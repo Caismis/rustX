@@ -962,6 +962,13 @@ pub enum Method {
     SourcesRead {
         target: crate::local_runtime::configuration::settings::SourceTarget,
     },
+    /// Test a saved Model without creating a Session.
+    #[serde(rename = "model/probe")]
+    ModelProbe {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        model: crate::model::catalog::ModelRef,
+        source: crate::local_runtime::model_probe::ModelProbeSource,
+    },
     /// Finite configuration connectivity check; never an Agent connection.
     #[serde(rename = "mcp/probe")]
     McpProbe {
@@ -1249,6 +1256,7 @@ impl Method {
             | Self::DeliveryCancel { .. }
             | Self::SessionUploadPrepare { .. }
             | Self::SessionSwitchNode { .. }
+            | Self::ModelProbe { .. }
             | Self::ModelSet { .. }
             | Self::ModelSelect { .. }
             | Self::CompactContext { .. }
@@ -1793,6 +1801,9 @@ pub enum MethodResult {
     },
     EffectiveConfiguration {
         projection: Box<crate::local_runtime::configuration::effective_observation::BoundedEffectiveConfiguration>,
+    },
+    ModelProbe {
+        outcome: crate::local_runtime::model_probe::ModelProbeOutcome,
     },
     McpProbe {
         result: crate::local_runtime::mcp_probe::McpProbeResult,

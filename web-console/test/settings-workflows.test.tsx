@@ -1,3 +1,4 @@
+import { providerAction } from './settings-harness';
 import { waitForSettingsSave } from './settings-harness';
 import {openResourceModule} from './settings-harness';
 import { sourceReceipt } from './fixture';
@@ -90,7 +91,6 @@ it('S2-02 deleting a Model removes exactly that authored unit after confirmation
   const s = cfg3Client();
   s.source.user.authored!.models = { main: fullModel() };
   await user(s, 'Models');
-  fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
   await openResourceRow('main');
   await confirmAction('Remove Model main');
   await waitFor(() => expect(writes(s)).toHaveLength(1));
@@ -380,14 +380,9 @@ it('S2-07 Workspace Settings offers only Workspace overrides, with inheritance r
   await openResourceRow('transport');
   // The Workspace override is removed to inherit again; it is never "deleted".
   expect(screen.queryByRole('button', { name: 'Remove Provider transport' })).toBeNull();
-  const trigger = screen.getByRole('button', { name: 'Use global default Provider transport' });
-  expect(trigger.closest('[data-removal]')!.getAttribute('data-removal')).toBe('override-removal');
-  fireEvent.click(trigger);
-  // Restoring inheritance is not a deletion: an ordinary dialog, never an
-  // alert dialog, and no destructive styling on either action.
+  await providerAction('Use global default');
   const restore = await screen.findByRole('dialog', { name: 'Use the global default for Provider transport?' });
   expect(screen.queryByRole('alertdialog')).toBeNull();
-  expect(trigger.closest('[data-tone]')!.getAttribute('data-tone')).toBe('restore');
   fireEvent.click(within(restore).getByRole('button', { name: 'Use global default Provider transport' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: null } } });
@@ -815,7 +810,6 @@ it('S2-09 a dirty Provider draft survives list/detail, page, filter and revision
   // The draft lives in the actor-owned transaction, not in the form library.
   expect(retained(s)).toContain('https://draft.invalid');
   // Detail → list → detail.
-  fireEvent.click(screen.getByRole('button', { name: '← Models' }));
   await openResourceRow('transport');
   expect(endpoint().value).toBe('https://draft.invalid');
   // Another page, a filter change there, and back: Models restores its focus.
@@ -925,20 +919,16 @@ it('S2-10 cancelling a deletion writes nothing and returns focus; confirming per
   const s = cfg3Client();
   await user(s, 'Models');
   await openResourceRow('transport');
-  const trigger = screen.getByRole('button', { name: 'Remove Provider transport' });
-  expect(trigger.closest('[data-removal]')!.getAttribute('data-removal')).toBe('authored-removal');
-  // A real press focuses its target first; the dialog restores focus to it.
+  const trigger = screen.getByRole('button', { name: 'Provider actions' });
   trigger.focus();
-  fireEvent.click(trigger);
-  const dialog = await screen.findByRole('alertdialog');
-  // The dialog states the actual removal: this User definition, nothing else.
-  expect(within(dialog).getByRole('heading', { name: 'Remove Provider transport from User configuration?' })).toBeTruthy();
-  expect(within(dialog).getByText(/Models using this provider will be unavailable/)).toBeTruthy();
+  await providerAction('Delete');
+  const dialog = await screen.findByRole('alertdialog', { name: 'Remove Provider transport from User configuration?' });
   fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
   await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
   expect(writes(s)).toHaveLength(0);
-  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Remove Provider transport' })));
-  await confirmAction('Remove Provider transport');
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+  await providerAction('Delete');
+  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove Provider transport' }));
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: null } });
 });

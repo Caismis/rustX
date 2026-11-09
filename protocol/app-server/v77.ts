@@ -1167,6 +1167,14 @@ export type Request1 =
       };
     }
   | {
+      method: 'model/probe';
+      params: {
+        target: SourceTarget;
+        model: ModelRef;
+        source: ModelProbeSource;
+      };
+    }
+  | {
       method: 'mcp/probe';
       params: {
         target: SourceTarget;
@@ -2010,6 +2018,13 @@ export type EffectiveFieldName =
   | 'effective_model'
   | 'admitted_attempt';
 /**
+ * An authored Model identity. Its spelling has no provider or wire semantics.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ModelRef".
+ */
+export type ModelRef = string;
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SourceFieldName".
  */
@@ -2054,13 +2069,6 @@ export type WorkflowModelChoicesQuery =
       offset: number;
       type: 'profiles';
     };
-/**
- * An authored Model identity. Its spelling has no provider or wire semantics.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ModelRef".
- */
-export type ModelRef = string;
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowConsumerField".
@@ -2964,6 +2972,10 @@ export type MethodResult =
   | {
       projection: BoundedEffectiveConfiguration;
       type: 'effective_configuration';
+    }
+  | {
+      outcome: ModelProbeOutcome;
+      type: 'model_probe';
     }
   | {
       result: McpProbeResult;
@@ -6249,6 +6261,15 @@ export type Origin =
       base: string;
       kind: 'process';
     };
+/**
+ * Provider responses are reduced to a finite outcome. Raw upstream details
+ * (including echoed credentials, headers, and configured request parameters)
+ * never leave this check.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ModelProbeOutcome".
+ */
+export type ModelProbeOutcome = 'connected' | 'rejected' | 'unavailable' | 'timed_out';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "McpProbeOutcome".
@@ -9837,6 +9858,16 @@ export interface EffectiveFieldRef {
   byte_length: number;
 }
 /**
+ * Both source revisions shown to the user when they requested a test.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ModelProbeSource".
+ */
+export interface ModelProbeSource {
+  user_revision: string;
+  workspace_revision?: string | null;
+}
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SourceFieldRef".
  */
@@ -9956,6 +9987,7 @@ export interface McpAuthoring {
  * via the `definition` "ProviderWrite".
  */
 export interface ProviderWrite {
+  hidden?: boolean;
   icon?: string | null;
   protocol: ModelProtocol;
   base_url: string;
@@ -9969,6 +10001,10 @@ export interface ProviderWrite {
  * via the `definition` "Model".
  */
 export interface Model {
+  /**
+   * Hide this entry from new model choices. Existing selections stay resolvable.
+   */
+  hidden?: boolean;
   provider: string;
   id: string;
   context_window: string;
@@ -18600,6 +18636,7 @@ export interface RuntimeLayer {
  * via the `definition` "ProviderView".
  */
 export interface ProviderView {
+  hidden?: boolean;
   icon?: string | null;
   protocol: ModelProtocol;
   base_url: string;

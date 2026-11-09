@@ -326,6 +326,7 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
         return { kind: 'write', commit: { acknowledgement, reread } };
       }
       if (operation.kind === 'reconcile') await s.client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_receipt');
+      if (operation.kind === 'model_probe') return { kind: 'model_probe', outcome: 'connected' };
       if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
       return { kind: operation.kind, projection: await readSource(s,target) };
     },
@@ -457,6 +458,7 @@ it('S12 a held Workspace post-write reread cannot regress a newer authoritative 
         return { kind: 'write', commit: { acknowledgement, reread } };
       }
       if (operation.kind === 'reconcile') await s.client.request({ method: 'configuration/reconcile', params: { target } }, 'configuration_receipt');
+      if (operation.kind === 'model_probe') return { kind: 'model_probe', outcome: 'connected' };
       if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
       return { kind: operation.kind, projection: await readSource(s,target) };
     },
@@ -539,6 +541,7 @@ it('S13 a write-owned reread cannot commit over a newer read that was only initi
         captured.release(); await held.reached;
         return { kind: 'write', commit: { acknowledgement, reread } };
       }
+      if (operation.kind === 'model_probe') return { kind: 'model_probe', outcome: 'connected' };
       if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
       return { kind: operation.kind, projection: await readSource(s,native.target) };
     },
@@ -611,6 +614,7 @@ it('S14 a superseded write-owned reread failure publishes no read error and leav
         captured.release(); await held.reached;
         return { kind: 'write', commit: { acknowledgement, reread } };
       }
+      if (operation.kind === 'model_probe') return { kind: 'model_probe', outcome: 'connected' };
       if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
       return { kind: operation.kind, projection: await readSource(s,native.target) };
     },

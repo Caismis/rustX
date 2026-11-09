@@ -104,6 +104,7 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/uploadPrepare': { effect: 'side_effecting' },
   'session/uploadStatus': { effect: 'read' },
   'configuration/sourcesRead': { effect: 'read' },
+  'model/probe': { effect: 'side_effecting' },
   'mcp/probe': { effect: 'read', unbounded: true },
   'session/effectiveConfiguration': { effect: 'read' },
   'session/effectiveConfigurationValueRead': { effect: 'read' },

@@ -203,6 +203,14 @@ impl AppServerConnection {
                 .map_err(|error| source_read_error(&error))?;
                 Ok(MethodResult::SourceValueChunk { chunk })
             }
+            Method::ModelProbe {
+                target,
+                model,
+                source,
+            } => {
+                let outcome = self.host.manager().probe_model(target, model, source).await;
+                Ok(MethodResult::ModelProbe { outcome })
+            }
             Method::McpProbe {
                 target,
                 id,

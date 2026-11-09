@@ -16,6 +16,7 @@ export function cfg3Client(handler?: (operation: Request1, source: SourceSetting
     const publish = (patch: Partial<ClientView>) => { state = { ...state, ...patch }; for (const listener of listeners) listener(); }; const request = vi.spyOn(client, 'request').mockImplementation(async (operation) => { const overridden = await handler?.(operation, source, effective); if (overridden)
     return overridden as never; if (operation.method === 'skills/list') return {type:'skills',page:{data:(source.prospective_resources?.definitions??[]).filter(row=>row.family==='skill').map(row=>({catalog:{name:row.name,description:'Skill '+row.name,location:row.location.path},provenance:{name:row.name,source:row.location.scope,location:row.location.path,shadowed:[]},metadata_revision:'skill-1'})),revision:'skills-1',diagnostics:[],diagnostics_truncated:false,next_offset:null}} as never;
     if(operation.method==='skills/read')return {type:'skill_content',content:{skill:{catalog:{name:operation.params.name,description:'Skill '+operation.params.name,location:'/skills/'+operation.params.name+'/SKILL.md'},provenance:{name:operation.params.name,source:'user',location:'/skills/'+operation.params.name+'/SKILL.md',shadowed:[]},metadata_revision:'skill-1'},revision:'skill-1',kind:operation.params.kind,data_base64:Buffer.from('Instructions for '+operation.params.name).toString('base64'),next_offset:null}} as never;
+    if (operation.method === 'model/probe') return { type: 'model_probe', outcome: 'connected' } as never;
     if (operation.method === 'mcp/probe') return {type:'mcp_probe',result:{id:operation.params.id,revision:operation.params.expected_revision,outcome:'reachable'}} as never; if (operation.method === 'session/configuration')
     return { type: 'session_configuration', projection:(applicationReceipt((source.application ?? null))) } as never; if (operation.method === 'session/effectiveConfiguration')
     return { type: 'effective_configuration', projection: {revision:'fixture',inline:structuredClone(effective),fields:[],collections:[]} } as never; if (operation.method === 'configuration/reconcile')
@@ -35,6 +36,10 @@ export function cfg3Host(subject: ReturnType<typeof cfg3Client>): import('../src
   return { listWorkspaces: async () => ({authorityId:'fixture-host',endpoint:'ws://fixture.invalid/',workspaces:['A','B'].map(id=>({id,displayName:id,location:id,displayPath:'/workspace/'+id})),picker:{kind:'unavailable',reason:'fixture'}}),
     configureWorkspace: async (id,_endpoint,operation) => {
       const target={kind:'workspace' as const,directory:'/workspace/'+id};
+      if (operation.kind === 'model_probe') {
+        const { outcome } = await subject.client.request({ method: 'model/probe', params: { target, model: operation.model, source: operation.source } }, 'model_probe');
+        return { kind: 'model_probe', outcome };
+      }
       if (operation.kind==='mcp_probe') { const {result}=await subject.client.request({method:'mcp/probe',params:{target,id:operation.id,expected_revision:operation.expected_revision}},'mcp_probe'); return {kind:'mcp_probe',result}; }
       if (operation.kind==='write') {
         const receipt = await subject.client.request({method:'configuration/sourceWrite',params:{target,expected_revision:operation.expected_revision,mutation:operation.mutation}},'sources_written');

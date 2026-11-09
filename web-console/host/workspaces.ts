@@ -493,6 +493,11 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       const readSource = async () => {
         return readSourceSettings(async()=>(await client.call('configuration/sourcesRead', {target}, 'source_settings')).projection, async(reference,offset)=>(await client.call('configuration/sourceValueRead',{target,reference,offset,max_bytes:65536},'source_value_chunk')).chunk, ()=>true);
       };
+      if (operation.kind === 'model_probe') {
+        const { outcome } = await client.call('model/probe', { target, model: operation.model, source: operation.source }, 'model_probe');
+        if (!await current()) throw new Error('Workspace authority changed');
+        return { kind: 'model_probe', outcome };
+      }
       if (operation.kind === 'mcp_probe') {
         const { result } = await client.call('mcp/probe', { target, id: operation.id, expected_revision: operation.expected_revision }, 'mcp_probe');
         if (!await current()) throw new Error('Workspace authority changed');

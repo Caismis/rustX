@@ -74,8 +74,12 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await openSettingsPage(page, 'Models');
     await settings(page).getByRole('row', {name:provider, exact:true}).click();
     const form = settings(page).getByRole('form', {name:'Provider '+provider, exact:true});
-    const trigger = form.getByRole('button', {name:'Choose provider icon', exact:true});
-    await trigger.click();
+    const trigger = form.getByRole('button', {name:'Provider actions', exact:true});
+    const openPicker = async () => {
+      await trigger.click();
+      await page.getByRole('menuitem', {name:'Choose provider icon', exact:true}).click();
+    };
+    await openPicker();
     const picker = page.getByRole('dialog', {name:'Choose provider icon', exact:true});
     const search = picker.getByRole('searchbox', {name:'Search icons', exact:true});
     await expect(search).toBeFocused();
@@ -92,11 +96,11 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await page.keyboard.press('Space');
     await expect(picker).toHaveCount(0);
     await expect(trigger).toBeFocused();
-    await expect(trigger).toHaveText('OpenAI');
+    await expect(form.locator('[data-provider-icon="openai"]')).toBeVisible();
     expect(await writes(page)).toBe(0);
     await form.getByRole('button', {name:'Discard', exact:true}).click();
-    await expect(trigger).toHaveText('Default icon');
-    await trigger.click();
+    await expect(form.locator('[data-provider-icon=""]')).toBeVisible();
+    await openPicker();
     await page.keyboard.press('Escape');
     await expect(picker).toHaveCount(0);
     await expect(trigger).toBeFocused();
@@ -173,7 +177,7 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await addProfile.click();
     await identity.fill('low');
     await identity.press('Enter');
-    await expect(modal.getByRole('alert')).toHaveText('low is already listed.');
+    await expect(page.locator('[data-toast][data-foreground]')).toHaveText('low is already listed.');
     await identity.press('Escape');
     await addProfile.click();
     const high = 'high-with-an-exceptionally-long-profile-identity';
@@ -246,10 +250,14 @@ test('provider creation validates the native name; API Key reveal is explicit an
   const add = page.getByRole('dialog',{name:'Add Provider',exact:true});
   await add.getByLabel('New Provider identity').fill('transport');
   await expect(add.getByRole('button',{name:'Continue'})).toBeDisabled();
-  await expect(add.getByRole('alert')).toHaveText('This configuration name already exists.');
+  await expect(page.locator('[data-toast][data-foreground]')).toHaveText('This configuration name already exists.');
   await add.getByRole('button',{name:'Cancel'}).click();
   await settings(page).getByRole('row',{name:'transport',exact:true}).click();
   const key = settings(page).getByLabel('API Key',{exact:true});
+  if (!await key.isVisible()) {
+    await settings(page).getByRole('button', { name: 'Provider actions', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Use an API Key', exact: true }).click();
+  }
   await key.fill('fixture-only-value');
   await expect(key).toHaveAttribute('type','password');
   await settings(page).getByRole('button',{name:'Show',exact:true}).click();

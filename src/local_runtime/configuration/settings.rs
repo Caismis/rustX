@@ -67,6 +67,8 @@ impl SourceTarget {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProviderView {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     pub protocol: crate::model::ModelProtocol,
@@ -77,6 +79,7 @@ impl From<Provider> for ProviderView {
     fn from(provider: Provider) -> Self {
         Self {
             icon: provider.icon,
+            hidden: provider.hidden,
             protocol: provider.protocol,
             base_url: provider.base_url,
             credential: provider.api_key.view(),
@@ -111,6 +114,8 @@ pub enum CredentialEdit {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderWrite {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     pub protocol: crate::model::ModelProtocol,
@@ -618,6 +623,7 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
                     }
                     Ok(Provider {
                         icon: authored.icon,
+                        hidden: authored.hidden,
                         protocol: authored.protocol,
                         base_url: authored.base_url,
                         api_key: credential,
@@ -748,6 +754,8 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
 fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
     #[derive(Serialize)]
     struct PrivateProvider {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         icon: Option<String>,
         protocol: crate::model::ModelProtocol,
@@ -763,6 +771,7 @@ fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
     let document = document.project(
         |provider| PrivateProvider {
             icon: provider.icon,
+            hidden: provider.hidden,
             protocol: provider.protocol,
             base_url: provider.base_url,
             api_key: match provider.api_key {
@@ -1019,6 +1028,7 @@ impl UserConfigManager {
     pub(in crate::local_runtime) fn capture_authored_settings(
         &self,
         target: &SourceTarget,
+        expected: Option<&crate::local_runtime::model_probe::ModelProbeSource>,
     ) -> Result<(Option<RuntimeLayer>, String), SettingsError> {
         self.with_source_documents(target, |user, workspace| {
             let user_bytes = user.read().map_err(|_| SettingsError::Io)?;
@@ -1027,6 +1037,13 @@ impl UserConfigManager {
                 .transpose()
                 .map_err(|_| SettingsError::Io)?
                 .flatten();
+            if let Some(expected) = expected
+                && (revision(user_bytes.as_deref()) != expected.user_revision
+                    || workspace.map(|_| revision(workspace_bytes.as_deref()))
+                        != expected.workspace_revision)
+            {
+                return Err(SettingsError::Invalid);
+            }
             let resolved = compose_authored_layers(
                 user.path(),
                 workspace.map(AdmittedSource::path),

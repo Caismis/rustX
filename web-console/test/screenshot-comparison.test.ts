@@ -78,19 +78,19 @@ const cells = (region: NoiseRegion): [number, number][] => {
 };
 
 it.each(['light', 'dark'])('the narrow %s Model input corner admits its two measured raster variants and rejects adjacent or larger changes', theme => {
-  const name = `model-advanced-${theme}-390-linux.png`;
-  const expected = fixture(`settings-model-advanced-${theme}-390-baseline-linux.png`);
+  const name = `settings-model-advanced-${theme}-390-baseline-linux.png`;
+  const expected = fixture(name);
   const actual = fixture(`settings-model-advanced-${theme}-390-noise-linux.png`);
-  const entry = manifest.find(item => item.reference === name)!;
+  const entry = frozenManifest.find(item => item.reference === name)!;
   expect(entry.regions).toEqual([{ label: 'Context input corner coverage', x: 34, y: 237, width: 1, height: 1, maxChangedPixels: 1, maxChannelDelta: 1 }]);
   expect(compare(actual, name, expected, []).ok).toBe(false);
-  const accepted = compare(actual, name, expected, noisePolicy);
+  const accepted = compare(actual, name, expected, comparatorPolicy);
   expect(accepted.ok).toBe(true); expect(accepted.totalChanged).toBe(1);
-  expect(compare(actual, `model-basic-${theme}-390-linux.png`, expected, noisePolicy).ok).toBe(false);
+  expect(compare(actual, `model-basic-${theme}-390-linux.png`, expected, comparatorPolicy).ok).toBe(false);
   const adjacent = copy(actual); nudge(adjacent, 35, 237, 1);
-  expect(compare(adjacent, name, expected, noisePolicy).ok).toBe(false);
+  expect(compare(adjacent, name, expected, comparatorPolicy).ok).toBe(false);
   const excessive = copy(expected); nudge(excessive, 34, 237, 2);
-  expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  expect(compare(excessive, name, expected, comparatorPolicy).ok).toBe(false);
 });
 
 it.each([

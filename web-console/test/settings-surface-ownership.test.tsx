@@ -1,3 +1,4 @@
+import { providerAction } from './settings-harness';
 import { waitForSettingsSave } from './settings-harness';
 import {changeJson} from './json-editor-helpers';
 import {openResourceModule} from './settings-harness';
@@ -7,7 +8,7 @@ import { openMcpContractEditor } from './settings-harness';
 import { afterEach, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
-import { chooseOption, confirmAction, waitForSettingsRevision, observedRevision, openResourceRow, openSettingsPage, renderEditor, settingsReady, SettingsSurface } from './settings-harness';
+import { confirmAction, waitForSettingsRevision, observedRevision, openResourceRow, openSettingsPage, renderEditor, settingsReady, SettingsSurface } from './settings-harness';
 import { UnitForm } from '../src/app/settings/forms/bridge';
 import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
@@ -247,7 +248,7 @@ it('S1-13 an unresolvable configuration never presents the effective value as Un
   const form = within(screen.getByRole('form', { name: 'Built-in tools' }));
   // Authored presence and effective resolution are reported independently.
   expect(screen.getByRole('form', { name: 'Built-in tools' }).dataset.effective).toBe('invalid');
-  expect(form.getByText(/This setting could not be applied/).textContent).toContain('Source cannot be resolved');
+  expect((await screen.findByText(/This setting could not be applied/)).textContent).toContain('Source cannot be resolved');
   expect(screen.getByRole('form', { name: 'Built-in tools' }).querySelector('pre')).toBeNull();
   // The valid Workspace source remains authorable through exact CAS.
   fireEvent.click(form.getByLabelText('read'));
@@ -429,7 +430,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://native.invalid' } });
-  await chooseOption('API Key source', 'Enter a literal secret');
+  if (!screen.queryByLabelText('API Key')) await providerAction('Use an API Key');
   fireEvent.change(screen.getByLabelText('API Key'), { target: { value: SECRET_SENTINEL } });
   // Before submission the sentinel is the live editing draft, which is where an
   // authored secret legitimately lives.
@@ -511,30 +512,26 @@ it('S1-15 an inherited User Provider and Model are discoverable in the Workspace
   const s = cfg3Client(); inheritedCatalog(s);
   await settingsReady();
   const providers = within(screen.getByRole('grid', { name: 'Providers' }));
-  // Both identities are listed although this Workspace authors neither, and
-  // each is reported with the native origin, not a manufactured one.
-  const transport = within(providers.getByRole('row', { name: 'transport' }));
-  expect(transport.getByText('Inherited from User')).toBeTruthy();
+  expect(providers.getByRole('row', { name: 'transport' })).toBeTruthy();
+  expect(screen.getByText('Using global settings.')).toBeTruthy();
   // An identity that is already reachable is not offered as a new one.
   fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'transport' } });
   expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-  fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
-  const models = within(screen.getByRole('grid', { name: 'All Models' }));
-  expect(within(models.getByRole('row', { name: 'main' })).getByText('Inherited from User')).toBeTruthy();
+  const models = within(screen.getByRole('grid', { name: 'Models of Provider transport' }));
+  expect(models.getByRole('row', { name: 'main' })).toBeTruthy();
   await openResourceRow('transport');
   fireEvent.click(screen.getByRole('button', { name: /^(?:\+ )?Add Model$/ }));
   fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'wire' } });
   fireEvent.submit(screen.getByRole('form', { name: 'Add Model' }));
-  await screen.findByText('This configuration name already exists.');
+  await screen.findByText(/This configuration name already exists/);
   expect(writes(s)).toHaveLength(0);
 });
 
 it('S1-15 viewing an inherited identity authors nothing and writes nothing', async () => {
   const s = cfg3Client(); inheritedCatalog(s);
   await settingsReady();
-  fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
   await openResourceRow('main');
   // The inherited Model is displayed from the native effective projection while
   // this Workspace authors nothing: no draft, no Save, no removal to offer.
@@ -549,11 +546,8 @@ it('S1-15 viewing an inherited identity authors nothing and writes nothing', asy
   // An inherited Provider credential is never projected into authoring state:
   // there is no "keep" option, because there is no credential in this scope.
   const provider = within(screen.getByRole('form', { name: 'Provider transport' }));
-  expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('');
-  fireEvent.click(provider.getByRole('button', { name: 'Connection options', expanded: false }));
-  fireEvent.click(provider.getByRole('button', { name: /API Key source$/ }));
-  expect(screen.queryByRole('option', { name: /Keep the credential/ })).toBeNull();
-  fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
+  expect((provider.getByLabelText('Base URL') as HTMLInputElement).matches(':disabled')).toBe(true);
+  expect((provider.getByLabelText('API Key') as HTMLInputElement).value).toBe('');
   // The native effective definition is still reported, redacted.
   expect(screen.queryByText(/Native effective Provider transport/)).toBeNull();
   expect((provider.getByRole('button', { name: 'Save Provider transport' }) as HTMLButtonElement).disabled).toBe(true);
@@ -564,8 +558,9 @@ it('S1-15 an explicit Workspace Provider override authors only that unit and nev
   const s = cfg3Client(); inheritedCatalog(s);
   await settingsReady();
   await openResourceRow('transport');
+  await providerAction('Customize');
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://workspace.invalid' } });
-  await chooseOption('API Key source', 'Read it from an environment variable');
+  await providerAction('Use an environment variable');
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'WORKSPACE_KEY' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { protocol: 'openai_responses', base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } }));
@@ -630,7 +625,7 @@ async function heldSecretSave(s: ReturnType<typeof cfg3Client>) {
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://native.invalid' } });
-  await chooseOption('API Key source', 'Enter a literal secret');
+  if (!screen.queryByLabelText('API Key')) await providerAction('Use an API Key');
   fireEvent.change(screen.getByLabelText('API Key'), { target: { value: SECRET_SENTINEL } });
   // The dirty draft is the only place the authored secret legitimately lives.
   expect(retained(s)).toContain(SECRET_SENTINEL);

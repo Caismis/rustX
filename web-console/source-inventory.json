@@ -614,21 +614,30 @@
       "upstream_sha256": "46f98375c76035f50f80e70090a60396560318b54b3ec83d2d2a659489382e1c",
       "retained_dependencies": [
         "../../../../../protocol/app-server/v77",
+        "../../../client/app-server",
         "../../../locale/react",
         "../../../locale/translation",
         "../../../presentation/primitives/Button",
         "../../../presentation/primitives/DialogSurface",
+        "../../../presentation/primitives/Switch",
         "../../../presentation/primitives/icons",
         "../../../presentation/settings/SettingsContent",
         "../../../presentation/settings/SettingsContent.module.css",
+        "../../../workspaces/host",
+        "../SettingsFeedback",
         "../forms/bridge",
         "../forms/fields",
         "../machines/navigation",
+        "../machines/react",
         "../primitives/aria",
         "../projection",
         "./ModelFields",
         "./ModelsPage.module.css",
+        "./ProviderConnection",
         "./ProviderIcon",
+        "./ProviderTemplates",
+        "./useModelProbe",
+        "@xstate/react",
         "react",
         "react-aria-components"
       ],
@@ -658,7 +667,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "d7ff50a292724c782ceb397e11b5382fcf66436d5baee3bffbe11f682f595b1d"
+      "local_sha256": "1512202f1865a598e3b631183ef6d08d0cfe391d26615919dbe490e593dd9b7c"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -672,6 +681,7 @@
         "../../../presentation/settings/SettingsContent.module.css",
         "../../resources/shared/AvailabilityDetail",
         "../../resources/shared/inventory",
+        "../SettingsFeedback",
         "../machines/navigation"
       ],
       "excluded_dependencies": [
@@ -713,7 +723,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "7b02675f59b97b1d603b09dc16e74a97578e4e531574c69bff08003ac3c1489c"
+      "local_sha256": "d2d19295ff09be7a85a7b0463db52be6da4cd0ef9d7f5cf5d3bb89b64c979331"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -733,6 +743,7 @@
         "../../workspaces/host",
         "../appearance",
         "./ConnectionSettings",
+        "./SettingsFeedback",
         "./SettingsScopeMenu",
         "./advanced/AdvancedPage",
         "./agent/AgentPage",
@@ -764,7 +775,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "4c4e886016b43ca7fea5b8e08d028138a3a89246aee750ffae69005e841b35fb"
+      "local_sha256": "ab0e07bc5e935e62e8de327cd3203f46765c8119e0f84619698e2b8ca4aaae31"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -4088,7 +4099,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "e900733345ff9276760ad10e8cf122ee6c211990834ec86436fa5a838b47f8c0"
+      "local_sha256": "cc8b0f5fe380dfab0a18f3a4b4aad70de8bf4f73af06467d96153f02059b607b"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -6726,7 +6737,7 @@
       "classification": "B",
       "treatment": "Harness transient warning announcement adapted to rustX: body portal, composer-centered top placement, three-second hold and one-second fade. Floating UI owns viewport clamping and layout tracking; only the required warning/text surface is retained. Existing rustX theme tokens replace upstream-only aliases.",
       "upstream_sha256": "85ed92693c910decadb38f095764bbdb3a1c6992b60bf63dedabdbebccd309b6",
-      "local_sha256": "1461f0d7d6a4f4e5333b74ec46564dca2e86379ed03340c682059044783d8c7c",
+      "local_sha256": "47fee2806b4e29392f09ef00479ad01a1c24d4aead567d24efe8ed78ad4b0df2",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "./Toast.module.css",
@@ -6746,7 +6757,7 @@
       "classification": "A",
       "treatment": "Harness transient warning announcement adapted to rustX: body portal, composer-centered top placement, three-second hold and one-second fade. Floating UI owns viewport clamping and layout tracking; only the required warning/text surface is retained. Existing rustX theme tokens replace upstream-only aliases.",
       "upstream_sha256": "74cab625e372a6cdaff92fa468b7d59bc037212d738e476ea0f8d485e4f8dbcb",
-      "local_sha256": "2ff6c1116a3b748299bf1d9510c4a1f468e342cd4b828fb029b1e093f7f06348",
+      "local_sha256": "54bf1fc5e0480eac991bdb5d6f8a4763a84e0698dc70f56bf1769f2e86f4058a",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -7551,6 +7562,7 @@
         "../../../locale/translation",
         "../../../presentation/primitives/Button",
         "../../../presentation/settings/SettingsContent.module.css",
+        "../SettingsFeedback",
         "../forms/bridge",
         "../forms/fields",
         "../primitives/aria",
@@ -7583,7 +7595,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "996b4366be6e24dc90857e6bcec14ea5f4ca49ad7b4181f916017fe7c21db8d2"
+      "local_sha256": "fe40ccbba2f74a395e9f881154efb3dd6d5530a0ab5ecf39b983c1258ddd204c"
     },
     {
       "upstream": "packages/client/ui-deliverables/src/client/ChangedFiles.tsx",

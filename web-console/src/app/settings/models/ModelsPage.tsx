@@ -1,32 +1,44 @@
-import type { Translate, TranslationKey } from '../../../locale/translation';
-import { message } from '../../../locale/translation';
+import { SettingsNotice } from '../SettingsFeedback';
+import type { TranslationKey } from '../../../locale/translation';
 import { useTranslation } from '../../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted settings cards and request controls; see PROVENANCE.md. */
 import { useLayoutEffect, useRef, useState } from 'react';
+import { shallowEqual, useSelector } from '@xstate/react';
 import { GridList, GridListItem } from 'react-aria-components';
-import type { Model, ModelLayer, ProviderView, ProviderWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v77';
+import type { Model, ModelLayer, ProviderView, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v77';
 import { Badge } from '../../../presentation/settings/SettingsContent';
+import { Switch } from '../../../presentation/primitives/Switch';
 import { Button } from '../../../presentation/primitives/Button';
 import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
-import { IconApiOutline14, IconCloseOutline16, IconRefreshOutline16 } from '../../../presentation/primitives/icons';
-import { TypedUnitForm, UnitForm, useUnitEditing, type UnitOptions, type TypedUnitForm as TypedForm } from '../forms/bridge';
-import { Enum, JsonObjectEditor, Text } from '../forms/fields';
-import { Advanced, Choice, ResourceList, Search, type ResourceRow } from '../primitives/aria';
-import { catalogEntries, provenanceLabel, sourceView, type CatalogEntry, observedResult, observedResultLabel, unitApplication } from '../projection';
+import { IconApiOutline14, IconCloseOutline16, IconEditOutline16, IconLinkOutline14, IconPlusOutline16, IconRefreshOutline16 } from '../../../presentation/primitives/icons';
+import { TypedUnitForm, UnitForm, UnitOutcomeNotice, useUnitEditing, type UnitOptions } from '../forms/bridge';
+import { JsonObjectEditor } from '../forms/fields';
+import { Advanced, Choice, Search } from '../primitives/aria';
+import { catalogEntries, sourceView, type CatalogEntry, type SettingsTarget, observedResult, observedResultLabel, unitApplication } from '../projection';
 import type { PageFocus } from '../machines/navigation';
+import { useSettingsActor } from '../machines/react';
 import { ModelFields } from './ModelFields';
-import { ProviderIcon, ProviderIconField } from './ProviderIcon';
+import { ProviderIcon } from './ProviderIcon';
+import type { AppServerClient } from '../../../client/app-server';
+import type { ProductHostWorkspaces } from '../../../workspaces/host';
+import { useModelProbe } from './useModelProbe';
+import { ProviderConnection } from './ProviderConnection';
+import { ProviderNameDialog } from './ProviderTemplates';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 import cards from './ModelsPage.module.css';
 
 export interface ModelsPageProps {
+  client: AppServerClient; host?: ProductHostWorkspaces; target: SettingsTarget;
   source: SourceSettings; scope: SourceScope; revision: string;
   models: string[];
   profiles: ModelProfiles;
   focus?: PageFocus['models'];
   onFocus: (focus?: PageFocus['models']) => void;
-  onRefresh: () => void;
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }
+
+const compactContext = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
 
 const emptyModel = (provider = '', id = ''): Model => ({
   provider, id, context_window: '128000', max_output_tokens: 8192,
@@ -36,27 +48,54 @@ const emptyModel = (provider = '', id = ''): Model => ({
 /** ZCode's provider navigation/detail split and model dialog, bound to rustX's
  * native semantic units. Each Provider owns its connection protocol; its Models
  * inherit it in native resolution and never author a separate API format. */
-export function ModelsPage({ source, scope, revision, models, profiles, focus, onFocus, onRefresh }: ModelsPageProps) {
+export function ModelsPage({ client, host, target, source, scope, revision, models, profiles, focus, onFocus, onRefresh, refreshing = false }: ModelsPageProps) {
   const tx = useTranslation();
   const landing = useRef<HTMLElement>(null);
+  const previousProvider = useRef<string>(undefined);
+  const probe = useModelProbe(client, host, target, source);
   const [query, setQuery] = useState('');
   const [adding, setAdding] = useState<'provider' | 'model'>();
+  const actor = useSettingsActor();
+  const draftedProviders = useSelector(actor, state => Object.values(state.context.units).flatMap(ref => {
+    const { selector } = ref.getSnapshot().context;
+    return selector.kind === 'config' && selector.unit === 'provider' && selector.entry ? [selector.entry] : [];
+  }), shallowEqual);
   const providers = catalogEntries<ProviderView>(source, scope, 'providers');
   const catalog = catalogEntries<Model>(source, scope, 'models');
+  // Keep models editable while their provider is missing or its source is invalid.
+  const unconfigured = new Set(draftedProviders);
+  for (const entry of catalog) {
+    const model = entry.authored ?? entry.effective;
+    if (model) unconfigured.add(model.provider);
+  }
+  for (const entry of providers) unconfigured.delete(entry.id);
+  const navigationProviders: CatalogEntry<ProviderView>[] = [
+    ...providers,
+    ...[...unconfigured].map(id => ({ id, origin: { state: 'unavailable' as const } })),
+  ];
   const requested = focus?.kind === 'provider' ? focus.id : focus?.kind === 'model' ? focus.provider : undefined;
-  const selected = requested && (providers.some(entry => entry.id === requested) || focus?.kind === 'provider' && focus.creating) ? requested : undefined;
-  const providerExists = providers.some(entry => entry.id === requested);
-  const creatingProvider = focus?.kind === 'provider' && focus.creating;
+  const missing = !!requested && !navigationProviders.some(entry => entry.id === requested);
+  const selected = missing ? navigationProviders[0]?.id : requested ?? navigationProviders[0]?.id;
   useLayoutEffect(() => {
-    if (creatingProvider && providerExists && requested) onFocus({ kind: 'provider', id: requested });
-    else if (requested && !selected && focus?.kind === 'provider') {
+    const previous = previousProvider.current;
+    previousProvider.current = selected;
+    const removed = previous !== undefined && !navigationProviders.some(entry => entry.id === previous);
+    if (removed || missing && focus?.kind === 'provider') {
       onFocus(undefined);
       landing.current?.focus();
     }
-  }, [creatingProvider, providerExists, requested, selected, focus?.kind, onFocus]);
-  const navigationProviders: CatalogEntry<ProviderView>[] = selected && !providers.some(entry => entry.id === selected)
-    ? [...providers, { id: selected, origin: { state: 'unavailable' } }] : providers;
-  const navigation = navigationProviders.filter(entry => entry.id.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  }, [navigationProviders, selected, missing, focus?.kind, onFocus]);
+  const navigation = navigationProviders.filter(entry => entry.id.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const providerEntry = navigationProviders.find(entry => entry.id === selected);
+  const selectedProvider = providerEntry?.authored ?? providerEntry?.effective;
+  const selectedModels = catalog.filter(entry => (entry.authored ?? entry.effective)?.provider === selected);
+  const closeProvider = () => { onFocus(undefined); landing.current?.focus(); };
+  const visibleModels = models.filter(id => {
+    const entry = catalog.find(entry => entry.id === id);
+    const model = entry?.authored ?? entry?.effective;
+    const owner = providers.find(entry => entry.id === model?.provider);
+    return !model?.hidden && !(owner?.authored ?? owner?.effective)?.hidden;
+  });
   const application = observedResult(unitApplication(source.application, 'provider'));
   const closeModel = () => onFocus(selected ? { kind: 'provider', id: selected } : undefined);
   return <section ref={landing} tabIndex={-1} aria-label={tx('settings:models-page.models')} className={cards.section}>
@@ -64,186 +103,144 @@ export function ModelsPage({ source, scope, revision, models, profiles, focus, o
     <div className={cards.toolbar}>
       <p>{tx('settings:models.description')}</p>
       <div className={cards.headerActions}>
-        <Button size="sm" aria-label={tx('settings:models.refresh')} title={tx('settings:models.refresh')} onClick={onRefresh}><IconRefreshOutline16/></Button>
+        {onRefresh && <Button size="sm" variant="outline" aria-label={tx('settings:settings.reload-configuration')} title={tx('settings:settings.reload-configuration')} disabled={refreshing} onClick={onRefresh}><IconRefreshOutline16/></Button>}
         <Button size="sm" variant="primary" onClick={() => setAdding('provider')}>{tx('settings:models.add-provider')}</Button>
       </div>
     </div>
-    {application.state === 'failed' && <p className={css.error} role="alert">{observedResultLabel(tx, application)} — {application.diagnostic}</p>}
+    <SettingsNotice text={application.state === 'failed' ? `${observedResultLabel(tx, application)} · ${application.diagnostic}` : undefined}/>
     <div className={cards.splitPanel} data-selected={!!selected}>
       <div className={cards.navigation}>
         <Search label={tx('settings:models-page.find-a-provider')} value={query} onChange={setQuery} placeholder={tx('settings:models.search')} />
-        <h4>{tx('settings:models-page.providers')}</h4>
+        <h4>{tx('settings:models.custom-providers')}</h4>
         <GridList className={cards.providers} aria-label={tx('settings:models-page.providers')} selectionMode="single" disallowEmptySelection selectedKeys={selected ? [selected] : []}
           onSelectionChange={keys => {
             if (keys === 'all') return;
             const id = keys.values().next().value;
-            if (id !== undefined) onFocus(focus?.kind === 'provider' && focus.creating && id === focus.id ? focus : { kind: 'provider', id: String(id) });
+            if (id !== undefined) onFocus({ kind: 'provider', id: String(id) });
           }}>
-          {navigation.map(entry => <GridListItem id={entry.id} key={entry.id} textValue={entry.id} aria-label={entry.id} className={cards.provider}>
-            <ProviderIcon icon={(entry.authored ?? entry.effective)?.icon}/>
-            <span className={cards.providerLabel}><span className={cards.providerName} title={entry.id}>{entry.id}</span>
-              {!entry.authored && !entry.effective ? <small>{tx('settings:models.unsaved-provider')}</small>
-                : scope === 'workspace' && entry.origin.state === 'known' && <small>{provenanceLabel(tx, entry.origin)}</small>}
-            </span>
-            <span className={cards.providerDot} data-authored={!!entry.authored} data-empty={!catalog.some(model => (model.authored ?? model.effective)?.provider === entry.id)}
-              title={entry.authored ? tx('settings:models-page.configured') : entry.origin.state === 'known' ? provenanceLabel(tx, entry.origin) : tx('settings:models-page.new-provider')}/>
-          </GridListItem>)}
+          {navigation.map(entry => {
+            const provider = entry.authored ?? entry.effective;
+            const hasModels = catalog.some(item => {
+              const model = item.authored ?? item.effective;
+              return model?.provider === entry.id && !model.hidden;
+            });
+            return <GridListItem id={entry.id} key={entry.id} textValue={entry.id} aria-label={entry.id} className={cards.provider}>
+              <ProviderIcon icon={provider?.icon} size={16}/>
+              <span className={cards.providerName} title={entry.id}>{entry.id}</span>
+              <span className={cards.providerDot} data-state={provider?.hidden ? 'off' : provider && hasModels ? 'ready' : 'empty'} aria-hidden="true"/>
+            </GridListItem>;
+          })}
         </GridList>
         {!navigation.length && <p className={cards.emptyNavigation}>{query ? tx('settings:models-page.no-provider-identity-matches-value', { p0: query }) : tx('settings:models-page.no-provider-is-defined-for-this-source-yet')}</p>}
       </div>
       <div className={cards.detailPane}>
-        {selected ? <ProviderDetail key={selected} source={source} scope={scope} revision={revision} id={selected} onBack={() => onFocus(undefined)}
-          onModel={id => onFocus({ kind: 'model', id, provider: selected })} onAddModel={() => setAdding('model')}/>
-          : <div className={cards.unselected}><span aria-hidden="true"><IconApiOutline14 size={32}/></span><p>{tx('settings:models.select-provider')}</p></div>}
+        {selected ? <>
+          <ProviderConnection key={selected} scope={scope} revision={revision} id={selected} authored={providerEntry?.authored}
+            inherited={scope === 'workspace' ? (providerEntry?.authored ? source.user.authored?.providers?.[selected] : providerEntry?.effective) : undefined}
+            hasModels={selectedModels.length > 0} onCancel={closeProvider}/>
+          <div className={cards.modelsHeading}><h4>{tx('settings:models.list')}</h4>
+            <Button size="sm" variant="toolbar" title={!selectedProvider ? tx('settings:models.save-provider-first') : undefined}
+              disabled={!selectedProvider} onClick={() => setAdding('model')}>{tx('settings:models.add-model')}</Button>
+          </div>
+          {selectedModels.length ? <GridList aria-label={tx('settings:models-page.models-of-provider-value', { p0: selected })} className={cards.modelList}>
+            {selectedModels.map(entry => <ModelRow key={entry.id} entry={entry} revision={revision} providerHidden={!selectedProvider || !!selectedProvider.hidden} canProbe={!!selectedProvider} probe={probe}
+              onOpen={() => onFocus({ kind: 'model', id: entry.id, provider: selected })}/>)}
+          </GridList> : <p className={cards.emptyModels}>{tx('settings:models.empty-models')}</p>}
+        </> : <div className={cards.unselected}><IconApiOutline14 size={28}/><p>{tx('settings:models.empty-providers')}</p>
+          <Button size="sm" variant="outline" icon={<IconPlusOutline16/>} onClick={() => setAdding('provider')}>{tx('settings:models-page.add-provider')}</Button>
+        </div>}
       </div>
     </div>
-    <Advanced title={tx('settings:models-page.all-models-value', { p0: catalog.length })}>
-      <ResourceList label={tx('settings:models-page.all-models')} rows={catalog.map(entry => modelRow(tx, entry, scope))}
-        onOpen={id => onFocus({ kind: 'model', id, provider: (catalog.find(entry => entry.id === id)?.authored ?? catalog.find(entry => entry.id === id)?.effective)?.provider })}
-        empty={tx('settings:copy.no-model-is-defined-for-this-source-yet')} />
-    </Advanced>
     <Advanced title={tx('settings:models-page.default-model-for-new-sessions')}>
       <UnitForm<ModelLayer> title={tx('settings:models-page.default-model')} authored={sourceView(source, scope)?.authored?.agent?.model ?? undefined}
         blank={{}} revision={revision} mutation={authored => ({ kind: 'config', mutation: { unit: 'root_model', authored } })}
         removalNotice={<p>{tx('settings:models-page.new-sessions-fall-back-to-the-native-default-model-once-no-sourc')}</p>}>
         {(value, change) => <><p className={css.hint}>{tx('settings:models-page.this-is-the-model-new-sessions-start-from-it-is-not-the-model-an')}</p>
-          <ModelSelection value={value} change={change} models={models} profiles={profiles} /></>}
+          <ModelSelection value={value} change={change} models={visibleModels} profiles={profiles} /></>}
       </UnitForm>
     </Advanced>
-    {adding === 'provider' && <ProviderNameDialog exists={providers.map(entry => entry.id)} onClose={() => setAdding(undefined)}
-      onCreate={id => { setAdding(undefined); onFocus({ kind: 'provider', id, creating: true }); }} />}
-    {adding === 'model' && selected && <ModelDialog source={source} scope={scope} revision={revision} provider={selected} onClose={() => setAdding(undefined)} />}
+    {adding === 'provider' && <ProviderNameDialog revision={revision} exists={[...providers.map(entry => entry.id), ...draftedProviders]} onClose={() => setAdding(undefined)}
+      onCreate={id => { setAdding(undefined); onFocus({ kind: 'provider', id }); }} />}
+    {adding === 'model' && selected && <ModelDialog source={source} scope={scope} revision={revision} provider={selected} suggestDeepSeek={selectedProvider?.base_url.replace(/\/$/, '') === 'https://api.deepseek.com/anthropic'} onClose={() => setAdding(undefined)} />}
     {focus?.kind === 'model' && <ModelDialog source={source} scope={scope} revision={revision} id={focus.id} provider={focus.provider} onClose={closeModel} />}
   </section>;
 }
 
-/** Provider identity is chosen before editing its connection. Opening Add
- * creates only browser intent; native receives nothing until Save. */
-function ProviderNameDialog({ exists, onCreate, onClose }: { exists: readonly string[]; onCreate: (id: string) => void; onClose: () => void }) {
-  const tx = useTranslation();
-  const [identity, setIdentity] = useState('');
-  const input = useRef<HTMLInputElement>(null);
-  const duplicate = exists.includes(identity.trim());
-  const title = tx('settings:models-page.add-provider');
-  return <DialogSurface open onClose={onClose} title={title} overlayClassName={cards.overlay} className={`${css.settings} ${cards.nameDialog}`} initialFocus={input}>
-    <div className={cards.dialogHeader}><h2>{title}</h2><Button aria-label={tx('settings:models.close')} onClick={onClose}><IconCloseOutline16/></Button></div>
-    <form onSubmit={event => { event.preventDefault(); if (identity.trim() && !duplicate) onCreate(identity.trim()); }}>
-      <label>{tx('settings:models-page.new-provider-identity')}
-        <input ref={input} required value={identity} aria-invalid={duplicate || undefined} onChange={event => setIdentity(event.target.value)} />
-      </label>
-      <p className={css.hint}>{tx('settings:models.provider-identity-help')}</p>
-      {duplicate && <p role="alert" className={css.error}>{tx('settings:models.duplicate')}</p>}
-      <div className={cards.nameActions}><Button onClick={onClose}>{tx('settings:aria.cancel')}</Button><Button type="submit" variant="primary" disabled={!identity.trim() || duplicate}>{tx('settings:models.continue')}</Button></div>
-    </form>
-  </DialogSurface>;
-}
-
-function modelRow(tx: Translate, entry: CatalogEntry<Model>, scope: SourceScope): ResourceRow {
-  const model = entry.authored ?? entry.effective;
-  return { id: entry.id, name: entry.id,
-    facts: scope === 'workspace' ? <Badge>{provenanceLabel(tx, entry.origin)}</Badge> : undefined,
-    detail: <p className={css.hint}>{model?.id !== entry.id && <>{model?.id} · </>}{model?.context_window}{' '}{tx('settings:models-page.context')}{' '}{model?.max_output_tokens}{' '}{tx('settings:models-page.output')}</p>,
-  };
-}
-
-function ProviderDetail({ source, scope, revision, id, onBack, onModel, onAddModel }: {
-  source: SourceSettings; scope: SourceScope; revision: string; id: string;
-  onBack: () => void; onModel: (id: string) => void; onAddModel: () => void;
+function ModelRow({ entry, revision, providerHidden, canProbe, probe, onOpen }: {
+  entry: CatalogEntry<Model>; revision: string; providerHidden: boolean; canProbe: boolean; probe: ReturnType<typeof useModelProbe>; onOpen: () => void;
 }) {
   const tx = useTranslation();
-  const authored = sourceView(source, scope)?.authored?.providers?.[id];
-  const inherited = !authored ? catalogEntries<ProviderView>(source, scope, 'providers').find(entry => entry.id === id)?.effective : undefined;
-  const owned = catalogEntries<Model>(source, scope, 'models').filter(entry => (entry.authored ?? entry.effective)?.provider === id);
-  return <section aria-label={tx('settings:models-page.provider-value', { p0: id })} className={cards.detail}>
-    <Button size="sm" className={cards.back} onClick={onBack}>{tx('settings:models-page.models-2')}</Button>
-    <h3 aria-label={tx('settings:models-page.provider-value', { p0: id })} title={id}><ProviderIcon icon={(authored ?? inherited)?.icon} size={24}/>{id}</h3>
-    {inherited && <p className={css.hint}>{tx('settings:forms.using-global')}</p>}
-    <TypedUnitForm<ProviderWrite> key={`provider:${id}`} title={tx('settings:models-page.provider-value', { p0: id })}
-      authored={authored && { icon: authored.icon, protocol: authored.protocol, base_url: authored.base_url, credential: { kind: 'retain' } }} blank={{ icon: inherited?.icon, protocol: inherited?.protocol ?? 'openai_chat_completions', base_url: '', credential: { kind: 'literal', value: '' } }}
-      inherited={() => undefined} revision={revision} presentation="resource"
-      removalNotice={<p>{tx('settings:models-page.models-that-name-this-provider-identity-are-not-changed-and-no-s')}</p>}
-      mutation={value => ({ kind: 'config', mutation: { unit: 'provider', id, authored: value } })}>
-      {form => <ProviderFields form={form} />}
-    </TypedUnitForm>
-    <div className={cards.modelsHeading}><h4>{tx('settings:models.list')}</h4><Button size="sm" disabled={!authored && !inherited} onClick={onAddModel}>{tx('settings:models.add-model')}</Button></div>
-    {!authored && !inherited && <p className={css.hint}>{tx('settings:models.save-provider-first')}</p>}
-    {owned.length ? <ResourceList label={tx('settings:models-page.models-of-provider-value', { p0: id })} rows={owned.map(entry => modelRow(tx, entry, scope))}
-      onOpen={onModel} empty="" /> : <p className={cards.emptyModels}>{tx('settings:models.empty-models')}</p>}
-  </section>;
+  const model = entry.authored ?? entry.effective;
+  const unit = useUnitEditing({
+    authored: entry.authored, blank: emptyModel(), revision,
+    mutation: authored => ({ kind: 'config', mutation: { unit: 'model', id: entry.id, authored } }),
+  });
+  if (!model) return null;
+  const context = Number(model.context_window);
+  const status = probe.states[entry.id];
+  return <GridListItem id={entry.id} textValue={model.id} aria-label={entry.id} onAction={onOpen} className={cards.modelRow} data-hidden={!!model.hidden || providerHidden}>
+    <span className={cards.modelName} title={model.id}>{model.id}</span>
+    <div className={cards.modelBadges}>
+      <span title={tx('settings:models.context-tokens', { p0: model.context_window })}><Badge>{compactContext.format(context)}</Badge></span>
+      {model.capabilities.input_modalities.includes('image') && <Badge>{tx('settings:models.vision')}</Badge>}
+    </div>
+    <div className={cards.modelActions}
+      onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
+      onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') event.stopPropagation(); }}>
+      <Button size="sm" className={cards.iconButton} aria-label={tx('settings:models.test-model', { p0: model.id })}
+        title={tx('settings:models.test-model', { p0: model.id })} aria-busy={status === 'checking'} data-probe={status}
+        disabled={!canProbe || !probe.available || status === 'checking'} onClick={() => { void probe.test(entry.id); }}><IconLinkOutline14/></Button>
+      <Button size="sm" className={cards.iconButton} aria-label={tx('settings:models.edit-model')} title={tx('settings:models.edit-model')} onClick={onOpen}><IconEditOutline16 size={14}/></Button>
+      <Switch className={cards.switch} checked={!model.hidden && !providerHidden} label={tx('settings:models.show-model', { p0: model.id })}
+        disabled={!entry.authored || providerHidden || !unit.admitted || unit.draft || unit.awaitingObservation}
+        onChange={checked => unit.apply({ ...model, hidden: !checked })}/>
+    </div>
+    <SettingsNotice text={status && status !== 'checking' ? tx(`settings:models.probe-${status}`) : undefined}
+      tone={status === 'connected' ? 'success' : undefined}/>
+    <UnitOutcomeNotice title={entry.id} outcome={unit.outcome} />
+  </GridListItem>;
 }
 
-function ProviderFields({ form }: { form: TypedForm<ProviderWrite> }) {
-  const tx = useTranslation();
-  const Credential = form.Field as unknown as (props: { name: 'credential'; children: (field: { state: { value: ProviderWrite['credential'] }; handleChange: (value: ProviderWrite['credential']) => void }) => React.ReactNode }) => React.ReactNode;
-  return <>
-    <form.Field name="icon">{field => <ProviderIconField value={field.state.value} onChange={field.handleChange}/>}</form.Field>
-    <Text form={form} name="base_url" label={tx('settings:models-page.endpoint')} required url placeholder={/* i18n-raw: exact example API endpoint */ 'https://api.example.com/v1'}
-      validate={value => {
-        try {
-          const url = new URL(String(value));
-          return ['http:', 'https:'].includes(url.protocol) && url.hostname && !url.username && !url.password && !url.search && !url.hash ? undefined : message('settings:models.invalid-endpoint');
-        } catch { return message('settings:models.invalid-endpoint'); }
-      }} />
-    <Enum form={form} name="protocol" label={tx('settings:models-page.protocol')} options={[
-      ['openai_chat_completions', tx('settings:models.api-chat')],
-      ['openai_responses', tx('settings:models.api-responses')],
-      ['anthropic_messages', tx('settings:models.api-anthropic')],
-    ]} />
-    <Credential name="credential">{field => <>
-      {field.state.value.kind === 'environment' ? <Text form={form} name="credential.variable" label={tx('settings:models-page.environment-variable')} required />
-        : <LiteralCredential key={field.state.value.kind} credential={field.state.value} onChange={field.handleChange} />}
-      <Advanced title={tx('settings:models.connection-options')}>
-        <Choice label={tx('settings:models-page.credential-source')} value={field.state.value.kind === 'environment' ? 'environment' : 'literal'}
-          options={[["literal", tx('settings:copy.enter-a-literal-secret')], ["environment", tx('settings:copy.read-it-from-an-environment-variable')]]}
-          onChange={kind => {
-            if (kind === (field.state.value.kind === 'environment' ? 'environment' : 'literal')) return;
-            field.handleChange(kind === 'environment' ? { kind, variable: '' } : { kind: 'literal', value: '' });
-          }} />
-      </Advanced>
-    </>}</Credential>
-  </>;
-}
-function LiteralCredential({ credential, onChange }: { credential: ProviderWrite['credential']; onChange: (value: ProviderWrite['credential']) => void }) {
-  const tx = useTranslation();
-  const [visible, setVisible] = useState(false);
-  const value = credential.kind === 'literal' ? credential.value : '';
-  return <div className={cards.secret}>
-      <label>{tx('settings:models-page.new-literal-credential')}<input type={visible ? 'text' : 'password'} autoComplete="new-password" spellCheck={false} required={credential.kind === 'literal'} value={value}
-        placeholder={credential.kind === 'retain' ? tx('settings:models.saved-key-placeholder') : undefined}
-        onChange={event => onChange({ kind: 'literal', value: event.target.value })} /></label>
-      <Button size="sm" disabled={!value} aria-pressed={visible} onClick={() => setVisible(!visible)}>{visible ? tx('settings:models.hide-key') : tx('settings:models.show-key')}</Button>
-    </div>;
-}
-
-function ModelDialog({ source, scope, revision, id, provider, onClose }: { source: SourceSettings; scope: SourceScope; revision: string; id?: string; provider?: string; onClose: () => void }) {
+function ModelDialog({ source, scope, revision, id, provider, suggestDeepSeek, onClose }: { source: SourceSettings; scope: SourceScope; revision: string; id?: string; provider?: string; suggestDeepSeek?: boolean; onClose: () => void }) {
   const tx = useTranslation();
   const dialog = useRef<HTMLElement>(null);
   const authored = id ? sourceView(source, scope)?.authored?.models?.[id] : undefined;
   const catalog = catalogEntries<Model>(source, scope, 'models');
+  const inherited = id ? catalog.find(entry => entry.id === id)?.effective : undefined;
   const creating = id === undefined;
   const title = creating ? tx('settings:models-page.add-model') : tx('settings:models-page.model-value', { p0: id });
   const options: UnitOptions<Model> = {
-    authored: authored ?? undefined, blank: emptyModel(provider), revision,
+    authored: authored ?? undefined, blank: inherited ?? emptyModel(provider), revision,
     draftKey: creating ? JSON.stringify({ create: 'model', provider: provider ?? null }) : undefined,
     mutation: value => ({ kind: 'config', mutation: { unit: 'model', id: id ?? (value ? `${value.provider}/${value.id.trim()}` : ''), authored: value && { ...value, id: value.id.trim() } } }),
   };
   const unit = useUnitEditing(options);
   const close = () => { if (unit.busy) return; if (creating) unit.discard(); onClose(); };
+  const duplicate = (owner: string, wireId: string) => catalog.some(entry => {
+    const model = entry.authored ?? entry.effective;
+    return entry.id === `${owner}/${wireId}` || model?.provider === owner && model.id === wireId;
+  });
+  // Model metadata from the matching DeepSeek template in ZCode's catalog.
+  const suggestions = creating && suggestDeepSeek ? ['deepseek-flash', 'deepseek-v4-pro'].filter(id => !duplicate(provider ?? '', id)) : [];
   return <DialogSurface open title={title} onClose={close} overlayClassName={cards.overlay} className={`${css.settings} ${cards.modelDialog}`} contentRef={dialog}
     initialFocus={() => {
       const input = dialog.current?.querySelector<HTMLInputElement>(authored ? 'input[type="number"]' : 'input');
       if (input && !input.matches(':disabled')) { input.focus(); input.select(); return false; }
       return dialog.current ?? false;
     }}>
-    <div className={cards.dialogHeader}><h2>{authored ? tx('settings:models.edit-model') : tx('settings:models-page.add-model')}</h2><Button aria-label={tx('settings:models.close')} disabled={unit.busy} onClick={close}><IconCloseOutline16/></Button></div>
+    <div className={cards.dialogHeader}><h2>{creating ? tx('settings:models-page.add-model') : tx('settings:models.edit-model')}</h2><Button aria-label={tx('settings:models.close')} disabled={unit.busy} onClick={close}><IconCloseOutline16/></Button></div>
+    {!!suggestions.length && <div role="group" className={cards.templates} aria-label={tx('settings:models.model-suggestions')}>
+      {suggestions.map(modelId => <Button key={modelId} size="sm" variant="outline" disabled={unit.busy || !unit.writable}
+        aria-pressed={unit.displayed.id === modelId} onClick={() => unit.edit({
+          ...unit.displayed, id: modelId, context_window: '1000000',
+          capabilities: { ...unit.displayed.capabilities, input_modalities: modelId === 'deepseek-flash' ? ['text', 'image'] : ['text'] },
+        })}>{modelId}</Button>)}
+    </div>}
     <TypedUnitForm<Model> {...options} title={title}
       presentation="dialog" onCancel={close} onSaved={creating ? onClose : undefined}
       removalNotice={<p>{tx('settings:models-page.any-source-that-names-this-model-identity-keeps-naming-it-native')}</p>}
       >
-      {form => <ModelFields form={form} duplicate={creating ? (owner, wireId) => catalog.some(entry => {
-        const model = entry.authored ?? entry.effective;
-        return entry.id === `${owner}/${wireId}` || model?.provider === owner && model.id === wireId;
-      }) : undefined} />}
+      {form => <ModelFields form={form} duplicate={creating ? duplicate : undefined} />}
     </TypedUnitForm>
   </DialogSurface>;
 }

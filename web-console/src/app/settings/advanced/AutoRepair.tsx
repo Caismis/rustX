@@ -1,3 +1,4 @@
+import { SettingsNotice } from '../SettingsFeedback';
 import { useEffect, useRef } from 'react';
 import { useTranslation } from '../../../locale/react';
 import type { Translate } from '../../../locale/translation';
@@ -61,8 +62,8 @@ export function AutoRepairSection({ receipt, malformed, focused, inspection, pre
     {!receipt ? <p role="status">{tx('settings:auto-repair.none')}</p> : <>
       {receipt.status === 'repaired'
         ? <p role="status">{tx('settings:auto-repair.repaired', { count: repairCount(tx, receipt.changed_count) })}</p>
-        : <p role="alert" className={css.error}>{receipt.status === 'unresolved' ? tx('settings:auto-repair.unresolved') : tx('settings:auto-repair.commit-uncertain')}</p>}
-      {receipt.diagnostic && <p className={css.error}>{receipt.diagnostic}</p>}
+        : <p>{tx(receipt.status === 'unresolved' ? 'settings:auto-repair.unresolved' : 'settings:auto-repair.commit-uncertain')}</p>}
+      <SettingsNotice text={receipt.diagnostic ?? undefined}/>
       {receipt.changes.length > 0 && <>
         <h5>{receipt.status === 'unresolved' ? tx('settings:auto-repair.not-applied') : tx('settings:auto-repair.changes')}</h5>
         <ul aria-label={receipt.status === 'unresolved' ? tx('settings:auto-repair.not-applied') : tx('settings:auto-repair.changes')}>

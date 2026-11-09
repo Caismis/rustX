@@ -109,12 +109,17 @@ pub(crate) enum Composition {
 pub(in crate::local_runtime) fn catalog_document(
     layer: &RuntimeLayer,
 ) -> crate::model::catalog::ModelCatalogDocument {
+    authored_catalog(layer).into()
+}
+
+pub(in crate::local_runtime) fn authored_catalog(
+    layer: &RuntimeLayer,
+) -> crate::model::authoring::Catalog {
     crate::model::authoring::Catalog {
         schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
         providers: layer.providers.clone().unwrap_or_default(),
         models: layer.models.clone().unwrap_or_default(),
     }
-    .into()
 }
 
 /// Source-intrinsic native semantics: every constraint an authored document

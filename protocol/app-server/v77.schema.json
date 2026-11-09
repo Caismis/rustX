@@ -9828,6 +9828,23 @@
         {
           "type": "object",
           "properties": {
+            "outcome": {
+              "$ref": "#/$defs/ModelProbeOutcome"
+            },
+            "type": {
+              "type": "string",
+              "const": "model_probe"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "outcome"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "result": {
               "$ref": "#/$defs/McpProbeResult"
             },
@@ -25615,6 +25632,9 @@
     "ProviderView": {
       "type": "object",
       "properties": {
+        "hidden": {
+          "type": "boolean"
+        },
         "icon": {
           "type": [
             "string",
@@ -25679,6 +25699,10 @@
       "description": "One authored Model. A Model declares either model-level `request_params`\nor a nonempty `profiles` collection with a `default_profile`, never both.",
       "type": "object",
       "properties": {
+        "hidden": {
+          "description": "Hide this entry from new model choices. Existing selections stay resolvable.",
+          "type": "boolean"
+        },
         "provider": {
           "type": "string"
         },
@@ -27189,6 +27213,16 @@
         "field",
         "total",
         "kind"
+      ]
+    },
+    "ModelProbeOutcome": {
+      "description": "Provider responses are reduced to a finite outcome. Raw upstream details\n(including echoed credentials, headers, and configured request parameters)\nnever leave this check.",
+      "type": "string",
+      "enum": [
+        "connected",
+        "rejected",
+        "unavailable",
+        "timed_out"
       ]
     },
     "McpProbeResult": {
@@ -36269,6 +36303,40 @@
           ]
         },
         {
+          "description": "Test a saved Model without creating a Session.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "model/probe"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/SourceTarget"
+                },
+                "model": {
+                  "$ref": "#/$defs/ModelRef"
+                },
+                "source": {
+                  "$ref": "#/$defs/ModelProbeSource"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "model",
+                "source"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "description": "Finite configuration connectivity check; never an Agent connection.",
           "type": "object",
           "properties": {
@@ -38172,6 +38240,25 @@
         "revision"
       ]
     },
+    "ModelProbeSource": {
+      "description": "Both source revisions shown to the user when they requested a test.",
+      "type": "object",
+      "properties": {
+        "user_revision": {
+          "type": "string"
+        },
+        "workspace_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "user_revision"
+      ]
+    },
     "WorkflowModelChoicesQuery": {
       "oneOf": [
         {
@@ -38929,6 +39016,9 @@
     "ProviderWrite": {
       "type": "object",
       "properties": {
+        "hidden": {
+          "type": "boolean"
+        },
         "icon": {
           "type": [
             "string",

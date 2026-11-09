@@ -1,3 +1,4 @@
+import { providerAction } from './settings-harness';
 import { waitForSettingsSave } from './settings-harness';
 import {openResourceModule} from './settings-harness';
 import { settingsContext } from './settings-harness';
@@ -150,7 +151,7 @@ it('S2-01 every primary page is reachable and renders its own product surface', 
   const subject = cfg3Client();
   render(<SettingsSurface client={subject.client} target={userSettingsTarget} />);
   await settingsReady();
-  for (const [page, region] of [['Models', 'Models'], ['Agent', 'Agent'], ['Tools & Permissions', 'Tools & Permissions'],
+  for (const [page, region] of [['Models', 'Model Settings'], ['Agent', 'Agent'], ['Tools & Permissions', 'Tools & Permissions'],
     ['Extensions', 'Extensions'], ['Advanced', 'Advanced']] as const) {
     await openSettingsPage(page);
     expect(screen.getByRole('region', { name: region })).toBeTruthy();
@@ -192,18 +193,19 @@ it('saves a whole Workspace Provider with explicit credentials without copying U
     if (mutation.unit === 'provider' && mutation.authored?.credential.kind === 'environment') {
       source.workspace!.authored = { providers: { [mutation.id]: { protocol: mutation.authored.protocol, base_url: mutation.authored.base_url, credential: { type: 'environment', variable: mutation.authored.credential.variable } } } };
     }
-  }); await open(subject, 'Models');
-  fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
-  fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'transport' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-  expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('');
+  });
+  subject.source.resolved = { providers: subject.source.user.authored!.providers };
+  await open(subject, 'Models');
+  await openResourceRow('transport');
+  await providerAction('Customize');
+  expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://user.invalid');
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://workspace.invalid' } });
-  await chooseOption('API Key source', 'Read it from an environment variable');
+  await providerAction('Use an environment variable');
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'WORKSPACE_KEY' } });
   await chooseOption('API format', 'OpenAI Responses (/v1/responses)');
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
   await waitForSettingsSave();
-  expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toEqual({ method: 'configuration/sourceWrite', params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { protocol: 'openai_responses', base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } });
+  expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ method: 'configuration/sourceWrite', params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { protocol: 'openai_responses', base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } });
   expect(screen.queryByRole('button', { name: /Adopt/ })).toBeNull();
 });
 
@@ -388,15 +390,11 @@ it('removes literal credentials from a successful Provider draft using the redac
   fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } }); fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://native.invalid' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Connection options', expanded: false }));
-  fireEvent.click(screen.getByRole('button', { name: /API Key source/ }));
-  fireEvent.click(await screen.findByRole('option', { name: 'Enter a literal secret' }));
   fireEvent.change(await screen.findByLabelText('API Key'), { target: { value: 'SECRET_SENTINEL' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
   await waitForSettingsSave();
   await waitFor(() => expect((screen.getByLabelText('API Key') as HTMLInputElement).value).toBe(''));
   expect(document.body.innerHTML).not.toContain('SECRET_SENTINEL');
-  fireEvent.click(screen.getByRole('button', { name: '← Models' }));
   await openResourceRow('secret');
   expect((screen.getByLabelText('API Key') as HTMLInputElement).placeholder).toContain('API Key saved');
 });
@@ -415,7 +413,6 @@ it('round-trips the single native JSON Schema claim through whole Workspace Mode
   subject.source.resolved = structuredClone(subject.effective.document);
   subject.source.resolved.providers = subject.source.user.authored!.providers;
   await open(subject, 'Models');
-  fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
   await openResourceRow('main');
   const nativeSchema = () => screen.getByRole('switch', { name: 'Structured output' }) as HTMLInputElement;
   expect(screen.getAllByRole('switch', { name: 'Structured output' })).toHaveLength(1);
@@ -426,8 +423,7 @@ it('round-trips the single native JSON Schema claim through whole Workspace Mode
     fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
     await waitForSettingsSave();
     fireEvent.click(within(screen.getByRole('dialog', { name: 'Model main' })).getByRole('button', { name: 'Close' }));
-    fireEvent.click(screen.getByRole('button', { name: '← Models' }));
-    const reads = subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead').length;
+      const reads = subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead').length;
     fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
     await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourcesRead')).toHaveLength(reads + 1));
     await openResourceRow('main');
@@ -442,7 +438,6 @@ it('retains a Model draft when native validation rejects its semantic unit', asy
  const subject = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite') throw new RpcFailure({ code: -32602, message: 'Invalid provider reference', data: { kind: 'invalid_params' } }); });
  subject.source.resolved = { providers: subject.source.user.authored!.providers };
  await open(subject, 'Models');
- fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
  await openResourceRow('transport');
  fireEvent.click(screen.getByRole('button', { name: /^(?:\+ )?Add Model$/ }));
  fireEvent.change(await screen.findByLabelText('Model ID'), { target: { value: 'wire' } });
@@ -593,9 +588,6 @@ it('retires a confirmed Provider save, including its literal credential, after t
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } });
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://native.invalid' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Connection options', expanded: false }));
-  fireEvent.click(screen.getByRole('button', { name: /API Key source/ }));
-  fireEvent.click(await screen.findByRole('option', { name: 'Enter a literal secret' }));
   fireEvent.change(await screen.findByLabelText('API Key'), { target: { value: 'SECRET_SENTINEL' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(1));

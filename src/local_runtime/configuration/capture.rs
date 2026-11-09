@@ -3,7 +3,7 @@
 //! [`ProspectiveSessionConfig`] or captured application input.
 #[cfg(test)]
 use super::ConfigurationHooks;
-use super::semantics::{SemanticFailure, catalog_document, composition_semantics};
+use super::semantics::{SemanticFailure, composition_semantics};
 use super::{
     AdmittedSource, BTreeMap, Digest, IndependentPolicy, LaunchFailure, LayerCapture, ModelCatalog,
     Origin, OsStrExt, Path, PathBuf, ProspectiveSessionConfig, ResourceDefinition, ResourceFamily,
@@ -419,7 +419,8 @@ impl UserConfigManager {
             );
         }
         let user_path = self.sources.config_path.clone();
-        let model_result = ModelCatalog::from_document(catalog_document(&merged));
+        let model_result =
+            ModelCatalog::from_authoring(super::semantics::authored_catalog(&merged));
         // A semantic failure names the document that authored its field.
         let owner = |failure: &SemanticFailure| {
             // Process policy stays outside the overlay; its source contract

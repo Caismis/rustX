@@ -214,7 +214,7 @@ describe('View details acknowledges a receipt only once its exact details are pr
     shell.s.held.delete('configuration/sourcesRead');
     await act(async () => shell.s.reply(read));
     const details = await shell.details();
-    expect(within(details).getByRole('alert').textContent).toBe('Automatic repair could not fix this source. It is unchanged.');
+    expect(within(details).getByText('Automatic repair could not fix this source. It is unchanged.')).toBeTruthy();
     await waitFor(() => expect(shell.acknowledged('w')).toBe(true));
     expect(shell.acknowledged('receipt-user-1')).toBe(false);
     expect(screen.getByRole('status', { name: 'Configuration repair' }).textContent).toMatch(/^Configuration automatically repaired · 3 changes in User configuration/);
@@ -667,8 +667,8 @@ it('shows an unresolved repair as a failure next to the manual repair', async ()
   await s.connect();
   render(<SettingsSurface client={s.client} target={userSettingsTarget} initialPage="advanced" />);
   const section = await screen.findByRole('region', { name: 'Auto Repair' });
-  expect(within(section).getByRole('alert').textContent).toBe('Automatic repair could not fix this source. It is unchanged.');
-  expect(within(section).getByText(/malformed TOML at line 3, column 1/)).toBeTruthy();
+  expect(within(section).getByText('Automatic repair could not fix this source. It is unchanged.')).toBeTruthy();
+  expect(await screen.findByText(/malformed TOML at line 3, column 1/)).toBeTruthy();
   expect(within(section).getByText('No backup copy was made.')).toBeTruthy();
   expect(within(section).getByText('Use Repair invalid source below to correct the document by hand.')).toBeTruthy();
   expect(screen.getByRole('button', { name: /Save Repair invalid source/ })).toBeTruthy();

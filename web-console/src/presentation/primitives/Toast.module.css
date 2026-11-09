@@ -16,6 +16,7 @@
   box-shadow: var(--dsw-elevation-panel);
   animation: toast-in 160ms ease-out, toast-fade 1000ms ease var(--dsh-toast-hold) forwards;
 }
+.toast[data-foreground] { z-index: 1300; }
 .icon { display: grid; place-items: center; flex: none; color: var(--dsw-alias-state-warn-label); }
 .text { min-width: 0; overflow-wrap: anywhere; }
 .success { color: var(--dsw-alias-state-success-primary); border: 1px solid currentColor; border-radius: 50%; width: 16px; height: 16px; }

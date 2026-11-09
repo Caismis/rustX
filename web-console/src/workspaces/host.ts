@@ -1,4 +1,4 @@
-import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v77.ts';
+import type { McpProbeResult, ModelProbeOutcome, ModelProbeSource, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v77.ts';
 import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v77.ts';
 import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor } from '../../../protocol/app-server/v77.ts';
 import type { WorkflowEdit, WorkflowSource } from '../../../protocol/app-server/workflow-documents.ts';
@@ -6,7 +6,7 @@ import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts'
 import type { FileBytes, FileReadOptions } from '../../shared/file-preview.ts';
 export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; locator: CanonicalContentLocator; delivery_index: number; read?: FileReadOptions }
 export interface DeliveryBytes extends FileBytes { file: SessionFileReference }
-export type WorkspaceConfigurationOperation =  { kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
+export type WorkspaceConfigurationOperation =  { kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'model_probe'; model: string; source: ModelProbeSource } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
 /** The separate authoritative read attempted after a confirmed write. It may
  * succeed or fail without changing the fact that the write committed. */
 export type WorkspaceConfigurationReread =
@@ -24,6 +24,7 @@ export interface WorkspaceConfigurationCommit {
  * never be mistaken for an uncommitted write. */
 export type WorkspaceConfigurationResult =
   | { kind: 'mcp_probe'; result: McpProbeResult }
+  | { kind: 'model_probe'; outcome: ModelProbeOutcome }
   | { kind: 'read' | 'reconcile'; projection: SourceSettings }
   | { kind: 'write'; commit: WorkspaceConfigurationCommit };
 /** One native Workflow file operation on one registered Workspace's own

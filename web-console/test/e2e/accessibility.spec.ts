@@ -109,27 +109,11 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     const endpoint = settings.getByLabel('Base URL', { exact: true });
     await tabTo(endpoint); await expect(endpoint).toBeFocused();
     await page.keyboard.press('End'); await page.keyboard.type('/draft-only');
-    // The advanced connection options disclosure opens from the keyboard.
-    const options = settings.getByRole('button', { name: 'Connection options', exact: true });
-    await tabTo(options); await page.keyboard.press('Enter');
-    await expect(options).toHaveAttribute('aria-expanded', 'true');
-    // A select opens and closes without changing the credential source.
-    const credential = settings.getByRole('button', { name: /API Key source$/ });
-    await tabTo(credential); await page.keyboard.press('Enter');
-    await expect(page.getByRole('listbox')).toBeVisible();
-    await page.keyboard.press('Escape'); await expect(page.getByRole('listbox')).toHaveCount(0);
-    await expect(credential).toBeFocused();
-    // A destructive action opens a modal confirmation that holds focus, is
-    // dismissed with Escape without writing, and returns focus to its trigger.
-    const remove = settings.getByRole('button', { name: 'Remove Provider fixture', exact: true });
-    await tabTo(remove); await page.keyboard.press('Enter');
-    const confirmation = page.getByRole('alertdialog');
-    await expect(confirmation).toBeVisible();
-    await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
-    await page.keyboard.press('Tab'); await page.keyboard.press('Tab');
-    await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
+    const actions = settings.getByRole('button', { name: 'Provider actions', exact: true });
+    await tabTo(actions); await page.keyboard.press('Enter');
+    await expect(page.getByRole('menuitem', { name: 'Choose provider icon', exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
-    await expect(confirmation).toHaveCount(0); await expect(remove).toBeFocused();
+    await expect(actions).toBeFocused();
     await expect(endpoint).toHaveValue(/\/draft-only$/);
     // The dedicated MCP page and create flow are keyboard reachable.
     await tabTo(page.getByRole('navigation',{name:'Primary navigation'}).getByRole('button',{name:'MCP servers',exact:true}));

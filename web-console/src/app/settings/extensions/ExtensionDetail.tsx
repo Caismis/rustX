@@ -1,3 +1,4 @@
+import { SettingsNotice } from '../SettingsFeedback';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted resource controls; see PROVENANCE.md. */
 import {useTranslation} from '../../../locale/react';
 import type {SourceScope,SourceSettings} from '../../../../../protocol/app-server/v77';
@@ -14,8 +15,7 @@ export function ExtensionDetail({source,scope,revision,name,onFocus}: {
  const entry=extensionEntries(source,scope,'managed_python').find(row=>row.name===name);
  return <section><Button size="sm" onClick={()=>onFocus(undefined)}>{tx('settings:extension-detail.extensions')}</Button><h3>{name}</h3>
   <p>{tx('settings:extensions.manage-files')}</p>{entry?.path&&<p className={css.hint}>{entry.path}</p>}
-  {entry?.diagnostics.map((reason,index)=><p key={index} role="alert">{reason}</p>)}
-  {source.prospective_resources?.sources[`python:${name}`]?.status==='unavailable'&&<p role="alert">{tx('settings:extensions.unavailable')}</p>}
+  <SettingsNotice text={entry?.diagnostics[0] ?? (source.prospective_resources?.sources[`python:${name}`]?.status === 'unavailable' ? tx('settings:extensions.unavailable') : undefined)}/>
   <AvailabilityDetail source={source} scope={scope} revision={revision} family="managed_python" name={name}/>
  </section>;
 }

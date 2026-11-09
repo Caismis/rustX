@@ -90,6 +90,7 @@ if (variant.get('conversation') === 'ready') {
 server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
   const projection = { ...source, target: { kind: 'workspace' as const, directory: '/workspace' } };
   if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: sourceReceipt(projection), reread: { status: 'observed', projection } } };
+  if (operation.kind === 'model_probe') return { kind: 'model_probe', outcome: 'connected' };
   if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:variant.get('scenario') === 'mcp-probe' && operation.id === 'broken' ? 'connection_failed' : 'reachable'}};
   return { kind: operation.kind, projection };
 };

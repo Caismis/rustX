@@ -11,7 +11,7 @@ import { UnitForm } from './forms/bridge';
 import css from '../../presentation/settings/SettingsContent.module.css';
 import { SourceContext } from './source-context';
 import { SettingsActorContext, useSettingsTarget } from './machines/react';
-import { mutationOutcome, type MutationOutcome } from './machines/settings-target';
+import { mutationOutcome } from './machines/settings-target';
 import { configurationSystem, type TransactionOwner } from './machines/system';
 import { SettingsPanel } from '../../presentation/settings/SettingsRoot';
 import {
@@ -23,6 +23,7 @@ import { ConnectionSettings } from './ConnectionSettings';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import { GeneralPage } from './general/GeneralPage';
+import { SettingsFeedback, SettingsNotice } from './SettingsFeedback';
 import { ModelsPage } from './models/ModelsPage';
 import { AgentPage } from './agent/AgentPage';
 import { ToolsPage } from './tools/ToolsPage';
@@ -50,17 +51,6 @@ export interface SettingsProps {
    * component renders shell navigation as it is; resource pages may select
    * their own configuration owner without retargeting the shell. */
   navigation: SettingsNavigationActor;
-}
-
-/** The presentation of one mutation outcome that is not attributable to a
- * single unit — a read or convergence fact of the target as a whole. Each
- * unit's own save reports itself, next to the unit it is about. */
-function MutationNotice({ outcome }: { outcome: MutationOutcome }) {
-  const tx = useTranslation();
-  switch (outcome.kind) {
-    case 'uncertain': return <p role="alert" className={css.error}>{tx('settings:settings.save-outcome-uncertain-authority-is-reread-the-write-is-never-re')}</p>;
-    default: return null;
-  }
 }
 
 /** Each primary page's glyph from the existing Harness icon family. They tell
@@ -172,7 +162,7 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
   const structured = config.state === 'structured';
   const body = !source || !selected ? null : <fieldset disabled={!editable} className={css.editor}>
     {current === 'models' && (structured
-      ? <ModelsPage source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} onRefresh={() => actor.send({ type: 'REFRESH' })} />
+      ? <ModelsPage client={client} host={host} target={target} source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} refreshing={busy} onRefresh={editable ? () => actor.send({ type: 'REFRESH' }) : undefined} />
       : <MalformedNotice config={config} />)}
     {current === 'agent' && (structured
       ? <AgentPage document={config.document} scope={scope} revision={config.revision} />
@@ -202,7 +192,7 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
   </fieldset>;
 
   const pages = settingsPages(target).map(id => ({ id, label: tx(`settings:page.${id}`), icon: pageIcons[id]() }));
-  return <SettingsPanel pages={pages} activeId={current} visible={visible}
+  return <SettingsFeedback active={visible}><SettingsPanel pages={pages} activeId={current} visible={visible}
     onSelect={id => navigation.send({ type: 'SELECT', page: id as SettingsPage })}
     // Scope stays visible; internal observation metadata is not product copy.
     context={<div className={css.context} data-lifecycle={lifecycle}>
@@ -210,29 +200,25 @@ function SettingsPageContent({ client, host, theme = 'system', setTheme, connect
         <h2>{settingsTargetLabel(tx, activeTarget)}</h2>
         {target.kind === 'workspace' && <Button size="sm" onClick={() => navigation.send({ type: 'OPEN', target: userSettingsTarget })}>{tx('settings:copy.open-user-settings')}</Button>}
       </div>
-      <Button size="sm" variant="outline" disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>{tx('settings:settings.reload-configuration')}</Button>
+      {(current !== 'models' || !editable || !structured) && <Button size="sm" variant="outline" disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>{tx('settings:settings.reload-configuration')}</Button>}
     </div>}>
     <section className={`${css.settings} ${css.page}`} data-settings-section={current} aria-busy={busy}>
-      {/* Target-wide facts, each reported as itself: a read failure, a
-          convergence report, an unknown save outcome and a maintenance
-          failure are separate alerts, and none of them hides another. */}
-      {readError && <p role="alert" className={css.error}>{tx('settings:settings.source-read-failed')}{' '}{readError}</p>}
-      {convergenceError && <p role="alert" className={css.error}>{convergenceError}</p>}
-      <MutationNotice outcome={outcome} />
-      {maintenanceError && <p role="alert" className={css.error}>{maintenanceError}</p>}
       {current === 'general' ? <GeneralPage theme={theme} setTheme={setTheme} /> : connectionFocused
         ? <ConnectionSettings connection={connection} client={client} />
         : !source ? <SourcePending lifecycle={lifecycle} />
           : <SettingsActorContext value={actor}><SourceContext value={source}>
             <div key={editorKey}>{body}</div>
           </SourceContext></SettingsActorContext>}
+      <SettingsNotice text={convergenceError || maintenanceError}/>
+      <SettingsNotice text={outcome.kind === 'uncertain' ? tx('settings:settings.save-outcome-uncertain-authority-is-reread-the-write-is-never-re') : undefined}/>
+      <SettingsNotice text={readError ? `${tx('settings:settings.source-read-failed')} ${readError}` : undefined}/>
       {connectionReachable && <p>
         <Button onClick={() => onFocus(connectionFocused ? undefined : connectionFocus)}>
           {connectionFocused ? tx('settings:settings.back-to-advanced') : tx('settings:connection-settings.connection')}
         </Button>
       </p>}
     </section>
-  </SettingsPanel>;
+  </SettingsPanel></SettingsFeedback>;
 }
 
 /** The page body before this target has any projection to present — not even
@@ -254,6 +240,6 @@ function MalformedNotice({ config }: {
   if (config.state !== 'malformed') return null;
   return <>
     <p role="status">{tx('settings:settings.structured-editing-is-unavailable-because')}{' '}{config.path} {tx('settings:settings.violates-the-source-contract-repair-it-to-edit-again')}</p>
-    <p role="alert" className={css.error}>{config.diagnostic ?? tx('settings:source.not-loaded')}</p>
+    <SettingsNotice text={config.diagnostic ?? tx('settings:source.not-loaded')}/>
   </>;
 }

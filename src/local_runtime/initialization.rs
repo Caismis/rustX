@@ -90,6 +90,7 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
             },
         )?;
         Model {
+            hidden: false,
             provider: provider.into(),
             id: request.model_id.clone().ok_or("init requires --model-id")?,
             context_window: request
@@ -116,6 +117,7 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
         providers: BTreeMap::from([(
             provider.into(),
             Provider {
+                hidden: false,
                 icon: None,
                 protocol,
                 base_url: request.endpoint.clone(),

@@ -1,3 +1,4 @@
+import { SettingsNotice } from './SettingsFeedback';
 import { displayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { useState, useSyncExternalStore } from 'react';
@@ -25,7 +26,7 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
     </> : <p>{tx('settings:connection-settings.the-launcher-supplies-this-connection-automatically')}</p>}
     <Button disabled={selection.busy} onClick={() => void connection.reconnect()}>{tx('settings:connection-settings.reconnect')}</Button>
     <Button onClick={() => void connection.disconnect()}>{tx('settings:connection-settings.disconnect')}</Button>
-    {(selection.error || transport.error) && <p role="alert">{displayText(tx, selection.error || transport.error || '')}</p>}
+    <SettingsNotice text={displayText(tx, selection.error || transport.error || '')}/>
     {!!transport.detached?.length && <details><summary>{tx('settings:connection-settings.detached-authority-diagnostics')}</summary>
       <p>{tx('settings:connection-settings.historical-evidence-only-these-operations-are-never-replayed-and')}</p>
       {transport.detached.map((evidence, index) => <section key={index}><h3>{tx('settings:connection.previous-connection', { number: index + 1 })}</h3>
@@ -39,7 +40,7 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
       <p>{tx('settings:connection-settings.historical-evidence-only-these-operations-are-never-replayed-and')}</p>
       {Object.values(transport.views).filter(view => view.deleting || view.error || view.modelMutation || view.cancellation).map(view => <section key={view.id}>
         <p>{tx('settings:connection.review-conversation', { id: view.id })}</p>
-        {view.error && <p role="alert">{displayText(tx, view.error)}</p>}
+        {view.error && <p>{displayText(tx, view.error)}</p>}
         {view.deleting && <p>{tx(!view.deletionCommitted ? 'settings:connection-settings.deletion-uncertain' : view.deletionCommitted === 'committed_cleanup_pending' ? 'settings:connection-settings.deletion-cleanup' : 'settings:connection-settings.deletion-durability')}</p>}
         {view.modelMutation && <p>{tx('settings:connection.review-model-change')}</p>}
         {view.cancellation && <p>{tx('settings:connection.review-cancellation')}</p>}

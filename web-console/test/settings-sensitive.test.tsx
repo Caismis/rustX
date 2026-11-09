@@ -1,3 +1,4 @@
+import { providerAction } from './settings-harness';
 import {openResourceModule} from './settings-harness';
 import { waitForSettingsRevision } from './settings-harness';
 // @vitest-environment jsdom
@@ -109,29 +110,18 @@ it('S1-15 a Provider credential is never read back from a shadowed definition', 
   const form = within(provider);
   expect(within(dialog).queryByText(/Native effective Provider transport/)).toBeNull();
   const endpoint = form.getByLabelText('Base URL') as HTMLInputElement;
-  expect(endpoint.value).toBe('');
-  expect((form.getByRole('button', { name: 'Save Provider transport' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(endpoint.value).toBe('https://user.invalid');
+  expect(endpoint.matches(':disabled')).toBe(true);
+  expect((form.getByLabelText('API Key') as HTMLInputElement).value).toBe('');
   const transactionsBefore = retained(s);
   const requestsBefore = s.request.mock.calls.slice();
   const sourceBefore = structuredClone(s.source);
-  // Authoring an override starts a complete new definition; `retain` is not
-  // even offered, because this Workspace authors no credential to retain.
-  fireEvent.click(form.getByRole('button', { name: 'Connection options', expanded: false }));
-  fireEvent.click(form.getByRole('button', { name: /API Key source/ }));
-  const listbox = await screen.findByRole('listbox');
-  expect(within(listbox).getAllByRole('option').map(option => option.textContent)).toEqual([
-    'Enter a literal secret', 'Read it from an environment variable',
-  ]);
-  expect(within(listbox).queryByRole('option', { name: 'Keep the credential this scope already authored' })).toBeNull();
-  // Select owns this Escape. A synthetic click need not settle browser focus,
-  // so document.activeElement can still name a control in the Settings layer.
-  fireEvent.keyDown(listbox, { key: 'Escape' });
-  expect(screen.queryByRole('listbox')).toBeNull();
+  fireEvent.click(form.getByRole('button', { name: 'Provider actions' }));
+  expect(await screen.findByRole('menuitem', { name: 'Customize' })).toBeTruthy();
+  expect(screen.queryByRole('menuitem', { name: 'Use an API Key' })).toBeNull();
+  fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
   expect(screen.getByRole('region', { name: 'Settings' })).toBe(dialog);
   expect(screen.getByRole('form', { name: 'Provider transport' })).toBe(provider);
-  expect(form.getByLabelText('Base URL')).toBe(endpoint);
-  expect(endpoint.value).toBe('');
-  expect((form.getByRole('button', { name: 'Save Provider transport' }) as HTMLButtonElement).disabled).toBe(true);
   expect(document.body.innerHTML).not.toContain(SENTINEL);
   expect(retained(s)).not.toContain(SENTINEL);
   expect(retained(s)).toBe(transactionsBefore);
@@ -169,6 +159,7 @@ it('S2-12 the form library opens no devtools channel, so a typed secret is never
     await settingsReady();
     await openSettingsPage('Models');
     await openResourceRow('transport');
+    await providerAction('Use an API Key');
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: SENTINEL } });
     // The draft legitimately holds the secret in the actor-owned transaction.
     await waitFor(() => expect(retained(s)).toContain(SENTINEL));

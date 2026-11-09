@@ -48,9 +48,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
         return;
       }
       await expandModelAuthoring(page);
-      if (await settings.getByRole('button', { name: '← Models', exact: true }).isVisible()) await settings.getByRole('button', { name: '← Models', exact: true }).click();
-      await settings.getByRole('button', { name: /^All Models/ }).click();
-      await settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name: 'fixture/console-model', exact: true }).click();
+      await settings.getByRole('row', { name: 'fixture/console-model', exact: true }).click();
       await expect(model.getByRole('heading', { name: 'Edit Model', exact: true })).toBeVisible();
     };
     const openMcp = async () => {

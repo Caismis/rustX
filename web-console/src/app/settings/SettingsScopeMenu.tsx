@@ -1,3 +1,4 @@
+import { SettingsNotice } from './SettingsFeedback';
 import { useEffect, useState } from 'react';
 import type { ProductHostWorkspace, ProductHostWorkspaces } from '../../workspaces/host';
 import { useTranslation } from '../../locale/react';
@@ -38,6 +39,6 @@ export function SettingsScopeMenu({ target, host, onSelect, userLabel, disabled 
         ...(loading ? [{id:'loading',label:tx('settings:catalog.loading-workspaces'),disabled:true}] : []),
       ]}
       onSelect={id => { const workspace = workspaces.find(row => `workspace:${row.id}` === id); setOpen(false); if (id === settingsTargetKey(target)) return; if (id === 'user') onSelect(userSettingsTarget); else if (workspace) onSelect(workspaceSettingsTarget(workspace.id, workspace.displayName)); }}/>
-    {error && <p role="alert">{error}</p>}
+    <SettingsNotice text={error}/>
   </div>;
 }

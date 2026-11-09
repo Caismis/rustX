@@ -228,11 +228,12 @@ export async function waitForSettingsRevision(expected?: string) {
  * The trigger's accessible name is its current value followed by its label, and
  * the listbox opens in a portal outside the form, so the trigger is found in
  * `scope` and the option globally. */
+export async function providerAction(name: string, scope: { getByRole: typeof screen.getByRole } = screen) {
+  fireEvent.click(scope.getByRole('button', { name: 'Provider actions' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name }));
+}
+
 export async function chooseOption(label: string, option: string, scope: { getByRole: typeof screen.getByRole } = screen) {
-  if (label === 'API Key source') {
-    const options = screen.queryByRole('button', { name: 'Connection options', expanded: false });
-    if (options) fireEvent.click(options);
-  }
   fireEvent.click(scope.getByRole('button', { name: (accessible: string) => accessible.endsWith(label) }));
   fireEvent.click(await screen.findByRole('option', { name: option }));
 }

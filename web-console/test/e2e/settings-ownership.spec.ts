@@ -63,7 +63,7 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    // A revoked target fences the next authored change and retains the draft.
    await settings.getByLabel('read', { exact: true }).check();
    await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
-   await expect(settings.getByRole('alert').filter({ hasText: /was not saved\. WorkspaceHostError: Workspace Host: Error: Unknown/ })).toBeVisible();
+   await expect(page.locator('[data-toast][data-foreground]').filter({ hasText: 'Unknown Workspace registration' })).toBeVisible();
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
    await returnHome(page);
    await page.getByRole('button', { name: 'Settings', exact: true }).click();

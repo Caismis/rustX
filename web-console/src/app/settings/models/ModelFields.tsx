@@ -1,3 +1,4 @@
+import { SettingsNotice } from '../SettingsFeedback';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted typed request controls; see PROVENANCE.md. */
 import { useContext, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { Model, Modality } from '../../../../../protocol/app-server/v77';
@@ -73,7 +74,6 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
   const addingDraft = useRef(false);
   const panel = useRef<HTMLDivElement>(null);
   const chips = useRef<HTMLDivElement>(null);
-  const errorId = useId();
   const Bound = form.Field as unknown as Field;
   return <Bound name="request_params">{params => <Bound name="default_profile">{fallback => <Bound name="reasoning_profile_order">{ranking => <Bound name="profiles">{field => {
     const profiles = (field.state.value as ProfileMap | null | undefined) ?? {};
@@ -126,7 +126,7 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
           }}>×</Button>
         </div>)}
         {adding && <input autoFocus aria-label={tx('settings:models-page.new-profile-identity')} className={cards.profileName}
-          value={identity} aria-invalid={duplicate || undefined} aria-describedby={duplicate ? errorId : undefined}
+          value={identity} aria-invalid={duplicate || undefined}
           onChange={event => setIdentity(event.target.value)} onBlur={finishAdd} onKeyDown={event => {
             if (event.key === 'Enter') { event.preventDefault(); finishAdd(); }
             if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); addingDraft.current = false; setAdding(false); setIdentity(''); focusAdd(); }
@@ -134,7 +134,7 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
         <Button data-add-profile size="sm" variant="outline" className={cards.profileAdd} aria-label={tx('settings:models-page.add-profile')}
           onClick={() => { if (canSwitch()) { addingDraft.current = true; setIdentity(''); setAdding(true); } }}>+</Button>
       </div>
-      {adding && duplicate && <p id={errorId} role="alert" className={css.error}>{name} {tx('settings:fields.is-already-listed')}</p>}
+      <SettingsNotice text={adding && duplicate ? `${name} ${tx('settings:fields.is-already-listed')}` : undefined}/>
       <div ref={panel}>
         {current && <ProfileFields key={current} id={current} profile={profiles[current]} change={next => update(current, next)} />}
       </div>
@@ -190,7 +190,7 @@ function ReasoningOrder({ identities, order, appended, change }: {
           </li>)}
         </ol>
         <p className={css.hint}>{tx('settings:models-page.reasoning-draft-help')}</p>
-        {appended && <p role="status" className={css.hint}>{tx('settings:models-page.reasoning-appended', { p0: appended })}</p>}
+        <SettingsNotice tone="success" text={appended ? tx('settings:models-page.reasoning-appended', { p0: appended }) : undefined}/>
       </>}
     <p className={css.hint}>{tx('settings:models-page.reasoning-help')}</p>
   </section>;

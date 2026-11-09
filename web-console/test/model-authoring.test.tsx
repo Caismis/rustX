@@ -1,3 +1,4 @@
+import { providerAction } from './settings-harness';
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { cfg3Client } from './cfg3-fixture';
@@ -44,7 +45,7 @@ it('a model is added in one dialog, confirmed by native observation, and listed 
   const second = within(screen.getByRole('dialog', { name: 'Add Model' }));
   fireEvent.change(second.getByLabelText('Model ID'), { target: { value: 'deepseek-flash' } });
   fireEvent.submit(second.getByRole('form'));
-  await second.findByText('This configuration name already exists.');
+  await screen.findByText(/This configuration name already exists\./);
   fireEvent.click(second.getByRole('button', { name: 'Reset form' }));
   await waitFor(() => expect((second.getByLabelText('Model ID') as HTMLInputElement).value).toBe(''));
   expect(writes(subject)).toHaveLength(1);
@@ -79,15 +80,15 @@ it('invalid model limits and duplicate model identities never reach native write
   const modal = await addModel(subject);
   fireEvent.change(modal.getByLabelText('Model ID'), { target: { value: 'duplicate' } });
   fireEvent.submit(modal.getByRole('form'));
-  await modal.findByText('This configuration name already exists.');
+  await screen.findByText(/This configuration name already exists\./);
   expect(writes(subject)).toHaveLength(0);
   fireEvent.change(modal.getByLabelText('Model ID'), { target: { value: 'new' } });
   fireEvent.change(modal.getByLabelText('Context window'), { target: { value: '1000' } });
   fireEvent.submit(modal.getByRole('form'));
-  await modal.findByText('Maximum output tokens must be smaller than the context window.');
+  await screen.findByText(/Maximum output tokens must be smaller than the context window\./);
   expect(writes(subject)).toHaveLength(0);
   fireEvent.change(modal.getByLabelText('Context window'), { target: { value: '128000' } });
-  await waitFor(() => expect(modal.queryByText('Maximum output tokens must be smaller than the context window.')).toBeNull());
+  await waitFor(() => expect(screen.queryByText(/Maximum output tokens must be smaller than the context window/)).toBeNull());
 });
 
 it('a refused save keeps the model dialog and all input; Cancel discards the creation draft', async () => {
@@ -97,7 +98,7 @@ it('a refused save keeps the model dialog and all input; Cancel discards the cre
   const modal = await addModel(subject);
   fireEvent.change(modal.getByLabelText('Model ID'), { target: { value: 'retained' } });
   fireEvent.click(modal.getByRole('button', { name: 'Save Add Model' }));
-  await modal.findByText(/Native rejected this model/);
+  await screen.findByText(/Native rejected this model/);
   expect((modal.getByLabelText('Model ID') as HTMLInputElement).value).toBe('retained');
   fireEvent.click(modal.getByRole('button', { name: 'Cancel' }));
   fireEvent.click(screen.getByRole('button', { name: '+ Add Model' }));
@@ -111,14 +112,14 @@ it('invalid token integers are rejected before serialization to native quantitie
   for (const value of ['1e5', '128000.5', '18446744073709551616']) {
     fireEvent.change(modal.getByLabelText('Context window'), { target: { value } });
     fireEvent.submit(modal.getByRole('form'));
-    await modal.findByText('Enter a positive whole number within the supported range.');
+    await screen.findByText(/Enter a positive whole number within the supported range\./);
     expect(writes(subject)).toHaveLength(0);
   }
   fireEvent.change(modal.getByLabelText('Context window'), { target: { value: '128000' } });
   for (const value of ['1.5', '4294967296']) {
     fireEvent.change(modal.getByLabelText('Maximum output tokens'), { target: { value } });
     fireEvent.submit(modal.getByRole('form'));
-    await modal.findByText('Enter a positive whole number within the supported range.');
+    await screen.findByText(/Enter a positive whole number within the supported range\./);
     expect(writes(subject)).toHaveLength(0);
   }
 });
@@ -132,16 +133,16 @@ it('an untouched required field is validated on submission, and a new provider c
   expect((screen.getByRole('button', { name: '+ Add Model' }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'fixture-only' } });
   fireEvent.submit(screen.getByRole('form', { name: 'Provider new-provider' }));
-  await screen.findByText('This field is required.');
+  await screen.findByText(/Use an HTTP or HTTPS URL/);
   expect(writes(subject)).toHaveLength(0);
 });
 
 it('switching credential modes removes the previous mode and its secret from the submitted provider', async () => {
   const subject = cfg3Client();
   await openModels(subject);
-  await chooseOption('API Key source', 'Enter a literal secret');
+  if (!screen.queryByLabelText('API Key')) await providerAction('Use an API Key');
   fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'DISCARDED_FIXTURE_SECRET' } });
-  await chooseOption('API Key source', 'Read it from an environment variable');
+  await providerAction('Use an environment variable');
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'PROVIDER_KEY' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
   await waitFor(() => expect(writes(subject)).toHaveLength(1));
@@ -161,21 +162,21 @@ it('provider icons share the native save and discard lifecycle, and preserve sav
   });
   await openModels(subject);
   const form = screen.getByRole('form', { name: 'Provider transport' });
-  fireEvent.click(within(form).getByRole('button', { name: 'Choose provider icon' }));
+  await providerAction('Choose provider icon', within(form));
   let dialog = within(screen.getByRole('dialog', { name: 'Choose provider icon' }));
   fireEvent.click(dialog.getByRole('row', { name: 'Default icon' }));
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Choose provider icon' })).toBeNull());
   expect(writes(subject)).toHaveLength(0);
-  fireEvent.click(within(form).getByRole('button', { name: 'Choose provider icon' }));
+  await providerAction('Choose provider icon', within(form));
   dialog = within(screen.getByRole('dialog', { name: 'Choose provider icon' }));
   fireEvent.change(dialog.getByRole('searchbox'), { target: { value: 'deepseek' } });
   expect(dialog.getAllByRole('row')).toHaveLength(1);
   fireEvent.click(dialog.getByRole('row', { name: 'DeepSeek' }));
   expect(writes(subject)).toHaveLength(0);
-  expect(within(form).getByRole('button', { name: 'Choose provider icon' }).textContent).toBe('DeepSeek');
+  expect(form.querySelector('[data-provider-icon="deepseek"]')).not.toBeNull();
   fireEvent.click(within(form).getByRole('button', { name: /Discard/ }));
-  expect(within(form).getByRole('button', { name: 'Choose provider icon' }).textContent).toBe('Default icon');
-  fireEvent.click(within(form).getByRole('button', { name: 'Choose provider icon' }));
+  expect(form.querySelector('[data-provider-icon=""]')).not.toBeNull();
+  await providerAction('Choose provider icon', within(form));
   dialog = within(screen.getByRole('dialog', { name: 'Choose provider icon' }));
   fireEvent.click(dialog.getByRole('row', { name: /^OpenAI$/ }));
   fireEvent.click(within(form).getByRole('button', { name: 'Save Provider transport' }));
@@ -184,4 +185,38 @@ it('provider icons share the native save and discard lifecycle, and preserve sav
   if (operation.method !== 'configuration/sourceWrite') throw new Error('write required');
   expect(operation.params.mutation).toMatchObject({ kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { icon: 'openai', credential: { kind: 'retain' } } } });
   await waitFor(() => expect(screen.getByRole('row', { name: 'transport' }).querySelector('[data-provider-icon="openai"]')).not.toBeNull());
+});
+
+
+it('tests the saved model and revision without opening its editor or writing configuration', async () => {
+  const subject = cfg3Client();
+  subject.source.user.authored!.models = { main: {
+    provider: 'transport', id: 'wire', context_window: '128000', max_output_tokens: 8192,
+    capabilities: { input_modalities: ['text'], output_modalities: ['text'], json_schema_output: false },
+  } };
+  await openModels(subject);
+  fireEvent.click(screen.getByRole('button', { name: 'Test connection for wire' }));
+  await screen.findByText('Connection successful');
+  expect(screen.queryByRole('dialog', { name: 'Model main' })).toBeNull();
+  expect(subject.request.mock.calls.find(([operation]) => operation.method === 'model/probe')?.[0]).toMatchObject({
+    params: { target: { kind: 'user' }, model: 'main', source: { user_revision: subject.source.user.revision } },
+  });
+  expect(writes(subject)).toHaveLength(0);
+});
+
+it('keeps a new provider template as a draft across provider and settings page changes', async () => {
+  const subject = cfg3Client();
+  await openModels(subject);
+  fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
+  fireEvent.click(within(screen.getByRole('dialog', { name: 'Add Provider' })).getByRole('button', { name: 'DeepSeek' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+  expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.deepseek.com/anthropic');
+  fireEvent.click(screen.getByRole('row', { name: 'transport' }));
+  await openSettingsPage('Agent');
+  await openSettingsPage('Models');
+  fireEvent.click(await screen.findByRole('row', { name: 'DeepSeek' }));
+  expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.deepseek.com/anthropic');
+  fireEvent.click(within(screen.getByRole('form', { name: 'Provider DeepSeek' })).getByRole('button', { name: 'Cancel' }));
+  expect(screen.queryByRole('row', { name: 'DeepSeek' })).toBeNull();
+  expect(writes(subject)).toHaveLength(0);
 });

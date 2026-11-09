@@ -865,6 +865,7 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
             .await
             .unwrap();
         let provider = crate::local_runtime::configuration::settings::ProviderWrite {
+            hidden: false,
             icon: None,
             protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
             base_url: fixture.provider.url("/v2"),
@@ -966,6 +967,7 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
             ConfigMutation::Model {
                 id: "local/a".into(),
                 authored: Some(crate::model::authoring::Model {
+    hidden: false,
                     request_params: Some(params(json!({"seed": 9_007_199_254_740_993_u64}))),
                     ..authored.clone()
                 }),
@@ -1135,6 +1137,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
             write(ConfigMutation::Model {
                 id: "local/a".into(),
                 authored: Some(crate::model::authoring::Model {
+    hidden: false,
                     request_params: Some(AuthoredRequestParams(holes())),
                     ..authored.clone()
                 }),

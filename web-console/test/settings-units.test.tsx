@@ -5,6 +5,8 @@ import { sourceReceipt } from './fixture';
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { cfg3Client } from './cfg3-fixture';
+import { userSettingsTarget } from '../src/app/settings/projection';
 import { ModelsPage } from '../src/app/settings/models/ModelsPage';
 import { AgentPage } from '../src/app/settings/agent/AgentPage';
 import { ToolsPage } from '../src/app/settings/tools/ToolsPage';
@@ -19,6 +21,7 @@ import { translator } from '../src/locale/translation';
 afterEach(cleanup);
 
 const noop = () => {};
+const modelProbeFixture = { client: cfg3Client().client, target: userSettingsTarget };
 
 /** An editor bound to a real Workspace source projection, so the unit forms see
  * the same authored/effective/provenance facts they see inside Settings. */
@@ -40,7 +43,7 @@ function catalogSource(scope: SourceScope, document: Record<string, unknown>) {
 /** The Models page focused on one Model's detail, which is where a Model's
  * complete typed contract is authored. */
 const modelDetail = (source: SourceSettings, scope: SourceScope, revision: string, id: string) =>
-  <ModelsPage source={source} scope={scope} revision={revision} models={[]} profiles={{}} focus={{ kind: 'model', id }} onFocus={noop} onRefresh={noop} />;
+  <ModelsPage {...modelProbeFixture} source={source} scope={scope} revision={revision} models={[]} profiles={{}} focus={{ kind: 'model', id }} onFocus={noop} onRefresh={noop} />;
 /** The Tools & Permissions page, bound to one authored `rustx.toml`. */
 const toolsPage = (source: SourceSettings, document: RuntimeLayer, scope: SourceScope, revision: string) =>
   <ToolsPage source={source} document={document} scope={scope} revision={revision} />;
@@ -137,7 +140,7 @@ it('never authors a protocol from the Model editor', async () => {
   for (const label of ['Chat reasoning replay', 'Chat output field', 'Chat stream usage', 'Chat tool protocol', 'Responses storage']) {
     expect(screen.queryByLabelText(label)).toBeNull();
   }
-  expect(screen.queryByLabelText('API format')).toBeNull();
+  expect(within(screen.getByRole('dialog', { name: 'Model main' })).queryByLabelText('API format')).toBeNull();
   fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'changed-wire' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(writes).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...model, id: 'changed-wire' } } }, 'r1'));
@@ -293,7 +296,7 @@ it('replaces default model intent and project guidance as independent native uni
   // Agent page: two user tasks, and two independent native semantic units.
   const source = catalogSource('workspace', { agent: { model: { model: 'main', request_params: { temperature: .4 } } } });
   const { writes: write, rerender } = await renderEditor(
-    <ModelsPage source={source} scope="workspace" revision="root-r1" models={['main', 'summary']} profiles={{ main: ['deep', 'quick'] }} onFocus={noop} onRefresh={noop} />,
+    <ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="root-r1" models={['main', 'summary']} profiles={{ main: ['deep', 'quick'] }} onFocus={noop} onRefresh={noop} />,
     { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const model = within(screen.getByRole('form', { name: 'Default model' }));
@@ -327,7 +330,7 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
   let write!: Awaited<ReturnType<typeof renderEditor>>['writes'];
   if (owner === 'default') {
     const source = catalogSource('workspace', { agent: { model } });
-    ({ writes: write } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={models} profiles={profiles} onFocus={noop} onRefresh={noop} />, { source, context: source }));
+    ({ writes: write } = await renderEditor(<ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="r1" models={models} profiles={profiles} onFocus={noop} onRefresh={noop} />, { source, context: source }));
   } else {
     const source = cfg3Source();
     source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
@@ -373,7 +376,7 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
   let write!: Awaited<ReturnType<typeof renderEditor>>['writes'];
   if (owner === 'default') {
     const source = catalogSource('workspace', { agent: { model } });
-    ({ writes: write } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={models} profiles={profiles} onFocus={noop} onRefresh={noop} />, { source, context: source }));
+    ({ writes: write } = await renderEditor(<ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="r1" models={models} profiles={profiles} onFocus={noop} onRefresh={noop} />, { source, context: source }));
   } else {
     const source = cfg3Source();
     source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
@@ -415,7 +418,7 @@ it('the explicit Summary Model variant owns complete labels in each locale witho
   const summary = { mode: 'explicit' as const, model: 'summary-a', profile: 'deep', max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
   const model = { model: 'main', profile: 'main-profile', max_output_tokens: { mode: 'limit' as const, tokens: 4096 }, request_params: { temperature: .7 }, summary_model: summary };
   const source = catalogSource('workspace', { agent: { model } });
-  const { writes: write, context } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={['main', 'summary-a']} profiles={{ main: ['main-profile'], 'summary-a': ['deep', 'quick'] }} onFocus={noop} onRefresh={noop} />, { source, context: source });
+  const { writes: write, context } = await renderEditor(<ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="r1" models={['main', 'summary-a']} profiles={{ main: ['main-profile'], 'summary-a': ['deep', 'quick'] }} onFocus={noop} onRefresh={noop} />, { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const labels = (locale: 'en' | 'zh') => {
     const tx = translator(locale);

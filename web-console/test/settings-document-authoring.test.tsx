@@ -74,7 +74,7 @@ it.each(['user', 'workspace'] as const)('DA-02 a malformed %s rustx.toml exposes
   // Diagnostics stay on Advanced even while the document does not parse.
   await waitForSettingsRevision(`${scope}-1`);
   open('Advanced');
-  expect(screen.getAllByRole('alert').map(alert => alert.textContent)).toContain(MALFORMED);
+  expect(await screen.findByText(MALFORMED)).toBeTruthy();
   if (scope === 'workspace') expect(forms()).toEqual(['Repair invalid source']);
   await assertRepairIsTheOnlyConfigMutation(s, `${scope}-1`);
   // The committed repair is observed by an authoritative read, and only that
@@ -151,10 +151,7 @@ function options(scope: HTMLElement, label: RegExp) {
   fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
   return listed;
 }
-const allModels = () => {
-  fireEvent.click(screen.getByRole('button', { name: /^All Models/ }));
-  return within(screen.getByRole('grid', { name: 'All Models' }));
-};
+const providerModels = () => within(screen.getByRole('grid', { name: 'Models of Provider transport' }));
 
 /** The Model catalog, the default-model selector and a named Agent's
  * explicit-model selector, in that order, for one rendered Settings surface. */
@@ -162,7 +159,7 @@ async function reachableModels() {
   open('Models');
   const defaultToggle = screen.queryByRole('button', { name: 'Default model for new Sessions', expanded: false });
   if (defaultToggle) fireEvent.click(defaultToggle);
-  const catalog = allModels().queryAllByRole('row').map(row => row.getAttribute('aria-label')!);
+  const catalog = providerModels().queryAllByRole('row').map(row => row.getAttribute('aria-label')!);
   const root = options(screen.getByRole('form', { name: 'Default model' }), /Model$/);
   open('Extensions');
   open('Extensions');
@@ -194,7 +191,6 @@ it('ID-03 Workspace-authored models stay reachable in every selector when a malf
   const rootForm = within(screen.getByRole('form', { name: 'Default model' }));
   expect(rootForm.getByRole('button', { name: 'Save Default model' }).closest('form')!.getAttribute('data-effective')).toBe('invalid');
   expect(rootForm.queryByText(/Native effective value available/)).toBeNull();
-  allModels();
   await openResourceRow('workspace-model');
   expect(screen.getByRole('form', { name: 'Model workspace-model' }).dataset.authored).toBe('present');
   // Nothing was copied into Workspace authoring.

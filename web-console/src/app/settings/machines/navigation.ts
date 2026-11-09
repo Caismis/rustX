@@ -31,7 +31,7 @@ export interface PageFocus {
   general: never;
   /** `provider` on a Model records which Provider detail it was opened from,
    * so leaving the Model returns to that Provider rather than the bare list. */
-  models: { kind: 'provider'; id: string; creating?: true } | { kind: 'model'; id: string; provider?: string };
+  models: { kind: 'provider'; id: string } | { kind: 'model'; id: string; provider?: string };
   agent: never;
   tools: never;
   extensions: { kind: 'extension'; family: 'managed_python'; name: string };

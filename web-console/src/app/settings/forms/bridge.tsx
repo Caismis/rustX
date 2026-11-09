@@ -4,6 +4,7 @@ import { useForm, type ReactFormExtendedApi } from '@tanstack/react-form';
 import { useSelector } from '@xstate/react';
 import type { SourceMutation } from '../../../../../protocol/app-server/v77';
 import { Button } from '../../../presentation/primitives/Button';
+import { SettingsNotice } from '../SettingsFeedback';
 import { SourceContext } from '../source-context';
 import { useSettingsActor, useUnitTransaction } from '../machines/react';
 import { admitsSourceMutation, committedUnit, unitOutcome, type MutationOutcome } from '../machines/settings-target';
@@ -335,10 +336,10 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
     onSubmit={event => { event.preventDefault(); if (onSubmit) onSubmit(); else unit.submit(); }}>
     <fieldset disabled={unit.busy || unavailable}><legend>{title}</legend>
       <div className={presentation === 'dialog' ? css.unitBody : undefined}>
-      {presentation === 'dialog' && availability && <p role={availability === 'loading' ? 'status' : 'alert'} className={css.hint}>{tx(`settings:models.authority-${availability}`)}</p>}
+      {presentation === 'dialog' && availability && <SettingsNotice text={tx(`settings:models.authority-${availability}`)}/>}
       {unit.configUnit && unit.facts.authored.state !== 'unavailable' && <>
-        {unit.facts.authored.state === 'invalid' && <p role="alert" className={css.error}>{tx('settings:bridge.authored-source-is-invalid')}{' '}{unit.facts.authored.diagnostic}</p>}
-        {unit.facts.effective.state === 'invalid' && <p role="alert" className={css.error}>{tx('settings:bridge.native-effective-resolution-failed')}{' '}{unit.facts.effective.diagnostic}</p>}
+        <SettingsNotice text={unit.facts.authored.state === 'invalid' ? `${tx('settings:bridge.authored-source-is-invalid')} ${unit.facts.authored.diagnostic}`
+          : unit.facts.effective.state === 'invalid' ? `${tx('settings:bridge.native-effective-resolution-failed')} ${unit.facts.effective.diagnostic}` : undefined}/>
       </>}
       {redacted && <p className={css.hint}>{tx('settings:forms.secret-replacement')}</p>}
       {unit.definition && (!presentation || unit.definition === 'inherited' || unit.definition === 'overriding' || unit.unparsed) && <DefinitionNotice unit={unit} />}
@@ -346,9 +347,8 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
           same fields, and none of them is writable until the explicit
           override transition. */}
       <fieldset className={css.fields} disabled={!unit.writable}>{children}</fieldset>
-      {unit.reviewNeeded && unit.outcome.kind !== 'conflict' && <div className={css.review}>
-        <p role="status">{tx('settings:forms.changed-elsewhere')}</p>
-      </div>}
+      <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx('settings:forms.changed-elsewhere') : undefined}
+        fallback={<div className={css.review}><p role="status">{tx('settings:forms.changed-elsewhere')}</p></div>}/>
       <UnitOutcomeNotice title={title} outcome={unit.outcome} />
       {presentation === 'dialog' && removal && <div className={css.unitRemoval}>{removal}</div>}
       </div>
@@ -383,7 +383,7 @@ export function DefinitionNotice<T>({ unit }: { unit: UnitEditing<T> }) {
   const shadowed = unit.shadowed;
   return <>
     {unit.definition === 'inherited' && <p role="status" data-definition-state="inherited">{tx('settings:forms.using-global')}</p>}
-    {unit.definition === 'inherited' && shadowed?.diagnostic && <p role="alert" className={css.error}>{shadowed.diagnostic}</p>}
+    <SettingsNotice text={unit.definition === 'inherited' ? shadowed?.diagnostic : undefined}/>
     {unit.definition === 'overriding' && <p role="status" data-definition-state="overriding">{tx('settings:forms.workspace-customization')}</p>}
     {!!shadowed?.withheld.length && <p className={css.hint}>{tx('settings:forms.reenter-secrets', { names: shadowed.withheld.join(', ') })}</p>}
     {unit.unparsed && <p role="status" data-definition-state="authored">{tx('settings:forms.unreadable')}</p>}
@@ -393,12 +393,10 @@ export function DefinitionNotice<T>({ unit }: { unit: UnitEditing<T> }) {
 /** Only outcomes that need attention occupy space in the editor. */
 export function UnitOutcomeNotice({ title, outcome }: { title: string; outcome: MutationOutcome }) {
   const tx = useTranslation();
-  switch (outcome.kind) {
-    case 'conflict': return <p role="alert" className={css.error}>{title} {tx('settings:bridge.was-not-saved-the-source-changed-your-draft-and-base-revision-ar')}</p>;
-    case 'rejected': return <p role="alert" className={css.error}>{title} {tx('settings:bridge.was-not-saved')}{' '}{outcome.detail}</p>;
-    case 'uncertain': return <p role="alert" className={css.error}>{tx('settings:bridge.the-outcome-of-saving')}{' '}{title} {tx('settings:bridge.is-unknown-authority-is-reread-the-write-is-never-replayed-revie')}</p>;
-    default: return null;
-  }
+  const text = outcome.kind === 'conflict' ? `${title} ${tx('settings:bridge.was-not-saved-the-source-changed-your-draft-and-base-revision-ar')}`
+    : outcome.kind === 'rejected' ? `${title} ${tx('settings:bridge.was-not-saved')} ${outcome.detail}`
+    : outcome.kind === 'uncertain' ? `${title} · ${tx('settings:settings.save-outcome-uncertain-authority-is-reread-the-write-is-never-re')}` : undefined;
+  return <SettingsNotice text={text} fallback={<p role="alert" className={css.error}>{text}</p>}/>;
 }
 
 /** One native semantic unit's editing surface, with a plain value contract.

@@ -22,20 +22,7 @@ export function ProviderIcon({ icon, size = 20 }: { icon?: string | null; size?:
   </span>;
 }
 
-export function ProviderIconField({ value, onChange }: { value?: string | null; onChange: (value: string | undefined) => void }) {
-  const tx = useTranslation();
-  const [open, setOpen] = useState(false);
-  const trigger = useRef<HTMLDivElement>(null);
-  const label = value ? (Object.hasOwn(providerIcons, value) ? providerIcons[value].name : tx('settings:models.icon-unavailable')) : tx('settings:models.icon-default');
-  return <div ref={trigger} className={css.field}>
-    <span>{tx('settings:models.icon')}</span>
-    <Button variant="outline" className={css.trigger} aria-label={tx('settings:models.choose-icon')}
-      aria-haspopup="dialog" onClick={() => setOpen(true)}><ProviderIcon icon={value}/><span>{label}</span></Button>
-    {open && <IconPicker value={value} onChange={onChange} onClose={() => setOpen(false)} finalFocus={() => trigger.current?.querySelector('button') ?? false}/>}
-  </div>;
-}
-
-function IconPicker({ value, onChange, onClose, finalFocus }: {
+export function IconPicker({ value, onChange, onClose, finalFocus }: {
   value?: string | null; onChange: (value: string | undefined) => void; onClose: () => void; finalFocus: () => HTMLElement | false;
 }) {
   const tx = useTranslation();

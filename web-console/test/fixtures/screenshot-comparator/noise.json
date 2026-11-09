@@ -4269,5 +4269,75 @@
       {"evidence":"Pinned Playwright 1.63.0 FULL CI run 42239006386, job 127967664835, artifact 13516078875 and a strict local reproduction have byte-identical stable captures. Exactly ten glyph-edge pixels differ from the unchanged reference: x 243 at y841-845 and y896-900, each [255,255,251,255] to [255,255,255,255] (blue-channel delta 4). They border the collapsed React Aria Disclosure triangle spans for All Models and Default Model for new Sessions; CI/local Settings DOM is identical after normalizing only generated React Aria ID prefixes (four form values and nineteen selected-state annotations retained), and all 132 stylesheet text blocks match. The inspected strict local run independently reproduced this reference mismatch. Each actual coordinate has its own 1x1/budget 1/delta 4 region; no neighboring pixels or global threshold are allowed. Internal Chromium causes are not established.","pixels":[[243,841,[255,255,251,255],[255,255,255,255]],[243,842,[255,255,251,255],[255,255,255,255]],[243,843,[255,255,251,255],[255,255,255,255]],[243,844,[255,255,251,255],[255,255,255,255]],[243,845,[255,255,251,255],[255,255,255,255]],[243,896,[255,255,251,255],[255,255,255,255]],[243,897,[255,255,251,255],[255,255,255,255]],[243,898,[255,255,251,255],[255,255,255,255]],[243,899,[255,255,251,255],[255,255,255,255]],[243,900,[255,255,251,255],[255,255,255,255]]]},
       {"file":"settings-conflict-light-noise-linux.png","pngSha256":"c37e05cdaf293f4b1f39b1e960c69291cf04e0d56f5f8c9cb97284c7226fc67e","pixels":[[1004,410,[255,255,255,255],[250,255,255,255]],[1004,417,[255,255,255,255],[245,255,255,255]]]}
     ]
+  },
+  {
+    "reference": "settings-model-advanced-light-390-baseline-linux.png",
+    "evidence": "Pinned Playwright 1.63.0 Chromium captures on 2026-11-08: two independent strict browser runs (the 49-case settings validation and the seven-case observation/contract replay) produced byte-identical stable PNGs, SHA256 7dacbb124b7b1c11615c7cb877ec9e7f1ab60fbc10d91a2fb9b9ef2e248b8600. Both differ from the stable reference SHA256 36fdf3630773cef7f77be8e6c726b1daa74f8c9b3b69b949cedfb0f7fc402d79 at exactly (34,237), one RGB level on the context input corner, with every other RGBA byte identical. A fresh intentional reference capture reproduces the original reference. Both raw PNG variants are frozen under test/fixtures/screenshot-comparator/settings-model-advanced-light-390-{baseline,noise}-linux.png. The internal Chromium cause is not established. This one disjoint 1x1 region admits only the measured delta; adjacent sites, larger deltas and every other reference remain strict.",
+    "regions": [
+      {
+        "label": "Context input corner coverage",
+        "x": 34,
+        "y": 237,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 1
+      }
+    ],
+    "pixels": [
+      [
+        34,
+        237,
+        [
+          223,
+          223,
+          223,
+          255
+        ],
+        [
+          222,
+          222,
+          222,
+          255
+        ]
+      ]
+    ],
+    "baselineSha256": "36fdf3630773cef7f77be8e6c726b1daa74f8c9b3b69b949cedfb0f7fc402d79",
+    "captureSha256": "7dacbb124b7b1c11615c7cb877ec9e7f1ab60fbc10d91a2fb9b9ef2e248b8600"
+  },
+  {
+    "reference": "settings-model-advanced-dark-390-baseline-linux.png",
+    "evidence": "Pinned Playwright 1.63.0 Chromium on 2026-11-08: the original checked-in reference and two independent strict captures are byte-identical (SHA256 ea234621a30bc4d02c840c064ebc556fa7be309d9c1f521b268a2a5ee1473871). An intentional stable reference capture and a separate repeat-each run reproduce the other stable variant (SHA256 143613d3cf574a802652c34a027587056eb73be614e0c87caec7acb5a9818a19). Both complete RGBA images differ only at (34,237), one RGB level at the same context input corner previously measured in the light theme. The three-repeat investigation also ran six real provider/model creation flows, all passing. The original reference is retained unchanged. Both raw PNG variants are frozen under test/fixtures/screenshot-comparator/settings-model-advanced-dark-390-{baseline,noise}-linux.png. The Chromium cause is not established. Only this measured 1x1 site and delta are admitted; adjacent pixels, larger deltas and other references remain strict.",
+    "regions": [
+      {
+        "label": "Context input corner coverage",
+        "x": 34,
+        "y": 237,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 1
+      }
+    ],
+    "pixels": [
+      [
+        34,
+        237,
+        [
+          77,
+          77,
+          79,
+          255
+        ],
+        [
+          78,
+          78,
+          80,
+          255
+        ]
+      ]
+    ],
+    "baselineSha256": "ea234621a30bc4d02c840c064ebc556fa7be309d9c1f521b268a2a5ee1473871",
+    "captureSha256": "143613d3cf574a802652c34a027587056eb73be614e0c87caec7acb5a9818a19"
   }
 ]

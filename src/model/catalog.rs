@@ -799,11 +799,11 @@ pub struct ModelCatalog {
 }
 
 impl ModelCatalog {
-    /// Canonical credential-free catalog projection for authoring and live selection.
+    /// Credential-free model choices in deterministic presentation order.
     #[must_use]
     pub fn view(&self) -> ModelCatalogView {
         let mut models = Vec::new();
-        for reference in self.model_refs() {
+        for reference in self.model_ordinals.iter().cloned() {
             let model = &self.models[&reference];
             let provider = &self.providers[&model.provider];
             models.push(CatalogModelView {
@@ -844,7 +844,28 @@ impl ModelCatalog {
     pub fn from_toml_slice(bytes: &[u8]) -> Result<Self, ModelCatalogError> {
         let document: super::authoring::Catalog = crate::toml_authoring::parse(bytes)
             .map_err(|detail| ModelCatalogError::Syntax { detail })?;
-        Self::from_document(document.into())
+        Self::from_authoring(document)
+    }
+
+    /// Validate the complete catalog, then index only visible model choices.
+    pub(crate) fn from_authoring(
+        document: super::authoring::Catalog,
+    ) -> Result<Self, ModelCatalogError> {
+        let hidden = document
+            .models
+            .iter()
+            .filter(|(_, model)| {
+                model.hidden
+                    || document
+                        .providers
+                        .get(&model.provider)
+                        .is_some_and(|provider| provider.hidden)
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<BTreeSet<_>>();
+        Self::from_document_with_choices(document.into(), |reference| {
+            !hidden.contains(reference.as_str())
+        })
     }
 
     /// Validates an already-parsed catalog document.
@@ -853,14 +874,25 @@ impl ModelCatalog {
     ///
     /// Returns the first validation failure.
     pub fn from_document(document: ModelCatalogDocument) -> Result<Self, ModelCatalogError> {
+        Self::from_document_with_choices(document, |_| true)
+    }
+
+    fn from_document_with_choices(
+        document: ModelCatalogDocument,
+        visible: impl Fn(&ModelRef) -> bool,
+    ) -> Result<Self, ModelCatalogError> {
         let (providers, models) = Self::validated_entries(document)?;
         if providers.is_empty() || models.is_empty() {
             return Err(ModelCatalogError::EmptyCatalog);
         }
-        let model_ordinals = models.keys().cloned().collect();
-        let profile_ordinals = models
-            .values()
-            .map(|model| model.profiles.keys().cloned().collect::<Arc<[_]>>())
+        let model_ordinals: Arc<[_]> = models
+            .keys()
+            .filter(|reference| visible(reference))
+            .cloned()
+            .collect();
+        let profile_ordinals = model_ordinals
+            .iter()
+            .map(|reference| models[reference].profiles.keys().cloned().collect())
             .collect();
         Ok(Self {
             providers,
@@ -1902,7 +1934,7 @@ impl std::error::Error for ModelCatalogError {}
 pub(crate) struct ModelCatalogReadView<'a>(&'a ModelCatalog);
 impl ModelCatalog {
     pub(crate) fn model_count(&self) -> usize {
-        self.models.len()
+        self.model_ordinals.len()
     }
     pub(crate) fn model_at(&self, ordinal: usize) -> Option<CatalogModelReadView<'_>> {
         let reference = self.model_ordinals.get(ordinal)?;

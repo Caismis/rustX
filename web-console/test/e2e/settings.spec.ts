@@ -50,7 +50,7 @@ test('Workspace settings save permissions and features, and keep configuration r
     writeFileSync(file, 'invalid = [');
     await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
     await expect(settings.getByRole('form', { name: 'Repair invalid source', exact: true })).toBeVisible();
-    await expect(settings.getByRole('alert').filter({ hasText: 'invalid rustx.toml' }).first()).toBeVisible();
+    await expect(page.locator('[data-toast][data-foreground]').filter({ hasText: 'malformed TOML' }).first()).toBeVisible();
     await settings.screenshot({ path: test.info().outputPath('settings-repair-needed.png') });
     writeFileSync(file, authored);
     await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();

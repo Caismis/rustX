@@ -1,3 +1,4 @@
+import { SettingsNotice } from '../SettingsFeedback';
 import { useTranslation } from '../../../locale/react';
 import { useState } from 'react';
 import type {
@@ -70,6 +71,6 @@ export function ToolsPage({ source, document, scope, revision }: {
         {(value, change) => <PolicyFields value={value} change={change} />}
       </UnitForm>)}
     </Advanced>
-    {sourceView(source, scope) === undefined && <p role="alert" className={css.error}>{tx('settings:tools-page.this-scope-has-no-source-view')}</p>}
+    <SettingsNotice text={sourceView(source, scope) === undefined ? tx('settings:tools-page.this-scope-has-no-source-view') : undefined}/>
   </section>;
 }

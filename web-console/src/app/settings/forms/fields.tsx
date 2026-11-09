@@ -1,4 +1,5 @@
 import { message, displayText, type DisplayText } from '../../../locale/translation';
+import { SettingsNotice, useSettingsFeedback } from '../SettingsFeedback';
 import { useTranslation, useNotice } from '../../../locale/react';
 import { useContext, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from '../../../presentation/primitives/Button';
@@ -42,11 +43,12 @@ function Bound<T, V>({ form, name, children }: {
   return <Field name={name as string}>{field => children(field.state.value as V, value => field.handleChange(value as never), field)}</Field>;
 }
 
-function Errors({ field }: { field: BoundField }) {
+function Errors({ field, label }: { field: BoundField; label: string }) {
   const tx = useTranslation();
   const errors = field.state.meta.errors.filter(Boolean);
   if (!field.state.meta.isTouched || !errors.length) return null;
-  return <span role="alert" className={css.error}>{[...new Set(errors.map(error => displayText(tx, ((error as { message?: DisplayText })?.message ?? error) as DisplayText)))].join('; ')}</span>;
+  const message = [...new Set(errors.map(error => displayText(tx, ((error as { message?: DisplayText })?.message ?? error) as DisplayText)))].join(' ');
+  return <SettingsNotice text={message.startsWith(label) ? message : `${label} · ${message}`} fallback={<span role="alert" className={css.error}>{message}</span>}/>;
 }
 
 /** Syntactic checks a browser can make truthfully. Each returns a message or
@@ -67,7 +69,7 @@ export function Text<T>({ form, name, label, required = false, url = false, plac
     <input aria-label={label} value={(field.state.value as string | null | undefined) ?? ''} placeholder={placeholder} required={required}
       aria-invalid={field.state.meta.errors.filter(Boolean).length > 0 || undefined}
       onBlur={field.handleBlur} onChange={event => field.handleChange(event.target.value as never)} />
-    <Errors field={field} />
+    <Errors field={field} label={label}/>
   </label>}</Field>;
 }
 
@@ -100,7 +102,7 @@ export function Numeric<T>({ form, name, label, min = 1, empty = null, required 
     <input aria-label={label} type="number" min={min} required={required} value={(field.state.value as number | string | null | undefined) ?? ''}
       aria-invalid={field.state.meta.errors.filter(Boolean).length > 0 || undefined}
       onBlur={field.handleBlur} onChange={event => field.handleChange((event.target.value ? Number(event.target.value) : empty) as never)} />
-    <Errors field={field} />
+    <Errors field={field} label={label}/>
   </label>}</Field>;
 }
 
@@ -118,7 +120,7 @@ export function NumericText<T>({ form, name, label, required = false }: { form: 
     <input aria-label={label} type="number" min={1} required={required} value={(field.state.value as string | null | undefined) ?? ''}
       aria-invalid={field.state.meta.errors.filter(Boolean).length > 0 || undefined}
       onBlur={field.handleBlur} onChange={event => field.handleChange((event.target.value || null) as never)} />
-    <Errors field={field} />
+    <Errors field={field} label={label}/>
   </label>}</Field>;
 }
 
@@ -195,7 +197,7 @@ export function EntryRows({ label, value, change, secret = false }: {
     </div>)}
     <label htmlFor={id}>{label} {tx('settings:fields.name')}</label>
     <input id={id} value={key} aria-invalid={duplicate || undefined} onChange={event => setKey(event.target.value)} />
-    {duplicate && <span role="alert" className={css.error}>{key} {tx('settings:fields.is-already-listed')}</span>}
+    <SettingsNotice text={duplicate ? `${key} ${tx('settings:fields.is-already-listed')}` : undefined}/>
     <Button disabled={!key || duplicate} onClick={() => { change({ ...value, [key]: '' }); setKey(''); }}>{tx('settings:extensions-page.add')}{' '}{label}</Button>
   </fieldset>;
 }
@@ -235,6 +237,7 @@ export function JsonObjectEditor({ label, value, change, optional = true, hint }
   const display = (current: RequestParams | undefined) => current === undefined ? '' : formatRequestParams(current);
   const [text, setText] = useState(() => display(value));
   const [error, setError] = useNotice();
+  const transient = useSettingsFeedback();
   const reflected = useRef(value);
   // Unparsed text is editor-local and never a draft, so the transaction owner
   // cannot reset it through the value alone: a discard or reviewed revision
@@ -257,7 +260,8 @@ export function JsonObjectEditor({ label, value, change, optional = true, hint }
     change(next);
   };
   return <div>
-    <JsonCodeEditor label={label} value={text} error={error}
+    <SettingsNotice text={transient && error ? `${label} · ${error}` : undefined}/>
+    <JsonCodeEditor label={label} value={text} error={error} hideErrorText={transient}
       placeholder={tx(optional ? 'settings:fields.request-params-placeholder-optional' : 'settings:fields.request-params-placeholder-required')}
       onChange={next => {
         setText(next);

@@ -101,14 +101,15 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await provider.getByLabel('Base URL', { exact: true }).fill(fixture.providerUrl + '/v1');
     await provider.getByLabel('API Key', { exact: true }).fill('fixture-only');
     await choose(provider, 'API format', 'OpenAI Responses (/v1/responses)');
-    await provider.getByRole('button', { name: 'Choose provider icon', exact: true }).click();
+    await provider.getByRole('button', { name: 'Provider actions', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Choose provider icon', exact: true }).click();
     const icons = page.getByRole('dialog', { name: 'Choose provider icon', exact: true });
     await icons.getByRole('searchbox', { name: 'Search icons' }).fill('deepseek');
     await icons.getByRole('row', { name: 'DeepSeek', exact: true }).click();
     await expect(icons).toHaveCount(0);
     await expect(settings.getByRole('button', { name: '+ Add Model', exact: true })).toBeDisabled();
     await provider.getByRole('button', { name: 'Save Provider custom', exact: true }).click();
-    await expect(provider.getByRole('button', { name: 'Save Provider custom', exact: true })).toBeDisabled();
+    await expect(provider.getByRole('button', { name: 'Save Provider custom', exact: true })).toBeHidden();
     await expect(settings.getByRole('button', { name: '+ Add Model', exact: true })).toBeEnabled();
     await expect(settings.getByRole('alert')).toHaveCount(0);
     await expect(settings.getByText('No models configured yet. Add a model to use this provider in conversations.')).toBeVisible();
@@ -125,10 +126,10 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await expect(model.getByLabel('Model ID', { exact: true })).toBeFocused();
     await model.getByLabel('Context window', { exact: true }).fill('1000');
     await model.getByRole('button', { name: 'Save Add Model', exact: true }).click();
-    await expect(model.getByRole('alert')).toContainText('Maximum output tokens must be smaller than the context window.');
+    await expect(page.locator('[data-toast][data-foreground]')).toContainText('Maximum output tokens must be smaller than the context window.');
     expect(readFileSync(fixture.settings, 'utf8')).not.toContain('[models.');
     await model.getByLabel('Context window', { exact: true }).fill('128000');
-    await expect(model.getByRole('alert')).toHaveCount(0);
+    await expect(page.locator('[data-toast][data-foreground]')).toHaveCount(0);
     await captureEvidence(model, `add-model-${width}`);
     await model.getByRole('button', { name: 'Save Add Model', exact: true }).click();
     await expect(model).toHaveCount(0);
@@ -139,14 +140,14 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await expect(settings.getByRole('row', { name: 'custom/first-model', exact: true })).not.toContainText('openai_responses');
     await choose(provider, 'API format', 'OpenAI Chat Completions (/v1/chat/completions)');
     await provider.getByRole('button', { name: 'Save Provider custom', exact: true }).click();
-    await expect(provider.getByRole('button', { name: 'Save Provider custom', exact: true })).toBeDisabled();
+    await expect(provider.getByRole('button', { name: 'Save Provider custom', exact: true })).toBeHidden();
     expect(readFileSync(fixture.settings, 'utf8').split('[models.')[0]).toContain('protocol = "openai_chat_completions"');
     await expect(provider.getByRole('button', { name: /API format$/ })).toContainText('OpenAI Chat Completions');
 
 
     await settings.getByRole('button', { name: '+ Add Model', exact: true }).click();
     await model.getByLabel('Model ID', { exact: true }).fill('first-model');
-    await expect(model.getByRole('alert')).toContainText('This configuration name already exists.');
+    await expect(page.locator('[data-toast][data-foreground]')).toContainText('This configuration name already exists.');
     await model.getByRole('button', { name: 'Cancel', exact: true }).click();
     await settings.getByRole('button', { name: '+ Add Model', exact: true }).click();
     await expect(model.getByLabel('Model ID', { exact: true })).toHaveValue('');

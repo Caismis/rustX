@@ -25,6 +25,9 @@ fn version() -> u32 {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {
+    /// Hide this entry from new model choices. Existing selections stay resolvable.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     /// Presentation-only `LobeHub` icon slug. Never participates in model resolution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
@@ -38,6 +41,9 @@ pub struct Provider {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
+    /// Hide this entry from new model choices. Existing selections stay resolvable.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     pub provider: String,
     pub id: String,
     pub context_window: u64,

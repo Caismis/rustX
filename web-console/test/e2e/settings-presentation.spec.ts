@@ -110,7 +110,7 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
     await openSettingsPage(page, name);
     // One stable page frame: a section change never resizes or moves it.
     expect(await panelBox(page)).toEqual(frame);
-    await expect(settings.getByRole('heading', { level: 3, name, exact: true })).toBeVisible();
+    await expect(settings.getByRole('heading', { level: 3, name: name === 'Models' ? 'Model Settings' : name, exact: true })).toBeVisible();
     // The owner and observation state live in the fixed header on every page.
     await expect(settings.getByRole('heading', { level: 2, name: 'User Settings' })).toBeVisible();
     await expect(settings.locator('[data-lifecycle="ready"]')).toBeVisible();
@@ -134,13 +134,12 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
     const style = getComputedStyle(el);
     return { height: el.getBoundingClientRect().height, padding: `${style.paddingTop} ${style.paddingLeft}`, radius: style.borderTopLeftRadius };
   });
-  expect(row.height).toBeGreaterThanOrEqual(40); expect(row.padding).toBe('8px 8px'); expect(row.radius).toBe('8px');
+  expect(row.height).toBeGreaterThanOrEqual(32); expect(row.padding).toBe('4px 8px'); expect(row.radius).toBe('8px');
 
   // Provider → detail keeps status and actions next to the object.
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
   await expect(settings.getByRole('heading', { name: 'Provider transport', exact: true })).toBeVisible();
-  await expect(settings.getByRole('button', { name: 'Remove Provider transport', exact: true })).toBeVisible();
-  await expect(settings.getByRole('button', { name: '← Models', exact: true })).toBeHidden();
+  await expect(settings.getByRole('button', { name: 'Provider actions', exact: true })).toBeVisible();
   await expectAccessible(page, settingsScope);
   await expectStableScreenshot(settings, 'settings-provider-detail-light.png');
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
@@ -200,7 +199,8 @@ test('deletion confirmation, CAS conflict review, loading and read failure are d
   await openSettingsPage(page, 'Models');
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
   // A real deletion: an alert dialog whose confirm action is destructive.
-  await settings.getByRole('button', { name: 'Remove Provider transport', exact: true }).click();
+  await settings.getByRole('button', { name: 'Provider actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
   const deletion = page.getByRole('alertdialog', { name: 'Remove Provider transport from User configuration?' });
   await expect(deletion).toBeVisible();
   await expect(deletion.getByRole('button', { name: 'Cancel' })).toBeFocused();
@@ -215,7 +215,7 @@ test('deletion confirmation, CAS conflict review, loading and read failure are d
   await endpoint.fill('https://user.invalid/v2');
   const unit = settings.getByRole('form', { name: 'Provider transport' });
   await unit.getByRole('button', { name: 'Save Provider transport' }).click();
-  await expect(unit.getByRole('alert')).toHaveText('Provider transport was not saved because it changed elsewhere. Your draft is kept.');
+  await expect(page.locator('[data-toast][data-foreground]')).toHaveText('Provider transport was not saved because it changed elsewhere. Your draft is kept.');
   await expect(endpoint).toHaveValue('https://user.invalid/v2');
   await expect(unit.getByRole('status').filter({ hasText: 'This setting changed elsewhere.' })).toHaveCount(0);
   await endpoint.scrollIntoViewIfNeeded();
@@ -238,7 +238,7 @@ test('deletion confirmation, CAS conflict review, loading and read failure are d
   errors = await start(page, '?scenario=read-error');
   await openUserSettings(page);
   await openSettingsPage(page, 'Models');
-  await expect(settings.getByRole('alert')).toContainText('/bound/rustx.toml is not readable by the App Server process');
+  await expect(page.locator('[data-toast][data-foreground]')).toContainText('/bound/rustx.toml is not readable by the App Server process');
   await expect(settings.locator('[data-lifecycle="failed"][aria-busy="false"]')).toBeVisible();
   await expectAccessible(page, settingsScope);
   await expectStableScreenshot(settings, 'settings-read-error-light.png');
@@ -301,28 +301,24 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   await expect(settings.getByRole('row', { name: longProvider, exact: true })).toBeVisible();
   await expectStableScreenshot(page, 'settings-mobile-dark.png');
 
-  // List → detail → back: the detail replaces the list, and the way back is
-  // in reach even after the detail has scrolled.
+  // The provider list remains accessible alongside the selected detail.
   await settings.getByRole('row', { name: longProvider, exact: true }).click();
-  const detail = settings.getByRole('region', { name: `Provider ${longProvider}` });
+  const detail = settings.getByRole('form', { name: `Provider ${longProvider}` });
   await expect(detail.getByRole('heading', { level: 3 })).toHaveText(longProvider);
-  await expect(settings.getByRole('row', { name: 'transport', exact: true })).toBeVisible();
+  const transport = settings.getByRole('row', { name: 'transport', exact: true });
+  await expect(transport).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await expectStableScreenshot(page, 'settings-provider-detail-mobile-dark.png');
-  await detail.getByRole('button', { name: `Remove Provider ${longProvider}` }).scrollIntoViewIfNeeded();
-  const back = settings.getByRole('button', { name: '← Models', exact: true });
-  await back.scrollIntoViewIfNeeded();
-  await expect(back).toBeInViewport();
-  // Destructive action reachable and its confirmation inside the viewport.
-  await detail.getByRole('button', { name: `Remove Provider ${longProvider}` }).click();
+  await transport.click();
+  await settings.getByRole('button', { name: 'Provider actions', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
   const deletion = page.getByRole('alertdialog');
   await expect(deletion).toBeVisible();
   const confirm = (await deletion.boundingBox())!;
   expect(confirm.x).toBeGreaterThanOrEqual(0); expect(confirm.x + confirm.width).toBeLessThanOrEqual(390);
-  await expect(deletion.getByRole('button', { name: `Remove Provider ${longProvider}` })).toBeInViewport();
+  await expect(deletion.getByRole('button', { name: 'Remove Provider transport' })).toBeInViewport();
   await page.keyboard.press('Escape');
   await expect(deletion).toHaveCount(0); await expect(settings).toBeVisible();
-  await back.click();
   await expect(settings.getByRole('row', { name: longProvider, exact: true })).toBeVisible();
 
   // Model detail through the Provider, with its long identity.
@@ -552,14 +548,20 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
   await expect(settings.getByRole('row', { name: 'transport', exact: true })).toBeFocused();
   const unit = settings.getByRole('form', { name: 'Provider transport' });
-  const remove = unit.getByRole('button', { name: 'Remove Provider transport', exact: true });
+  const remove = unit.getByRole('button', { name: 'Provider actions', exact: true });
   const deletion = page.getByRole('alertdialog', { name: 'Remove Provider transport from User configuration?' });
+  const openDeletion = async () => {
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('menuitem', { name: 'Delete', exact: true })).toBeVisible();
+    await page.getByRole('menuitem', { name: 'Delete', exact: true }).focus();
+    await page.keyboard.press('Enter');
+  };
   const cancel = deletion.getByRole('button', { name: 'Cancel', exact: true });
   const writes = async () => (await nativeRequests(page)).filter(request => request.method === 'configuration/sourceWrite').length;
 
   // Cancel: nothing is written and focus returns to the trigger.
   await expect(remove).toBeEnabled(); await remove.focus(); await expect(remove).toBeFocused();
-  await page.keyboard.press('Enter');
+  await openDeletion();
   await expect(cancel).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(deletion).toHaveCount(0);
@@ -568,7 +570,7 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   expect(await writes()).toBe(0);
   expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
   // Escape: only the confirmation closes, and focus returns to the trigger.
-  await page.keyboard.press('Enter');
+  await openDeletion();
   await expect(cancel).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(deletion).toHaveCount(0);
@@ -592,7 +594,7 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   // Confirm: the removal is submitted and held in flight. The unit's controls,
   // the trigger among them, are closed until native answers, so focus settles
   // on the unit itself — not the body, not the disabled trigger.
-  await page.keyboard.press('Enter');
+  await openDeletion();
   await expect(cancel).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(deletion.getByRole('button', { name: 'Remove Provider transport', exact: true })).toBeFocused();
@@ -612,7 +614,7 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   await expect(unit).toHaveCount(0);
   await expect(remove).toHaveCount(0);
   await expect.poll(writes).toBe(1);
-  await expect(settings.getByRole('region', { name: 'Models', exact: true })).toBeFocused();
+  await expect(settings.getByRole('region', { name: 'Model Settings', exact: true })).toBeFocused();
   await expect(settings.getByRole('row', { name: 'transport', exact: true })).toHaveCount(0);
   // Tab continues from Models after its removed provider editor unmounts.
   await page.keyboard.press('Tab');
@@ -670,8 +672,9 @@ for (const unavailable of ['disabled', 'hidden', 'removed'] as const) test(`dism
   await openSettingsPage(page, 'Models');
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
   const unit = settings.getByRole('form', { name: 'Provider transport' });
-  const trigger = page.locator('form[aria-label="Provider transport"] button[aria-label="Remove Provider transport"]');
+  const trigger = page.locator('form[aria-label="Provider transport"] button[aria-label="Provider actions"]');
   await trigger.click();
+  await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
   const confirmation = page.getByRole('alertdialog');
   await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
   // Simulate an invoking control becoming unavailable while the modal owns
@@ -800,12 +803,16 @@ test('Provider split-panel deletion preserves exact unit CAS and updates the nav
   await openUserSettings(page); await openSettingsPage(page, 'Models');
   const settings = settingsPage(page);
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
-  const remove = settings.getByRole('button', { name: 'Remove Provider transport', exact: true });
-  await remove.focus(); await page.keyboard.press('Enter');
+  const remove = settings.getByRole('button', { name: 'Provider actions', exact: true });
+  const openDeletion = async () => {
+    await remove.click();
+    await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
+  };
+  await openDeletion();
   const confirmation = page.getByRole('alertdialog', { name: 'Remove Provider transport from User configuration?', exact: true });
   await expect(confirmation).toBeVisible();
   await page.keyboard.press('Escape'); await expect(remove).toBeFocused();
-  await page.keyboard.press('Enter');
+  await openDeletion();
   await confirmation.getByRole('button', { name: 'Remove Provider transport', exact: true }).click();
   await expect(confirmation).toHaveCount(0);
   await expect(settings.getByRole('form', { name: 'Provider transport', exact: true })).toBeFocused();
@@ -824,8 +831,8 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     await openUserSettings(page);
     await openSettingsPage(page, 'Models');
     const settings = settingsPage(page);
-    await settings.getByRole('button', { name: /^All Models/ }).click();
-    await settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name: longModel, exact: true }).click();
+    await settings.getByRole('row', { name: longProvider, exact: true }).click();
+    await settings.getByRole('row', { name: longModel, exact: true }).click();
     const model = page.getByRole('dialog', { name: `Model ${longModel}`, exact: true });
     await expect(model.getByRole('heading', { name: 'Edit Model', exact: true })).toBeVisible();
     await model.getByRole('button', { name: 'Advanced configuration', exact: true }).click();

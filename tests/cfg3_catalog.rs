@@ -25,6 +25,36 @@ const ROOT: &str = r#"
 model = "arbitrary-name"
 "#;
 
+#[test]
+fn hidden_providers_and_models_stay_resolvable_but_are_absent_from_model_choices() {
+    let second = MODEL.replace("arbitrary-name", "second");
+    let hidden_model = second.replace("provider = ", "hidden = true\nprovider = ");
+    let hidden_provider = PROVIDER.replace("protocol = ", "hidden = true\nprotocol = ");
+    for (catalog, visible) in [
+        (
+            format!("{PROVIDER}{MODEL}{second}"),
+            vec!["arbitrary-name", "second"],
+        ),
+        (
+            format!("{PROVIDER}{MODEL}{hidden_model}"),
+            vec!["arbitrary-name"],
+        ),
+        (format!("{hidden_provider}{MODEL}{second}"), vec![]),
+    ] {
+        let catalog = ModelCatalog::from_toml_slice(catalog.as_bytes()).unwrap();
+        let choices: Vec<_> = catalog
+            .view()
+            .models
+            .iter()
+            .map(|model| model.model.to_string())
+            .collect();
+        assert_eq!(choices, visible);
+        for id in ["arbitrary-name", "second"] {
+            assert!(catalog.model(&ModelRef::parse(id).unwrap()).is_ok());
+        }
+    }
+}
+
 const WORKFLOW: &str = "description: Return a literal\nblock:\n  input: {type: object, properties: {}, additionalProperties: false}\n  edges:\n  - from: workflow_start\n    to: done\n  nodes:\n    workflow_start:\n      type: start\n    done:\n      type: return\n      outputs: []\n";
 
 #[test]
@@ -553,6 +583,7 @@ fn provider_secrets_are_not_read_back_and_cannot_be_retained_from_lower_scope() 
             mutation: ConfigMutation::Provider {
                 id: "transport".into(),
                 authored: Some(ProviderWrite {
+                    hidden: false,
                     icon: None,
                     protocol: rustx::model::ModelProtocol::OpenAiResponses,
                     base_url: "https://higher.invalid/v1".into(),
@@ -1151,6 +1182,7 @@ fn provider_icons_round_trip_without_changing_model_resolution_or_exposing_secre
                     mutation: ConfigMutation::Provider {
                         id: "transport".into(),
                         authored: Some(ProviderWrite {
+                            hidden: false,
                             icon: icon.map(str::to_owned),
                             protocol: rustx::model::ModelProtocol::OpenAiResponses,
                             base_url: "https://workspace.invalid/v1".into(),
@@ -1197,6 +1229,7 @@ fn provider_icons_round_trip_without_changing_model_resolution_or_exposing_secre
                 mutation: ConfigMutation::Provider {
                     id: "transport".into(),
                     authored: Some(ProviderWrite {
+                        hidden: false,
                         icon: Some(icon.into()),
                         protocol: rustx::model::ModelProtocol::OpenAiResponses,
                         base_url: "https://workspace.invalid/v1".into(),

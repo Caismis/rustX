@@ -30,18 +30,17 @@ reasoning_profile_order = [${id === 'a' ? '"low", "high"' : second}]
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
     const repair = settings.getByRole('form', { name: 'Repair invalid source', exact: true });
     await expect(repair).toBeVisible();
-    await expect(settings.getByRole('alert')).toContainText('invalid Model reasoning Profile order at models.*.reasoning_profile_order');
+    await expect(page.locator('[data-toast][data-foreground]')).toContainText('invalid Model reasoning Profile order at models.*.reasoning_profile_order');
     await expect(settings.getByRole('button', { name: 'Add Model', exact: true })).toHaveCount(0);
     await repair.getByLabel('Replacement TOML').fill(document('"low"'));
     await repair.getByRole('button', { name: 'Save Repair invalid source', exact: true }).click();
-    await expect(repair.getByRole('alert')).toBeVisible();
+    await expect(page.locator('[data-toast][data-foreground]')).toBeVisible();
     expect(readFileSync(source, 'utf8')).toBe(invalid);
     await repair.getByLabel('Replacement TOML').fill(document('"high", "low"'));
     await repair.getByRole('button', { name: 'Save Repair invalid source', exact: true }).click();
     await expect(repair).toHaveCount(0);
     await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
-    await settings.getByRole('button', { name: /^All Models/ }).click();
-    await settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name: 'b', exact: true }).click();
+    await settings.getByRole('row', { name: 'b', exact: true }).click();
     const modal = page.getByRole('dialog', { name: 'Model b', exact: true });
     await modal.getByRole('button', { name: 'Advanced configuration', exact: true }).click();
     const list = modal.getByRole('list', { name: 'Reasoning order (low to high)' });
@@ -82,9 +81,8 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     if (await expand.isVisible()) await expand.click();
     await openWorkspaceSettings(page, 'Workspace A');
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
-    await settings.getByRole('button', { name: /^All Models/ }).click();
     const open = async () => {
-      await settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name: 'ordered', exact: true }).click();
+      await settings.getByRole('row', { name: 'ordered', exact: true }).click();
       await page.getByRole('dialog', { name: 'Model ordered', exact: true }).getByRole('button', { name: 'Advanced configuration', exact: true }).click();
     };
     await open();
@@ -119,7 +117,7 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     await modal.getByLabel('New profile identity').fill(custom);
     await modal.getByLabel('New profile identity').press('Enter');
     expect(await ids()).toEqual(['a-high', 'z-off', custom]);
-    await expect(modal.getByText(`Profile ${custom} was placed last in this draft. Adjust its position before Save.`, { exact: true })).toBeVisible();
+    await expect(page.locator('[data-toast][data-foreground]')).toHaveText(`Profile ${custom} was placed last in this draft. Adjust its position before Save.`);
     await list.scrollIntoViewIfNeeded();
     await page.screenshot({ path: test.info().outputPath(`reasoning-order-long-${width}.png`) });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

@@ -153,7 +153,7 @@ export function Toggle({ label, checked, onChange, disabled = false }: {
  * The workflow names the stable outcome surface; this interaction chooses
  * dismissed versus confirmed. DialogSurface owns the close-focus lifecycle.
  */
-export function ConfirmAction({ label, triggerText, title, description, confirm, onConfirm, tone, settle, disabled = false }: {
+export function ConfirmAction({ label, triggerText, title, description, confirm, onConfirm, tone, settle, disabled = false, renderTrigger }: {
   label: string; triggerText?: string; title: string; description: ReactNode; confirm: string;
   onConfirm: () => void; tone: 'destructive' | 'restore';
   /** The enabled element of the caller's workflow that takes focus after a
@@ -161,6 +161,7 @@ export function ConfirmAction({ label, triggerText, title, description, confirm,
    * removes. */
   settle: RefObject<HTMLElement | null>;
   disabled?: boolean;
+  renderTrigger?: (open: () => void, ref: RefObject<HTMLButtonElement | null>) => ReactNode;
 }) {
   const tx = useTranslation();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -168,12 +169,13 @@ export function ConfirmAction({ label, triggerText, title, description, confirm,
   const [open, setOpen] = useState(false);
   const closing = useRef<'dismissed' | 'confirmed'>('dismissed');
   const destructive = tone === 'destructive';
+  const show = () => { closing.current = 'dismissed'; setOpen(true); };
   return <span className={css.removal} data-tone={tone}>
-    <AriaButton ref={trigger} isDisabled={disabled} aria-label={label}
+    {renderTrigger ? renderTrigger(show, trigger) : <AriaButton ref={trigger} isDisabled={disabled} aria-label={label}
       className={clsx(buttonCss.button, buttonCss.ghost, buttonCss.md, destructive && css.dangerTrigger)}
-      onPress={() => { closing.current = 'dismissed'; setOpen(true); }}>
+      onPress={show}>
       {destructive && <span className={buttonCss.icon}><IconTrashOutline16 /></span>}{triggerText ?? label}
-    </AriaButton>
+    </AriaButton>}
     <DialogSurface open={open} onClose={() => setOpen(false)} title={title}
       role={destructive ? 'alertdialog' : 'dialog'} overlayClassName={css.confirmOverlay}
       panelClassName={css.confirmModal} className={css.confirmDialog} initialFocus={cancel}
