@@ -456,15 +456,15 @@ pub(super) fn validate_fresh_input_binding(
     configuration: &native_request::FreshConfiguration,
     root: Option<manifest::NodeRef>,
 ) -> Result<(), ConversationStoreError> {
-    let actual: String = connection
+    let matches = connection
         .query_row_cached(
             "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
             [snapshot.request_id.as_str()],
-            |r| r.get(0),
+            |row| Ok(row.get_ref(0)?.as_str()? == json),
         )
-        .map_err(|e| storage(e.to_string()))?;
+        .map_err(|error| storage(error.to_string()))?;
     configuration.authenticate(connection)?;
-    if actual != json || read_stored_snapshot_root(connection, &snapshot.request_id)? != root {
+    if !matches || read_stored_snapshot_root(connection, &snapshot.request_id)? != root {
         return Err(ConversationStoreError::InvalidReference(
             "fresh request stored Snapshot/root differs from exact admitted values".into(),
         ));
