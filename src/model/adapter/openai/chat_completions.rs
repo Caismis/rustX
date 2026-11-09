@@ -206,7 +206,7 @@ async fn chat_pull(
             }
         };
         match item {
-            Some(Ok(chunk)) => match normalizer.push(&chunk) {
+            Some(Ok(chunk)) => match normalizer.push(chunk) {
                 Ok(events) => pending.extend(events),
                 Err(error) => pending.push_back(failed(error)),
             },
@@ -581,7 +581,7 @@ impl ChatStreamNormalizer {
 
     /// Processes one raw chunk, returning canonical events and ephemeral
     /// provider-derived progress in the same stream contract.
-    fn push(&mut self, chunk: &serde_json::Value) -> Result<Vec<ModelStreamItem>, ModelError> {
+    fn push(&mut self, chunk: serde_json::Value) -> Result<Vec<ModelStreamItem>, ModelError> {
         self.buffered_generation = false;
         let events = self.push_events(chunk)?;
         let mut items = events
@@ -598,11 +598,11 @@ impl ChatStreamNormalizer {
     /// cannot yet be attributed to a canonical call are reported by `push` as
     /// ephemeral generation progress, while remaining buffered here.
     #[allow(clippy::too_many_lines)] // one provider stream chunk state machine
-    fn push_events(&mut self, chunk: &serde_json::Value) -> Result<Vec<ModelEvent>, ModelError> {
+    fn push_events(&mut self, chunk: serde_json::Value) -> Result<Vec<ModelEvent>, ModelError> {
         if let Some(error) = chunk.get("error") {
             return Err(chat_stream_error(error));
         }
-        let chunk: ChatChunkWire = serde_json::from_value(chunk.clone())
+        let chunk: ChatChunkWire = serde_json::from_value(chunk)
             .map_err(|e| provider_error(format!("malformed chat chunk: {e}")))?;
         if value_has_output(chunk.moderation.as_ref())
             || value_has_output(chunk.video_result.as_ref())
@@ -1791,7 +1791,7 @@ mod tests {
         let mut normalizer =
             ChatStreamNormalizer::new(ValidatedTools::default().into(), ChatToolProtocol::Native);
         let error = normalizer
-            .push(&json!({
+            .push(json!({
                 "base_resp": {"status_code": 500, "status_msg": "upstream unavailable"}
             }))
             .expect_err("a non-zero base response is a provider failure");
@@ -1804,11 +1804,26 @@ mod tests {
         assert_eq!(error.provider_code.as_deref(), Some("500"));
 
         let error = normalizer
-            .push(&json!({
+            .push(json!({
                 "base_resp": {"status_code": 409, "status_msg": "request rejected"}
             }))
             .expect_err("a second non-zero base response is a provider failure");
         assert_eq!(error.retry_disposition, ModelRetryDisposition::Never);
+    }
+
+    #[test]
+    fn chat_in_band_error_precedes_typed_chunk_decoding() {
+        let mut normalizer =
+            ChatStreamNormalizer::new(ValidatedTools::default().into(), ChatToolProtocol::Native);
+        let error = normalizer
+            .push(json!({
+                "choices": "not a typed choice list",
+                "error": {"code": 429, "message": "upstream rate limit"}
+            }))
+            .expect_err("in-band errors are classified before decoding the rest of the chunk");
+        assert_eq!(error.kind, ModelErrorKind::RateLimit);
+        assert_eq!(error.provider_code.as_deref(), Some("429"));
+        assert_eq!(error.retry_disposition, ModelRetryDisposition::Transient);
     }
 
     #[test]
