@@ -36,6 +36,8 @@ function Editor({ source,scope,revision,focus, scopeControl, close, document }: 
     blank: {definition:{type:'stdio',command:'',args:[]},retained_env:[],retained_headers:[]}, mutation: value => ({kind:'mcp',id:name,authored:value}) });
   const [json, setJson] = useState(() => formatMcpJson(name, unit.displayed));
   const submitted = useRef(false), pendingSave = useRef(false), card = useRef<HTMLFormElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
   const [invalidFields, setInvalidFields] = useState<Record<string, boolean>>({});
   const validity = useCallback((field: string, valid: boolean) => setInvalidFields(current => {
     if (!!current[field] === !valid) return current;
@@ -119,22 +121,25 @@ function Editor({ source,scope,revision,focus, scopeControl, close, document }: 
     if (mode === 'json') { pendingSave.current = true; applyJson(); }
     else { submitted.current = true; unit.submit(); }
   };
+  const cancel = () => { if (!duplicate) unit.discard(); close(); };
   return <>
     <div className={css.back}><Button size="sm" variant="ghost" disabled={blocked} onClick={close}>{tx('settings:mcp.back')}</Button></div>
-    <div className={css.editorHeader}><div><h3>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={css.modes} role="group" aria-label={tx('settings:mcp.form')}>
+    <div className={css.editorHeader}><div><h3 ref={heading} tabIndex={-1}>{title}</h3><p>{tx('settings:mcp.form-help')}</p></div><div className={css.modes} role="group" aria-label={tx('settings:mcp.form')}>
       <Button size="sm" disabled={blocked} aria-pressed={mode === 'form'} variant={mode === 'form' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('form')}>{tx('settings:mcp.form')}</Button><Button size="sm" disabled={blocked || !validFields || !unit.writable} aria-pressed={mode === 'json'} variant={mode === 'json' ? 'toolbar' : 'ghost'} onClick={() => chooseMode('json')}>JSON</Button></div></div>
     <form ref={card} tabIndex={-1} className={css.form} aria-label={title} data-definition={unit.definition} onSubmit={event => {event.preventDefault();save();}}>
       <fieldset disabled={blocked} className={css.formBody}>
         <DefinitionNotice unit={unit}/>
-        <div className={css.top}>{mode === 'form' && <label>{tx('settings:mcp.name')}<input value={name} placeholder={tx('settings:mcp.name-placeholder')} disabled={!!focus.name || unit.reviewNeeded} onChange={event => changeName(event.target.value.trim())}/></label>}<div className={css.scope}>{tx('settings:mcp.scope')}{scopeControl}</div></div>
+        <div className={css.sectionHead}><h4>{tx('settings:mcp.connection')}</h4><div className={css.scope}>{tx('settings:mcp.scope')}{scopeControl}</div></div>
         {duplicate && <p role="alert" className={css.error}>{tx('settings:mcp.duplicate')}</p>}
         {mode === 'json' ? <>
           <JsonCodeEditor label={tx('settings:mcp.json')} value={json} allowEmpty={false} minHeight={280}
             error={error ? tx('settings:mcp.invalid-json',{error}) : ''} onChange={text => {setJson(text);setError('');}}/>
           <p className={css.hint}>{tx('settings:mcp.json-help')}</p>
           {Object.keys(imports).length > 1 && <div className={css.actions}>{Object.entries(imports).map(([id,data]) => <Button key={id} onClick={() => importValue(id,data)}>{id}</Button>)}</div>}
-        </> : <fieldset disabled={duplicate || !unit.writable} className={css.formBody}>
-          <McpFormFields value={value} change={unit.edit} validity={validity}/>
+        </> : <fieldset className={css.formBody}>
+          <McpFormFields value={value} change={unit.edit} validity={validity} disabled={duplicate || !unit.writable}
+            identity={<label>{tx('settings:mcp.name')}<input value={name} placeholder={tx('settings:mcp.name-placeholder')}
+              disabled={!!focus.name || unit.reviewNeeded} onChange={event => changeName(event.target.value.trim())}/></label>}/>
         </fieldset>}
         {unit.override && <div className={css.notice}><p>{tx('settings:mcp.inherited')}</p><Button type="button" onClick={unit.override}>{tx('settings:bridge.override')}</Button></div>}
         {unit.reviewNeeded && <div className={css.notice}><p role="status">{tx('settings:mcp.review')}</p><Button onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button></div>}
@@ -144,9 +149,9 @@ function Editor({ source,scope,revision,focus, scopeControl, close, document }: 
       <div className={css.footer}>
         {focus.name && unit.authoredPresent && <span data-removal={restoresInherited?'override-removal':'authored-removal'}><ConfirmAction label={removalLabel} triggerText={tx(restoresInherited?'settings:models.restore':'settings:copy.delete')} title={tx(restoresInherited?'settings:bridge.use-the-global-default-for-value':'settings:mcp.remove-confirm',{p0:identityTitle})} description={tx(restoresInherited?'settings:forms.restore-help':'settings:mcp.remove-help')} confirm={removalLabel} tone={restoresInherited?'restore':'destructive'} settle={card} disabled={blocked || !unit.admitted} onConfirm={() => {submitted.current=true;unit.submit(true);}}/></span>}
         <div className={css.footerButtons}>
-          <Button variant="primary" type="submit" aria-label={tx('settings:mcp.save')} aria-busy={blocked} disabled={!canSave}>{tx(blocked ? 'settings:catalog.saving' : 'settings:mcp.save')}</Button>
-          {unit.intent && <Button type="button" disabled={blocked} onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>}
-          <Button type="button" disabled={blocked} onClick={() => {if (!duplicate) unit.discard();close();}}>{tx('settings:mcp.cancel')}</Button>
+          {unit.intent && <Button size="sm" disabled={blocked} onClick={unit.discard}>{tx('settings:bridge.discard-draft')}</Button>}
+          <Button size="sm" variant="outline" disabled={blocked} onClick={cancel}>{tx('settings:mcp.cancel')}</Button>
+          <Button size="sm" variant="primary" type="submit" aria-label={tx('settings:mcp.save')} aria-busy={blocked} disabled={!canSave}>{tx(blocked ? 'settings:catalog.saving' : 'settings:mcp.save')}</Button>
         </div>
       </div>
     </form>

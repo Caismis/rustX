@@ -13,6 +13,8 @@ for (const width of [1440, 390]) test(`MCP compact creation form, reference JSON
   await openResourceModule(page,'mcp','Global');
   await page.getByRole('button',{name:'＋ New MCP server',exact:true}).click();
   const form=page.getByRole('form',{name:'New MCP server'});
+  await expect(page.getByRole('heading',{name:'New MCP server',exact:true})).toBeFocused();
+  await expect(page.getByRole('tab',{name:'Global',exact:true})).toHaveCount(0);
   await expect(form.getByLabel('Command',{exact:true})).toBeVisible();
   await expect(form.getByLabel('Arguments (space-separated)',{exact:true})).toBeVisible();
   await expect(form.getByLabel('Command',{exact:true})).toHaveCSS('height','36px');
@@ -39,6 +41,7 @@ for (const width of [1440, 390]) test(`MCP compact creation form, reference JSON
   await expect(referenceEditor.getByRole('button',{name:'Format JSON: Environment variables (JSON)',exact:true})).toBeHidden();
   await references.fill('{broken');
   await expect(form.getByRole('button',{name:'Save',exact:true})).toBeDisabled();
+  await expect(form.getByRole('button',{name:'Save',exact:true})).toBeInViewport({ratio:1});
   await expect(references).toHaveAttribute('aria-invalid','true');
   await expect(form.locator('.cm-lintRange-error')).not.toHaveCount(0);
   await references.fill('{"TOKEN":"$TOKEN"}');

@@ -107,6 +107,7 @@ export const en = {
   "models-page.request-parameter-overrides-btw": "Request parameter overrides (BTW)",
 
   "mcp.type": "Type",
+  "mcp.connection": "Connection",
   "mcp.arguments": "Arguments (space-separated)",
   "mcp.command": "Command",
   "mcp.url": "URL",
@@ -150,7 +151,7 @@ export const en = {
   "mcp.more": "More actions",
   "mcp.refresh": "Refresh",
   "mcp.form": "Form",
-  "mcp.form-help": "Fill in the new MCP configuration, then save to return to the list.",
+  "mcp.form-help": "Configure the server connection and save to return to the list.",
   "mcp.name": "Name",
   "mcp.save": "Save",
   "mcp.cancel": "Cancel",
@@ -773,6 +774,7 @@ export const zh = {
   "models-page.request-parameter-overrides-btw": "临时提问请求参数覆盖",
 
   "mcp.type": "类型",
+  "mcp.connection": "连接设置",
   "mcp.arguments": "参数（空格分隔）",
   "mcp.command": "命令",
   "mcp.url": "URL",
@@ -816,7 +818,7 @@ export const zh = {
   "mcp.more": "更多操作",
   "mcp.refresh": "刷新",
   "mcp.form": "表单",
-  "mcp.form-help": "填写新的 MCP 配置，保存后返回列表。",
+  "mcp.form-help": "配置服务器连接，保存后返回列表。",
   "mcp.name": "名称",
   "mcp.save": "保存",
   "mcp.cancel": "取消",

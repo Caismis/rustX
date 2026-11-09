@@ -63,7 +63,7 @@ export const en = {
   'close': 'Close',
   'cancel': 'Cancel',
   'skills.instructions': 'Instructions',
-  'skills.read-only': 'Skills are managed as files. You can view their instructions and enable or disable them here.',
+  'skills.empty-instructions': 'This skill has no instructions.',
 } as const;
 export const zh: Record<keyof typeof en,string> = {
   'subagents.title': '子智能体',
@@ -130,5 +130,5 @@ export const zh: Record<keyof typeof en,string> = {
   'close': '关闭',
   'cancel': '取消',
   'skills.instructions': '使用说明',
-  'skills.read-only': '技能通过文件管理，你可以在这里查看说明并控制是否启用。',
+  'skills.empty-instructions': '此技能暂无使用说明。',
 };

@@ -106,16 +106,22 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const listTitle = useRef<HTMLHeadingElement>(null);
   const returnFocus = useRef(false);
   useEffect(() => {
-    if (!agentEditor && returnFocus.current) {
+    if (!agentEditor && !detail && returnFocus.current) {
       returnFocus.current = false;
       listTitle.current?.focus({ preventScroll: true });
     }
-  }, [agentEditor]);
+  }, [agentEditor, detail]);
   const closeAgent = () => { returnFocus.current = true; setNewAgent(undefined); setResourceFocus(undefined); };
+  const focusMcp = (next?: McpFocus) => {
+    if (!next) returnFocus.current = true;
+    setMcpFocus(next);
+  };
+  const mcpPage = module === 'mcp' && source && <McpPage source={source} scope={scope} revision={revision} focus={mcpFocus} onFocus={focusMcp}
+    scopeControl={<span>{scopeLabel}</span>} query={query} view={view} probeStates={probes.states} testConnection={probes.testConnection} probeAvailable={probes.available} />;
 
   return <section className={`primary-page ${catalogCss.surface}`} aria-label={title} data-resource-module={module}
     data-lifecycle={available && observation && !readError ? 'ready' : readError ? 'failed' : 'loading'} hidden={!visible} inert={!visible}>
-    {agentEditor ? <div className={clsx(catalogCss.library, css.agentEditor)} key={lifetime}><SettingsFeedback active={visible}>
+    {agentEditor ? <div className={clsx(catalogCss.library, css.detailEditor)} key={lifetime}><SettingsFeedback active={visible}>
       {[readError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <SettingsNotice text={error} key={index} />)}
       {available && source ? <SettingsActorContext value={actor}><SourceContext value={source}>
         <AgentEditor source={source} target={target} host={host} name={resourceFocus} initialDraft={newAgent} editable={editable}
@@ -125,10 +131,17 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
         <Button size="sm" onClick={closeAgent}>{tx('resources:cancel')}</Button>
         <p className={catalogCss.state} role="status">{tx(available ? 'resources:loading' : 'resources:scope.unavailable')}</p>
       </>}
-    </SettingsFeedback></div> : <div className={catalogCss.library}>
+    </SettingsFeedback></div> : detail ? <div className={clsx(catalogCss.library, css.detailEditor)} key={lifetime}>
+      <div className={clsx(settings.settings, css.mcpDetail)}>
+        {[readError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}
+        {source && <SettingsActorContext value={actor}><SourceContext value={source}>
+          <fieldset className={css.editor} disabled={!editable}>{mcpPage}</fieldset>
+        </SourceContext></SettingsActorContext>}
+      </div>
+    </div> : <div className={catalogCss.library}>
       <header className={clsx(catalogCss.pageHead, css.heading)}>
         <div><h1 ref={listTitle} tabIndex={-1}>{title}</h1><p className={catalogCss.muted}>{tx(`resources:${module}.description`)}</p></div>
-        {!detail && module === 'mcp' && <McpActions disabled={!editable || !(scope === 'user' ? source?.user_mcp : source?.workspace_mcp)?.authored} onFocus={setMcpFocus} />}
+        {module === 'mcp' && <McpActions disabled={!editable || !(scope === 'user' ? source?.user_mcp : source?.workspace_mcp)?.authored} onFocus={focusMcp} />}
         {module === 'subagents' && <Button variant="primary" icon={<IconPlusOutline16 />} disabled={!editable} onClick={() => setNewAgent({})}>{tx('resources:subagents.new')}</Button>}
       </header>
       <Tabs selectedKey={tab} onSelectionChange={key => { resetScope(); setTab(key as typeof tab); }}>
@@ -148,8 +161,8 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
                 </button>} />
             </div> : <p className={catalogCss.context}>{scopeLabel}</p>}
             <div className={clsx(catalogCss.controlsRight, css.tools)}>
-              {!detail && <><CatalogSearch label={tx(module === 'mcp' ? 'settings:mcp.search' : 'resources:search')} value={query} onChange={setQuery} />
-                <CatalogViewSwitch view={view} onChange={setView} /></>}
+              <CatalogSearch label={tx(module === 'mcp' ? 'settings:mcp.search' : 'resources:search')} value={query} onChange={setQuery} />
+              <CatalogViewSwitch view={view} onChange={setView} />
               <Button size="sm" variant="outline" className={css.refresh} aria-label={tx('resources:refresh')} title={tx('resources:refresh')}
                 disabled={!available || busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}><IconRefreshOutline16 /></Button>
             </div>
@@ -157,15 +170,12 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
           {!available ? <p className={catalogCss.state} role="status">{tx(workspaceId ? 'resources:scope.unavailable' : 'resources:scope.empty')}</p> : <>
             {[readError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <p className={catalogCss.banner} role="alert" key={index}>{error}</p>)}
             {!source ? <p className={catalogCss.state} role="status">{tx('resources:loading')}</p> : <SettingsActorContext value={actor}><SourceContext value={source}>
-              <div className={detail ? settings.settings : undefined} key={lifetime}>
-                <fieldset className={css.editor} disabled={!editable}>
-                  {module === 'mcp' ? <McpPage source={source} scope={scope} revision={revision} focus={mcpFocus} onFocus={setMcpFocus}
-                    scopeControl={<span>{scopeLabel}</span>} query={query} view={view} probeStates={probes.states} testConnection={probes.testConnection} probeAvailable={probes.available} />
-                    : module === 'subagents' ? <SubagentList source={source} scope={scope} revision={revision} query={query} view={view} onOpen={setResourceFocus} />
-                    : <ResourceBrowser client={client} source={source} scope={scope} revision={revision}
-                      query={query} view={view} focus={resourceFocus} onFocus={setResourceFocus} />}
-                </fieldset>
-              </div>
+              <fieldset className={css.editor} disabled={!editable} key={lifetime}>
+                {module === 'mcp' ? mcpPage
+                  : module === 'subagents' ? <SubagentList source={source} scope={scope} revision={revision} query={query} view={view} onOpen={setResourceFocus} />
+                  : <ResourceBrowser client={client} source={source} scope={scope} revision={revision}
+                    query={query} view={view} focus={resourceFocus} onFocus={setResourceFocus} />}
+              </fieldset>
             </SourceContext></SettingsActorContext>}
           </>}
         </TabPanel>

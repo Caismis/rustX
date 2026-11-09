@@ -13,11 +13,11 @@ export function ResourceGroup({ label, count, view, empty, children }: {
   </section>;
 }
 
-export function ResourceCard({ name, label, icon, description, diagnostic, path, onOpen, availability, actions }: {
+export function ResourceCard({ name, label, icon, description, diagnostic, onOpen, availability, actions }: {
   name: string; label?: string; icon: ReactNode; description: string; diagnostic?: string;
-  path: string; onOpen: () => void; availability?: ReactNode; actions?: ReactNode;
+  onOpen: () => void; availability?: ReactNode; actions?: ReactNode;
 }) {
-  return <li aria-label={name} className={clsx(catalog.card, diagnostic && catalog.invalidCard)}>
+  return <li aria-label={name} className={clsx(catalog.card, css.resourceCard, diagnostic && catalog.invalidCard)}>
     <div className={clsx(catalog.cardHead, css.cardHeading)}>
       <button type="button" className={catalog.cardOpen} aria-label={label ?? name} onClick={onOpen}>
         <span className={catalog.fileTile}>{icon}</span>
@@ -25,10 +25,7 @@ export function ResourceCard({ name, label, icon, description, diagnostic, path,
       </button>
       {availability && <div className={catalog.enable}>{availability}</div>}
     </div>
-    <p className={clsx(catalog.cardDescription, css.description, diagnostic && catalog.invalid)}>{diagnostic ?? description}</p>
-    <div className={clsx(catalog.cardFoot, css.cardFoot)}>
-      <span className={catalog.path} title={path}><span>{path}</span></span>
-      {actions && <div className={css.cardActions}>{actions}</div>}
-    </div>
+    {(diagnostic || description) && <p className={clsx(catalog.cardDescription, css.description, diagnostic && catalog.invalid)}>{diagnostic ?? description}</p>}
+    {actions && <div className={css.cardActions}>{actions}</div>}
   </li>;
 }

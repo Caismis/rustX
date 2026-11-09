@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { McpWrite } from '../../../../../protocol/app-server/v77';
 import { useTranslation } from '../../../locale/react';
 import { mcpTransport } from '../../../bindings/mcp';
@@ -34,27 +34,31 @@ function DraftText<T>({ value, format, parse, change, validity, field, label, er
   </label>;
 }
 
-export function McpFormFields({ value, change, validity }: {
+export function McpFormFields({ value, change, validity, identity, disabled }: {
   value: McpWrite; change: (value: McpWrite) => void; validity: (field: string, valid: boolean) => void;
+  identity: ReactNode; disabled: boolean;
 }) {
   const tx = useTranslation(), definition = value.definition, http = mcpTransport(definition) === 'http';
   const patch = (next: Partial<McpWrite['definition']>) => change({...value, definition: {...definition, ...next}});
   return <>
-    <div className={css.short}><Choice label={tx('settings:mcp.type')} value={http ? 'http' : 'stdio'}
-      options={[[ 'stdio', tx('settings:mcp.stdio') ],[ 'http', 'HTTP' ]]}
-      onChange={next => { if (next !== (http ? 'http' : 'stdio')) change({definition:next === 'http' ? {type:'http',url:''} : {type:'stdio',command:'',args:[]},retained_env:[],retained_headers:[]}); }}/></div>
-    {http ? <label>{tx('settings:mcp.url')}<input value={definition.url ?? ''} placeholder={tx('settings:mcp.url-placeholder')} onChange={event => patch({url:event.target.value})}/></label>
-      : <>
-        <label>{tx('settings:mcp.command')}<input value={definition.command ?? ''} placeholder={tx('settings:mcp.command-placeholder')} onChange={event => patch({command:event.target.value})}/></label>
-        <DraftText field="args" label={tx('settings:mcp.arguments')} value={definition.args ?? []} format={formatArguments} parse={parseArguments}
-          change={args => patch({args})} validity={validity} error={tx('settings:mcp.args-error')} placeholder={tx('settings:mcp.args-placeholder')}/>
-      </>}
-    <details className={css.optionalMap} key={http ? 'http' : 'stdio'}><summary>{tx(http ? 'settings:mcp.headers' : 'settings:mcp.env')}</summary>
-      <DraftText field={http ? 'headers' : 'env'} label={tx(http ? 'settings:mcp.headers-json' : 'settings:mcp.env-json')} json
-        value={(http ? definition.sensitive_headers : definition.sensitive_env) ?? {}} format={formatReferences} parse={parseReferences}
-        change={references => patch(http ? {sensitive_headers:references} : {sensitive_env:references})} validity={validity}
-        error={tx('settings:mcp.references-error')} placeholder={tx(http ? 'settings:mcp.headers-placeholder' : 'settings:mcp.env-placeholder')}/>
-    </details>
-
+    <div className={css.top}>{identity}
+      <div className={css.short}><Choice label={tx('settings:mcp.type')} value={http ? 'http' : 'stdio'} disabled={disabled}
+        options={[[ 'stdio', tx('settings:mcp.stdio') ],[ 'http', 'HTTP' ]]}
+        onChange={next => { if (next !== (http ? 'http' : 'stdio')) change({definition:next === 'http' ? {type:'http',url:''} : {type:'stdio',command:'',args:[]},retained_env:[],retained_headers:[]}); }}/></div>
+    </div>
+    <fieldset className={css.formBody} disabled={disabled}>
+      {http ? <label>{tx('settings:mcp.url')}<input value={definition.url ?? ''} placeholder={tx('settings:mcp.url-placeholder')} onChange={event => patch({url:event.target.value})}/></label>
+        : <>
+          <label>{tx('settings:mcp.command')}<input value={definition.command ?? ''} placeholder={tx('settings:mcp.command-placeholder')} onChange={event => patch({command:event.target.value})}/></label>
+          <DraftText field="args" label={tx('settings:mcp.arguments')} value={definition.args ?? []} format={formatArguments} parse={parseArguments}
+            change={args => patch({args})} validity={validity} error={tx('settings:mcp.args-error')} placeholder={tx('settings:mcp.args-placeholder')}/>
+        </>}
+      <details className={css.optionalMap} key={http ? 'http' : 'stdio'}><summary>{tx(http ? 'settings:mcp.headers' : 'settings:mcp.env')}</summary>
+        <DraftText field={http ? 'headers' : 'env'} label={tx(http ? 'settings:mcp.headers-json' : 'settings:mcp.env-json')} json
+          value={(http ? definition.sensitive_headers : definition.sensitive_env) ?? {}} format={formatReferences} parse={parseReferences}
+          change={references => patch(http ? {sensitive_headers:references} : {sensitive_env:references})} validity={validity}
+          error={tx('settings:mcp.references-error')} placeholder={tx(http ? 'settings:mcp.headers-placeholder' : 'settings:mcp.env-placeholder')}/>
+      </details>
+    </fieldset>
   </>;
 }

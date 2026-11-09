@@ -2,7 +2,7 @@ import type { SourceScope, SourceSettings } from '../../../../../protocol/app-se
 import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
 import type { CatalogView } from '../../../presentation/catalog/CatalogControls';
-import { IconCodeOutline16 } from '../../../presentation/primitives/icons';
+import { IconSkillOutline16 } from '../../../presentation/primitives/icons';
 import { SkillDetail } from '../skills/SkillDetail';
 import { useSkillCatalog } from '../skills/useSkillCatalog';
 import { extensionEntries } from './inventory';
@@ -37,15 +37,15 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
   const inherited = matches.filter(row => row.owner !== scope);
 
   const renderCard = (row: typeof entries[number]) => <ResourceCard key={row.name} name={row.name}
-    icon={<IconCodeOutline16 />}
-    description={row.description} diagnostic={row.diagnostics[0]} path={row.path} onOpen={() => onFocus(row.name)}
+    icon={<IconSkillOutline16 />}
+    description={row.description} diagnostic={row.diagnostics[0]} onOpen={() => onFocus(row.name)}
     availability={revision !== undefined && skillsByName.get(row.name)?.disable_model_invocation === false && <ResourceAvailability family="skill" name={row.name} valid={row.valid}
       source={source} scope={scope} revision={revision} skillNames={skillNames} />} />;
 
   return <>
     {skills?.error && <p role="alert">{skills.error}</p>}
     <ResourceGroup label={tx('resources:scope.owned')} count={owned.length} view={view}
-      empty={<p>{tx(needle ? 'resources:no-results' : 'resources:empty')}</p>}>
+      empty={<p role="status">{tx(needle ? 'resources:no-results' : !skills ? 'resources:loading' : 'resources:empty')}</p>}>
       {owned.map(renderCard)}
     </ResourceGroup>
     {!!inherited.length && <ResourceGroup label={tx('resources:scope.inherited')} count={inherited.length} view={view} empty={null}>

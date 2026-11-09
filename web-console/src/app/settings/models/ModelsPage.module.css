@@ -1,13 +1,15 @@
 /* Provider rows use the Harness card material. The selected editor is a
    separate inset module, like the other sections of Settings. */
 .section { container-type: inline-size; }
-.toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
-.description { color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.toolbar > div:first-child { flex: 1 1 220px; min-width: 0; }
+.section .description { margin-top: 4px; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
 .headerActions { display: flex; align-items: center; gap: 8px; flex: none; }
-.layout { display: grid; grid-template-columns: minmax(144px, 28%) minmax(0, 1fr); gap: 16px; align-items: start; }
-.navigation { display: grid; gap: 8px; min-width: 0; }
-.navigation > div:first-child { padding: 0; }
-.section .navigation h4 { margin: 2px 0 0; }
+.layout { display: grid; grid-template-columns: minmax(144px, 28%) minmax(0, 1fr); align-items: stretch; }
+.layout:has(.navigation) { border: .5px solid var(--dsw-alias-border-l2); border-radius: 16px; }
+.navigation { display: grid; align-content: start; gap: 8px; min-width: 0; padding: 14px 12px; border-inline-end: .5px solid var(--dsw-alias-border-l2); }
+.navigation > div { padding: 0; }
+.section .navigation h4 { margin: 0; color: var(--dsw-alias-label-secondary); font-size: 13px; }
 .providers { display: flex; flex-direction: column; gap: 6px; min-width: 0; outline: none; }
 .provider { box-sizing: border-box; display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 8px 12px; border: .5px solid var(--dsw-alias-border-l4); border-radius: var(--dsw-radius-lg); background: transparent; cursor: pointer; outline: none; }
 .provider[data-hovered] { background: var(--dsw-alias-interactive-bg-hover); }
@@ -18,7 +20,7 @@
 .providerDot[data-state=ready] { background: var(--dsw-alias-state-success-primary); }
 .providerDot[data-state=empty] { background: var(--dsw-alias-state-warn-primary); }
 .emptyNavigation { font-size: 13px; color: var(--dsw-alias-label-secondary); }
-.detailPane { min-width: 0; padding: 14px 16px; border: .5px solid var(--dsw-alias-border-l2); border-radius: 16px; background: var(--dsw-alias-bg-module-platform); }
+.detailPane { min-width: 0; padding: 14px 16px; background: var(--dsw-alias-bg-module-platform); border-radius: 0 16px 16px 0; }
 .connection { min-width: 0; }
 .detailHeader { display: flex; align-items: center; gap: 8px; min-height: 28px; margin-bottom: 14px; }
 .section .detailHeader h3 { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; font-size: 14px; line-height: 22px; margin: 0; }
@@ -41,17 +43,22 @@
 .modelsHeading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 16px 0 4px; padding-top: 12px; border-top: .5px solid var(--dsw-alias-border-l2); }
 .section .modelsHeading h4 { margin: 0; }
 .modelList { min-width: 0; outline: none; }
-.modelRow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 5px 10px; min-height: 40px; cursor: pointer; outline: none; }
+.modelRow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 8px; min-height: 40px; cursor: pointer; outline: none; }
 .modelRow[data-hovered] { background: var(--dsw-alias-interactive-bg-hover); }
 .modelRow[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: -2px; }
 .modelRow + .modelRow { border-top: .5px solid var(--dsw-alias-border-l2); }
 .modelRow [role=alert] { flex-basis: 100%; }
+.modelIdentity { display: flex; flex: 1 1 152px; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
 .section .modelName { min-width: 0; max-width: 100%; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .modelRow[data-hidden=true] .modelName { color: var(--dsw-alias-label-secondary); }
 .modelBadges { display: flex; align-items: center; gap: 4px; }
 .modelActions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
-.section .emptyModels { margin: 0; padding: 8px 0 4px; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
+.section .emptyModels { margin: 8px 0 0; padding: 10px 12px; border: .5px dashed var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-lg); color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
 .unselected { grid-column: 1 / -1; display: flex; gap: 8px; padding: 24px 16px; align-items: center; flex-direction: column; border: .5px dashed var(--dsw-alias-border-l3); border-radius: 16px; text-align: center; color: var(--dsw-alias-label-secondary); font-size: 13px; }
+.defaultModel { border: .5px solid var(--dsw-alias-border-l2); border-radius: 16px; padding: 0 14px; }
+.defaultModel > div { border: 0; }
+.defaultChoices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 0 12px; }
+.defaultChoices > div { min-width: 0; }
 .templates { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
 .templates button { border-radius: 8px; }
 .templates button[aria-pressed=true] { background: var(--dsw-alias-interactive-bg-hover); border-color: var(--dsw-alias-label-secondary); }
@@ -83,10 +90,12 @@
 .modelDialog .profileName { width: 140px; height: 32px; }
 .profileAdd { width: 32px; height: 32px; padding: 0; border-radius: 8px; font-size: 20px; }
 @container (max-width: 520px) {
-  .layout { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .navigation { border-inline-end: 0; border-bottom: .5px solid var(--dsw-alias-border-l2); }
   .providers { flex-direction: row; overflow-x: auto; }
   .provider { flex: none; max-width: 180px; min-height: 36px; padding-block: 6px; }
-  .detailPane { padding: 12px; }
+  .detailPane { padding: 12px; border-radius: 0 0 16px 16px; }
+  .modelIdentity { flex-basis: 100%; min-height: 32px; }
 }
 @media (max-width: 480px) {
   .modelDialog, .nameDialog { padding: 16px; border-radius: 16px; }

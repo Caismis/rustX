@@ -103,18 +103,18 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
   const closeModel = () => onFocus(selected ? { kind: 'provider', id: selected } : undefined);
   return <section ref={landing} tabIndex={-1} aria-label={tx('settings:models-page.models')} className={cards.section}>
     <div className={cards.toolbar}>
-      <h3>{tx('settings:models-page.models')}</h3>
+      <div><h3>{tx('settings:models-page.models')}</h3>
+        <p className={cards.description}>{tx('settings:models.description')}</p></div>
       <div className={cards.headerActions}>
         {onRefresh && <Button size="sm" variant="outline" aria-label={tx('settings:settings.reload-configuration')} title={tx('settings:settings.reload-configuration')} disabled={refreshing} onClick={onRefresh}><IconRefreshOutline16/></Button>}
-        <Button size="sm" variant="outline" onClick={() => setAdding('provider')}>{tx('settings:models.add-provider')}</Button>
+        <Button size="sm" variant="primary" onClick={() => setAdding('provider')}>{tx('settings:models.add-provider')}</Button>
       </div>
     </div>
-    <p className={cards.description}>{tx('settings:models.description')}</p>
     <SettingsNotice text={application.state === 'failed' ? `${observedResultLabel(tx, application)} · ${application.diagnostic}` : undefined}/>
     <div className={cards.layout}>
       {!!navigationProviders.length && <div className={cards.navigation}>
-        <Search label={tx('settings:models-page.find-a-provider')} value={query} onChange={setQuery} placeholder={tx('settings:models.search')} />
         <h4>{tx('settings:models.custom-providers')}</h4>
+        <Search label={tx('settings:models-page.find-a-provider')} value={query} onChange={setQuery} placeholder={tx('settings:models.search')} />
         <GridList className={cards.providers} aria-label={tx('settings:models-page.providers')} selectionMode="single" disallowEmptySelection selectedKeys={selected ? [selected] : []}
           onSelectionChange={keys => {
             if (keys === 'all') return;
@@ -152,14 +152,16 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
           </GridList> : <p className={cards.emptyModels}>{tx('settings:models.empty-models')}</p>}
       </div> : <div className={cards.unselected}><IconApiOutline14 size={24}/><p>{tx('settings:models.empty-providers')}</p></div>}
     </div>
-    <Advanced title={tx('settings:models-page.default-model-for-new-sessions')}>
-      <UnitForm<ModelLayer> title={tx('settings:models-page.default-model')} authored={sourceView(source, scope)?.authored?.agent?.model ?? undefined}
-        blank={{}} revision={revision} mutation={authored => ({ kind: 'config', mutation: { unit: 'root_model', authored } })}
-        removalNotice={<p>{tx('settings:models-page.new-sessions-fall-back-to-the-native-default-model-once-no-sourc')}</p>}>
-        {(value, change) => <><p className={css.hint}>{tx('settings:models-page.this-is-the-model-new-sessions-start-from-it-is-not-the-model-an')}</p>
-          <DefaultModelSelection value={value} change={change} models={visibleModels} profiles={profiles} /></>}
-      </UnitForm>
-    </Advanced>
+    <div className={cards.defaultModel}>
+      <Advanced title={tx('settings:models-page.default-model-for-new-sessions')}>
+        <UnitForm<ModelLayer> title={tx('settings:models-page.default-model')} authored={sourceView(source, scope)?.authored?.agent?.model ?? undefined}
+          blank={{}} revision={revision} mutation={authored => ({ kind: 'config', mutation: { unit: 'root_model', authored } })}
+          removalNotice={<p>{tx('settings:models-page.new-sessions-fall-back-to-the-native-default-model-once-no-sourc')}</p>}>
+          {(value, change) => <><p className={css.hint}>{tx('settings:models-page.this-is-the-model-new-sessions-start-from-it-is-not-the-model-an')}</p>
+            <DefaultModelSelection value={value} change={change} models={visibleModels} profiles={profiles} /></>}
+        </UnitForm>
+      </Advanced>
+    </div>
     {adding === 'provider' && <ProviderNameDialog revision={revision} exists={[...providers.map(entry => entry.id), ...draftedProviders]} onClose={() => setAdding(undefined)}
       onCreate={id => { setAdding(undefined); onFocus({ kind: 'provider', id }); }} />}
     {adding === 'model' && selected && <ModelDialog source={source} scope={scope} revision={revision} provider={selected} suggestDeepSeek={selectedProvider?.base_url.replace(/\/$/, '') === 'https://api.deepseek.com/anthropic'} onClose={() => setAdding(undefined)} />}
@@ -184,10 +186,12 @@ function ModelRow({ entry, revision, providerHidden, canProbe, probe, scope, res
   const removeLabel = tx(restoresGlobal ? 'settings:bridge.use-global-default-value' : 'settings:bridge.remove-value', { p0: title });
   const removeDisabled = !unit.admitted || unit.busy || unit.awaitingObservation;
   return <GridListItem id={entry.id} textValue={model.id} aria-label={entry.id} onAction={onOpen} className={cards.modelRow} data-hidden={!!model.hidden || providerHidden}>
-    <span className={cards.modelName} title={model.id}>{model.id}</span>
-    <div className={cards.modelBadges}>
-      <span title={tx('settings:models.context-tokens', { p0: model.context_window })}><Badge>{compactContext.format(context)}</Badge></span>
-      {model.capabilities.input_modalities.includes('image') && <Badge>{tx('settings:models.vision')}</Badge>}
+    <div className={cards.modelIdentity}>
+      <span className={cards.modelName} title={model.id}>{model.id}</span>
+      <div className={cards.modelBadges}>
+        <span title={tx('settings:models.context-tokens', { p0: model.context_window })}><Badge>{compactContext.format(context)}</Badge></span>
+        {model.capabilities.input_modalities.includes('image') && <Badge>{tx('settings:models.vision')}</Badge>}
+      </div>
     </div>
     <div className={cards.modelActions}
       onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}
@@ -266,10 +270,12 @@ function DefaultModelSelection({ value, change, models, profiles }: ModelSelecti
   // budget. The auxiliary models are configured independently in the source.
   const { profile, request_params: _params, max_output_tokens: _limit, ...selection } = value;
   return <>
-    <Choice label={tx('settings:models-page.model')} value={model} placeholder={tx('settings:copy.select-model')} disabled={choices.size === 0}
-      options={[...choices].map(id => [id, id])} onChange={model => change({ ...selection, model })}/>
-    {model && <ModelProfileChoice label={tx('settings:models-page.profile')} profile={profile} profiles={profiles[model] ?? []}
-      onChange={profile => change(profile ? { ...selection, profile } : selection)}/>}
+    <div className={cards.defaultChoices}>
+      <Choice label={tx('settings:models-page.model')} value={model} placeholder={tx('settings:copy.select-model')} disabled={choices.size === 0}
+        options={[...choices].map(id => [id, id])} onChange={model => change({ ...selection, model })}/>
+      {model && <ModelProfileChoice label={tx('settings:models-page.profile')} profile={profile} profiles={profiles[model] ?? []}
+        onChange={profile => change(profile ? { ...selection, profile } : selection)}/>}
+    </div>
     {model && <Advanced title={tx('settings:models-page.auxiliary-models')}>
       <AuxiliaryModelSelections value={value} change={change} models={models} profiles={profiles}/>
     </Advanced>}

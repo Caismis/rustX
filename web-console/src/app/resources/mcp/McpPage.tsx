@@ -56,7 +56,7 @@ export function McpPage({ source, scope, revision, focus, onFocus, scopeControl,
 
   const renderCard = (entry: typeof matches[number], inherited: boolean) => <ResourceCard key={entry.name}
     name={entry.name} label={tx('settings:extension-detail.mcp-value',{p0:entry.name})} icon={<McpStatusIcon entry={entry} probe={probeStates[entry.name]} />}
-    description={entry.description} diagnostic={entry.diagnostics[0]} path={entry.path} onOpen={() => onFocus({kind:'mcp', name:entry.name})}
+    description={entry.description} diagnostic={entry.diagnostics[0]} onOpen={() => onFocus({kind:'mcp', name:entry.name})}
     availability={revision && <ResourceAvailability family="mcp" name={entry.name} valid={entry.valid} source={source} scope={scope} revision={revision} />}
     actions={<>
       <Button size="sm" variant="outline" disabled={inherited || !probeAvailable || entry.valid === false || probeStates[entry.name] === 'checking'}
