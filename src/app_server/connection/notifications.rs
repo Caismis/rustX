@@ -541,7 +541,7 @@ impl AppServerConnection {
                     registration_id,
                     target,
                     cursor: event.cursor,
-                    event: Box::new(event.event),
+                    event: event.event,
                 }
             }
             RoutedDelivery::Projection(EventDelivery::Unavailable { message }) => {

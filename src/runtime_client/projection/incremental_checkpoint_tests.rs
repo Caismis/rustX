@@ -85,8 +85,8 @@ fn incremental_checkpoint_reuses_unchanged_domains_without_capture_or_whole_fit(
 
 #[test]
 fn incremental_checkpoint_changed_domains_and_cursor_widths_match_original_bytes() {
-    let (mut projection, store) = initialized_source_projection();
     for revision in [9, 99, 999, 9_007_199_254_740_990] {
+        let (mut projection, store) = initialized_source_projection();
         projection.cursor = RuntimeClientCursor::new(revision);
         projection.initialize_publication_view();
         let before = projection.checkpoint_seed();

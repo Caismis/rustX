@@ -1000,7 +1000,7 @@ fn subscriber_delivery_and_eviction_preserve_held_metadata_owners() {
     let SubscriberPoll::Event(held) = projection.poll_subscriber(caught_up) else {
         panic!("retained first transition");
     };
-    let RuntimeClientEvent::ProjectionTransition { metadata: old, .. } = &held.event else {
+    let RuntimeClientEvent::ProjectionTransition { metadata: old, .. } = held.event.as_ref() else {
         unreachable!()
     };
     let old_bytes = encoded_event_bytes(&held.event, CHECKPOINT_TARGET_BYTES).unwrap();
@@ -1014,7 +1014,7 @@ fn subscriber_delivery_and_eviction_preserve_held_metadata_owners() {
     let SubscriberPoll::Event(second) = projection.poll_subscriber(caught_up) else {
         panic!("caught-up subscriber receives the next transition");
     };
-    let RuntimeClientEvent::ProjectionTransition { metadata: current, .. } = &second.event else {
+    let RuntimeClientEvent::ProjectionTransition { metadata: current, .. } = second.event.as_ref() else {
         unreachable!()
     };
     assert!(Arc::ptr_eq(&old.content, &current.content));

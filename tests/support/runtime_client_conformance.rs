@@ -728,7 +728,7 @@ pub async fn receive_until(
                 expected,
                 "one subscription observes strictly contiguous cursors"
             );
-            match &event.event {
+            match event.event.as_ref() {
                 RuntimeClientEvent::ProjectionTransition { metadata, .. } => {
                     assert_eq!(metadata.read_cut.revision, event.cursor.get());
                 }

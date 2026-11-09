@@ -109,7 +109,7 @@ fn framed_checkpoint(
 }
 
 fn assert_event_cut(event: &rustx::runtime_client::RuntimeClientProtocolEvent) {
-    match &event.event {
+    match event.event.as_ref() {
         rustx::runtime_client::RuntimeClientEvent::ProjectionTransition { metadata, .. } => {
             assert_eq!(metadata.read_cut.revision, event.cursor.get());
         }
@@ -125,7 +125,7 @@ fn assert_read_suffix(
     event: &rustx::runtime_client::RuntimeClientProtocolEvent,
     terminal: &rustx::runtime::identity::AttemptId,
 ) {
-    match &event.event {
+    match event.event.as_ref() {
         rustx::runtime_client::RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
             let attempt = checkpoint
                 .snapshot
@@ -181,7 +181,7 @@ async fn receive_terminal(
             }
         }
         if let rustx::runtime_client::RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } =
-            &event.event
+            event.event.as_ref()
             && let Some(attempt) = &checkpoint.snapshot.attempt
             && matches!(
                 attempt.phase,

@@ -1992,7 +1992,7 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
             // Every complete published record is a readiness observation.
             // Workflow source revisions can arrive in outer metadata without
             // an inline WorkflowsUpdated fact or checkpoint replacement.
-            let (kind, revision) = match &event.event {
+            let (kind, revision) = match event.event.as_ref() {
                 RuntimeClientEvent::ProjectionTransition { metadata, .. } => (
                     "projection_transition",
                     metadata.read_cut.domain_revisions.get("workflows").copied(),

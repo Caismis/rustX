@@ -53,7 +53,12 @@ settlement heads and publication frontiers remain authority despite cache evicti
 checkpoints. The arrays describe ordered immutable content. Each issued cut
 retains its own authority, source validation and replay admission, even when
 two publications share the same arrays. Clipping and enrichment that change
-the content detach before mutation. Native Journal readiness and direct-publication provenance index existing
+the content detach before mutation. Published events are immutable and shared by
+the replay window and its consumers. The window retains a contiguous suffix of
+published cursors, allowing direct slot lookup. Each subscriber still advances
+its own cursor and must recover when its next position has been evicted.
+
+Native Journal readiness and direct-publication provenance index existing
 source facts; they create no second journal, client ACK registry or execution owner.
 Within a connection epoch, readiness retains only pending Journal and transcript
 positions. Releasing a native batch deletes its pending positions and unions its

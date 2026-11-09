@@ -1942,7 +1942,7 @@ pub enum NotificationMethod {
         registration_id: String,
         target: AttachmentTarget,
         cursor: RuntimeClientCursor,
-        event: Box<crate::runtime_client::event::RuntimeClientEvent>,
+        event: std::sync::Arc<crate::runtime_client::event::RuntimeClientEvent>,
     },
     /// Source preparation failed. This registration is fenced without consuming a Cursor;
     /// recovery requires an explicit checkpoint/subscription after the source is serviceable.

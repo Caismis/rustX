@@ -910,13 +910,14 @@ async fn t13_attach_identity_checkpoint_and_subscribe_preserve_the_native_cut() 
             assert_eq!(routed, target);
             assert_eq!(cursor.get(), previous + 1);
             previous = cursor.get();
-            let RuntimeClientEvent::ProjectionTransition { events, metadata } = *event else {
+            let RuntimeClientEvent::ProjectionTransition { events, metadata } = event.as_ref()
+            else {
                 panic!("one bounded native transition");
             };
             assert_eq!(metadata.read_cut.revision, cursor.get());
             let mut settled = false;
             for event in events {
-                if let RuntimeClientEvent::InboundEnqueued { message, .. } = &event {
+                if let RuntimeClientEvent::InboundEnqueued { message, .. } = event {
                     assert_eq!(message.id, accepted.message_id);
                     occurrences += 1;
                 }

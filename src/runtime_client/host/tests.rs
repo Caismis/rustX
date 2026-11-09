@@ -966,14 +966,15 @@ async fn receive_until(
             let EventDelivery::Event(event) = delivery else {
                 panic!("subscription must stay open and contiguous, got {delivery:?}");
             };
-            let RuntimeClientEvent::ProjectionTransition { metadata, .. } = &event.event else {
+            let RuntimeClientEvent::ProjectionTransition { metadata, .. } = event.event.as_ref()
+            else {
                 panic!("one complete native transition");
             };
             assert_eq!(metadata.read_cut.revision, event.cursor.get());
             let matched = event.event.facts().iter().any(|fact| {
                 predicate(&RuntimeClientProtocolEvent {
                     cursor: event.cursor,
-                    event: fact.clone(),
+                    event: Arc::new(fact.clone()),
                 })
             });
             seen.push(event);
@@ -995,7 +996,7 @@ async fn receive_until_metadata(
             let EventDelivery::Event(event) = subscription.next().await else {
                 panic!("native subscription must remain contiguous");
             };
-            let RuntimeClientEvent::ProjectionTransition { metadata, .. } = &event.event else {
+            let RuntimeClientEvent::ProjectionTransition { metadata, .. } = event.event.as_ref() else {
                 panic!("one complete native transition");
             };
             assert_eq!(metadata.read_cut.revision, event.cursor.get());
@@ -1961,7 +1962,7 @@ async fn t06_t14_many_live_blocks_keep_every_descriptor_after_inline_budget_exha
         })
     })
     .await;
-    let RuntimeClientEvent::ProjectionTransition { metadata, .. } = &update.event else {
+    let RuntimeClientEvent::ProjectionTransition { metadata, .. } = update.event.as_ref() else {
         unreachable!()
     };
     let event_ref = &metadata
@@ -2709,7 +2710,7 @@ async fn incremental_projection_independent_snapshot_capture() {
                     target: target.clone(),
                     registration_id: "capture-registration".into(),
                     cursor: event.cursor,
-                    event: Box::new(event.event),
+                    event: event.event,
                 },
             })
         })

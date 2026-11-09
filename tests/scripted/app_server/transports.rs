@@ -2346,7 +2346,9 @@ async fn t16_pending_receipt_supersession_and_stale_queue_progression() {
                     registration_id: registration.id.clone(),
                     target: target.clone(),
                     cursor,
-                    event: Box::new(crate::runtime_client::RuntimeClientEvent::TraceChanged),
+                    event: std::sync::Arc::new(
+                        crate::runtime_client::RuntimeClientEvent::TraceChanged,
+                    ),
                 },
             },
             Some(registration.event(cursor)),
@@ -2960,7 +2962,9 @@ async fn t16_pending_physical_pipe_replacement_advances_without_readiness() {
                     registration_id: registration.id.clone(),
                     target: target.clone(),
                     cursor,
-                    event: Box::new(crate::runtime_client::RuntimeClientEvent::TraceChanged),
+                    event: std::sync::Arc::new(
+                        crate::runtime_client::RuntimeClientEvent::TraceChanged,
+                    ),
                 },
             },
             Some(registration.event(cursor)),
