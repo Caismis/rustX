@@ -652,9 +652,9 @@ fn image_block(
     let bytes = images
         .get(&image.artifact_id)
         .ok_or_else(|| unsupported("unresolved image artifact"))?;
-    crate::model::images::validate_png(bytes).map_err(|error| unsupported(&error))?;
+    bytes.measurement().map_err(|error| unsupported(&error))?;
     Ok(
-        serde_json::json!({ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": base64::engine::general_purpose::STANDARD.encode(bytes) } }),
+        serde_json::json!({ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": base64::engine::general_purpose::STANDARD.encode(bytes.as_bytes()) } }),
     )
 }
 

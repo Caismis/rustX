@@ -28,9 +28,9 @@ fn image_data_url(
     let bytes = images
         .get(&image.artifact_id)
         .ok_or("unresolved image artifact")?;
-    crate::model::images::validate_png(bytes)?;
+    bytes.measurement()?;
     Ok(format!(
         "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(bytes)
+        base64::engine::general_purpose::STANDARD.encode(bytes.as_bytes())
     ))
 }

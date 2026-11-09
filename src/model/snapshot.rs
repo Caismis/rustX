@@ -244,6 +244,48 @@ fn validate_frozen_budget(request: &ModelRequest) -> Result<(), String> {
     }
     Ok(())
 }
+#[derive(Default)]
+struct SnapshotInput {
+    manifest: crate::model::SelectedInputManifest,
+    images: crate::model::images::ResolvedImages,
+    fingerprint: String,
+    response_schema: Option<super::structured::PreparedResponseSchema>,
+    continuation_source: Option<crate::runtime::continuation::AcceptedOutputContinuationSource>,
+}
+
+impl SnapshotInput {
+    fn capture(
+        request: &ModelRequest,
+        selected: &crate::model::SelectedInputManifest,
+    ) -> Result<Self, String> {
+        #[cfg(test)]
+        let _reads = super::selected_input::PreparationReads::new();
+        if !selected.messages().same_input(&request.messages) {
+            return Err("native selected input count disagrees with request".into());
+        }
+        request.continuation_boundary()?;
+        selected.validate_budget()?;
+        if request
+            .images
+            .values()
+            .try_fold(0usize, |total, bytes| total.checked_add(bytes.len()))
+            .is_none_or(|total| total > MAX_FROZEN_IMAGE_BYTES)
+        {
+            return Err("frozen input exceeds image byte budget".into());
+        }
+        Ok(Self {
+            manifest: selected.clone(),
+            images: request.images.clone(),
+            fingerprint: selected.semantic_digest().map_or_else(
+                || request.semantic_input_fingerprint(),
+                |messages| request.semantic_input_fingerprint_with_messages(&messages),
+            ),
+            response_schema: request.response_schema.clone(),
+            continuation_source: request.continuation_source.clone(),
+        })
+    }
+}
+
 impl RequestSnapshot {
     /// Builds the frozen snapshot from the exact effective values used to
     /// create a primary request.
@@ -264,21 +306,92 @@ impl RequestSnapshot {
         continuation: Option<ProviderContinuationState>,
         request_context_ids: Vec<MessageId>,
     ) -> Self {
+        let messages = crate::model::SelectedModelInput::default().semantic_fingerprint();
+        let images = crate::model::images::ResolvedImages::new();
+        let fingerprint = super::types::fingerprint_metadata(&(
+            messages,
+            &images,
+            &effective_system_prompt,
+            &tool_definitions,
+            &invocation,
+            &continuation,
+            None::<super::structured::PreparedResponseSchema>,
+        ));
+        Self::with_input(
+            identity,
+            canonical_frontier,
+            effective_system_prompt,
+            system_sections,
+            runtime_resource_revision,
+            invocation,
+            context_window_tokens,
+            profile,
+            tool_definitions,
+            capability_revision,
+            context_generation,
+            continuation,
+            request_context_ids,
+            SnapshotInput {
+                images,
+                fingerprint,
+                ..SnapshotInput::default()
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)] // Freeze the admitted request and the exact staged context metadata.
+    pub(crate) fn from_selected(
+        identity: RequestIdentity,
+        canonical_frontier: crate::context::resources::LedgerFrontier,
+        system_sections: Vec<AcceptedSystemSection>,
+        runtime_resource_revision: crate::runtime::RuntimeResourceRevision,
+        context_window_tokens: u64,
+        profile: Option<crate::model::catalog::ModelProfileId>,
+        capability_revision: CapabilityRevision,
+        context_generation: ContextGeneration,
+        request_context_ids: Vec<MessageId>,
+        request: &ModelRequest,
+        selected: &crate::model::SelectedInputManifest,
+    ) -> Result<Self, String> {
+        let input = SnapshotInput::capture(request, selected)?;
+        Ok(Self::with_input(
+            identity,
+            canonical_frontier,
+            request.effective_system_prompt.clone(),
+            system_sections,
+            runtime_resource_revision,
+            request.invocation.clone(),
+            context_window_tokens,
+            profile,
+            request.tools.clone(),
+            capability_revision,
+            context_generation,
+            request.continuation.clone(),
+            request_context_ids,
+            input,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)] // One constructor for the complete snapshot representation.
+    fn with_input(
+        identity: RequestIdentity,
+        canonical_frontier: crate::context::resources::LedgerFrontier,
+        effective_system_prompt: String,
+        system_sections: Vec<AcceptedSystemSection>,
+        runtime_resource_revision: crate::runtime::RuntimeResourceRevision,
+        invocation: ModelInvocationConfig,
+        context_window_tokens: u64,
+        profile: Option<crate::model::catalog::ModelProfileId>,
+        tool_definitions: Vec<ModelToolDefinition>,
+        capability_revision: CapabilityRevision,
+        context_generation: ContextGeneration,
+        continuation: Option<ProviderContinuationState>,
+        request_context_ids: Vec<MessageId>,
+        input: SnapshotInput,
+    ) -> Self {
         let provisional_message_id = identity.provisional_message_id();
-        let semantic_input_fingerprint = ModelRequest {
-            response_schema: None,
-            response_byte_limit: None,
-            images: crate::model::images::ResolvedImages::new(),
-            invocation: invocation.clone(),
-            messages: crate::model::SelectedModelInput::default(),
-            tools: tool_definitions.clone(),
-            effective_system_prompt: effective_system_prompt.clone(),
-            continuation: continuation.clone(),
-            continuation_source: None,
-        }
-        .semantic_input_fingerprint();
         Self {
-            response_schema: None,
+            response_schema: input.response_schema,
             tool_associations: Vec::new().into(),
             history_cut: crate::durable::projection::RequestHistoryCut {
                 ledger: crate::context::resources::LedgerFrontier(
@@ -290,9 +403,9 @@ impl RequestSnapshot {
                 activation: crate::context::checkpoint::ProjectionActivationId(0),
                 base_frontier: crate::context::resources::LedgerFrontier(0),
             },
-            input: crate::model::SelectedInputManifest::default(),
-            images: crate::model::images::ResolvedImages::new(),
-            semantic_input_fingerprint,
+            input: input.manifest,
+            images: input.images,
+            semantic_input_fingerprint: input.fingerprint,
             request_id: identity.request_id(),
             identity,
             provisional_message_id,
@@ -307,7 +420,7 @@ impl RequestSnapshot {
             capability_revision,
             context_generation,
             continuation,
-            continuation_source: None,
+            continuation_source: input.continuation_source,
             request_context_ids,
             unresolved_output_carryover_source: None,
             unresolved_output_carryover: None,
@@ -368,30 +481,12 @@ impl RequestSnapshot {
         request: &ModelRequest,
         selected: &crate::model::SelectedInputManifest,
     ) -> Result<(), String> {
-        #[cfg(test)]
-        let _reads = super::selected_input::PreparationReads::new();
-        if !selected.messages().same_input(&request.messages) {
-            return Err("native selected input count disagrees with request".into());
-        }
-        request.continuation_boundary()?;
-        selected.validate_budget()?;
-        if request
-            .images
-            .values()
-            .try_fold(0usize, |total, bytes| total.checked_add(bytes.len()))
-            .is_none_or(|total| total > MAX_FROZEN_IMAGE_BYTES)
-        {
-            return Err("frozen input exceeds image byte budget".into());
-        }
-        self.input = selected.clone();
-        self.images.clone_from(&request.images);
-        self.response_schema.clone_from(&request.response_schema);
-        self.continuation_source
-            .clone_from(&request.continuation_source);
-        self.semantic_input_fingerprint = selected.semantic_digest().map_or_else(
-            || request.semantic_input_fingerprint(),
-            |messages| request.semantic_input_fingerprint_with_messages(&messages),
-        );
+        let input = SnapshotInput::capture(request, selected)?;
+        self.input = input.manifest;
+        self.images = input.images;
+        self.response_schema = input.response_schema;
+        self.continuation_source = input.continuation_source;
+        self.semantic_input_fingerprint = input.fingerprint;
         Ok(())
     }
 
@@ -457,11 +552,10 @@ impl RequestSnapshot {
 
     /// Checks native scalar metadata against the certified unfinished flat SHA.
     pub(crate) fn selected_fingerprint_matches(&self) -> bool {
-        use sha2::{Digest, Sha256};
         let Some(messages) = self.input.semantic_digest() else {
             return false;
         };
-        let bytes = serde_json::to_vec(&(
+        super::types::fingerprint_metadata(&(
             messages,
             &self.images,
             &self.effective_system_prompt,
@@ -469,9 +563,7 @@ impl RequestSnapshot {
             &self.invocation,
             &self.continuation,
             &self.response_schema,
-        ))
-        .expect("native request metadata serializes");
-        format!("{:x}", Sha256::digest(bytes)) == self.semantic_input_fingerprint
+        )) == self.semantic_input_fingerprint
     }
 
     /// Reconstruct with an already retained finite set of immutable dependencies.
@@ -900,7 +992,7 @@ mod tests {
         other = request.clone();
         other.images.insert(
             crate::runtime::identity::ArtifactId::new("image"),
-            vec![1, 2, 3],
+            serde_json::from_str("[1,2,3]").unwrap(),
         );
         assert_ne!(other.semantic_input_fingerprint(), fingerprint);
     }

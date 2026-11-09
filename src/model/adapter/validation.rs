@@ -463,6 +463,57 @@ mod tests {
     }
 
     #[test]
+    fn provider_translation_reuses_one_image_proof_for_repeated_occurrences() {
+        use crate::message::content::ImageReference;
+        use crate::message::types::{MessageBlock, UserContentBlock};
+        use crate::model::images::{FrozenImage, take_decodes};
+        use crate::model::{ModelInputMessage, catalog::Modality};
+        use crate::runtime::identity::ArtifactId;
+
+        for protocol in [
+            ModelProtocol::OpenAiChatCompletions,
+            ModelProtocol::OpenAiResponses,
+            ModelProtocol::AnthropicMessages,
+        ] {
+            let mut request =
+                crate::scripted_suites::common::simple_request(protocol, "test", "input");
+            request
+                .invocation
+                .capabilities
+                .input_modalities
+                .insert(Modality::Image);
+            let id = ArtifactId::new("repeat");
+            let block = UserContentBlock::Image(ImageReference {
+                artifact_id: id.clone(),
+                alt: None,
+            });
+            let ModelInputMessage::Canonical(MessageBlock::User(user)) = &mut request.messages[0]
+            else {
+                panic!("fixture starts with User input");
+            };
+            user.content.extend([block.clone(), block]);
+            let mut bytes = Vec::new();
+            png::Encoder::new(&mut bytes, 1, 1)
+                .write_header()
+                .unwrap()
+                .write_image_data(&[0])
+                .unwrap();
+            take_decodes();
+            let image = FrozenImage::new(bytes).unwrap();
+            request.images.insert(id.clone(), image.clone());
+            let prepared = super::prepare_request(request, protocol).unwrap();
+            assert_eq!(prepared.input().images[&id].as_ptr(), image.as_ptr());
+            let body = std::str::from_utf8(&prepared.body).unwrap();
+            assert_eq!(
+                body.matches("iVBORw0KGgo").count(),
+                2,
+                "both occurrences are transported"
+            );
+            assert_eq!(take_decodes(), 1);
+        }
+    }
+
+    #[test]
     fn prepared_retry_shares_input_and_one_encoded_body() {
         for protocol in [
             ModelProtocol::OpenAiChatCompletions,
