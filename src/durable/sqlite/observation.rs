@@ -870,9 +870,16 @@ fn latest_event(
         )
     } else {
         (
-            "SELECT sequence,observation_json,observation_witness FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')=?1 AND sequence<=?2 AND sequence<?3 ORDER BY sequence DESC LIMIT 1",
+            concat!(
+                "SELECT sequence,observation_json,observation_witness FROM events INDEXED BY events_kind_idx WHERE ",
+                crate::durable::sqlite::event_kind_key::sql!(
+                    "json_extract(event_json,'$.event.type')"
+                ),
+                "=?1",
+                " AND sequence<=?2 AND sequence<?3 ORDER BY sequence DESC LIMIT 1"
+            ),
             vec![
-                rusqlite::types::Value::Text(kind.into()),
+                super::event_kind_key::parameter(kind),
                 rusqlite::types::Value::Integer(seq_to_i64(through)?),
                 rusqlite::types::Value::Integer(bound),
             ],

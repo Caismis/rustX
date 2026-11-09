@@ -2,9 +2,11 @@
 
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
 
-pub(super) const AUXILIARY_SCHEMA: &str = r"
-CREATE INDEX IF NOT EXISTS events_primary_trace_kind_idx
-    ON events(observation_kind) WHERE observation_trace_fact_required=1;
+pub(super) const AUXILIARY_SCHEMA: &str = concat!(
+    "CREATE INDEX IF NOT EXISTS events_primary_trace_kind_idx ON events",
+    crate::durable::sqlite::event_kind_key::sql!("observation_kind"),
+    " WHERE observation_trace_fact_required=1;",
+    r"
 CREATE TABLE IF NOT EXISTS request_owners (
     request_id TEXT PRIMARY KEY
         CHECK(length(CAST(request_id AS BLOB)) >= 1),
@@ -137,7 +139,8 @@ CREATE INDEX IF NOT EXISTS events_auxiliary_fact_type_idx
     )
     OR json_extract(event_json,'$.event.type') IN
         ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled');
-";
+"
+);
 
 pub(super) const AUXILIARY_SEQUENCE_ENCODING_DIGITS_MAX: usize = 20;
 
@@ -180,8 +183,12 @@ pub(super) const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
         name: "events_primary_trace_kind_idx",
         unique: false,
         partial: true,
-        columns: &[Some("observation_kind")],
-        definition: "CREATE INDEX events_primary_trace_kind_idx ON events(observation_kind) WHERE observation_trace_fact_required=1",
+        columns: &[None],
+        definition: concat!(
+            "CREATE INDEX events_primary_trace_kind_idx ON events",
+            crate::durable::sqlite::event_kind_key::sql!("observation_kind"),
+            " WHERE observation_trace_fact_required=1"
+        ),
     },
     AuxiliaryIndexShape {
         table: "auxiliary_requests",

@@ -89,14 +89,19 @@ pub(super) fn window_cut(
 
 // Bootstrap order is immutable native provenance order. Local Attempt starts
 // use their indexed Journal order, independent of compaction or model steps.
-const OWNERS: &str = "WITH owners AS (
+const OWNERS: &str = concat!(
+    "WITH owners AS (
     SELECT 0 AS source, p.ordinal AS ordering
     FROM inherited_turn_provenance p
     UNION ALL
     SELECT 1,sequence
     FROM events INDEXED BY events_kind_idx
-    WHERE sequence<=?1 AND json_extract(event_json,'$.event.type')='attempt_started'
-) ";
+    WHERE sequence<=?1 AND ",
+    crate::durable::sqlite::event_kind_key::sql!("json_extract(event_json,'$.event.type')"),
+    "=x'0002'",
+    "
+) "
+);
 
 fn location(
     connection: &Connection,
@@ -172,19 +177,25 @@ pub(super) fn local_prompt_sql() -> String {
 
 fn adoption_prompt_sql(eligible: &str) -> String {
     format!(
-        "WITH adoptions AS (
+        concat!(
+            "WITH adoptions AS (
          SELECT sequence,event_json FROM events INDEXED BY events_attempt_kind_idx
          WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='inbound_turn_adopted' AND sequence<=?3
          UNION ALL
          SELECT sequence,event_json FROM events INDEXED BY events_attempt_kind_idx
          WHERE attempt_id IS NULL AND json_extract(event_json,'$.event.type')='inbound_turn_adopted' AND sequence<?2
            AND sequence>(SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx
-             WHERE sequence<?2 AND json_extract(event_json,'$.event.type')='attempt_started')
+             WHERE sequence<?2 AND ",
+            crate::durable::sqlite::event_kind_key::sql!("json_extract(event_json,'$.event.type')"),
+            "=x'0002'",
+            ")
         )
         SELECT m.value FROM adoptions e,json_each(e.event_json,'$.event.message_ids') m
         JOIN message_ledger l ON l.message_id=m.value
         WHERE {eligible}
         ORDER BY e.sequence,CAST(m.key AS INTEGER) LIMIT 1"
+        ),
+        eligible = eligible
     )
 }
 
