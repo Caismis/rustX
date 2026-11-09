@@ -273,7 +273,8 @@ fn t14_t20_workflow_native_revision_gaps_preserve_complete_replay_and_checkpoint
                 .iter()
                 .any(|(cursor, event)| { *cursor == record.cursor && event == &record.event })
         );
-        let RuntimeClientEvent::ProjectionTransition { events, metadata } = &record.event else {
+        let RuntimeClientEvent::ProjectionTransition { events, metadata } = record.event.as_ref()
+        else {
             panic!("one complete Runtime transition");
         };
         let [
@@ -1873,7 +1874,7 @@ fn todo_status_section_round_trips_the_wire_shape() {
 fn single_fact(
     event: &crate::runtime_client::types::RuntimeClientProtocolEvent,
 ) -> &RuntimeClientEvent {
-    let RuntimeClientEvent::ProjectionTransition { events, metadata } = &event.event else {
+    let RuntimeClientEvent::ProjectionTransition { events, metadata } = event.event.as_ref() else {
         panic!("complete native transition: {:?}", event.event);
     };
     assert_eq!(metadata.read_cut.revision, event.cursor.get());
@@ -5189,7 +5190,7 @@ fn t06_t14_oversized_transition_is_one_foldable_checkpoint_and_converges() {
     projection.install_publication(encoded);
     assert_eq!(projection.cursor.get(), initial.cursor.get() + 1);
     let (cursor, event) = projection.replay.back().unwrap();
-    let RuntimeClientEvent::ProjectionTransition { events, metadata } = event else {
+    let RuntimeClientEvent::ProjectionTransition { events, metadata } = event.as_ref() else {
         panic!("one complete native transition");
     };
     let [
@@ -6098,7 +6099,7 @@ fn canonical_capture_case(
                     target: target.clone(),
                     registration_id: "canonical-capture".into(),
                     cursor: *cursor,
-                    event: Box::new(event.clone()),
+                    event: event.clone(),
                 },
             })
         })
@@ -6853,4 +6854,78 @@ mod attempt_first_turn_tests {
 mod model_turn_settlement_tests {
     use super::*;
     include!("model_turn_settlement_tests.rs");
+}
+
+#[test]
+fn replay_direct_index_survives_wrapping_and_shares_each_delivered_event() {
+    let mut projection = projection();
+    projection.replay_limit = 4;
+    let (lagging, _) = projection.subscribe(RuntimeClientCursor::new(0)).unwrap();
+    assert!(matches!(
+        projection.poll_subscriber(lagging),
+        SubscriberPoll::Pending
+    ));
+    for cursor in 1..=19 {
+        projection.cursor = RuntimeClientCursor::new(cursor);
+        projection.retain_replay(RuntimeClientEvent::TraceChanged, 1);
+    }
+    assert!(matches!(
+        projection.poll_subscriber(lagging),
+        SubscriberPoll::Lagged { .. }
+    ));
+    let (reader, _) = projection.subscribe(RuntimeClientCursor::new(15)).unwrap();
+    let (follower, _) = projection.subscribe(RuntimeClientCursor::new(18)).unwrap();
+    let mut last = None;
+    for (index, wanted) in (16..=19).enumerate() {
+        let SubscriberPoll::Event(delivered) = projection.poll_subscriber(reader) else {
+            panic!("retained event {wanted}");
+        };
+        assert_eq!(delivered.cursor.get(), wanted);
+        assert!(Arc::ptr_eq(&delivered.event, &projection.replay[index].1));
+        last = Some(delivered);
+    }
+    let SubscriberPoll::Event(tail) = projection.poll_subscriber(follower) else {
+        panic!("following subscriber reads the tail");
+    };
+    let last = last.unwrap();
+    assert!(Arc::ptr_eq(&tail.event, &last.event));
+    assert!(matches!(
+        projection.poll_subscriber(reader),
+        SubscriberPoll::Pending
+    ));
+    assert!(matches!(
+        projection.poll_subscriber(follower),
+        SubscriberPoll::Pending
+    ));
+    let owner = Arc::downgrade(&last.event);
+    for cursor in 20..=23 {
+        projection.cursor = RuntimeClientCursor::new(cursor);
+        projection.retain_replay(RuntimeClientEvent::TraceChanged, 1);
+    }
+    assert_eq!(owner.strong_count(), 2, "only in-flight deliveries remain");
+    drop((last, tail));
+    assert_eq!(owner.strong_count(), 0);
+}
+
+#[test]
+fn replay_direct_index_handles_last_cursor_without_wrapping() {
+    let mut projection = projection();
+    projection.cursor = RuntimeClientCursor::new(u64::MAX);
+    projection.retain_replay(RuntimeClientEvent::TraceChanged, 1);
+    let (subscriber, _) = projection
+        .subscribe(RuntimeClientCursor::new(u64::MAX - 1))
+        .unwrap();
+    let SubscriberPoll::Event(event) = projection.poll_subscriber(subscriber) else {
+        panic!("last event");
+    };
+    assert_eq!(event.cursor.get(), u64::MAX);
+    assert!(matches!(
+        projection.poll_subscriber(subscriber),
+        SubscriberPoll::Pending
+    ));
+    projection.exhausted = true;
+    assert!(matches!(
+        projection.poll_subscriber(subscriber),
+        SubscriberPoll::Exhausted
+    ));
 }

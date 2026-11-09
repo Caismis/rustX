@@ -794,13 +794,16 @@ impl RuntimeClientProjection {
     }
 
     pub(super) fn retain_replay(&mut self, mut event: RuntimeClientEvent, bytes: usize) {
+        debug_assert!(self.replay.back().is_none_or(|(previous, _)| {
+            previous.get().checked_add(1) == Some(self.cursor.get())
+        }));
         compact_replay_storage(&mut event);
         if let Some(cut) = Self::retained_event_cut(&event) {
             self.replay_cut_cursors.insert(cut.revision, self.cursor);
         }
         self.replay_sizes.push_back(bytes);
         self.replay_bytes += bytes;
-        self.replay.push_back((self.cursor, event));
+        self.replay.push_back((self.cursor, Arc::new(event)));
         while self.replay.len() > self.replay_limit
             || self.replay_bytes > RUNTIME_CLIENT_REPLAY_BYTES
         {

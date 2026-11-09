@@ -448,7 +448,7 @@ pub(crate) struct RuntimeClientProjection {
     capability_head: crate::observation::capability_source::PreparedCapabilityHead,
     trace_head: super::checkpoint::PreparedTraceHead,
     /// The bounded projection replay ring, oldest first.
-    replay: VecDeque<(RuntimeClientCursor, RuntimeClientEvent)>,
+    replay: VecDeque<(RuntimeClientCursor, Arc<RuntimeClientEvent>)>,
     /// Scalar cut-to-cursor lookup, bounded by the same replay retention.
     replay_cut_cursors: HashMap<u64, RuntimeClientCursor>,
     /// Genuine constructor cut, retained only while replay after cursor zero is serviceable.

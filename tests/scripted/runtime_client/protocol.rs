@@ -79,7 +79,8 @@ fn protocol_envelopes_round_trip_deterministically() {
             attempt_id: rustx::runtime::identity::AttemptId::new("attempt-1"),
             model: Some(Box::new(support::attempt_model_view("fixture/model-a"))),
             execution_settings: None,
-        },
+        }
+        .into(),
     };
     let json = serde_json::to_string(&event).expect("serialize event");
     let value: serde_json::Value = serde_json::from_str(&json).expect("json");
@@ -231,7 +232,8 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
                     request: request.clone().into(),
                 },
             )),
-        },
+        }
+        .into(),
     };
     let submitted_settled = RuntimeClientProtocolEvent {
         cursor: RuntimeClientCursor::new(21),
@@ -245,7 +247,8 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
                     response: submitted,
                 },
             },
-        },
+        }
+        .into(),
     };
     let declined_settled = RuntimeClientProtocolEvent {
         cursor: RuntimeClientCursor::new(22),
@@ -259,7 +262,8 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
                     response: QuestionnaireResponse::Declined,
                 },
             },
-        },
+        }
+        .into(),
     };
 
     let pending_json = serde_json::to_value(&pending).expect("pending questionnaire JSON");

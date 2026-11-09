@@ -1233,7 +1233,7 @@ pub struct RuntimeClientProtocolEvent {
     /// The cursor this event was published at.
     pub cursor: RuntimeClientCursor,
     /// The typed external event payload.
-    pub event: RuntimeClientEvent,
+    pub event: std::sync::Arc<RuntimeClientEvent>,
 }
 
 // Re-exported for use by the public protocol docs.
@@ -1539,7 +1539,8 @@ mod tests {
                 attempt_id: AttemptId::new("attempt-1"),
                 model: Some(Box::new(attempt_model_view("acme/model-a"))),
                 execution_settings: None,
-            },
+            }
+            .into(),
         };
         let value = serde_json::to_value(&notification).expect("serialize");
         assert!(value.get("id").is_none());

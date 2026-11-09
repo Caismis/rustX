@@ -109,11 +109,14 @@ impl RuntimeClientProjection {
                 earliest_serviceable: earliest,
             };
         }
-        let Some((cursor, event)) = self
-            .replay
-            .iter()
-            .find(|(cursor, _)| *cursor > consumed)
-            .map(|(cursor, event)| (*cursor, event.clone()))
+        // Published cursors advance by one and eviction removes only a
+        // prefix. A following subscriber is usually at the far end of the ring.
+        let wanted = consumed.get().checked_add(1);
+        let Some((cursor, event)) = wanted
+            .and_then(|wanted| wanted.checked_sub(self.replay.front()?.0.get()))
+            .and_then(|offset| usize::try_from(offset).ok())
+            .and_then(|index| self.replay.get(index))
+            .filter(|(cursor, _)| Some(cursor.get()) == wanted)
         else {
             // Unreachable while `consumed < self.cursor` and
             // `consumed >= earliest_serviceable`; treated as lag rather
@@ -123,8 +126,11 @@ impl RuntimeClientProjection {
                 earliest_serviceable: earliest,
             };
         };
-        subscriber.consumed = cursor;
-        SubscriberPoll::Event(RuntimeClientProtocolEvent { cursor, event })
+        subscriber.consumed = *cursor;
+        SubscriberPoll::Event(RuntimeClientProtocolEvent {
+            cursor: *cursor,
+            event: event.clone(),
+        })
     }
 
     /// Removes one registered subscriber (attachment detach, re-subscribe,

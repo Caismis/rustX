@@ -420,7 +420,7 @@ impl Peer {
                     {
                         return Err(failed("noncontiguous native event batch"));
                     }
-                    match &event.event {
+                    match event.event.as_ref() {
                         super::event::RuntimeClientEvent::ProjectionTransition {
                             metadata, ..
                         } => self.validate_cut(&metadata.read_cut)?,

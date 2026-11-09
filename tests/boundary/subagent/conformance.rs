@@ -4979,7 +4979,7 @@ async fn await_child_publication_fact<T>(
             };
             let rustx::runtime_client::RuntimeClientEvent::ProjectionTransition {
                 metadata, ..
-            } = &record.event
+            } = record.event.as_ref()
             else {
                 panic!("complete native Child transition");
             };

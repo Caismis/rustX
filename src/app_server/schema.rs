@@ -288,7 +288,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 registration_id: "registration_fixture".into(),
                 target: target.clone(),
                 cursor: crate::runtime_client::RuntimeClientCursor::new(9_007_199_254_740_993),
-                event: Box::new(crate::runtime_client::RuntimeClientEvent::AttemptStarted {
+                event: std::sync::Arc::new(crate::runtime_client::RuntimeClientEvent::AttemptStarted {
                     attempt_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
                     model: None,
                     execution_settings: None,
@@ -682,7 +682,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             registration_id: "registration_fixture".into(),
             target,
             cursor: crate::runtime_client::RuntimeClientCursor::new(EXACT),
-            event: Box::new(
+            event: std::sync::Arc::new(
                 crate::runtime_client::RuntimeClientEvent::WorkflowsUpdated {
                     workflows: crate::runtime::workflow::read_model::WorkflowSnapshot {
                         revision: crate::runtime::workflow::read_model::WorkflowRevision(EXACT),
