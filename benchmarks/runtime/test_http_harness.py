@@ -50,11 +50,12 @@ def sample():
 class ObserverModeTests(unittest.TestCase):
     def test_model_time_cannot_be_normalized_away(self):
         value=sample()
+        value['wire_requests'][0]['body']['messages'].insert(0, {'role':'system','content':'Native system guidance'})
         result={'product_exit':0,'provider_exit':0,
                 'provider_report':{'ok':True,'requestCount':1,'requests':value['wire_requests']}}
         check=lambda: controller.validate_sample(result,value,'cancel',f'test {controller.TEST} ... ok')
         check()
-        value['wire_requests'][0]['body']['messages'][1]['content']=controller.MODEL_REMINDER.replace('00:00:00','00:00:01')
+        value['wire_requests'][0]['body']['messages'][2]['content']=controller.MODEL_REMINDER.replace('00:00:00','00:00:01')
         with self.assertRaises(AssertionError): check()
 
     def test_new_modes_require_matching_raw_and_per_turn_identity(self):

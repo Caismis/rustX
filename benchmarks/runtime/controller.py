@@ -59,7 +59,10 @@ def validate_sample(result, sample, case, log_text):
     assert isinstance(wire,list) and len(wire) == expected_requests
     assert wire == result['provider_report']['requests']
     for request in wire:
-        content = request['body']['messages'][1]['content']
+        messages = request['body']['messages']
+        first_user = int(messages[0]['role'] == 'system')
+        assert [message['role'] for message in messages[first_user:first_user+2]] == ['user', 'user']
+        content = messages[first_user+1]['content']
         assert content == MODEL_REMINDER or content == [{'type': 'text', 'text': MODEL_REMINDER}]
     expected_history={'short-small':8,'short-large':64}.get(case,0)
     expected_measured=32 if expected_history else 1

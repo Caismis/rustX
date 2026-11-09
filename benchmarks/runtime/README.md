@@ -38,8 +38,9 @@ Rust distinguishes checkpoint terminal sightings from explicit settlement events
 
 The provider is the same Python HTTP/SSE implementation and scenario for both
 engines. Pi uses its production `openAICompletionsApi()` with actual Durable
-SQLite, not its faux provider. Each paired run compares complete core requests
-and separately records the intentionally different native tool schemas.
+SQLite, not its faux provider. Each paired run compares the ordered
+conversation and request options. It records the native leading system
+prompt and tool schemas separately after each product's own oracle check.
 Neither full request equality nor product/durability equivalence is claimed.
 
 `measure_canonical_append` separately measures 32 canonical acceptances after

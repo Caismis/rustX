@@ -307,7 +307,7 @@ async fn measure_runtime() {
     std::fs::write(
         output,
         serde_json::to_vec_pretty(&json!({
-            "case":case,"schema":rustx::durable::sqlite::SQLITE_SCHEMA_VERSION,
+            "case":case,"workspace":workspace,"schema":rustx::durable::sqlite::SQLITE_SCHEMA_VERSION,
             "protocol":APP_SERVER_PROTOCOL_VERSION,"history":history,"measured":measured,
             "requests":expected_requests,"open_us":open_us,"samples":samples,
             "initial_process":initial,"lifecycle":lifecycle,"workload_version":3,"model_time":request_oracle::MODEL_TIME,"measurement_version":3,
