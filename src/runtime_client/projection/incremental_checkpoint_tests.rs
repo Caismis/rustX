@@ -365,7 +365,7 @@ fn checkpoint_descriptor_and_metadata_rows_keep_the_admitted_owner() {
     assert_eq!(first.content.len(), later.content.len());
     assert!(first.content.iter().zip(later.content.iter()).all(|(left,right)| left.same_owner(right)));
     assert!(first.collections.iter().zip(later.collections.iter()).all(|(left,right)| left.same_owner(right)));
-    if let Some(frontier) = later.collections.first_mut() { frontier.loaded = 0; }
+    if let Some(frontier) = Arc::make_mut(&mut later.collections).first_mut() { frontier.loaded = 0; }
     std::sync::Arc::make_mut(&mut later.snapshot.message_descriptors[0]).role = "changed".into();
     assert_eq!(serde_json::to_vec(&first).unwrap(), frozen);
 }
