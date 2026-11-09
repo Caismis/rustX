@@ -210,16 +210,17 @@ test('deletion confirmation, CAS conflict review, loading and read failure are d
   await expect(deletion).toHaveCount(0);
 
   // CAS conflict: the draft and its base survive, the review is local to the
-  // unit, and Save / Discard / Use latest setting stay in reach.
+  // unit, and applying the retained changes requires explicit review.
   const endpoint = settings.getByLabel('Base URL', { exact: true });
   await endpoint.fill('https://user.invalid/v2');
   const unit = settings.getByRole('form', { name: 'Provider transport' });
-  await unit.getByRole('button', { name: 'Save Provider transport' }).click();
+  await endpoint.press('Enter');
   await expect(page.locator('[data-toast][data-foreground]')).toHaveText('Provider transport was not saved because it changed elsewhere. Your draft is kept.');
   await expect(endpoint).toHaveValue('https://user.invalid/v2');
   await expect(unit.getByRole('status').filter({ hasText: 'This setting changed elsewhere.' })).toHaveCount(0);
   await endpoint.scrollIntoViewIfNeeded();
-  for (const action of ['Save Provider transport', 'Discard', 'Use latest setting']) await expect(unit.getByRole('button', { name: action, exact: true })).toBeInViewport();
+  await expect(unit.getByRole('button', { name: 'Apply my changes', exact: true })).toBeInViewport();
+  await expect(unit.getByRole('button', { name: 'Save Provider transport', exact: true })).toHaveCount(0);
   await expectAccessible(page, settingsScope);
   await expectStableScreenshot(settings, 'settings-conflict-light.png');
   expect(errors).toEqual([]);

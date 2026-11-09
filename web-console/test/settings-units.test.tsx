@@ -308,8 +308,11 @@ it('replaces default model intent and project guidance as independent native uni
     { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const model = within(screen.getByRole('form', { name: 'Default model' }));
-  for (const label of ['Output limit', 'Request parameter overrides', 'Summary model', 'Title model', 'Classification model', 'BTW model']) {
+  for (const label of ['Output limit', 'Request parameter overrides']) {
     expect(model.queryByLabelText(label, { exact: true })).toBeNull();
+  }
+  for (const label of ['Summary model', 'Title model', 'Classification model', 'BTW model']) {
+    expect(model.queryByRole('button', { name: new RegExp(`${label}$`) })).toBeNull();
   }
   await chooseOption('Profile', 'deep', model);
   fireEvent.click(model.getByRole('button', { name: 'Save Default model' }));
@@ -327,6 +330,17 @@ it('replaces default model intent and project guidance as independent native uni
   fireEvent.click(model.getByRole('button', { name: 'Save Default model' }));
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model',
     authored: { model: 'plain', summary_model },
+  } }, 'root-r1'));
+
+  fireEvent.click(model.getByRole('button', { name: 'Auxiliary models' }));
+  await chooseOption('Title model', 'other', model);
+  await chooseOption('Profile (Title)', 'high', model);
+  await chooseOption('Summary model', 'other', model);
+  await chooseOption('Profile (Summary)', 'quick', model);
+  fireEvent.click(model.getByRole('button', { name: 'Save Default model' }));
+  await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model',
+    authored: { model: 'plain', title_model: { mode: 'explicit', model: 'other', profile: 'high' },
+      summary_model: { mode: 'explicit', model: 'other', profile: 'quick' } },
   } }, 'root-r1'));
 
   rerender(<AgentPage document={{}} scope="workspace" revision="root-r1" />);

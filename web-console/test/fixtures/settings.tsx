@@ -65,6 +65,16 @@ if (variant.get('scenario') === 'conflict') server.handlers.set('configuration/s
   source.user.revision = 'user-external-edit';
   throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: request.params.expected_revision, actual: source.user.revision } });
 });
+if (variant.get('scenario') === 'provider-autosave') server.handlers.set('configuration/sourceWrite', request => {
+  if (request.method !== 'configuration/sourceWrite' || request.params.expected_revision !== source.user.revision
+    || request.params.mutation.kind !== 'config' || request.params.mutation.mutation.unit !== 'provider') throw new Error('Expected a Provider write at the current revision');
+  const { id, authored } = request.params.mutation.mutation;
+  if (!authored || authored.credential.kind !== 'retain') throw new Error('Expected an icon edit retaining credentials');
+  const saved = source.user.authored!.providers![id];
+  source.user.authored!.providers![id] = { ...authored, credential: saved.credential };
+  source.user.revision = 'user-provider-saved';
+  return { type: 'sources_written', revision: source.user.revision, configuration_revision: null };
+});
 const session = variant.get('session');
 if (session) server.handlers.set('session/configuration', () => ({ type: 'session_configuration', projection: applicationReceipt(sessionApplication(session)) }));
 /** The focused Session's native application in one banner state. */

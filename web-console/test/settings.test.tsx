@@ -203,7 +203,7 @@ it('saves a whole Workspace Provider with explicit credentials without copying U
   await providerAction('Use an environment variable');
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'WORKSPACE_KEY' } });
   await chooseOption('API format', 'OpenAI Responses (/v1/responses)');
-  fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
+  fireEvent.keyDown(screen.getByLabelText('Environment variable'), { key: 'Enter' });
   await waitForSettingsSave();
   expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ method: 'configuration/sourceWrite', params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { protocol: 'openai_responses', base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } });
   expect(screen.queryByRole('button', { name: /Adopt/ })).toBeNull();
@@ -391,7 +391,7 @@ it('removes literal credentials from a successful Provider draft using the redac
   fireEvent.change(screen.getByLabelText('New Provider identity'), { target: { value: 'secret' } }); fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://native.invalid' } });
   fireEvent.change(await screen.findByLabelText('API Key'), { target: { value: 'SECRET_SENTINEL' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
+  fireEvent.keyDown(screen.getByLabelText('API Key'), { key: 'Enter' });
   await waitForSettingsSave();
   await waitFor(() => expect((screen.getByLabelText('API Key') as HTMLInputElement).value).toBe(''));
   expect(document.body.innerHTML).not.toContain('SECRET_SENTINEL');
@@ -589,7 +589,7 @@ it('retires a confirmed Provider save, including its literal credential, after t
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://native.invalid' } });
   fireEvent.change(await screen.findByLabelText('API Key'), { target: { value: 'SECRET_SENTINEL' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
+  fireEvent.keyDown(screen.getByLabelText('API Key'), { key: 'Enter' });
   await waitFor(() => expect(subject.request.mock.calls.filter(([op]) => op.method === 'configuration/sourceWrite')).toHaveLength(1));
   // The editor unmounts while the native write is still in flight.
   await openSettingsPage('Agent');

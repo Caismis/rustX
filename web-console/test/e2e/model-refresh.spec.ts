@@ -35,14 +35,18 @@ for (const width of [1440, 390]) test(`provider single-click navigation and work
     const second = settings.getByRole('form', {name:'Provider second',exact:true});
     await second.getByLabel('Base URL', {exact:true}).fill(`${fixture.providerUrl}/v1`);
     await second.getByLabel('API Key', {exact:true}).fill('fixture-only');
-    await second.getByRole('button', {name:'Save Provider second',exact:true}).click();
-    await expect(second.getByRole('button', {name:'Save Provider second',exact:true})).toBeHidden();
     // Every transition below is one mouse click, including returning to the first provider.
     await settings.getByRole('row', {name:'fixture',exact:true}).click();
     await expect(settings.getByRole('form', {name:'Provider fixture',exact:true})).toBeVisible();
+    await expect.poll(() => readFileSync(fixture.settings, 'utf8')).toContain('[providers.second]');
     await settings.getByRole('row', {name:'second',exact:true}).click();
     await expect(second).toBeVisible();
+    await expect(second.getByLabel('API Key', {exact:true})).toHaveValue('');
     await settings.getByRole('row', {name:'fixture',exact:true}).click();
+    const endpoint = settings.getByRole('form', {name:'Provider fixture',exact:true}).getByLabel('Base URL', {exact:true});
+    await endpoint.fill(`${fixture.providerUrl}/v1/`);
+    await expect.poll(() => readFileSync(fixture.settings, 'utf8')).toContain(`base_url = "${fixture.providerUrl}/v1/"`);
+    await expect(endpoint).toBeFocused();
     const addModel = async (id: string) => {
       await settings.getByRole('button', {name:'+ Add Model',exact:true}).click();
       const dialog = page.getByRole('dialog', {name:'Add Model',exact:true});

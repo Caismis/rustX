@@ -89,7 +89,6 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
   const providerEntry = navigationProviders.find(entry => entry.id === selected);
   const selectedProvider = providerEntry?.authored ?? providerEntry?.effective;
   const selectedModels = catalog.filter(entry => (entry.authored ?? entry.effective)?.provider === selected);
-  const closeProvider = () => { onFocus(undefined); landing.current?.focus(); };
   const visibleModels = models.filter(id => {
     const entry = catalog.find(entry => entry.id === id);
     const model = entry?.authored ?? entry?.effective;
@@ -137,7 +136,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
         {selected ? <>
           <ProviderConnection key={selected} scope={scope} revision={revision} id={selected} authored={providerEntry?.authored}
             inherited={scope === 'workspace' ? (providerEntry?.authored ? source.user.authored?.providers?.[selected] : providerEntry?.effective) : undefined}
-            hasModels={selectedModels.length > 0} onCancel={closeProvider}/>
+            hasModels={selectedModels.length > 0}/>
           <div className={cards.modelsHeading}><h4>{tx('settings:models.list')}</h4>
             <Button size="sm" variant="toolbar" title={!selectedProvider ? tx('settings:models.save-provider-first') : undefined}
               disabled={!selectedProvider} onClick={() => setAdding('model')}>{tx('settings:models.add-model')}</Button>
@@ -272,19 +271,30 @@ function DefaultModelSelection({ value, change, models, profiles }: ModelSelecti
       options={[...choices].map(id => [id, id])} onChange={model => change({ ...selection, model })}/>
     {model && <ModelProfileChoice label={tx('settings:models-page.profile')} profile={profile} profiles={profiles[model] ?? []}
       onChange={profile => change(profile ? { ...selection, profile } : selection)}/>}
+    {model && <Advanced title={tx('settings:models-page.auxiliary-models')}>
+      <AuxiliaryModelSelections value={value} change={change} models={models} profiles={profiles}/>
+    </Advanced>}
   </>;
 }
 
 /** Full invocation settings for a named Agent. */
 export function ModelSelection({ value, change, models, profiles }: ModelSelectionProps) {
   const tx = useTranslation();
-  const summary = value.summary_model;
-  const title = value.title_model;
   const identities = (extra?: string) => [...new Set([...models, ...(extra ? [extra] : [])])];
   return <>
     <Choice label={tx('settings:models-page.model')} value={value.model ?? ''} options={[['', tx('settings:copy.select-model')], ...identities(value.model ?? undefined).map(id => [id, id] as const)]}
       onChange={model => change({ ...value, model: model || null })} />
     <ModelRequestFields value={value} change={change} profiles={profiles[value.model ?? ''] ?? []} />
+    <AuxiliaryModelSelections value={value} change={change} models={models} profiles={profiles}/>
+  </>;
+}
+
+function AuxiliaryModelSelections({ value, change, models, profiles }: ModelSelectionProps) {
+  const tx = useTranslation();
+  const summary = value.summary_model;
+  const title = value.title_model;
+  const identities = (extra?: string) => [...new Set([...models, ...(extra ? [extra] : [])])];
+  return <>
     <Choice label={tx('settings:models-page.summary-model')} value={summary?.mode === 'explicit' ? summary.model : ''}
       options={[['', tx('settings:copy.follow-selected-model')], ...identities(summary?.mode === 'explicit' ? summary.model : undefined).map(id => [id, id] as const)]}
       onChange={model => change({ ...value, summary_model: model ? { ...(summary?.mode === 'explicit' ? summary : {}), mode: 'explicit', model } : { mode: 'session' } })} />

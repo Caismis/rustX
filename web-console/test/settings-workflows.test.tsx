@@ -807,41 +807,40 @@ it('S2-08 Workflows are no longer listed in Settings',async()=>{
 
 // ── S2-09 Drafts survive navigation, revisions and native errors ────────────
 
-it('S2-09 a dirty Provider draft survives list/detail, page, filter and revision changes and a native rejection', async () => {
+it('S2-09 an incomplete Provider draft survives navigation and needs review after an external edit', async () => {
   let reject = false;
   const s = cfg3Client(async op => { if (op.method === 'configuration/sourceWrite' && reject) throw new Error('native rejected the Provider'); });
   await user(s, 'Models');
   await openResourceRow('transport');
   const endpoint = () => screen.getByLabelText('Base URL') as HTMLInputElement;
-  fireEvent.change(endpoint(), { target: { value: 'https://draft.invalid' } });
+  fireEvent.change(endpoint(), { target: { value: 'incomplete' } });
   // The draft lives in the actor-owned transaction, not in the form library.
-  expect(retained(s)).toContain('https://draft.invalid');
+  expect(retained(s)).toContain('incomplete');
   // Detail → list → detail.
   await openResourceRow('transport');
-  expect(endpoint().value).toBe('https://draft.invalid');
+  expect(endpoint().value).toBe('incomplete');
   // Another page, a filter change there, and back: Models restores its focus.
   await openSettingsPage('Extensions');
   await openResourceModule('mcp');
   await openSettingsPage('Models');
   expect(screen.getByRole('heading', { name: 'Provider transport' })).toBeTruthy();
-  expect(endpoint().value).toBe('https://draft.invalid');
+  expect(endpoint().value).toBe('incomplete');
   // An external revision change: the draft and its original CAS base survive,
   // and replacing against the newer revision is an explicit review gesture.
   s.source.user.revision = 'user-external';
   fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
-  await screen.findByRole('button', { name: 'Use latest setting' });
-  expect(endpoint().value).toBe('https://draft.invalid');
-  fireEvent.click(screen.getByRole('button', { name: 'Use latest setting' }));
-  // A native rejection keeps the draft too.
+  const review = await screen.findByRole('button', { name: 'Apply my changes' });
+  expect(endpoint().value).toBe('incomplete');
+  fireEvent.change(endpoint(), { target: { value: 'https://draft.invalid' } });
   reject = true;
-  fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
+  fireEvent.click(review);
   await screen.findByText(/native rejected the Provider/);
   expect(endpoint().value).toBe('https://draft.invalid');
   expect(writes(s)).toHaveLength(1);
   expect(writes(s)[0].params.expected_revision).toBe('user-external');
 });
 
-it('S2-09 a committed Model accepts no edit until its authoritative reread, and the next edit starts from the observed Model', async () => {
+it('S2-09 a Provider autosave waits for the committed Model reread and uses its revision', async () => {
   // Native applies each write and acknowledges it at a new revision; the read
   // after a commit is held until the test releases it.
   let revision = 1;
@@ -885,13 +884,18 @@ it('S2-09 a committed Model accepts no edit until its authoritative reread, and 
   // Another unit stays editable in the same window, but cannot submit.
   fireEvent.click(screen.getByRole('button', { name: 'Close' }));
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://draft.invalid' } });
+  fireEvent.keyDown(screen.getByLabelText('Base URL'), { key: 'Enter' });
   expect(retained(s)).toContain('https://draft.invalid');
-  expect(save('Provider transport').disabled).toBe(true);
   expect(writes(s)).toHaveLength(1);
   // The authoritative observation of the committed Model releases both.
   await act(async () => reread!.resolve());
-  await waitFor(() => expect(save('Provider transport').disabled).toBe(false));
-  expect(screen.queryByRole('button', { name: 'Use latest setting' })).toBeNull();
+  await waitFor(() => expect(writes(s)).toHaveLength(2));
+  expect(writes(s)[1].params).toMatchObject({ expected_revision: 'user-2', mutation: {
+    kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { base_url: 'https://draft.invalid' } },
+  } });
+  await act(async () => reread!.resolve());
+  await waitForSettingsSave();
+  expect(screen.queryByRole('button', { name: 'Apply my changes' })).toBeNull();
   fireEvent.click(within(screen.getByRole('grid', { name: 'Models of Provider transport' })).getByRole('row', { name: 'main' }));
   await waitFor(() => expect(wire().value).toBe('wire-new'));
   expect(contextWindow().closest('fieldset')!.disabled).toBe(false);
@@ -899,24 +903,16 @@ it('S2-09 a committed Model accepts no edit until its authoritative reread, and 
   // revision, and the complete replacement keeps what D1 committed.
   fireEvent.change(contextWindow(), { target: { value: '256000' } });
   fireEvent.click(save('Model main'));
-  await waitFor(() => expect(writes(s)).toHaveLength(2));
-  expect(writes(s)[1].params.expected_revision).toBe('user-2');
-  expect(writes(s)[1].params.mutation).toEqual({ kind: 'config', mutation: {
+  await waitFor(() => expect(writes(s)).toHaveLength(3));
+  expect(writes(s)[2].params.expected_revision).toBe('user-3');
+  expect(writes(s)[2].params.mutation).toEqual({ kind: 'config', mutation: {
     unit: 'model', id: 'main', authored: { ...fullModel(), id: 'wire-new', context_window: '256000' },
   } });
   await act(async () => reread!.resolve());
   await waitForSettingsSave();
   fireEvent.click(screen.getByRole('button', { name: 'Close' }));
   expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://draft.invalid');
-  expect(screen.queryByRole('button', { name: 'Use latest setting' })).toBeNull();
-  fireEvent.click(save('Provider transport'));
-  await waitFor(() => expect(writes(s)).toHaveLength(3));
-  expect(writes(s)[2].params).toMatchObject({ expected_revision: 'user-3', mutation: {
-    kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { base_url: 'https://draft.invalid' } },
-  } });
-  await act(async () => reread!.resolve());
-  await waitForSettingsSave();
-  expect(save('Provider transport').disabled).toBe(true);
+  expect(screen.queryByRole('button', { name: 'Apply my changes' })).toBeNull();
   expect(screen.queryByText('Provider transport saved.')).toBeNull();
 });
 

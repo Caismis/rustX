@@ -1,6 +1,6 @@
 import { providerAction } from './settings-harness';
 import { afterEach, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { cfg3Client } from './cfg3-fixture';
 import { chooseOption, openSettingsPage, settingsReady, SettingsSurface } from './settings-harness';
 import { userSettingsTarget } from '../src/app/settings/projection';
@@ -63,7 +63,6 @@ it('changes API format once on the provider without exposing protocol identifier
   subject.source.user.authored!.models = { one: model, two: { ...model, id: 'two' } };
   await openModels(subject);
   await chooseOption('API format', 'Anthropic Messages (/v1/messages)');
-  fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
   await waitFor(() => expect(writes(subject)).toHaveLength(1));
   expect(writes(subject)[0][0]).toMatchObject({ params: { mutation: { mutation: { unit: 'provider', id: 'transport', authored: { protocol: 'anthropic_messages', credential: { kind: 'retain' } } } } } });
   await waitFor(() => {
@@ -72,6 +71,34 @@ it('changes API format once on the provider without exposing protocol identifier
   });
   fireEvent.click(screen.getByRole('button', { name: '+ Add Model' }));
   expect(within(screen.getByRole('dialog', { name: 'Add Model' })).queryByLabelText('API format')).toBeNull();
+});
+
+it('autosaves a newer Provider edit after the previous write is observed', async () => {
+  let release!: () => void;
+  const held = new Promise<void>(done => { release = done; });
+  let revision = 1;
+  const subject = cfg3Client(async (operation, source) => {
+    if (operation.method !== 'configuration/sourceWrite' || operation.params.mutation.kind !== 'config') return;
+    const mutation = operation.params.mutation.mutation;
+    if (mutation.unit !== 'provider' || !mutation.authored) return;
+    if (revision === 1) await held;
+    source.user.authored!.providers!.transport.base_url = mutation.authored.base_url;
+    source.user.revision = `user-${++revision}`;
+    return {type:'sources_written', revision:source.user.revision, configuration_revision:null};
+  });
+  await openModels(subject);
+  const url = screen.getByLabelText('Base URL');
+  fireEvent.change(url, {target:{value:'https://first.example/v1'}});
+  fireEvent.keyDown(url, {key:'Enter'});
+  await waitFor(() => expect(writes(subject)).toHaveLength(1));
+  fireEvent.change(url, {target:{value:'https://latest.example/v1'}});
+  fireEvent.keyDown(url, {key:'Enter'});
+  expect(writes(subject)).toHaveLength(1);
+  await act(async () => release());
+  await waitFor(() => expect(writes(subject)).toHaveLength(2));
+  expect(writes(subject)[1][0]).toMatchObject({params:{expected_revision:'user-2', mutation:{mutation:{
+    id:'transport', authored:{base_url:'https://latest.example/v1', credential:{kind:'retain'}},
+  }}}});
 });
 
 it('invalid model limits and duplicate model identities never reach native writes', async () => {
@@ -144,14 +171,14 @@ it('switching credential modes removes the previous mode and its secret from the
   fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'DISCARDED_FIXTURE_SECRET' } });
   await providerAction('Use an environment variable');
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'PROVIDER_KEY' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
+  fireEvent.keyDown(screen.getByLabelText('Environment variable'), { key: 'Enter' });
   await waitFor(() => expect(writes(subject)).toHaveLength(1));
   expect(writes(subject)[0][0]).toMatchObject({ params: { mutation: { mutation: { authored: { credential: { kind: 'environment', variable: 'PROVIDER_KEY' } } } } } });
   expect(JSON.stringify(writes(subject))).not.toContain('DISCARDED_FIXTURE_SECRET');
   expect(JSON.stringify(writes(subject))).not.toContain('"value"');
 });
 
-it('provider icons share the native save and discard lifecycle, and preserve saved credentials', async () => {
+it('automatically saves provider icons and retains saved credentials', async () => {
   const subject = cfg3Client(async (operation, source) => {
     if (operation.method !== 'configuration/sourceWrite') return;
     const mutation = operation.params.mutation;
@@ -172,19 +199,12 @@ it('provider icons share the native save and discard lifecycle, and preserve sav
   fireEvent.change(dialog.getByRole('searchbox'), { target: { value: 'deepseek' } });
   expect(dialog.getAllByRole('row')).toHaveLength(1);
   fireEvent.click(dialog.getByRole('row', { name: 'DeepSeek' }));
-  expect(writes(subject)).toHaveLength(0);
-  expect(form.querySelector('[data-provider-icon="deepseek"]')).not.toBeNull();
-  fireEvent.click(within(form).getByRole('button', { name: /Discard/ }));
-  expect(form.querySelector('[data-provider-icon=""]')).not.toBeNull();
-  await providerAction('Choose provider icon', within(form));
-  dialog = within(screen.getByRole('dialog', { name: 'Choose provider icon' }));
-  fireEvent.click(dialog.getByRole('row', { name: /^OpenAI$/ }));
-  fireEvent.click(within(form).getByRole('button', { name: 'Save Provider transport' }));
   await waitFor(() => expect(writes(subject)).toHaveLength(1));
   const operation = writes(subject)[0][0];
   if (operation.method !== 'configuration/sourceWrite') throw new Error('write required');
-  expect(operation.params.mutation).toMatchObject({ kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { icon: 'openai', credential: { kind: 'retain' } } } });
-  await waitFor(() => expect(screen.getByRole('row', { name: 'transport' }).querySelector('[data-provider-icon="openai"]')).not.toBeNull());
+  expect(operation.params.mutation).toMatchObject({ kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { icon: 'deepseek', credential: { kind: 'retain' } } } });
+  await waitFor(() => expect(screen.getByRole('row', { name: 'transport' }).querySelector('[data-provider-icon="deepseek"]')).not.toBeNull());
+  expect(within(form).queryByRole('button', { name: 'Save Provider transport' })).toBeNull();
 });
 
 
@@ -216,7 +236,7 @@ it('keeps a new provider template as a draft across provider and settings page c
   await openSettingsPage('Models');
   fireEvent.click(await screen.findByRole('row', { name: 'DeepSeek' }));
   expect((screen.getByLabelText('Base URL') as HTMLInputElement).value).toBe('https://api.deepseek.com/anthropic');
-  fireEvent.click(within(screen.getByRole('form', { name: 'Provider DeepSeek' })).getByRole('button', { name: 'Cancel' }));
+  await providerAction('Delete', within(screen.getByRole('form', { name: 'Provider DeepSeek' })));
   expect(screen.queryByRole('row', { name: 'DeepSeek' })).toBeNull();
   expect(writes(subject)).toHaveLength(0);
 });

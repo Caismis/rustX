@@ -24,12 +24,12 @@ function runtimeErrors(page: Page) {
   page.on('console', event => { if (['error','warning'].includes(event.type())) errors.push(event.text()); });
   return errors;
 }
-async function start(page: Page, theme: 'Light' | 'Dark', width: number) {
+async function start(page: Page, theme: 'Light' | 'Dark', width: number, scenario = '') {
   const errors = runtimeErrors(page);
   await page.clock.setFixedTime(new Date('2026-10-21T12:00:00Z'));
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width, height: width === 390 ? 844 : 1000 });
-  await page.goto(fixture);
+  await page.goto(scenario ? `${fixture}?scenario=${scenario}` : fixture);
   await expect(page).toHaveTitle('Session A — rustX');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await settings(page).getByRole('group', { name: 'Appearance' }).getByRole('button', { name: theme, exact: true }).click();
@@ -69,8 +69,8 @@ test('authority replacement hides a retained model dialog and releases its focus
 });
 
 for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) {
-  test(`${theme} ${width}: provider icons are searchable, keyboard accessible and remain a draft until Save`, async ({page}) => {
-    const errors = await start(page, theme, width);
+  test(`${theme} ${width}: provider icons are searchable, keyboard accessible and autosaved`, async ({page}) => {
+    const errors = await start(page, theme, width, 'provider-autosave');
     await openSettingsPage(page, 'Models');
     await settings(page).getByRole('row', {name:provider, exact:true}).click();
     const form = settings(page).getByRole('form', {name:'Provider '+provider, exact:true});
@@ -97,13 +97,14 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await expect(picker).toHaveCount(0);
     await expect(trigger).toBeFocused();
     await expect(form.locator('[data-provider-icon="openai"]')).toBeVisible();
-    expect(await writes(page)).toBe(0);
-    await form.getByRole('button', {name:'Discard', exact:true}).click();
-    await expect(form.locator('[data-provider-icon=""]')).toBeVisible();
+    await expect.poll(() => writes(page)).toBe(1);
+    await expect(form).toHaveAttribute('aria-busy', 'false');
+    await expect(form.getByRole('button', {name:`Save Provider ${provider}`, exact:true})).toHaveCount(0);
     await openPicker();
     await page.keyboard.press('Escape');
     await expect(picker).toHaveCount(0);
     await expect(trigger).toBeFocused();
+    expect(await writes(page)).toBe(1);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
     expect(errors).toEqual([]);
   });

@@ -1,10 +1,42 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { choose, connectRemote, openEmptySession, openSettingsPage, settledSave } from './shell-actions';
 import { captureEvidence } from './screenshot';
 import { wireProbe } from './wire-probe';
+
+test('new sessions receive independently configured title and compaction models', async ({page}) => {
+  const fixture = await startDogfood();
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  let native: AppServerHost | undefined;
+  try {
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await openSettingsPage(page, 'Models');
+    await page.getByRole('button', {name:'Default model for new Sessions', exact:true}).click();
+    const defaults = page.getByRole('form', {name:'Default model', exact:true});
+    const auxiliary = defaults.getByRole('button', {name:'Auxiliary models', exact:true});
+    await expect(auxiliary).toHaveAttribute('aria-expanded', 'false');
+    await auxiliary.click();
+    await choose(defaults, 'Title model', 'fixture/second-model');
+    await choose(defaults, 'Summary model', 'fixture/second-model');
+    await defaults.getByRole('button', {name:'Save Default model', exact:true}).click();
+    await expect(settledSave(defaults, 'Default model')).toBeVisible();
+    const session = await openEmptySession(page, fixture, 'Workspace A');
+    native = await AppServerHost.connectRemote({endpoint:fixture.endpoint, token:fixture.token});
+    const { settings } = await native.readSettings(session);
+    expect(settings.model).toMatchObject({
+      model: 'fixture/console-model',
+      summaryModel: {mode:'explicit', model:'fixture/second-model'},
+      titleModel: {mode:'explicit', model:'fixture/second-model'},
+    });
+    expect(errors).toEqual([]);
+  } finally { await native?.shutdown(); await fixture.stop(false); }
+});
 
 for (const width of [1440, 390]) test(`Responses profile API parameters save directly and preserve the independent output limit at ${width}px`, async ({page}) => {
   const fixture = await startDogfood();
@@ -98,8 +130,8 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await name.getByLabel('New Provider identity').fill('custom');
     await name.getByRole('button', { name: 'Continue', exact: true }).click();
     const provider = settings.getByRole('form', { name: 'Provider custom' });
+    await expect(settings.getByRole('button', { name: '+ Add Model', exact: true })).toBeDisabled();
     await provider.getByLabel('Base URL', { exact: true }).fill(fixture.providerUrl + '/v1');
-    await provider.getByLabel('API Key', { exact: true }).fill('fixture-only');
     await choose(provider, 'API format', 'OpenAI Responses (/v1/responses)');
     await provider.getByRole('button', { name: 'Provider actions', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Choose provider icon', exact: true }).click();
@@ -107,9 +139,13 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     await icons.getByRole('searchbox', { name: 'Search icons' }).fill('deepseek');
     await icons.getByRole('row', { name: 'DeepSeek', exact: true }).click();
     await expect(icons).toHaveCount(0);
+    const key = provider.getByLabel('API Key', { exact: true });
+    await key.fill('fixture-only');
+    await provider.getByRole('button', { name: 'Show', exact: true }).click();
+    await expect(key).toHaveAttribute('type', 'text');
     await expect(settings.getByRole('button', { name: '+ Add Model', exact: true })).toBeDisabled();
-    await provider.getByRole('button', { name: 'Save Provider custom', exact: true }).click();
-    await expect(provider.getByRole('button', { name: 'Save Provider custom', exact: true })).toBeHidden();
+    await provider.getByLabel('Base URL', { exact: true }).focus();
+    await expect(key).toHaveValue('');
     await expect(settings.getByRole('button', { name: '+ Add Model', exact: true })).toBeEnabled();
     await expect(settings.getByRole('alert')).toHaveCount(0);
     await expect(settings.getByText('No models configured yet. Add a model to use this provider in conversations.')).toBeVisible();
@@ -139,9 +175,7 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
     expect(readFileSync(fixture.settings, 'utf8').split('[models.')[1]).not.toContain('protocol =');
     await expect(settings.getByRole('row', { name: 'custom/first-model', exact: true })).not.toContainText('openai_responses');
     await choose(provider, 'API format', 'OpenAI Chat Completions (/v1/chat/completions)');
-    await provider.getByRole('button', { name: 'Save Provider custom', exact: true }).click();
-    await expect(provider.getByRole('button', { name: 'Save Provider custom', exact: true })).toBeHidden();
-    expect(readFileSync(fixture.settings, 'utf8').split('[models.')[0]).toContain('protocol = "openai_chat_completions"');
+    await expect.poll(() => readFileSync(fixture.settings, 'utf8').split('[models.')[0]).toContain('protocol = "openai_chat_completions"');
     await expect(provider.getByRole('button', { name: /API format$/ })).toContainText('OpenAI Chat Completions');
 
 

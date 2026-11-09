@@ -40,7 +40,6 @@
 .section .secret input { padding-right: 36px; }
 .secret > button { position: absolute; right: 4px; bottom: 2px; }
 .connectionActions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.connectionActions[data-clean=true] { display: none; }
 .connectionActions button { border-radius: 8px; }
 .inherited { color: var(--dsw-alias-label-secondary); font-size: 12px; }
 .modelsHeading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 0 5px; }

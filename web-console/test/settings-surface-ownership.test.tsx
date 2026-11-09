@@ -436,7 +436,7 @@ it('S1-14 a confirmed Provider literal-secret save drops the submitted payload e
   // authored secret legitimately lives.
   expect(retained(s)).toContain(SECRET_SENTINEL);
   failReads = true;
-  fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
+  fireEvent.keyDown(screen.getByLabelText('API Key'), { key: 'Enter' });
   // The write commits and native acknowledges it; the post-write authoritative
   // reread fails, so the transaction cannot settle yet.
   await waitForSettingsSave();
@@ -550,7 +550,7 @@ it('S1-15 viewing an inherited identity authors nothing and writes nothing', asy
   expect((provider.getByLabelText('API Key') as HTMLInputElement).value).toBe('');
   // The native effective definition is still reported, redacted.
   expect(screen.queryByText(/Native effective Provider transport/)).toBeNull();
-  expect((provider.getByRole('button', { name: 'Save Provider transport' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(provider.queryByRole('button', { name: 'Save Provider transport' })).toBeNull();
   expect(writes(s)).toHaveLength(0);
 });
 
@@ -562,7 +562,7 @@ it('S1-15 an explicit Workspace Provider override authors only that unit and nev
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://workspace.invalid' } });
   await providerAction('Use an environment variable');
   fireEvent.change(screen.getByLabelText('Environment variable'), { target: { value: 'WORKSPACE_KEY' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Provider transport' }));
+  fireEvent.keyDown(screen.getByLabelText('Environment variable'), { key: 'Enter' });
   await waitFor(() => expect(writes(s)[0][0]).toMatchObject({ params: { target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'workspace-1', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'transport', authored: { protocol: 'openai_responses', base_url: 'https://workspace.invalid', credential: { kind: 'environment', variable: 'WORKSPACE_KEY' } } } } } }));
   // Exactly one unit is authored, and the authored credential is the one the
   // user entered — never a copy or reconstruction of the shadowed User one.
@@ -629,7 +629,7 @@ async function heldSecretSave(s: ReturnType<typeof cfg3Client>) {
   fireEvent.change(screen.getByLabelText('API Key'), { target: { value: SECRET_SENTINEL } });
   // The dirty draft is the only place the authored secret legitimately lives.
   expect(retained(s)).toContain(SECRET_SENTINEL);
-  fireEvent.click(screen.getByRole('button', { name: 'Save Provider secret' }));
+  fireEvent.keyDown(screen.getByLabelText('API Key'), { key: 'Enter' });
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   return { ui, host, release: async () => { await act(async () => { release(); await held; }); } };
 }
