@@ -57,6 +57,9 @@ class Client:
         # Match native lanes; the advertised total also includes eight Agent
         # observation slots. Control intent keeps its two independent credits.
         self.ordinary = asyncio.Semaphore(6)
+        # Concurrent native thread/read calls use the separate two-slot
+        # metadata lane, including while ordinary turn requests are in flight.
+        self.metadata = asyncio.Semaphore(2)
         self.control = asyncio.Semaphore(2)
         self.task = asyncio.create_task(self.read())
 
@@ -99,7 +102,8 @@ class Client:
                 raise
 
     async def call(self, method, params, *, allow_unavailable=False):
-        lane = self.control if method in ['turn/interrupt', 'session/detach'] else self.ordinary
+        lane = (self.control if method in ['turn/interrupt', 'session/detach']
+                else self.metadata if method == 'thread/read' else self.ordinary)
         async with lane:
             self.sequence += 1
             identity = self.sequence
