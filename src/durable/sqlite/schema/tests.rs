@@ -152,9 +152,16 @@ fn incompatible_schema_fails_without_migration_or_repair() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("incompatible.sqlite");
     let connection = rusqlite::Connection::open(&path).unwrap();
+    let future_version = SQLITE_SCHEMA_VERSION + 1;
     connection
         .execute_batch(
-            "CREATE TABLE rustx_store (id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, conversation_id TEXT NOT NULL, next_inbound_sequence INTEGER NOT NULL, next_event_sequence INTEGER NOT NULL); INSERT INTO rustx_store VALUES (1, 99, 'conv-1', 0, 0);",
+            "CREATE TABLE rustx_store (id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, conversation_id TEXT NOT NULL, next_inbound_sequence INTEGER NOT NULL, next_event_sequence INTEGER NOT NULL);",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO rustx_store VALUES (1, ?1, 'conv-1', 0, 0)",
+            [future_version],
         )
         .unwrap();
     drop(connection);
@@ -164,9 +171,9 @@ fn incompatible_schema_fails_without_migration_or_repair() {
             &path
         ),
         Err(ConversationStoreError::SchemaVersionMismatch {
-            stored: 99,
+            stored,
             expected: SQLITE_SCHEMA_VERSION
-        })
+        }) if stored == future_version
     ));
 }
 
