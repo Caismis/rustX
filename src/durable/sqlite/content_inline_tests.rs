@@ -80,11 +80,14 @@ fn sqlite_tail_append_keeps_binary_bytes_all_encodings_and_historical_prefixes()
                             .unwrap_or_else(|error| panic!("{encoding} revision={revision} cut={cut} range={offset}..{finish}: {error:?}")),
                         expected[offset..finish]
                     );
-                    assert!(last_read_work().0 <= 2);
+                    assert!(last_read_work().0 <= SEGMENT_BYTES / STREAM_SEGMENT_BYTES + 1);
                 }
             }
         }
-        assert_eq!(stored_rows(&connection, "binary-tail"), (7, 3));
+        assert_eq!(
+            stored_rows(&connection, "binary-tail"),
+            (7, expected.len().div_ceil(STREAM_SEGMENT_BYTES) as u64)
+        );
     }
 }
 
@@ -443,8 +446,8 @@ fn audit_transfer_preserves_large_text_raw_and_completed_json_across_chunk_bound
     assert!(text.len() > 131_072 && raw.len() > 131_072 && canonical.len() > 131_072);
     let source_rows = stored_rows(&connection, stream.as_str());
     assert_eq!(source_rows.0, 7);
-    let overflow_rows = text.len().div_ceil(SEGMENT_BYTES) - 1
-        + raw.len().div_ceil(SEGMENT_BYTES)
+    let overflow_rows = text.len().div_ceil(STREAM_SEGMENT_BYTES) - 1
+        + raw.len().div_ceil(STREAM_SEGMENT_BYTES)
         + canonical.len().div_ceil(SEGMENT_BYTES)
         - 1;
 
@@ -524,7 +527,156 @@ fn assert_transferred_windows(connection: &Connection, text: &[u8], raw: &[u8], 
                 expected[start..end],
             );
             let (rows, bytes) = last_read_work();
-            assert!(rows <= 2 && bytes == end - start && bytes <= SEGMENT_BYTES);
+            assert!(
+                rows <= SEGMENT_BYTES / segment_bytes("audit", representation) + 1
+                    && bytes == end - start
+                    && bytes <= SEGMENT_BYTES
+            );
+        }
+    }
+}
+
+thread_local! {
+    static APPEND_WORK: std::cell::Cell<(usize, usize, usize)> = const {
+        std::cell::Cell::new((0, 0, 0))
+    };
+}
+
+pub(super) fn record_tail_copy(bytes: usize) {
+    let (updates, inserts, copied) = APPEND_WORK.get();
+    APPEND_WORK.set((updates + 1, inserts, copied + bytes));
+}
+
+pub(super) fn record_segment_insert() {
+    let (updates, inserts, copied) = APPEND_WORK.get();
+    APPEND_WORK.set((updates, inserts + 1, copied));
+}
+
+#[derive(Debug)]
+struct LayoutWork {
+    frames: u64,
+    statements: usize,
+    rebuilt: usize,
+    read_rows: usize,
+}
+
+fn stream_layout_work(width: usize, suffix_size: usize) -> LayoutWork {
+    const OUTPUT: usize = 256 * 1024;
+    let directory = tempfile::tempdir().unwrap();
+    let mut connection = Connection::open(directory.path().join("stream.sqlite")).unwrap();
+    crate::durable::sqlite::schema::configure_connection(&mut connection, false).unwrap();
+    connection
+        .execute_batch("PRAGMA wal_autocheckpoint=0")
+        .unwrap();
+    crate::durable::sqlite::schema::create_schema(&mut connection).unwrap();
+    connection
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .unwrap();
+    let key = ("live", "layout-probe-stream", 0, Rep::Utf8Text);
+    let output: Vec<_> = (0..OUTPUT)
+        .map(|offset| u8::try_from(offset % 251).unwrap())
+        .collect();
+    APPEND_WORK.set((0, 0, 0));
+    for (index, suffix) in output.chunks_exact(suffix_size).enumerate() {
+        let transaction = connection.transaction().unwrap();
+        put_segmented(&transaction, key, index as u64 + 1, suffix, true, width).unwrap();
+        transaction.commit().unwrap();
+    }
+    let (updates, inserts, rebuilt) = APPEND_WORK.replace((0, 0, 0));
+    let wal_bytes = std::fs::metadata(directory.path().join("stream.sqlite-wal"))
+        .unwrap()
+        .len();
+    let page_size: u64 = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(page_size, 2048);
+    assert_eq!((wal_bytes - 32) % (page_size + 24), 0);
+    let revisions = OUTPUT / suffix_size;
+    assert_eq!(
+        stored_rows(&connection, key.1),
+        (revisions as u64, OUTPUT.div_ceil(width) as u64)
+    );
+    // Read old cuts after all appends. Include the worst-aligned maximum
+    // window and the last bytes of each prefix without replaying old frames.
+    let mut read_rows = 0;
+    for revision in 1..=revisions {
+        let frontier: usize = connection
+            .query_row(
+                "SELECT readable_end FROM content_frontiers WHERE source_kind='live' AND source_id=?1 AND block_index=0 AND representation='t' AND revision=?2",
+                params![key.1, revision],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(frontier, revision * suffix_size);
+        let offset = frontier.saturating_sub(SEGMENT_BYTES);
+        assert_eq!(
+            range_bytes_segmented(
+                &connection,
+                key,
+                revision as u64,
+                offset as u64,
+                frontier as u64,
+                width as u64
+            )
+            .unwrap(),
+            output[offset..frontier]
+        );
+        let (rows, bytes) = last_read_work();
+        assert!(rows <= SEGMENT_BYTES / width + 1);
+        assert_eq!(bytes, frontier - offset);
+        read_rows = read_rows.max(rows);
+    }
+    assert_eq!(
+        range_bytes_segmented(
+            &connection,
+            key,
+            revisions as u64,
+            1,
+            SEGMENT + 1,
+            width as u64,
+        )
+        .unwrap(),
+        output[1..=SEGMENT_BYTES]
+    );
+    let (unaligned_rows, bytes) = last_read_work();
+    assert_eq!(unaligned_rows, SEGMENT_BYTES / width + 1);
+    assert_eq!(bytes, SEGMENT_BYTES);
+    read_rows = read_rows.max(unaligned_rows);
+    let integrity: String = connection
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    LayoutWork {
+        frames: (wal_bytes - 32) / (page_size + 24),
+        statements: updates + inserts + 2 * revisions,
+        rebuilt,
+        read_rows,
+    }
+}
+
+#[test]
+fn streaming_segment_layout_balances_wal_work_and_bounded_reads() {
+    for suffix in [1_024, 8_192, 65_536] {
+        let layouts = [4_096, 8_192, 16_384, 65_536].map(|width| stream_layout_work(width, suffix));
+        let [small, chosen, medium, baseline] = &layouts;
+        eprintln!(
+            "SQLite {} suffix={suffix} 4/8/16/64 KiB: {layouts:?}",
+            rusqlite::version()
+        );
+        assert_eq!(STREAM_SEGMENT_BYTES, 8_192);
+        assert!(chosen.read_rows <= 9 && medium.read_rows <= 5 && baseline.read_rows <= 2);
+        assert!(chosen.read_rows <= small.read_rows);
+        match suffix {
+            1_024 => {
+                assert_eq!(chosen.statements, baseline.statements);
+                assert!(chosen.frames < baseline.frames && chosen.rebuilt < baseline.rebuilt);
+            }
+            8_192 => {
+                assert_eq!(chosen.statements, baseline.statements);
+                assert!(chosen.statements < small.statements && chosen.frames < baseline.frames);
+                assert_eq!(chosen.rebuilt, 0);
+            }
+            _ => assert_eq!(chosen.rebuilt, 0),
         }
     }
 }
