@@ -207,44 +207,38 @@ impl AgentExecution<'_> {
     ///
     /// Usage and provider continuation state are request bookkeeping, not
     /// released output, so they produce no publication frame.
-    fn publication_payload(event: &ModelEvent) -> Option<PublicationPayload> {
+    fn publication_payload(event: ModelEvent) -> Option<PublicationPayload> {
         match event {
             ModelEvent::TextDelta { block_index, text } => Some(PublicationPayload::TextSuffix {
-                block_index: *block_index,
-                suffix: text.clone(),
+                block_index,
+                suffix: text,
             }),
             ModelEvent::ReasoningDelta { block_index, text } => {
                 Some(PublicationPayload::ReasoningSuffix {
-                    block_index: *block_index,
-                    suffix: text.clone(),
+                    block_index,
+                    suffix: text,
                 })
             }
             ModelEvent::RefusalDelta { block_index, text } => {
                 Some(PublicationPayload::RefusalSuffix {
-                    block_index: *block_index,
-                    suffix: text.clone(),
+                    block_index,
+                    suffix: text,
                 })
             }
             ModelEvent::ToolCallStarted { block_index, call } => {
-                Some(PublicationPayload::ProposedToolCallStarted {
-                    block_index: *block_index,
-                    call: call.clone(),
-                })
+                Some(PublicationPayload::ProposedToolCallStarted { block_index, call })
             }
             ModelEvent::ToolCallArgumentsDelta {
                 block_index,
                 call_id,
                 arguments_delta,
             } => Some(PublicationPayload::ProposedToolCallArgumentsSuffix {
-                block_index: *block_index,
-                call_id: call_id.clone(),
-                suffix: arguments_delta.clone(),
+                block_index,
+                call_id,
+                suffix: arguments_delta,
             }),
             ModelEvent::ToolCallCompleted { block_index, call } => {
-                Some(PublicationPayload::ProposedToolCallCompleted {
-                    block_index: *block_index,
-                    call: call.clone(),
-                })
+                Some(PublicationPayload::ProposedToolCallCompleted { block_index, call })
             }
             ModelEvent::Started
             | ModelEvent::UsageUpdate { .. }
@@ -256,7 +250,7 @@ impl AgentExecution<'_> {
 
     /// Buffers one non-terminal model event into the publication coalescer
     /// and performs the bounded flush the policy requires.
-    pub(super) fn publish_model_event(&mut self, event: &ModelEvent) {
+    pub(super) fn publish_model_event(&mut self, event: ModelEvent) {
         let Some(payload) = Self::publication_payload(event) else {
             return;
         };

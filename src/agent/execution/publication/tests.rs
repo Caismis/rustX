@@ -18,6 +18,54 @@ use crate::tools::executor::ToolRegistry;
 use crate::tools::types::ToolCall;
 use std::sync::Arc;
 
+#[test]
+fn publication_moves_the_original_delta_allocations() {
+    use crate::publication::PublicationPayload;
+
+    const DELTA: &str = "水🙂 and a partial JSON suffix";
+    let block_index = ContentBlockIndex::new(2);
+    for event in [
+        ModelEvent::TextDelta {
+            block_index,
+            text: DELTA.to_owned(),
+        },
+        ModelEvent::ReasoningDelta {
+            block_index,
+            text: DELTA.to_owned(),
+        },
+        ModelEvent::RefusalDelta {
+            block_index,
+            text: DELTA.to_owned(),
+        },
+        ModelEvent::ToolCallArgumentsDelta {
+            block_index,
+            call_id: ToolCallId::new("call-1"),
+            arguments_delta: DELTA.to_owned(),
+        },
+    ] {
+        let original = match &event {
+            ModelEvent::TextDelta { text, .. }
+            | ModelEvent::ReasoningDelta { text, .. }
+            | ModelEvent::RefusalDelta { text, .. }
+            | ModelEvent::ToolCallArgumentsDelta {
+                arguments_delta: text,
+                ..
+            } => text.as_ptr(),
+            _ => unreachable!(),
+        };
+        let payload = AgentExecution::publication_payload(event).unwrap();
+        let (PublicationPayload::TextSuffix { suffix, .. }
+        | PublicationPayload::ReasoningSuffix { suffix, .. }
+        | PublicationPayload::RefusalSuffix { suffix, .. }
+        | PublicationPayload::ProposedToolCallArgumentsSuffix { suffix, .. }) = payload
+        else {
+            panic!("expected a publication suffix");
+        };
+        assert_eq!(suffix, DELTA);
+        assert_eq!(suffix.as_ptr(), original);
+    }
+}
+
 /// A committed start, controlled preparation gap, then actual adapter dispatch.
 /// The stream also delays EOF to prove it cannot move the provider terminal.
 #[tokio::test]
