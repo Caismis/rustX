@@ -525,4 +525,3 @@ Installed gperftools 2.15-3build1 caps heap profile serialization at 1MiB. Globa
 | live-subscriber | 64 | pi | 126.0742 | 154.1738 | after_cleanup, after_cleanup, after_cleanup, after_cleanup |
 
 Per-phase medians and all raw counter projections are archived, linked by SHA to the previous immutable archive. Endpoints cannot prove continuous peaks.
-
