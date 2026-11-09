@@ -941,7 +941,6 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
             );
             CREATE INDEX IF NOT EXISTS events_aggregate_holes_idx ON events(observation_aggregate_holes) WHERE observation_aggregate_holes>0;
             CREATE INDEX IF NOT EXISTS events_owner_holes_idx ON events(observation_owner_holes) WHERE observation_owner_holes>0;
-            CREATE INDEX IF NOT EXISTS events_trace_kind_idx ON events(observation_kind) WHERE observation_kind IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_trace_owner_idx ON events(observation_trace_owner,observation_kind) WHERE observation_trace_owner IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_readiness_missing_idx ON events(sequence) WHERE observation_readiness_missing=1;
             CREATE INDEX IF NOT EXISTS events_observation_assistant_ledger_idx ON events(observation_assistant_ledger) WHERE observation_assistant_ledger IS NOT NULL;

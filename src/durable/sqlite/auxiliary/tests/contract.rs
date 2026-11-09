@@ -1058,7 +1058,7 @@ fn request_cardinality_and_call_terminal_absorbing_rules_are_enforced() {
 
 #[test]
 fn required_schema_indexes_and_constraints_are_current() {
-    assert_eq!(SQLITE_SCHEMA_VERSION, 101);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 102);
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     let connection = store.lock().unwrap();
     for index in [
@@ -1107,6 +1107,32 @@ fn required_schema_indexes_and_constraints_are_current() {
         .unwrap();
     assert!(open_sql.to_ascii_uppercase().contains("UNIQUE"));
     assert!(open_sql.to_ascii_uppercase().contains("WHERE"));
+    for predicate in [
+        "json_extract(event_json,'$.event.type') IN
+         ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled') AND sequence<=10",
+        "json_extract(event_json,'$.event.type')='auxiliary_call_settled'",
+        "json_extract(event_json,'$.event.type')='auxiliary_call_settled'
+         AND sequence<=10 ORDER BY sequence LIMIT 2",
+    ] {
+        let mut statement = connection
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN SELECT sequence FROM events INDEXED BY events_auxiliary_call_id_kind_idx
+                 WHERE json_extract(event_json,'$.event.call_id')=?1 AND {predicate}"
+            ))
+            .unwrap();
+        let plan = statement
+            .query_map(["auxiliary-call"], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        assert!(
+            plan.contains("SEARCH events USING INDEX events_auxiliary_call_id_kind_idx")
+                || plan.contains("SEARCH events USING COVERING INDEX events_auxiliary_call_id_kind_idx"),
+            "{plan}"
+        );
+        assert!(!plan.contains("SCAN ") && !plan.contains("TEMP B-TREE"), "{plan}");
+    }
 }
 
 #[test]

@@ -595,12 +595,20 @@ fn primary_trace_query_work_stays_bounded_across_dense_auxiliary_intervals() {
         if population == 512 {
             // Negative control: the same primary result through an index that
             // includes auxiliary requests must perform population-sized work.
+            store
+                .lock()
+                .unwrap()
+                .execute_batch(
+                    "CREATE INDEX test_unscoped_trace_kind_idx ON events(observation_kind)
+                     WHERE observation_kind IS NOT NULL",
+                )
+                .unwrap();
             let (unscoped_result, unscoped_steps) = measured_sql(&store, || {
                 store
                     .lock()
                     .unwrap()
                     .query_row(
-                        "SELECT sequence FROM events INDEXED BY events_trace_kind_idx
+                        "SELECT sequence FROM events INDEXED BY test_unscoped_trace_kind_idx
                      WHERE observation_kind='model_request_started' AND sequence<=?1
                        AND EXISTS(SELECT 1 FROM request_owners o WHERE o.owner_kind='agent'
                          AND o.start_sequence=events.sequence)

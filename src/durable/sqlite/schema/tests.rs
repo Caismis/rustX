@@ -278,7 +278,7 @@ fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 101);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 102);
 
     // And the refusal is not ceremony: had the gate admitted the file,
     // these are the rows the typed decoder would have had to interpret,
@@ -343,7 +343,7 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 101);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 102);
 
     // And the refusal is not ceremony: the envelope framing is unchanged,
     // and the row the gate refused really is undecodable under the current
@@ -358,6 +358,73 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
         serde_json::from_str::<RuntimeEventEnvelope>(V31_SUBAGENT_OWNERSHIP).is_err(),
         "the typed vocabulary cannot interpret a schema-31 ownership fact"
     );
+}
+
+#[test]
+fn schema_101_event_indexes_are_refused_without_rewriting_the_store() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("event-indexes-v101.sqlite");
+    let id = ConversationId::generate();
+    {
+        let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+        let connection = store.conn.lock().unwrap();
+        let broad_trace_index_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='events_trace_kind_idx')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!broad_trace_index_exists);
+        connection.execute_batch(
+            "UPDATE rustx_store SET schema_version=101 WHERE id=1;
+             DROP INDEX events_auxiliary_call_id_kind_idx;
+             CREATE INDEX events_auxiliary_call_id_kind_idx
+               ON events(json_extract(event_json,'$.event.call_id'),json_extract(event_json,'$.event.type'));
+             CREATE INDEX events_trace_kind_idx ON events(observation_kind) WHERE observation_kind IS NOT NULL;",
+        ).unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+    for opened in [
+        SqliteConversationStore::open(id.clone(), &path),
+        SqliteConversationStore::open_existing(id, &path),
+    ] {
+        assert!(matches!(
+            opened,
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 101,
+                expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
+fn file_writer_uses_normal_wal_with_two_kib_pages() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = SqliteConversationStore::open(
+        ConversationId::generate(),
+        &directory.path().join("wal-policy.sqlite"),
+    )
+    .unwrap();
+    let connection = store.conn.lock().unwrap();
+    let journal: String = connection
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap();
+    let version: String = connection
+        .query_row("SELECT sqlite_version()", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(journal, "wal");
+    for (sql, expected) in [
+        ("PRAGMA synchronous", 1),
+        ("PRAGMA page_size", 2048),
+        ("PRAGMA wal_autocheckpoint", 1000),
+    ] {
+        let actual: i64 = connection.query_row(sql, [], |row| row.get(0)).unwrap();
+        assert_eq!(actual, expected, "{sql}");
+    }
+    eprintln!("SQLite {version} WAL/NORMAL, 2048-byte pages, 1000-frame autocheckpoint");
 }
 
 #[test]
@@ -523,7 +590,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
     use crate::runtime::identity::AuxiliaryCallId;
     use crate::runtime::workflow::read_model::WorkflowWait;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 101);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 102);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-wait.sqlite");
@@ -580,7 +647,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
 fn workflow_node_io_and_indexes_require_current_schema_without_rewrite() {
     use crate::runtime::workflow::read_model::WorkflowNodeKind;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 101);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 102);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-node-io.sqlite");
