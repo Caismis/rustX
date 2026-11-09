@@ -186,6 +186,27 @@ pub struct SessionController {
     copy_gate: Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
 }
 impl SessionController {
+    pub(crate) async fn thread(
+        &self,
+        id: &crate::runtime::identity::ConversationId,
+    ) -> Result<super::session::threads::Thread, SessionError> {
+        self.catalog.lock().await.thread(id)
+    }
+    pub(crate) async fn threads(
+        &self,
+        offset: usize,
+        limit: usize,
+        archived: bool,
+    ) -> Result<(Vec<super::session::threads::ThreadSummary>, Option<usize>), SessionError> {
+        self.catalog.lock().await.threads(offset, limit, archived)
+    }
+    pub(crate) async fn update_thread(
+        &self,
+        id: &crate::runtime::identity::ConversationId,
+        update: super::session::threads::ThreadUpdate,
+    ) -> Result<super::session::threads::Thread, SessionError> {
+        self.catalog.lock().await.update_thread(id, update)
+    }
     /// Prepare historical export through native authorities, without residency.
     /// # Errors
     /// Missing history, ownership conflicts and cancellation fail explicitly.
@@ -756,7 +777,7 @@ impl SessionController {
         &self,
         settings: SessionPersistentState,
     ) -> Result<SessionTransitionResult, SessionError> {
-        self.create_session_with_binding(settings, None, |_| {})
+        self.create_session_with_binding(settings, Vec::new(), None, |_| {})
             .await
     }
 
@@ -765,6 +786,7 @@ impl SessionController {
     pub(crate) async fn create_session_with_binding(
         &self,
         settings: SessionPersistentState,
+        dynamic_tools: Vec<crate::tools::host::HostToolDefinition>,
         binding: Option<super::configuration::AdmittedSessionConfig>,
         published: impl FnOnce(&SessionTransitionResult),
     ) -> Result<SessionTransitionResult, SessionError> {
@@ -813,7 +835,8 @@ impl SessionController {
         .map_err(|e| SessionError::Catalog {
             detail: e.to_string(),
         })?;
-        let prepared = prepared?;
+        let mut prepared = prepared?;
+        prepared.dynamic_tools = dynamic_tools;
         let mut catalog = self.catalog.lock().await;
         // Keep provisional bindings private from configuration coordination as
         // well as attachment until the catalog visibility decision is complete.
@@ -904,11 +927,18 @@ impl SessionController {
         id: &SessionId,
         node: Option<&SessionNodeId>,
     ) -> Result<SessionNode, SessionError> {
-        self.catalog
+        let node = self
+            .catalog
             .lock()
             .await
             .lineage(id, node)
-            .map(|(node, _)| node)
+            .map(|(node, _)| node)?;
+        if node.archived {
+            return Err(SessionError::Catalog {
+                detail: "archived Threads cannot execute".into(),
+            });
+        }
+        Ok(node)
     }
     /// Explicit cold storage recovery for one Session's graph and owned children.
     /// Never performed by opening, listing or reading the catalog.
@@ -1279,6 +1309,7 @@ impl SessionController {
                 },
             )
         };
+        prepared.dynamic_tools.clone_from(&node.dynamic_tools);
         if !tree {
             snapshot.copy_saved_label(id, &mut prepared)?;
             let claim = self

@@ -1,4 +1,5 @@
-import type { ScheduleHeader, ScheduleSnapshot, ScheduleCommandResult, ScheduledWorkflowRecovery } from '../../protocol/app-server/v72';
+import { threadFor } from '../../protocol/app-server/testing';
+import type { ScheduleHeader, ScheduleSnapshot, ScheduleCommandResult, ScheduledWorkflowRecovery } from '../../protocol/app-server/v75';
 import { Server, snapshot } from './fixture';
 import { cfg3Source } from './cfg3-data';
 export const nodeA = 'node_00000000-0000-7000-8000-000000000001';
@@ -21,12 +22,13 @@ export function schedulerFixture(values = [task()]) {
     session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024,
       credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'medium' }, { id: 'high' }], defaultProfile: 'medium' })) } } } });
   let sessionSequence = 0;
-  server.handlers.set('session/create', request => {
-    if (request.method !== 'session/create') throw Error('create');
+  server.handlers.set('thread/start', request => {
+    if (request.method !== 'thread/start') throw Error('create');
     const id = 'scheduled-' + ++sessionSequence;
     server.snapshots.set(id, snapshot(id));
     server.summaries.set(id, { cwd: request.params.settings.cwd, active_node: 'node-' + id });
-    return { type: 'session_transition', session: { id, active_node: 'node-' + id, active_conversation_id: 'conversation-' + id, node_count: 1, created_at: '0', updated_at: '0' } };
+    const session = { id, active_node: 'node-' + id, active_conversation_id: 'conversation-' + id, node_count: 1, created_at: '0', updated_at: '0' };
+    return { type: 'session_transition', thread: threadFor(session), session };
   });
   server.handlers.set('schedule/catalog', request => {
     if (request.method !== 'schedule/catalog') throw Error('catalog');

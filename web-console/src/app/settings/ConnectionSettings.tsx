@@ -23,12 +23,12 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
       <label>{tx('settings:connection-settings.transport-token')}<Input type="password" autoComplete="off" aria-label={tx('settings:connection-settings.transport-token')} value={token} onChange={event => setToken(event.target.value)} /></label>
       <label>{tx('settings:connection-settings.delivery-token')}<Input type="password" autoComplete="off" aria-label={tx('settings:connection-settings.delivery-token')} value={deliveryToken} onChange={event => setDeliveryToken(event.target.value)} /></label>
       <p>{tx('settings:connection-settings.transport-credentials-stay-in-page-memory-remote-attachment-gran')}</p>
-      <Button disabled={selection.busy} onClick={() => void connection.connectRemote(endpoint, token, deliveryToken || undefined)}>{tx('settings:connection-settings.connect')}</Button>
+      <Button disabled={selection.busy} onClick={() => void connection.connectRemote(endpoint, token)}>{tx('settings:connection-settings.connect')}</Button>
     </> : <p>{tx('settings:connection-settings.the-launcher-supplies-this-connection-automatically')}</p>}
     <Button disabled={selection.busy} onClick={() => void connection.reconnect()}>{tx('settings:connection-settings.reconnect')}</Button>
     <Button onClick={() => void connection.disconnect()}>{tx('settings:connection-settings.disconnect')}</Button>
     {(selection.error || transport.error) && <p role="alert">{displayText(tx, selection.error || transport.error || '')}</p>}
-    <details><summary>{tx('settings:connection-settings.connection-details')}</summary><p>{transport.endpoint} {tx('settings:connection-settings.generation')} {transport.generation} {tx('settings:copy.app-server-v72')}</p></details>
+    <details><summary>{tx('settings:connection-settings.connection-details')}</summary><p>{transport.endpoint} {tx('settings:connection-settings.generation')} {transport.generation} {tx('settings:copy.app-server-v75')}</p></details>
     {!!transport.detached?.length && <details><summary>{tx('settings:connection-settings.detached-authority-diagnostics')}</summary>
       <p>{tx('settings:connection-settings.historical-evidence-only-these-operations-are-never-replayed-and')}</p>
       {transport.detached.map((evidence, index) => <section key={index}><h3>{evidence.authority}</h3>

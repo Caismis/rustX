@@ -70,7 +70,7 @@ test('shows each native node in the Dify-style card and grouped settings panel',
     writeFileSync(join(directory, 'node_surfaces.yaml'), JSON.stringify(document).replace('"timeout_ms":"3600000"', '"timeout_ms":3600000'));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'node_surfaces', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/);
     const start = canvas(page).getByLabel('Workflow Start', { exact: true }); await start.focus(); await start.press('Enter');

@@ -4,7 +4,7 @@ import { incrementalAgent } from './incremental-agent-fixture';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Server } from './fixture';
 import { tracePage, traceRecord } from './trace-fixture';
-import type { RuntimeClientEvent } from '../../protocol/app-server/v72';
+import type { RuntimeClientEvent } from '../../protocol/app-server/v75';
 const servers: Server[] = [];
 const create = async () => { const s = new Server(); servers.push(s); await s.attached('A'); expect(s.requests.filter(row=>row.request.method==='session/checkpoint')).toHaveLength(1);expect(s.requests.filter(row=>row.request.method==='session/subscribe')).toHaveLength(1);s.requests.splice(0,s.requests.length,...s.requests.filter(row=>!['session/checkpoint','session/subscribe'].includes(row.request.method))); return s; };
 afterEach(() => { for (const s of servers) s.client.disconnect(); servers.length = 0; });
@@ -81,7 +81,7 @@ it('failed snapshot remains stale until explicit recovery and never replays a mu
   await s.client.refresh('A');
   expect(s.client.getSnapshot().views.A.cursor).toBe('4');
   expect(s.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(2);
-  expect(s.requests.some(row => ['turn/start', 'turn/steer', 'session/uploadPrepare', 'session/create'].includes(row.request.method))).toBe(false);
+  expect(s.requests.some(row => ['inbound/queue', 'turn/steer', 'session/uploadPrepare', 'thread/start'].includes(row.request.method))).toBe(false);
 });
 it('same Session replacement fences the old snapshot and old events by exact attachment', async () => {
   const s = await create(); const oldTarget = s.target('A');
@@ -96,8 +96,8 @@ it('same Session replacement fences the old snapshot and old events by exact att
   expect(s.client.getSnapshot().views.A.cursor).toBe('0');
 });
 it('notifications preceding the attach response join the returned cursor through native replay', async () => {
-  const s = new Server(); servers.push(s); await s.connect(); s.held.add('session/attach');
-  const attaching = s.client.attach('A'); const request = await s.waitFor('session/attach', 1);
+  const s = new Server(); servers.push(s); await s.connect(); s.held.add('thread/resume');
+  const attaching = s.client.attach('A'); const request = await s.waitFor('thread/resume', 1);
   const ack = s.commit(request);
   emit(s, '1', started); emit(s, '2', open);
   s.socket.deliver(ack); await attaching;
@@ -130,7 +130,7 @@ it('resync during an explicit snapshot survives acquisition and installs an exac
   expect(s.client.getSnapshot().views.A.snapshot?.attempt?.in_flight?.blocks).toEqual([]);
   expect(s.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(1);
   expect(s.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(1);
-  expect(s.requests.some(row => ['turn/start', 'turn/steer', 'session/uploadPrepare', 'session/create'].includes(row.request.method))).toBe(false);
+  expect(s.requests.some(row => ['inbound/queue', 'turn/steer', 'session/uploadPrepare', 'thread/start'].includes(row.request.method))).toBe(false);
   emit(s, '8', delta()); // Now the registered continuation advances normally.
   expect(s.client.getSnapshot().views.A.cursor).toBe('8');
 });
@@ -157,7 +157,7 @@ it.each([2, null])('acquisition-time resync uses bounded authoritative replay re
   expect(s.client.getSnapshot().views.A).toMatchObject({ cursor: String(6 + attempts), attachment: successAt ? 'attached' : 'stale' });
   expect(s.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(attempts);
   expect(s.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(attempts);
-  expect(s.requests.some(row => ['turn/start', 'turn/steer', 'session/uploadPrepare', 'session/create'].includes(row.request.method))).toBe(false);
+  expect(s.requests.some(row => ['inbound/queue', 'turn/steer', 'session/uploadPrepare', 'thread/start'].includes(row.request.method))).toBe(false);
 });
 
 it('registered native replay preceding subscribe ACK advances the cut without enabling controls early', async () => {
@@ -226,7 +226,7 @@ it('same Session attachment replacement rejects a held Trace response', async ()
   const oldWork = s.client['traces']['traceReads'].get('A')!.work;
   // Unrelated supplementary metadata may settle after attachment readiness.
   // Hold it so object identity measures only the retired Trace response.
-  s.held.add('session/settings');
+  s.held.add('session/settings');s.held.add('thread/read');s.held.add('session/summary');
   await s.client.release('A'); await s.client.attach('A');
   const replacement = s.client.getSnapshot().views.A;
   expect(replacement.target).not.toEqual(target);
@@ -329,7 +329,7 @@ it.each(['attachment replacement', 'disconnect'] as const)('failed dirty Trace o
   const work = s.client['traces']['traceReads'].get('A')!.work;
   const rejected = expect(work).rejects.toThrow();
   emit(s, '2', { type: 'trace_changed' });
-  s.held.add('session/settings');
+  s.held.add('session/settings');s.held.add('thread/read');s.held.add('session/summary');
   if (retirement === 'disconnect') await s.client.disconnect();
   else { await s.client.release('A'); await s.client.attach('A'); }
   const view = s.client.getSnapshot().views.A;

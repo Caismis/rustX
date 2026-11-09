@@ -3,7 +3,9 @@ import { lazy, Suspense, useMemo, useEffect, useImperativeHandle, useLayoutEffec
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope } from '../../workspaces/host';
 import type { WorkbenchRequest, WorkbenchTerminal, WorkbenchTarget } from '../../workspaces/workbench';
 import { useTranslation } from '../../locale/react';
-import { WorkspaceFiles, WorkspaceFile, fileTabView } from './WorkbenchFiles';
+import { WorkspaceFiles, fileTabView } from './WorkbenchFiles';
+import { WorkbenchFileNavigator } from './WorkbenchNavigator';
+import { viewersForPath } from './workbench-documents/definitions';
 import { FileTypeIcon } from '../../presentation/primitives/FileTypeIcon';
 import { IconPanelLeftOutline16, IconChevronDownOutline14, IconAgentPresetOutline16, IconClockOutline16, IconQuestionOutline14 } from '../../presentation/primitives/icons';
 import { Menu } from '../../presentation/primitives/Menu';
@@ -23,13 +25,12 @@ import type { WorkbenchCall } from './WorkbenchFiles';
 import { PREVIEW_POLICY } from '../../client/preview-policy';
 import type { WorkbenchPreviewRetention } from '../workbench-previews';
 import { ChangesReview } from './ChangesReview';
-import { viewersForPath } from './workbench-documents/definitions';
 import type { ChangesReviewRequest } from '../changes-review';
 const TerminalView = lazy(() => import('./WorkbenchTerminal'));
 const guideTab = (id: TabId): TabRecord => ({id,kind:'start',contentId:`start:${id}`,title:''});
 export interface WorkbenchHandle { openSideQuestion(): void; openFile(path: string, line?: number): Promise<boolean>; openAgent(id: string, title: string): void; openChanges(request:ChangesReviewRequest):void; openTask(id: string, title: string): void }
-export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderTaskTitle, fileRef, host, previews, scope, target, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
-  renderSideQuestion?: (visible: boolean) => ReactNode; renderAgent?: (id: string, visible: boolean) => ReactNode; renderTask?: (id: string) => ReactNode; renderTaskTitle?: (id: string, fallback: string) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; previews: WorkbenchPreviewRetention; scope?: WorkspaceAuthorityScope; target?: WorkbenchTarget; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: (resetPresentation?: boolean) => void;
+export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderTaskTitle, fileRef, host, previews, scope, target, active = true, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
+  renderSideQuestion?: (visible: boolean) => ReactNode; renderAgent?: (id: string, visible: boolean) => ReactNode; renderTask?: (id: string) => ReactNode; renderTaskTitle?: (id: string, fallback: string) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; previews: WorkbenchPreviewRetention; scope?: WorkspaceAuthorityScope; target?: WorkbenchTarget; active?: boolean; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: (resetPresentation?: boolean) => void;
 }) {
   const tx = useTranslation();
   const session = target && 'session_id' in target ? target : undefined;
@@ -69,6 +70,12 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
   }, [state.tabs]);
   const navigation = useRef(0);
   const viewFor = (id:TabId) => { let view=views.get(id); if(!view) {view=fileTabView(cache, retained.current);views.set(id,view);}return view; };
+  const navigatorFor = (id: PaneId) => {
+    let navigator = retained.navigators.get(id);
+    if (!navigator) { navigator = { open: false, width: 260, view: fileTabView(cache, retained.current) }; retained.navigators.set(id, navigator); }
+    return navigator;
+  };
+  useEffect(() => { for (const id of retained.navigators.keys()) if (!state.nodes[id]) retained.navigators.delete(id); }, [retained, state.nodes]);
   const [terminals,setTerminals] = useState<WorkbenchTerminal[]>([]), [shells,setShells] = useState<string[]>([]);
   const [shell,setShell] = useState(''),[error,setError] = useState(''),[busy,setBusy] = useState(false),[menu,setMenu] = useState<PaneId>();
   const pendingCreate = useRef<{id:string;shell:string}|null>(null), lifetime=useRef<AbortController|null>(null);
@@ -86,15 +93,21 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
     return call;
   },[host,scope?.authorityId,scope?.endpoint,session?.session_id,session?.active_node,workspace]);
   const available=!!host.workbench && !!scope && !!target;
-  const open=(paneId:PaneId,tab:{kind:string;path?:string;id?:string;title?:string})=>{
-    if (tab.kind === 'file' && !Object.values(state.tabs).some(existing => existing.contentId === `file:${tab.path}`) && Object.values(state.tabs).filter(existing => existing.kind === 'file').length >= PREVIEW_POLICY.tabsPerSession) { setError(tx('artifacts:workspace.tabs')); return; }
-    navigation.current++;
-    focusRequest.current = { paneId, origin: document.activeElement };
+  const open=(paneId:PaneId,tab:{kind:string;path?:string;id?:string;title?:string},replace = false)=>{
     const before=dock.getSnapshot().state;
     const pane=getPane(before,paneId), active=pane.activeTabId && before.tabs[pane.activeTabId];
+    const replacing = !!active && (pane.host === 'float' || replace && active.kind === 'file');
+    const files = Object.values(before.tabs).filter(existing => existing.kind === 'file');
+    const reusesFile = !replacing && files.some(existing => existing.contentId === `file:${tab.path}`);
+    if (tab.kind === 'file' && !(replacing && active.kind === 'file') && !reusesFile && files.length >= PREVIEW_POLICY.tabsPerSession) { setError(tx('artifacts:workspace.tabs')); return; }
+    navigation.current++;
+    if (!replace || !navigatorFor(paneId).open) focusRequest.current = { paneId, origin: document.activeElement };
     const contentId=tab.kind==='file' ? `file:${tab.path}` : tab.kind==='files' ? `files:${paneId}` : tab.id ?? crypto.randomUUID();
-    dock.openContent({paneId,kind:tab.kind,contentId,title:tab.title ?? tab.path ?? ''});
-    if(active && active.kind==='start') dock.closeTab(active.id);
+    if (replacing) dock.replaceContent(active.id, { kind: tab.kind, contentId, title: tab.title ?? tab.path ?? '' });
+    else {
+      const opened = dock.openContent({paneId,kind:tab.kind,contentId,title:tab.title ?? tab.path ?? ''});
+      if(active && active.id !== opened && active.kind==='start') dock.closeTab(active.id);
+    }
   };
   const openSideQuestion = (paneId = dock.activeDockPaneId()) => { if (renderSideQuestion) open(paneId, { kind: 'btw', id: 'btw', title: tx('agent:btw.title') }); };
   useImperativeHandle(fileRef, () => ({ openSideQuestion, openTask: (id, title) => open(dock.activeDockPaneId(), { kind: 'schedule', id, title }), openChanges: request => {
@@ -111,7 +124,9 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
       open(dock.activeDockPaneId(), { kind: 'file', path: result.path });
       if (line !== undefined) {
         const tab = Object.values(dock.getSnapshot().state.tabs).find(t => t.contentId === `file:${result.path}`)!;
-        const view = viewFor(tab.id); view.mode = 'code'; view.line = line; view.focusRevision = (view.focusRevision ?? 0) + 1;
+        const view = viewFor(tab.id), viewers = viewersForPath(result.path);
+        view.mode = viewers.includes('code') ? 'code' : viewers.includes('text') ? 'text' : viewers[0];
+        view.line = line; view.focusRevision = (view.focusRevision ?? 0) + 1;
         // Remount just this view so a repeated line reference is a fresh navigation.
         setFileFocus(n => n + 1);
       }
@@ -120,7 +135,7 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
   }}));
   const [, setFileFocus] = useState(0);
   useEffect(()=>{
-    if(!visible || !available) return;
+    if(!active || !visible || !available) return;
     const abort=new AbortController();
     void call({kind:'terminals'},abort.signal).then(value=>{
       if(abort.signal.aborted)return;
@@ -133,7 +148,7 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
       if(focused && dock.getSnapshot().state.tabs[focused])dock.focusTab(focused);
     },cause=>{if(!abort.signal.aborted)setError(String(cause));});
     return()=>abort.abort();
-  },[call,visible,available,dock]);
+  },[call,active,visible,available,dock]);
   const create=async(paneId:PaneId,selectedShell=shell)=>{
     if(busy || !selectedShell)return;
     const admittedNavigation = ++navigation.current;
@@ -193,7 +208,7 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
     moveFloat:(id,x,y)=>dock.moveFloat(id,x,y),resizeFloat:(id,rect)=>dock.resizeFloat(id,rect),resizeSplit:(id,sizes)=>dock.resizeSplit(id,sizes),
   };
   useEffect(()=>{
-    if(!visible && !floatingVisible)return;
+    if(!active || !visible && !floatingVisible)return;
     const composition=observeComposition(document);
     const key=(e:KeyboardEvent)=>{
       if(e.defaultPrevented||composition.guards(e)||document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"]'))return;
@@ -220,44 +235,44 @@ export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderT
   // Only this scope's mounted geometry may occupy spare file-body slots.
   const residency = useRef<{ owner: typeof retained; ids: TabId[] }>({ owner: retained, ids: [] });
   if (residency.current.owner !== retained) residency.current = { owner: retained, ids: [] };
-  const visibleFiles = Object.values(state.tabs).filter(tab => {
+  // Selected bodies retain their browsing contexts through collapse and Home.
+  // Actual visibility separately parks geometry without retiring its cached scene.
+  const selectedFiles = Object.values(state.tabs).filter(tab => {
     const pane = findTabPane(state, tab.id);
-    return tab.kind === 'file' && pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible && state.expanded);
+    if (tab.kind !== 'file' || pane.activeTabId !== tab.id) return false;
+    const geometry = (views.get(tab.id)?.mode ?? viewersForPath(tab.title)[0]) === 'geometry';
+    return pane.host === 'float' ? floatingVisible : geometry ? visible && state.expanded : visible || floatingVisible;
   }).sort((left, right) => Number(findTabPane(state, right.id).id === state.activePaneId) - Number(findTabPane(state, left.id).id === state.activePaneId)).slice(0, PREVIEW_POLICY.activeBodies);
-  const visibleFileIds = new Set(visibleFiles.map(tab => tab.id));
+  const selectedFileIds = new Set(selectedFiles.map(tab => tab.id));
+  const visibleFileIds = new Set(selectedFiles.filter(tab => {
+    const pane = findTabPane(state, tab.id);
+    return active && (pane.host === 'float' ? floatingVisible : visible && state.expanded);
+  }).map(tab => tab.id));
   const hasVisibleSurface = visible || floatingVisible && state.floats.length > 0;
-  // Selected non-geometry files retain their existing collapsed-body lifetime.
-  // This never retains an unselected ordinary tab or a geometry context.
-  const collapsedFileIds = visible || floatingVisible ? residency.current.ids.filter(id => {
-    const tab = state.tabs[id], pane = tab && findTabPane(state, id);
-    return tab?.kind === 'file' && !visibleFileIds.has(id) && pane?.host === 'dock' && pane.activeTabId === id
-      && (views.get(id)?.mode ?? viewersForPath(tab.title)[0]) !== 'geometry';
-  }) : [];
   const mountedFileIds = new Set([
-    ...visibleFileIds,
-    ...collapsedFileIds,
+    ...selectedFileIds,
     ...(hasVisibleSurface ? residency.current.ids.filter(id => {
       const tab = state.tabs[id];
-      return tab?.kind === 'file' && !visibleFileIds.has(id) && (views.get(id)?.mode ?? viewersForPath(tab.title)[0]) === 'geometry';
+      return tab?.kind === 'file' && !selectedFileIds.has(id) && (views.get(id)?.mode ?? viewersForPath(tab.title)[0]) === 'geometry';
     }) : []),
   ].slice(0, PREVIEW_POLICY.activeBodies));
   residency.current.ids = [...mountedFileIds];
   const body=(tab:TabRecord)=>{
     const pane=findTabPane(state,tab.id);
     return <div className={css.body}>
-    {tab.kind==='btw' ? renderSideQuestion?.(pane.activeTabId === tab.id && state.activePaneId === pane.id && (pane.host === 'float' ? floatingVisible : visible && state.expanded)) : tab.kind==='schedule' ? renderTask?.(tab.contentId) : tab.kind==='changes' ? (reviews.current.has(tab.contentId) && <ChangesReview request={reviews.current.get(tab.contentId)!} visible={pane.activeTabId===tab.id && (pane.host==='float'?floatingVisible:visible)}/>) : tab.kind==='subagent'?renderAgent?.(tab.contentId, pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible)):tab.kind==='start'? <div className={css.guide}>
+    {tab.kind==='btw' ? renderSideQuestion?.(active && pane.activeTabId === tab.id && state.activePaneId === pane.id && (pane.host === 'float' ? floatingVisible : visible && state.expanded)) : tab.kind==='schedule' ? renderTask?.(tab.contentId) : tab.kind==='changes' ? (reviews.current.has(tab.contentId) && <ChangesReview request={reviews.current.get(tab.contentId)!} visible={active && pane.activeTabId===tab.id && (pane.host==='float'?floatingVisible:visible)}/>) : tab.kind==='subagent'?renderAgent?.(tab.contentId, active && pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible)):tab.kind==='start'? <div className={css.guide}>
         <span className={css.hero}><CompassGlyph size={56}/></span>
         {renderSideQuestion && <button type="button" className={css.entry} onClick={() => openSideQuestion(pane.id)}><span className={css.entryIcon}><IconQuestionOutline14 size={26}/></span><span className={css.entryText}><span className={css.entryTitle}>{tx('agent:btw.title')}</span></span></button>}
         <button type="button" className={css.entry} disabled={!available} aria-keyshortcuts={isMac ? 'Alt+Meta+P' : 'Alt+Control+P'} onClick={() => open(pane.id, { kind: 'files' })}><span className={css.entryIcon}><GuideArtworkFiles size={26}/></span><span className={css.entryText}><span className={css.entryTitle}>{tx('artifacts:workbench.files')}</span><span className={css.entryDescription}>{tx('artifacts:workbench.files-description')}</span></span><ShortcutKeys keys={isMac ? ['⌥', '⌘', 'P'] : ['Alt', 'Ctrl', 'P']}/></button>
         <div className={`${css.entry} ${css.terminalEntry}`}><button type="button" className={css.launch} aria-label={tx('artifacts:workbench.new-terminal')} aria-keyshortcuts="Control+`" disabled={!available || busy || !shell} onClick={() => void create(pane.id)}/><span className={css.entryIcon}><PluginArtworkTerminal size={26}/></span><span className={css.entryText}><span className={css.titleRow}><span className={css.entryTitle}>{tx('artifacts:workbench.new-terminal')}</span><Menu open={menu === pane.id} autoFocus align="end" items={shells.map(s => ({ id: s, label: s.split('/').at(-1)! }))} selectedId={shell} onClose={() => setMenu(undefined)} onSelect={s => { setShell(s); setMenu(undefined); void create(pane.id, s); }} anchor={<button type="button" className={css.shellTrigger} disabled={busy || !shells.length} aria-label={tx('artifacts:workbench.shell')} aria-haspopup="menu" aria-expanded={menu === pane.id} onClick={() => setMenu(menu === pane.id ? undefined : pane.id)}><IconChevronDownOutline14/></button>}/></span><span className={css.entryDescription}>{tx('artifacts:workbench.terminal-description')}</span></span><ShortcutKeys keys={[isMac ? '⌃' : 'Ctrl', '`']}/></div>
-      </div> :tab.kind==='files'?<WorkspaceFiles call={call} view={viewFor(tab.id)} onOpen={path=>open(pane.id,{kind:'file',path})}/>:tab.kind==='file'?mountedFileIds.has(tab.id) ? <WorkspaceFile visible={visibleFileIds.has(tab.id)} key={`${tab.id}:${viewFor(tab.id).focusRevision ?? 0}`} onOpen={path=>open(pane.id,{kind:'file',path})} path={tab.title} call={call} view={viewFor(tab.id)}/> : <p role="status">{tx('artifacts:document.capacity')}</p> :<Suspense fallback={<p>{tx('artifacts:workbench.loading')}</p>}><TerminalView id={tab.contentId} call={call}/></Suspense>}
+      </div> :tab.kind==='files'?<WorkspaceFiles call={call} view={navigatorFor(pane.id).view} onOpen={path=>open(pane.id,{kind:'file',path})}/>:tab.kind==='file'?mountedFileIds.has(tab.id) ? <WorkbenchFileNavigator visible={visibleFileIds.has(tab.id)} navigator={navigatorFor(pane.id)} onNavigate={path=>open(pane.id,{kind:'file',path},true)} key={`${tab.id}:${viewFor(tab.id).focusRevision ?? 0}`} onOpen={path=>open(pane.id,{kind:'file',path})} path={tab.title} call={call} view={viewFor(tab.id)}/> : <p role="status">{tx('artifacts:document.capacity')}</p> :<Suspense fallback={<p>{tx('artifacts:workbench.loading')}</p>}><TerminalView id={tab.contentId} call={call}/></Suspense>}
     </div>;
   };
   const usesWorkspaceTools = Object.values(state.tabs).some(tab => !['btw','subagent','changes','schedule'].includes(tab.kind) && findTabPane(state, tab.id).activeTabId === tab.id);
-  return <div ref={root} className={css.root} hidden={!visible && !floatingVisible} data-workbench>
+  return <div ref={root} className={css.root} hidden={!active || !visible && !floatingVisible} inert={!active} data-workbench>
     {visible&&error&&<p role="alert" className={css.notice}>{error}</p>}
     {visible&&!available&&usesWorkspaceTools&&<p className={css.notice}>{tx('artifacts:workbench.unavailable')}</p>}
-    <DockLayout state={state} active={visible || floatingVisible} canSplit={dockPaneIds(state).length<2} dropZones="horizontal" minPaneFraction={0.2} intents={intents}
+    <DockLayout state={state} active={active && (visible || floatingVisible)} canSplit={dockPaneIds(state).length<2} dropZones="horizontal" minPaneFraction={0.2} intents={intents}
       canAddTab={id=>!getPane(state,id).tabs.some(t=>state.tabs[t].kind==='start')}
       canCloseTab={id=>canCloseTab(state,id)} onRoom={fits=>{room.current=fits;}}
       labels={{emptyPane:tx('artifacts:workbench.empty-pane'),splitPane:tx('artifacts:workbench.split'),splitPaneDisabled:tx('artifacts:workbench.split-limit'),splitPaneNarrow:tx('artifacts:workbench.split-room'),splitPaneShortcut:isMac?'Meta+\\':'Control+\\',splitPaneKeys:isMac?['⌘','\\']:['Ctrl','+','\\'],closeTab:tx('artifacts:workbench.close-tab'),closeTabShortcut:isMac?'Alt+Meta+W':'Alt+Control+W',closeTabKeys:isMac?['⌥','⌘','W']:['Ctrl','+','Alt','+','W'],addTab:tx('artifacts:workbench.add-tab'),dockFloat:tx('artifacts:workbench.dock'),closeFloat:tx('artifacts:workbench.close-tab'),dropZone:{center:tx('artifacts:workbench.drop-center'),left:tx('artifacts:workbench.drop-left'),right:tx('artifacts:workbench.drop-right'),top:tx('artifacts:workbench.drop-top'),bottom:tx('artifacts:workbench.drop-bottom')}}}

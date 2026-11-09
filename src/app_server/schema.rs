@@ -17,12 +17,13 @@ use super::protocol::{
 /// # Panics
 /// Panics if a constant fixture violates its native value constructor.
 pub fn fixtures() -> Vec<ProtocolMessage> {
+    use super::thread_status::{ThreadActiveFlag, ThreadStatus, ThreadStatusEntry};
     const EXACT: u64 = 9_007_199_254_740_993;
     use crate::events::interaction::{
         ExactInteger, FiniteNumber, IntegerAnswer, NumberAnswer, QuestionnaireAnswer,
         QuestionnaireAnswerEntry, QuestionnaireResponse, QuestionnaireSubmission,
     };
-    use crate::runtime::identity::{ConversationId, InteractionId};
+    use crate::runtime::identity::ConversationId;
     let target = AttachmentTarget {
         session_id: crate::local_runtime::session::SessionId::new(
             "ses_00000000-0000-7000-8000-000000000001",
@@ -47,7 +48,26 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         attempt_id: Some(crate::runtime::identity::AttemptId::new("attempt-fixture")),
         attempt_id_source: None,
     };
+    let status_target = target.clone();
     let mut fixtures = vec![
+        ProtocolMessage::ServerMessage(super::protocol::ServerMessage::Request(super::protocol::ServerRequest {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("server-incarnation:host-1".into()),
+            call: super::protocol::ServerRequestMethod::ToolCall(super::protocol::HostToolCall {
+                thread_id:target.conversation_id.clone(),
+                turn_id:crate::runtime::identity::AttemptId::new("native-attempt"),
+                call_id:crate::runtime::identity::ToolCallId::new("native-call"),
+                namespace:Some("business".into()),tool:"lookup".into(),arguments:serde_json::json!({"key":"invoice"}),
+            }),
+        })),
+        ProtocolMessage::ClientReply(super::protocol::ClientReply::Success(super::protocol::ClientSuccess {
+            jsonrpc:JsonRpcVersion::V2,id:RequestId::String("server-incarnation:host-1".into()),
+            result:serde_json::json!({"success":true,"contentItems":[{"type":"inputText","text":"invoice found"}]}),
+        })),
+        ProtocolMessage::ServerMessage(super::protocol::ServerMessage::Resolved {
+            jsonrpc:JsonRpcVersion::V2,method:super::protocol::ServerResolvedMethod::Resolved,
+            params:super::protocol::ServerRequestResolved {request_id:RequestId::String("server-incarnation:host-1".into()),thread_id:target.conversation_id.clone()},
+        }),
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("exact-node".into()),
@@ -87,7 +107,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-initial-model".into()),
-            call: Method::SessionCreate { submission: None,
+            call: Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
                     cwd: "/workspace".into(),
                     model: Some(crate::model::session::SessionModelConfig::of(
@@ -99,7 +119,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         ProtocolMessage::Request(Box::new(Request {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("create-with-native-default".into()),
-            call: Method::SessionCreate { submission: None,
+            call: Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
                 settings: crate::local_runtime::session::SessionPersistentState {
                     cwd: "/workspace".into(),
                     model: None,
@@ -123,6 +143,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("submit-workspace-draft".into()),
             call: Method::SessionCreate {
+                dynamic_tools: Vec::new(),
                 settings: crate::local_runtime::session::SessionPersistentState { cwd: "/workspace".into(), model: None },
                 submission: Some(crate::local_runtime::mcp_drafts::McpDraftTarget { draft_id: "draft-tab-1".into(), generation: 1, host_authority: "host-1".into() }),
             },
@@ -171,7 +192,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             jsonrpc: JsonRpcVersion::V2,
             id: RequestId::String("exact-session-summary".into()),
             result: MethodResult::SessionSummary {
-                summary: crate::local_runtime::session::SessionSummary {
+                summary: crate::app_server::thread_status::SessionSummary { metadata: crate::local_runtime::session::SessionSummary {
                     ownership_generation: "1".into(),
                     id: target.session_id.clone(),
                     cwd: "/workspace".into(),
@@ -182,6 +203,9 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                     active_node: crate::local_runtime::session::SessionNodeId::new(
                         "node_00000000-0000-7000-8000-000000000001",
                     ),
+                },
+                thread_id: target.conversation_id.clone(),
+                thread_status: Some(crate::app_server::thread_status::ThreadStatusEntry {thread_id:target.conversation_id.clone(),status:crate::app_server::thread_status::ThreadStatus::Idle,revision:0,runtime_incarnation:Some(target.runtime_incarnation)}),
                 },
             },
         }))),
@@ -248,34 +272,15 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 data: None,
             },
         })),
-        ProtocolMessage::Request(Box::new(Request {
+        ProtocolMessage::ClientReply(super::protocol::ClientReply::Success(super::protocol::ClientSuccess {
             jsonrpc: JsonRpcVersion::V2,
-            id: RequestId::Integer(-3),
-            call: Method::InteractionRespond {
-                target: target.clone(),
-                interaction: crate::runtime::interaction::InteractionRef {
-                    conversation_id: target.conversation_id.clone(),
-                    interaction_id: InteractionId::new("interaction-fixture"),
-                },
-                response: crate::runtime::interaction::InteractionResponse::Questionnaire {
-                    response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
-                        answers: vec![
-                            QuestionnaireAnswerEntry {
-                                question_index: 0,
-                                answer: QuestionnaireAnswer::Integer(IntegerAnswer {
-                                    value: ExactInteger::new(9_007_199_254_740_993),
-                                }),
-                            },
-                            QuestionnaireAnswerEntry {
-                                question_index: 1,
-                                answer: QuestionnaireAnswer::Number(NumberAnswer {
-                                    value: FiniteNumber::try_new(1.25).expect("finite"),
-                                }),
-                            },
-                        ],
-                    }),
-                },
-            },
+            id: RequestId::String("server-incarnation:3".into()),
+            result: serde_json::to_value(crate::runtime::interaction::InteractionResponse::Questionnaire {
+                response: QuestionnaireResponse::Submitted(QuestionnaireSubmission { answers: vec![
+                    QuestionnaireAnswerEntry { question_index: 0, answer: QuestionnaireAnswer::Integer(IntegerAnswer { value: ExactInteger::new(9_007_199_254_740_993) }) },
+                    QuestionnaireAnswerEntry { question_index: 1, answer: QuestionnaireAnswer::Number(NumberAnswer { value: FiniteNumber::try_new(1.25).expect("finite") }) },
+                ] }),
+            }).unwrap(),
         })),
         ProtocolMessage::Notification(Notification {
             jsonrpc: JsonRpcVersion::V2,
@@ -767,9 +772,59 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             },
         })));
     }
+    let statuses = [
+        ThreadStatus::NotLoaded,
+        ThreadStatus::Idle,
+        ThreadStatus::SystemError,
+        ThreadStatus::Active {
+            active_flags: vec![
+                ThreadActiveFlag::WaitingOnApproval,
+                ThreadActiveFlag::WaitingOnUserInput,
+            ],
+        },
+    ];
+    for status in statuses {
+        fixtures.push(ProtocolMessage::Notification(Notification {
+            jsonrpc: JsonRpcVersion::V2,
+            notification: NotificationMethod::ThreadStatusChanged(ThreadStatusEntry {
+                thread_id: status_target.conversation_id.clone(),
+                status,
+                revision: EXACT,
+                runtime_incarnation: Some(status_target.runtime_incarnation),
+            }),
+        }));
+    }
+    fixtures.push(ProtocolMessage::Notification(Notification {
+        jsonrpc: JsonRpcVersion::V2,
+        notification: NotificationMethod::ThreadStatusResyncRequired {},
+    }));
+    fixtures.push(ProtocolMessage::Request(Box::new(Request {
+        jsonrpc: JsonRpcVersion::V2,
+        id: RequestId::String("loaded-threads".into()),
+        call: Method::ThreadLoadedList {
+            offset: 0,
+            limit: 64,
+        },
+    })));
+    fixtures.push(ProtocolMessage::Response(Response::Success(Box::new(
+        Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("loaded-threads".into()),
+            result: MethodResult::LoadedThreads {
+                data: vec![ThreadStatusEntry {
+                    thread_id: status_target.conversation_id.clone(),
+                    status: ThreadStatus::Idle,
+                    revision: EXACT,
+                    runtime_incarnation: Some(status_target.runtime_incarnation),
+                }],
+                next_offset: None,
+            },
+        },
+    ))));
     workflow_fixtures(&mut fixtures);
     schedule_fixtures(&mut fixtures);
     reasoning_order_fixtures(&mut fixtures);
+    environment_fixtures(&mut fixtures);
     fixtures
 }
 
@@ -1371,6 +1426,142 @@ fn report_reference(
     }
 }
 
+#[allow(clippy::too_many_lines)] // Canonical constructors exercise every new method family.
+fn environment_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
+    let source = crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+        directory: "/workspace".into(),
+    };
+    let path = "/workspace/file".to_owned();
+    let params = super::command::ExecParams {
+        command: vec!["/usr/bin/printf".into(), "%s".into(), "literal".into()],
+        cwd: "/workspace".into(),
+        env: std::collections::BTreeMap::new(),
+        process_id: Some("process-fixture".into()),
+        tty: false,
+        stream_stdin: true,
+        stream_stdout_stderr: true,
+        output_bytes_cap: Some(65536),
+        timeout_ms: Some(60000),
+        size: None,
+    };
+    let methods = vec![
+        Method::CommandExec(params),
+        Method::CommandWrite(super::command::WriteParams {
+            process_id: "process-fixture".into(),
+            delta_base64: Some("AP8=".into()),
+            close_stdin: true,
+        }),
+        Method::CommandResize {
+            process_id: "process-fixture".into(),
+            size: super::command::TerminalSize { rows: 24, cols: 80 },
+        },
+        Method::CommandTerminate {
+            process_id: "process-fixture".into(),
+        },
+        Method::FsReadFile {
+            path: path.clone(),
+            offset: 0,
+            max_bytes: 65536,
+            expected_revision: None,
+        },
+        Method::FsWriteFile {
+            path: path.clone(),
+            data_base64: "aGk=".into(),
+            expected_revision: Some("native-revision".into()),
+        },
+        Method::FsGetMetadata { path: path.clone() },
+        Method::FsReadDirectory {
+            path: "/workspace".into(),
+            offset: 0,
+            limit: 32,
+            expected_revision: None,
+        },
+        Method::FsCreateDirectory {
+            path: "/workspace/new".into(),
+            recursive: true,
+        },
+        Method::FsCopy {
+            source_path: path.clone(),
+            destination_path: "/workspace/copy".into(),
+            recursive: false,
+        },
+        Method::FsRemove {
+            path,
+            recursive: false,
+            force: false,
+        },
+        Method::FsWatch {
+            watch_id: "watch-fixture".into(),
+            path: "/workspace".into(),
+        },
+        Method::FsUnwatch {
+            watch_id: "watch-fixture".into(),
+        },
+        Method::SkillsList {
+            target: source.clone(),
+            offset: 0,
+            limit: 32,
+            expected_revision: None,
+        },
+        Method::SkillsRead {
+            target: source.clone(),
+            name: "example".into(),
+            kind: crate::local_runtime::skill_management::SkillContentKind::Instructions,
+            offset: 0,
+            max_bytes: 65536,
+            expected_revision: None,
+        },
+        Method::McpCatalog {
+            target: source,
+            id: crate::runtime::identity::McpServerId::new("example"),
+            expected_revision: "source-revision".into(),
+            kind: crate::tools::mcp::catalog::CatalogKind::Resources,
+        },
+    ];
+    for (index, call) in methods.into_iter().enumerate() {
+        fixtures.push(ProtocolMessage::Request(Box::new(Request {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String(format!("environment-{index}")),
+            call,
+        })));
+    }
+    fixtures.push(ProtocolMessage::Response(Response::Success(Box::new(
+        Success {
+            jsonrpc: JsonRpcVersion::V2,
+            id: RequestId::String("command-final".into()),
+            result: MethodResult::CommandExec {
+                result: super::command::ExecResult {
+                    exit_code: Some(0),
+                    status: super::command::ExecStatus::Completed,
+                    stdout_base64: String::new(),
+                    stderr_base64: String::new(),
+                    stdout_truncated: false,
+                    stderr_truncated: false,
+                },
+            },
+        },
+    ))));
+    fixtures.push(ProtocolMessage::Notification(Notification {
+        jsonrpc: JsonRpcVersion::V2,
+        notification: NotificationMethod::CommandOutputDelta(super::command::OutputDelta {
+            process_id: "process-fixture".into(),
+            sequence: 9_007_199_254_740_993,
+            stream: super::command::OutputStream::Stdout,
+            delta_base64: "AP8=".into(),
+            cap_reached: false,
+        }),
+    }));
+    fixtures.push(ProtocolMessage::Notification(Notification {
+        jsonrpc: JsonRpcVersion::V2,
+        notification: NotificationMethod::FsChanged(super::filesystem::Changed {
+            watch_id: "watch-fixture".into(),
+            changed_paths: vec!["/workspace/file".into()],
+            resync_required: true,
+            retired: false,
+        }),
+    }));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1530,23 +1721,23 @@ mod tests {
     }
 
     #[test]
-    fn public_questionnaire_requests_reject_impossible_scalar_values() {
-        let schema = protocol_schema();
-        let validator = jsonschema::validator_for(&schema).unwrap();
+    fn response_envelopes_leave_domain_validation_to_the_native_owner() {
+        let validator = jsonschema::validator_for(&protocol_schema()).unwrap();
         let request = fixtures()
             .into_iter()
             .find_map(|fixture| match fixture {
-                ProtocolMessage::Request(request)
-                    if matches!(request.call, Method::InteractionRespond { .. }) =>
-                {
-                    Some(*request)
+                ProtocolMessage::ClientReply(super::super::protocol::ClientReply::Success(
+                    reply,
+                )) if reply.result["type"] == "questionnaire" => {
+                    Some(super::super::protocol::ClientReply::Success(reply))
                 }
                 _ => None,
             })
             .unwrap();
         let wire = serde_json::to_value(request).unwrap();
         assert!(validator.is_valid(&wire));
-        assert!(serde_json::from_value::<Request>(wire.clone()).is_ok());
+        let payload = wire["result"].clone();
+        assert!(super::super::wire::interaction_response_from_value(payload.clone()).is_ok());
         for (index, invalid) in [
             (0, "9223372036854775808"),
             (0, "-0"),
@@ -1554,12 +1745,14 @@ mod tests {
             (1, "8000000000000000"),
         ] {
             let mut wire = wire.clone();
-            wire["params"]["response"]["response"]["value"]["answers"][index]["answer"]["value"]
-                ["value"] = serde_json::json!(invalid);
-            assert!(!validator.is_valid(&wire), "schema accepted {invalid}");
+            wire["result"]["response"]["value"]["answers"][index]["answer"]["value"]["value"] =
+                serde_json::json!(invalid);
             assert!(
-                serde_json::from_value::<Request>(wire).is_err(),
-                "serde accepted {invalid}"
+                serde_json::from_value::<super::super::protocol::ClientReply>(wire.clone()).is_ok()
+            );
+            assert!(
+                super::super::wire::interaction_response_from_value(wire["result"].clone())
+                    .is_err()
             );
         }
     }
@@ -1574,9 +1767,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v72.schema.json", "v72.ts"]);
+        assert_eq!(generations, ["v75.schema.json", "v75.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v72.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v75.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

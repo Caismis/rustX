@@ -25,7 +25,7 @@ it('one compact reconnect control holds progress then confirms recovery without 
   await act(async () => vi.advanceTimersByTime(150));
   expect(screen.queryByRole('status', { name: 'Connected' })).toBeNull();
   expect(server.sockets).toHaveLength(2); expect(settings).not.toHaveBeenCalled();
-  expect(server.requests.filter(row => row.request.method === 'turn/start')).toEqual([]);
+  expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toEqual([]);
 });
 
 it('a new outage retires recovery confirmation and the rail retains its accessible action', async () => {
@@ -54,7 +54,7 @@ it('App exposes one physical outage control without a conversation-blocking bann
   expect(screen.queryByText('Configuration status unavailable. Retaining the last observation.')).toBeNull();
   expect(screen.queryByRole('region', { name: 'Connection recovery' })).toBeNull();
   expect(screen.getByRole('textbox', { name: 'Message' })).toBe(editor);
-  expect(server.requests.filter(row => row.request.method === 'turn/start')).toEqual([]);
+  expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toEqual([]);
 });
 
 it('incompatible versions open settings instead of retrying the same incompatible connection', async () => {

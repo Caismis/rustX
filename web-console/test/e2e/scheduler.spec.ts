@@ -8,8 +8,7 @@ for (const locale of ['en', 'zh'] as const) for (const width of [1440, 390]) for
     await page.setViewportSize({ width, height: 1000 }); await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: theme });
     await page.clock.install({ time: new Date('2026-10-27T08:00:00Z') });
     await page.goto(origin + '/test/fixtures/scheduler.html?empty&locale=' + locale + '&theme=' + theme);
-    if (width === 390) await page.getByRole('button', { name: zh ? '打开侧边栏' : 'Expand Sidebar' }).click();
-    await page.getByRole('button', { name: zh ? '自动化任务' : 'Automation tasks', exact: true }).click();
+    await page.getByRole('navigation', { name: zh ? '主导航' : 'Primary navigation', exact: true }).getByRole('button', { name: zh ? '计划任务' : 'Scheduled Tasks', exact: true }).click();
     await page.getByRole('button', { name: zh ? '新建' : 'New', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: zh ? '设置自动化任务' : 'Set up an automation task' });
     await expect(dialog).toBeVisible();
@@ -36,16 +35,16 @@ for (const locale of ['en', 'zh'] as const) for (const width of [1440, 390]) for
     await captureEvidence(page, `scheduler-${locale}-${width}-${theme}-create`);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
     const rect = await dialog.boundingBox(); expect(rect!.width).toBeLessThanOrEqual(width - 24);
-    expect(await page.evaluate(() => (window as unknown as { schedulerFixture: { requests(): { method: string }[] } }).schedulerFixture.requests().some(row => row.method === 'session/create'))).toBe(false);
+    expect(await page.evaluate(() => (window as unknown as { schedulerFixture: { requests(): { method: string }[] } }).schedulerFixture.requests().some(row => row.method === 'thread/start'))).toBe(false);
     await dialog.getByRole('button', { name: zh ? '取消' : 'Cancel', exact: true }).click();
     await page.getByRole('button', { name: zh ? '新建自动化任务' : 'New automation task', exact: true }).click();
     await expect(dialog).toBeVisible();
     await dialog.getByRole('button', { name: zh ? '创建' : 'Create', exact: true }).click();
     await expect(dialog).toBeHidden();
     const requests = await page.evaluate(() => (window as unknown as { schedulerFixture: { requests(): { method: string; params: unknown }[] } }).schedulerFixture.requests());
-    expect(requests.filter(row => row.method === 'session/create').map(row => row.params)).toEqual([{ settings: { cwd: '/workspace' } }]);
+    expect(requests.filter(row => row.method === 'thread/start').map(row => row.params)).toEqual([{ settings: { cwd: '/workspace' } }]);
     expect(requests.filter(row => row.method === 'schedule/command')).toHaveLength(1);
-    expect(requests.some(row => ['session/attach', 'turn/start'].includes(row.method))).toBe(false);
+    expect(requests.some(row => ['thread/resume', 'turn/start'].includes(row.method))).toBe(false);
     await expect(page.locator('[data-shell-route="schedules"]')).toBeVisible();
   });
 }
@@ -56,8 +55,7 @@ for (const locale of ['en', 'zh'] as const) for (const width of [1440, 390]) for
     await page.clock.install({ time: new Date('2026-10-27T08:00:00Z') });
     const prefix = `scheduler-${locale}-${width}${theme === 'dark' ? '-dark' : ''}`;
     await page.goto(origin + '/test/fixtures/scheduler.html?locale=' + locale + '&theme=' + theme);
-    if (width === 390) await page.getByRole('button', { name: zh ? '打开侧边栏' : 'Expand Sidebar' }).click();
-    await page.getByRole('button', { name: zh ? '自动化任务' : 'Automation tasks', exact: true }).click();
+    await page.getByRole('navigation', { name: zh ? '主导航' : 'Primary navigation', exact: true }).getByRole('button', { name: zh ? '计划任务' : 'Scheduled Tasks', exact: true }).click();
     const title = zh ? '检查仓库最新变更' : 'Review repository changes';
     await expect(page.getByRole('button', { name: new RegExp(title) })).toBeVisible();
     await expectStableScreenshot(page, prefix + '-list.png');
@@ -77,14 +75,14 @@ for (const locale of ['en', 'zh'] as const) for (const width of [1440, 390]) for
     await page.getByRole('tab', { name: zh ? '任务运行记录' : 'Task runs' }).click();
     await expect(page.getByText(zh ? '正在执行' : 'In progress', { exact: true })).toBeVisible();
     await expectStableScreenshot(page, prefix + '-workflow.png');
-    expect(await page.evaluate(() => (window as unknown as { schedulerFixture: { requests(): { method: string }[] } }).schedulerFixture.requests().some(row => row.method === 'session/attach'))).toBe(false);
+    expect(await page.evaluate(() => (window as unknown as { schedulerFixture: { requests(): { method: string }[] } }).schedulerFixture.requests().some(row => row.method === 'thread/resume'))).toBe(false);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth); expect(overflow).toBe(false);
   });
 }
 test('structured time controls preserve the selected IANA zone and submit the exact native rule', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-10-27T08:00:00Z') });
   await page.goto(origin + '/test/fixtures/scheduler.html?locale=en');
-  await page.getByRole('button', { name: 'Automation tasks', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Primary navigation', exact: true }).getByRole('button', { name: 'Scheduled Tasks', exact: true }).click();
   await page.getByRole('button', { name: /Review repository changes/ }).click();
   await page.getByRole('button', { name: 'Repeat', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Once', exact: true }).click();

@@ -17,7 +17,7 @@ async function setup() {
   await screen.findByRole('button', { name: 'New automation task' });
   return { ...f, openSession, authority, ui };
 }
-const mutations = (server: Server) => server.requests.filter(row => ['session/create', 'schedule/command', 'session/attach', 'turn/start'].includes(row.request.method));
+const mutations = (server: Server) => server.requests.filter(row => ['thread/start', 'schedule/command', 'thread/resume', 'turn/start'].includes(row.request.method));
 async function fill(text = 'Review the latest repository changes.') {
   await screen.findByRole('button', { name: 'Workspace' });
   fireEvent.change(screen.getByRole('textbox', { name: 'Task instruction' }), { target: { value: text } });
@@ -41,12 +41,12 @@ it('creates a dedicated Session with the default model left unauthored, then sav
   const text = 'Review changes\nInclude suggested next steps.'; await fill(text);
   fireEvent.click(screen.getByRole('button', { name: 'Create' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  const create = f.server.requests.find(row => row.request.method === 'session/create')!.request;
+  const create = f.server.requests.find(row => row.request.method === 'thread/start')!.request;
   expect(create.params).toEqual({ settings: { cwd: '/workspace' } });
   const schedule = f.server.requests.find(row => row.request.method === 'schedule/command')!.request;
   expect(schedule.params).toMatchObject({ session_id: 'scheduled-1', node_id: 'node-scheduled-1', command: { mutation: { type: 'create', title: 'Review changes', text,
     timing: { type: 'cron', expression: '0 9 * * *', time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone } } } });
-  expect(f.server.requests.some(row => ['session/attach', 'turn/start'].includes(row.request.method))).toBe(false);
+  expect(f.server.requests.some(row => ['thread/resume', 'turn/start'].includes(row.request.method))).toBe(false);
   expect(f.openSession).not.toHaveBeenCalled();
   await screen.findByDisplayValue('Review changes');
 });
@@ -63,7 +63,7 @@ it('uses the registered Workspace and explicit native model/profile selection wi
   await act(async () => fireEvent.click(await screen.findByRole('menuitemradio', { name: 'high' })));
   fireEvent.change(screen.getByRole('textbox', { name: 'Task name' }), { target: { value: 'Explicit name' } });
   fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-  const create = await f.server.waitFor('session/create', 1);
+  const create = await f.server.waitFor('thread/start', 1);
   expect(create.params).toEqual({ settings: { cwd: '/workspace/B', model: { model: 'fixture/second', profile: 'high' } } });
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   expect(configure.mock.calls.every(call => call[2].kind === 'read')).toBe(true);
@@ -79,7 +79,7 @@ it('retains acknowledged conversation ownership after failure and retries once a
   fireEvent.click(screen.getByRole('button', { name: 'New' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Retry creation' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(f.server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+  expect(f.server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
   const commands = f.server.requests.filter(row => row.request.method === 'schedule/command').map(row => row.request.params);
   expect(commands).toHaveLength(2); expect(commands[0]).toEqual(commands[1]);
 });
@@ -101,7 +101,7 @@ it('restores a submitted draft after route remount and retries the original conv
   expect((await screen.findByRole('textbox', { name: 'Task instruction' }) as HTMLTextAreaElement).value).toBe('Recover my submitted task');
   fireEvent.click(await screen.findByRole('button', { name: 'Retry creation' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(f.server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+  expect(f.server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
 });
 it('allows explicit editing after a definitive scheduling rejection without replaying the rejected command', async () => {
   const f = await setup();
@@ -109,29 +109,29 @@ it('allows explicit editing after a definitive scheduling rejection without repl
   fireEvent.click(screen.getByRole('button', { name: 'New' })); await fill(); fireEvent.click(screen.getByRole('button', { name: 'Create' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Edit task' }));
   await waitFor(() => expect((screen.getByRole('textbox', { name: 'Task instruction' }) as HTMLTextAreaElement).disabled).toBe(false));
-  expect(f.server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+  expect(f.server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(1);
 });
 it('requires explicit Start over and Create gestures after a lost conversation creation response', async () => {
-  const f = await setup(); f.server.held.add('session/create');
+  const f = await setup(); f.server.held.add('thread/start');
   fireEvent.click(screen.getByRole('button', { name: 'New' })); await fill('Preserve this task instruction');
   fireEvent.click(screen.getByRole('button', { name: 'Create' }));
-  const request = await f.server.waitFor('session/create', 1);
+  const request = await f.server.waitFor('thread/start', 1);
   await act(async () => { f.server.commit(request); f.server.socket.close(); });
   await screen.findByRole('button', { name: 'Start over' });
   expect((screen.getByRole('textbox', { name: 'Task instruction' }) as HTMLTextAreaElement).disabled).toBe(true);
-  await act(async () => { await f.server.connect(); }); f.server.held.delete('session/create');
-  expect(f.server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+  await act(async () => { await f.server.connect(); }); f.server.held.delete('thread/start');
+  expect(f.server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
   fireEvent.click(screen.getByRole('button', { name: 'Start over' }));
   await waitFor(() => expect((screen.getByRole('textbox', { name: 'Task instruction' }) as HTMLTextAreaElement).disabled).toBe(false));
   expect((screen.getByRole('textbox', { name: 'Task instruction' }) as HTMLTextAreaElement).value).toBe('Preserve this task instruction');
-  expect(f.server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+  expect(f.server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(0);
   await waitFor(() => expect((screen.getByRole('button', { name: 'Create' }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button', { name: 'Create' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(f.server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(2);
+  expect(f.server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(2);
   expect(f.server.requests.filter(row => row.request.method === 'schedule/command')).toHaveLength(1);
 });
 it('shows workspace read failures and a read-only retry inside the modal', async () => {

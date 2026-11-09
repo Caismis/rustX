@@ -13,7 +13,7 @@ export interface SessionProductState {
 
 /** Pure display projection. Stale snapshots never imply current execution or
  * settlement. Recovery only names an existing client operation; no replay. */
-export function deriveSessionProductState(tx: Translate, state: Pick<ClientView, 'connection' | 'uncertain'>, view?: SessionView, sessionId = view?.id, transition?: SessionTransition): SessionProductState {
+export function deriveSessionProductState(tx: Translate, state: Pick<ClientView, 'connection' | 'uncertain' | 'threadStatusSynchronized'>, view?: SessionView, sessionId = view?.id, transition?: SessionTransition): SessionProductState {
   if (view?.deleting) {
     if (view.error || state.uncertain.some(item => item.sessionId === sessionId)) return {
       status: 'uncertain', label: tx('common:session-product.deletion-needs-verification'), severity: 'warning',
@@ -50,13 +50,17 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
   if (recovery) return { status: 'reconnect', label: tx('common:session-product.connection-interrupted'), severity: 'warning', recovery,
     detail: recovery.action === 'open' ? tx('common:copy.open-this-session-to-continue-your-previous-requests-will-not-be-sent-again') : tx('common:copy.reconnect-to-see-current-work-your-previous-requests-will-not-be-sent-again') };
   if (connecting || view?.attachment === 'attaching' || view?.attachment === 'resynchronizing') return { status: 'connecting', severity: 'quiet' };
-  if (!view?.snapshot) return { status: 'idle', severity: 'quiet' };
-  const snapshot = view.snapshot;
-  if (snapshot.shutting_down) return { status: 'stopping', label: tx('common:session-product.session-is-closing'), severity: 'warning' };
-  if (view.cancellation?.attemptId !== undefined && view.cancellation.attemptId === view.snapshot?.attempt?.attempt_id) return { status: 'stopping', label: tx('common:session-product.stopping'), severity: 'quiet' };
-  if (view.modelMutation) return { status: 'waiting', severity: 'quiet' };
-  if (snapshot.pending_interactions?.length) return { status: 'waiting', label: tx('common:session-product.waiting-for-your-response'), severity: 'quiet' };
-  if (snapshot.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type)) return { status: 'working', severity: 'quiet' };
-  if (snapshot.inbound.pending?.length || view.submissions?.length) return { status: 'queued', label: tx('common:session-product.queued'), severity: 'quiet' };
-  return { status: 'idle', severity: 'quiet' };
+  const target=view?.target?.conversation_id??view?.nodeConversationId;
+  const summaryStatus=view?.summary?.thread_status;
+  const entry=(view?.threadStatus&&view.threadStatus.threadId===target?view.threadStatus:undefined)??(summaryStatus?.threadId===target?summaryStatus:undefined);
+  if(entry&&state.connection==='connected'&&state.threadStatusSynchronized!==false) {
+    switch(entry.status.type) {
+      case 'notLoaded':return {status:'idle',severity:'quiet'};
+      case 'idle':return {status:'idle',severity:'quiet'};
+      case 'systemError':return {status:'failure',severity:'error',label:tx('workspace:status.systemError')};
+      case 'active':return {status:entry.status.activeFlags.length?'waiting':'working',severity:'quiet',label:entry.status.activeFlags.length?entry.status.activeFlags.map(flag=>tx(flag==='waitingOnApproval'?'workspace:status.waitingApproval':'workspace:status.waitingAnswer')).join(' · '):undefined};
+    }
+  }
+  return {status:'unavailable',severity:'warning',label:tx('common:session-product.observation-unavailable')};
+
 }

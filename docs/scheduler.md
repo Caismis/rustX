@@ -11,7 +11,7 @@ ConversationRuntime owns canonical adoption and Workflow execution.
 `SessionRuntimeManager::schedule_command`, `schedule_get`, and `schedule_list`
 address an explicit Session and node. Commands have stable caller-generated
 identities and revisioned mutations. These are trusted native product controls;
-App Server v72 exposes `schedule/list`, `schedule/get`, `schedule/command` and
+App Server v74 exposes `schedule/list`, `schedule/get`, `schedule/command` and
 `schedule/recoverStorage`. The manager derives the conversation binding from
 catalog authority. Root model Tools expose `get_schedule`, `list_schedules` and
 `schedule_command` with native current-Human authorization described below.
@@ -56,8 +56,11 @@ native run-time rule directly, with registered Workspace, optional task name,
 and native Model/Profile choices in Advanced. Creating explicitly allocates one
 dedicated Session and writes its native Message schedule without attaching a
 runtime, sending a message or asking a model to author the rule. Later occurrences
-continue that same conversation. The displayed Workspace model default is not
-persisted as Session intent unless the user explicitly selects a model or profile.
+continue that same conversation. When no Model/Profile is explicitly selected,
+the UI omits `settings.model`; Native captures the initial model in
+`initial_binding` and persists it when creating the Session. Later changes to the
+Workspace default do not replace that Session's selected model. This does not
+freeze the rest of the model configuration.
 Cancel performs no mutation. Failed scheduling retains the acknowledged Session;
 retry reuses the exact command identity and payload rather than creating another
 Session. An uncertain Session creation is not automatically replayed.

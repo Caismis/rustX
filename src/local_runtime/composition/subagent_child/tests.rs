@@ -1007,188 +1007,91 @@ async fn a_nested_binding_child_never_discovers_ancestor_project_instructions() 
     );
 }
 
-/// A frozen Skill allowlist is **materialized** into the child-private
-/// root, re-proven against its frozen `SkillVersionId`, and rendered as
-/// metadata only, so progressive disclosure survives the boundary
-/// (Issue #145).
+/// Frozen definitions use live source files without discovery or package copying.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[allow(clippy::too_many_lines)] // complete child composition and ownership fixture
-async fn a_frozen_skill_allowlist_is_materialized_and_rendered_without_bodies() {
+async fn frozen_skill_definitions_keep_live_locations_without_copying_assets() {
     let dir = lab();
-    let source = dir.path().canonicalize().unwrap().join("selected-source");
-    std::fs::create_dir_all(&source).expect("source");
+    let source = dir
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join(".agents/skills/selected");
+    std::fs::create_dir_all(&source).unwrap();
     std::fs::write(
         source.join("SKILL.md"),
-        "---\nname: selected\ndescription: the selected skill\n---\nsecret body\n",
+        "---\nname: selected\ndescription: Frozen summary\n---\nold body\n",
     )
-    .expect("SKILL.md");
-    let files = vec![std::path::PathBuf::from("SKILL.md")];
-    let version_id =
-        crate::skills::identity::package_version_id(&source, &files).expect("frozen identity");
-    let child_spec = spec(
+    .unwrap();
+    let discovery =
+        crate::skills::SkillDiscovery::user_root(source.parent().unwrap().to_path_buf()).discover();
+    let package = &discovery.packages[0];
+    std::fs::File::create(source.join("asset.bin"))
+        .unwrap()
+        .set_len(2 * 1024 * 1024 * 1024)
+        .unwrap();
+    let mut child_spec = spec(
         dir.path(),
         vec![builtin("read"), builtin("grep")],
         Vec::new(),
         vec![crate::runtime::subagent::ResolvedSubagentSkill {
-            provenance: crate::skills::SkillProvenance {
-                name: "selected".into(),
-                source: crate::skills::SkillSource::Workspace,
-                location: source.join("SKILL.md").display().to_string(),
-                shadowed: Vec::new(),
-            },
+            provenance: discovery.provenance[0].clone(),
             binding: crate::protocol::manifest::SkillBinding {
-                skill_id: crate::runtime::identity::SkillId::new("selected"),
-                version_id,
+                skill_id: package.id().clone(),
+                version_id: package.version_id().clone(),
             },
+            dependencies: package.dependencies().clone(),
             catalog_entry: crate::skills::SkillCatalogEntry {
-                name: "selected".to_owned(),
-                description: "the selected skill".to_owned(),
-                location: source.join("SKILL.md").display().to_string(),
+                name: "selected".into(),
+                description: "Frozen summary".into(),
+                location: package.location().into(),
             },
-            source_root: source.clone(),
-            files,
         }],
     );
+    child_spec.resolved.skill_roots = discovery.roots.clone();
+    // Neither resource edits nor later definitions can change the authorization.
+    std::fs::write(
+        source.join("SKILL.md"),
+        "---\nname: selected\ndescription: New summary\n---\ncurrent body\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(source.parent().unwrap().join("ambient")).unwrap();
+    std::fs::write(
+        source.parent().unwrap().join("ambient/SKILL.md"),
+        "---\nname: ambient\ndescription: New skill\n---\n",
+    )
+    .unwrap();
     let core = LocalConversationCore::compose_subagent_child(
         &child_spec,
         &dependencies(),
         &ChildPreparation::detached(),
     )
     .await
-    .expect("the child composes");
-    let catalog = core
-        .runtime()
-        .runtime_resources()
-        .skill_catalog()
-        .expect("the frozen catalog")
-        .to_owned();
-    let materialized = child_spec
-        .runtime_root()
-        .unwrap()
-        .join("skills/workspace/selected/SKILL.md")
-        .display()
-        .to_string();
-    assert!(catalog.contains("selected"));
+    .unwrap();
+    let resources = core.runtime().runtime_resources();
+    let catalog = resources.skill_catalog().unwrap();
+    assert!(catalog.contains("Frozen summary"));
     assert!(
-        catalog.contains(
-            &child_spec
-                .runtime_root()
-                .unwrap()
-                .join("skills/workspace")
-                .display()
-                .to_string()
-        ),
-        "the model-visible root is remapped onto the child's own copy: {catalog}"
-    );
-    assert!(
-        std::path::Path::new(&materialized).is_file(),
-        "the frozen bytes are materialized under the child-private root"
-    );
-    assert!(
-        !catalog.contains("ambient"),
-        "an unselected, discoverable Skill is absent from the child catalog: {catalog}"
-    );
-    assert!(
-        !catalog.contains("secret body"),
-        "only catalog metadata crosses the boundary: {catalog}"
-    );
-    // Skill visibility is independent of a child's Native Tool selection.
-    let incarnation_parent = child_spec
-        .runtime_root()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf();
-    let mut without_read = child_spec;
-    without_read.incarnation = "incarnation-without-read".to_owned();
-    std::fs::create_dir_all(incarnation_parent.join(&without_read.incarnation)).unwrap();
-    without_read.resolved.tools = vec![builtin("grep")];
-    let core_without_read = LocalConversationCore::compose_subagent_child(
-        &without_read,
-        &dependencies(),
-        &ChildPreparation::detached(),
-    )
-    .await
-    .expect("child without Read still materializes admitted packages");
-    assert!(
-        core_without_read
-            .runtime()
-            .runtime_resources()
-            .skill_catalog()
-            .is_some()
+        !catalog.contains("New summary")
+            && !catalog.contains("ambient")
+            && !catalog.contains("current body")
     );
     assert_eq!(
-        core_without_read
-            .capability
-            .current_snapshot()
-            .tool_registry()
-            .names(),
-        ["grep"]
+        resources.capability().model_skill_entries()[0].location,
+        package.location()
     );
+    assert_eq!(
+        resources.capability().skills().bindings()[0].version_id,
+        *package.version_id()
+    );
+    assert!(!child_spec.runtime_root().unwrap().join("skills").exists());
     assert!(
-        without_read
-            .runtime_root()
+        std::fs::read_to_string(package.location())
             .unwrap()
-            .join("skills/workspace/selected/SKILL.md")
-            .is_file()
+            .contains("current body")
     );
-}
-
-/// Skill bytes that changed after the parent froze them fail child
-/// composition rather than executing a different Skill version.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_changed_skill_source_fails_child_composition() {
-    let dir = lab();
-    let source = dir.path().canonicalize().unwrap().join("selected-source");
-    std::fs::create_dir_all(&source).expect("source");
-    std::fs::write(
-        source.join("SKILL.md"),
-        "---\nname: selected\ndescription: the selected skill\n---\noriginal\n",
-    )
-    .expect("SKILL.md");
-    let files = vec![std::path::PathBuf::from("SKILL.md")];
-    let version_id =
-        crate::skills::identity::package_version_id(&source, &files).expect("frozen identity");
-    // The source moves on after the freeze.
-    std::fs::write(
-        source.join("SKILL.md"),
-        "---\nname: selected\ndescription: the selected skill\n---\nrewritten\n",
-    )
-    .expect("rewrite");
-    let child_spec = spec(
-        dir.path(),
-        vec![builtin("read")],
-        Vec::new(),
-        vec![crate::runtime::subagent::ResolvedSubagentSkill {
-            provenance: crate::skills::SkillProvenance {
-                name: "selected".into(),
-                source: crate::skills::SkillSource::Workspace,
-                location: source.join("SKILL.md").display().to_string(),
-                shadowed: Vec::new(),
-            },
-            binding: crate::protocol::manifest::SkillBinding {
-                skill_id: crate::runtime::identity::SkillId::new("selected"),
-                version_id,
-            },
-            catalog_entry: crate::skills::SkillCatalogEntry {
-                name: "selected".to_owned(),
-                description: "the selected skill".to_owned(),
-                location: source.join("SKILL.md").display().to_string(),
-            },
-            source_root: source,
-            files,
-        }],
-    );
-    let error = LocalConversationCore::compose_subagent_child(
-        &child_spec,
-        &dependencies(),
-        &ChildPreparation::detached(),
-    )
-    .await
-    .expect_err("a changed Skill source fails closed");
-    assert!(
-        format!("{error}").contains("source bytes changed"),
-        "unexpected failure: {error}"
+    assert_eq!(
+        core.capability.current_snapshot().tool_registry().names(),
+        ["read", "grep"]
     );
 }
 

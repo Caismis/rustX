@@ -6,10 +6,10 @@ import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { closeSettings, connectRemote, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { returnHome, connectRemote, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { diagnosticCut } from './wire-diagnostics';
-import type { AttachmentTarget, TraceRequestDetail } from '../../../protocol/app-server/v72';
+import type { AttachmentTarget, TraceRequestDetail } from '../../../protocol/app-server/v75';
 
 function immutable(request: TraceRequestDetail) {
   const { usage: _usage, failure: _failure, generation: _generation, ...input } = request;
@@ -26,24 +26,24 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
   let diagnosticTarget: AttachmentTarget | undefined;
   let following: Awaited<ReturnType<typeof followRoot>> | undefined;
   try {
-    const a = (await remote.client.call('session/create', { settings: { cwd: f.workspaceA } }, 'session_transition')).session.id;
-    const b = (await remote.client.call('session/create', { settings: { cwd: f.workspaceB } }, 'session_transition')).session.id;
+    const a = (await remote.client.call('thread/start', { settings: { cwd: f.workspaceA } }, 'session_transition')).session.id;
+    const b = (await remote.client.call('thread/start', { settings: { cwd: f.workspaceB } }, 'session_transition')).session.id;
     await remote.renameSession(a, 'New session');
     await remote.renameSession(b, 'New session');
-    const attachedA = await remote.client.call('session/attach', { session_id: a }, 'attached');
+    const attachedA = await remote.client.call('thread/resume', {threadId:(await remote.readSession(a)).active_conversation_id}, 'attached');
     diagnosticTarget = attachedA.target;
-    const attachedB = await remote.client.call('session/attach', { session_id: b }, 'attached');
+    const attachedB = await remote.client.call('thread/resume', {threadId:(await remote.readSession(b)).active_conversation_id}, 'attached');
     const bindingB = (await readEffective(remote, attachedB.target)).adopted_binding;
     const trace = async () => (await remote.client.call('session/trace', { target: attachedA.target, limit: 32 }, 'trace')).page;
     const detail = async (record_id: string) => {
       const {page}=await remote.client.call('session/traceDetail',{target:attachedA.target,record_id},'domain_page');
-      const value=await domainOriginalValue<import('../../../protocol/app-server/v72').TraceDetail>(page,{
+      const value=await domainOriginalValue<import('../../../protocol/app-server/v75').TraceDetail>(page,{
         current:()=>!remote.client.closed,
         page:async(previous,offset)=>(await remote.client.call('conversation/checkpointPage',{target:attachedA.target,agent_id:null,cut:previous.read_cut,domain:previous.domain,offset,limit:32},'checkpoint_page')).page,
         value:async(previous,item,offset)=>(await remote.client.call('conversation/checkpointValueRead',{target:attachedA.target,agent_id:null,cut:previous.read_cut,domain:previous.domain,item_offset:Number(item.offset),path:[],offset,max_bytes:65536},'checkpoint_value_chunk')).chunk});
       return value.request!;
     };
-    await remote.client.call('turn/start', { target: attachedA.target, content: [{ type: 'text', text: 'Before automatic commit' }] }, 'inbound_accepted');
+    await remote.client.call('inbound/queue', { inputId:crypto.randomUUID(), target: attachedA.target, content: [{ type: 'text', text: 'Before automatic commit' }] }, 'inbound_accepted');
     await f.gate('trace-before');
     const oldRecord = (await trace()).records.find(record => record.kind === 'request')!;
     const before = immutable(await detail(oldRecord.id));
@@ -54,13 +54,14 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     writeFileSync(join(f.workspaceB, 'rustx.toml'), '[invalid TOML');
     await routeWorkspaceHost(page, f); await page.goto('/'); await connectRemote(page, f.endpoint, f.token);
     await openWorkspaceSettings(page, 'Workspace A');
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
     await openSettingsPage(page, 'Agent');
     await settings.getByLabel('Instructions', { exact: true }).fill('TRACE_NEW_INSTRUCTIONS');
     await settings.getByRole('button', { name: 'Save Root instructions', exact: true }).click();
     await expect(settings.getByText('Root instructions saved.')).toBeVisible();
-    await closeSettings(page);
+    await returnHome(page);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await settings.getByRole('button', { name: 'Open User Settings', exact: true }).click();
     await openSettingsPage(page, 'Tools & Permissions');
     await settings.getByLabel('read', { exact: true }).uncheck();
     await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
@@ -101,7 +102,7 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     following = await followRoot(remote, attachedA.target);
     let settled = false, settlementFailure: unknown;
     const settlement = following.nextSettlement().then(() => { settled = true; }, error => { settlementFailure = error; });
-    await remote.client.call('turn/start', { target: attachedA.target, content: [{ type: 'text', text: 'After automatic commit' }] }, 'inbound_accepted');
+    await remote.client.call('inbound/queue', { inputId:crypto.randomUUID(), target: attachedA.target, content: [{ type: 'text', text: 'After automatic commit' }] }, 'inbound_accepted');
     await expect.poll(() => { if (settlementFailure) throw settlementFailure; return settled; }).toBe(true);
     await settlement;
     expect((await trace()).records.filter(record => record.kind === 'request' && record.state === 'completed')).toHaveLength(2);
@@ -116,8 +117,8 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     expect(immutable(await detail(oldRecord.id))).toEqual(before);
     expect((await f.control('requests')).requests).toHaveLength(2);
     expect(wire.requests.filter(request => request.method === 'configuration/sourceWrite')).toHaveLength(1);
-    expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(0);
-    await closeSettings(page);
+    expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(0);
+    await returnHome(page);
     await remote.client.call('session/detach', { target: attachedA.target }, 'detached');
     await page.locator(`button[data-session-id="${a}"]`).click();
     await page.getByRole('tab', { name: 'Chat', exact: true }).click();

@@ -29,6 +29,7 @@ mod model_selection;
 mod schedule;
 mod schedule_catalog;
 mod schedule_driver;
+pub(crate) mod status;
 pub use schedule_catalog::{ScheduleCatalogCursor, ScheduleCatalogEntry, ScheduleCatalogPage};
 mod sessions;
 mod source_watch;
@@ -78,6 +79,7 @@ pub enum RuntimeManagerError {
         requested_conversation: ConversationId,
     },
     StaleIncarnation,
+    ThreadArchived,
     LoadingCancelled,
     Draining,
     ResidencyCapacity,
@@ -98,6 +100,7 @@ impl std::fmt::Display for RuntimeManagerError {
             ),
             Self::ResidencyCapacity => f.write_str("runtime residency capacity exhausted"),
             Self::StaleIncarnation => f.write_str("runtime incarnation is no longer current"),
+            Self::ThreadArchived => f.write_str("Thread is archived; unarchive before execution"),
             Self::LoadingCancelled => f.write_str("runtime loading was cancelled"),
             Self::Draining => f.write_str("runtime manager is draining"),
             Self::TransitionFailed(message) => message.fmt(f),
@@ -335,6 +338,8 @@ impl ManagedRuntime {
 /// Sole strong composition owner, retained only by registry/transition machinery.
 #[derive(Debug)]
 struct ResidentRuntime {
+    status_read: Mutex<()>,
+    status_wake: Arc<tokio::sync::Notify>,
     node: SessionNodeId,
     initialization: Arc<Initialization>,
     identity: Arc<ManagedRuntime>,
@@ -422,6 +427,13 @@ impl ResidentRuntime {
             .expect("resident owns operation drain");
     }
 
+    fn try_observation_runtime(&self) -> Option<ConversationRuntime> {
+        self.composition
+            .try_lock()
+            .ok()?
+            .as_ref()
+            .map(|c| c.runtime().clone())
+    }
     // Shutdown alone may clone execution authority. Never exposed to clients.
     fn shutdown_runtime(&self) -> Option<ConversationRuntime> {
         self.composition
@@ -445,7 +457,7 @@ enum Entry {
 #[derive(Debug)]
 #[cfg_attr(test, allow(clippy::struct_excessive_bools))] // independent test hooks
 struct RegistryState {
-    entries: HashMap<ConversationId, Entry>,
+    entries: status::ResidencyEntries,
     // WriterAbsent results are observation receipts, never residency owners.
     // Keep them per Conversation so automatic attachment cannot retry a failure.
     failed_submissions: HashMap<ConversationId, Arc<Flight>>,
@@ -601,6 +613,10 @@ struct RuntimeRegistry(Mutex<RegistryState>);
 /// current configuration sources to `configuration`, and execution to each core.
 #[derive(Clone)]
 pub struct SessionRuntimeManager {
+    pub(crate) environment: Arc<super::environment::Environment>,
+    status: Arc<status::StatusPublisher>,
+    interaction_lifecycle:
+        Arc<std::sync::OnceLock<Arc<dyn crate::runtime_client::host::InteractionLifecycleSink>>>,
     pub(super) sessions: SessionController,
     registry: Arc<RuntimeRegistry>,
     pub(super) configuration: UserConfigManager,
@@ -608,6 +624,7 @@ pub struct SessionRuntimeManager {
     pub(super) process_policy: Arc<std::sync::RwLock<super::app_server_policy::AppServerPolicy>>,
     pub(super) applications: super::configuration::application::ConfigurationApplications,
     pub(crate) mcp_drafts: Arc<super::mcp_drafts::McpDraftRegistry>,
+    pub(crate) mcp_probes: Arc<super::mcp_probe::McpProbeRegistry>,
     dependencies: Arc<LocalRuntimeDependencies>,
     clock: Arc<dyn MonotonicClock>,
     schedule_clock: Arc<dyn crate::runtime::types::RuntimeClock>,
@@ -626,6 +643,22 @@ impl std::fmt::Debug for SessionRuntimeManager {
     }
 }
 impl SessionRuntimeManager {
+    pub(crate) fn bind_interaction_lifecycle(
+        &self,
+        sink: Arc<dyn crate::runtime_client::host::InteractionLifecycleSink>,
+    ) {
+        assert!(
+            self.interaction_lifecycle.set(sink).is_ok(),
+            "one process interaction sink"
+        );
+    }
+    pub(crate) fn bind_host_tools(
+        &self,
+        dispatcher: Arc<dyn crate::tools::host::HostToolDispatcher>,
+    ) {
+        self.dependencies.host_tools.bind(dispatcher);
+    }
+
     pub(crate) fn mcp_draft_scope(&self) -> super::mcp_drafts::McpDraftScope {
         self.mcp_drafts
             .open(self.configuration.clone(), self.credentials.clone())
@@ -762,11 +795,20 @@ impl SessionRuntimeManager {
         sessions.runtime_owner.set(()).map_err(|()| {
             error("SessionController already allocated its runtime manager; clone that manager")
         })?;
+        let environment = Arc::new(super::environment::Environment::default());
+        environment.configure(
+            &configuration
+                .app_server_policy()
+                .map_err(error)?
+                .environment_roots,
+        );
         Ok(Self {
+            environment,
+            status: Arc::default(),
             sessions,
             registry: Arc::new(RuntimeRegistry(Mutex::new(RegistryState {
                 policy,
-                entries: HashMap::new(),
+                entries: status::ResidencyEntries::default(),
                 schedule_open: true,
                 schedule_write_fenced: std::collections::HashSet::new(),
                 schedule_reads: watch::channel(0).0,
@@ -816,7 +858,9 @@ impl SessionRuntimeManager {
             credentials,
             applications: super::configuration::application::ConfigurationApplications::default(),
             mcp_drafts: Arc::default(),
+            mcp_probes: Arc::default(),
             dependencies: Arc::new(dependencies),
+            interaction_lifecycle: Arc::default(),
             clock: Arc::new(SystemMonotonicClock::new()),
             schedule_clock: Arc::new(crate::runtime::types::SystemClock),
             schedule_changed: Arc::default(),

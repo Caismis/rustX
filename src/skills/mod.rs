@@ -8,13 +8,13 @@
 //! - the session-level Skill **source policy**, source identity, and
 //!   automatic root resolution (`source`);
 //! - Skill discovery, per-candidate validation, same-scope conflict
-//!   elimination, and `explicit > workspace > global` merge
+//!   elimination, and `Workspace > User` merge
 //!   (`package::SkillDiscovery`);
 //! - typed generation-scoped Skill diagnostics and effective provenance
 //!   (`diagnostics`);
 //! - Agent Skills `SKILL.md` frontmatter parsing and validation
 //!   (`package::SkillPackage`);
-//! - deterministic content-derived package/version hashing (`identity`);
+//! - deterministic normalized frontmatter definition hashing (`identity`);
 //! - rustX dependency declaration parsing, normalization, and
 //!   merge/conflict detection (`dependencies`);
 //! - Python/Node environment identity and materialization
@@ -36,11 +36,11 @@
 //! versa.
 
 mod catalog;
-mod dependencies;
+pub(crate) mod dependencies;
 mod diagnostics;
 pub mod environments;
+mod frontmatter;
 pub(crate) mod identity;
-pub mod materialization;
 pub(crate) mod package;
 pub mod source;
 
@@ -61,3 +61,6 @@ pub use package::{
 pub use source::{
     AutomaticSkillRoot, SKILLS_DIRECTORY, SKILLS_ROOT, SkillSource, automatic_skill_roots,
 };
+
+#[cfg(test)]
+mod tests;

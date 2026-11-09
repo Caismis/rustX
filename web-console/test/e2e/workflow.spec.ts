@@ -1,5 +1,5 @@
 import { connectRemote } from './shell-actions';
-import { openEmptySession, closeSettings, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { openEmptySession, returnHome, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,7 +21,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
   const agent = readFileSync(agentPath, 'utf8');
   const connect = async () => {
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Transport token')).toBeHidden();
     // Transport initialization precedes restoration of the selected Session.
     // Large authored inputs must finish native attachment before replay checks.
     if (session) await wire.attachedTarget(session);
@@ -101,7 +101,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(childTrace).toContainText('One-shot subagent record');
     await page.screenshot({ path: '/tmp/rustx-workflow-child-completed.png' });
     await page.getByRole('button', { name: parentTitle, exact: true }).click();
-    await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await returnHome(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     await expect(page.getByText('workflow conformance complete', { exact: true })).toBeVisible();
     await expect(run).toContainText('completed');
     await expect(catalog).toHaveText('1 subagents');
@@ -119,8 +119,8 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(childView).toContainText('One-shot subagent record');
     await page.getByRole('button', { name: parentTitle, exact: true }).click();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-    await closeSettings(page);
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A');
     await openSettingsPage(page, 'Extensions');
     await settings.getByRole('tab', { name: 'Subagents', exact: true }).click();

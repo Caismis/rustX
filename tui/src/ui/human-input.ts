@@ -1,5 +1,5 @@
 import { validateInteractionBody } from "../../../protocol/app-server/interaction.ts";
-import type { CheckpointPage, RuntimeClientInteractionHeader } from "../../../protocol/app-server/v72.ts";
+import type { CheckpointPage, RuntimeClientInteractionHeader } from "../../../protocol/app-server/v75.ts";
 import type { SizeValue } from "@earendil-works/pi-tui";
 import type { AppServerSession } from "../app-server/session.ts";
 import type { PreferenceChange } from "../commands/outcome.ts";
@@ -339,7 +339,7 @@ export class HumanInputController {
       this.#page = undefined;
       this.#pageRead += 1;
     }
-    if (this.#page) state = { ...state, pendingInteractions: this.#page.items };
+    if (this.#page) state = { ...state, pendingInteractions: this.#page.items.filter(item => source!.interactionVisible(item.interaction)) };
     const body = this.#body;
     if (body && body.session === source && body.stamp === stamp) state = { ...state, pendingInteractions: state.pendingInteractions.map(item => sameInteractionRef(item.interaction, body.interaction) ? body.body : item) };
     else if (body) { this.#body = undefined; this.#bodyRead++; }

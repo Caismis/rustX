@@ -10,7 +10,7 @@ vi.mock('node:child_process',()=>({spawn:launch.spawn}));
 import { runMacOfficeSandbox } from '../host/documents/office-macos';
 it('does not signal a retired process group again when cancellation settles',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'rustx-mac-lifecycle-'));
-  const child=Object.assign(new EventEmitter(),{pid:987654,stdout:new PassThrough(),stderr:new PassThrough()});
+  const child=Object.assign(new EventEmitter(),{pid:987654,stdin:new PassThrough(),stdout:new PassThrough(),stderr:new PassThrough()});
   let spawned!:()=>void;
   const ready=new Promise<void>(resolve=>{spawned=resolve});
   launch.spawn.mockImplementation(()=>{spawned();return child});

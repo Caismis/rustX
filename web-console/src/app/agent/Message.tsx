@@ -1,16 +1,17 @@
+import {isPlainMessageKind} from '../../../../protocol/app-server/message-kind';
 import { isContextInjection } from '../../bindings/agent-status';
 import { InboundMessage, isUserBubble } from './InboundMessage';
 import { AgentConversationContext } from './subagent-context';
 import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
-import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v72';
+import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v75';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { Artifact } from '../components/Artifact';
 import { UserMessage, AssistantMessage, MessageFile } from '../../presentation/agent/Message';
 import { Reasoning } from '../../presentation/agent/Reasoning';
 import { Tool } from './Tool';
 import { CanonicalTool } from './CanonicalTool';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v72';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v75';
 import { Fragment, useContext, type ReactNode } from 'react';
 import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
@@ -63,7 +64,7 @@ export function Message({ message, publicationStream, tools = [], actions, strea
   // Results belong to the native call projection; Context injections are
   // Harness hidden rows, whose content Trace keeps.
   if (message.role === 'tool' || isContextInjection(message)) return null;
-  if (message.role === 'user' && message.kind && message.kind !== 'message') return <details><summary>{tx('agent:message.context')}{' '}{Object.keys(message.kind)[0]}</summary><Content messageId={message.id} blocks={message.content} markdown/></details>;
+  if (message.role === 'user' && !isPlainMessageKind(message.kind)) return <details><summary>{tx('agent:message.context')}{' '}{Object.keys(message.kind)[0]}</summary><Content messageId={message.id} blocks={message.content} markdown/></details>;
   if (message.role === 'user' && !isUserBubble(message, receiver?.parent_agent_id)) return <InboundMessage message={message}/>;
   return message.role === 'user' ? <UserMessageContent message={message} label={tx(message.source === 'human' ? 'agent:message.your-message' : 'common:subagents.parent-message')} actions={actions}/>
     : <AssistantMessage label={tx(stopped ? 'agent:message.incomplete-response' : streaming ? 'agent:agent-transcript.streaming-response' : 'agent:message.assistant-response')} stopped={stopped ? tx('agent:turn-process.stopped') : undefined} actions={actions}><Content messageId={message.id} publicationStream={publicationStream} blocks={blocks ?? message.content} markdown tools={tools} streaming={streaming} reasoningHidden={reasoningHidden} include={include}/></AssistantMessage>;

@@ -1,5 +1,5 @@
 import { parseAbsolute } from '@internationalized/date';
-import type { ScheduleCommand, ScheduleTiming, SessionModelConfig } from '../../../../protocol/app-server/v72';
+import type { ScheduleCommand, ScheduleTiming, SessionModelConfig } from '../../../../protocol/app-server/v75';
 import type { AppServerClient } from '../../client/app-server';
 import type { OperationAdmission } from '../../client/contracts';
 import { isOutcomeUncertain, RequestNotDispatched, RpcFailure } from '../../client/errors';
@@ -122,7 +122,7 @@ export class TaskCreation {
       const [location] = await this.host.classifyLocations([operation.cwd], operation.endpoint, catalog.authorityId);
       if (!location?.authorized) throw new CreationFailure('workspace_changed');
       const admission = this.admission(operation, state.generation, () => { sent = true; });
-      await this.client.request({ method: 'session/create', params: { settings: { cwd: operation.cwd, ...(copy.model ? { model: copy.model } : {}) } } }, 'session_transition', result => {
+      await this.client.request({ method: 'thread/start', params: { settings: { cwd: operation.cwd, ...(copy.model ? { model: copy.model } : {}) } } }, 'session_transition', result => {
         operation.session = { session_id: result.session.id, node_id: result.session.active_node };
       }, admission);
       return await this.schedule(operation, state.generation);

@@ -19,8 +19,8 @@ function measuredDuration(value: number) {
 const elapsed = (start: number) => measuredDuration(performance.now() - start);
 
 for (const fixture of [
-  { name: 'near-limit dense closed STL', bytes: denseBoxStl, triangles: 330672, dimensions: '1 × 1 × 1' },
-  { name: 'plane with disconnected tiny zero-normal solid', bytes: planeAndTinySolidStl, triangles: 20012, dimensions: '1 × 1 × 2' },
+  { name: 'near-limit dense closed STL', bytes: denseBoxStl, triangles: 330672, dimensions: '1 × 1 × 1', outlines: false },
+  { name: 'plane with disconnected tiny zero-normal solid', bytes: planeAndTinySolidStl, triangles: 20012, dimensions: '1 × 1 × 2', outlines: true },
 ]) test(`actual Worker retains ${fixture.name} under its original deadline`, async ({ page }) => {
   await instrument(page); const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const bytes = fixture.bytes();
@@ -30,6 +30,9 @@ for (const fixture of [
   await expect(page.locator('[data-geometry-format]')).toContainText(fixture.dimensions, { timeout: 20_000 });
   const imports = await page.evaluate(() => (window as any).geometryImports as { triangles: number }[][]);
   expect(imports).toHaveLength(1); expect(imports[0].reduce((sum, mesh) => sum + mesh.triangles, 0)).toBe(fixture.triangles);
+  const outlines = page.getByRole('button', { name: 'Model outlines', exact: true });
+  await expect(outlines).toHaveAttribute('aria-busy', 'false');
+  await expect(outlines).toHaveAttribute('aria-pressed', String(fixture.outlines));
   await page.getByRole('button', { name: 'Close preview cube.stl', exact: true }).click();
   await expect.poll(() => resources(page)).toEqual({ workers: 0, contexts: 0, buffers: 0, textures: 0, urls: 0 });
   expect(errors).toEqual([]);
@@ -74,17 +77,33 @@ test('production startup defers geometry and the STL envelope remains responsive
   });
   const start = performance.now(); await page.getByRole('button', { name: 'Preview cube.stl in sidebar', exact: true }).click();
   await expect(page.locator('[data-geometry-format]')).toContainText('350 × 350 × 0', { timeout: 20_000 });
-  const measurement = { triangles: 245000, vertices: 735000, sourceBytes: 12250084, displayMs: elapsed(start),
+  const displayMs = elapsed(start);
+  // The final Worker model is the original geometry admitted by modelScene;
+  // budgeted exact planar preparation may retain the grid or retriangulate it.
+  const imports = await page.evaluate(() => (window as any).geometryImports as { vertices: number; triangles: number }[][]);
+  expect(imports).toHaveLength(1); expect(imports[0]).toHaveLength(1);
+  const admitted = imports[0][0];
+  expect(Number.isSafeInteger(admitted.triangles)).toBe(true); expect(admitted.triangles).toBeGreaterThan(0); expect(admitted.triangles).toBeLessThanOrEqual(245000);
+  expect(Number.isSafeInteger(admitted.vertices)).toBe(true); expect(admitted.vertices).toBeGreaterThan(0); expect(admitted.vertices).toBeLessThanOrEqual(735000);
+  // Positions plus a Uint32 index for every triangle corner bounds either
+  // indexed or non-indexed output, independently of the optional preparation.
+  const outlineInputBytesUpperBound = admitted.vertices * 12 + admitted.triangles * 12;
+  expect(outlineInputBytesUpperBound).toBeLessThanOrEqual(16 * 1024 * 1024);
+  const measurement = { triangles: 245000, vertices: 735000, sourceBytes: 12250084, admitted, outlineInputBytesUpperBound, displayMs,
     observedFrameGapMs: measuredDuration(await page.evaluate(() => Math.max(...(window as any).geometryFrameDelays))), resources: await resources(page),
     browser: await page.locator('[data-geometry-format] canvas').evaluate((canvas: HTMLCanvasElement) => {
       const context = canvas.getContext('webgl2')!, debug = context.getExtension('WEBGL_debug_renderer_info');
       return { userAgent: navigator.userAgent, renderer: context.getParameter(debug?.UNMASKED_RENDERER_WEBGL ?? context.RENDERER), vendor: context.getParameter(debug?.UNMASKED_VENDOR_WEBGL ?? context.VENDOR), version: context.getParameter(context.VERSION), devicePixelRatio };
     }),
     idleDrawCalls: 0 };
-  // Shaded dimensions can appear while default-on outlines are still preparing.
-  // Complete that owned work before settling frames and sampling an idle view.
+  // Outlines must follow the admitted complete mesh's separate 100k budget,
+  // regardless of whether exact preparation finished within its fixed budget.
   const outlines = page.getByRole('button', { name: 'Model outlines', exact: true });
-  await expect(outlines).toHaveAttribute('aria-pressed', 'true');
+  if (admitted.triangles <= 100000) await expect(outlines).toHaveAttribute('aria-pressed', 'true');
+  else {
+    await expect(page.getByText('Outlines are unavailable for this model. Keep using the shaded view.', { exact: true })).toBeVisible();
+    await expect(outlines).toHaveAttribute('aria-pressed', 'false');
+  }
   await expect(outlines).toHaveAttribute('aria-busy', 'false');
   await expect.poll(async () => (await resources(page)).workers).toBe(0);
   await expect(page.locator('[data-geometry-format] canvas')).toHaveAttribute('data-geometry-quality', 'complete');

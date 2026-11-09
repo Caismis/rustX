@@ -5,7 +5,7 @@ import { modelRetryNotices, modelRetryPlacements } from '../src/bindings/model-r
 import { useModelRetryFeedback } from '../src/app/agent/ModelRetry';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
 import type { AppServerClient } from '../src/client/app-server';
-import type { RuntimeClientTranscriptEntry, TraceFieldSource, Request } from '../../protocol/app-server/v72';
+import type { RuntimeClientTranscriptEntry, TraceFieldSource, Request } from '../../protocol/app-server/v75';
 import { Server, checkpoint, snapshot } from './fixture';
 import { traceRecord } from './trace-fixture';
 import { localeController } from '../src/locale/controller';
@@ -76,7 +76,7 @@ it('shows timeout then active retry, loads only disclosed failure details and st
     await act(async () => server.client.disconnect());
     expect(ui.container.querySelector('[data-shimmer="true"]')).toBeNull();
     expect(ui.getByText('Model request retried (1)')).toBeTruthy();
-    expect(server.socket.requests.some(r => r.method === 'turn/start')).toBe(false);
+    expect(server.socket.requests.some(r => r.method === 'inbound/queue')).toBe(false);
   } finally { server.client.disconnect(); }
 });
 
@@ -178,7 +178,7 @@ it.each(['message', 'audit'] as const)('retains independent collapsed retry reco
     expect(notices()).toHaveLength(2);
     expect(notices().map(row => row.closest('[data-chat-anchor-key]')?.getAttribute('data-chat-anchor-key'))).toEqual(anchors);
     expect(notices().every(row => !row.open && !row.hasAttribute('data-active'))).toBe(true);
-    expect(server.requests.some(row => row.request.method === 'turn/start')).toBe(false);
+    expect(server.requests.some(row => row.request.method === 'inbound/queue')).toBe(false);
   } finally { server.client.disconnect(); }
 });
 

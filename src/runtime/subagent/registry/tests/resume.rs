@@ -224,6 +224,13 @@ async fn staged_rollback_uncertainty_survives_prepare_and_durable_admission_roll
         })
         .collect();
     assert_eq!(rollback, vec![false]);
+    assert!(
+        plane
+            .registry
+            .with_activity(|_, fault, _, _| fault)
+            .unwrap(),
+        "failed rollback reservation cannot become idle when its resume task exits"
+    );
     assert_eq!(
         plane
             .registry

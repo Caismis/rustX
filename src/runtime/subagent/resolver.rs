@@ -31,10 +31,10 @@
 //! [`FrozenModelSpec`] rather than a desired configuration plus a catalog
 //! path, each Builtin capability crosses as its exact admitted
 //! `ToolDefinition` rather than a name, and each Skill crosses as its
-//! immutable `SkillId` + `SkillVersionId` binding rather than a host path.
+//! immutable `SkillId` + `SkillVersionId` definition binding together with its
+//! effective live host location and normalized dependency declarations.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -128,43 +128,20 @@ impl ResolvedSubagentTool {
     }
 }
 
-/// One frozen Skill authorization of a resolved child.
-///
-/// Two different things travel together here, and the distinction is the
-/// point:
-///
-/// - `binding` is the **immutable identity** of the exact Skill version the
-///   invoking generation admitted (`SkillId` + `SkillVersionId`). It is what
-///   a physical Skill materialization must realize, and it is what makes an
-///   old frozen specification unambiguous after the host filesystem has
-///   moved on. A host path is *not* an identity: the bytes behind a path can
-///   change without the path changing.
-/// - `catalog_entry` is the **model-visible metadata** of that Skill: name,
-///   description, and the host `SKILL.md` location the model passes to Read.
-///   It is exactly what progressive disclosure needs and nothing more — no
-///   `SKILL.md` body and no supporting resource ever crosses this boundary.
+/// One parent-authorized Skill definition and live host resource binding.
+/// The child installs these values verbatim, without discovery or package I/O.
+/// Definition/visibility stay frozen; Tool reads observe current resource bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResolvedSubagentSkill {
-    /// Frozen discovery provenance; materialization changes only the effective location.
+    /// Effective source and location admitted by the parent.
     pub provenance: crate::skills::SkillProvenance,
-    /// The exact immutable `SkillId` + `SkillVersionId` the generation
-    /// admitted.
+    /// Normalized frontmatter definition version, independent of resource bytes.
     pub binding: SkillBinding,
-    /// The model-visible catalog metadata of that same Skill, as the parent
-    /// generation rendered it. The child **remaps** `location` onto its own
-    /// materialized copy; every other field crosses verbatim.
+    /// Normalized dependency declarations of this frozen definition.
+    pub dependencies: crate::skills::DependencyManifest,
+    /// Frozen model-visible metadata, including the actual SKILL.md location.
     pub catalog_entry: SkillCatalogEntry,
-    /// The canonical absolute host root of the admitted package.
-    ///
-    /// This is a materialization **source**, never an identity: the child
-    /// copies exactly `files` from here and then proves the copy hashes back
-    /// to `binding.version_id`. A source whose bytes moved on after the
-    /// parent froze them therefore fails closed instead of being executed.
-    pub source_root: PathBuf,
-    /// The exact package-relative file set of the admitted package, in the
-    /// generation's deterministic order.
-    pub files: Vec<PathBuf>,
 }
 
 /// The frozen **physical materialization plane** of one resolved child
@@ -363,8 +340,7 @@ pub struct ResolvedSubagentSpec {
 ///                            any admitted credential value
 /// execution identities       SubagentId, conversation/agent ids, tool call id
 /// timestamps                 nothing time-derived enters the preimage
-/// physical paths             the staging root, the Skill source root, the
-///                            child's remapped Skill locations, the MCP
+/// physical paths             the staging root and MCP
 ///                            server's physical launch plane
 /// raw payload formatting     the override JSON's key order, whitespace,
 ///                            duplicate entries, or whether an override was
@@ -418,6 +394,8 @@ pub struct SubagentExecutionProfileDigest(String);
 /// v5 -> v6  (#500) frames source-wide Resources authority separately from Tools.
 /// v6 -> v7  frames each authorized Resource source's frozen approval policy,
 ///           including resource-only sources without ordinary Tool identities.
+/// v7 -> v8  Skill versions identify definitions; live source/location bindings
+///           execute directly instead of being remapped onto child copies.
 /// ```
 ///
 /// Both `v2 -> v3` corrections change what an existing preimage means: the
@@ -427,7 +405,7 @@ pub struct SubagentExecutionProfileDigest(String);
 /// visibly a different framing rather than silently reinterpreted under the
 /// corrected rules — so the version moves even though `v2` never shipped and
 /// no compatibility mode exists.
-pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v7";
+pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v8";
 
 impl SubagentExecutionProfileDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
@@ -1090,12 +1068,12 @@ fn freeze_tool(
 
 /// Applies the exact Skill allowlist over the generation's admitted Skills.
 ///
-/// Two things are frozen per selected Skill, and only two:
+/// The parent freezes each selected Skill's definition and execution binding:
 ///
 /// - the immutable `SkillId` + `SkillVersionId` binding of the exact package
-///   this generation admitted, which is the identity a later physical
-///   materialization must realize;
-/// - the model-visible catalog **metadata** of that package.
+///   this generation admitted, independent of runtime resource edits;
+/// - model-visible catalog metadata and effective source/location;
+/// - normalized declared dependencies for selected environment preparation.
 ///
 /// A `SKILL.md` body and its supporting resources are deliberately absent:
 /// rustX progressive disclosure is preserved, so a selected Skill's content
@@ -1140,9 +1118,8 @@ fn resolve_skills(
                 skill_id: package.id().clone(),
                 version_id: package.version_id().clone(),
             },
+            dependencies: package.dependencies().clone(),
             catalog_entry: catalog_entry.clone(),
-            source_root: package.materialization_root().to_path_buf(),
-            files: package.files().to_vec(),
         });
     }
     Ok(resolved)
@@ -1359,36 +1336,29 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
         // Destructured for the same reason the Tool framing is: every frozen
         // field is classified, and adding one is a compile error.
         let ResolvedSubagentSkill {
-            // Inspection provenance does not affect execution identity.
-            provenance: _,
+            // Effective source is execution binding; shadow diagnostics are inert.
+            provenance,
             binding,
+            dependencies,
             catalog_entry,
-            // A materialization SOURCE, not an identity. The child copies
-            // from it and then proves the copy hashes back to `version_id`.
-            source_root: _,
-            // Represented exactly by `version_id`, which hashes every
-            // package-relative path AND its bytes in sorted order: the file
-            // set cannot change without the version identity changing.
-            files: _,
         } = skill;
+        field(
+            &mut hasher,
+            "skill.dependencies",
+            &serde_json::to_string(dependencies).expect("frozen dependencies serialize"),
+        );
         field(&mut hasher, "skill.id", binding.skill_id.as_str());
         field(&mut hasher, "skill.version_id", binding.version_id.as_str());
         let crate::skills::SkillCatalogEntry {
             name,
             description,
-            // The host `SKILL.md` path. The child REMAPS it onto its own
-            // materialized copy, so the parent's spelling never executes.
-            location: _,
+            location,
         } = catalog_entry;
-        // Both model-visible fields cross to the child verbatim — only
-        // `location` is remapped — so both are part of what the child's model
-        // actually sees. `description` in particular drives progressive
-        // disclosure: it is how the model decides whether to open the Skill at
-        // all. It is NOT covered by `version_id`, even though it is parsed
-        // from the hashed `SKILL.md`, because the child trusts this frozen
-        // string rather than re-deriving it from the materialized package.
+        // Definition strings and actual runtime file binding both cross verbatim.
         field(&mut hasher, "skill.name", name);
         field(&mut hasher, "skill.description", description);
+        field(&mut hasher, "skill.location", location);
+        field(&mut hasher, "skill.source", provenance.source.as_str());
     }
     // The project instruction chain's order is meaning, so it is framed
     // exactly as resolved, content included.
@@ -1508,6 +1478,13 @@ fn frame_tool_definition(hasher: &mut Sha256, prefix: &str, definition: &ToolDef
     field(hasher, &key("id"), id.as_str());
     field(hasher, &key("name"), name);
     match origin {
+        crate::tools::types::ToolOrigin::Host { namespace, name } => {
+            field(
+                hasher,
+                &key("origin"),
+                &format!("host:{namespace:?}:{name}"),
+            );
+        }
         crate::tools::types::ToolOrigin::ManagedPython { package } => {
             field(hasher, &key("origin"), &format!("python:{package}"));
         }
@@ -2751,7 +2728,7 @@ mod tests {
     fn sub258_the_profile_framing_is_versioned() {
         assert_eq!(
             super::SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION,
-            "rustx-subagent-profile-v7",
+            "rustx-subagent-profile-v8",
             "the corrected framing is not one of the readings it replaced"
         );
         assert!(
@@ -3116,14 +3093,13 @@ mod tests {
     /// execution contract, and the physical plane behind it is not.
     ///
     /// The same audit that corrected the Builtin Tool framing found the same
-    /// shape here: `version_id` is a content digest of the package, but the
-    /// child does not re-derive `catalog_entry` from the materialized bytes —
-    /// it takes the parent's frozen strings verbatim and only remaps
-    /// `location`. So the description reaches the child's model exactly as
-    /// frozen, drives progressive disclosure, and must identify the profile.
+    /// shape here: `version_id` identifies the normalized definition, and the
+    /// child installs the parent's frozen catalog strings and live location.
+    /// The description reaches the child's model exactly as frozen, drives
+    /// progressive disclosure, and must identify the profile.
     #[test]
-    fn sub258_a_skill_description_identifies_the_profile_and_its_paths_do_not() {
-        let skill = |description: &str, source_root: &str, location: &str| {
+    fn skill_definition_and_live_location_identify_the_profile() {
+        let skill = |description: &str, location: &str| {
             let mut spec = frozen_spec();
             spec.skills = vec![ResolvedSubagentSkill {
                 provenance: crate::skills::SkillProvenance {
@@ -3136,46 +3112,42 @@ mod tests {
                     skill_id: SkillId::new("code-review"),
                     version_id: SkillVersionId::new("sha256:abc"),
                 },
+                dependencies: crate::skills::DependencyManifest::default(),
                 catalog_entry: crate::skills::SkillCatalogEntry {
                     name: "code-review".to_owned(),
                     description: description.to_owned(),
                     location: location.to_owned(),
                 },
-                source_root: std::path::PathBuf::from(source_root),
-                files: vec![std::path::PathBuf::from("SKILL.md")],
             }];
             spec
         };
-        let base = skill(
-            "Reviews a diff.",
-            "/w/.skills/code-review",
-            "/w/.skills/code-review/SKILL.md",
-        );
+        let base = skill("Reviews a diff.", "/w/.skills/code-review/SKILL.md");
 
         assert_ne!(
             base.profile_digest(),
             skill(
                 "Reviews a diff, adversarially.",
-                "/w/.skills/code-review",
                 "/w/.skills/code-review/SKILL.md"
             )
             .profile_digest(),
             "the description the model reads is part of the child's contract"
         );
-        assert_eq!(
+        assert_ne!(
             base.profile_digest(),
-            skill(
-                "Reviews a diff.",
-                "/other/root/code-review",
-                "/other/root/code-review/SKILL.md"
-            )
-            .profile_digest(),
-            "a host source root and a remapped location are physical, not identity"
+            skill("Reviews a diff.", "/other/root/code-review/SKILL.md").profile_digest(),
+            "the live resource binding is part of the child execution contract"
         );
 
         let mut renamed = base.clone();
         renamed.skills[0].catalog_entry.name = "review".to_owned();
         assert_ne!(base.profile_digest(), renamed.profile_digest());
+
+        let mut dependencies = base.clone();
+        dependencies.skills[0]
+            .dependencies
+            .python
+            .insert("example".into(), "1.0".into());
+        assert_ne!(base.profile_digest(), dependencies.profile_digest());
 
         let mut reversioned = base.clone();
         reversioned.skills[0].binding.version_id = SkillVersionId::new("sha256:def");

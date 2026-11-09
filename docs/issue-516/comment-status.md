@@ -1,10 +1,13 @@
 # PR 517 comment implementation status
 
-Checked on 2026-11-06, Asia/Shanghai, through review comment 6680895688 and the
-requested first-image/navigation policy. The latest repairs cover failed-module
-Refresh recovery, contiguous-read assertions, bounded exact STL preparation and
-Workflow fixture shutdown. Details and validation limits are in
-[the review/CI repair report](review-ci-repairs.md);
+Checked on 2026-11-09, Asia/Shanghai, through review comment 6681877806 and the
+requested first-image/navigation policy. The latest integration resolves the
+upstream-main text conflicts and adapts the added app-server calls to v75
+thread/start and thread/resume. Regression fixes cover startup Session hints
+during Home reauthorization, settings and task defaults, and geometry envelope
+assertions. Final validation state is in
+[the integration report](main-integration-20261109.md). Earlier repair details
+and limits are in [the review/CI repair report](review-ci-repairs.md);
 the inline-thread list was empty. This is an implementation inventory, not a public reply or an
 acceptance of the remaining latency budget. The current implementation and
 verification are recorded in [the whole-model LOD report](lod-validation.md).
@@ -37,6 +40,7 @@ These follow-ups are not represented as disabled placeholder controls.
 
 | Comment | Implementation status |
 | --- | --- |
+| [6681877806](https://github.com/Caismis/rustX/pull/517#issuecomment-6681877806) | Corrected the Scheduler documentation to describe Native's initial model capture and Session persistence when the UI omits `settings.model`. Later Workspace default changes do not replace that Session's selected model; this does not freeze other model configuration. This is based on native creation/capture code; the existing frontend test proves request omission only, and no native end-to-end regression is claimed. |
 | [6680895688](https://github.com/Caismis/rustX/pull/517#issuecomment-6680895688) | A settled Workspace source with no prospective approval mode now shows Native's configuration diagnostic, or a localized unavailable explanation, through the existing source owner and reread action. An available previously published Session catalog cannot admit sending. Actual reads still use the Send-preparation spinner; no waiting footer is restored. Two real-App regressions first failed because the settled diagnostic was absent, then passed with draft retention, blocked button/keyboard submission, reread preparation and repaired-source recovery without automatic sending. |
 | [6675579112](https://github.com/Caismis/rustX/pull/517#issuecomment-6675579112) | A current outline request retains its desired state while preparation suspends it in a parked preview; visibility restoration resumes that request without hidden work, duplicate Workers or retries of actual failures. Latest Off and replacement-copy fences remain authoritative. An unresolved startup Session hint survives transient admission failure and closing another tab; authoritative deletion or newer explicit navigation retires it. Real component/viewport and App regressions reproduce both findings before the repairs. Validation is recorded in [the suspension repair report](suspension-review-repairs.md). |
 | [6654200365](https://github.com/Caismis/rustX/pull/517#issuecomment-6654200365) | Copy-ID changes retry a failed viewer import in the same artifact pane, with late-result fencing and a real Refresh regression. CAD expected reads follow actual fixture size. Large binary STL can prepare a complete, source-proven exact planar surface within the existing optional budget; unproved surfaces keep the standard path. Workflow visual tests close their page before the Host. Installed-Chrome regressions pass; strict first-model/maximum-input acceptance and current-head pinned CI remain separate and open. |

@@ -1,4 +1,4 @@
-import type { BoundedNames, ConfigurationChange, ConfigurationDomain, NamedChanges } from '../../../protocol/app-server/v72';
+import type { BoundedNames, ConfigurationChange, ConfigurationDomain, NamedChanges } from '../../../protocol/app-server/v75';
 import type { Translate } from '../locale/translation';
 
 /** Presentation of one recorded configuration commit. It reads only the

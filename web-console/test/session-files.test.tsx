@@ -9,7 +9,7 @@ import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { validateRaster, RASTER_MAX_PIXELS } from '../src/client/raster';
 import { WorkspaceHostError, type DeliveryBytes, type DeliveryRead, type ProductHostWorkspaces } from '../src/workspaces/host';
 import type { DocumentRequest, DocumentResult } from '../shared/documents';
-import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v72';
+import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v75';
 import { Server } from './fixture';
 import { PreviewWorkspaceOwner } from '../src/app/preview-workspace';
 import { PreviewWorkspaceNotice } from '../src/app/components/PreviewWorkspace';
@@ -251,7 +251,13 @@ it.each([{ image: true, mimeType: undefined }, { image: false, mimeType: 'image/
   const lease = f.resources.acquire(2, { kind: 'artifact', id: 'artifact_1' });
   const ui = render(<ArtifactPreview artifact={{ source: lease.source, name: 'artifact_1', image, mimeType }} resources={lease} {...viewState}/>);
   await act(async () => {});
-  expect(lease.content!.getSnapshot().mode).toBe('bytes'); expect(ui.getByRole('img', { name: 'artifact_1' }).getAttribute('src')).toBe('blob:1');
+  expect(lease.content!.getSnapshot().mode).toBe('bytes');
+  // Browser image decoding owns readiness; no intrinsic-size flash before load.
+  const pending = ui.getByRole('img', { name: 'artifact_1', hidden: true });
+  expect(pending.closest('[hidden]')).not.toBeNull();
+  Object.defineProperty(pending, 'naturalWidth', { value: 1 });
+  fireEvent.load(pending);
+  expect(ui.getByRole('img', { name: 'artifact_1' }).getAttribute('src')).toBe('blob:1');
   expect(f.calls).toHaveLength(0); expect(create).toHaveBeenCalledOnce();
   expect(server.requests.filter(row => row.request.method === 'artifact/read')).toHaveLength(1);
   ui.unmount(); lease.dispose(); expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:1');

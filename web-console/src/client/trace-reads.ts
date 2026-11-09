@@ -1,7 +1,7 @@
 import { validateObservationCut } from '../../../protocol/app-server/observation';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
-import { standaloneTraceCut, inlineTraceDetail, retainedTraceDetailPage, bindTraceDetailReader, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceCache, type TraceFieldReader } from './trace';
-import type { AttachmentTarget, CheckpointReadCut, ProjectionDetail, TraceRecord, TraceToolLocator } from '../../../protocol/app-server/v72';
+import { standaloneTraceCut, inlineTraceDetail, retainedTraceDetailPage, bindTraceDetailReader, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, fillTraceGap, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceCache, type TraceFieldReader } from './trace';
+import type { AttachmentTarget, CheckpointReadCut, ProjectionDetail, TraceRecord, TraceToolLocator } from '../../../protocol/app-server/v75';
 import { traceWindowReady } from './history-policy';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, OperationAdmission, SessionView } from './contracts';
@@ -159,27 +159,37 @@ export class TraceReads {
     this.traceReads.set(id, read);
     return read.work;
   }
-  /** Older reads are fenced by attachment, connection and read-window epoch.
-   * Ordinary live refreshes preserve the epoch only with a durable overlap. */
+  /** Older reads are fenced by attachment, connection and navigation epoch. */
   /** One Turn-aligned reading window, assembled from bounded native pages. */
   loadInitialTrace(id: string) {
     const trace = this.port.state().views[id]?.trace;
     if (!trace || trace.located || trace.loading || trace.error || trace.page.next_cursor == null || traceWindowReady(trace.page.records)) return Promise.resolve();
     return this.loadEarlierTrace(id, true);
   }
-  async loadEarlierTrace(id: string, initial = false) {
+  async loadEarlierTrace(id: string, initial = false, gapBefore?: string) {
     if (this.port.state().views[id]?.attachment === 'attaching') return this.readPreview(id, () => true, true);
     const observation = this.port.observe(id);
     if (!observation) return;
     const { target } = observation;
     const cache = this.port.state().views[id].trace;
+    const gap = cache?.gaps?.find(gap => gap.before === gapBefore);
     const authority = this.traceAuthorities.get(id);
-    if (!cache || cache.loading || cache.page.next_cursor == null) return;
+    if (!cache || cache.loading || (gapBefore ? !gap : cache.page.next_cursor == null)) return;
     const current = () => observation.current()
       && this.traceAuthorities.get(id) === authority
       && this.port.state().views[id]?.trace?.epoch === cache.epoch;
     this.port.setSession(id, { trace: { ...cache, loading: true, error: undefined } });
     try {
+      if (gap) {
+        const result = await this.port.request({ method: 'session/trace', params: { target, before: gap.cursor, limit: TRACE_PAGE_SIZE } }, 'trace', undefined, current);
+        if (!current()) return;
+        standaloneTraceCut(result.page, target.conversation_id);
+        if (result.page.next_cursor === gap.cursor) throw new Error('Native Trace history did not advance.');
+        const live = this.port.state().views[id].trace!;
+        this.port.setSession(id, { trace: { ...fillTraceGap(live, gap, result.page), loading: false } });
+        await this.refreshDomain(id);
+        return;
+      }
       let next = cache;
       const visited = new Set<string>();
       const added: TraceRecord[] = [];

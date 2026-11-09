@@ -149,6 +149,48 @@ describe('tab identity', () => {
   })
 })
 
+describe('content replacement', () => {
+  it.each(['dock', 'float'] as const)('replaces an unopened file in its %s seat with one notification and exact undo', host => {
+    const { controller, paneId } = expanded()
+    const first = controller.openContent({ contentId: 'file:a.txt', title: 'a.txt', kind: 'file' })
+    const target = host === 'float' ? controller.floatTab(first, { x: 45, y: 60, width: 700, height: 550 }) : paneId
+    const before = controller.getSnapshot().state
+    let notifications = 0
+    const stop = controller.subscribe(() => { notifications++ })
+    const replacement = controller.replaceContent(first, { contentId: 'file:b.txt', title: 'b.txt', kind: 'file' })
+    stop()
+    const after = controller.getSnapshot().state
+    expect(notifications).toBe(1)
+    expect(after.tabs[first]).toBeUndefined()
+    expect(after.tabs[replacement]?.contentId).toBe('file:b.txt')
+    expect(getPane(after, target)).toEqual({ ...getPane(before, target), tabs: getPane(before, target).tabs.map(id => id === first ? replacement : id), activeTabId: replacement })
+    expect(Object.keys(after.tabs)).toHaveLength(Object.keys(before.tabs).length)
+    expect(after.activePaneId).toBe(target)
+    expect(controller.undo()).toBe(true)
+    expect(controller.getSnapshot().state).toEqual(before)
+    expect(controller.redo()).toBe(true)
+    expect(controller.getSnapshot().state).toEqual(after)
+  })
+
+  it('keeps a floating replacement independent of an existing docked copy and preserves its seat on repeated selection', () => {
+    const { controller, paneId } = expanded()
+    const first = controller.openContent({ contentId: 'file:a.txt', title: 'a.txt', kind: 'file' })
+    const floating = controller.floatTab(first)
+    const existing = controller.openContent({ paneId, contentId: 'file:b.txt', title: 'b.txt', kind: 'file' })
+    const before = controller.getSnapshot().state
+    const replacement = controller.replaceContent(first, { contentId: 'file:b.txt', title: 'b.txt', kind: 'file' })
+    const after = controller.getSnapshot().state
+    expect(replacement).not.toBe(existing)
+    expect(getPane(after, paneId)).toBe(getPane(before, paneId))
+    expect(after.tabs[existing]).toBe(before.tabs[existing])
+    expect(getPane(after, floating).tabs).toEqual([replacement])
+    expect(getPane(after, floating).rect).toBe(getPane(before, floating).rect)
+    expect(after.activePaneId).toBe(floating)
+    expect(controller.replaceContent(replacement, { contentId: 'file:b.txt', title: 'b.txt', kind: 'file' })).toBe(replacement)
+    expect(controller.getSnapshot().state.tabs[replacement]).toBe(after.tabs[replacement])
+  })
+})
+
 describe('drops', () => {
   it('moves a tab into the pane under the pointer', () => {
     const { controller, paneId } = expanded()

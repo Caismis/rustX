@@ -44,6 +44,8 @@ use super::{ConversationRuntime, RuntimeInner};
 #[derive(Debug, Default)]
 #[allow(clippy::struct_field_names)]
 pub(crate) struct CoordinatorProbe {
+    /// Parks a status read after its healthy Gate read, before native leaf capture.
+    pub(crate) activity_capture_gate: Option<Arc<Gate>>,
     pub(crate) title_source_reads: Option<Arc<std::sync::atomic::AtomicUsize>>,
     /// Fails the next configuration change record after its generation is
     /// published, as a failed durable append would.
@@ -351,6 +353,17 @@ impl ConversationRuntime {
     /// A non-owning handle to the shared runtime state, for lifetime tests.
     pub(crate) fn weak_inner(&self) -> Weak<RuntimeInner> {
         Arc::downgrade(&self.inner)
+    }
+
+    /// Observes admission-worker exit independently of projection-worker exit.
+    #[cfg(test)]
+    pub(crate) fn install_worker_exit_probe(&self, sender: std::sync::mpsc::Sender<()>) {
+        *self
+            .inner
+            .wake
+            .worker_exit
+            .lock()
+            .expect("worker exit probe lock poisoned") = Some(sender);
     }
 
     /// Installs one test-only pre-tool policy for the next runtime-created

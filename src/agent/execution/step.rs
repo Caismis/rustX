@@ -682,7 +682,7 @@ impl<'a> AgentExecution<'a> {
             // inbound work. A drained batch keeps the attempt running for
             // one further model turn, so a pending inbound message prevents
             // a successful Stop from settling before it is observed.
-            return match self.safe_boundary_drain() {
+            return match self.safe_boundary_drain(true) {
                 Ok(true) => None,
                 Ok(false) => Some(Terminal::Completed { finish_reason }),
                 Err(terminal) => Some(terminal),
@@ -754,7 +754,7 @@ impl<'a> AgentExecution<'a> {
         // committed before this point. One finite mailbox drain may attach
         // an inbound batch to the continuation; the drain never splits the
         // tool-result batch.
-        self.safe_boundary_drain().err()
+        self.safe_boundary_drain(false).err()
     }
 
     /// Retains bounded request-time feedback for a Workflow Agent protocol
@@ -808,7 +808,19 @@ impl<'a> AgentExecution<'a> {
     /// Returns `Ok(true)` when one complete batch was adopted, `Ok(false)`
     /// when the snapshot observed an empty inbox, and the attempt terminal
     /// when cancellation was observable before the snapshot.
-    fn safe_boundary_drain(&mut self) -> Result<bool, Terminal> {
+    fn safe_boundary_drain(&mut self, terminal_boundary: bool) -> Result<bool, Terminal> {
+        let owner = self.tool_runtime.mailbox().steering.clone();
+        let mut gate = owner.lock().expect("steering admission");
+        let result = self.drain_steering();
+        if (result.is_err() || (terminal_boundary && matches!(result, Ok(false))))
+            && gate.active.as_ref() == Some(&self.request.attempt_id)
+        {
+            gate.open = false;
+        }
+        result
+    }
+
+    fn drain_steering(&mut self) -> Result<bool, Terminal> {
         let mailbox = self.tool_runtime.mailbox();
         if self.cancellation.is_cancelled() {
             return Err(Terminal::Cancelled {
@@ -820,7 +832,7 @@ impl<'a> AgentExecution<'a> {
         // selected batch. A durable selection failure is a
         // durable-authority failure (Issue #63): the settled result carries
         // it to the coordinator.
-        let batch = match mailbox.select_pending_batch() {
+        let batch = match mailbox.select_steering_batch() {
             Ok(Some(batch)) => batch,
             Ok(None) => return Ok(false),
             Err(error) => {

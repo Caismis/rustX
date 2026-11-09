@@ -8,7 +8,7 @@ import { App } from '../../src/app/App';
 import { Server, endpoint } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/errors';
-import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v72';
+import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v75';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -157,6 +157,7 @@ server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_
 // The native requests this page issued, for browser assertions of exact
 // identity, ordering and request counts. Test fixture only.
 (window as unknown as { rustxNativeRequests: () => unknown[] }).rustxNativeRequests = () => server.requests.map(item => item.request);
+(window as unknown as { rustxReplaceAuthority: () => Promise<void> }).rustxReplaceAuthority = async () => { server.authorityId = 'replacement-authority'; await server.connect(); };
 // Streams one long answer for Session A through the production client fold,
 // one delta per task so every delta can paint. Test fixture only.
 (window as unknown as { rustxStream: (deltas: number) => Promise<void> }).rustxStream = async deltas => {

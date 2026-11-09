@@ -1,7 +1,7 @@
 import { CommandRejected, replaceNode } from './commands';
 import { blockAt, nodeAt, sameBlockPath, updateBlock, type BlockPath, type WorkflowDocument } from './model';
 import { nodePresentation, putNote, setNodePresentation } from './geometry';
-import type { WorkflowNodePresentation, WorkflowNote } from '../../../../../protocol/app-server/v72';
+import type { WorkflowNodePresentation, WorkflowNote } from '../../../../../protocol/app-server/v75';
 
 /** One component of a field path inside a node or block. A string is a
  * structural property of the native authoring type, `{ key }` an authored

@@ -434,6 +434,22 @@ fn workflow_document_schema() -> &'static Value {
     })
 }
 
+/// Decode a claimed callback result through the ordinary App Server numeric
+/// contract. Envelope correlation deliberately precedes domain validation.
+pub(super) fn interaction_response_from_value(
+    mut value: Value,
+) -> Result<crate::runtime::interaction::InteractionResponse, String> {
+    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    let schema = SCHEMA.get_or_init(|| {
+        serde_json::to_value(schemars::schema_for!(
+            crate::runtime::interaction::InteractionResponse
+        ))
+        .expect("Interaction response schema")
+    });
+    convert(&mut value, schema, schema, false)?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
 /// Content references carry the same numeric domains and duplicate-field rules
 /// as ordinary DTOs, without requiring the content to fit a control record.
 pub(crate) fn workflow_document_to_bytes(
@@ -558,6 +574,7 @@ macro_rules! envelope {
 envelope!(super::protocol::Request);
 envelope!(super::protocol::Response);
 envelope!(super::protocol::Notification);
+envelope!(super::protocol::ServerRequest);
 // The private Host carrier uses the same exact attachment identities as the
 // ordinary protocol, without adding its operation to the public Method space.
 envelope!(super::product_host::FileRead);
@@ -573,6 +590,9 @@ pub(super) fn protocol_schema() -> Value {
     let _ = generator.subschema_for::<crate::durable::observation::WorkflowTraceNode>();
     let _ = generator.subschema_for::<crate::runtime_client::RuntimeClientModelName>();
     let _ = generator.subschema_for::<crate::runtime::interaction::RoutedInteraction>();
+    let _ = generator.subschema_for::<crate::runtime::interaction::InteractionResponse>();
+    let _ = generator.subschema_for::<super::protocol::HostToolResponse>();
+    let _ = generator.subschema_for::<super::protocol::ServerOutput>();
     // Assign envelope-owned names first; the chunked report shares domain type names.
     let _ = generator.root_schema_for::<super::protocol::ProtocolMessage>();
     let _ =
@@ -585,6 +605,43 @@ pub(super) fn protocol_schema() -> Value {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn claimed_review_reply_decodes_exact_native_identity_and_rejects_noncanonical_values() {
+        use crate::events::review::ReviewSpecification;
+        use crate::runtime::interaction::InteractionResponse;
+        const EXACT: u64 = 9_007_199_254_740_993;
+        let mut instance = crate::runtime::workflow::test_instance("review", "human");
+        instance.block.run.invocation = EXACT;
+        instance.block.invocations = vec![u32::MAX];
+        instance.visit = u32::MAX;
+        let specification =
+            ReviewSpecification::new(instance, "Ship it?".into(), ["Accept", "Revise"]);
+        let response = InteractionResponse::Review {
+            response: specification.choose(1),
+        };
+        let schema = serde_json::to_value(schemars::schema_for!(InteractionResponse)).unwrap();
+        let mut wire = serde_json::to_value(&response).unwrap();
+        super::convert(&mut wire, &schema, &schema, true).unwrap();
+        assert_eq!(
+            wire["response"]["instance"]["block"]["run"]["invocation"],
+            EXACT.to_string()
+        );
+        assert_eq!(wire["response"]["instance"]["visit"], u32::MAX);
+        assert_eq!(
+            super::interaction_response_from_value(wire.clone()).unwrap(),
+            response
+        );
+        for invalid in [
+            serde_json::json!(EXACT),
+            serde_json::json!("01"),
+            serde_json::json!("18446744073709551616"),
+        ] {
+            let mut wire = wire.clone();
+            wire["response"]["instance"]["block"]["run"]["invocation"] = invalid;
+            assert!(super::interaction_response_from_value(wire).is_err());
+        }
+    }
 
     #[test]
     fn private_host_read_requires_exact_wire_identity() {
@@ -699,7 +756,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v72.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v75.ts"),
         )
         .unwrap();
         for domain in [

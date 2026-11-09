@@ -4,6 +4,36 @@
 use super::*;
 
 impl ConversationRuntime {
+    pub(crate) fn lifecycle(&self) -> ConversationLifecycle {
+        self.inner.lifecycle.clone()
+    }
+
+    pub(crate) fn with_pending_interaction_header<T>(
+        &self,
+        interaction: &InteractionRef,
+        publish: impl FnOnce(&crate::observation::interaction::RuntimeClientInteractionHeader) -> T,
+    ) -> Option<T> {
+        if interaction.conversation_id == self.inner.conversation_id {
+            return self
+                .inner
+                .interaction
+                .with_pending_header(interaction, publish);
+        }
+        self.inner
+            .subagents
+            .as_ref()?
+            .with_pending_interaction_header(interaction, publish)
+    }
+
+    pub(crate) fn pending_interaction_headers(
+        &self,
+    ) -> Vec<crate::observation::interaction::RuntimeClientInteractionHeader> {
+        let mut headers = self.inner.interaction.callback_headers(128);
+        if let Some(subagents) = &self.inner.subagents {
+            headers.extend(subagents.callback_headers(128 - headers.len()));
+        }
+        headers
+    }
     /// Answers one live native interaction through its originating
     /// conversation. The root runtime is only a routing surface: it never
     /// creates a parent interaction for a child and never settles a child

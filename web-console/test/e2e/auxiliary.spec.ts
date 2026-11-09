@@ -12,12 +12,12 @@ for (const locale of ['en', 'zh'] as const) {
       await page.setViewportSize({ width: locale === 'zh' ? 390 : 1440, height: 900 });
       await page.addInitScript(locale => { localStorage.setItem('rustx-locale-v1', 'en'); localStorage.setItem('rustx-appearance-v1', locale === 'en' ? 'light' : 'dark'); }, locale);
       await routeWorkspaceHost(page, fixture); await page.goto('/');
-      await connectRemote(page, fixture.endpoint, fixture.token, fixture.deliveryToken);
+      await connectRemote(page, fixture.endpoint, fixture.token);
       await openEmptySession(page, fixture, 'Workspace A');
       if (locale === 'zh') {
         await page.getByRole('button', { name: 'Settings', exact: true }).click();
-        await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-        await page.getByRole('button', { name: '关闭设置' }).click();
+        await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+        await page.getByRole('button', { name: '主页' }).click();
       }
       const primary = page.getByRole('textbox', { name: copy('Message', '消息'), exact: true });
       await primary.fill('Primary remains running'); await primary.press('Enter'); await fixture.gate('primary');

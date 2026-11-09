@@ -23,8 +23,11 @@ scope enforces `erasableSyntaxOnly`, and a clean native child regression exercis
 real Host classification and HTTP authority-error serialization.
 
 Normal local development uses [the dev launcher](../DEVELOPMENT.md), which owns
-the ephemeral config and metadata. The following describes the distinct case of
-an independently managed Product Host with persistent operator-owned metadata.
+the ephemeral Product Host configuration and a persistent Workspace registry at
+`$XDG_STATE_HOME/rustx/web/<profile>/workspaces.json` (defaulting to
+`~/.local/state`). Registrations, order, names and the manually selected Workspace
+survive launcher restarts. The following describes the distinct case of an
+independently managed Product Host with operator-owned configuration and metadata.
 The launcher carrier authenticates browser requests before the Workspace middleware.
 Its bootstrap DTO contains only native transport admission material, never roots.
 Browser authentication cannot add roots; Remote Settings cannot grant filesystem access.
@@ -120,10 +123,10 @@ use the displayed registration as navigation intent, but must resolve it freshly
 before creation; display evidence never supplies a cwd or operation permission.
 
 Native `session/name` owns renaming. Sidebar Fork opens the existing native exact
-boundary chooser and `session/fork`; TypeScript never clones Session/history state.
+boundary chooser and `thread/fork`; TypeScript never clones Session/history state.
 
 Create and `/new` resolve the selected Host registration to an explicit cwd before
-`session/create`. ShellNavigationMachine owns disposable route preparation and publication. Native
+`thread/start`. ShellNavigationMachine owns disposable route preparation and publication. Native
 FirstSubmissions and Session Lifecycle retain creation and attachment settlement;
 connection generations and dispatch admission fence unsent work. Supersession never cancels an operation
 already committed on the server. For first submission, decoded creation ACK
@@ -145,8 +148,9 @@ credentials or resource definitions. See [Web Settings](../docs/web-settings.md)
 
 ## Harness browser presentation (#345)
 
-The Sidebar uses the upstream compact project/Session rows, hover cards, menus,
-search results and collapsed rail. **New Conversation** opens the center draft route. Workspace selection stays
+The Home secondary sidebar uses the upstream compact project/Session rows,
+hover cards, menus and search results. Collapsing it leaves only the separate
+permanent primary navigation rail. **New Conversation** opens the center draft route. Workspace selection stays
 browser draft state until first submit; only that submit creates a native Session.
 Project title selection changes navigation context; its chevron expands/collapses
 rows. **View options** switches Flat/Grouped view and refreshes the native list.
@@ -252,7 +256,7 @@ operation is dispatched are not retroactive cancellation of that operation.
 
 **Captured cwd.** Final validation reclassifies the cwd captured from the initial
 `session/settings` read instead of rereading native settings. Native
-`SessionPersistentState.cwd` is fixed at `session/create`/`session/fork` on every App
+`SessionPersistentState.cwd` is fixed at `thread/start`/`thread/fork` on every App
 Server path: the protocol has no settings-replacement method, and the only production
 settings writer (configuration adoption in `SessionRuntimeManager`) copies the lineage
 settings and replaces `model` alone. A future wire method that can change a Session's
@@ -263,7 +267,7 @@ classification stays adjacent to send and validation never returns to "validate,
 queue". At most two validations run at once; waiting validations hold nothing and never
 block requests behind them. Product Host validations reserve only ordinary RPC
 capacity and cannot consume the independent lifecycle-control capacity.
-`turn/cancel` uses the separate, bounded two-request control lane: ordinary RPC
+`turn/interrupt` uses the separate, bounded two-request control lane: ordinary RPC
 saturation cannot delay an otherwise admissible exact cancellation, while a full
 control lane refuses new local control admission before transmission. Each validation
 has the RPC deadline from reservation; retirement (Host replacement, navigation,

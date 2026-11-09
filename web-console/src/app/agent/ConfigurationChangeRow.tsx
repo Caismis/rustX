@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Tool-change presentation adapted from Harness ContextInjectionRow; see PROVENANCE.md. */
 import { useState } from 'react';
-import type { BoundedNames, ConfigurationChange } from '../../../../protocol/app-server/v72';
+import type { BoundedNames, ConfigurationChange } from '../../../../protocol/app-server/v75';
 import { useTranslation } from '../../locale/react';
 import { DisclosureRow } from '../../presentation/primitives/DisclosureRow';
 import { IconBrowseOutline16 } from '../../presentation/primitives/icons';

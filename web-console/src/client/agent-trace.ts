@@ -1,7 +1,7 @@
-import type { CheckpointReadCut,RuntimeClientAgent,TraceToolLocator } from '../../../protocol/app-server/v72';
+import type { CheckpointReadCut,RuntimeClientAgent,TraceToolLocator } from '../../../protocol/app-server/v75';
 import type { AppServerClient } from './app-server';
 import type { Observation } from './session-lifecycle/port';
-import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceFieldReader,type TraceCache } from './trace';
+import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, fillTraceGap, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceFieldReader,type TraceCache } from './trace';
 import { traceWindowReady } from './history-policy';
 
 /** One child Conversation's finite, read-only Trace domain. Parent attachment
@@ -83,7 +83,7 @@ export class AgentTraceReader {
     if (!result.location) throw new Error('This tool occurrence has no native execution record.');
     this.pageCut(result.location.page);
     const cache = {...replaceTrace(result.location.page, this.cache),fields:this.fields};
-    const repaired = refreshTrace({ ...cache, located: true }, result.location.page, result.location.page.updates);
+    const repaired = refreshTrace({ ...cache, located: true }, result.location.page, result.location.page.updates, undefined, true);
     this.publish(selectTrace(repaired, result.location.record_id));
     return true;
   };
@@ -97,14 +97,25 @@ export class AgentTraceReader {
     if (this.cache.located || this.cache.error || traceWindowReady(this.cache.page.records)) return Promise.resolve();
     return this.earlier(true);
   };
-  earlier = async (initial = false) => {
+  earlier = async (initial = false, gapBefore?: string) => {
     const cache = this.cache;
-    if (!this.current() || cache.loading || !cache.page.next_cursor) return;
+    const gap = cache.gaps?.find(gap => gap.before === gapBefore);
+    if (!this.current() || cache.loading || (gapBefore ? !gap : !cache.page.next_cursor)) return;
     const operation = {};
     const current = () => this.current() && this.cache.epoch === cache.epoch && this.paging === operation;
     this.paging = operation;
     this.publish({ ...cache, loading: true, error: undefined });
     try {
+      if (gap) {
+        const result = await this.client.request({ method: 'agent/trace', params: { target: this.proof.target, agent_id: this.agentId, before: gap.cursor, limit: TRACE_PAGE_SIZE } }, 'trace', undefined, current);
+        if (!current()) return;
+        this.pageCut(result.page);
+        if (result.page.next_cursor === gap.cursor) throw new Error('Native child Trace history did not advance.');
+        this.paging = undefined;
+        this.publish({ ...fillTraceGap(this.cache, gap, result.page), loading: false });
+        await this.refresh();
+        return;
+      }
       let next = cache;
       const visited = new Set<string>();
       const added: TraceCache['page']['records'] = [];

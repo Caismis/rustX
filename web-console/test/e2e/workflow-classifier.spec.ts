@@ -21,15 +21,16 @@ for (const width of [1440,390]) test.describe(`classifier panel ${width}`,()=>{
       const file=join(directory,'classify.yaml');writeFileSync(file,JSON.stringify(dataNodesDocument()));
       await page.addInitScript(dark=>localStorage.setItem('rustx-appearance-v1',dark?'dark':'light'),width===390);
       await routeWorkspaceHost(page,fixture);await page.goto('/');await connectRemote(page,fixture.endpoint,fixture.token);await openEmptySession(page,fixture,'Workspace A');
-      await page.getByRole('navigation',{name:'Global panels'}).getByRole('button',{name:'Workflows',exact:true}).click();
+      await page.getByRole('navigation',{name:'Primary navigation'}).getByRole('button',{name:'Workflows',exact:true}).click();
       await page.getByRole('button',{name:'classify',exact:true}).click();
       await expect(page).toHaveTitle(/rustX$/);
       const card=page.locator(`.react-flow__node[data-id='${viewId([],'node','classify')}']`);
       await card.focus();await card.press('Enter');
       // The same source and layout, with product-owned Chinese wording.
       await page.getByRole('button',{name:'Settings',exact:true}).click();
-      await choose(page.getByRole('dialog',{name:'Settings',exact:true}),'Language','中文');
-      await page.getByRole('button',{name:'关闭设置',exact:true}).click();
+      await choose(page.getByRole('region',{name:'Settings',exact:true}),'Language','中文');
+      await page.getByRole('button',{name:'工作流',exact:true}).click();
+      await card.focus();await card.press('Enter');
       const panel=page.getByRole('complementary',{name:'检查器',exact:true});
       await expect(panel.getByText('视觉',{exact:true})).toHaveCount(0);
       await expect(panel.getByRole('textbox',{name:'Class ID',exact:true})).toHaveCount(0);

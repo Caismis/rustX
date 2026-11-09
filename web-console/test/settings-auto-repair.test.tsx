@@ -7,7 +7,8 @@ import { materializeSource } from '../../protocol/app-server/source-observation'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActor } from 'xstate';
-import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v72';
+import { useState } from 'react';
+import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v75';
 import { RepairNotice, repairNoticeText } from '../src/app/RepairNotice';
 import { repairChangeLabel } from '../src/app/settings/advanced/AutoRepair';
 import { inspectionAcknowledger, RepairAcknowledgements } from '../src/app/repair-notices';
@@ -126,11 +127,19 @@ async function inspectionShell(native: NativeSources = {}) {
     inspected: inspectionAcknowledger(s.client, acknowledgements),
   } });
   navigation.start();
-  const viewDetails = vi.fn(({ source, authorityId, receiptId }: RepairInspection) => navigation.send({ type: 'OPEN.REPAIRS', source, inspection: { authorityId, receiptId } }));
-  render(<>
-    <RepairNotice client={s.client} acknowledgements={acknowledgements} viewDetails={viewDetails} />
-    <SettingsSurface client={s.client} host={host} target={userSettingsTarget} navigation={navigation} />
-  </>);
+  let reveal!: () => void;
+  const viewDetails = vi.fn(({ source, authorityId, receiptId }: RepairInspection) => {
+    reveal(); navigation.send({ type: 'OPEN.REPAIRS', source, inspection: { authorityId, receiptId } });
+  });
+  function Surface() {
+    const [visible, setVisible] = useState(false);
+    reveal = () => setVisible(true);
+    return <>
+      <RepairNotice client={s.client} acknowledgements={acknowledgements} viewDetails={viewDetails}/>
+      <div hidden={!visible}><SettingsSurface visible={visible} client={s.client} host={host} target={userSettingsTarget} navigation={navigation}/></div>
+    </>;
+  }
+  render(<Surface/>);
   if (native.user) await announce(s, { kind: 'user' }, native.user);
   if (native.workspace) await announce(s, workspace, native.workspace);
   /** Answer the owner lookup in flight for `directory`. */
@@ -230,7 +239,7 @@ describe('View details acknowledges a receipt only once its exact details are pr
   }
 
   for (const [name, abandon] of [
-    ['Settings closed', (shell: Awaited<ReturnType<typeof inspectionShell>>) => shell.navigation.send({ type: 'CLOSE' })],
+    ['Settings left', (shell: Awaited<ReturnType<typeof inspectionShell>>) => shell.navigation.send({ type: 'SUSPEND' })],
     ['another Settings target opened', (shell: Awaited<ReturnType<typeof inspectionShell>>) => shell.navigation.send({ type: 'OPEN', target: workspaceSettingsTarget('wB', 'Workspace B') })],
     ['the lookup superseded by another owner lookup', (shell: Awaited<ReturnType<typeof inspectionShell>>) => shell.navigation.send({ type: 'OPEN.OWNER', directory: '/workspace/A' })],
     ['the App Server authority retired', (shell: Awaited<ReturnType<typeof inspectionShell>>) => shell.navigation.send({ type: 'RETIRE' })],
@@ -250,14 +259,14 @@ describe('View details acknowledges a receipt only once its exact details are pr
     });
   }
 
-  it('Settings closed after the owner landed, before the details were presented, acknowledges nothing', async () => {
+  it('Settings left after the owner landed, before the details were presented, acknowledges nothing', async () => {
     const shell = await inspectionShell({ workspace: workspaceReceipt() });
     shell.s.held.add('configuration/sourcesRead');
     const reading = shell.s.waitFor('configuration/sourcesRead');
     viewDetails();
     await shell.resolve({ kind: 'resolved', id: 'wA', displayName: 'Workspace A' });
     const read = await reading;
-    act(() => shell.navigation.send({ type: 'CLOSE' }));
+    act(() => shell.navigation.send({ type: 'SUSPEND' }));
     shell.s.held.delete('configuration/sourcesRead');
     await act(async () => shell.s.reply(read));
     expect(shell.acknowledged('w')).toBe(false);

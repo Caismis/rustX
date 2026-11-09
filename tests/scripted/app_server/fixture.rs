@@ -105,19 +105,27 @@ impl Fixture {
         Self::with_session_count(tool, 2).await
     }
     pub(super) async fn with_session_count(tool: Option<&'static str>, count: usize) -> Self {
-        Self::with_provider_gating(tool, count, false, None).await
+        Self::with_provider_gating(tool, count, false, None, None).await
     }
 
     pub(super) async fn with_summary_gate() -> Self {
-        Self::with_provider_gating(None, 1, true, None).await
+        Self::with_provider_gating(None, 1, true, None, None).await
     }
 
     pub(super) async fn with_titles() -> Self {
-        Self::with_provider_gating(Some("title"), 1, false, None).await
+        Self::with_provider_gating(Some("title"), 1, false, None, None).await
     }
 
     pub(super) async fn with_anthropic_titles(title: &str) -> Self {
-        Self::with_provider_gating(Some("title"), 1, false, Some(title.to_owned())).await
+        Self::with_provider_gating(Some("title"), 1, false, Some(title.to_owned()), None).await
+    }
+
+    pub(super) async fn with_owner_policy(
+        count: usize,
+        clock: Arc<dyn crate::runtime::monotonic::MonotonicClock>,
+        policy: crate::local_runtime::app_server_policy::AppServerPolicy,
+    ) -> Self {
+        Self::with_provider_gating(None, count, false, None, Some((clock, policy))).await
     }
 
     async fn with_provider_gating(
@@ -125,6 +133,10 @@ impl Fixture {
         count: usize,
         gate_summary: bool,
         anthropic_title: Option<String>,
+        owner: Option<(
+            Arc<dyn crate::runtime::monotonic::MonotonicClock>,
+            crate::local_runtime::app_server_policy::AppServerPolicy,
+        )>,
     ) -> Self {
         let mut phases = FixturePhase::new("Session fixture construction");
         phases.enter("provider listener");
@@ -304,7 +316,17 @@ impl Fixture {
         }
         let archive_root = paths.runtime_root.clone();
         phases.enter("manager construction");
-        let manager = SessionRuntimeManager::new(
+        let residency = owner.as_ref().map_or(
+            RuntimeResidencyPolicy {
+                max_resident_runtimes: 8,
+                idle_grace_ms: 300_000,
+            },
+            |(_, policy)| RuntimeResidencyPolicy {
+                max_resident_runtimes: policy.max_resident_runtimes,
+                idle_grace_ms: policy.idle_grace_ms,
+            },
+        );
+        let mut manager = SessionRuntimeManager::new(
             controller,
             UserConfigManager::new(paths.sources.clone()).unwrap(),
             CredentialSnapshot::new([("TEST_KEY".into(), "fixture".into())]),
@@ -320,20 +342,20 @@ impl Fixture {
                 }),
                 ..LocalRuntimeDependencies::default()
             },
-            RuntimeResidencyPolicy {
-                max_resident_runtimes: 8,
-                idle_grace_ms: 300_000,
-            },
+            residency,
         )
         .unwrap();
+        let policy = if let Some((clock, policy)) = owner {
+            manager.clock = clock;
+            policy
+        } else {
+            crate::local_runtime::app_server_policy::AppServerPolicy::default()
+        };
         phases.finish();
         Self {
             _root: root,
             archive_root,
-            host: crate::app_server::host::AppServerHost::new(
-                manager.clone(),
-                crate::local_runtime::app_server_policy::AppServerPolicy::default(),
-            ),
+            host: crate::app_server::host::AppServerHost::new(manager.clone(), policy),
             manager,
             sessions,
             gates,
@@ -435,10 +457,16 @@ fn delivery_child_gate_uses_exact_task_text_not_parent_context_mentions() {
 /// A hang guard, not a latency bound. A fixture's durable turns can take tens
 /// of seconds in a debug build while the whole suite shares the CPU and disk,
 /// so only a fixture that stops making progress for minutes is a failure.
-pub(super) async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
-    tokio::time::timeout(std::time::Duration::from_secs(180), future)
-        .await
-        .expect("test liveness")
+#[track_caller]
+pub(super) fn bounded<T>(
+    future: impl std::future::Future<Output = T>,
+) -> impl std::future::Future<Output = T> {
+    let caller = std::panic::Location::caller();
+    async move {
+        tokio::time::timeout(std::time::Duration::from_secs(180), future)
+            .await
+            .unwrap_or_else(|_| panic!("test liveness at {caller}"))
+    }
 }
 
 pub(super) fn events(runtime: &ConversationRuntime) -> Vec<RuntimeEvent> {

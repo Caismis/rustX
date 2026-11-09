@@ -1,6 +1,8 @@
 import { watch } from 'node:fs';
 import { open, readFile, statfs } from 'node:fs/promises';
 import { OFFICE_LIMITS } from './limits.ts';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 /** Do not release the Host seat if physical retirement cannot be established. */
 export class OfficeSettlementError extends Error { constructor() { super('converter_unavailable'); } }
@@ -29,7 +31,27 @@ export async function observeOfficeCgroup(path: string, unit: string) {
   observer.on('error', fail);
   void check();
   let killing: Promise<void> | undefined;
+  const exec = promisify(execFile);
+  const env = Object.fromEntries(['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'].flatMap(key => process.env[key] ? [[key, process.env[key]!]] : []));
+  const deadlineUnit = unit.replace(/\.service$/, '-deadline');
+  let armed = false;
+  const disarm = async () => {
+    if (!armed) return;
+    for (const suffix of ['timer', 'service']) {
+      try { await exec('/usr/bin/systemctl', ['--user', 'stop', `${deadlineUnit}.${suffix}`], { env }); }
+      catch (cause) { if ((cause as {code?:number}).code !== 5) throw cause; }
+    }
+    armed = false;
+  };
   return {
+    async deadline(active: boolean) {
+      await disarm();
+      if (!active) return;
+      await exec('/usr/bin/systemd-run', ['--user', '--quiet', '--collect', `--unit=${deadlineUnit}`,
+        `--on-active=${OFFICE_LIMITS.runtimeSeconds}s`, '--timer-property=AccuracySec=1us',
+        '--', '/usr/bin/systemctl', '--user', 'kill', '--kill-whom=all', '--signal=SIGKILL', unit], { env });
+      armed = true;
+    },
     kill: () => killing ??= control.write('1', 0, 'utf8').then(() => {}, async error => {
       // An already removed cgroup has no remaining tasks. Other errors must not
       // turn an unknown retirement into a released capacity reservation.
@@ -37,7 +59,7 @@ export async function observeOfficeCgroup(path: string, unit: string) {
     }),
     async retire() {
       try { await this.kill(); await settled; }
-      finally { closing = true; observer.close(); await checking; await control.close(); }
+      finally { closing = true; observer.close(); await checking; await control.close(); await disarm(); }
     },
   };
 }

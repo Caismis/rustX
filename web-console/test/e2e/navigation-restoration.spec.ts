@@ -12,6 +12,7 @@ test('a real page reload restores the last selected Session on the same native a
     native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     const a = (await native.createSession({ cwd: fixture.workspaceA })).session;
     const b = (await native.createSession({ cwd: fixture.workspaceB })).session;
+    const bThread = (await native.readNode(b.id, b.active_node)).conversation_id;
     await native.renameSession(a.id, 'Reload Session A');
     await native.renameSession(b.id, 'Reload Session B');
     const originalIds = (await native.listSessions()).sessions.map(session => session.id).sort();
@@ -50,11 +51,11 @@ test('a real page reload restores the last selected Session on the same native a
     await expect(rowA).not.toHaveAttribute('aria-current', 'page');
     await expect(page.getByLabel('Session title', { exact: true })).toHaveText('Reload Session B');
 
-    const restored = wire.requests.slice(beforeReload).filter(row => row.method === 'session/attach');
-    expect(restored[0]?.params.session_id).toBe(b.id);
+    const restored = wire.requests.slice(beforeReload).filter(row => row.method === 'thread/resume');
+    expect(restored[0]?.params.threadId).toBe(bThread);
     expect(wire.responses.filter(row => row.method === 'initialize').map(row => row.result.authority_id)).toEqual([authority, authority]);
     expect((await native.listSessions()).sessions.map(session => session.id).sort()).toEqual(originalIds);
-    expect(wire.requests.filter(row => ['session/create', 'session/submissionIntent', 'turn/start'].includes(row.method))).toEqual([]);
+    expect(wire.requests.filter(row => ['thread/start', 'session/submissionIntent', 'turn/start'].includes(row.method))).toEqual([]);
     expect((await fixture.control('requests')).requests).toEqual([]);
     expect(await page.evaluate(token => [...Object.values(localStorage), ...Object.values(sessionStorage)].some(value => value.includes(token)), fixture.token)).toBe(false);
   } catch (error) {

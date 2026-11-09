@@ -145,9 +145,9 @@ it.each(['message', 'catalog'] as const)('keeps retained Workflow records non-ac
   };
   expectRetainedWithoutAuthority();
 
-  server.held.add('session/attach');
+  server.held.add('thread/resume');
   await act(async () => { await server.connect(); });
-  const attach = await server.waitFor('session/attach', 2);
+  const attach = await server.waitFor('thread/resume', 2);
   expect(server.client.getSnapshot().connection).toBe('connected');
   expect(server.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
   expectRetainedWithoutAuthority();

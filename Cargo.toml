@@ -81,14 +81,16 @@ ignore = "0.4.33"
 grep-matcher = "0.1.9"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
-nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir", "inotify", "event", "user", "poll", "socket", "resource"] }
-rustix = { version = "1.1.4", features = ["fs"] }
+nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir", "inotify", "event", "user", "poll", "socket", "resource", "term"] }
+rustix = { version = "1.1.4", features = ["fs", "termios", "pty"] }
 libc = "0.2"
 serde_yaml = "0.9"
 serde_path_to_error = "0.1"
 toml = "0.8"
 url = "2"
 sha2 = "0.10"
+constant_time_eq = "0.4"
+jsonwebtoken = { version = "10.4", default-features = false, features = ["aws_lc_rs"] }
 # Bounded line comparisons for captured per-turn workspace changes.
 similar = "3.2"
 imbl = "7.0.0"

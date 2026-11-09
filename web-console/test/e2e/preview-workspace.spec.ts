@@ -155,7 +155,11 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await textPane.getByRole('button', { name: 'Move tab to other pane', exact: true }).focus(); await page.keyboard.press('Enter');
     await expect(panes).toHaveCount(2); await expect(tabs).toHaveCount(3);
 
-    await open('sample.docx'); await expect(panel.locator('[data-pdf-page="1"] .textLayer').filter({ hasText: 'rustX document preview' })).toBeVisible();
+    await open('sample.docx');
+    const officePage = panel.locator('[data-pdf-page="1"] .textLayer').filter({ hasText: 'rustX document preview' });
+    // Conversion can consume most of this existing readiness budget. Sample
+    // visibility throughout its final window rather than backing off past it.
+    await expect.poll(() => officePage.isVisible(), { timeout: 5_000, intervals: [50] }).toBe(true);
     await expect(panel.locator('[data-pdf-preview]')).toHaveCount(2); await expect.poll(liveWorkers).toBe(2);
     const officePane = panes.filter({ has: page.getByRole('tab', { name: 'sample.docx', exact: true }) });
     const pdfPane = panes.filter({ hasNot: page.getByRole('tab', { name: 'sample.docx', exact: true }) });
@@ -255,7 +259,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     await expectSettled(page, wire);
     await expect.poll(() => anchor.evaluate(element => element.getBoundingClientRect().top)).toBeCloseTo(top, 0);
     await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toBeVisible();
-    expect(wire.requests.filter(request => request.method === 'turn/cancel')).toHaveLength(0);
+    expect(wire.requests.filter(request => request.method === 'turn/interrupt')).toHaveLength(0);
     const beforeSession = await tabs.evaluateAll(elements => elements.map(element => element.getAttribute('data-preview-tab')));
     const readsBeforeSession = reads.length;
     const contentBeforeSession = contentReadCount(), conversionsBeforeSession = derivations.length;
@@ -287,8 +291,8 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
 
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
-    await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-    await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+    await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+    await page.getByRole('button', { name: '主页', exact: true }).click();
     const chinesePanel = page.getByRole('complementary', { name: '预览', exact: true });
     await expect(chinesePanel.locator('[data-pdf-page="1"] .textLayer').nth(0)).toContainText('rustX');
     await expect(chinesePanel.locator('[data-pdf-page="1"] .textLayer').nth(1)).toContainText('rustX');
@@ -312,7 +316,7 @@ test('bounded preview workspace keeps exact occurrences, two live PDFs, keyboard
     const counts = await page.evaluate(() => { const state = (window as any).previewObservation; return { workers: state.maximumWorkers, urls: state.maximumUrls, duplicate: state.duplicateRevocations }; });
     expect(counts).toEqual({ workers: 2, urls: 1, duplicate: 0 });
     expect((await fixture.control('requests')).requests).toHaveLength(modelRequests);
-    expect(wire.requests.filter(request => request.method === 'turn/start')).toHaveLength(2);
+    expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(2);
     expect(errors).toEqual([]); passed = true;
   } finally { await page.close(); await fixture.stop(passed); }
 });

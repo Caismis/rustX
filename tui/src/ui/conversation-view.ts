@@ -1,5 +1,7 @@
+import {threadStatusText} from '../../../protocol/app-server/thread-status.ts';
+import type {ThreadStatusEntry} from '../../../protocol/app-server/v75.ts';
 import { Container, Loader, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
-import type { CollectionFrontier } from "../../../protocol/app-server/v72.ts";
+import type { CollectionFrontier } from "../../../protocol/app-server/v75.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import { correlateTools } from "../presentation/tools.ts";
 import { selectTodos } from "../presentation/todos.ts";
@@ -21,6 +23,7 @@ import { style } from "./theme.ts";
 
 /** Everything one total render reads besides the projection itself. */
 export interface ConversationRenderContext {
+  threadStatus?:ThreadStatusEntry;
   preferences: PresentationPreferences;
   sessionInfo: SessionView | undefined;
   workspace: string | undefined;
@@ -137,7 +140,10 @@ export class ConversationView {
     });
     if (todos.length > 0) this.todos.addChild(new Text(todos, 1, 0));
 
-    const working = workingStatus(state);
+    const status=context.threadStatus;
+    const working = status?.status.type==='active'
+      ? status.status.activeFlags.length?threadStatusText(status):workingStatus({...state,pendingInteractions:[]})??'Working…'
+      : undefined;
     if (working === undefined) {
       this.#loader.stop();
     } else {

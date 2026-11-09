@@ -1,5 +1,6 @@
+import {threadFor} from '../../protocol/app-server/testing.ts';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Request } from '../../protocol/app-server/v72';
+import type { Request } from '../../protocol/app-server/v75';
 import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 import { firstSubmitPort } from '../src/app/new-conversation/port';
 import { Server, snapshot } from './fixture';
@@ -38,7 +39,7 @@ it.each([false, true])('notifies attachment exactly once after subscription hand
   expect(ready).toHaveBeenCalledExactlyOnceWith(server.client.target('A'));
   expect(server.client.getSnapshot().views.A).toMatchObject({ attachment: 'attached', observationState: 'following' });
   expect(server.client.isAttachmentControlCurrent('A', server.client.getSnapshot().views.A.attachmentObservation)).toBe(true);
-  expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(recover ? 2 : 1);
   const settings = await server.waitFor('session/settings', 1);
   server.reply(settings);
@@ -51,7 +52,7 @@ it.each(['current', 'navigation', 'disconnect'] as const)('first Send continues 
   const server = await fixture();
   const session = { id: 'created', active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' };
   server.snapshots.set(session.id, snapshot(session.id));
-  server.handlers.set('session/create', () => ({ type: 'session_transition', session }));
+  server.handlers.set('thread/start', () => ({thread:threadFor(session), type: 'session_transition', session }));
   const host = { ...server.workspaceHost, resolveWorkspace: async () => ({ cwd: '/workspace/created' }) };
   let navigationCurrent = true;
   const published = vi.fn(), ready = vi.fn();
@@ -68,7 +69,7 @@ it.each(['current', 'navigation', 'disconnect'] as const)('first Send continues 
   const recovered = await server.waitFor('session/subscribe', 2);
   expect(ready).not.toHaveBeenCalled();
   expect(published).not.toHaveBeenCalled();
-  expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare' || row.request.method === 'turn/start')).toHaveLength(0);
+  expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare' || row.request.method === 'inbound/queue')).toHaveLength(0);
   if (caller === 'navigation') navigationCurrent = false;
   if (caller === 'disconnect') {
     const socket = server.socket;
@@ -76,14 +77,14 @@ it.each(['current', 'navigation', 'disconnect'] as const)('first Send continues 
     socket.success(recovered, { type: 'subscribed', after_cursor: '0' });
   } else server.reply(recovered);
   expect(await submitting).toBe(caller === 'current');
-  expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
-  expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(2);
   if (caller === 'current') {
     expect(ready).toHaveBeenCalledExactlyOnceWith(server.client.target(session.id));
     expect(published).toHaveBeenCalledExactlyOnceWith(session.id);
     expect(server.carrierTransfers).toBe(1);
-    const starts = server.requests.filter(row => row.request.method === 'turn/start');
+    const starts = server.requests.filter(row => row.request.method === 'inbound/queue');
     expect(starts).toHaveLength(1);
     expect(starts[0].request.params).toMatchObject({ target: server.client.target(session.id), content: [
       { type: 'upload', session_id: session.id }, { type: 'text', text: draft.text },
@@ -93,7 +94,7 @@ it.each(['current', 'navigation', 'disconnect'] as const)('first Send continues 
     expect(ready).not.toHaveBeenCalled();
     expect(published).not.toHaveBeenCalled();
     expect(server.carrierTransfers).toBe(0);
-    expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+    expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(0);
     expect(owner.session(session.id)).toMatchObject({ phase: 'failed', draft });
   }
 });

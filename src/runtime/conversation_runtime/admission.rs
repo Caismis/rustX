@@ -108,9 +108,22 @@ pub struct InboundAdmission {
     pub inbound_sequence: InboundSequence,
 }
 
+pub(crate) struct TurnInputAdmission {
+    pub(crate) accepted: InboundAdmission,
+    pub(crate) started: bool,
+    pub(crate) attempt: tokio::sync::oneshot::Receiver<AttemptId>,
+}
+
 /// An inbound publish failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InboundAdmissionError {
+    /// The precise native target is no longer the steerable active Attempt.
+    StaleAttempt,
+    /// Malformed or already accepted caller correlation; repair by lookup.
+    InvalidInputId,
+    /// Cancellation or native terminal arbitration already closed steering.
+    NotSteerable,
+
     /// The runtime was not activated: an inert conversation accepts no
     /// inbound work.
     Inactive,
@@ -141,6 +154,11 @@ pub enum InboundAdmissionError {
 impl core::fmt::Display for InboundAdmissionError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::InvalidInputId => {
+                f.write_str("input ID is invalid or already accepted; use inbound/submissionLookup")
+            }
+            Self::StaleAttempt => f.write_str("the expected Turn is not active"),
+            Self::NotSteerable => f.write_str("the active Turn is not steerable"),
             Self::Inactive => f.write_str("the conversation runtime is not activated"),
             Self::GuidanceSealed => {
                 f.write_str("the child conversation already committed its terminal seal")
@@ -832,6 +850,7 @@ impl RuntimeInner {
     /// The attempt ordinal comes from the coordinator's recovered allocator,
     /// so it is never an ordinal that already entered durable authority before
     /// a restart.
+    #[allow(clippy::too_many_lines)] // One native Attempt admission and input-receipt publication.
     pub(super) fn publish_attempt(
         self: &Arc<Self>,
         mut state: MutexGuard<'_, CoordinatorState>,
@@ -882,6 +901,19 @@ impl RuntimeInner {
         // compares this against the terminals it has observed to prove it
         // has seen every attempt an accepted steer could have opened.
         state.admitted_attempts = state.admitted_attempts.saturating_add(1);
+        {
+            let mut steering = self.mailbox.steering.lock().expect("steering admission");
+            steering.active = Some(attempt_id.clone());
+            steering.open = true;
+            if let Some(fresh) = &fresh {
+                for message in fresh.message_ids() {
+                    if let Some(receipt) = steering.waiting.remove(message) {
+                        let _ = receipt.send(attempt_id.clone());
+                    }
+                }
+            }
+        }
+
         // The attempt model snapshot is taken at exactly this admission
         // linearization boundary, under the same lock that publishes the
         // attempt. A `model_set` that linearizes before this point is
@@ -960,6 +992,7 @@ impl RuntimeInner {
             .lifecycle
             .try_enter_running()
             .expect("the coordinator lock owns the attempt admission boundary");
+        let activity = self.activity.lease();
         drop(state);
         #[cfg(test)]
         self.enter_attempt_execution_probe();
@@ -983,6 +1016,7 @@ impl RuntimeInner {
                 .await;
             inner.finish_attempt(attempt_id, result);
             drop(attempt_admission);
+            drop(activity);
         });
     }
 }
@@ -1073,6 +1107,28 @@ impl ConversationRuntime {
         // whole acceptance even though the absorbing failure fact itself is
         // read from the DurabilityGate.
         let state = self.inner.lock_state();
+        self.accept_sourced_inbound_locked(
+            &state,
+            source,
+            content,
+            class,
+            InboundKind::Message,
+            None,
+        )
+    }
+
+    fn accept_sourced_inbound_locked(
+        &self,
+        state: &CoordinatorState,
+        source: UserSource,
+        content: Vec<UserContentBlock>,
+        class: SemanticInboundClass,
+        kind: InboundKind,
+        correlation: Option<String>,
+    ) -> Result<InboundAdmission, InboundAdmissionError> {
+        if content.is_empty() {
+            return Err(InboundAdmissionError::EmptyContent);
+        }
         // The child conversation's guidance seal (Issue #193) is absorbing
         // and outranks every other admission gate: once it commits, no
         // parent-authored guidance can reach an Agent Loop boundary, and
@@ -1137,18 +1193,122 @@ impl ConversationRuntime {
             .accept_draft(InboundDraft {
                 message_id: None,
                 source,
-                kind: InboundKind::Message,
+                kind,
                 content,
                 timestamp: self.inner.clock.now(),
-                correlation: None,
+                correlation,
             })
             .map_err(InboundAdmissionError::Mailbox)?;
         drop(permission);
-        drop(state);
         Ok(InboundAdmission {
             message_id: accepted.message_id,
             inbound_sequence: accepted.sequence,
         })
+    }
+
+    /// Admit input and its precise routing decision under the native
+    /// coordinator and terminal-steering gate, in that order.
+    pub(crate) fn start_or_steer(
+        &self,
+        content: Vec<UserContentBlock>,
+        expected: Option<&AttemptId>,
+        input_id: &str,
+    ) -> Result<TurnInputAdmission, InboundAdmissionError> {
+        let state = self.inner.lock_state();
+        let correlation = input_correlation(input_id)?;
+        self.require_new_input(&correlation)?;
+        let mut steering = self
+            .inner
+            .mailbox
+            .steering
+            .lock()
+            .expect("steering admission");
+        steering.waiting.retain(|_, sender| !sender.is_closed());
+        if steering.waiting.len() >= 128 {
+            return Err(InboundAdmissionError::NotSteerable);
+        }
+        let current = state.current_attempt.as_ref();
+        if let Some(expected) = expected
+            && current.is_none_or(|current| current.attempt_id != *expected)
+        {
+            return Err(InboundAdmissionError::StaleAttempt);
+        }
+        if state.scheduled.is_some()
+            || state.manual_compaction.is_some()
+            || current.is_some_and(|current| {
+                current.cancellation.is_cancelled()
+                    || !steering.open
+                    || steering.active.as_ref() != Some(&current.attempt_id)
+            })
+        {
+            return Err(InboundAdmissionError::NotSteerable);
+        }
+        let started = current.is_none() && steering.waiting.is_empty();
+        let accepted = self.accept_sourced_inbound_locked(
+            &state,
+            UserSource::Human,
+            content,
+            SemanticInboundClass::Ordinary,
+            InboundKind::Message,
+            Some(correlation),
+        )?;
+        let (sender, attempt) = tokio::sync::oneshot::channel();
+        if let Some(current) = current {
+            let _ = sender.send(current.attempt_id.clone());
+        } else {
+            steering.waiting.insert(accepted.message_id.clone(), sender);
+        }
+        drop(steering);
+        drop(state);
+        // This runs the existing bounded native admission pass. A staged
+        // configuration may defer it; no second Agent Loop is constructed.
+        self.inner.admit_next_attempt();
+        Ok(TurnInputAdmission {
+            accepted,
+            started,
+            attempt,
+        })
+    }
+
+    pub(crate) fn queue_inbound(
+        &self,
+        content: Vec<UserContentBlock>,
+        input_id: &str,
+    ) -> Result<InboundAdmission, InboundAdmissionError> {
+        let state = self.inner.lock_state();
+        let correlation = input_correlation(input_id)?;
+        self.require_new_input(&correlation)?;
+        self.accept_sourced_inbound_locked(
+            &state,
+            UserSource::Human,
+            content,
+            SemanticInboundClass::Ordinary,
+            InboundKind::QueuedMessage,
+            Some(correlation),
+        )
+    }
+
+    fn require_new_input(&self, correlation: &str) -> Result<(), InboundAdmissionError> {
+        if self
+            .inner
+            .mailbox
+            .lookup_inbound(correlation)
+            .map_err(InboundAdmissionError::Mailbox)?
+            .is_some()
+        {
+            return Err(InboundAdmissionError::InvalidInputId);
+        }
+        Ok(())
+    }
+    pub(crate) fn lookup_input(
+        &self,
+        input_id: &str,
+    ) -> Result<Option<crate::durable::inbox::InboundAcceptance>, InboundAdmissionError> {
+        let correlation = input_correlation(input_id)?;
+        self.inner
+            .mailbox
+            .lookup_inbound(&correlation)
+            .map_err(InboundAdmissionError::Mailbox)
     }
 
     pub(crate) fn has_current_attempt(&self) -> bool {
@@ -1193,3 +1353,15 @@ impl ConversationRuntime {
 
 #[cfg(test)]
 mod tests;
+
+fn input_correlation(id: &str) -> Result<String, InboundAdmissionError> {
+    if id.is_empty()
+        || id.len() > 64
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+    {
+        return Err(InboundAdmissionError::InvalidInputId);
+    }
+    Ok(format!("app-server:{id}"))
+}

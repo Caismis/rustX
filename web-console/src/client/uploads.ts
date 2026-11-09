@@ -1,4 +1,4 @@
-import type { UploadPolicy, UploadReceipt, UploadedFile, UploadOutcome } from '../../../protocol/app-server/v72';
+import type { UploadPolicy, UploadReceipt, UploadedFile, UploadOutcome } from '../../../protocol/app-server/v75';
 import { uploadOperationId } from '../../../protocol/app-server/upload';
 
 export type IntakeInput = { file: File | null; name?: string; directory?: boolean };

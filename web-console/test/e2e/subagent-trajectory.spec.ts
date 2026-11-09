@@ -5,10 +5,10 @@ for (const width of [1440, 390]) test(`child-owned trajectory, automatic history
   await page.setViewportSize({ width, height: 1000 }); await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
   await page.goto(fixture);
   await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.resumeCatalog(); });
-  if (width < 600) await page.getByRole('button', { name: 'Expand Sidebar', exact: true }).click();
+  if (width < 600) await page.getByRole('button', { name: 'Home', exact: true }).click();
   await page.locator('button[data-session-id=A]').click();
-  await page.evaluate(() => (window as any).startupFixture.release('session/attach'));
-  if (width < 600) await expect(page.getByRole('button', { name: 'Expand Sidebar', exact: true })).toBeFocused();
+  await page.evaluate(() => (window as any).startupFixture.release('thread/resume'));
+  if (width < 600) await expect(page.getByRole('button', { name: 'Home', exact: true })).toBeFocused();
   await page.getByRole('button', { name: 'Subagents', exact: true }).click();
   await page.getByRole('treeitem', { name: /Verify findings/ }).click();
   const input = page.getByRole('textbox', { name: 'Message Agent Verify findings' });

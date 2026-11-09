@@ -11,27 +11,27 @@ it.each(['capacity', 'validation'] as const)('%s revocation is unsent and frees 
   const ready = new Promise<void>(resolve => { entered = resolve; });
   s.held.add('session/summary');
   const blockers = barrier === 'capacity' ? Array.from({ length: 6 }, () => s.client.request({ method: 'session/summary', params: { session_id: 'A' } }, 'session_summary')) : [];
-  const work = s.client.request({ method: 'turn/start', params: { target: s.target('A'), content: [] } }, 'inbound_accepted', undefined,
+  const work = s.client.request({ method: 'inbound/queue', params: { inputId:crypto.randomUUID(), target: s.target('A'), content: [] } }, 'inbound_accepted', undefined,
     barrier === 'validation' ? { current: () => true, validate: () => { entered(); return gate; } } : undefined);
   const outcome = work.catch(error => error); if (barrier === 'validation') await ready;
   const release = s.client.release('A'); void release.catch(() => {});
   if (blockers.length) for (const row of s.requests.filter(r => r.request.method === 'session/summary').slice(-blockers.length)) s.reply(row.request);
   resume(); await Promise.all(blockers); await release;
-  expect(await outcome).toBeInstanceOf(RequestNotDispatched); expect(count(s, 'turn/start')).toBe(0); expect(s.client.getSnapshot().uncertain).toEqual([]);
+  expect(await outcome).toBeInstanceOf(RequestNotDispatched); expect(count(s, 'inbound/queue')).toBe(0); expect(s.client.getSnapshot().uncertain).toEqual([]);
   s.held.delete('session/summary'); await s.client.attach('A'); await s.client.refresh('A');
   expect(s.claims()).toHaveLength(1); expect(count(s, 'session/checkpoint')).toBe(3);
 });
 it.each(['throw', 'close'] as const)('synchronous send %s is one attempted uncertain outcome, not native acceptance', async failure => {
   const s = await setup(), send = s.socket.send.bind(s.socket); let attempts = 0, acknowledgements = 0;
   vi.spyOn(s.socket, 'send').mockImplementation(raw => {
-    if (JSON.parse(raw).method !== 'turn/start') return send(raw);
+    if (JSON.parse(raw).method !== 'inbound/queue') return send(raw);
     attempts++; if (failure === 'close') s.socket.close(); throw new Error('send failed');
   });
-  const result = await s.client.request({ method: 'turn/start', params: { target: s.target('A'), content: [] } }, 'inbound_accepted', () => acknowledgements++).catch(error => error);
+  const result = await s.client.request({ method: 'inbound/queue', params: { inputId:crypto.randomUUID(), target: s.target('A'), content: [] } }, 'inbound_accepted', () => acknowledgements++).catch(error => error);
   expect(result).toBeInstanceOf(OutcomeUncertain); expect(attempts).toBe(1); expect(acknowledgements).toBe(0);
-  expect(s.client.getSnapshot().uncertain.filter(row => row.method === 'turn/start')).toHaveLength(1);
+  expect(s.client.getSnapshot().uncertain.filter(row => row.method === 'inbound/queue')).toHaveLength(1);
   expect((s.client as unknown as { pipeline: { size: number } }).pipeline.size).toBe(0);
-  expect(count(s, 'turn/start')).toBe(0); await s.connect(); expect(count(s, 'turn/start')).toBe(0);
+  expect(count(s, 'inbound/queue')).toBe(0); await s.connect(); expect(count(s, 'inbound/queue')).toBe(0);
 });
 it('correlates a synchronous response during socket dispatch', async () => {
   const s = await setup(), send = s.socket.send.bind(s.socket);
@@ -48,7 +48,7 @@ it('correlates a synchronous response during socket dispatch', async () => {
 
 it.each(['direct', 'validated'] as const)('reentrant caller predicate at final %s dispatch cannot revoke then authorize', async mode => {
   const s = await setup(), proof = s.client.getSnapshot().views.A.attachmentObservation;
-  s.held.add('turn/start'); s.held.add('session/detach');
+  s.held.add('inbound/queue'); s.held.add('session/detach');
   let final = false, release: Promise<void> | undefined, resume!: () => void, entered!: () => void;
   const order: string[] = [], ready = new Promise<void>(resolve => { entered = resolve; });
   const gate = new Promise<boolean>(resolve => { resume = () => resolve(true); });
@@ -60,14 +60,14 @@ it.each(['direct', 'validated'] as const)('reentrant caller predicate at final %
     if (final && !release) { order.push('release'); release = s.client.release('A'); void release.catch(() => {}); }
     return true;
   };
-  const work = s.client.request({ method: 'turn/start', params: { target: s.target('A'), content: [] } }, 'inbound_accepted', undefined,
+  const work = s.client.request({ method: 'inbound/queue', params: { inputId:crypto.randomUUID(), target: s.target('A'), content: [] } }, 'inbound_accepted', undefined,
     mode === 'direct' ? predicate : { current: predicate, validate: () => { entered(); return gate; } });
   const outcome = work.catch(error => error);
   if (mode === 'validated') { await ready; resume(); }
   await s.waitFor('session/detach', 1);
   expect(order.slice(-2)).toEqual(['final-caller', 'release']);
   expect(s.client.isAttachmentControlCurrent('A', proof)).toBe(false);
-  expect(count(s, 'turn/start')).toBe(0);
+  expect(count(s, 'inbound/queue')).toBe(0);
   expect(await outcome).toBeInstanceOf(RequestNotDispatched); expect(s.client.getSnapshot().uncertain).toEqual([]); expect(s.claims()).toHaveLength(1);
   s.reply(await s.waitFor('session/detach', 1)); await release;
   expect(count(s, 'session/detach')).toBe(1); expect(s.claims()).toHaveLength(0);
@@ -77,21 +77,21 @@ it.each(['direct', 'validated'] as const)('reentrant caller predicate at final %
 it('a caller releasing A cannot revoke the independent exact proof for B', async () => {
   const s = new Server(); servers.push(s); await s.attached('A', 'B'); s.held.add('session/detach');
   let release: Promise<void> | undefined; const target = s.target('B');
-  const result = await s.client.request({ method: 'turn/start', params: { target, content: [] } }, 'inbound_accepted', undefined, () => {
+  const result = await s.client.request({ method: 'inbound/queue', params: { inputId:crypto.randomUUID(), target, content: [] } }, 'inbound_accepted', undefined, () => {
     if (!release) { release = s.client.release('A'); void release.catch(() => {}); } return true;
   });
-  expect(result.type).toBe('inbound_accepted'); expect(count(s, 'turn/start')).toBe(1);
-  expect(s.requests.find(r => r.request.method === 'turn/start')!.request.params).toMatchObject({ target });
+  expect(result.type).toBe('inbound_accepted'); expect(count(s, 'inbound/queue')).toBe(1);
+  expect(s.requests.find(r => r.request.method === 'inbound/queue')!.request.params).toMatchObject({ target });
   s.reply(await s.waitFor('session/detach', 1)); await release; expect(s.claims()).toEqual([target]);
 });
 
 it('a sent callback cannot replace correlated native success with a local observer exception', async () => {
-  const s = await setup(); s.held.add('turn/start'); let sent = 0, acknowledged = 0;
+  const s = await setup(); s.held.add('inbound/queue'); let sent = 0, acknowledged = 0;
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  const work = s.client.request({ method: 'turn/start', params: { target: s.target('A'), content: [] } }, 'inbound_accepted', () => acknowledged++, {
+  const work = s.client.request({ method: 'inbound/queue', params: { inputId:crypto.randomUUID(), target: s.target('A'), content: [] } }, 'inbound_accepted', () => acknowledged++, {
     current: () => true, validate: async () => true, sent: () => { sent++; throw new Error('local sent observer'); },
   }); void work.catch(() => {});
-  const request = await s.waitFor('turn/start', 1); s.reply(request);
+  const request = await s.waitFor('inbound/queue', 1); s.reply(request);
   expect((await work).type).toBe('inbound_accepted'); expect(sent).toBe(1); expect(acknowledged).toBe(1);
   expect(s.client.getSnapshot().uncertain).toEqual([]); expect((s.client as unknown as { pipeline: { size: number } }).pipeline.size).toBe(0);
 });
@@ -99,11 +99,11 @@ it('a sent callback cannot replace correlated native success with a local observ
 
 it('non-reentrant final validation sends and settles exactly once', async () => {
   const s = await setup(); let validated = 0, sent = 0, acknowledged = 0;
-  const result = await s.client.request({ method: 'turn/start', params: { target: s.target('A'), content: [] } }, 'inbound_accepted', () => acknowledged++, {
+  const result = await s.client.request({ method: 'inbound/queue', params: { inputId:crypto.randomUUID(), target: s.target('A'), content: [] } }, 'inbound_accepted', () => acknowledged++, {
     current: () => true, validate: async () => { validated++; return true; }, sent: () => { sent++; },
   });
   expect(result.type).toBe('inbound_accepted'); expect([validated, sent, acknowledged]).toEqual([1, 1, 1]);
-  expect(count(s, 'turn/start')).toBe(1); expect(s.client.getSnapshot().uncertain).toEqual([]);
+  expect(count(s, 'inbound/queue')).toBe(1); expect(s.client.getSnapshot().uncertain).toEqual([]);
   expect((s.client as unknown as { pipeline: { size: number } }).pipeline.size).toBe(0);
 });
 

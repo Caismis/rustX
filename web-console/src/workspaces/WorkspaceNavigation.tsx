@@ -7,7 +7,6 @@ import type { AppServerClient } from '../client/app-server';
 import type { ClientView } from '../client/contracts';
 import { useClientSelector, sameValue, type ShellView } from '../client/selectors';
 import { sessionDisplayTitle } from '../bindings/session-title';
-import { activeAttempt } from '../bindings/projection';
 import { deriveSessionProductState, type SessionTransition } from '../bindings/session-product';
 import { actionError } from '../bindings/action-error';
 import { Button } from '../presentation/primitives/Button';
@@ -40,11 +39,10 @@ export function sessionObservation(tx: Translate, state: ClientView, id: string,
   if (!transition && state.connection === 'connected' && (!view || view.attachmentIntent === 'released')) return '';
   return product.label ?? '';
 }
-export function WorkspaceNavigation({ associations, host, client, state, transition, endpoint, workspace, selected, draft, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, wide, expand, workspaceSettings }: {
+export function WorkspaceNavigation({ associations, host, client, state, transition, endpoint, workspace, selected, draft, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, workspaceSettings }: {
   associations: WorkspaceAssociations; transition?: { sessionId: string; action: SessionTransition };
   workspaceSettings?: (id: string, label: string) => void;
   host: ProductHostWorkspaces; client: AppServerClient; state: ShellView; endpoint: string;
-  wide: boolean; expand: () => void;
   metadataChanged: (removed?: string) => void;
   draft?: DraftConversation;
   workspace?: string; selected?: string; selectWorkspace: (id?: string) => void;
@@ -118,13 +116,13 @@ export function WorkspaceNavigation({ associations, host, client, state, transit
     containsCurrent: row.id === workspace,
     sessionCount: rows.filter(item => item.group === row.id).length, sessions: rows.filter(item => item.group === row.id).map(item => toNode(item.session)) }));
   return <>
-    <WorkspaceBrowser draft={bound && !selected && catalog?.workspaces.some(row => row.id === draft?.workspaceId) ? draft : undefined} renderSession={(node, render) => <LiveSessionNode key={node.id} client={client} node={node} transition={transition?.sessionId === node.id ? transition.action : undefined}>{render}</LiveSessionNode>} wide={wide} expand={expand} groups={groupNodes} sessions={sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
+    <WorkspaceBrowser draft={bound && !selected && catalog?.workspaces.some(row => row.id === draft?.workspaceId) ? draft : undefined} renderSession={(node, render) => <LiveSessionNode key={node.id} client={client} node={node} transition={transition?.sessionId === node.id ? transition.action : undefined}>{render}</LiveSessionNode>} groups={groupNodes} sessions={sessions.map(toNode)} selected={selected} closeView={closeView} closeAllViews={openViews.length ? closeAllViews : undefined}
       unclassified={state.sessions.filter(session => { const entry = associationState.entries.get(session.id); return !entry || entry.cwd !== session.cwd || (!entry.confirmed && entry.status !== 'revoked'); }).map(session => session.id)} query={query} search={text => connected && search(text)} open={id => connected && openSession(id)} rename={id => edit('session', id, state.sessions.find(session => session.id === id)?.name ?? state.sessions.find(session => session.id === id)?.generated_title?.text ?? state.sessions.find(session => session.id === id)?.preview ?? '')} pin={id => pins.toggle(id)} copyId={id => { const generation = client.getSnapshot().generation; void writeClipboard(id).then(copied => { if (generation === client.getSnapshot().generation) setToast(previous => ({ sequence: (previous?.sequence ?? 0) + 1, copied })); }); }} fork={forkSession} remove={deleteSession}
       workspaceSettings={workspaceSettings} selectWorkspace={selectWorkspace} create={id => connected && createSession(id)} renameWorkspace={(id, title) => edit('workspace', id, title)} removeWorkspace={(id, title) => edit('remove', id, title)}
       addWorkspace={catalog?.picker.kind === 'configured' && bound ? () => edit('add', '', '') : undefined}
       refresh={() => { associations.refresh(); search(query, offset); }} previous={connected && offset > 0 ? () => search(query, Math.max(0, offset - 32)) : undefined}
       next={connected && state.nextOffset != null ? () => search(query, state.nextOffset!) : undefined}
-      notices={<>{status && status !== 'ready' && status !== 'disconnected' && <p role="status">{tx(status === 'unavailable' ? 'workspace:association.unavailable' : 'workspace:association.refreshing')}</p>}{catalog && !bound && <p role="status">{tx('workspace:workspace-navigation.this-workspace-host-belongs-to')}{' '}{catalog.endpoint}.</p>}</>} />
+      notices={<>{status === 'unavailable' && <p role="status">{tx('workspace:association.unavailable')}</p>}{catalog && !bound && <p role="status">{tx('workspace:workspace-navigation.this-workspace-host-belongs-to')}{' '}{catalog.endpoint}.</p>}</>} />
     {!dialog && error && <Toast key={notice?.sequence} text={error} holdMs={6000} icon={<IconWarningOutline16/>} onDone={() => setError('')}/>}
     {renaming && <RenameSession key={renaming.id} client={client} id={renaming.id} title={renaming.title} close={() => setRenaming(undefined)}/>}
     {toast && <Toast key={toast.sequence} anchor={null} tone={toast.copied ? 'success' : undefined} text={tx(toast.copied ? 'workspace:toast.sessionIdCopied' : 'workspace:toast.sessionIdCopyFailed')} icon={toast.copied ? <IconCheckOutline16/> : <IconWarningOutline16/>} onDone={() => setToast(undefined)}/>}
@@ -148,10 +146,19 @@ function LiveSessionNode({ client, node, children, transition }: { client: AppSe
   const tasks = records.filter(row => row.binding.session_id === node.id && row.state === 'enabled').sort((a, b) => (a.next_due_utc ?? '').localeCompare(b.next_due_utc ?? ''));
   const activity = useClientSelector(client, state => {
     const view = state.views[node.id];
-    const current = state.connection === 'connected' && view?.attachment === 'attached' && view.attachmentIntent === 'wanted';
-    const pending = current ? view.snapshot?.pending_interactions?.[0] : undefined;
-    return { running: !!current && activeAttempt(view.snapshot),
-      pendingInteraction: pending ? pending.kind === 'approval' ? 'approval' as const : pending.kind === 'review' ? 'plan-review' as const : 'question' as const : undefined,
+    const row=state.sessions.find(row=>row.id===node.id)??view?.summary;
+    const entry=row?.thread_status;
+    const available=state.connection==='connected'&&state.threadStatusSynchronized!==false&&entry!=null;
+    let runtimeStatus:SessionNode['runtimeStatus'];
+    if(available)switch(entry.status.type) {
+      case 'idle':runtimeStatus={state:'done',labels:[tx('workspace:status.idle')]};break;
+      case 'notLoaded':runtimeStatus={state:'done',labels:[tx('workspace:status.notLoaded')]};break;
+      case 'systemError':runtimeStatus={state:'error',labels:[tx('workspace:status.systemError')]};break;
+      case 'active':runtimeStatus={state:entry.status.activeFlags.length?'warning':'ongoing',labels:entry.status.activeFlags.length?entry.status.activeFlags.map(flag=>tx(flag==='waitingOnApproval'?'workspace:status.waitingApproval':'workspace:status.waitingAnswer')):[tx('workspace:status.running')]};break;
+    }
+    return { running:available&&entry.status.type==='active',
+      runtimeStatus,statusUnavailable:!available,
+      pendingInteraction:undefined,
       observation: sessionObservation(tx, state, node.id, transition) };
   }, sameValue);
   return children({ ...node, ...activity,

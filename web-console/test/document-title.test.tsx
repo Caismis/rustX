@@ -46,11 +46,12 @@ it('retains the conversation title under Settings and uses the product title in 
   expect(document.title).toBe('Session A — rustX');
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
   expect(document.title).toBe('Session A — rustX');
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close Settings' })); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Home' })); });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Workflows' })); });
   expect(document.title).toBe('rustX');
   await act(async () => { await server.client.renameSession('A', 'Revised while away'); });
   expect(document.title).toBe('rustX');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Home' })));
   await open('Revised while away');
   expect(document.title).toBe('Revised while away — rustX');
 });

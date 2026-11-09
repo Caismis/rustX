@@ -9,11 +9,11 @@ import { useCallback, useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Trajectory } from '../src/app/trajectory/Trajectory';
-import { prependTrace, beginTraceDetail, completeTraceDetail, refreshTrace, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
-import { ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
+import { prependTrace, beginTraceDetail, completeTraceDetail, fillTraceGap, refreshTrace, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
+import { completeHistoryThrough, ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v72';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v75';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -1742,4 +1742,85 @@ it('partial usage keeps unknown input absent in request and cumulative accountin
   expect(cumulative.textContent).toContain('Output19 tok');
   expect(within(cumulative).queryByText('Input', { exact: true })).toBeNull();
   expect(cumulative.textContent).not.toContain('0 tok');
+});
+
+it.each(['interaction', 'subagent'] as const)('keeps gap controls reachable when the newest 32 records are hidden %s audits', kind => {
+  const first = traceRecord(1, { kind: 'user', request: null, has_detail: false });
+  const tail = Array.from({ length: 32 }, (_, index) => traceRecord(index + 100, { kind, request: null, has_detail: false }));
+  const cache = refreshTrace(cacheOf([first]), { records: tail, next_cursor: 'opaque-tail-continuation' });
+  const readCursor = vi.fn(), older = vi.fn((before?: string) => readCursor(cache.gaps?.find(gap => gap.before === before)?.cursor));
+  show(cache, vi.fn(), older);
+  expect(cache.page.next_cursor).toBeNull();
+  expect(document.querySelector(`[data-kind="${kind}"]`)).toBeNull();
+  const control = screen.getByRole('button', { name: 'Load earlier history' });
+  expect(control.hasAttribute('disabled')).toBe(false);
+  fireEvent.click(control);
+  expect(older).toHaveBeenCalledExactlyOnceWith(tail[0]!.id);
+  expect(readCursor).toHaveBeenCalledExactlyOnceWith('opaque-tail-continuation');
+});
+
+it('orders gap controls chronologically when several hidden intervals share the last visible row', () => {
+  const first = traceRecord(1, { kind: 'user', request: null, has_detail: false });
+  const hidden = (start: number) => Array.from({ length: 32 }, (_, index) => traceRecord(start + index, { kind: 'interaction', request: null, has_detail: false }));
+  let cache = refreshTrace(cacheOf([first]), { records: hidden(100), next_cursor: 'first-continuation' });
+  cache = refreshTrace(cache, { records: hidden(200), next_cursor: 'second-continuation' });
+  cache = { ...cache, gaps: [...cache.gaps!].reverse() };
+  const older = vi.fn();
+  show(cache, vi.fn(), older);
+  const controls = screen.getAllByRole('button', { name: 'Load earlier history' });
+  expect(controls).toHaveLength(2);
+  controls.forEach(control => fireEvent.click(control));
+  expect(older.mock.calls.map(([before]) => cache.gaps?.find(gap => gap.before === before)?.cursor)).toEqual(['first-continuation', 'second-continuation']);
+});
+
+it('session usage requires a continuous native prefix through the selected owner, retaining complete earlier prefixes', () => {
+  const request = (id: number, input: string, output: string) => {
+    const record = traceRecord(id, { has_detail: false });
+    record.request!.usage = { input_tokens: input, output_tokens: output };
+    return record;
+  };
+  const first = request(1, '10', '1'), middle = request(2, '20', '2'), last = request(3, '30', '3');
+  const cache = refreshTrace(cacheOf([first]), { records: [last], next_cursor: 'middle-continuation' });
+  const view = show(cache);
+  const cumulative = () => screen.getByRole('heading', { name: 'Session cumulative' }).parentElement!;
+  fireEvent.click(row('RequestBoundary', last.id));
+  fireEvent.click(screen.getByRole('tab', { name: 'Usage' }));
+  expect(within(cumulative()).getByText('Usage not reported')).toBeTruthy();
+  expect(cumulative().textContent).not.toContain('40 tok');
+  expect(screen.getByRole('heading', { name: 'This request' }).parentElement!.textContent).toContain('Input30 tok');
+
+  fireEvent.click(row('RequestBoundary', first.id));
+  fireEvent.click(screen.getByRole('tab', { name: 'Usage' }));
+  expect(cumulative().textContent).toContain('Input10 tok');
+  expect(cumulative().textContent).toContain('Output1 tok');
+  fireEvent.click(row('RequestBoundary', last.id));
+  expect(within(cumulative()).getByText('Usage not reported')).toBeTruthy();
+
+  const filled = fillTraceGap(cache, cache.gaps![0]!, { records: [first, middle], next_cursor: null });
+  view.rerender(<Trajectory cache={filled} loadEarlier={noop} onSelect={noop} onLoadDetail={noop} />);
+  expect(cumulative().textContent).toContain('Input60 tok');
+  expect(cumulative().textContent).toContain('Output6 tok');
+});
+
+it('never certifies a prefix whose selected owner, start or gap boundary is unavailable', () => {
+  const records = [traceRecord(1), traceRecord(3)];
+  expect(completeHistoryThrough(records, 'trace:2', null)).toBe(false);
+  expect(completeHistoryThrough(records, 'trace:3', 'opaque-earlier-continuation')).toBe(false);
+  expect(completeHistoryThrough(records, 'trace:3', undefined)).toBe(false);
+  expect(completeHistoryThrough(records, 'trace:1', null, [{ before: 'unloaded-boundary' }])).toBe(false);
+  expect(completeHistoryThrough(records, 'trace:1', null, [{ before: 'trace:3' }])).toBe(true);
+  expect(completeHistoryThrough(records, 'trace:3', null, [{ before: 'trace:3' }])).toBe(false);
+  expect(completeHistoryThrough(records, 'trace:3', null)).toBe(true);
+});
+
+it('does not infer a complete usage prefix from missing native start evidence', () => {
+  const record = traceRecord(1, { has_detail: false });
+  record.request!.usage = { input_tokens: '10', output_tokens: '1' };
+  const cache = cacheOf([record]);
+  cache.page = { records: [record] };
+  show(cache);
+  fireEvent.click(row('RequestBoundary', record.id));
+  fireEvent.click(screen.getByRole('tab', { name: 'Usage' }));
+  const cumulative = screen.getByRole('heading', { name: 'Session cumulative' }).parentElement!;
+  expect(within(cumulative).getByText('Usage not reported')).toBeTruthy();
 });

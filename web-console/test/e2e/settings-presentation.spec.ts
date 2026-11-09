@@ -9,7 +9,7 @@ const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
-import { closeSettings, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
+import { returnHome, openSettingsPage, openWorkspaceSettings, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
 
 const fixture = `${fixtureOrigin}/test/fixtures/settings.html`;
 const pages = ['General', 'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced'];
@@ -25,15 +25,18 @@ async function start(page: Page, query = '', size = { width: 1440, height: 1000 
   await expect(page).toHaveTitle('Session A — rustX');
   return errors;
 }
-const dialog = (page: Page) => page.getByRole('dialog', { name: 'Settings', exact: true });
+const settingsPage = (page: Page) => page.getByRole('region', { name: 'Settings', exact: true });
 async function openUserSettings(page: Page) {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await expect(dialog(page)).toBeVisible();
+  await expect(settingsPage(page)).toBeVisible();
+  const user = settingsPage(page).getByRole('button', { name: 'Open User Settings', exact: true });
+  if (await user.isVisible()) await user.click();
+  await openSettingsPage(page, 'General');
 }
 async function setTheme(page: Page, theme: 'Light' | 'Dark') {
   await openUserSettings(page);
-  await dialog(page).getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: theme, exact: true }).click();
-  await closeSettings(page);
+  await settingsPage(page).getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: theme, exact: true }).click();
+  await returnHome(page);
 }
 
 /** No horizontal page overflow, and nothing inside the Settings panel is
@@ -42,8 +45,8 @@ async function setTheme(page: Page, theme: 'Light' | 'Dark') {
  * control that scrolls on its own (a `pre`, a table) may be wider. */
 async function expectNoHorizontalOverflow(page: Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  if (!await dialog(page).isVisible()) return;
-  const escaped = await dialog(page).evaluate(root => {
+  if (!await settingsPage(page).isVisible()) return;
+  const escaped = await settingsPage(page).evaluate(root => {
     const panel = root.getBoundingClientRect();
     // A control that scrolls on its own, or a visually hidden element (React
     // Aria's native form proxies are clipped to nothing), is not overflow.
@@ -71,11 +74,11 @@ async function expectAccessible(page: Page, scope: string) {
   const serious = results.violations.filter(violation => violation.impact === 'serious' || violation.impact === 'critical');
   expect(serious.map(violation => `${violation.id}: ${violation.nodes.map(node => node.target.join(' ')).join(' | ')}`)).toEqual([]);
 }
-const settingsScope = '[role="dialog"][aria-label="Settings"]';
+const settingsScope = '[data-settings-page]';
 
 /** Measured panel geometry, in CSS pixels. */
 async function panelBox(page: Page) {
-  return dialog(page).evaluate(el => {
+  return settingsPage(page).evaluate(el => {
     const panel = el.parentElement!, rect = panel.getBoundingClientRect(), style = getComputedStyle(panel);
     return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, radius: style.borderTopLeftRadius };
   });
@@ -84,11 +87,11 @@ async function panelBox(page: Page) {
 test('desktop: seven pages share one stable Harness frame, distinct icons and one row vocabulary', async ({ page }) => {
   const errors = await start(page);
   await openUserSettings(page);
-  const settings = dialog(page);
+  const settings = settingsPage(page);
   const frame = await panelBox(page);
-  // Inspected Harness desktop geometry, bounded by the viewport on small screens.
-  expect(frame.width).toBe(800);
-  expect(frame.height).toBe(704); expect(frame.radius).toBe('24px');
+  // Settings fills the content area beside the permanent primary rail.
+  expect(frame.width).toBe(1440 - 56);
+  expect(frame.height).toBe(1000); expect(frame.radius).toBe('0px');
   const rail = page.getByRole('tablist', { name: 'Settings pages' });
   await expect(rail).toHaveAttribute('aria-orientation', 'vertical');
   await expect(rail.getByRole('tab')).toHaveText(pages);
@@ -105,8 +108,8 @@ test('desktop: seven pages share one stable Harness frame, distinct icons and on
   const references: Record<string, string> = { General: 'settings-general-light.png', Models: 'settings-models-light.png', Agent: 'settings-agent-light.png', 'Tools & Permissions': 'settings-tools-light.png', Extensions: 'settings-extensions-light.png' };
   for (const name of pages) {
     await openSettingsPage(page, name);
-    // One stable modal frame: a page change never resizes or moves it.
-    expect(await panelBox(page)).toEqual(name === 'Models' ? { ...frame, x: 180, width: 1080 } : frame);
+    // One stable page frame: a section change never resizes or moves it.
+    expect(await panelBox(page)).toEqual(frame);
     await expect(settings.getByRole('heading', { level: 3, name, exact: true })).toBeVisible();
     // The owner and observation state live in the fixed header on every page.
     await expect(settings.getByRole('heading', { level: 2, name: 'User Settings' })).toBeVisible();
@@ -149,7 +152,7 @@ test('desktop: seven pages share one stable Harness frame, distinct icons and on
 
 test('Workspace inherited and overridden units, restore versus deletion, nested Escape ownership', async ({ page }) => {
   const errors = await start(page);
-  const settings = dialog(page);
+  const settings = settingsPage(page);
   await openWorkspaceSettings(page, 'Workspace A');
   await expect(settings.getByRole('heading', { level: 2, name: 'Workspace Settings — Workspace A' })).toBeVisible();
   // Inherited: displayed, authored nothing, no draft, offers Override only.
@@ -198,7 +201,7 @@ test('Workspace inherited and overridden units, restore versus deletion, nested 
 
 test('deletion confirmation, CAS conflict review, loading and read failure are designed states', async ({ page }) => {
   let errors = await start(page, '?scenario=conflict');
-  const settings = dialog(page);
+  const settings = settingsPage(page);
   await openUserSettings(page);
   await openSettingsPage(page, 'Models');
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
@@ -253,7 +256,7 @@ test('dark desktop Advanced keeps the same family and native diagnostics', async
   await setTheme(page, 'Dark');
   await openUserSettings(page);
   await openSettingsPage(page, 'Advanced');
-  const settings = dialog(page);
+  const settings = settingsPage(page);
   await expect(settings.getByText(/Revision: user-1/)).toBeVisible();
   await expect(settings.getByRole('button', { name: 'Rescan configuration files' })).toBeVisible();
   await expectAccessible(page, settingsScope);
@@ -266,12 +269,13 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   await setTheme(page, 'Dark');
   await page.setViewportSize({ width: 390, height: 844 });
   await openUserSettings(page);
-  const settings = dialog(page), menu = settingsSectionMenu(page);
+  const settings = settingsPage(page), menu = settingsSectionMenu(page);
   // The narrow panel replaces the rail with one section menu in its header.
   await expect(page.getByRole('tablist', { name: 'Settings pages' })).toBeHidden();
   await expect(menu).toBeVisible();
   await expect(menu).toHaveAccessibleName('Settings page: General');
-  await expect(page.getByRole('button', { name: 'Close Settings' })).toBeInViewport();
+  await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeInViewport();
+  await expect(page.getByRole('button', { name: 'Close Settings' })).toHaveCount(0);
 
   // Keyboard: Enter opens on the first row, the current page is announced,
   // Escape closes only the menu and returns focus to its trigger.
@@ -337,7 +341,7 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   await expect(settings.getByRole('heading', { level: 3, name: `Provider ${longProvider}` })).toBeVisible();
 
   // Workspace resource detail at 390: named Agent list → detail.
-  await closeSettings(page);
+  await returnHome(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await openWorkspaceSettings(page, 'Workspace A');
   await page.setViewportSize({ width: 390, height: 844 });
@@ -354,7 +358,7 @@ test('390 × 844: section menu, list → detail → back, long identities and no
     let pane: HTMLElement | null = form.parentElement;
     while (pane && getComputedStyle(pane).overflowY !== 'auto') pane = pane.parentElement;
     if (!pane) throw new Error('Settings scroll owner missing');
-    const panel = form.closest('[role="dialog"]')!.getBoundingClientRect();
+    const panel = form.closest('[data-settings-page]')!.getBoundingClientRect();
     const gap = () => panel.bottom - pane!.getBoundingClientRect().bottom;
     const before = gap(), position = pane.scrollTop;
     pane.scrollTop = pane.scrollHeight;
@@ -371,13 +375,15 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   expect(gutter).toEqual({ before: 20, after: 20, scrollable: true, rangeUnchanged: true });
   await expectStableScreenshot(page, 'settings-agent-narrow-dark.png');
 
-  // Escape closes Settings itself when no transient layer is open; the global
-  // entry then restores focus to its own trigger.
-  await page.keyboard.press('Escape'); await expect(settings).toHaveCount(0);
+  // Escape preserves the Settings page when no transient layer is open.
+  // Leaving and returning through primary navigation restores its section.
+  await page.keyboard.press('Escape'); await expect(settings).toBeVisible();
+  await returnHome(page); await expect(settings).toBeHidden();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(settings).toBeVisible();
-  await page.keyboard.press('Escape'); await expect(settings).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape'); await expect(settings).toBeVisible();
+  await returnHome(page); await expect(settings).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Home', exact: true })).toBeFocused();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
 
@@ -387,7 +393,7 @@ test('layout follows the Settings panel width, not the window', async ({ page })
   const rail = page.getByRole('tablist', { name: 'Settings pages' });
   await expect(rail).toBeVisible(); await expect(settingsSectionMenu(page)).toBeHidden();
   // The same 1440px window, with the panel itself constrained: narrow layout.
-  const constrain = (width: string) => dialog(page).evaluate((el, value) => { el.parentElement!.style.width = value; }, width);
+  const constrain = (width: string) => settingsPage(page).evaluate((el, value) => { el.parentElement!.style.width = value; }, width);
   await constrain('480px');
   await expect(rail).toBeHidden(); await expect(settingsSectionMenu(page)).toBeVisible();
   await openSettingsPage(page, 'Extensions');
@@ -401,7 +407,7 @@ test('layout follows the Settings panel width, not the window', async ({ page })
 test('an open section menu settles closed when the panel widens under it', async ({ page }) => {
   const errors = await start(page);
   await openUserSettings(page);
-  const settings = dialog(page), trigger = settingsSectionMenu(page);
+  const settings = settingsPage(page), trigger = settingsSectionMenu(page);
   const rail = page.getByRole('tablist', { name: 'Settings pages' });
   const constrain = (width: string) => settings.evaluate((el, value) => { el.parentElement!.style.width = value; }, width);
   await constrain('480px');
@@ -421,7 +427,7 @@ test('an open section menu settles closed when the panel widens under it', async
   // Its owner's open state settled with it: the hidden trigger says closed.
   await expect(settings.getByRole('button', { name: /^Settings page: /, includeHidden: true })).toHaveAttribute('aria-expanded', 'false');
   // The keyboard is on no removed row, not on the hidden trigger and not on
-  // the page body: the Settings dialog, the focus owner the panel names for
+  // the page body: the Settings page, the focus owner the panel names for
   // its section menu, holds it, as when it first opened.
   await expect(settings).toBeFocused();
   const focus = await page.evaluate(() => {
@@ -431,21 +437,20 @@ test('an open section menu settles closed when the panel widens under it', async
   expect(focus).toEqual({ body: false, menuitem: false, rendered: true });
 
   // Wide Settings keyboard navigation works from there exactly as from a
-  // freshly opened dialog: Tab walks the header and reaches the current page
-  // on the rail, the arrows move between pages, and Escape still closes
-  // Settings and returns focus to its global entry.
+  // freshly opened page: Tab walks the header and reaches the current page
+  // on the rail and the arrows move between sections. Escape leaves Settings
+  // visible; primary Home navigation leaves the page.
   await page.keyboard.press('Tab');
   await expect(settings.getByRole('button', { name: 'Reload configuration' })).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(page.getByRole('button', { name: 'Close Settings' })).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(rail.getByRole('tab', { name: 'General' })).toBeFocused();
   await page.keyboard.press('ArrowDown');
   await expect(rail.getByRole('tab', { name: 'Models' })).toHaveAttribute('aria-selected', 'true');
   await expect(settings.getByRole('heading', { level: 3, name: 'Models', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(settings).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeFocused();
+  await expect(settings).toBeVisible();
+  await page.getByRole('button', { name: 'Home', exact: true }).click();
+  await expect(settings).toBeHidden();
   expect(errors).toEqual([]);
 });
 
@@ -476,7 +481,7 @@ const bodyFrames = (page: Page) => page.evaluate(() => {
 test('a focused rail tab hands the keyboard to the section trigger when the panel narrows', async ({ page }) => {
   const errors = await start(page);
   await openUserSettings(page);
-  const settings = dialog(page), trigger = settingsSectionMenu(page);
+  const settings = settingsPage(page), trigger = settingsSectionMenu(page);
   const rail = page.getByRole('tablist', { name: 'Settings pages' });
   const constrain = (width: string) => settings.evaluate((el, value) => { el.parentElement!.style.width = value; }, width);
   await openSettingsPage(page, 'Extensions');
@@ -519,7 +524,7 @@ test('a focused rail tab hands the keyboard to the section trigger when the pane
 test('a focused closed section trigger hands the keyboard to the selected rail tab when the panel widens', async ({ page }) => {
   const errors = await start(page);
   await openUserSettings(page);
-  const settings = dialog(page), trigger = settingsSectionMenu(page);
+  const settings = settingsPage(page), trigger = settingsSectionMenu(page);
   const rail = page.getByRole('tablist', { name: 'Settings pages' });
   const constrain = (width: string) => settings.evaluate((el, value) => { el.parentElement!.style.width = value; }, width);
   await constrain('480px');
@@ -554,24 +559,25 @@ test('a focused closed section trigger hands the keyboard to the selected rail t
   await expect(extensions).toHaveAttribute('aria-selected', 'true');
   await expect(settings.getByRole('heading', { level: 3, name: 'Extensions', exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(settings).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeFocused();
+  await expect(settings).toBeVisible();
+  await page.getByRole('button', { name: 'Home', exact: true }).click();
+  await expect(settings).toBeHidden();
   expect(errors).toEqual([]);
 });
 
 /** Observe rendered frames after a responsive layout transition. */
 const settled = (page: Page) => page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 /** Where the keyboard is: never the page body, never a disabled control,
- * always inside the Settings dialog. */
+ * always inside the Settings page. */
 const keyboard = (page: Page) => page.evaluate(() => {
   const active = document.activeElement!;
-  return { body: active === document.body, disabled: active.matches(':disabled'), settings: active.closest('[role="dialog"][aria-label="Settings"]') !== null, rendered: active.getClientRects().length > 0, connected: active.isConnected };
+  return { body: active === document.body, disabled: active.matches(':disabled'), settings: active.closest('[data-settings-page]') !== null, rendered: active.getClientRects().length > 0, connected: active.isConnected };
 });
 const releaseWrites = (page: Page) => page.evaluate(() => (window as unknown as { rustxReleaseWrites: () => void }).rustxReleaseWrites());
 
 test('confirming a removal settles focus on its unit while the write is in flight; dismissal returns it to the trigger', async ({ page }) => {
   const errors = await start(page, '?write=held');
-  const settings = dialog(page);
+  const settings = settingsPage(page);
   await openUserSettings(page);
   await openSettingsPage(page, 'Models');
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
@@ -602,10 +608,11 @@ test('confirming a removal settles focus on its unit while the write is in fligh
   expect(await writes()).toBe(0);
   expect(await keyboard(page)).toEqual({ body: false, disabled: false, settings: true, rendered: true, connected: true });
 
-  // With the transient layer gone, Escape belongs to Settings again.
+  // With the transient layer gone, Escape leaves the Settings page intact.
   await page.keyboard.press('Escape');
-  await expect(settings).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeFocused();
+  await expect(settings).toBeVisible();
+  await page.getByRole('button', { name: 'Home', exact: true }).click();
+  await expect(settings).toBeHidden();
   expect(await writes()).toBe(0);
   await openUserSettings(page);
   await openSettingsPage(page, 'Models');
@@ -645,7 +652,7 @@ test('confirming a removal settles focus on its unit while the write is in fligh
 
 test('confirming a restore of inheritance settles focus on its unit while the write is in flight', async ({ page }) => {
   const errors = await start(page, '?write=held');
-  const settings = dialog(page);
+  const settings = settingsPage(page);
   await openWorkspaceSettings(page, 'Workspace A');
   await openSettingsPage(page, 'Agent');
   const unit = settings.getByRole('form', { name: 'Root identity' });
@@ -689,7 +696,7 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
 for (const unavailable of ['disabled', 'hidden', 'removed'] as const) test(`dismissal settles on the unit when its trigger becomes ${unavailable}`, async ({ page }) => {
   const errors = await start(page, '?write=held');
   await openUserSettings(page);
-  const settings = dialog(page);
+  const settings = settingsPage(page);
   await openSettingsPage(page, 'Models');
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
   const unit = settings.getByRole('form', { name: 'Provider transport' });
@@ -721,8 +728,8 @@ test('reduced motion removes Settings and banner motion', async ({ page }) => {
   await expect(dot).toHaveCSS('animation-name', 'none');
   await openUserSettings(page);
   await openSettingsPage(page, 'Extensions');
-  await dialog(page).getByRole('tab', { name: 'Native', exact: true }).click();
-  const track = dialog(page).getByRole('switch').first().locator('xpath=ancestor::label[1]').locator('[class*="switchTrack"]');
+  await settingsPage(page).getByRole('tab', { name: 'Native', exact: true }).click();
+  const track = settingsPage(page).getByRole('switch').first().locator('xpath=ancestor::label[1]').locator('[class*="switchTrack"]');
   await expect(track).toHaveCSS('transition-duration', '0s');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await expect(track).toHaveCSS('transition-duration', '0.15s');
@@ -739,14 +746,14 @@ test.describe('touch', () => {
     await menu.tap();
     await page.getByRole('menuitem', { name: 'Tools & Permissions' }).tap();
     await expect(menu).toHaveAccessibleName('Settings page: Tools & Permissions');
-    await expect(dialog(page).getByRole('heading', { level: 3, name: 'Tools & Permissions' })).toBeVisible();
+    await expect(settingsPage(page).getByRole('heading', { level: 3, name: 'Tools & Permissions' })).toBeVisible();
     // A tap outside the open menu dismisses it without closing Settings.
     await menu.tap();
     await expect(page.getByRole('menu')).toBeVisible();
     // Well below the open list, inside the Settings panel.
     await page.touchscreen.tap(195, 780);
     await expect(page.getByRole('menu')).toHaveCount(0);
-    await expect(dialog(page)).toBeVisible();
+    await expect(settingsPage(page)).toBeVisible();
     expect(errors).toEqual([]);
   });
 });
@@ -772,7 +779,7 @@ test('Session configuration banner: preparing, waiting and failed, compact and o
   await expect(banner(page).getByRole('button')).toHaveCount(0);
   await expectAccessible(page, '[aria-label="Session configuration"]');
   await expectStableScreenshot(page.locator('#session-view > header'), 'session-banner-waiting-light.png');
-  expect((await nativeRequests(page)).filter(request => ['configuration/reconcile', 'turn/cancel'].includes(request.method))).toEqual([]);
+  expect((await nativeRequests(page)).filter(request => ['configuration/reconcile', 'turn/interrupt'].includes(request.method))).toEqual([]);
   expect(errors).toEqual([]);
 
   // Failed: the native diagnostic, one action per native owner — here User
@@ -785,8 +792,8 @@ test('Session configuration banner: preparing, waiting and failed, compact and o
   await expect(failed.getByRole('button')).toHaveText(['Open User Settings', 'Open Workspace Settings — /workspace/B', 'Retry']);
   await expectStableScreenshot(page.locator('#session-view > header'), 'session-banner-failed-light.png');
   await failed.getByRole('button', { name: 'Open Workspace Settings — /workspace/B' }).click();
-  await expect(dialog(page).getByRole('heading', { level: 2, name: 'Workspace Settings — Workspace B' })).toBeVisible();
-  await closeSettings(page);
+  await expect(settingsPage(page).getByRole('heading', { level: 2, name: 'Workspace Settings — Workspace B' })).toBeVisible();
+  await returnHome(page);
   // Narrow: the reason and the actions wrap; nothing scrolls sideways.
   await setTheme(page, 'Dark');
   await page.setViewportSize({ width: 390, height: 844 });
@@ -821,7 +828,7 @@ test('Session configuration banner neither flickers nor rereads configuration wh
 test('Provider split-panel deletion preserves exact unit CAS and updates the navigation after observation', async ({ page }) => {
   const errors = await start(page, '?write=held');
   await openUserSettings(page); await openSettingsPage(page, 'Models');
-  const settings = dialog(page);
+  const settings = settingsPage(page);
   await settings.getByRole('row', { name: 'transport', exact: true }).click();
   const remove = settings.getByRole('button', { name: 'Remove Provider transport', exact: true });
   await remove.focus(); await page.keyboard.press('Enter');
@@ -846,7 +853,7 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     const errors = await start(page, '', viewport);
     await openUserSettings(page);
     await openSettingsPage(page, 'Models');
-    const settings = dialog(page);
+    const settings = settingsPage(page);
     await settings.getByRole('button', { name: /^All Models/ }).click();
     await settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name: longModel, exact: true }).click();
     const model = page.getByRole('dialog', { name: `Model ${longModel}`, exact: true });

@@ -21,7 +21,7 @@ import { useComposerContent } from '../../src/app/agent/useComposerContent';
 import { TodoDock } from '../../src/app/composer/TodoDock';
 import { todoDock } from '../../src/bindings/composer-context';
 import { conversationPreferences } from '../../src/app/conversation-preferences';
-import type { ContentChunk, ContentRef, MessageBlock, ForegroundToolExecution, RuntimeClientGoalSnapshot, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v72';
+import type { ContentChunk, ContentRef, MessageBlock, ForegroundToolExecution, RuntimeClientGoalSnapshot, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v75';
 import { Server, snapshot, checkpoint, projectionHead } from '../fixture';
 import { foldRuntimeEvent } from '../../../protocol/app-server/projection';
 import '../../src/presentation/theme/base.css';
@@ -59,7 +59,7 @@ server.handlers.set('workflow/list', request => { if (request.method !== 'workfl
 await server.attached('A');
 if (scene === 'first') {
   localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
-  server.held.add('session/attach');
+  server.held.add('thread/resume');
 }
 const view = server.client.getSnapshot().views.A, cut = view.checkpoint!.read_cut;
 view.checkpoint!.collections.push({ domain: 'todos.tasks', revision: '1', total: '3', loaded: '0', next_offset: '0' });
@@ -150,10 +150,10 @@ function Continuity() {
       finishDeferredRead: () => { const request = server.requests.filter(row => row.socket === server.socket && row.request.method === 'conversation/contentRead').at(-1)?.request; if (!request) throw Error('No pending content read'); server.held.delete('conversation/contentRead'); server.reply(request); },
       replaceReadingAuthority: async () => { server.authorityId = 'replacement-server'; server.socket.close(); await server.connect(); await server.client.attach('A'); },
       otherReading: async () => { server.nodeSnapshots.set('node-other', readingSnapshot('B')); await server.client.switchNode('A', 'node-other'); await server.client.attach('A', 'node-other'); },
-      holdFirst: () => server.held.add('turn/start'),
-      attachFirst: () => { server.held.delete('session/attach'); for (const row of server.requests) if (row.request.method === 'session/attach' && row.request.params.session_id === 'B') server.reply(row.request); },
-      ackFirst: () => { const request = server.requests.find(row => row.request.method === 'turn/start')?.request; if (!request) throw Error('No first input'); server.reply(request); },
-      firstState: () => ({ phase: firstSubmissions(server.client).session('B')?.phase, fileReferences: firstSubmissions(server.client).session('B')?.draft.files.length, pending: server.client.getSnapshot().views.B?.submissions?.length ?? 0, requests: server.requests.filter(row => row.request.method === 'turn/start').length }),
+      holdFirst: () => server.held.add('inbound/queue'),
+      attachFirst: () => { server.held.delete('thread/resume'); for (const row of server.requests) if (row.request.method === 'thread/resume' && server.sessionForThread(row.request.params.threadId) === 'B') server.reply(row.request); },
+      ackFirst: () => { const request = server.requests.find(row => row.request.method === 'inbound/queue')?.request; if (!request) throw Error('No first input'); server.reply(request); },
+      firstState: () => ({ phase: firstSubmissions(server.client).session('B')?.phase, fileReferences: firstSubmissions(server.client).session('B')?.draft.files.length, pending: server.client.getSnapshot().views.B?.submissions?.length ?? 0, requests: server.requests.filter(row => row.request.method === 'inbound/queue').length }),
       observeFirst: async () => { const message = { role: 'user' as const, source: 'human' as const, id: 'accepted-user', content: [{ type: 'text' as const, text: 'First message stays visible' }] }; server.snapshots.set('B', { ...snapshot('B'), messages: [message], transcript: { entries: [{ cursor: '1', item: { type: 'message', message } }] } }); await server.client.refresh('B'); },
       changeGoal: () => {
         server.held.add('conversation/checkpointPage'); server.held.add('conversation/checkpointValueRead');

@@ -1,5 +1,5 @@
 import { createRef, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Workbench, type WorkbenchHandle } from '../src/app/components/Workbench';
 import { PreviewWorkspace } from '../src/app/components/PreviewWorkspace';
@@ -167,6 +167,39 @@ it.each([4, 64 * 1024 * 1024 + 1])('Workbench keeps its mounted geometry through
   await act(async () => { await ref.current!.openFile('a.stl'); });
   await waitFor(() => expect(models.live).toBeGreaterThan(0));
   await act(async () => server.client.release('A')); expect(models.live).toBe(0);
+});
+
+it('Workbench defers inactive geometry admission and parks the same Navigator viewport across Home', async () => {
+  const previews = new WorkbenchPreviewRetention(server.client, authority, new PreviewContentCache()); stops.push(previews.start());
+  const reads = vi.fn(), host = { ...server.workspaceHost, workbench: vi.fn(async (_scope, { request }) => {
+    if (request.kind === 'resolve') return { path: request.path };
+    if (request.kind === 'preview') { reads(request.path); return { preview: { data: new Uint8Array(4), version: 'one', offset: 0, bytes: 4, eof: true } }; }
+    return {};
+  }) } satisfies typeof server.workspaceHost;
+  const ref = createRef<WorkbenchHandle>(), props = { fileRef: ref, host, previews, scope: authority.getCatalog()!, target: { session_id: 'A', active_node: 'node-A' }, visible: true, floatingVisible: false, fullscreen: false, toggleFullscreen() {}, closePanel() {} };
+  const ui = render(<Workbench {...props} active={false}/>);
+  await act(async () => { await ref.current!.openFile('parked.stl'); });
+  expect(reads).not.toHaveBeenCalled(); expect(models.imports).toBe(0);
+
+  ui.rerender(<Workbench {...props} active/>);
+  await waitFor(() => expect(models.imports).toBe(1));
+  const canvas = ui.container.querySelector('[data-model="parked.stl"]')!, copy = models.copies[0];
+  // Exercise the main file navigator surrounding the geometry body.
+  fireEvent.click(ui.getByRole('button', { name: 'Show workspace files' }));
+  expect(ui.container.querySelector('[data-files-navigator]')).not.toBeNull();
+  expect(canvas.getAttribute('data-shown')).toBe('true');
+
+  ui.rerender(<Workbench {...props} active={false}/>);
+  expect(ui.container.querySelector('[data-model="parked.stl"]')).toBe(canvas);
+  expect(canvas.getAttribute('data-shown')).toBe('false');
+  expect(canvas.closest('[hidden]')).not.toBeNull(); expect(canvas.closest('[inert]')).not.toBeNull();
+  expect(copy.disposed).toBe(false); expect(models.live).toBe(1);
+
+  ui.rerender(<Workbench {...props} active/>);
+  expect(ui.container.querySelector('[data-model="parked.stl"]')).toBe(canvas);
+  expect(canvas.getAttribute('data-shown')).toBe('true');
+  expect(ui.getByRole('button', { name: 'Hide workspace files' }).getAttribute('aria-expanded')).toBe('true');
+  expect(models.copies[0].model).toBe(copy.model); expect(models.imports).toBe(1); expect(reads).toHaveBeenCalledTimes(1);
 });
 
 it.each([{ mimeType: 'image/png', mode: 'bytes' }, { mimeType: 'text/markdown; charset=UTF-8', mode: 'pages' }])('does not park a managed $mimeType artifact with a misleading geometry suffix', async ({ mimeType, mode }) => {

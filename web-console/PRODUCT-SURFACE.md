@@ -37,7 +37,7 @@ Failure remains retryable, without polling, mutation replay or LLM naming.
 | Child Agent activity | Product | Stable Agent row, current activation, canonical transcript and message/interrupt/wait controls | Active → Inactive → resumed under the same identity |
 | Job activity | Product | Finite Job status, retained output and wait/cancel controls | Proactive terminal settlement; terminal is final |
 | Workflow activity | Product | Named Workflow and steps, no attempt IDs | Workflow progress |
-| Workflow files | Product | Sidebar **Workflows** entry: exact-scope library (Workspace / Global) and file editor | Author native `.agents/workflows/<id>.yaml`; saving affects only future adoption |
+| Workflow files | Product | Primary rail **Workflows** destination: exact-scope library (Workspace / Global) and file editor | Author native `.agents/workflows/<id>.yaml`; saving affects only future adoption |
 | Raw Agent status | Internal | Native client/runtime observations | Unstructured native diagnostics |
 | Attachment state / intent / ID | Internal | Native client/runtime observations | Internal controller lifecycle |
 | Runtime incarnation / residency | Internal | Native client/runtime observations | Exact native lifetime evidence |
@@ -72,3 +72,20 @@ and re-fetched current `ddefc45fbc7f8e46dd73185e68295696d1297887`.
 Header title/actions/utilities/corner and view-tab hierarchy inform the composition;
 existing imported shell/primitives remain the implementation baseline. No Harness
 runtime, slot system, docking framework or persistence is adopted.
+
+## Primary shell destinations (#536)
+
+The permanent icon rail selects Home, Workflows, Scheduled Tasks or Settings from
+Shell's committed route. Home alone has workspace/conversation browsing; its
+entire secondary sidebar can collapse. Other pages use all space beside the
+primary rail. Settings is a page with its existing internal sections and scoped
+editors; the old mask, close control, focus trap and Escape-to-close are removed.
+Transient operation confirmations remain dialogs.
+
+Primary navigation preserves the last Home editor, unsent input, attachments,
+preview/workbench state and admitted native operations. Return validates current
+Host authorization and lifecycle facts without starting native work. Invalid
+remembered targets yield empty Home; authority replacement retires old IDs.
+Workflow leave confirmation is enforced by Shell for every outgoing destination,
+including scoped Settings and Session/task entry points. Cancellation preserves
+the displayed editor and selected rail item; superseded callbacks cannot commit.

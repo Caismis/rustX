@@ -1,5 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. HtmlBody port; see PROVENANCE.md. */
 import { useEffect, useMemo, useState } from 'react';
+import { LoadingIndicator } from '../../../../presentation/primitives/LoadingIndicator';
 import { createHtmlDocument } from './bootstrap';
 import { createBasicHtmlDocument } from '../basic-document';
 import { packHtml } from './pack';
@@ -45,7 +46,7 @@ function HtmlFrame({ data, path, call, signal, dependencies: retained }: Props) 
     }).catch(error => { if (!current.aborted) setFrame({data, error}); });
     return () => { lifetime.abort(); if (url) URL.revokeObjectURL(url); };
   }, [data, path, dependencies, signal]);
-  if (frame?.data !== data) return <p role="status">{tx('artifacts:workbench.loading')}</p>;
+  if (frame?.data !== data) return <LoadingIndicator label={tx('artifacts:workbench.loading')}/>;
   if (frame.error !== undefined) return <p role="alert">{tx(`artifacts:document.${documentFailure(frame.error)}`)}</p>;
   return <iframe key={frame.url} className={css.frame} src={frame.url} sandbox="allow-scripts" title="HTML" data-html-preview/>;
 }

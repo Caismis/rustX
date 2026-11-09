@@ -89,8 +89,7 @@ async fn attach(client: &impl AppServerConformanceDriver, f: &Fixture) -> Attach
         client,
         1,
         Method::SessionAttach {
-            session_id: f.sessions[0].id.clone(),
-            node_id: None,
+            thread_id: f.sessions[0].active_conversation_id.clone(),
         },
     )
     .await
@@ -213,10 +212,10 @@ async fn t08_t12_content_range_error_is_typed_correlated_and_keeps_connection_fo
             initialize(&client).await;
             let target = attach(&client, &fixture).await;
             let text = "水🙂 exact bytes ".repeat(4096);
-            let MethodResult::InboundAccepted { message_id, .. } = call(
+            let MethodResult::TurnInputAccepted { message_id, .. } = call(
                 &client,
                 46_780,
-                Method::TurnStart {
+                Method::TurnStart { input_id: uuid::Uuid::new_v4().to_string(),
                     target: target.clone(),
                     content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
                         text: text.clone(),
@@ -345,6 +344,7 @@ async fn adapter_disconnect_preserves_active_execution_and_replacement_authority
                 &client,
                 2,
                 Method::TurnStart {
+                    input_id: uuid::Uuid::new_v4().to_string(),
                     target: old.clone(),
                     content: (input("request-A"))
                         .into_iter()
@@ -374,7 +374,10 @@ async fn adapter_disconnect_preserves_active_execution_and_replacement_authority
                 .request(Request {
                     jsonrpc: JsonRpcVersion::V2,
                     id: RequestId::Integer(3),
-                    call: Method::TurnCancel { target: old },
+                    call: Method::TurnCancel {
+                        turn_id: crate::runtime::identity::AttemptId::new("obsolete-turn"),
+                        target: old,
+                    },
                 })
                 .await;
             assert!(matches!(stale, Response::Failure(_)));
@@ -420,6 +423,7 @@ async fn adapter_disconnect_cannot_settle_approval_or_questionnaire() {
                     &client,
                     2,
                     Method::TurnStart {
+                        input_id: uuid::Uuid::new_v4().to_string(),
                         target,
                         content: (input("request-A"))
                             .into_iter()
@@ -488,6 +492,7 @@ async fn blocked_pipe_overflows_and_drops_writer_while_runtime_progresses() {
             &direct,
             2,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: (input("request-A"))
                     .into_iter()
@@ -544,9 +549,12 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         let mut request = "ws://localhost/".into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v72, rustx-token.{}", driver::TOKEN)
-                .parse()
-                .unwrap(),
+            format!(
+                "rustx.app-server.v75, {}",
+                driver::credential_offer(driver::TOKEN)
+            )
+            .parse()
+            .unwrap(),
         );
         let (mut socket, _) = tokio_tungstenite::client_async(request, client)
             .await
@@ -884,8 +892,7 @@ async fn one_pending_session_request_does_not_serialize_another_session() {
                 &client,
                 2,
                 Method::SessionAttach {
-                    session_id: f.sessions[1].id.clone(),
-                    node_id: None,
+                    thread_id: f.sessions[1].active_conversation_id.clone(),
                 },
             )
             .await
@@ -955,9 +962,12 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         let mut request = url.as_str().into_client_request().unwrap();
         request.headers_mut().insert(
             "sec-websocket-protocol",
-            format!("rustx.app-server.v72, rustx-token.{}", driver::TOKEN)
-                .parse()
-                .unwrap(),
+            format!(
+                "rustx.app-server.v75, {}",
+                driver::credential_offer(driver::TOKEN)
+            )
+            .parse()
+            .unwrap(),
         );
         let error = tokio_tungstenite::connect_async(request).await.unwrap_err();
         // The listener drops excess sockets before HTTP admission, rather than
@@ -1139,113 +1149,45 @@ async fn pending_application_observation_does_not_block_attachment_notifications
 // ordinary transport token. It never substitutes for it, a wrong value fails
 // the handshake closed, and native credential removal revokes live grants.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn websocket_delivery_access_is_a_separate_additive_revocable_credential() {
-    async fn delivery_access(client: &driver::Driver) -> bool {
-        let MethodResult::Initialized { capabilities, .. } = call(
-            client,
-            0,
-            Method::Initialize(InitializeParams {
-                protocol_version: APP_SERVER_PROTOCOL_VERSION,
-                client: ClientIdentity {
-                    name: "rustx-product-host".into(),
-                    version: "1".into(),
-                },
-                presentation: PresentationCapabilities::default(),
-            }),
-        )
-        .await
-        else {
-            panic!("initialized")
-        };
-        capabilities.delivery_access
-    }
-    async fn read(client: &driver::Driver, target: AttachmentTarget) -> ErrorData {
-        let Response::Failure(failure) = client
-            .request(Request {
-                jsonrpc: JsonRpcVersion::V2,
-                id: RequestId::Integer(9),
-                call: Method::DeliveryRead {
-                    target,
-                    locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
-                        message_id: crate::runtime::identity::MessageId::new("invented"),
-                    },
-                    delivery_index: 0,
-                },
-            })
-            .await
-        else {
-            panic!("no delivery exists")
-        };
-        failure.error.data.unwrap()
-    }
+async fn authenticated_clients_share_ordinary_delivery_api_eligibility() {
     bounded(async {
-        const DELIVERY: &str = "delivery-secret-000000000000000000000000000000000000";
-        const PRODUCT_HOST: &str = "product-host-secret-0000000000000000000000000000000000";
         let f = Fixture::with_session_count(None, 1).await;
-        f.host
-            .bind_delivery_access(Some(websocket::Credential::new(DELIVERY.into()).unwrap()));
-        f.host
-            .bind_product_host(Some(websocket::Credential::new(PRODUCT_HOST.into()).unwrap()));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("ws://{}", listener.local_addr().unwrap());
-        let stop = CancellationToken::new();
-        let serving = tokio::spawn(websocket::serve(
-            listener,
-            f.host.clone(),
-            websocket::Credential::new(driver::TOKEN.into()).unwrap(),
-            stop.clone(),
-        ));
-        let token = driver::TOKEN;
-        for offered in [
-            format!("rustx.app-server.v72, rustx-delivery-access.{DELIVERY}"),
-            format!("rustx.app-server.v72, rustx-token.{token}, rustx-delivery-access.{PRODUCT_HOST}"),
-            format!("rustx.app-server.v72, rustx-token.{token}, rustx-delivery-access.{token}"),
-            format!("rustx.app-server.v72, rustx-token.{token}, rustx-delivery-access.wrong"),
-            format!("rustx.app-server.v72, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}, rustx-delivery-access."),
-        ] {
-            assert!(driver::try_socket(&url, &offered).await.is_err(), "{offered}");
+        let a = AppServerConnection::new(f.host.clone());
+        let b = AppServerConnection::new(f.host.clone());
+        initialize(&app_server_conformance::DirectDriver(&a)).await;
+        initialize(&app_server_conformance::DirectDriver(&b)).await;
+        for connection in [&a, &b] {
+            let target = attach(&app_server_conformance::DirectDriver(connection), &f).await;
+            let response = connection
+                .handle_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(9),
+                    call: Method::DeliveryRead {
+                        target,
+                        locator:
+                            crate::observation::content::CanonicalContentLocator::ByMessageId {
+                                message_id: crate::runtime::identity::MessageId::new("absent"),
+                            },
+                        delivery_index: 0,
+                    },
+                })
+                .await;
+            assert!(matches!(
+                response,
+                Response::Failure(Failure {
+                    error: RpcError {
+                        data: Some(ErrorData::SessionFileRead {
+                            reason:
+                                crate::tools::session_files::SessionFileReadFailure::Unavailable
+                        }),
+                        ..
+                    },
+                    ..
+                })
+            ));
         }
-        let unauthorized = ErrorData::SessionFileRead {
-            reason: crate::tools::session_files::SessionFileReadFailure::Unauthorized,
-        };
-        // A Product Host secret offered on the ordinary lane is not delivery access.
-        let ordinary = driver::websocket_offering(
-            &url,
-            &format!("rustx.app-server.v72, rustx-token.{token}, rustx-product-host.{PRODUCT_HOST}"),
-        )
-        .await;
-        assert!(!delivery_access(&ordinary).await);
-        let target = attach(&ordinary, &f).await;
-        assert_eq!(read(&ordinary, target.clone()).await, unauthorized);
-        call(&ordinary, 2, Method::SessionDetach { target }).await;
-        ordinary.close().await;
-        let granted = driver::websocket_offering(
-            &url,
-            &format!("rustx.app-server.v72, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
-        )
-        .await;
-        assert!(delivery_access(&granted).await);
-        let target = attach(&granted, &f).await;
-        assert_eq!(
-            read(&granted, target.clone()).await,
-            ErrorData::SessionFileRead {
-                reason: crate::tools::session_files::SessionFileReadFailure::Unavailable,
-            },
-            "authorized lookup of an invented coordinate finds no delivery"
-        );
-        f.host.bind_delivery_access(None);
-        assert_eq!(read(&granted, target).await, unauthorized, "removal revokes live grants");
-        assert!(
-            driver::try_socket(
-                &url,
-                &format!("rustx.app-server.v72, rustx-token.{token}, rustx-delivery-access.{DELIVERY}"),
-            )
-            .await
-            .is_err()
-        );
-        granted.close().await;
-        stop.cancel();
-        serving.await.unwrap().unwrap();
+        a.close();
+        b.close();
         f.close().await;
     })
     .await;
@@ -1623,7 +1565,7 @@ async fn delivery_publication_linearizes_at_the_transports_first_accepted_byte()
             "published",
             "shutdown",
         ] {
-            let connection = Arc::new(AppServerConnection::with_delivery_access(
+            let connection = Arc::new(AppServerConnection::with_connection_lifetime(
                 f.host.clone(),
                 CancellationToken::new(),
             ));
@@ -1824,7 +1766,7 @@ async fn delivery_revocation_overlapping_a_hand_off_is_ordered_after_its_accepta
         let revocations = f.host.revocations().clone();
         let success_30 = |offer: &[u8]| response(offer, 30) == Some(true);
         for case in ["credential", "detach", "close", "cancel"] {
-            let connection = Arc::new(AppServerConnection::with_delivery_access(
+            let connection = Arc::new(AppServerConnection::with_connection_lifetime(
                 f.host.clone(),
                 CancellationToken::new(),
             ));
@@ -1978,7 +1920,7 @@ async fn websocket_writer_stages_nothing_while_the_reader_holds_the_stream() {
         let f = Fixture::with_session_count(Some("present"), 1).await;
         let tool = committed_delivery(&f).await;
         let permits = f.host.file_reads();
-        let connection = Arc::new(AppServerConnection::with_delivery_access(
+        let connection = Arc::new(AppServerConnection::with_connection_lifetime(
             f.host.clone(),
             CancellationToken::new(),
         ));
@@ -2066,137 +2008,12 @@ async fn websocket_writer_stages_nothing_while_the_reader_holds_the_stream() {
     .await;
 }
 
-/// Over WebSocket the publication point is tungstenite's acceptance of the
-/// frame, which `websocket::connection` reaches only once every earlier frame
-/// has gone to the socket. Behind an earlier frame the socket has not taken,
-/// a delivery response stays undecided and a credential revocation wins.
-/// Once tungstenite has taken the frame, even into its own buffer because the
-/// socket takes nothing, the frame is published and a revocation does not
-/// retract it: that is the documented WebSocket limit.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn websocket_delivery_publication_is_decided_when_tungstenite_takes_the_frame() {
-    use super::protocol::delivery::{
-        DELIVERED, committed_delivery, delivered_bytes, delivery_request, failed_with,
-    };
-    use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
-    use futures_util::StreamExt;
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    bounded(Box::pin(async {
-        const DELIVERY: &str = "delivery-secret-000000000000000000000000000000000000";
-        let f = Fixture::with_session_count(Some("present"), 1).await;
-        let tool = committed_delivery(&f).await;
-        let probe = f.host.file_read_probe();
-        let permits = f.host.file_reads();
-        let frame_for = |id: i64, success: bool| {
-            move |frame: &[u8]| response(frame_payload(frame), id) == Some(success)
-        };
-        for behind_unsent_frame in [true, false] {
-            f.host
-                .bind_delivery_access(Some(websocket::Credential::new(DELIVERY.into()).unwrap()));
-            let valve = ValveControl::new();
-            let (client, server) = tokio::io::duplex(1 << 20);
-            let serving = tokio::spawn(websocket::connection(
-                Valve {
-                    inner: server,
-                    control: valve.clone(),
-                },
-                f.host.clone(),
-                websocket::Credential::new(driver::TOKEN.into()).unwrap(),
-                CancellationToken::new(),
-            ));
-            let mut request = "ws://localhost/".into_client_request().unwrap();
-            request.headers_mut().insert(
-                "sec-websocket-protocol",
-                format!(
-                    "rustx.app-server.v72, rustx-token.{}, rustx-delivery-access.{DELIVERY}",
-                    driver::TOKEN
-                )
-                .parse()
-                .unwrap(),
-            );
-            let (socket, _) = tokio_tungstenite::client_async(request, client)
-                .await
-                .unwrap();
-            let (sink, stream) = socket.split();
-            let texts = driver::frames(stream);
-            let (incoming, received) = recording(texts);
-            let client = driver::Driver::new(incoming, driver::text_sink(sink));
-            initialize(&client).await;
-            let target = attach(&client, &f).await;
-            probe.completed.send_replace(None);
-            let read = || delivery_request(30, &target, &tool, false);
-            valve.grant(0);
-            if behind_unsent_frame {
-                let (earlier, outcome) = tokio::join!(client.request(server_info(29)), async {
-                    valve.refused(frame_for(29, true)).await;
-                    let (outcome, ()) = tokio::join!(client.request(read()), async {
-                        probe
-                            .completed
-                            .subscribe()
-                            .wait_for(Option::is_some)
-                            .await
-                            .unwrap();
-                        assert_eq!(*probe.completed.borrow(), Some(true), "produced");
-                        assert!(
-                            !valve.offered(|frame| response(frame_payload(frame), 30).is_some()),
-                            "not yet taken by tungstenite"
-                        );
-                        f.host.bind_delivery_access(None);
-                        valve.grant(usize::MAX);
-                    });
-                    outcome
-                });
-                assert!(matches!(earlier, Response::Success(_)));
-                failed_with(
-                    &outcome,
-                    &ErrorData::SessionFileRead {
-                        reason: SessionFileReadFailure::Unauthorized,
-                    },
-                );
-            } else {
-                let (outcome, ()) = tokio::join!(client.request(read()), async {
-                    valve.refused(frame_for(30, true)).await;
-                    f.host.bind_delivery_access(None);
-                    valve.grant(usize::MAX);
-                });
-                assert_eq!(
-                    delivered_bytes(&outcome),
-                    DELIVERED,
-                    "taken by tungstenite, the frame is not retracted"
-                );
-            }
-            assert!(matches!(
-                client.request(server_info(32)).await,
-                Response::Success(_)
-            ));
-            answered_once(&received, 30, 1);
-            assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
-            client.close().await;
-            let _ = serving.await.unwrap();
-        }
-        f.close().await;
-    }))
-    .await;
-}
-
 const ROTATION_A: &str = "rotation-secret-a-0000000000000000000000000000000000000";
 const ROTATION_B: &str = "rotation-secret-b-0000000000000000000000000000000000000";
-const ROTATION_C: &str = "rotation-secret-c-0000000000000000000000000000000000000";
 fn rotation_credential(secret: &str) -> websocket::Credential {
     websocket::Credential::new(secret.into()).unwrap()
 }
-/// Authenticates `secret` as a delivery credential through the handshake's
-/// own authority path: a fresh token, or `None` when refused.
-fn delivery_token(f: &Fixture, secret: &str) -> Option<CancellationToken> {
-    let offered = format!(
-        "{}{secret}",
-        crate::app_server::delivery_access::CREDENTIAL_PREFIX
-    );
-    f.host
-        .authenticate_delivery_access(&[offered.as_str()])
-        .ok()
-        .flatten()
-}
+
 /// The same, for the Product Host credential.
 fn product_host_token(f: &Fixture, secret: &str) -> Option<CancellationToken> {
     let offered = format!("rustx-product-host.{secret}");
@@ -2220,145 +2037,6 @@ async fn revocations_waiting(
         _ = completed => panic!("a rotation completed while a publication was between its decision and its acceptance"),
     }
 }
-/// An ordinary App Server WebSocket connection over a [`Valve`], admitted
-/// with `credential` as its delivery access, initialized and attached.
-async fn delivery_websocket(
-    f: &Fixture,
-    credential: &str,
-    valve: &Arc<ValveControl>,
-) -> (
-    driver::Driver,
-    Received,
-    tokio::task::JoinHandle<io::Result<()>>,
-    AttachmentTarget,
-) {
-    use futures_util::StreamExt;
-    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    let (client, server) = tokio::io::duplex(1 << 20);
-    let serving = tokio::spawn(websocket::connection(
-        Valve {
-            inner: server,
-            control: valve.clone(),
-        },
-        f.host.clone(),
-        websocket::Credential::new(driver::TOKEN.into()).unwrap(),
-        CancellationToken::new(),
-    ));
-    let mut request = "ws://localhost/".into_client_request().unwrap();
-    request.headers_mut().insert(
-        "sec-websocket-protocol",
-        format!(
-            "rustx.app-server.v72, rustx-token.{}, rustx-delivery-access.{credential}",
-            driver::TOKEN
-        )
-        .parse()
-        .unwrap(),
-    );
-    let (socket, _) = tokio_tungstenite::client_async(request, client)
-        .await
-        .unwrap();
-    let (sink, stream) = socket.split();
-    let texts = driver::frames(stream);
-    let (incoming, received) = recording(texts);
-    let client = driver::Driver::new(incoming, driver::text_sink(sink));
-    initialize(&client).await;
-    let target = attach(&client, f).await;
-    (client, received, serving, target)
-}
-
-/// Replacing or removing the delivery credential is one authority
-/// transition, ordered against publication by the revocation order.
-///
-/// An A-admitted WebSocket connection's success for 30 is decided and held
-/// inside tungstenite's acceptance. A rotation to B (or a removal) then
-/// reports that it waits for that publication and has not completed. While it
-/// waits, B does not authenticate, and A still does (a token minted then is
-/// revoked by the rotation). After the release the success stands, the
-/// rotation completes, A's tokens (including the connection's) are cancelled,
-/// only B authenticates, and the A connection's next delivery is
-/// `unauthorized`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn delivery_credential_rotation_is_one_transition_ordered_against_publication() {
-    use super::protocol::delivery::{
-        DELIVERED, committed_delivery, delivered_bytes, delivery_request, failed_with,
-    };
-    use crate::tools::session_files::{SESSION_FILE_MAX_READS, SessionFileReadFailure};
-    bounded(Box::pin(async {
-        let f = Fixture::with_session_count(Some("present"), 1).await;
-        let tool = committed_delivery(&f).await;
-        let permits = f.host.file_reads();
-        for next in [Some(ROTATION_B), None] {
-            f.host
-                .bind_delivery_access(Some(rotation_credential(ROTATION_A)));
-            let valve = ValveControl::new();
-            let _released = valve.released_on_drop();
-            let (client, received, serving, target) =
-                delivery_websocket(&f, ROTATION_A, &valve).await;
-            f.host.revocations().waited.send_replace(0);
-            valve
-                .writes
-                .arm_for(|frame| response(frame_payload(frame), 30) == Some(true));
-            let (outcome, ()) = tokio::join!(
-                client.request(delivery_request(30, &target, &tool, false)),
-                async {
-                    valve.writes.entered().await;
-                    let rotating = tokio::task::spawn_blocking({
-                        let host = f.host.clone();
-                        move || host.bind_delivery_access(next.map(rotation_credential))
-                    });
-                    tokio::pin!(rotating);
-                    revocations_waiting(&f, 1, &mut [rotating.as_mut()]).await;
-                    // The previous credential is not revoked yet, so the
-                    // next one is not observable either.
-                    assert!(
-                        delivery_token(&f, ROTATION_B).is_none(),
-                        "B observable before A is revoked"
-                    );
-                    let early = delivery_token(&f, ROTATION_A).expect("A, before the rotation");
-                    valve.writes.release();
-                    rotating.await.unwrap();
-                    assert!(
-                        early.is_cancelled(),
-                        "a token minted before the rotation is revoked by it"
-                    );
-                }
-            );
-            assert_eq!(
-                delivered_bytes(&outcome),
-                DELIVERED,
-                "accepted before the rotation: the success stands"
-            );
-            assert!(delivery_token(&f, ROTATION_A).is_none(), "A is revoked");
-            match next {
-                Some(_) => assert!(
-                    !delivery_token(&f, ROTATION_B)
-                        .expect("B after the rotation")
-                        .is_cancelled()
-                ),
-                None => assert!(delivery_token(&f, ROTATION_B).is_none()),
-            }
-            failed_with(
-                &client
-                    .request(delivery_request(34, &target, &tool, false))
-                    .await,
-                &ErrorData::SessionFileRead {
-                    reason: SessionFileReadFailure::Unauthorized,
-                },
-            );
-            assert!(matches!(
-                client.request(server_info(32)).await,
-                Response::Success(_)
-            ));
-            answered_once(&received, 30, 1);
-            answered_once(&received, 34, 1);
-            assert_eq!(permits.available_permits(), SESSION_FILE_MAX_READS);
-            client.close().await;
-            let _ = serving.await.unwrap();
-        }
-        f.close().await;
-    }))
-    .await;
-}
 
 /// Product Host credential rotation follows the same transition. A real
 /// Product Host socket, admitted with A, reads a committed delivery; its
@@ -2379,9 +2057,6 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
         let permits = f.host.file_reads();
         f.host
             .bind_product_host(Some(rotation_credential(ROTATION_A)));
-        f.host
-            .bind_delivery_access(Some(rotation_credential(ROTATION_C)));
-        let unrelated = delivery_token(&f, ROTATION_C).unwrap();
         let browser = AppServerConnection::new(f.host.clone());
         let direct = app_server_conformance::DirectDriver(&browser);
         initialize(&direct).await;
@@ -2469,8 +2144,6 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
         assert!(product_host_token(&f, ROTATION_A).is_none(), "A is revoked");
         assert!(!product_host_token(&f, ROTATION_B).unwrap().is_cancelled());
         // Unrelated authority is untouched.
-        assert!(!unrelated.is_cancelled());
-        assert!(delivery_token(&f, ROTATION_C).is_some());
         assert!(matches!(
             browser.handle_request(server_info(40)).await,
             Response::Success(_)
@@ -2481,161 +2154,6 @@ async fn product_host_credential_rotation_is_one_transition_ordered_against_publ
         browser.close();
         f.close().await;
     }))
-    .await;
-}
-
-/// Overlapping rotations take one total order. With an A-admitted
-/// publication held inside its acceptance, rotations to B, to C and to none
-/// are started one after another, each observed waiting behind that
-/// publication before the next starts, so all three overlap. After the
-/// release each is linearized in turn: the rotation log holds exactly those
-/// three installations, the final credential state is the last one's, every
-/// superseded credential is refused, and the A connection's authority is
-/// revoked.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn overlapping_delivery_credential_rotations_take_one_total_order() {
-    use super::protocol::delivery::{
-        DELIVERED, committed_delivery, delivered_bytes, delivery_request, failed_with,
-    };
-    use crate::tools::session_files::SessionFileReadFailure;
-    bounded(Box::pin(async {
-        let f = Fixture::with_tool(Some("present")).await;
-        let tool = committed_delivery(&f).await;
-        let probe = f.host.file_read_probe();
-        f.host
-            .bind_delivery_access(Some(rotation_credential(ROTATION_A)));
-        let valve = ValveControl::new();
-        let _released = valve.released_on_drop();
-        let (client, _received, serving, target) = delivery_websocket(&f, ROTATION_A, &valve).await;
-        probe.rotations.take();
-        f.host.revocations().waited.send_replace(0);
-        valve
-            .writes
-            .arm_for(|frame| response(frame_payload(frame), 30) == Some(true));
-        let nexts = [Some(ROTATION_B), Some(ROTATION_C), None];
-        let (outcome, ()) = tokio::join!(
-            client.request(delivery_request(30, &target, &tool, false)),
-            async {
-                valve.writes.entered().await;
-                let mut rotations = Vec::new();
-                for (started, next) in nexts.into_iter().enumerate() {
-                    rotations.push(Box::pin(tokio::task::spawn_blocking({
-                        let host = f.host.clone();
-                        move || host.bind_delivery_access(next.map(rotation_credential))
-                    })));
-                    let mut waiting: Vec<_> = rotations
-                        .iter_mut()
-                        .map(|rotation| rotation.as_mut())
-                        .collect();
-                    revocations_waiting(&f, started + 1, &mut waiting).await;
-                }
-                valve.writes.release();
-                for rotation in rotations {
-                    rotation.await.unwrap();
-                }
-            }
-        );
-        assert_eq!(
-            delivered_bytes(&outcome),
-            DELIVERED,
-            "the publication stands"
-        );
-        let order = probe.rotations.take();
-        let named = |installed: &Option<websocket::Credential>| {
-            nexts
-                .into_iter()
-                .position(|next| match (next, installed) {
-                    (None, None) => true,
-                    (Some(secret), Some(installed)) => {
-                        installed.same_secret(&rotation_credential(secret))
-                    }
-                    _ => false,
-                })
-                .expect("one of the three rotations")
-        };
-        let mut seen: Vec<_> = order.iter().map(named).collect();
-        let last = nexts[*seen.last().expect("three linearized rotations")];
-        seen.sort_unstable();
-        assert_eq!(seen, [0, 1, 2], "each rotation linearized exactly once");
-        for secret in [ROTATION_A, ROTATION_B, ROTATION_C] {
-            assert_eq!(
-                delivery_token(&f, secret).is_some(),
-                last == Some(secret),
-                "only the last rotation's credential authenticates"
-            );
-        }
-        failed_with(
-            &client
-                .request(delivery_request(34, &target, &tool, false))
-                .await,
-            &ErrorData::SessionFileRead {
-                reason: SessionFileReadFailure::Unauthorized,
-            },
-        );
-        client.close().await;
-        let _ = serving.await.unwrap();
-        f.close().await;
-    }))
-    .await;
-}
-
-/// Authentication racing a rotation sees one side of it. An authentication
-/// with A is parked while it holds the credential slot; a rotation to B then
-/// reports that it waits for that slot and has not completed. Released, the
-/// authentication returns a token minted from A, the state before the
-/// rotation, and the rotation then revokes it: no token escapes its grant.
-/// Afterwards only B authenticates.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn authentication_racing_a_rotation_sees_one_side_of_it() {
-    bounded(async {
-        let f = Fixture::with_session_count(None, 1).await;
-        let probe = f.host.file_read_probe();
-        f.host
-            .bind_delivery_access(Some(rotation_credential(ROTATION_A)));
-        probe.credential_waited.send_replace(false);
-        let _gate = probe.authenticating.arm_scoped();
-        let authenticating = tokio::task::spawn_blocking({
-            let host = f.host.clone();
-            move || {
-                let offered = format!(
-                    "{}{ROTATION_A}",
-                    crate::app_server::delivery_access::CREDENTIAL_PREFIX
-                );
-                host.authenticate_delivery_access(&[offered.as_str()])
-            }
-        });
-        tokio::task::spawn_blocking({
-            let probe = probe.clone();
-            move || probe.authenticating.wait_entered()
-        })
-        .await
-        .unwrap();
-        let rotating = tokio::task::spawn_blocking({
-            let host = f.host.clone();
-            move || host.bind_delivery_access(Some(rotation_credential(ROTATION_B)))
-        });
-        tokio::pin!(rotating);
-        let mut waited = probe.credential_waited.subscribe();
-        tokio::select! {
-            biased;
-            _ = waited.wait_for(|waited| *waited) => {}
-            _ = &mut rotating => panic!("the rotation completed inside an authentication"),
-        }
-        probe.authenticating.release();
-        let early = authenticating
-            .await
-            .unwrap()
-            .unwrap()
-            .expect("minted from A, before the rotation");
-        rotating.await.unwrap();
-        assert!(
-            early.is_cancelled(),
-            "no token escapes its grant's revocation"
-        );
-        assert!(delivery_token(&f, ROTATION_A).is_none());
-        assert!(!delivery_token(&f, ROTATION_B).unwrap().is_cancelled());
-        f.close().await;
-    })
     .await;
 }
 
@@ -2650,15 +2168,16 @@ async fn t07_oversized_controlled_response_keeps_publication_owner_at_websocket_
         let f = Fixture::with_session_count(Some("present"), 1).await;
         let message = committed_delivery(&f).await;
         for cancel_first in [true, false] {
-            let connection =
-                AppServerConnection::with_delivery_access(f.host.clone(), CancellationToken::new());
+            let connection = AppServerConnection::with_connection_lifetime(
+                f.host.clone(),
+                CancellationToken::new(),
+            );
             super::protocol::initialize(&connection).await;
             let MethodResult::Attached { target, .. } = super::protocol::call(
                 &connection,
                 1,
                 Method::SessionAttach {
-                    session_id: f.sessions[0].id.clone(),
-                    node_id: None,
+                    thread_id: f.sessions[0].active_conversation_id.clone(),
                 },
             )
             .await
@@ -2727,7 +2246,7 @@ async fn t16_pending_receipt_supersession_and_stale_queue_progression() {
     use futures_util::StreamExt;
     use std::task::Poll;
     use tokio_tungstenite::tungstenite::protocol::Role;
-    bounded(async {
+    bounded(Box::pin(async {
         let f = Fixture::with_session_count(None, 1).await;
         let connection = AppServerConnection::new(f.host.clone());
         super::protocol::initialize(&connection).await;
@@ -2845,7 +2364,7 @@ async fn t16_pending_receipt_supersession_and_stale_queue_progression() {
         assert!(slot.following().is_some());
         connection.close();
         f.close().await;
-    })
+    }))
     .await;
 }
 
@@ -3554,6 +3073,7 @@ async fn t17_partial_event_disconnect_replays_from_locally_applied_cursor() {
             &connection,
             703,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
                     text: "partial event recovery".into(),
@@ -3620,8 +3140,7 @@ async fn t17_partial_event_disconnect_replays_from_locally_applied_cursor() {
             &replacement,
             704,
             Method::SessionAttach {
-                session_id: target.session_id,
-                node_id: None,
+                thread_id: target.conversation_id,
             },
         )
         .await
@@ -3813,8 +3332,7 @@ async fn start_effective_read_secondary(
         client,
         106,
         Method::SessionAttach {
-            session_id: f.sessions[1].id.clone(),
-            node_id: None,
+            thread_id: f.sessions[1].active_conversation_id.clone(),
         },
     )
     .await
@@ -3846,6 +3364,7 @@ async fn start_effective_read_secondary(
         client,
         109,
         Method::TurnStart {
+            input_id: uuid::Uuid::new_v4().to_string(),
             target: target.clone(),
             content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
                 text: "request-B: unrelated execution across configuration reads".into(),

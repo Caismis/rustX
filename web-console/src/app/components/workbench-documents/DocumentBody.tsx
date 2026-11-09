@@ -1,5 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. MarkdownBody and ImageBody adapted; see PROVENANCE.md. */
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { LoadingIndicator } from '../../../presentation/primitives/LoadingIndicator';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { MarkdownText } from '../../../presentation/markdown/MarkdownText';
 import { useLocale, useTranslation } from '../../../locale/react';
 import { splitFrontmatter } from './frontmatter';
@@ -28,8 +29,11 @@ export function DocumentBody({ mode, text, bytes, path, view, signal, retry, cal
   const change = (patch: typeof state) => { view.document = {...view.document,...patch}; setState(view.document); };
 
   const split = useMemo(() => splitFrontmatter(text), [text]);
-  const loading = <p role="status">{tx('artifacts:workbench.loading')}</p>;
+  const loading = <LoadingIndicator label={tx('artifacts:workbench.loading')}/>;
+  const geometryStarted = useRef(false);
+  if (mode === 'geometry' && visible) geometryStarted.current = true;
   if (mode === 'geometry') {
+    if (!geometryStarted.current) return loading;
     const owner = view.preview!.owner, snapshot = owner.getSnapshot();
     const sameCopy = () => view.current() && view.preview?.owner === owner && owner.getSnapshot().revision === snapshot.revision && owner.getSnapshot().version === snapshot.version && owner.getSnapshot().data === snapshot.data;
     return <GeometryDocument visible={visible} bytes={snapshot.data} name={path} copyId={`${snapshot.revision}:${snapshot.version}`} signal={signal} current={() => !signal.aborted && sameCopy()} takeSource={() => snapshot.data && sameCopy() ? owner.takeGeometryBytes(snapshot.data) : undefined} releaseSource={() => { if (snapshot.data && sameCopy()) owner.releaseGeometryBytes(snapshot.data); }} viewState={state} onViewStateChange={patch => { if (!signal.aborted && sameCopy()) change(patch); }} onGeometryRetire={geometry => { if (sameCopy()) view.document = { ...view.document, geometry }; }}/>
@@ -52,5 +56,5 @@ function ImageBody({bytes,path,view,signal}: {bytes:Uint8Array<ArrayBuffer>;path
   const [error, setError] = useState(false);
   useEffect(()=>{ setError(false); try { validateRaster(bytes); const mime = `image/${path.split('.').at(-1)}`; const next = URL.createObjectURL(new Blob([bytes],{type:mime}));setUrl(next);return ()=>URL.revokeObjectURL(next); } catch { setError(true); } },[bytes,path]);
   if (error) return <p role="alert">{tx('artifacts:document.malformed')}</p>;
-  return url ? <ImagePreview url={url} name={path} signal={signal} decodeError={() => setError(true)} viewState={metadata} onViewStateChange={patch => { view.document = { ...view.document, ...patch }; setMetadata(view.document); }}/> : <p role="status">{tx('artifacts:document.loading')}</p>;
+  return url ? <ImagePreview url={url} name={path} signal={signal} decodeError={() => setError(true)} viewState={metadata} onViewStateChange={patch => { view.document = { ...view.document, ...patch }; setMetadata(view.document); }}/> : <LoadingIndicator label={tx('artifacts:document.loading')}/>;
 }

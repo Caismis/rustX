@@ -1,6 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
-  "association.refreshing": "Refreshing Workspace associations…",
   "association.unavailable": "Workspace associations unavailable. Last confirmed groups are shown.",
   "association.disconnected": "Disconnected. Last confirmed groups are shown.",
   "association.unclassified": "Workspace not yet classified",
@@ -70,6 +69,8 @@ export const en = {
   "status.subagentsRunning.one": "{n} subagent running",
   "status.subagentsRunning.other": "{n} subagents running",
   "status.idle": "Idle",
+  "status.notLoaded": "Not loaded",
+  "status.systemError": "System error",
   "status.waitingApproval": "Waiting for approval",
   "status.planReview": "Plan awaiting review",
   "status.waitingAnswer": "Waiting for answer",
@@ -97,7 +98,6 @@ export const en = {
 } as const;
 export type WorkspaceKey = keyof typeof en;
 export const zh = {
-  "association.refreshing": "正在刷新工作区关联…",
   "association.unavailable": "工作区关联暂不可用。显示上次确认的分组。",
   "association.disconnected": "连接已断开。显示上次确认的分组。",
   "association.unclassified": "工作区尚未分类",
@@ -167,6 +167,8 @@ export const zh = {
   "status.subagentsRunning.one": "{n} 个子智能体运行中",
   "status.subagentsRunning.other": "{n} 个子智能体运行中",
   "status.idle": "空闲",
+  "status.notLoaded": "未加载",
+  "status.systemError": "系统错误",
   "status.waitingApproval": "等待审批",
   "status.planReview": "计划待审",
   "status.waitingAnswer": "等待回答",

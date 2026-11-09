@@ -1,5 +1,8 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "workbench.navigator-show": "Show workspace files",
+  "workbench.navigator-hide": "Hide workspace files",
+  "workbench.navigator-resize": "Resize workspace files",
   "changes.unchanged": "Both sides have the same content.",
   "changes.truncated": "Only the first part of this comparison is shown.",
   "changes.title": "Edited {count} files",
@@ -167,6 +170,9 @@ export const en = {
 } as const;
 export type ArtifactsKey = keyof typeof en;
 export const zh = {
+  "workbench.navigator-show": "显示工作区文件",
+  "workbench.navigator-hide": "隐藏工作区文件",
+  "workbench.navigator-resize": "调整工作区文件宽度",
   "changes.unchanged": "两侧内容相同。",
   "changes.truncated": "仅展示部分改动内容。",
   "changes.title": "已编辑 {count} 个文件",

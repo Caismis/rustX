@@ -3,7 +3,7 @@ import { displayText, translator } from '../src/locale/translation';
 import { workspaceApprovalBlock, approvalIdentity, approvalMutation } from '../src/app/new-conversation/approval';
 import { expect, it, vi } from 'vitest';
 import { assign, createActor, setup, type ActorRefFrom, type InspectionEvent } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v72';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v75';
 import { admitsSourceMutation, mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
 import { awaitingCommitObservation, discardable, requiresReview, unitTransactionMachine } from '../src/app/settings/machines/unit-transaction';
 import { applicationCurrent, applicationKnown, observationUnavailable, sessionConfigurationMachine } from '../src/app/settings/machines/session-configuration';
@@ -369,7 +369,7 @@ it('R04 a definitive acknowledgement settles its transaction after the presentat
   edit(actor, ['read'], 'r1');
   submit(actor, 'r1');
   await flush();
-  // The Settings dialog closes while the acknowledgement is in flight.
+  // The Settings surface detaches while the acknowledgement is in flight.
   actor.send({ type: 'DETACH' });
   expect(actor.getSnapshot().matches({ authority: 'suspended' })).toBe(true);
   // The observation is demoted to stale presentation data; the transaction is
@@ -2835,14 +2835,14 @@ it.each(['resolved', 'failed'] as const)('R14 a stale owner lookup that %s after
 it('R15 a lookup completing under a replaced authority mutates nothing', async () => {
   const gate = deferred<OwnerResolution>();
   const actor = navigationActor(() => gate.promise);
-  actor.send({ type: 'CLOSE' });
+  actor.send({ type: 'SUSPEND' });
   actor.send({ type: 'OPEN.OWNER', directory: '/workspace/A' });
   // The authority is replaced. The lookup answers `retired`, which is neither a
   // navigation decision nor an error.
   actor.send({ type: 'RETIRE' });
   gate.resolve({ kind: 'retired' });
   await flush();
-  expect(actor.getSnapshot().context.page).toBeUndefined();
+  expect(actor.getSnapshot().context.page).toBe('general');
   expect(actor.getSnapshot().context.error).toBe('');
   expect(actor.getSnapshot().context.target).toEqual(userSettingsTarget);
 });
@@ -2862,7 +2862,7 @@ it('R15 an unregistered owning Workspace reports explicitly and opens nothing', 
   actor.send({ type: 'OPEN.OWNER', directory: '/workspace/revoked' });
   await flush();
   expect(displayText(translator('en'), actor.getSnapshot().context.error)).toContain('/workspace/revoked is not registered');
-  expect(actor.getSnapshot().context.page).toBeUndefined();
+  expect(actor.getSnapshot().context.page).toBe('general');
   expect(actor.getSnapshot().context.target).toEqual(userSettingsTarget);
 });
 
@@ -2912,12 +2912,13 @@ it('S2-01 Connection is the Advanced sub-surface of the global client, never a s
   expect(actor.getSnapshot().context.focus).toEqual({ advanced: { kind: 'connection' } });
 });
 
-it('S2-01 a page cannot be selected or focused while Settings is closed', () => {
+it('S2-01 Settings internal sections remain navigable independently of Shell visibility', () => {
   const actor = navigationActor(async () => ({ kind: 'retired' }));
   actor.send({ type: 'SELECT', page: 'models' });
   actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'deepseek' } });
-  expect(actor.getSnapshot().context.page).toBeUndefined();
-  expect(actor.getSnapshot().context.focus).toEqual({});
+  actor.send({ type: 'SUSPEND' });
+  expect(actor.getSnapshot().context.page).toBe('models');
+  expect(actor.getSnapshot().context.focus).toEqual({ models: { kind: 'provider', id: 'deepseek' } });
 });
 
 // ── #392 target capability: navigation never enters an unauthorized state ──

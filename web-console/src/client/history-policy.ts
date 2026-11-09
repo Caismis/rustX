@@ -1,5 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. History window policy adapted from session-controller; see PROVENANCE.md. */
-import type { RuntimeClientTranscriptEntry, TraceRecord } from '../../../protocol/app-server/v72';
+import {isPlainMessageKind} from '../../../protocol/app-server/message-kind';
+import type { RuntimeClientTranscriptEntry, TraceRecord } from '../../../protocol/app-server/v75';
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
 import { traceAttemptKey } from '../../../protocol/app-server/trace-identity';
 
@@ -12,7 +13,7 @@ export const HISTORY_MAX_MESSAGES = 500;
 export function transcriptWindowReady(entries: readonly RuntimeClientTranscriptEntry[]) {
   const turns = new Set(entries.flatMap(entry => entry.turn_process ? [attemptOwnerKey(entry.turn_process)] : []));
   const messages = entries.filter(entry => entry.item.type === 'publication_audit' || entry.item.type === 'message'
-    && (entry.item.message.role === 'assistant' || entry.item.message.role === 'user' && (!entry.item.message.kind || entry.item.message.kind === 'message'))).length;
+    && (entry.item.message.role === 'assistant' || entry.item.message.role === 'user' && isPlainMessageKind(entry.item.message.kind))).length;
   return messages >= HISTORY_MAX_MESSAGES || messages >= HISTORY_MIN_MESSAGES && turns.size >= HISTORY_MIN_TURNS;
 }
 export function traceWindowReady(records: readonly TraceRecord[]) {

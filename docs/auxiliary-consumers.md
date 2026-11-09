@@ -4,12 +4,14 @@ Classification and BTW are named consumers of the native auxiliary executor.
 The public boundary is `auxiliary/classify`, `auxiliary/btw`, `auxiliary/status`,
 `auxiliary/result`, `auxiliary/submissionLookup`, `auxiliary/cancel` and
 `auxiliary/discard`. There is no public generic dispatch. These methods require
-an exact current attachment and DeliveryAccess. Starts, cancellation and discard
-require the current controller; status, result and lookup require read authority.
-The managed Web launcher supplies a distinct owner-only Delivery Access token
-through its authenticated no-store bootstrap. Remote Settings accepts it
-optionally; native capability confirmation gates the BTW action. Credentials stay
-in page memory and never enter browser storage or a question fingerprint.
+an exact current attachment. Every authenticated and initialized ordinary client
+has the same API eligibility. Native Call ownership, policy, scope and identity
+checks remain effective; closing one client cannot cancel another client's Call.
+WebSocket uses the ordinary instance credential and stdio trusts its OS pipes.
+The managed Web launcher supplies that credential through its authenticated
+no-store bootstrap. Credentials stay in page memory and never enter browser
+storage or a question fingerprint. See [authentication and shared control](app-server/shared-control.md).
+
 
 A start response contains only CallId, correlation and original submission scope.
 Native ownership transfers first; the successful response waits for confirmed
@@ -148,8 +150,8 @@ submits or cancels a question; reopening observes the retained execution/result.
 Only inert tab layout is persisted, never question text or drafts. Panel close
 aborts reads only. Exact
 Call cancellation uses retained attachment observation identity even while Source
-readiness is unavailable or a checkpoint is blocked; native control authorization
-still enforces the single current controller. Source
+readiness is unavailable or a checkpoint is blocked; native checks enforce the
+exact live attachment and connection-owned Call scope. Source
 unavailability or a failed read stops automatic polling; Check status explicitly
 retries reading. Exact target, connection generation, CallId, RequestId and attempt
 fence updates. Decode-time acknowledgement retains CallId, scope and correlation

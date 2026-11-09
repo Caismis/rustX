@@ -23,7 +23,7 @@ import { recordedToolDetails } from '../../bindings/recorded-tool-details';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { BoundedNames, CheckpointReadCut, ContentRef, TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v72';
+import type { BoundedNames, CheckpointReadCut, ContentRef, TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v75';
 import { configurationDomainLabel, configurationNames } from '../../bindings/configuration-change';
 import { SourceContent } from '../agent/SourceContent';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
@@ -566,7 +566,7 @@ export interface TrajectoryInspectorProps {
   facet: TrajectoryFacet;
   onFacet: (facet: TrajectoryFacet) => void;
   detail?: TraceDetail | undefined;
-  detailPage?:import('../../../../protocol/app-server/v72').CheckpointPage;
+  detailPage?:import('../../../../protocol/app-server/v75').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
   loading?: boolean | undefined;
   stale?: boolean;
@@ -582,7 +582,8 @@ export interface TrajectoryInspectorProps {
   /** Assistant record id → its loaded matching Tool executions. */
   executions: ReadonlyMap<string, readonly TraceRecord[]>;
   requestNumbers: ReadonlyMap<string, number>;
-  /** Whether the loaded window starts at the conversation's first record. */
+  /** Every native record from the conversation start through this item's
+   * owner is loaded, with no intervening history gap. */
   completeHistory: boolean;
   /** Open another loaded record's summary (or a named tab). */
   onOpen: (recordId: string, facet?: TrajectoryFacet) => void;

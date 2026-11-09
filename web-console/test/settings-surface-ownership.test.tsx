@@ -10,7 +10,7 @@ import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { SessionConfiguration } from '../src/app/SessionConfiguration';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { OutcomeUncertain } from '../src/client/errors';
-import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v72';
+import type { ConfigurationApplication, SourceSettings, SourceTarget } from '../../protocol/app-server/v75';
 import { cfg3Application, cfg3Source } from './cfg3-data';
 import { cfg3Client, cfg3Host, cfg3Session } from './cfg3-fixture';
 afterEach(cleanup);
@@ -28,7 +28,7 @@ it('S1-01 User Settings opens with zero Sessions and zero Workspaces without hid
   expect(sourcesReads(s)).toHaveLength(1);
   expect(sourcesReads(s)[0][0]).toEqual({ method: 'configuration/sourcesRead', params: { target: { kind: 'user' } } });
   const names = s.request.mock.calls.map(([op]) => op.method);
-  expect(names.some(name => ['session/create', 'session/attach', 'session/effectiveConfiguration', 'turn/start', 'configuration/reconcile'].includes(name))).toBe(false);
+  expect(names.some(name => ['thread/start', 'thread/resume', 'session/effectiveConfiguration', 'inbound/queue', 'configuration/reconcile'].includes(name))).toBe(false);
   expect(screen.queryByLabelText('Configuration owner')).toBeNull();
 });
 
@@ -648,10 +648,10 @@ const commitsProvider = async (op: { method: string }, source: SourceSettings) =
   if (op.method === 'configuration/sourceWrite') source.workspace!.authored = { providers: { secret: { base_url: 'https://native.invalid', credential: { type: 'literal' } } } };
 };
 
-it('S1-16 a definitive acknowledgement outlives the whole Settings dialog and retires the submitted secret-bearing transaction', async () => {
+it('S1-16 a definitive acknowledgement outlives the whole Settings surface and retires the submitted secret-bearing transaction', async () => {
   const s = cfg3Client(commitsProvider);
   const { ui, host, release } = await heldSecretSave(s);
-  // The whole Settings dialog closes — not merely the editor section — while
+  // The whole Settings surface unmounts, including its editor section, while
   // the definitive acknowledgement is still in flight.
   ui.unmount();
   await release();
@@ -669,7 +669,7 @@ it('S1-16 a definitive acknowledgement outlives the whole Settings dialog and re
   await waitFor(() => expect(retained(s)).not.toContain('"committed"'));
   expect(retained(s)).not.toContain(SECRET_SENTINEL);
   expect(document.body.innerHTML).not.toContain(SECRET_SENTINEL);
-  // The committed revision is the base, so closing Settings never manufactures
+  // The committed revision is the base, so unmounting Settings never manufactures
   // an external conflict or a reviewed-revision gesture.
   await openResourceRow('secret');
   expect(credentialSource()).toContain('Keep the credential this scope already authored');

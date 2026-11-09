@@ -4,7 +4,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 import { useClientSelector, transportSelection, sameValue } from '../../client/selectors';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted EmptyHero and WorkspacePicker; see PROVENANCE.md. */
 import { useEffect, useEffectEvent, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react';
-import type { SessionModelConfig } from '../../../../protocol/app-server/v72';
+import type { SessionModelConfig } from '../../../../protocol/app-server/v75';
 import type { AppServerClient } from '../../client/app-server';
 import type { SessionView } from '../../client/contracts';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog } from '../../workspaces/host';
@@ -36,7 +36,7 @@ export function ConversationComposer({ client, host, authority, associations, in
   const [localDraft] = useState(() => new ComposerDraft());
   const editor = draftOwner ?? localDraft;
   const [intent, setIntent] = useState<SessionModelConfig>();
-  const [catalog, setCatalog] = useState<WorkspaceCatalog>();
+  const [catalog, setCatalog] = useState<WorkspaceCatalog | undefined>(() => authority.getCatalog());
   const [error, setError] = useNotice(), [menu, setMenu] = useState(false), [add, setAdd] = useState<{ mutation: WorkspaceMutation; locations: { id: string; displayName: string }[] }>(), [adopting, setAdopting] = useState(false);
   // Transport transitions never remount this draft: each submission binds the
   // authority current at its own gesture, and a committed Session survives.
@@ -111,7 +111,18 @@ export function ConversationComposer({ client, host, authority, associations, in
         }}
         anchor={<button type="button" className={hero.workspace} aria-label={tx('common:conversation-composer.choose-workspace')} aria-haspopup="menu" aria-expanded={menu} disabled={!drafting || adopting} onClick={() => setMenu(v => !v)}><IconFolderClose16 size={16}/><span className={hero.workspaceLabel}>{selected?.displayName ?? tx('common:conversation-composer.choose-workspace')}</span><IconChevronDownOutline14 size={12}/></button>}/>
     </div>}
-    <ComposerContextStack todo={context} goal={null} queue={null} composer={<WorkspaceControls client={client} host={host} workspaceId={active ? initialWorkspace : workspaceId}>{(source, approval) => { const selection = intent ?? preference ?? (source?.session_models?.kind === 'available' ? source.session_models.default_model : undefined); const block = () => approval.block() ?? sessionModelBlock(source, selection); return <><AgentControls client={client} view={activeView} coldSource={source} blocked={pending} draft={active ? undefined : { source, intent: selection, choose: chooseModel, disabled: !drafting }}>{(toolbar, picker) => composer(block, (active ? initialWorkspace : selected) && <WorkspacePermission source={source} approval={approval} disabled={active ? pending || !live : !drafting}/>, toolbar, picker, !active && !!selected && approval.reading && approval.block()?.key === 'workspace:approval.reading')}</AgentControls>{!active && selected && block() && block()?.key !== 'workspace:approval.reading' && <small role="status">{displayText(tx, block()!)}</small>}</>; }}</WorkspaceControls>}/>
+    <ComposerContextStack todo={context} goal={null} queue={null} composer={<WorkspaceControls client={client} host={host} workspaceId={active ? initialWorkspace : workspaceId}>{(source, approval) => {
+      const selection = intent ?? preference ?? (source?.session_models?.kind === 'available' ? source.session_models.default_model : undefined);
+      const block = () => approval.block() ?? sessionModelBlock(source, selection);
+      const guidance = block();
+      // Keep the editor and control seats mounted while initial authority loads.
+      // Passive reads never insert temporary copy into the centered layout.
+      const preparing = !active && approval.loading;
+      const quietControl = (control: ReactNode) => <div className={preparing ? startupCss.pendingControl : undefined} aria-hidden={preparing || undefined} inert={preparing || undefined}>{control}</div>;
+      return <><AgentControls client={client} view={activeView} coldSource={source} blocked={pending} draft={active ? undefined : { source, intent: selection, choose: chooseModel, disabled: !drafting }}>{(toolbar, picker) => composer(block,
+        (active ? initialWorkspace : selected) && quietControl(<WorkspacePermission source={source} approval={approval} disabled={active ? pending || !live : !drafting}/>), quietControl(toolbar), picker, !active && !!selected && approval.reading && approval.block()?.key === 'workspace:approval.reading')}
+      </AgentControls>{!active && selected && guidance && guidance.key !== 'workspace:approval.reading' && <small role="status">{displayText(tx, guidance)}</small>}</>;
+    }}</WorkspaceControls>}/>
     {!active && catalog?.picker.kind === 'unavailable' && !selected && <small role="status">{catalog.picker.reason}</small>}
     {!active && !add && error && <p role="alert">{error}</p>}
     {flow && (flow.session || activeView) && pending && !['attaching', 'uploading', 'admitting'].includes(flow.phase) && <p className={startupCss.notice} role="status" data-first-submission={flow.phase}>{tx(flow.phase === 'paused' ? 'agent:upload.paused' : flow.phase === 'attaching' ? 'common:startup.attaching' : flow.phase === 'uploading' ? 'common:startup.uploading' : flow.phase === 'admitting' ? 'common:startup.admitting' : flow.phase === 'uncertain' ? 'common:startup.uncertain' : flow.failedPhase === 'attaching' ? 'common:startup.attach-failed' : flow.failedPhase === 'uploading' ? 'common:startup.upload-failed' : 'common:startup.admission-failed')}</p>}

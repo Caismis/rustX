@@ -2,7 +2,7 @@
  * The App Server protocol as this client sees it.
  *
  * There is no wire transcription here. Every type below is either re-exported
- * from `protocol/app-server/v72.ts` — generated from the authoritative Rust DTOs
+ * from `protocol/app-server/v75.ts` — generated from the authoritative Rust DTOs
  * in `src/app_server/protocol.rs` — or **derived from one of those generated
  * types** with an indexed access. A derivation cannot drift: if the Rust DTO
  * changes shape, regeneration changes the type this file names, and every use
@@ -11,9 +11,9 @@
  * ```text
  * src/app_server/protocol.rs      (Rust authority)
  *        | schemars
- * protocol/app-server/v72.schema.json
+ * protocol/app-server/v75.schema.json
  *        | json-schema-to-typescript
- * protocol/app-server/v72.ts       (generated)
+ * protocol/app-server/v75.ts       (generated)
  *        | re-export + indexed access
  * this file                       (the only names the TUI spells)
  * ```
@@ -56,7 +56,7 @@ import type {
   SessionSummary,
   SessionUserMessageBoundaryObservation,
   Success,
-} from "../../../protocol/app-server/v72.ts";
+} from "../../../protocol/app-server/v75.ts";
 
 export type {
   AttemptIdentitySource,
@@ -145,7 +145,7 @@ export type {
   WorkflowDependencyFailure,
   WorkflowInspection,
   WorkflowState,
-} from "../../../protocol/app-server/v72.ts";
+} from "../../../protocol/app-server/v75.ts";
 
 // ---------------------------------------------------------------------------
 // Envelope helpers
@@ -539,6 +539,10 @@ export function describeRpcError(error: RpcError): string {
     case "observation_in_use": return "this Child already has an active observation wait";
     case "response_too_large": return "the response exceeds the encoded record budget";
     case "response_serialization_failed": return "the response could not be encoded";
+    case "connection_closed": return "the connection closed before native output was accepted";
+    case "environment_unauthorized": return "the path is outside the instance environment grants";
+    case "environment_resource_not_found": return "the native environment resource is unavailable";
+    case "environment_capacity_or_conflict": return "native environment capacity was reached or the resource changed";
     case "outcome_unknown": return "the operation outcome is unknown; inspect authoritative state before retrying";
     case "observation_cancelled":
       return "the child conversation observation was cancelled";
@@ -548,8 +552,6 @@ export function describeRpcError(error: RpcError): string {
       return "this attachment has been replaced";
     case "stale_runtime":
       return "this runtime incarnation has been replaced";
-    case "controller_in_use":
-      return "another client already controls this Session";
     case "invalid_state":
       return `the server rejected the request: ${error.message}`;
     case "invalid_params":
@@ -570,6 +572,6 @@ export function describeRpcError(error: RpcError): string {
 
 export type { SessionNode as SessionNodeView };
 export type { SessionSnapshot as SessionView };
-export type SessionSummaryView = SessionSummary;
+export type SessionSummaryView = SessionSummary & { thread_id?:string;thread_status?: import('../../../protocol/app-server/v75.ts').ThreadStatusEntry|null };
 
 export type { SessionPersistentState as SessionSettings };

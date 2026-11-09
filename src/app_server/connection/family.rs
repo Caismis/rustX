@@ -10,6 +10,7 @@ use crate::app_server::protocol::{AttachmentTarget, Method};
 pub(super) enum Family<'a> {
     /// Negotiation and server-level reads the connection owner answers itself.
     Connection,
+    Environment,
     /// Transport-authorized delivery reads, registered before dispatch.
     Delivery,
     /// Attachment relationships and submission intent before attachment.
@@ -30,6 +31,19 @@ impl Family<'_> {
     #[allow(clippy::too_many_lines)] // Exhaustive public RPC routing keeps new variants from silently bypassing their owner.
     pub(super) fn of(method: &Method) -> Family<'_> {
         match method {
+            Method::CommandExec(..)
+            | Method::CommandWrite(..)
+            | Method::CommandResize { .. }
+            | Method::CommandTerminate { .. }
+            | Method::FsReadFile { .. }
+            | Method::FsWriteFile { .. }
+            | Method::FsReadDirectory { .. }
+            | Method::FsGetMetadata { .. }
+            | Method::FsCreateDirectory { .. }
+            | Method::FsRemove { .. }
+            | Method::FsCopy { .. }
+            | Method::FsWatch { .. }
+            | Method::FsUnwatch { .. } => Family::Environment,
             Method::ConfigurationGet { target, .. }
             | Method::ConfigurationValueRead { target, .. }
             | Method::ConfigurationPage { target, .. }
@@ -77,11 +91,11 @@ impl Family<'_> {
             | Method::SessionSubscribe { target, .. }
             | Method::TurnStart { target, .. }
             | Method::TurnSteer { target, .. }
+            | Method::InboundQueue { target, .. }
+            | Method::InboundSubmissionLookup { target, .. }
             | Method::InboundEdit { target, .. }
             | Method::InboundRemove { target, .. }
-            | Method::TurnCancel { target, .. }
-            | Method::InteractionRespond { target, .. }
-            | Method::InteractionCancel { target, .. } => Family::Runtime(target),
+            | Method::TurnCancel { target, .. } => Family::Runtime(target),
             Method::WorkflowScheduledRecovery { .. }
             | Method::WorkflowScheduledCancel { .. }
             | Method::WorkflowScheduledReconcile { .. }
@@ -113,7 +127,13 @@ impl Family<'_> {
             | Method::SessionRetryInitialization { .. }
             | Method::SessionDetach { .. }
             | Method::SessionAttachmentStatus { .. } => Family::Attachment,
-            Method::SessionExportPrepare { .. }
+            Method::ThreadRead { .. }
+            | Method::ThreadList { .. }
+            | Method::ThreadLoadedList { .. }
+            | Method::ThreadName { .. }
+            | Method::ThreadArchive { .. }
+            | Method::ThreadUnarchive { .. }
+            | Method::SessionExportPrepare { .. }
             | Method::SessionList { .. }
             | Method::SessionCreate { .. }
             | Method::SessionRead { .. }
@@ -141,7 +161,10 @@ impl Family<'_> {
             | Method::SessionHistoryValueRead { .. }
             | Method::SessionStatistics { .. }
             | Method::SessionEditorRead { .. } => Family::History,
-            Method::SourcesRead { .. }
+            Method::McpCatalog { .. }
+            | Method::SkillsList { .. }
+            | Method::SkillsRead { .. }
+            | Method::SourcesRead { .. }
             | Method::McpProbe { .. }
             | Method::SourcesPage { .. }
             | Method::SourcesValueRead { .. }

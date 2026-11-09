@@ -1,7 +1,8 @@
 import type { ClientView } from '../../client/contracts';
+import { sameEndpoint } from '../../workspaces/endpoint';
 import type { ShellNavigationContext, ShellRoute } from './machine';
 
-export type SavedRoute = Exclude<ShellRoute, { kind: 'session-draft' }>;
+export type SavedRoute = Exclude<ShellRoute, { kind: 'session-draft' | 'settings' }>;
 export const navigationPreferencesKey = 'rustx-console-view-v3';
 export interface NavigationPreferences { endpoint?: string; openViews: string[]; route: SavedRoute }
 
@@ -35,7 +36,7 @@ export function resumableViews(ids: readonly string[], state: Pick<ClientView, '
 }
 
 export function restoreRoute(preferences: NavigationPreferences, state: Pick<ClientView, 'endpoint' | 'views'>): SavedRoute | undefined {
-  if (preferences.endpoint !== state.endpoint) return;
+  if (!sameEndpoint(preferences.endpoint, state.endpoint)) return;
   const route = preferences.route;
   return route.kind !== 'session' || resumableViews(preferences.openViews, state).includes(route.sessionId)
     ? route : { kind: 'new-conversation' };
@@ -43,13 +44,18 @@ export function restoreRoute(preferences: NavigationPreferences, state: Pick<Cli
 
 /** A startup selection remains a presentation hint through transient admission
  * failure. Other cold selections never persist an uncommitted Session or draft. */
-export function saveRoute(context: Pick<ShellNavigationContext, 'route' | 'draftSession' | 'pending' | 'intentRevision'>, openViews: readonly string[]): SavedRoute {
-  const { route, draftSession, pending, intentRevision } = context;
+export function saveRoute(context: Pick<ShellNavigationContext, 'route' | 'home' | 'draftSession' | 'pending' | 'intentRevision'>, openViews: readonly string[]): SavedRoute {
+  const { draftSession, pending, intentRevision } = context;
+  // Settings is configuration of the retained Home owner, not a replacement
+  // startup destination. Its eligible Home selection survives a refresh.
+  const route = context.route.kind === 'settings' ? context.home : context.route;
   if (route.kind === 'session-draft' && draftSession?.sessionId === route.sessionId
     && draftSession.intent.destination.kind === 'restore-session'
     && draftSession.intent.destination.sessionId === route.sessionId
     && draftSession.intentRevision === intentRevision
-    && (!pending || pending === draftSession.intent) && openViews.includes(route.sessionId)) {
+    // Revalidating this retained Home does not replace its startup selection.
+    && (!pending || pending === draftSession.intent || pending.destination.kind === 'home' && pending.destination.route === route)
+    && openViews.includes(route.sessionId)) {
     return { kind: 'session', sessionId: route.sessionId };
   }
   return route.kind === 'session-draft' || route.kind === 'session' && !openViews.includes(route.sessionId)

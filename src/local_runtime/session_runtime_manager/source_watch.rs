@@ -11,7 +11,7 @@
 //! | Source | Watched |
 //! | --- | --- |
 //! | User document | its directory, non-recursively, for that one file |
-//! | User resources and guidance | `~/rustx/.agents` for `mcp.toml` and its guidance files, and its `agents`, `skills`, `tools` and `workflows`, recursively (the parent until it exists) |
+//! | User resources and guidance | `~/rustx/.agents` for `mcp.toml` and its guidance files, and its `agents`, `tools` and `workflows`, recursively, with non-recursive Skill collection/candidate watches (the parent until it exists) |
 //! | Workspace document and root guidance | each known Workspace root, non-recursively, for `rustx.toml`, the guidance files and `*.md` |
 //! | Workspace resources | each known Workspace's `.agents`, as for the User |
 //! | Captured inputs | each other file a known Workspace's retained capture read or tried to read (a selected instruction file, for one, valid or not), as every directory entry opening it traverses — each component beneath the Workspace (or from the filesystem root, for a file outside it, and again for an absolute link target), each link and what it resolves to, up to the first missing or non-directory entry — through each entry's canonical directory, non-recursively |
@@ -136,6 +136,32 @@ fn beneath<'p>(
     Some(components)
 }
 
+/// Normalize exactly the Skill entries discovery opens, without resource walks.
+fn skill_entry(root: &Path, rest: &Path, same: &impl Fn(&Path, &Path) -> bool) -> Option<PathBuf> {
+    let mut parts = rest.components();
+    let Some(candidate) = parts.next() else {
+        return Some(root.to_path_buf());
+    };
+    let hidden = candidate.as_os_str().as_encoded_bytes().starts_with(b".");
+    let candidate = root.join(candidate);
+    let Some(file) = parts.next() else {
+        // Every direct entry counts toward collection admission, including
+        // hidden entries and files. Notifications carry no trusted pre-change
+        // type: a former candidate may already be a regular file.
+        return Some(candidate);
+    };
+    if hidden || parts.next().is_some() {
+        return None;
+    }
+    loader_name(
+        &candidate,
+        file.as_os_str(),
+        std::iter::once("SKILL.md"),
+        same,
+    )
+    .map(|name| candidate.join(name))
+}
+
 /// Every source target whose loaders read `path`, each with `path` as that
 /// owner opens it. Each owner — the User and each known Workspace, through a
 /// resource root or a document — is matched [`beneath`] its own canonical
@@ -201,7 +227,13 @@ fn owners(
                 .flatten(),
         );
         if let Some(name) = loader_name(&root, entry.as_os_str(), names, same) {
-            owners.push((target, root.join(name).join(rest)));
+            if name == "skills" {
+                if let Some(path) = skill_entry(&root.join(name), rest, same) {
+                    owners.push((target, path));
+                }
+            } else {
+                owners.push((target, root.join(name).join(rest)));
+            }
         }
     }
     let document = |directory: &Path| {
@@ -397,13 +429,21 @@ pub(super) struct KnownSources {
 }
 
 /// The watches of one existing resource root: the root itself, for its
-/// direct entries, and each source directory recursively.
+/// direct entries, recursive non-Skill sources and non-recursive Skill entries.
 fn resource_watches(root: &Path, watches: &mut BTreeMap<PathBuf, RecursiveMode>) {
     watches.insert(root.to_path_buf(), RecursiveMode::NonRecursive);
     for name in SOURCE_ENTRIES {
         let entry = root.join(name);
         if entry.is_dir() {
-            watches.insert(entry, RecursiveMode::Recursive);
+            if name == "skills" {
+                watches.insert(entry.clone(), RecursiveMode::NonRecursive);
+                // Reuse bounded candidate/source validation, never walk assets.
+                for path in crate::skills::package::candidate_directories(&entry) {
+                    watches.insert(path, RecursiveMode::NonRecursive);
+                }
+            } else {
+                watches.insert(entry, RecursiveMode::Recursive);
+            }
         }
     }
 }
@@ -1251,7 +1291,10 @@ mod tests {
             watches.get(&workspace.join("docs")),
             Some(&RecursiveMode::NonRecursive)
         );
-        assert!(!watches.contains_key(&workspace.join(".agents/skills/x")));
+        assert_eq!(
+            watches.get(&workspace.join(".agents/skills/x")),
+            Some(&RecursiveMode::NonRecursive)
+        );
         let mut active = BTreeMap::new();
         let workspace_target = |directory: &Path| SourceTarget::Workspace {
             directory: directory.to_path_buf(),
@@ -1623,6 +1666,63 @@ mod tests {
     }
 
     #[test]
+    fn skills_watch_only_collection_candidates_and_route_only_definition_entries() {
+        let temporary = tempfile::tempdir().unwrap();
+        let workspace = temporary.path().canonicalize().unwrap();
+        let collection = workspace.join(".agents/skills");
+        let candidate = collection.join("guide");
+        std::fs::create_dir_all(candidate.join("assets/deep")).unwrap();
+        let user = roots(&workspace.join("home"));
+        let sources = known(&user, std::slice::from_ref(&workspace));
+        let mut watches = desired(&sources);
+        assert_eq!(watches.get(&collection), Some(&RecursiveMode::NonRecursive));
+        assert_eq!(watches.get(&candidate), Some(&RecursiveMode::NonRecursive));
+        assert!(!watches.contains_key(&candidate.join("assets")));
+        for path in [
+            candidate.join("notes.txt"),
+            candidate.join("assets/deep/image.png"),
+            candidate.join("assets/other/SKILL.md"),
+            collection.join(".hidden/SKILL.md"),
+            collection.join(".hidden/assets/deep/image.png"),
+        ] {
+            assert!(
+                notified(&path, &sources, &same_entry, &mut watches).is_empty(),
+                "{path:?}"
+            );
+        }
+        for path in [&candidate, &candidate.join("SKILL.md"), &collection] {
+            assert_eq!(
+                notified(path, &sources, &same_entry, &mut watches).len(),
+                1,
+                "{path:?}"
+            );
+        }
+        assert_eq!(
+            notified(
+                &collection.join(".hidden"),
+                &sources,
+                &same_entry,
+                &mut watches
+            )
+            .len(),
+            1,
+            "every direct entry consumes the collection budget"
+        );
+        std::fs::rename(&candidate, collection.join("old")).unwrap();
+        std::fs::write(&candidate, "a directory replaced by a file").unwrap();
+        assert_eq!(
+            notified(&candidate, &sources, &same_entry, &mut watches).len(),
+            1
+        );
+        std::fs::remove_file(&candidate).unwrap();
+        std::fs::create_dir(&candidate).unwrap();
+        assert_eq!(
+            desired(&sources).get(&candidate),
+            Some(&RecursiveMode::NonRecursive)
+        );
+    }
+
+    #[test]
     fn the_watch_set_is_bounded_to_existing_source_directories() {
         let home = tempfile::tempdir().unwrap();
         let user = roots(home.path());
@@ -1649,7 +1749,7 @@ mod tests {
         );
         assert_eq!(
             watches.get(&home.path().join("rustx/.agents/skills")),
-            Some(&RecursiveMode::Recursive)
+            Some(&RecursiveMode::NonRecursive)
         );
         assert_eq!(
             watches.get(&workspace.path().join(".agents/workflows")),

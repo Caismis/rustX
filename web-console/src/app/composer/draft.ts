@@ -1,4 +1,4 @@
-import type { AttachmentTarget, MethodResult, UserInputBlock, UploadReceipt } from '../../../../protocol/app-server/v72';
+import type { AttachmentTarget, MethodResult, UserInputBlock, UploadReceipt } from '../../../../protocol/app-server/v75';
 import type { AttachmentIntake } from '../../client/uploads';
 import { editableContent } from './editor-content';
 
@@ -8,7 +8,7 @@ function sameConversation(a?: ComposerConversation, b?: ComposerConversation) {
 }
 
 type RestoredUpload = Extract<UserInputBlock, { type: 'upload' }>;
-export type InputAcceptance = Extract<MethodResult, { type: 'inbound_accepted' }>;
+export type InputAcceptance = Extract<MethodResult, { type: 'inbound_accepted' | 'turn_input_accepted' }>;
 export type SubmissionOutcome = 'pending' | 'unsent' | 'rejected' | 'accepted' | 'uncertain';
 export interface DraftState {
   key: string; incarnation: number; revision: number; text: string;

@@ -1,4 +1,4 @@
-import type { ContentRef, RuntimeClientMessageDescriptor, RuntimeClientSnapshot, TurnProcessView } from '../../../protocol/app-server/v72';
+import type { ContentRef, RuntimeClientMessageDescriptor, RuntimeClientSnapshot, TurnProcessView } from '../../../protocol/app-server/v75';
 import type { Server } from '../fixture';
 import { workflowRunsFixture } from './workflow-runs';
 import { chatFlowFixture } from './chat-flow';

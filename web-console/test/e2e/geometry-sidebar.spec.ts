@@ -3,7 +3,7 @@ import { copyFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { choose, connectRemote, openEmptySession, expectSettled } from './shell-actions';
+import { choose, connectRemote, openEmptySession, expectSettled, openSettingsPage } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { instrument, observeGeometryLatency, resources } from './geometry-observation';
 
@@ -260,9 +260,14 @@ test('Workbench CAD uses the shared document body and defaults to revealing the 
     await expect(file.getByRole('button', { name: 'Refresh', exact: true })).toBeVisible();
     await expect(file.getByRole('button', { name: 'Parts', exact: true })).toHaveAttribute('aria-expanded', 'false');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
-    await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-    await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    await expect(settings).toBeVisible();
+    await openSettingsPage(page, 'General');
+    await settings.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
+    await choose(settings, 'Language', '中文');
+    const home = page.getByRole('button', { name: '主页', exact: true });
+    await home.click();
+    await expect(home).toHaveAttribute('aria-current', 'page');
     await page.screenshot({ path: info.outputPath('geometry-workbench-zh-dark.png'), animations: 'disabled' });
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(file.getByRole('button', { name: '打开文件位置', exact: true })).toBeVisible();

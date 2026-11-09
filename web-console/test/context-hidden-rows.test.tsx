@@ -1,6 +1,6 @@
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { MessageBlock, RuntimeClientSnapshot, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v72';
+import type { MessageBlock, RuntimeClientSnapshot, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v75';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { conversationPreferences } from '../src/app/conversation-preferences';
 import { snapshot } from './fixture';

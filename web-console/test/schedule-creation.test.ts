@@ -1,5 +1,6 @@
+import { threadFor } from '../../protocol/app-server/testing';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Request, ScheduleCommandResult } from '../../protocol/app-server/v72';
+import type { Request, ScheduleCommandResult } from '../../protocol/app-server/v75';
 import { TaskCreation, taskCreation, type TaskCreationDraft } from '../src/app/scheduler/creation';
 import { schedulerModel } from '../src/app/scheduler/model';
 import { Server, snapshot } from './fixture';
@@ -12,9 +13,10 @@ const draft = (): TaskCreationDraft => ({ workspaceId: 'workspace-a', title: 'Da
 async function fixture() {
   const server = new Server(); servers.push(server); await server.connect();
   const results = new Map<string, ScheduleCommandResult>();
-  server.handlers.set('session/create', () => {
+  server.handlers.set('thread/start', () => {
     const id = 'created'; server.snapshots.set(id, snapshot(id));
-    return { type: 'session_transition', session: { id, active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' } };
+    const session = { id, active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' };
+    return { type: 'session_transition', thread: threadFor(session), session };
   });
   server.handlers.set('schedule/command', request => {
     if (request.method !== 'schedule/command') throw Error('command');
@@ -36,7 +38,7 @@ it('creates a future Session and exact-node task directly with model settings an
   const result = await creation.submit(draft());
   expect(result).toEqual({ session_id: 'created', node_id: 'node-created', id: { conversation_id: 'conversation-created', ordinal: '17' } });
   expect(creation.getSnapshot()).toMatchObject({ phase: 'created', locked: true, retryable: false, task: result });
-  expect(requests(server, 'session/create')[0].params).toEqual({ settings: { cwd: '/workspace/created', model: draft().model } });
+  expect(requests(server, 'thread/start')[0].params).toEqual({ settings: { cwd: '/workspace/created', model: draft().model } });
   expect(requests(server, 'schedule/command')[0].params).toEqual({ session_id: 'created', node_id: 'node-created', command: {
     command_id: expect.any(String), mutation: { type: 'create', title: draft().title, text: draft().text, timing: draft().timing } } });
   expect(host.listWorkspaces).toHaveBeenCalledTimes(3);
@@ -45,19 +47,19 @@ it('creates a future Session and exact-node task directly with model settings an
   for (const call of host.classifyLocations.mock.calls) expect(call.slice(0, 3)).toEqual([['/workspace/created'], server.client.getSnapshot().endpoint, 'fixture-host']);
   expect(refresh).toHaveBeenCalled();
   const methods = server.requests.map(row => row.request.method);
-  for (const method of ['turn/start', 'turn/steer', 'session/attach', 'session/submissionIntent', 'model/select']) expect(methods).not.toContain(method);
+  for (const method of ['turn/start', 'turn/steer', 'thread/resume', 'session/submissionIntent', 'model/select']) expect(methods).not.toContain(method);
   expect(server.claims()).toEqual([]);
   expect(creation.reset()).toBe(true);
 });
 
 it('does not duplicate concurrent submits or mutate the admitted draft', async () => {
-  const { server, creation } = await fixture(); server.held.add('session/create');
+  const { server, creation } = await fixture(); server.held.add('thread/start');
   const input = draft(), pending = creation.submit(input);
-  const create = await server.waitFor('session/create', 1);
+  const create = await server.waitFor('thread/start', 1);
   input.text = 'Changed while pending'; input.timing = { type: 'after', seconds: 120 };
   expect(await creation.submit(draft())).toBeUndefined(); expect(creation.reset()).toBe(false);
   server.reply(create); await pending;
-  expect(requests(server, 'session/create')).toHaveLength(1);
+  expect(requests(server, 'thread/start')).toHaveLength(1);
   expect(requests(server, 'schedule/command')[0].params).toMatchObject({ command: { mutation: { text: draft().text, timing: draft().timing } } });
 });
 
@@ -69,26 +71,28 @@ it('retries a lost schedule response with the same command and Session after sam
   expect(creation.reset()).toBe(false); expect(await creation.submit(draft())).toBeUndefined();
   await server.connect(); server.held.delete('schedule/command');
   expect(await creation.retry()).toBeDefined();
-  expect(requests(server, 'session/create')).toHaveLength(1);
+  expect(requests(server, 'thread/start')).toHaveLength(1);
   expect(requests(server, 'schedule/command').map(row => row.params)).toEqual([request.params, request.params]);
   expect(results.size).toBe(1); expect(creation.getSnapshot().phase).toBe('created');
 });
 
 it('never blindly retries a lost Session create, but permits an explicit discard before a new Create gesture', async () => {
-  const { server, creation } = await fixture(); server.held.add('session/create');
-  const pending = creation.submit(draft()); const request = await server.waitFor('session/create', 1);
+  const { server, creation } = await fixture(); server.held.add('thread/start');
+  const pending = creation.submit(draft()); const request = await server.waitFor('thread/start', 1);
   server.commit(request); server.socket.close(); await pending;
   expect(creation.getSnapshot()).toMatchObject({ phase: 'uncertain', errorKind: 'create_uncertain', locked: true, retryable: false });
   await server.connect(); expect(await creation.retry()).toBeUndefined(); expect(await creation.submit(draft())).toBeUndefined();
-  expect(requests(server, 'session/create')).toHaveLength(1); expect(requests(server, 'schedule/command')).toHaveLength(0);
+  expect(requests(server, 'thread/start')).toHaveLength(1); expect(requests(server, 'schedule/command')).toHaveLength(0);
   expect(creation.reset()).toBe(true);
-  server.held.delete('session/create');
-  server.handlers.set('session/create', () => ({ type: 'session_transition', session: {
-    id: 'new-gesture', active_node: 'node-new-gesture', active_conversation_id: 'conversation-new-gesture', node_count: 1, created_at: '0', updated_at: '0' } }));
+  server.held.delete('thread/start');
+  server.handlers.set('thread/start', () => {
+    const session = { id: 'new-gesture', active_node: 'node-new-gesture', active_conversation_id: 'conversation-new-gesture', node_count: 1, created_at: '0', updated_at: '0' };
+    return { type: 'session_transition', thread: threadFor(session), session };
+  });
   server.handlers.set('schedule/command', () => ({ type: 'schedule_command', result: { status: 'applied', receipt: {
     id: { conversation_id: 'conversation-new-gesture', ordinal: '1' }, revision: '1', spec: { type: 'at', at_utc: '2099-01-01T00:00:00Z' }, state: 'enabled' } } }));
   expect(await creation.submit(draft())).toMatchObject({ session_id: 'new-gesture', node_id: 'node-new-gesture' });
-  expect(requests(server, 'session/create')).toHaveLength(2);
+  expect(requests(server, 'thread/start')).toHaveLength(2);
   expect(requests(server, 'schedule/command').map(row => row.params)).toEqual([expect.objectContaining({ session_id: 'new-gesture', node_id: 'node-new-gesture' })]);
 });
 
@@ -101,7 +105,7 @@ it.each(['registration', 'cwd', 'host', 'authorization'] as const)('revalidates 
   if (changed === 'authorization') host.classifyLocations.mockResolvedValueOnce([{ authorized: true }]).mockResolvedValue([{ authorized: false, reason: 'denied' }]);
   expect(await creation.submit(draft())).toBeUndefined();
   expect(creation.getSnapshot()).toMatchObject({ phase: 'failed', locked: false });
-  expect(requests(server, 'session/create')).toHaveLength(0); expect(requests(server, 'schedule/command')).toHaveLength(0);
+  expect(requests(server, 'thread/start')).toHaveLength(0); expect(requests(server, 'schedule/command')).toHaveLength(0);
 });
 
 it('retains acknowledged Session across Host replacement before schedule dispatch, and reuses it after authorization returns', async () => {
@@ -109,9 +113,9 @@ it('retains acknowledged Session across Host replacement before schedule dispatc
   host.listWorkspaces.mockResolvedValueOnce(initial).mockResolvedValueOnce(initial).mockResolvedValue({ ...initial, authorityId: 'replacement-host' });
   await creation.submit(draft());
   expect(creation.getSnapshot()).toMatchObject({ phase: 'failed', errorKind: 'authority_changed', locked: true, retryable: true });
-  expect(requests(server, 'session/create')).toHaveLength(1); expect(requests(server, 'schedule/command')).toHaveLength(0);
+  expect(requests(server, 'thread/start')).toHaveLength(1); expect(requests(server, 'schedule/command')).toHaveLength(0);
   host.listWorkspaces.mockResolvedValue(initial); expect(await creation.retry()).toBeDefined();
-  expect(requests(server, 'session/create')).toHaveLength(1);
+  expect(requests(server, 'thread/start')).toHaveLength(1);
 });
 
 it('does not retry an acknowledged Session on a replaced native server', async () => {
@@ -120,14 +124,14 @@ it('does not retry an acknowledged Session on a replaced native server', async (
   server.authorityId = 'replacement-native-server'; await server.connect();
   expect(await creation.retry()).toBeUndefined();
   expect(creation.getSnapshot()).toMatchObject({ locked: true, retryable: false });
-  expect(requests(server, 'session/create')).toHaveLength(1); expect(requests(server, 'schedule/command')).toHaveLength(1);
+  expect(requests(server, 'thread/start')).toHaveLength(1); expect(requests(server, 'schedule/command')).toHaveLength(1);
 });
 
 it.each(['workspaceId', 'title', 'text'] as const)('rejects empty %s before native or Host effects', async field => {
   const { server, host, creation } = await fixture();
   await creation.submit({ ...draft(), [field]: ' ' });
   expect(creation.getSnapshot()).toMatchObject({ phase: 'failed', errorKind: 'invalid', locked: false });
-  expect(host.listWorkspaces).not.toHaveBeenCalled(); expect(requests(server, 'session/create')).toHaveLength(0);
+  expect(host.listWorkspaces).not.toHaveBeenCalled(); expect(requests(server, 'thread/start')).toHaveLength(0);
 });
 
 it('rejects invalid timing and disconnected submissions before effects', async () => {
@@ -145,7 +149,7 @@ it('rejects oversized native schedule content before creating its Session', asyn
   await creation.submit({ ...draft(), title: 'a'.repeat(121) });
   await creation.submit({ ...draft(), text: 'a'.repeat(16_385) });
   expect(creation.getSnapshot().errorKind).toBe('invalid');
-  expect(host.listWorkspaces).not.toHaveBeenCalled(); expect(requests(server, 'session/create')).toHaveLength(0);
+  expect(host.listWorkspaces).not.toHaveBeenCalled(); expect(requests(server, 'thread/start')).toHaveLength(0);
 });
 
 it('retains a decoded committed task receipt when transport disappears during acknowledgement publication', async () => {
@@ -157,13 +161,13 @@ it('retains a decoded committed task receipt when transport disappears during ac
 
 it('retains a decoded Session acknowledgement when native transport disappears before scheduling', async () => {
   const { server, creation } = await fixture();
-  server.held.add('session/create');
-  const pending = creation.submit(draft()), request = await server.waitFor('session/create', 1);
+  server.held.add('thread/start');
+  const pending = creation.submit(draft()), request = await server.waitFor('thread/start', 1);
   server.reply(request); server.socket.close(); await pending;
   expect(creation.getSnapshot()).toMatchObject({ phase: 'failed', locked: true, retryable: true });
   expect(requests(server, 'schedule/command')).toHaveLength(0);
   await server.connect(); expect(await creation.retry()).toBeDefined();
-  expect(requests(server, 'session/create')).toHaveLength(1);
+  expect(requests(server, 'thread/start')).toHaveLength(1);
 });
 
 it('keeps creation ownership and immutable submitted inputs across route remount and same-native reconnect', async () => {
@@ -174,7 +178,7 @@ it('keeps creation ownership and immutable submitted inputs across route remount
   expect(owner.getSnapshot().draft).toEqual(draft());
   await server.connect(); expect(taskCreation(server.client, host)).toBe(owner);
   server.held.delete('schedule/command'); expect(await owner.retry()).toBeDefined();
-  expect(requests(server, 'session/create')).toHaveLength(1);
+  expect(requests(server, 'thread/start')).toHaveLength(1);
 });
 
 it('starts a separate owner on native replacement while keeping the old committed receipt scoped to its authority', async () => {
@@ -195,5 +199,5 @@ it('allows explicit discard of a definitive schedule rejection before creating a
   server.handlers.set('schedule/command', () => ({ type: 'schedule_command', result: { status: 'applied', receipt: {
     id: { conversation_id: 'conversation-created', ordinal: '18' }, revision: '1', spec: { type: 'at', at_utc: '2099-01-01T00:00:00Z' }, state: 'enabled' } } }));
   expect(await creation.submit({ ...draft(), timing: { type: 'at', at: '2099-01-01T00:00:00Z' } })).toBeDefined();
-  expect(requests(server, 'session/create')).toHaveLength(2);
+  expect(requests(server, 'thread/start')).toHaveLength(2);
 });

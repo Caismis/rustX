@@ -1,3 +1,4 @@
+import {summaryFor} from '../../protocol/app-server/testing';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from '../src/app/App';
@@ -7,22 +8,21 @@ let server: Server;
 beforeEach(() => { localStorage.clear(); server = new Server(); });
 afterEach(() => { cleanup(); server.client.disconnect(); vi.useRealTimers(); });
 it('Harness column solve preserves the center, concedes the right panel and keeps the 56px rail', () => {
-  expect(computeColumns(1440, 280, 648)).toEqual({ sidebar: 280, center: 512, rightbar: 648 });
-  expect(computeColumns(1000, 280, 648)).toEqual({ sidebar: 280, center: 400, rightbar: 320 });
-  expect(computeColumns(900, 280, 648)).toEqual({ sidebar: 280, center: 620, rightbar: 0 });
-  expect(computeColumns(390, 0, 648)).toEqual({ sidebar: 56, center: 334, rightbar: 0 });
+  expect(computeColumns(1440, 280, 648)).toEqual({ sidebar: 280, primary: 56, center: 456, rightbar: 648 });
+  expect(computeColumns(1100, 280, 648)).toEqual({ primary: 56, sidebar: 280, center: 400, rightbar: 364 });
+  expect(computeColumns(900, 280, 648)).toEqual({ primary: 56, sidebar: 280, center: 564, rightbar: 0 });
+  expect(computeColumns(390, 0, 648)).toEqual({ primary: 56, sidebar: 0, center: 334, rightbar: 0 });
 });
 it('collapse, rail expansion and Settings appearance gestures emit no native operations', async () => {
   await server.connect();
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   const baseline = server.requests.length;
-  vi.useFakeTimers();
   fireEvent.click(screen.getByRole('button', { name: 'Collapse Sidebar' }));
-  act(() => vi.advanceTimersByTime(150)); // upstream presentation transition only, never race synchronization
-  expect(document.querySelector('[data-sidebar-wide]')?.getAttribute('data-sidebar-wide')).toBe('false');
-  expect(screen.getByRole('button', { name: 'New Conversation' })).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Expand Sidebar' }));
-  expect(document.querySelector('[data-sidebar-wide]')?.getAttribute('data-sidebar-wide')).toBe('true');
+  expect(document.querySelector('#home-sidebar')?.hasAttribute('hidden')).toBe(true);
+  expect(screen.queryByRole('button', { name: 'New Conversation' })).toBeNull();
+  expect(screen.getByRole('navigation', { name: 'Primary navigation' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Home' }));
+  expect(document.querySelector('#home-sidebar')?.hasAttribute('hidden')).toBe(false);
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   // Appearance lives on General, the page global Settings opens at.
   const theme = (option: string) => {
@@ -33,7 +33,11 @@ it('collapse, rail expansion and Settings appearance gestures emit no native ope
   theme('Light');
   expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(false);
   expect(server.requests.slice(baseline).every(row => ['configuration/sourcesRead', 'schedule/list', 'schedule/catalog'].includes(row.request.method))).toBe(true);
-  expect(JSON.stringify(localStorage)).not.toMatch(/workspaceId|cwd|snapshot|interaction/);
+  expect(JSON.stringify(localStorage)).not.toMatch(/cwd|snapshot|interaction/);
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v3')!)).toEqual({
+    endpoint: 'ws://127.0.0.1:8080/', openViews: [],
+    route: { kind: 'new-conversation', workspaceId: 'workspace-a' },
+  });
 });
 it('Extensions remain reachable through Settings without a sidebar shortcut', async () => {
   await server.connect();
@@ -53,13 +57,13 @@ it('waiting interactions outrank running; queued input alone is not a waiting in
   const row = screen.getByRole('button', { name: 'Open Session A' }).closest('[role=treeitem]')!;
   expect(row.querySelector('[data-state]')?.getAttribute('data-state')).toBe('warning');
   expect(row.textContent).toContain('Waiting for approval');
-  await act(async () => { server.snapshots.get('A')!.pending_interactions = []; await server.client.refresh('A'); });
+  await act(async () => { await server.update('A',{...server.snapshots.get('A')!,pending_interactions:[]}); });
   expect(row.querySelector('[data-state]')?.getAttribute('data-state')).toBe('ongoing');
 });
 it('native paging sends offsets and does not create browser-owned Session membership', async () => {
   server.handlers.set('session/list', request => {
     if (request.method !== 'session/list') throw Error('wrong request');
-    return { type: 'sessions', sessions: [{ ownership_generation: '1', id: `page-${request.params.offset}`, name: `Page ${request.params.offset}`, cwd: '/workspace/A', active_node: 'n', updated_at: '2026-09-18T00:00:00Z' }], next_offset: request.params.offset === 0 ? 32 : null };
+    return { type: 'sessions', sessions: ([{ ownership_generation: '1', id: `page-${request.params.offset}`, name: `Page ${request.params.offset}`, cwd: '/workspace/A', active_node: 'n', updated_at: '2026-09-18T00:00:00Z' }]).map(row=>summaryFor(row)), next_offset: request.params.offset === 0 ? 32 : null };
   });
   await server.connect();
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
@@ -70,5 +74,5 @@ it('native paging sends offsets and does not create browser-owned Session member
   expect(server.requests.filter(row => row.request.method === 'session/list').map(row => row.request.params)).toEqual([
     { offset: 0, limit: 32, query: '' }, { offset: 32, limit: 32, query: '' }, { offset: 0, limit: 32, query: '' },
   ]);
-  expect(JSON.parse(localStorage.getItem('rustx-console-view-v3')!)).toEqual({ endpoint: 'ws://127.0.0.1:8080/', openViews: [], route: { kind: 'new-conversation' } });
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v3')!)).toEqual({ endpoint: 'ws://127.0.0.1:8080/', openViews: [], route: { kind: 'new-conversation', workspaceId: 'workspace-a' } });
 });

@@ -505,10 +505,12 @@ impl RuntimeClientProjection {
                 if let Some(pending) = self.prepared_pending.take() {
                     self.snapshot.inbound.pending = pending;
                 } else {
-                    self.snapshot
-                        .inbound
-                        .pending
-                        .retain(|item| item.sequence > batch.watermark());
+                    self.snapshot.inbound.pending.retain(|pending| {
+                        !batch
+                            .items()
+                            .iter()
+                            .any(|item| item.message().id == pending.message.id)
+                    });
                 }
                 self.snapshot.inbound.last_drain = Some(InboundDrainView {
                     watermark: batch.watermark(),

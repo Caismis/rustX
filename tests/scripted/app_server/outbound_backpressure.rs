@@ -5,6 +5,7 @@ use tokio::sync::{mpsc, oneshot};
 
 fn turn(target: AttachmentTarget, text: &str) -> Method {
     Method::TurnStart {
+        input_id: uuid::Uuid::new_v4().to_string(),
         target,
         content: input(text)
             .into_iter()
@@ -22,8 +23,7 @@ async fn second_target(connection: &AppServerConnection, fixture: &Fixture) -> A
         &direct,
         3,
         Method::SessionAttach {
-            session_id: fixture.sessions[1].id.clone(),
-            node_id: None,
+            thread_id: fixture.sessions[1].active_conversation_id.clone(),
         },
     )
     .await
@@ -131,7 +131,7 @@ async fn transient_full_queue_preserves_admitted_control_and_other_conversation_
         full.await.unwrap();
         assert!(!connection.closed_for_test());
         settle_second_conversation(&fixture, &input, second).await;
-        send_request(&input, 99, Method::TurnCancel { target }).await;
+        send_request(&input, 99, Method::TurnCancel { turn_id: runtime.configuration_cut().admitted_attempt.unwrap().attempt, target }).await;
         let settled = runtime.child_attempt_settlement(after).await;
         assert_eq!(settled.ordinal, after + 1);
         assert!(matches!(settled.outcome, NativeAttemptOutcome::Cancelled));
@@ -148,7 +148,7 @@ async fn transient_full_queue_preserves_admitted_control_and_other_conversation_
                 assert!(matches!(response.result, MethodResult::CancellationAccepted { attempt_id } if attempt_id == settled.attempt_id));
             } else {
                 assert_eq!(response.id, RequestId::Integer(98));
-                assert!(matches!(response.result, MethodResult::InboundAccepted { .. }));
+                assert!(matches!(response.result, MethodResult::TurnInputAccepted { .. }));
             }
         }
         send_request(&input, 100, Method::ServerInfo {}).await;

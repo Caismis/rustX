@@ -6,7 +6,7 @@
  */
 
 /** Resolved widths for one frame. */
-export interface Columns { sidebar: number; center: number; rightbar: number }
+export interface Columns { primary: number; sidebar: number; center: number; rightbar: number }
 
 /** Center width protected while the normal right column is open. */
 export const CENTER_MIN = 400
@@ -16,9 +16,9 @@ export const SIDEBAR_MIN = 264
 export const SIDEBAR_MAX = 420
 /** Sidebar width before any user drag. */
 export const SIDEBAR_DEFAULT = 280
-/** Closed-sidebar rail: a 24px icon column between 16px horizontal paddings. */
-export const SIDEBAR_COLLAPSED = 56
-/** Viewport width below which the sidebar auto-collapses to the rail (deepsuite
+/** Permanent primary navigation, independent of the Home sidebar. */
+export const PRIMARY_RAIL_WIDTH = 56
+/** Viewport width below which the Home sidebar auto-collapses (deepsuite
  * LG breakpoint); below it, manual expansion overlays the center instead of
  * consuming another grid track. */
 export const SIDEBAR_AUTO_COLLAPSE = 1024
@@ -41,20 +41,18 @@ export function clampWidth(px: number, min: number, max: number): number {
 }
 
 /**
- * Solve the three column widths for one viewport frame.
+ * Solve the permanent rail and three optional/content column widths.
  * @param viewport - available frame width in px.
  * @param sidebar - sidebar width preference in px (0 = closed).
  * @param rightbar - requested right panel width in px (0 = no track).
- * @param collapsedWidth - track width of the closed sidebar; the default keeps
- *   the icon rail, 0 hides the column entirely (macOS desktop).
  * @returns actual widths after shrinking or removing the right track; only
  *   without that track may the center fall below its minimum, down to zero.
  */
-export function computeColumns(viewport: number, sidebar: number, rightbar: number, collapsedWidth = SIDEBAR_COLLAPSED): Columns {
-  const s = sidebar === 0 ? collapsedWidth : clampWidth(sidebar, SIDEBAR_MIN, SIDEBAR_MAX)
-  const available = viewport - s - CENTER_MIN
+export function computeColumns(viewport: number, sidebar: number, rightbar: number): Columns {
+  const s = sidebar === 0 ? 0 : clampWidth(sidebar, SIDEBAR_MIN, SIDEBAR_MAX)
+  const available = viewport - PRIMARY_RAIL_WIDTH - s - CENTER_MIN
   const r = rightbar === 0 || available < RIGHTBAR_MIN
     ? 0
     : Math.min(available, clampWidth(rightbar, RIGHTBAR_MIN, viewport * RIGHTBAR_MAX_RATIO))
-  return { sidebar: s, center: Math.max(0, viewport - s - r), rightbar: r }
+  return { primary: PRIMARY_RAIL_WIDTH, sidebar: s, center: Math.max(0, viewport - PRIMARY_RAIL_WIDTH - s - r), rightbar: r }
 }

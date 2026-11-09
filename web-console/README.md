@@ -72,8 +72,9 @@ Direct `pnpm dev`/`preview` remain component-only commands for focused UI work o
 an independently managed runtime/Host. The [Host contract](WORKSPACES.md) describes
 that operator-owned integration. Use the launcher for complete local composition.
 
-Native authentication remains #36's **local/trusted, single writable controller** boundary.
-The browser sends subprotocols `rustx.app-server.v72` and `rustx-token.<token>` in its
+Native authentication admits trusted clients of one user's App Server. WebUI,
+TUI and external clients may share writable attachments to one Conversation.
+The browser sends subprotocols `rustx.app-server.v75` and `rustx-token.<base64url-no-pad(token bytes)>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -134,7 +135,7 @@ and never rewrites an unsaved draft's base outside the explicit review workflow.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v72.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v75.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -263,17 +264,22 @@ AppFrame owns narrow-sidebar visibility and reports explicit Escape, backdrop,
 toggle and breakpoint dismissal to the XState v5 ShellNavigationMachine. Its
 committed route is independent from its single disposable preparing actor. Beginning or retiring a
 pending gesture leaves the displayed conversation's Stop/upload controls valid;
-only route publication or authority replacement revokes its committed fence.
+only a different conversation publication or authority replacement revokes its
+committed fence. Primary-page publication retains Home operation ownership.
 Sidebar catalog search owns only its directory read identity; it cannot replace
 the route or retire an unrelated navigation intent.
 Failure retires only its own pending intent, without refreshing, reopening or
 releasing an attachment. Stale cleanup cannot retire a newer intent. Overlay
-user dismissal retires sidebar preparation; successful programmatic closure
-does not cancel the committed route. Settings, connection Settings and
+dismissal retires only viewport-close interest for an already selected cold
+Session; its pending executable promotion remains current. Uncommitted
+History/Fork/sidebar preparation retains its own cancellation rules. Successful
+programmatic closure does not cancel the committed route. Settings, connection Settings and
 owning-Workspace Settings synchronously retire preparation from every
-conversation entry point before dispatching to the
-independent Settings machine. Idle Settings and overlay dismissal preserve
-committed controls and continuation fences. A current authoritative attachment permits
+conversation entry point before committing the Settings page. The Settings machine owns internal
+target/section/detail navigation; its visibility belongs only to Shell. Primary
+pages and overlay dismissal preserve Home native operation fences, draft identity
+and admitted continuation ownership. Returning Home revalidates its authorization
+and never replays attachment or execution. A current authoritative attachment permits
 immediate presentation navigation without an
 attachment refresh. Cold navigation commits only after lifecycle admission and
 the final gesture, generation and attachment-control checks. Dismissal or a newer
@@ -344,7 +350,7 @@ preview callbacks are not inherited by that route.
 Request IDs provide correlation only. Separate bounded lanes permit four waits,
 two Agent message admissions, two lifecycle controls and eight transmitted ordinary
 RPCs, within the transport's sixteen-request work bound; the overall 64-request
-pending/queue bound remains. `turn/cancel` shares the control lane with
+pending/queue bound remains. `turn/interrupt` shares the control lane with
 `agent/interrupt` and `job/cancel`, independently of ordinary RPC capacity. Full
 domain lanes refuse local admission before transmission. Only ordinary RPCs use
 the 30-second response deadline, which closes the transport rather than resending;
@@ -352,9 +358,11 @@ wait, admission and control lanes have no response deadline. A transmitted
 side-effect with no acknowledgement is **outcome uncertain**, including create,
 delete, turn/cancellation, interaction and lifecycle operations. Unsent calls are
 discarded. Reconnect reads authority first; no mutation is automatically replayed.
-Non-interaction uncertainty remains a diagnostic even when a snapshot is suggestive:
-the protocol cannot prove request identity. The product warning and Connection Settings
-retain that unresolved evidence. Up to 64 unresolved mutations can be retained; new mutations are
+Only authoritative correlation proof repairs an uncertain receipt. Input admission
+uses its exact `inputId` and `inbound/submissionLookup`; acceptance is not execution
+or success. A suggestive snapshot alone proves no operation identity. Unresolved
+evidence remains in the product warning and Connection Settings.
+Up to 64 unresolved mutations can be retained; new mutations are
 refused before diagnostics would be silently dropped. After inspecting evidence and
 verifying affected work, Connection → Review uncertain operations permits explicit
 browser-local acknowledgement of non-interaction notices. This sends no RPC,
@@ -451,14 +459,23 @@ which observations were automated versus manually inspected.
 
 ## Harness presentation shell
 
-[SHELL-ARCHITECTURE.md](SHELL-ARCHITECTURE.md) records the #345 reset. Direct imports
-from `presentation/` form one Harness-derived foundation. AppFrame accepts Sidebar,
-main, right-panel and overlay seats. Its measured columns retain the upstream
-280px Sidebar, 56px rail, 1024px responsive collapse and right-panel constraints.
-The Sidebar Settings entry opens **Overview** in the shared modal/navigation frame; existing CFG3
-editors supply its content. File previews and the workbench use the right panel.
-Connection is an explicit Settings section. Connection recovery **Show details**
-opens that section directly without changing the ordinary Settings default.
+[SHELL-ARCHITECTURE.md](SHELL-ARCHITECTURE.md) records the #345 baseline and
+#536 navigation ownership. `AppFrame` composes a permanent 56px primary rail,
+Home's resizable 280px secondary sidebar, the selected page and a retained Home
+preview/workbench. The Home sidebar collapses completely; below 1024px it opens
+as an overlay beside the still-interactive rail. Only UI geometry is stored in
+`rustx-shell-layout-v1` by the application binding.
+
+Home restores its last authorized conversation or draft with the same logical
+editor, unsent text and local attachments. Switching primary pages preserves
+admitted native work, configuration transactions and the right-side workbench.
+Settings is an independent page with General, Models, Agent, Tools, MCP,
+Extensions and Advanced; internal scoped/detail navigation stays with its own
+machine. The rail returns to the previous Settings section. Exact Workspace,
+Connection and repair-inspection entry points select their own target/detail.
+There is no top-level Settings mask, focus trap, backdrop close or Escape close.
+Every Workflow exit uses its existing dirty/unsettled-edit confirmation through
+the Shell route owner. Native runtime invariants and protocol contracts are unchanged.
 
 Menus, HoverCards, Tooltips and Modals own only presentation/focus state. The
 workspace adapter projects native list/cwd, Host classification and current
@@ -644,9 +661,16 @@ never imports these addons. The
 workbench HTTP route uses the same authenticated carrier and native Session/node
 admission as the existing desktop workspace action.
 
+Workspace files and committed Session-file deliveries also open read-only GLB,
+STL, STEP/STP, IGES/IGS and Open CASCADE BREP previews. The shared 3D viewer
+supports orbit, pan, zoom, standard views, part selection and visibility. Geometry
+keeps its authorized fixed copy and view state while parked in another tab;
+Download retains the original source. See [geometry previews](../docs/geometry-previews.md)
+for units, supported variants and resource limits.
+
 ### Temporary questions
 
-Use **Ask a side question** in the Conversation header while Agent work continues. It reads a committed snapshot, which may exclude streaming work. Closing the panel keeps execution running; **Cancel question** explicitly cancels that Call. **Check status** recovers an uncertain receipt or incomplete display without submitting again. Temporary answers expire after five minutes and are never canonical conversation messages. Settings → Models exposes independent Classification and BTW model policies. See [native semantics and limits](../docs/auxiliary-consumers.md).
+Use **Ask a side question** in the Conversation header to open a right Workbench tab while Agent work continues. It reads a committed snapshot, which may exclude streaming work. Closing the panel keeps execution running; **Cancel question** explicitly cancels that Call. **Check status** recovers an uncertain receipt or incomplete display without submitting again. Temporary answers expire after five minutes and are never canonical conversation messages. Settings → Models exposes independent Classification and BTW model policies. See [native semantics and limits](../docs/auxiliary-consumers.md).
 
 
 ## Visual Workflow editing
@@ -680,3 +704,8 @@ checked write; a conflict keeps local changes for explicit reconciliation.
 
 See [the authoring contract](../docs/workflow-authoring.md) and [design, evidence
 and test traceability](../docs/workflow-visual-editor.md).
+
+Existing Workspace row status uses Native v75 Thread status independently of full
+transcript attachments. Exact Thread identity and process-local revision order
+snapshots and notifications; reconnect/overflow repairs use pure reads. Runtime
+status, connection availability and native Turn outcomes remain separate.

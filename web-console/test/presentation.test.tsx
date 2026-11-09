@@ -46,7 +46,7 @@ it('renders streaming then one committed response, and an authoritative Approval
   await act(() => server.update('A', { ...snapshot(), messages: [{ role: 'assistant', id: 'assistant-1', content: [{ type: 'text', text: 'Committed response' }] }], transcript: { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: 'assistant-1', content: [{ type: 'text', text: 'Committed response' }] } } }] }, pending_interactions: [interaction('approval')] }));
   expect(screen.queryByLabelText('Streaming response')).toBeNull();
   expect(screen.getAllByText('Committed response')).toHaveLength(1);
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Allow once' })); await server.waitFor('interaction/respond', 1); await server.client.refresh('A'); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Allow once' })); await server.waitForReply(); await server.client.refresh('A'); });
   expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
   expect(conversation(server.client.getSnapshot().views.A.snapshot!).messages).toHaveLength(1);
 });
@@ -79,9 +79,9 @@ it('native Review preserves instance and subject digest and waits for authoritat
   localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   fireEvent.click(screen.getByRole('radio', { name: 'Approve' }));
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Submit' })); await server.waitFor('interaction/respond', 1); await server.client.refresh('A'); });
-  const request = server.requests.find(item => item.request.method === 'interaction/respond')!.request;
-  expect(request.params).toMatchObject({ interaction: review.interaction, response: { type: 'review', response: { instance, subject_digest: 'native-subject-digest', submission: { answers: [{ question_index: 0, answer: { type: 'option', value: { option_index: 0 } } }] } } } });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Submit' })); await server.waitForReply(); await server.client.refresh('A'); });
+  const request = server.replies[0]!;
+  expect('result' in request ? request.result : undefined).toMatchObject( { type: 'review', response: { instance, subject_digest: 'native-subject-digest', submission: { answers: [{ question_index: 0, answer: { type: 'option', value: { option_index: 0 } } }] } } });
   expect(screen.queryByRole('region', { name: 'Questionnaire' })).toBeNull();
 });
 
@@ -108,11 +108,11 @@ it('closing A immediately emits exactly its detach, preserving B, runtime work a
   expect(server.loaded.has('A')).toBe(true);
   expect(server.snapshots.get('A')?.attempt?.phase.type).toBe('running');
   await act(() => server.connect());
-  expect(server.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'B', node_id: 'node-B' }]);
+  expect(server.requests.slice(baseline).filter(({ request }) => request.method === 'thread/resume').map(({ request }) => request.params)).toEqual([{ threadId: 'conversation-B' }]);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })); await server.client.attach('A'); });
   expect(screen.getByRole('button', { name: 'Allow once' })).toBeTruthy();
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('wanted');
-  expect(server.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach' && request.params.session_id === 'A')).toHaveLength(1);
+  expect(server.requests.slice(baseline).filter(({ request }) => request.method === 'thread/resume' && server.sessionForThread(request.params.threadId) === 'A')).toHaveLength(1);
 });
 it('lost close-view acknowledgement leaves intent released across reconnect and marks the affected Sidebar row', async () => {
   await server.attached('A', 'B'); server.held.add('session/detach');
@@ -128,6 +128,6 @@ it('lost close-view acknowledgement leaves intent released across reconnect and 
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   expect(server.claims().map(item => item.session_id)).toEqual(['B']);
   expect(server.requests.filter(({ request }) => request.method === 'session/detach')).toHaveLength(1);
-  expect(server.requests.filter(({ request }) => request.method === 'session/attach' && request.params.session_id === 'A')).toHaveLength(1);
+  expect(server.requests.filter(({ request }) => request.method === 'thread/resume' && server.sessionForThread(request.params.threadId) === 'A')).toHaveLength(1);
   expect(JSON.parse(localStorage.getItem('rustx-console-view-v3')!).openViews).toEqual(['B']);
 });

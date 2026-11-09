@@ -5,7 +5,7 @@ import { boundedSettings } from "./fixture";
 import { cfg3Source, cfg3Effective, cfg3Application } from './cfg3-data';
 import { snapshot } from './fixture';
 import { vi } from 'vitest';
-import type { AttachmentTarget, EffectiveConfiguration, MethodResult, Request1, SourceSettings } from '../../protocol/app-server/v72';
+import type { AttachmentTarget, EffectiveConfiguration, MethodResult, Request1, SourceSettings } from '../../protocol/app-server/v75';
 import { AppServerClient } from '../src/client/app-server';
 import type { ClientView } from '../src/client/contracts';
 export const cfg3Session = 'ses_00000000-0000-7000-8000-000000000001';
@@ -43,5 +43,5 @@ export function cfg3Host(subject: ReturnType<typeof cfg3Client>): import('../src
       }
       if(operation.kind==='reconcile') await subject.client.request({method:'configuration/reconcile',params:{target}},'configuration_receipt');
       return {kind:operation.kind,projection:await read(target)};
-    }, adoptWorkspace:async()=>{},renameWorkspace:async()=>{},reorderWorkspace:async()=>{},removeWorkspace:async()=>{},resolveWorkspace:async(id)=>({cwd:'/workspace/'+id}),classifyLocations:async(cwds)=>cwds.map(()=>({authorized:true})) };
+    }, adoptWorkspace:async()=>{},renameWorkspace:async()=>{},selectWorkspace: async () => {}, reorderWorkspace:async()=>{},removeWorkspace:async()=>{},resolveWorkspace:async(id)=>({cwd:'/workspace/'+id}),classifyLocations:async(cwds)=>cwds.map(()=>({authorized:true})) };
 }

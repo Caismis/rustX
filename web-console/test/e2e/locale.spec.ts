@@ -18,20 +18,20 @@ test('Chinese General switches the resident UI without requests, keeps native id
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN');
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '设置', exact: true });
+  const dialog = page.getByRole('region', { name: '设置', exact: true });
   await expect(dialog.getByRole('heading', { name: '通用设置' })).toBeVisible();
   await expectStableScreenshot(page, 'locale-general-zh.png');
   const before = await page.evaluate(() => (window as unknown as { rustxNativeRequests(): unknown[] }).rustxNativeRequests());
   await choose(dialog, '语言', 'English');
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
-  const english = page.getByRole('dialog', { name: 'Settings', exact: true });
+  const english = page.getByRole('region', { name: 'Settings', exact: true });
   await expect(english.getByRole('heading', { name: 'General' })).toBeVisible();
   expect(await page.evaluate(() => (window as unknown as { rustxNativeRequests(): unknown[] }).rustxNativeRequests())).toEqual(before);
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await choose(page.getByRole('dialog', { name: 'Settings', exact: true }), 'Language', '中文');
-  await page.getByRole('button', { name: '关闭设置' }).click();
+  await choose(page.getByRole('region', { name: 'Settings', exact: true }), 'Language', '中文');
+  await page.getByRole('button', { name: '主页' }).click();
   await expect(page.getByRole('textbox', { name: '消息', exact: true })).toBeVisible();
   await expect(page.locator('button[data-session-id="A"]')).toContainText('Session A');
   expect(errors).toEqual([]);
@@ -53,7 +53,7 @@ test('Chinese new conversation preserves the user draft and localizes composer c
   await expect(page.getByRole('listbox', { name: '模型', exact: true })).toBeVisible();
   await page.getByRole('option', { name: 'fixture/model', exact: true }).click();
   await expect(input).toHaveValue('');
-  expect(await page.evaluate(() => (window as unknown as { rustxNativeRequests(): { method: string }[] }).rustxNativeRequests().filter(request => request.method === 'session/create'))).toEqual([]);
+  expect(await page.evaluate(() => (window as unknown as { rustxNativeRequests(): { method: string }[] }).rustxNativeRequests().filter(request => request.method === 'thread/start'))).toEqual([]);
 });
 
 test('Chinese approval localizes actions while preserving the native request reason', async ({ page }) => {
