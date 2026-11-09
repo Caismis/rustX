@@ -51,7 +51,10 @@ the complete creation draft and validates required fields, duplicate identities
 and token limits before submitting; it
 closes only after its submission is exactly observed with no newer draft
 generation or unfinished editing intent. Native settlement of an older
-submission cannot close a newer editing flow. Every Model inherits its Provider's
+submission cannot close a newer editing flow. The shared bridge pairs completion
+with the exact identity/token accepted for that editing flow; a failed MCP
+creation renamed to an existing server cannot consume that server's earlier
+completion. Every Model inherits its Provider's
 API format. Existing credentials stay redacted, and changing credential mode
 replaces the previous mode's fields.
 
@@ -94,6 +97,12 @@ Provider and Model edits address independent identities. Workspace
 replacement edits complete objects. Native Tools use an explicit checkbox whitelist;
 MCP, Python and Skill selections have all/exact/none controls. Skill guidance explains
 availability. Plugins default off.
+
+Freezing dynamic all-Skill visibility into an exact list requires complete,
+successful native discovery, including every page. Loading or failed discovery
+disables only that conversion; it never supplies an empty list. Existing exact
+selections, explicit All/None and restoring Workspace inheritance remain
+independent of discovery availability.
 
 The Model capability editor contains one **Structured output** checkbox
 (`json_schema_output`), defaulting to false. Its declaration means native API schema

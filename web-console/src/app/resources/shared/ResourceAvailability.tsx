@@ -24,15 +24,17 @@ export function SkillSelectionPolicy({ source, scope, revision, skillNames }: {
   const mode = scope === 'workspace' && !unit.authoredPresent && !unit.draft ? 'inherit'
     : selection === 'all' ? 'all' : selection.length ? 'selected' : 'none';
   const blocked = unit.draft || unit.reviewNeeded || !unit.writable || !unit.admitted || unit.busy;
+  const canFreeze = selection !== 'all' || skillNames !== undefined;
   return <section className={css.skillPolicy} aria-label={tx('resources:skills.selection')} aria-busy={unit.busy || unit.awaitingObservation}>
     <Choice label={tx('resources:skills.selection')} value={mode} disabled={blocked}
+      disabledKeys={canFreeze ? undefined : ['selected']}
       options={[
         ...(scope === 'workspace' ? [['inherit', tx('resources:skills.inherit')] as const] : []),
         ['all', tx('resources:skills.all')], ['selected', tx('resources:skills.selected')], ['none', tx('settings:copy.none')],
       ]} onChange={next => {
-        if (blocked) return;
+        if (blocked || next === 'selected' && !canFreeze) return;
         if (next === 'inherit') { if (unit.authoredPresent) unit.submit(true); }
-        else unit.apply(next === 'all' ? 'all' : next === 'none' ? [] : selection === 'all' ? skillNames ?? [] : selection);
+        else unit.apply(next === 'all' ? 'all' : next === 'none' ? [] : selection === 'all' ? skillNames! : selection);
       }} />
     <div className={css.availability}>
       {unit.reviewNeeded && <Button size="sm" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}

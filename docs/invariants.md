@@ -8343,11 +8343,12 @@ See [the storage and lifecycle contract](issue-520/README.md).
 ## Large local resources (Issue #527)
 
 - Skill bodies and assets have no discovery byte ceiling because discovery never
-  reads them. The YAML frontmatter prefix is bounded to 1 MiB to bound malformed
+  reads them. The YAML frontmatter prefix is bounded to 2 MiB to bound malformed
   input, with cancellable 4 KiB read-ahead. Only a normalized validated definition
-  affects SkillVersionId; source/location facts are compared separately. Root
-  escape and symlinked package/entry rejection remain discovery rules; internal
-  resource access belongs to ordinary Tools.
+  affects SkillVersionId; source/location facts are compared separately. File and
+  directory symlinks may point outside either collection; broken links and cycles
+  are skipped. Body and resource access belongs to ordinary Tools under their
+  existing authorization rules.
 - Managed Python authorization freezes disk-backed bytes, declarations and
   identity together. Later path edits cannot alter that source object. Capture
   and installation use fixed byte buffers, with no eager whole-package vector.

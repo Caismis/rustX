@@ -40,8 +40,9 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
   const authored = Object.hasOwn(document.document, name) ? document.document[name] : undefined;
   const unit = useUnitEditing<McpWrite>({ draftKey: focus.name ? undefined : JSON.stringify(['create-mcp', name]),
     authored, revision: document.revision,
+    onSaved: () => { onEditorDraftChange(undefined); close(); },
     blank: {definition:{type:'stdio',command:'',args:[]},retained_env:[],retained_headers:[]}, mutation: value => ({kind:'mcp',id:name,authored:value}) });
-  const submitted = useRef(false), pendingSave = useRef(false), card = useRef<HTMLFormElement>(null);
+  const pendingSave = useRef(false), card = useRef<HTMLFormElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
   const [invalidFields, setInvalidFields] = useState<McpFieldBuffers>(editorDraft?.invalidFields ?? {});
@@ -62,18 +63,10 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
   const identityTitle = tx('settings:extension-detail.mcp-value',{p0:name});
   const restoresInherited = scope === 'workspace' && unit.shadowed !== undefined;
   const removalLabel = tx(restoresInherited ? 'settings:bridge.use-global-default-value' : 'settings:bridge.remove-value',{p0:identityTitle});
-  const duplicate = !focus.name && !!authored && !(submitted.current && unit.outcome.kind === 'saved');
+  const duplicate = !focus.name && !!authored && !(unit.submission && unit.outcome.kind === 'saved');
   const definition = value.definition;
   const complete = !!name && !duplicate && (definition.type === 'http' || definition.url != null
     ? !!definition.url && /^https?:\/\//.test(definition.url) : !!definition.command?.trim());
-  useEffect(() => {
-    if (unit.outcome.kind === 'submitting' || unit.outcome.kind === 'committed') submitted.current = true;
-    if (submitted.current && unit.completion !== undefined) {
-      submitted.current = false;
-      onEditorDraftChange(undefined);
-      close();
-    }
-  }, [unit.outcome, unit.completion, close, onEditorDraftChange]);
   const chooseMode = (next: 'form'|'json') => {
     if (next === mode) return;
     if (next === 'form') {
@@ -138,7 +131,7 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
   useEffect(() => {
     if (pendingSave.current && (!unit.writable || reviewNeeded)) pendingSave.current = false;
     if (pendingSave.current && !pendingImport && complete && unit.draft && unit.admitted && unit.writable) {
-      pendingSave.current = false; submitted.current = true; unit.submit();
+      pendingSave.current = false; unit.submit();
     }
   }, [pendingImport, complete, unit.draft, unit.admitted, unit.writable, reviewNeeded]);
   let jsonReady = false;
@@ -158,7 +151,7 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
   const save = () => {
     if (!canSave) return;
     if (mode === 'json') { pendingSave.current = true; applyJson(); }
-    else { submitted.current = true; unit.submit(); }
+    else unit.submit();
   };
   const resetBuffers = () => {
     pendingSave.current = false;
@@ -205,7 +198,7 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
       <div className={css.footer}>
         {focus.name && unit.authoredPresent && <span data-removal={restoresInherited?'override-removal':'authored-removal'}><ConfirmAction label={removalLabel} triggerText={tx(restoresInherited?'settings:models.restore':'settings:copy.delete')} title={tx(restoresInherited?'settings:bridge.use-the-global-default-for-value':'settings:mcp.remove-confirm',{p0:identityTitle})} description={tx(restoresInherited?'settings:forms.restore-help':'settings:mcp.remove-help')} confirm={removalLabel} tone={restoresInherited?'restore':'destructive'} settle={card} disabled={!canWrite} onConfirm={() => {
           if (!canWrite) return;
-          submitted.current = true; unit.submit(true);
+          unit.submit(true);
         }}/></span>}
         <div className={css.footerButtons}>
           {(unit.intent || pendingImport || jsonEdit || !validFields) && <Button size="sm" disabled={blocked} onClick={discard}>{tx('settings:bridge.discard-draft')}</Button>}

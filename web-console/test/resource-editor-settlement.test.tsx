@@ -37,6 +37,62 @@ function Surface({ actor, kind }: { actor: ReturnType<typeof settingsAuthority>[
   return <InSettings actor={actor} source={source}><SettingsFeedback>{editor}</SettingsFeedback></InSettings>;
 }
 
+function McpCreations({ actor }: { actor: ReturnType<typeof settingsAuthority>['actor'] }) {
+  const source = useSelector(actor, snapshot => snapshot.context.observation);
+  const [open, setOpen] = useState(false);
+  if (!source) return null;
+  return <InSettings actor={actor} source={source}><SettingsFeedback>
+    {open ? <McpEditor source={source} scope="user" focus={{ kind: 'mcp' }} scopeControl={null}
+      close={() => setOpen(false)} onEditorDraftChange={() => {}} />
+      : <button onClick={() => setOpen(true)}>New MCP</button>}
+  </SettingsFeedback></InSettings>;
+}
+
+it.each(['earlier editor', 'native source'] as const)('MCP preserves a rejected creation renamed to a server from %s', async origin => {
+  const source = cfg3Source();
+  const server = { definition: { type: 'stdio' as const, command: 'command-a' }, retained_env: [], retained_headers: [] };
+  if (origin === 'native source') source.user_mcp.authored!['server-a'] = server;
+  let revision = 1;
+  const authority = settingsAuthority(source, { write: async (_expected, mutation) => {
+    if (mutation.kind !== 'mcp' || !mutation.authored) throw new Error('Expected MCP authoring');
+    if (mutation.id === 'server-b') throw new Error('Native rejected B');
+    source.user_mcp.authored![mutation.id] = { ...mutation.authored,
+      retained_env: mutation.authored.retained_env ?? [], retained_headers: mutation.authored.retained_headers ?? [] };
+    source.user_mcp.revision = `mcp-${++revision}`;
+    return { acknowledgement: { revision: source.user_mcp.revision } };
+  } });
+  actors.push(authority.actor);
+  render(<McpCreations actor={authority.actor} />);
+  if (origin === 'earlier editor') {
+    fireEvent.click(await screen.findByRole('button', { name: 'New MCP' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'server-a' } });
+    fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'command-a' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByRole('button', { name: 'New MCP' });
+    expect(Object.values(authority.context().completions)).toHaveLength(1);
+  }
+  const successful = authority.writes.mock.calls.length;
+  fireEvent.click(await screen.findByRole('button', { name: 'New MCP' }));
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'server-b' } });
+  fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'unsaved-command-b' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await screen.findByText(/Native rejected B/);
+  await waitFor(() => expect((screen.getByLabelText('Name') as HTMLInputElement).disabled).toBe(false));
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'server-a' } });
+  expect(screen.getByRole('form')).toBeTruthy();
+  expect((screen.getByLabelText('Command') as HTMLInputElement).value).toBe('unsaved-command-b');
+  expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByLabelText('Name') as HTMLInputElement).disabled).toBe(false);
+  expect(authority.writes).toHaveBeenCalledTimes(successful + 1);
+  expect(Object.values(authority.context().units)).toHaveLength(0);
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'server-c' } });
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await screen.findByRole('button', { name: 'New MCP' });
+  expect(authority.writes).toHaveBeenCalledTimes(successful + 2);
+  expect(source.user_mcp.authored!['server-c'].definition).toMatchObject({ command: 'unsaved-command-b' });
+});
+
 it.each<Editor>(['model', 'new-agent', 'edit-agent', 'mcp'])('%s closes only after the exact committed revision is observed', async kind => {
   await exercise(kind, true);
 });

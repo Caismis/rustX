@@ -1,5 +1,5 @@
 import { useTranslation } from '../../../locale/react';
-import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useForm, type ReactFormExtendedApi } from '@tanstack/react-form';
 import { useSelector } from '@xstate/react';
 import type { SourceMutation } from '../../../../../protocol/app-server/v77';
@@ -126,9 +126,9 @@ export interface UnitEditing<T> {
    * commit whose first read diverged is still unresolved and is never saved
    * completion, even though the target has finished its post-write read. */
   readonly settled: boolean;
-  /** The submission that completed this editing generation, with no remaining
-   * intent. An older settled commit never completes a newer draft generation. */
-  readonly completion: number | undefined;
+  /** The exact submission accepted for this editing flow. Never inferred from
+   * another editor's outcome or a unit's historical completion. */
+  readonly submission?: { identity: string; token: number };
   readonly busy: boolean;
   readonly admitted: boolean;
   readonly reviewNeeded: boolean;
@@ -162,6 +162,9 @@ export interface UnitEditing<T> {
 }
 
 export interface UnitOptions<T> {
+  /** Called once only when this flow's accepted identity/token completes.
+   * The unit actor independently verifies generation and remaining intent. */
+  onSaved?: () => void;
   /** An actor-owned creation draft has a stable identity before its native
    * resource name is chosen. Only its submitted mutation names the resource. */
   draftKey?: string;
@@ -189,7 +192,7 @@ export interface UnitOptions<T> {
   redacted?: boolean;
 }
 
-export function useUnitEditing<T>({ authored, authoredPresent = authored !== undefined, blank, revision, mutation, inherited = value => value as T, redacted = false, draftKey }: UnitOptions<T>): UnitEditing<T> {
+export function useUnitEditing<T>({ authored, authoredPresent = authored !== undefined, blank, revision, mutation, inherited = value => value as T, redacted = false, draftKey, onSaved }: UnitOptions<T>): UnitEditing<T> {
   const actor = useSettingsActor();
   const source = useContext(SourceContext);
   const scope = source?.target.kind ?? 'user';
@@ -233,6 +236,17 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
   const settled = snapshot ? snapshot.matches({ mutation: 'settled' }) : outcome.kind === 'saved' && outcome.observed;
   const retiredCompletion = useSelector(actor, target => target.context.completions[identity]);
   const completion = snapshot ? editingCompletion(snapshot) : retiredCompletion;
+  const [pending, setPending] = useState<{ actor: typeof actor; receipt: { identity: string; token: number } }>();
+  const submission = pending?.actor === actor && pending.receipt.identity === identity ? pending.receipt : undefined;
+  // A different identity/authority is a different editing flow. Returning to a
+  // previously visited identity must not revive its abandoned waiting relation.
+  useEffect(() => { setPending(undefined); }, [actor, identity]);
+  useEffect(() => {
+    if (submission && completion === submission.token) {
+      setPending(undefined);
+      onSaved?.();
+    }
+  }, [submission, completion, onSaved]);
   const resets = useSelector(actor, target => target.context.resets[identity] ?? 0);
   const draft = transaction?.draft as { value: T } | undefined;
   const unparsed = authoredPresent && authored === undefined;
@@ -260,9 +274,18 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
           : definition === 'inherited' ? overrideSeed : blank;
   const writable = definition !== 'inherited' && !awaitingObservation;
   const begin = (value: T) => actor.send({ type: 'UNIT.EDIT', identity, selector, revision, value });
+  const submit = (value: T | null) => {
+    const previous = actor.getSnapshot().context.submission;
+    actor.send({ type: 'UNIT.SUBMIT', identity, selector, revision, mutation: mutation(value) });
+    const accepted = actor.getSnapshot().context.submission;
+    // send() processes admission synchronously; only a newly accepted native
+    // submission can arm completion. Refused gestures create no waiting flow.
+    setPending(accepted && accepted !== previous && accepted.identity === identity
+      ? { actor, receipt: { identity, token: accepted.token } } : undefined);
+  };
   return {
     identity, displayed, outcome, resets, draft: draft !== undefined, authoredPresent, unparsed,
-    overriding: draft !== undefined || authoredPresent, inheritance, committed, settled, completion, busy, admitted,
+    overriding: draft !== undefined || authoredPresent, inheritance, committed, settled, submission, busy, admitted,
     base, observed, scope, facts, configUnit: unitMutation.kind === 'config',
     definition, shadowed, awaitingObservation, writable,
     // For a value-inherited unit an edit is an unambiguous override
@@ -275,16 +298,16 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
     apply: (value: T) => {
       if (!writable || !admitted || busy || draft || (snapshot && requiresReview(snapshot))) return;
       begin(value);
-      actor.send({ type: 'UNIT.SUBMIT', identity, selector, revision, mutation: mutation(value) });
+      submit(value);
     },
     override: definition === 'inherited' ? () => { if (!awaitingObservation) begin(overrideSeed); } : undefined,
     submit: (remove = false) => {
       if (!remove && !draft) return;
       // Only the mutation itself carries the authored payload; the transaction
       // is handed the token and the non-sensitive selector that settle it.
-      actor.send({ type: 'UNIT.SUBMIT', identity, selector, revision, mutation: mutation(remove ? null : draft!.value) });
+      submit(remove ? null : draft!.value);
     },
-    discard: () => actor.send({ type: 'UNIT.DISCARD', identity }),
+    discard: () => { setPending(undefined); actor.send({ type: 'UNIT.DISCARD', identity }); },
     review: () => actor.send({ type: 'UNIT.REVIEW', identity }),
     // Whether the current source diverges from the CAS base is the
     // transaction's own fact: it alone knows whether a post-commit observation
@@ -451,9 +474,9 @@ export function UnitForm<T>({ title, children, removable = true, removalNotice, 
 export function TypedUnitForm<T>({ title, children, removable = true, removalNotice, presentation, onCancel, onSaved, ...options }: UnitOptions<T> & {
   title: string; children: (form: TypedUnitForm<T>) => ReactNode;
   removable?: boolean; removalNotice?: ReactNode;
-  presentation?: 'resource' | 'dialog'; onCancel?: () => void; onSaved?: () => void;
+  presentation?: 'resource' | 'dialog'; onCancel?: () => void;
 }) {
-  const unit = useUnitEditing(options);
+  const unit = useUnitEditing({ ...options, onSaved });
   // The value this form last pushed into the transaction actor. Comparing the
   // actor's current value against it — rather than against the form's own
   // state — is what tells an external change apart from this form's own edit.
@@ -461,13 +484,11 @@ export function TypedUnitForm<T>({ title, children, removable = true, removalNot
   // The latest unit facts, for the change listener the form instance holds.
   const current = useRef(unit);
   current.current = unit;
-  const submitted = useRef(false);
   const form = useForm({
     defaultValues: unit.displayed,
     onSubmit: () => {
       const owner = current.current;
       if (!owner.draft || !owner.admitted || owner.busy || owner.awaitingObservation) return;
-      submitted.current = true;
       owner.submit();
     },
     listeners: {
@@ -484,12 +505,6 @@ export function TypedUnitForm<T>({ title, children, removable = true, removalNot
       },
     },
   }) as TypedUnitForm<T>;
-  useEffect(() => {
-    if (submitted.current && unit.completion !== undefined) {
-      submitted.current = false;
-      onSaved?.();
-    }
-  }, [unit.completion, onSaved]);
   useEffect(() => {
     if (sameValue(reflected.current, unit.displayed)) return;
     // The actor's value moved for a reason that is not this form's editing:

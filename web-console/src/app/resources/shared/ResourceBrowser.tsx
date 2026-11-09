@@ -16,7 +16,10 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
   const tx = useTranslation();
   const skills = useSkillCatalog(client, source, true);
   const skillsByName = new Map(skills?.skills.map(skill => [skill.catalog.name, skill]));
-  const skillNames = skills?.skills.filter(skill => !skill.disable_model_invocation).map(skill => skill.catalog.name);
+  // Only a complete, successful discovery can freeze the dynamic all policy.
+  // Loading and failed pagination are unavailable evidence, never an empty list.
+  const skillNames = skills && skills.error === undefined
+    ? skills.skills.filter(skill => !skill.disable_model_invocation).map(skill => skill.catalog.name) : undefined;
   const entries = extensionEntries(source, scope, 'skill').map(entry => ({
     ...entry,
     description: skillsByName.get(entry.name)?.catalog.description ?? '',

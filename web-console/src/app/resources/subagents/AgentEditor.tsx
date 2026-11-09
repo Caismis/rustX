@@ -36,6 +36,7 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
   const creating = name === undefined;
   const current = source.agents.find(agent => agent.scope === scope && agent.name === name);
   const unit = useUnitEditing<AgentDraft>({
+    onSaved: onClose,
     draftKey: creating ? 'create-subagent' : undefined,
     authoredPresent: current !== undefined,
     authored: current?.source.authored ?? undefined,
@@ -49,13 +50,6 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
   const form = useRef<HTMLFormElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
-  const submitted = useRef(false);
-  useEffect(() => {
-    if (submitted.current && unit.completion !== undefined) {
-      submitted.current = false;
-      onClose();
-    }
-  }, [unit.completion, onClose]);
 
   const close = () => { unit.discard(); onClose(); };
   const value = unit.displayed;
@@ -98,7 +92,6 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
         onSubmit={event => {
           event.preventDefault();
           if (!save) return;
-          submitted.current = true;
           if (unit.draft) unit.submit();
           else unit.apply(value);
         }}>
@@ -187,7 +180,7 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
             confirm={tx(restoring ? 'settings:bridge.use-global-default-value' : 'settings:bridge.remove-value', { p0: formName })}
             description={tx(restoring ? 'settings:forms.restore-help' : 'resources:subagents.delete-help')}
             settle={form} tone={restoring ? 'restore' : 'destructive'} disabled={!canSubmit}
-            onConfirm={() => { if (canSubmit) { submitted.current = true; unit.submit(true); } }} /></span>}
+            onConfirm={() => { if (canSubmit) unit.submit(true); }} /></span>}
           <div className={css.saveActions}>
             {unit.reviewNeeded && <Button size="sm" disabled={!editable || busy} onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
             <Button variant="outline" size="sm" disabled={busy} onClick={close}>{tx('resources:cancel')}</Button>

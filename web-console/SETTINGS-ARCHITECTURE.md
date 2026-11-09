@@ -251,6 +251,11 @@ records the settled submission token and its draft generation; shared
 no remaining edit intent. The target retains that proof when the unit retires.
 Typed forms, Agent and MCP editors consume that same completion contract, so
 late settlement of an older submission cannot close a newer draft.
+The shared editing bridge records the exact identity/token only after the target
+accepts this flow's submission. Its `onSaved` callback consumes only that matching
+completion, never a historical outcome found by the currently entered name.
+Changing identity/authority, discarding or starting a new editor clears the
+waiting relation. Consumers keep no independent submitted boolean.
 
 A clean Remove is exactly `intent.clean` + `base.pinned`: delete intent pins the
 reviewed revision without manufacturing a fake value draft. A late

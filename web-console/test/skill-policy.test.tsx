@@ -1,15 +1,21 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 import { chooseOption, openResourceModule, settingsReady, SettingsSurface } from './settings-harness';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
+import type { MethodResult } from '../../protocol/app-server/v77';
 
 afterEach(cleanup);
 const writes = (subject: ReturnType<typeof cfg3Client>) => subject.request.mock.calls.flatMap(([op]) => op.method === 'configuration/sourceWrite' ? [op.params] : []);
 
-async function skills(workspace = false) {
+type SkillsPage = Extract<MethodResult, { type: 'skills' }>;
+async function skills(workspace = false, options: {
+  catalog?: (offset: number) => Promise<SkillsPage>;
+  selection?: 'all' | string[]; workspaceSelection?: 'all' | string[];
+} = {}) {
   let version = 1;
   const subject = cfg3Client(async (op, source) => {
+    if (op.method === 'skills/list' && options.catalog) return options.catalog(op.params.offset ?? 0);
     if (op.method === 'configuration/sourcesRead') {
       const authored = op.params.target.kind === 'workspace' ? source.workspace?.authored?.agent?.skills : undefined;
       source.resolved = { agent: { skills: authored ?? source.user.authored?.agent?.skills ?? 'all' } };
@@ -23,7 +29,8 @@ async function skills(workspace = false) {
     document.revision = `${op.params.target.kind}-${++version}`;
     return { type: 'sources_written', revision: document.revision, configuration_revision: null };
   });
-  subject.source.user.authored!.agent = { skills: 'all' };
+  subject.source.user.authored!.agent = { skills: options.selection ?? 'all' };
+  if (options.workspaceSelection !== undefined) subject.source.workspace!.authored!.agent = { skills: options.workspaceSelection };
   subject.source.prospective_resources = { ...subject.effective.resources, definitions: ['a', 'b'].map(name => ({
     family: 'skill', name, valid: true, location: { scope: 'user', path: `/skills/${name}/SKILL.md` },
   })) };
@@ -36,6 +43,59 @@ async function skills(workspace = false) {
 const toggle = (name: string) => within(screen.getByRole('listitem', { name })).getByRole('switch');
 const policy = () => screen.getByRole('button', { name: /Skill access$/ });
 async function settled() { await waitFor(() => expect((policy() as HTMLButtonElement).disabled).toBe(false)); }
+
+function catalogPage(names: string[], next_offset: number | null = null): SkillsPage {
+  return { type: 'skills', page: { revision: 'catalog-1', next_offset, diagnostics: [], diagnostics_truncated: false,
+    data: names.map(name => ({ catalog: { name, description: `Skill ${name}`, location: `/skills/${name}/SKILL.md` },
+      provenance: { name, source: 'user', location: `/skills/${name}/SKILL.md`, shadowed: [] },
+      metadata_revision: 'skill-1', disable_model_invocation: false })) } };
+}
+
+it.each(['loading', 'failed', 'page-failed'] as const)('cannot freeze all from a %s catalog, while explicit None stays available', async state => {
+  let release!: (value: SkillsPage) => void;
+  const held = new Promise<SkillsPage>(resolve => { release = resolve; });
+  const subject = await skills(false, { catalog: async offset => {
+    if (state === 'loading') return held;
+    if (state === 'page-failed' && offset === 0) return catalogPage(['a'], 32);
+    throw new Error('Catalog unavailable');
+  } });
+  if (state !== 'loading') await screen.findByText(/Catalog unavailable/);
+  fireEvent.click(policy());
+  const selected = await screen.findByRole('option', { name: 'Selected skills' });
+  expect(selected.getAttribute('aria-disabled')).toBe('true');
+  fireEvent.click(selected);
+  expect(writes(subject)).toHaveLength(0);
+  expect(subject.source.user.authored!.agent!.skills).toBe('all');
+  expect(screen.getByRole('option', { name: 'All skills, including newly discovered' }).getAttribute('aria-disabled')).not.toBe('true');
+  fireEvent.click(screen.getByRole('option', { name: 'None' }));
+  await waitFor(() => expect(writes(subject)).toHaveLength(1));
+  expect(writes(subject)[0].mutation).toMatchObject({ mutation: { authored: [] } });
+  if (state === 'loading') await act(async () => release(catalogPage(['a', 'b'])));
+  expect(subject.request.mock.calls.filter(([op]) => op.method === 'skills/list').length).toBeGreaterThanOrEqual(state === 'page-failed' ? 2 : 1);
+});
+
+it.each([{ names: ['a', 'b'] }, { names: [] }])('freezes all only from a complete successful catalog $names', async ({ names }) => {
+  const subject = await skills(false, { catalog: async () => catalogPage(names) });
+  await chooseOption('Skill access', 'Selected skills');
+  await waitFor(() => expect(writes(subject)).toHaveLength(1));
+  expect(writes(subject)[0].mutation).toMatchObject({ mutation: { authored: names } });
+});
+
+it('can author an inherited exact selection when discovery fails', async () => {
+  const subject = await skills(true, { selection: ['unlisted'], catalog: async () => { throw new Error('Catalog unavailable'); } });
+  await screen.findByText(/Catalog unavailable/);
+  await chooseOption('Skill access', 'Selected skills');
+  await waitFor(() => expect(writes(subject)).toHaveLength(1));
+  expect(writes(subject)[0].mutation).toMatchObject({ mutation: { authored: ['unlisted'] } });
+});
+
+it('can restore Workspace inheritance while discovery is unavailable', async () => {
+  const subject = await skills(true, { workspaceSelection: 'all', catalog: async () => { throw new Error('Catalog unavailable'); } });
+  await screen.findByText(/Catalog unavailable/);
+  await chooseOption('Skill access', 'Use global settings');
+  await waitFor(() => expect(writes(subject)).toHaveLength(1));
+  expect(writes(subject)[0].mutation).toMatchObject({ mutation: { authored: null } });
+});
 
 it('restores dynamic all after exact toggles and enables skills discovered afterwards', async () => {
   const subject = await skills();
