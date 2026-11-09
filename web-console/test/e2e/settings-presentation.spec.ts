@@ -124,6 +124,12 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
   const instructions = settings.getByRole('form', { name: 'Instructions' });
   await expect(instructions.getByRole('button', { name: 'Configuration details', exact: true })).toHaveCount(0);
   await expect(instructions).toHaveAttribute('data-authored', 'absent');
+  await expect(settings.getByRole('button', { name: /^Author (Instructions|Project guidance)$/ })).toHaveCount(0);
+  const save = instructions.getByRole('button', { name: 'Save Instructions', exact: true });
+  await expect(save).toBeDisabled();
+  await instructions.getByRole('textbox', { name: 'Instructions', exact: true }).fill('Review the changes.');
+  await expect(save).toBeEnabled();
+  await instructions.getByRole('button', { name: 'Discard', exact: true }).click();
   const unit = await instructions.evaluate(el => {
     const style = getComputedStyle(el);
     return { height: el.getBoundingClientRect().height, padding: `${style.paddingTop} ${style.paddingLeft}`, radius: style.borderTopLeftRadius };

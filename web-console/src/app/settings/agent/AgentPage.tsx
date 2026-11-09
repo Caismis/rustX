@@ -13,13 +13,13 @@ export function AgentPage({ document, revision }: { document: RuntimeLayer; revi
   return <section aria-label={tx('settings:agent-page.agent')}>
     <h3>{tx('settings:agent-page.agent')}</h3>
 
-    <UnitForm<string> title={instructions} authored={document.agent?.instructions ?? undefined} blank="" revision={revision}
+    <UnitForm<string> title={instructions} authored={document.agent?.instructions ?? undefined} blank="" revision={revision} allowUnchangedDraft={false}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'instructions', authored } })}>
       {(value, change) => <textarea aria-label={instructions} value={value} onChange={event => change(event.target.value)} />}
     </UnitForm>
 
     <UnitForm<AgentProjectInstructionsDocument> title={tx('settings:agent-page.project-guidance')} authored={document.agent?.agents_md ?? undefined}
-      blank={{}} revision={revision} mutation={authored => ({ kind: 'config', mutation: { unit: 'project_guidance', authored } })}>
+      blank={{}} revision={revision} allowUnchangedDraft={false} mutation={authored => ({ kind: 'config', mutation: { unit: 'project_guidance', authored } })}>
       {(value, change) => <>
         <div className={css.guidanceRow}>
           <p className={settings.hint}>{tx('settings:agent-page.automatic-guidance-description')}</p>

@@ -289,9 +289,9 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
  *
  * The frame renders the actions; it never owns them. Every one of them is a
  * message to the unit's transaction actor. */
-function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice, children, presentation, onCancel, onSubmit }: {
+function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice, allowUnchangedDraft = true, children, presentation, onCancel, onSubmit }: {
   title: string; unit: UnitEditing<T>; redacted?: boolean; removable: boolean;
-  removalNotice?: ReactNode; children: ReactNode;
+  removalNotice?: ReactNode; allowUnchangedDraft?: boolean; children: ReactNode;
   presentation?: 'resource' | 'dialog'; onCancel?: () => void;
   onSubmit?: () => void;
 }) {
@@ -362,7 +362,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
           aria-label={`${tx('settings:bridge.override')} ${title} ${tx('settings:bridge.in-this-workspace')}`}
           title={tx('settings:bridge.begin-a-workspace-definition-of-value-from-the-inherited-one-not', { p0: title })}
           disabled={unit.awaitingObservation} onClick={unit.override}>{tx('settings:forms.customize')}</Button>}
-        {unit.configUnit && !unit.authoredPresent && !unit.intent && !unit.overriding && (!presentation || unit.inheritance) && <Button type="button" disabled={unit.awaitingObservation}
+        {allowUnchangedDraft && unit.configUnit && !unit.authoredPresent && !unit.intent && !unit.overriding && (!presentation || unit.inheritance) && <Button type="button" disabled={unit.awaitingObservation}
           aria-label={`${workspace ? tx('settings:bridge.override') : tx('settings:bridge.author')} ${title}`}
           title={workspace ? tx('settings:bridge.author-this-unit-in-this-workspace-nothing-is-written-until-you') : tx('settings:bridge.author-this-unit-in-this-source-nothing-is-written-until-you-sav')}
           onClick={() => unit.edit(unit.displayed)}>{tx('settings:forms.customize')}</Button>}
@@ -402,12 +402,12 @@ export function UnitOutcomeNotice({ title, outcome }: { title: string; outcome: 
  *
  * Used where the unit is a single scalar or a small closed choice, so a typed
  * form layer would add mechanics without removing any. */
-export function UnitForm<T>({ title, children, removable = true, removalNotice, ...options }: UnitOptions<T> & {
+export function UnitForm<T>({ title, children, removable = true, removalNotice, allowUnchangedDraft = true, ...options }: UnitOptions<T> & {
   title: string; children: (value: T, change: (value: T) => void) => ReactNode;
-  removable?: boolean; removalNotice?: ReactNode;
+  removable?: boolean; removalNotice?: ReactNode; allowUnchangedDraft?: boolean;
 }) {
   const unit = useUnitEditing(options);
-  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice}>
+  return <UnitShell title={title} unit={unit} redacted={options.redacted} removable={removable} removalNotice={removalNotice} allowUnchangedDraft={allowUnchangedDraft}>
     {children(unit.displayed, unit.edit)}
   </UnitShell>;
 }
