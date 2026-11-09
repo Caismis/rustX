@@ -601,6 +601,14 @@ impl core::fmt::Debug for RuntimeClientHost {
 }
 
 impl RuntimeClientHost {
+    #[cfg(feature = "issue-387-profile")]
+    pub(crate) fn retention_profile(&self) -> serde_json::Value {
+        self.inner
+            .lock_published_state()
+            .projection
+            .retention_profile()
+    }
+
     pub(crate) fn install_interaction_lifecycle(&self, sink: Arc<dyn InteractionLifecycleSink>) {
         assert!(
             self.inner.interaction_lifecycle.set(sink).is_ok(),

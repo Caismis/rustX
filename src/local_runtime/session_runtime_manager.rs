@@ -26,6 +26,8 @@ mod configuration;
 mod drain;
 mod lifecycle;
 mod model_selection;
+#[cfg(feature = "issue-387-profile")]
+mod retention_profile;
 mod schedule;
 mod schedule_catalog;
 mod schedule_driver;
@@ -667,6 +669,8 @@ impl SessionRuntimeManager {
     /// # Panics
     /// Panics if an internal ownership mutex is poisoned.
     pub fn diagnostics(&self) -> RuntimeResidencyDiagnostics {
+        #[cfg(feature = "issue-387-profile")]
+        let mut retention = retention_profile::Sample::requested();
         let (mut snapshot, candidates) = {
             let state = self.registry.0.lock().expect("registry mutex");
             let candidates: Vec<_> = state
@@ -711,6 +715,8 @@ impl SessionRuntimeManager {
         // hold the process admission lock or become admission authority.
         let now = self.clock.now_millis();
         for (session_id, conversation_id, residency, resident) in candidates {
+            #[cfg(feature = "issue-387-profile")]
+            retention.capture(&conversation_id, resident.as_ref());
             match residency {
                 ResidencyState::Loading => snapshot.loading += 1,
                 ResidencyState::Loaded => snapshot.loaded += 1,
@@ -759,6 +765,8 @@ impl SessionRuntimeManager {
         snapshot
             .sessions
             .sort_by(|a, b| a.session_id.cmp(&b.session_id));
+        #[cfg(feature = "issue-387-profile")]
+        retention.finish();
         snapshot
     }
     #[must_use]
