@@ -86,11 +86,7 @@ impl Census {
             size_of::<crate::observation::content::ContentRef>() + ARC_HEADER,
         );
         for path in std::iter::once(&binding.path).chain(binding.source_path.iter()) {
-            if self.owner(
-                "binding_path_arrays",
-                path.as_ptr() as usize,
-                path.len() * size_of::<String>() + ARC_HEADER,
-            ) {
+            if self.vector("binding_path_vectors", path) {
                 self.bytes(
                     "binding_path_strings",
                     path.iter().map(String::capacity).sum(),
@@ -306,7 +302,7 @@ mod tests {
     fn binding() -> ContentBinding {
         ContentBinding {
             source_path: None,
-            path: vec!["messages".into(), "0".into(), "display".into()].into(),
+            path: vec!["messages".into(), "0".into(), "display".into()],
             content_ref: crate::observation::content::ContentRef::configuration_instructions(
                 crate::runtime::identity::ConversationId::generate(),
                 1,
@@ -329,7 +325,7 @@ mod tests {
         assert_eq!(census.allocations["binding_fragments"].owners, 1);
         census.binding(&right);
         assert_eq!(census.allocations["binding_fragments"].owners, 2);
-        assert_eq!(census.allocations["binding_path_arrays"].owners, 1);
+        assert_eq!(census.allocations["binding_path_vectors"].owners, 2);
         assert_eq!(census.allocations["content_ref_owners"].owners, 1);
     }
 

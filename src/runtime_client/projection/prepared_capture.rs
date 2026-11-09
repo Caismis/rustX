@@ -214,7 +214,6 @@ impl PreparedBindingHead {
                 .values
                 .iter()
                 .map(|value| {
-                    let mut value = value.clone();
                     let path = match prefix {
                         BindingPrefix::Message(index) => {
                             let skip = usize::from(
@@ -229,8 +228,13 @@ impl PreparedBindingHead {
                             .chain(value.path.iter().cloned())
                             .collect(),
                     };
-                    value.path = path;
-                    value.into()
+                    crate::observation::cut::ContentBinding {
+                        source_path: value.source_path.clone(),
+                        path,
+                        content_ref: Arc::clone(&value.content_ref),
+                        deferred: value.deferred,
+                    }
+                    .into()
                 })
                 .collect(),
         );

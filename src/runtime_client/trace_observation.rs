@@ -187,9 +187,7 @@ pub(crate) fn page(
                     .content
                     .into_iter()
                     .map(|mut binding| {
-                        binding.path = std::iter::once("request".into())
-                            .chain(binding.path.iter().cloned())
-                            .collect();
+                        binding.path.insert(0, "request".into());
                         binding
                     })
                     .collect(),

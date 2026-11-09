@@ -105,10 +105,11 @@ impl Display {
                             ordinal.to_string(),
                             "text".into(),
                         ];
-                        let value = if let Some(binding) =
-                            checkpoint.content.iter().find(|binding| {
-                                binding.path.as_ref() == path.as_slice() && binding.deferred
-                            }) {
+                        let value = if let Some(binding) = checkpoint
+                            .content
+                            .iter()
+                            .find(|binding| binding.path == path && binding.deferred)
+                        {
                             String::from_utf8(read_content(attachment, &binding.content_ref, 0))
                                 .unwrap()
                         } else {
@@ -282,7 +283,7 @@ fn hydrate_display_value(
             }
         };
         let mut target = &mut value;
-        for component in binding.path.iter() {
+        for component in &binding.path {
             target = if target.is_array() {
                 target.get_mut(component.parse::<usize>().unwrap()).unwrap()
             } else {

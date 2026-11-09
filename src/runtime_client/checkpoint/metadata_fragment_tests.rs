@@ -6,8 +6,8 @@ use crate::runtime_client::event::RuntimeClientEvent;
 
 fn binding() -> ContentBinding {
     ContentBinding {
-        source_path: Some(vec!["text\"\\\n水".into()].into()),
-        path: vec!["messages".into(), "0".into(), "content".into(), "0".into()].into(),
+        source_path: Some(vec!["text\"\\\n水".into()]),
+        path: vec!["messages".into(), "0".into(), "content".into(), "0".into()],
         content_ref: ContentRef {
             conversation_id: ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
             source: ContentSource::CanonicalMessageBlock {
@@ -110,7 +110,7 @@ fn metadata_array_cache_requires_ordered_owners_and_preserves_stable_duplicates(
     let mut value = metadata();
     for (path, revision) in [("z", 1), ("a", 2), ("a", 3)] {
         let mut content = binding();
-        content.path = vec![path.into()].into();
+        content.path = vec![path.into()];
         std::sync::Arc::make_mut(&mut content.content_ref).content_revision = revision;
         Arc::make_mut(&mut value.content).push(content.into());
     }
@@ -214,7 +214,7 @@ fn array_metadata(keys: &[usize]) -> ProjectionMetadata {
     let mut value = metadata();
     for (index, key) in keys.iter().enumerate() {
         let mut content = binding();
-        content.path = vec![format!("key-{key:03}")].into();
+        content.path = vec![format!("key-{key:03}")];
         std::sync::Arc::make_mut(&mut content.content_ref).content_revision =
             u64::try_from(index).unwrap() + 1;
         Arc::make_mut(&mut value.content).push(content.into());
@@ -393,7 +393,7 @@ fn immutable_metadata_fragments_preserve_schema_wire_and_exact_budget_boundaries
         let mut value = metadata();
         for index in 0..count {
             let mut content = binding();
-            content.source_path = (index % 2 == 0).then(|| vec!["text\"\\\n水".into()].into());
+            content.source_path = (index % 2 == 0).then(|| vec!["text\"\\\n水".into()]);
             content.path = content
                 .path
                 .iter()
@@ -515,13 +515,13 @@ fn metadata_binding_merge_reuses_only_ordered_owners_and_keeps_duplicate_priorit
     use metadata_fragment::{BindingFragments, MetadataArrays, take_evidence_work};
     let cache = MetadataArrays::default();
     let mut first = binding();
-    first.path = vec!["existing".into()].into();
+    first.path = vec!["existing".into()];
     std::sync::Arc::make_mut(&mut first.content_ref).content_revision = 90;
     let mut duplicate = first.clone();
     std::sync::Arc::make_mut(&mut duplicate.content_ref).content_revision = 91;
     let prefix: Vec<MetadataFragment<_>> = vec![first.into(), duplicate.into()];
     let mut a = binding();
-    a.path = vec!["new".into()].into();
+    a.path = vec!["new".into()];
     std::sync::Arc::make_mut(&mut a.content_ref).content_revision = 1;
     let mut b = a.clone();
     std::sync::Arc::make_mut(&mut b.content_ref).content_revision = 2;
@@ -608,7 +608,7 @@ fn metadata_fragment_mutation_invalidates_size_and_resolution_without_changing_o
 }
 
 #[test]
-fn shared_binding_parts_preserve_plain_and_structural_wire_bytes() {
+fn shared_content_reference_preserves_plain_and_structural_wire_bytes() {
     #[derive(Serialize, schemars::JsonSchema)]
     struct OwnedBinding {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -619,10 +619,10 @@ fn shared_binding_parts_preserve_plain_and_structural_wire_bytes() {
     }
     for source_path in [None, Some(Vec::new()), Some(vec!["水\\\"\n".into()])] {
         let mut shared = binding();
-        shared.source_path = source_path.clone().map(Into::into);
+        shared.source_path.clone_from(&source_path);
         let owned = OwnedBinding {
             source_path,
-            path: shared.path.to_vec(),
+            path: shared.path.clone(),
             content_ref: shared.content_ref.as_ref().clone(),
             deferred: shared.deferred,
         };
@@ -650,17 +650,14 @@ fn resolving_and_editing_a_binding_keep_previous_parts_and_certificates_immutabl
     reference.content_revision += 1;
     let reference = Arc::new(reference);
     let mut resolved = original.resolve(&reference);
-    assert!(Arc::ptr_eq(&original.path, &resolved.path));
-    assert!(Arc::ptr_eq(
-        original.source_path.as_ref().unwrap(),
-        resolved.source_path.as_ref().unwrap()
-    ));
+    assert_eq!(original.path, resolved.path);
+    assert_eq!(original.source_path, resolved.source_path);
     assert!(!Arc::ptr_eq(&original.content_ref, &resolved.content_ref));
     assert!(Arc::ptr_eq(&reference, &resolved.content_ref));
     assert_eq!(encoded(&original).unwrap(), old_wire);
     let resolved_wire = encoded(&resolved).unwrap();
     let old_resolved = resolved.clone();
-    Arc::make_mut(&mut resolved.path)[0] = "changed".into();
+    resolved.path[0] = "changed".into();
     assert_eq!(encoded(&original).unwrap(), old_wire);
     assert_eq!(original.size(), old_size);
     assert_eq!(encoded(&old_resolved).unwrap(), resolved_wire);

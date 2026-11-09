@@ -175,12 +175,12 @@ impl MetadataArrays {
         let prefix = output.len();
         let mut paths = output
             .iter()
-            .map(|binding| binding.path.as_ref())
+            .map(|binding| binding.path.as_slice())
             .collect::<std::collections::BTreeSet<_>>();
         let mut appended = Vec::new();
         for head in &heads {
             for binding in head.iter() {
-                if paths.insert(binding.path.as_ref()) {
+                if paths.insert(binding.path.as_slice()) {
                     appended.push(binding.clone());
                 }
             }

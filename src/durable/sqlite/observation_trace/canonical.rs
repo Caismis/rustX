@@ -50,7 +50,7 @@ fn binding(
     Ok(TraceFieldSource::Content {
         field,
         binding: crate::observation::cut::ContentBinding {
-            path: Vec::new().into(),
+            path: Vec::new(),
             source_path: Some(path.iter().map(|part| (*part).into()).collect()),
             content_ref: reference.into(),
             deferred: true,

@@ -111,8 +111,8 @@ fn empty_draft() -> PublicationDraft {
 
 fn binding(draft: &PublicationDraft, message: &MessageBlock, path: Vec<String>) -> ContentBinding {
     ContentBinding {
-        source_path: Some(vec!["text".into()].into()),
-        path: path.into(),
+        source_path: Some(vec!["text".into()]),
+        path,
         content_ref: ContentRef {
             conversation_id: draft.seed.snapshot.conversation_id.clone(),
             source: ContentSource::CanonicalMessageBlock {
@@ -656,7 +656,7 @@ fn native_metadata_heads_reuse_fragments_across_publication_and_keep_old_paths()
     expected.path = expected.path[1..].into();
     let mut path = vec!["messages".into(), "7".into()];
     path.extend(expected.path.iter().cloned());
-    expected.path = path.into();
+    expected.path = path;
     assert_eq!(
         serde_json::to_vec(moved.as_ref()).unwrap(),
         serde_json::to_vec(&vec![expected]).unwrap()
@@ -684,7 +684,7 @@ fn indexed_metadata_merge_preserves_existing_duplicates_and_first_source_path() 
         vec!["content".into(), "0".into(), "text".into()],
     );
     let mut second = raw.clone();
-    std::sync::Arc::make_mut(&mut second.path)[1] = "1".into();
+    second.path[1] = "1".into();
     std::sync::Arc::make_mut(&mut second.content_ref).content_revision = 2;
     let mut duplicate = second.clone();
     std::sync::Arc::make_mut(&mut duplicate.content_ref).content_revision = 3;

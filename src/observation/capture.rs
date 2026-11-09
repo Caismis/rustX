@@ -632,7 +632,7 @@ impl Capture {
         self.content.push(
             ContentBinding {
                 source_path: None,
-                path: path.into(),
+                path,
                 deferred: true,
                 content_ref: ContentRef {
                     conversation_id: conversation.clone(),
@@ -749,7 +749,7 @@ impl Capture {
             );
             self.content.push(ContentBinding {
                 source_path: None,
-                path: field.into(),
+                path: field,
                 deferred: true,
                 content_ref: ContentRef {
                     conversation_id: conversation.clone(),
