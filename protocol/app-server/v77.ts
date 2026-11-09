@@ -2232,6 +2232,10 @@ export type ConfigMutation =
     }
   | {
       id: string;
+      unit: 'restore_provider';
+    }
+  | {
+      id: string;
       authored?: Model | null;
       unit: 'model';
     }

@@ -318,3 +318,104 @@ test('deleting the default and then the last model preserves old conversations a
     throw error;
   } finally { await native.shutdown(); await fixture.stop(false); }
 });
+
+test('deleting a provider removes its models and keeps the workspace and old conversation usable', async ({page}) => {
+  const fixture = await startDogfood('web_model_deletion');
+  const wire = await wireProbe(page);
+  const native = await AppServerHost.connectRemote({endpoint:fixture.endpoint, token:fixture.token});
+  try {
+    appendFileSync(fixture.settings, `
+[agent.model.summary_model]
+mode = "explicit"
+model = "fixture/console-model"
+
+[agent.model.title_model]
+mode = "explicit"
+model = "fixture/second-model"
+
+[providers.alternative]
+protocol = "openai_chat_completions"
+base_url = "${fixture.providerUrl}/v1"
+api_key = "fixture-only"
+
+[models."alternative/replacement"]
+provider = "alternative"
+id = "second-model"
+context_window = 128000
+max_output_tokens = 4096
+capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
+compat = { chat_reasoning_replay = "omit" }
+`);
+    appendFileSync(`${fixture.workspaceA}/rustx.toml`, `
+[models."workspace-alias"]
+provider = "fixture"
+id = "console-model"
+context_window = 128000
+max_output_tokens = 4096
+capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
+compat = { chat_reasoning_replay = "omit" }
+`);
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    const oldId = await openEmptySession(page, fixture, 'Workspace A');
+    const input = page.getByRole('textbox', {name:'Message', exact:true});
+    const send = page.getByRole('button', {name:'Send', exact:true});
+    const trigger = page.locator('[data-model-select]');
+    const history = page.locator('[data-chat-group-part="response"]').getByText('Existing conversation history.', {exact:true});
+    await input.fill('Before model deletion');
+    await send.click();
+    await expect(history).toBeVisible();
+    await openSettingsPage(page, 'Models');
+    const provider = page.getByRole('row', {name:'fixture', exact:true});
+    await provider.click();
+    await expect(page.getByRole('row', {name:'fixture/console-model', exact:true})).toBeVisible();
+    await expect(page.getByRole('row', {name:'fixture/second-model', exact:true})).toBeVisible();
+    await page.getByRole('button', {name:'Provider actions', exact:true}).click();
+    await page.getByRole('menuitem', {name:'Delete', exact:true}).click();
+    const confirm = page.getByRole('alertdialog', {name:'Remove Provider fixture from User configuration?', exact:true});
+    await expect(confirm).toContainText('This also removes this provider’s models');
+    await confirm.getByRole('button', {name:'Remove Provider fixture', exact:true}).click();
+    await expect(provider).toHaveCount(0);
+    const config = readFileSync(fixture.settings, 'utf8');
+    expect(config).not.toContain('[providers.fixture]');
+    expect(config).not.toContain('[models."fixture/');
+    expect(config).toContain('[providers.alternative]');
+    expect(readFileSync(`${fixture.workspaceA}/rustx.toml`, 'utf8')).toContain('workspace-alias');
+
+    await chooseWorkspace(page, 'Workspace A');
+    await expect(trigger).toContainText('alternative/replacement');
+    await input.fill('Start with the replacement');
+    wire.holdNext('thread/start');
+    await send.click();
+    await expect.poll(() => wire.held()).toBe(1);
+    const started = wire.responses.find(response => response.method === 'thread/start')!.result.session;
+    await native.renameSession(started.id, 'New session after provider deletion');
+    wire.releaseHeld();
+    await fixture.gate('new-conversation-ready');
+    await fixture.release('new-conversation-ready');
+    await expect(page.getByText('New conversation uses the replacement.', {exact:true})).toBeVisible();
+
+    await page.locator(`button[data-session-id="${oldId}"]`).click();
+    await expect(history).toBeVisible();
+    await expect(trigger).toContainText('fixture/console-model');
+    await expect(page.getByText('This conversation’s model is unavailable. Choose another model to continue.', {exact:true})).toBeVisible();
+    await trigger.click();
+    await expect(page.locator('[data-model-menu]')).toBeVisible();
+    const drill = page.getByRole('menuitem', {name:'Model', exact:true});
+    if (await drill.isVisible()) await drill.click();
+    await expect(page.getByRole('menuitemradio', {name:'workspace-alias', exact:true})).toHaveCount(0);
+    const replacement = page.getByRole('menuitemradio', {name:'alternative/replacement', exact:true});
+    await expect(replacement).toBeEnabled();
+    await replacement.click();
+    await expect(trigger).toContainText('alternative/replacement');
+    await input.fill('Continue the old conversation');
+    await send.click();
+    await expect(page.getByText('Old conversation continues after reselecting.', {exact:true})).toBeVisible();
+    const selection = (await native.readSettings(oldId)).settings.model;
+    expect(selection).toMatchObject({summaryModel:{mode:'session'}, titleModel:{mode:'session'}});
+  } catch (error) {
+    await test.info().attach('native-diagnostics', {body:JSON.stringify(fixture.diagnostics()),contentType:'application/json'});
+    throw error;
+  } finally { await native.shutdown(); await fixture.stop(false); }
+});

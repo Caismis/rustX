@@ -20,6 +20,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
 }) {
   const tx = useTranslation();
   const actor = useSettingsActor();
+  const restores = scope === 'workspace' && !!inherited;
   const unit = useUnitEditing<ProviderWrite>({
     authored: authored && { display_name: authored.display_name, hidden: authored.hidden, icon: authored.icon, protocol: authored.protocol, base_url: authored.base_url, credential: { kind: 'retain' } },
     blank: {
@@ -29,7 +30,8 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
       credential: { kind: 'literal', value: '' },
     },
     revision,
-    mutation: value => providerMutation(id, value),
+    draftKey: JSON.stringify(providerMutation(id, null)),
+    mutation: value => providerMutation(id, value, restores),
   });
   const identity = unit.identity;
   useEffect(() => () => flushProviderSave(actor, identity), [actor, identity]);
@@ -62,8 +64,6 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
   const getKey = providerTemplates.find(item => item.url === value.base_url.replace(/\/$/, ''))?.keyUrl;
   const locked = unit.busy || unit.awaitingObservation;
   const creating = !authored && !inherited;
-  const restores = scope === 'workspace' && !!inherited;
-  const canRemove = !!authored && (restores || !hasModels);
   const canDiscardCreation = creating && unit.intent && !hasModels;
   const { endpointError, credentialError } = connectionErrors(value);
   const edit = (next: ProviderWrite, trigger?: 'idle' | 'blur' | 'now') => {
@@ -137,7 +137,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
         label={tx('settings:bridge.remove-value', { p0: title })}
         title={restores ? tx('settings:bridge.use-the-global-default-for-value', { p0: title }) : tx('settings:bridge.remove-value-from-value-configuration', { p0: title, p1: tx(scope === 'workspace' ? 'settings:extension-detail.workspace' : 'settings:extension-detail.user') })}
         confirm={restores ? tx('settings:bridge.use-global-default-value', { p0: title }) : tx('settings:bridge.remove-value', { p0: title })}
-        description={tx(restores ? 'settings:forms.restore-help' : 'settings:forms.delete-help')}
+        description={tx(restores ? 'settings:forms.restore-help' : hasModels ? 'settings:models.delete-provider-and-models' : 'settings:forms.delete-help')}
         tone={restores ? 'restore' : 'destructive'} settle={form} onConfirm={() => {
           if (!unit.admitted || locked) return;
           cancelProviderSave(actor, identity);
@@ -155,8 +155,8 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
               ...canDiscardCreation ? [{ id: 'discard-creation', label: tx('settings:copy.delete'), icon: <IconTrashOutline16/>, danger: true }] : [],
               ...unit.outcome.kind === 'rejected' && !unit.reviewNeeded && !endpointError && !credentialError
                 ? [{ id: 'retry', label: tx('settings:models.retry-provider-save') }] : [],
-              ...authored ? [{ id: 'delete', label: tx(restores ? 'settings:models.restore' : canRemove ? 'settings:copy.delete' : 'settings:models.remove-models-first'),
-                icon: <IconTrashOutline16/>, danger: !restores, disabled: !canRemove || !unit.admitted }] : [],
+              ...authored ? [{ id: 'delete', label: tx(restores ? 'settings:models.restore' : 'settings:copy.delete'),
+                icon: <IconTrashOutline16/>, danger: !restores, disabled: !unit.admitted }] : [],
             ]}
           onSelect={action => {
             setMenu(false);

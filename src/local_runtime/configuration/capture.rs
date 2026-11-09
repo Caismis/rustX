@@ -426,8 +426,12 @@ impl UserConfigManager {
             );
         }
         let user_path = self.sources.config_path.clone();
-        let model_result =
-            ModelCatalog::from_authoring(super::semantics::authored_catalog(&merged));
+        let catalog = if allow_unselected {
+            super::semantics::available_catalog(&merged)
+        } else {
+            super::semantics::authored_catalog(&merged)
+        };
+        let model_result = ModelCatalog::from_authoring(catalog);
         // A semantic failure names the document that authored its field.
         let owner = |failure: &SemanticFailure| {
             // Process policy stays outside the overlay; its source contract
@@ -507,6 +511,9 @@ impl UserConfigManager {
                                 .is_ok()
                         })
                 });
+        }
+        if allow_unselected && let Some(selection) = &mut config.agent.model {
+            selection.use_available_auxiliary_models(&models, None);
         }
         let mcp = super::super::mcp_resources::load(
             &self.sources.home_directory.join("rustx/.agents"),

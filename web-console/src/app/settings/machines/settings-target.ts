@@ -1,5 +1,5 @@
 import { assign, enqueueActions, fromPromise, raise, setup, stateIn, type ActorRefFrom, type SnapshotFrom } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v77';
+import type { ConfigurationApplication, Model, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v77';
 import { isOutcomeUncertain, RpcFailure } from '../../../client/errors';
 import type { ConnectionState } from '../../../client/contracts';
 import { WorkspaceHostError } from '../../../workspaces/host';
@@ -459,15 +459,21 @@ export const settingsTargetMachine = setup({
       enqueue.assign({ observation: () => projection, readError: () => '', convergenceError: () => '', staleObservation: () => undefined });
       const settlement = context.unobservedSettlement;
       for (const unit of Object.values(context.units)) {
-        const { identity, selector } = unit.getSnapshot().context;
+        const { identity, selector, draft } = unit.getSnapshot().context;
         const revision = unitRevision(projection, selector);
         if (revision === undefined) continue;
         // Exact CAS proved the entire transition from expected to revision.
         // Only that observed commit can advance a draft of a different unit
         // in the same document, without copying or comparing secret values.
-        const previousRevision = settlement?.committed && identity !== settlement.identity
-          && revision === settlement.revision && separateUnitsInDocument(selector, settlement.selector)
-          ? settlement.expected : undefined;
+        const ownCommit = settlement?.committed && revision === settlement.revision ? settlement : undefined;
+        if (ownCommit?.selector.kind === 'config' && ownCommit.selector.removesModels
+          && selector.kind === 'config' && selector.unit === 'model' && selector.entry && draft) {
+          const before = context.observation ?? context.staleObservation;
+          const model = before?.[projection.target.kind]?.authored?.models?.[selector.entry] ?? draft.value as Model;
+          if (model.provider === ownCommit.selector.entry) enqueue.sendTo(unit, { type: 'DISCARD' });
+        }
+        const previousRevision = ownCommit && identity !== ownCommit.identity && separateUnitsInDocument(selector, ownCommit.selector)
+          ? ownCommit.expected : undefined;
         enqueue.sendTo(unit, { type: 'OBSERVED', revision, postCommit: params.postCommit, previousRevision });
       }
       // A read issued after a settlement discharges that settlement's

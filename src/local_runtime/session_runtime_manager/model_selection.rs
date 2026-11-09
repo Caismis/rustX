@@ -75,10 +75,11 @@ impl SessionRuntimeManager {
             let identity = application.view(session.as_ref()).map(|view| view.desired);
             (runtime, candidate, adopted, expected_settings, identity)
         };
-        let selection = match input {
+        let mut selection = match input {
             ModelSelectionInput::Configuration(selection) => *selection,
             ModelSelectionInput::Catalog(choice) => candidate.catalog_selection(&choice)?,
         };
+        candidate.recover_auxiliary_models(&mut selection);
         let candidate = runtime.resolve_model_selection(candidate, selection.clone())?;
         #[cfg(test)]
         owner

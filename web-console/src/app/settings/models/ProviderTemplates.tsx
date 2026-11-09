@@ -27,8 +27,8 @@ export const providerTemplates: readonly ProviderTemplate[] = [
   { name: 'Anthropic', icon: 'anthropic', protocol: 'anthropic_messages', url: 'https://api.anthropic.com/v1', keyUrl: 'https://console.anthropic.com/settings/keys' },
 ];
 
-export function providerMutation(id: string, authored: ProviderWrite | null): SourceMutation {
-  return { kind: 'config', mutation: { unit: 'provider', id, authored } };
+export function providerMutation(id: string, authored: ProviderWrite | null, restore = false): SourceMutation {
+  return { kind: 'config', mutation: restore && authored === null ? { unit: 'restore_provider', id } : { unit: 'provider', id, authored } };
 }
 
 export function ProviderNameDialog({ exists, revision, onCreate, onClose }: {

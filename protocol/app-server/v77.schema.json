@@ -38491,6 +38491,23 @@
             "id": {
               "type": "string"
             },
+            "unit": {
+              "type": "string",
+              "const": "restore_provider"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "unit",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
             "authored": {
               "anyOf": [
                 {

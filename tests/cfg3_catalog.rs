@@ -554,6 +554,95 @@ fn competing_native_writers_have_exactly_one_commit_winner() {
 }
 
 #[test]
+fn removing_a_provider_cascades_only_within_the_revision_fenced_source() {
+    use rustx::local_runtime::configuration::settings::{
+        ConfigMutation, SettingsError, SourceMutation,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let other = MODEL
+        .replace("arbitrary-name", "other-model")
+        .replace("transport", "other");
+    let other_provider = PROVIDER.replace("transport", "other");
+    let local = MODEL.replace("arbitrary-name", "workspace-alias");
+    let (host, request) = sources(
+        root.path(),
+        &format!("{PROVIDER}{MODEL}{other_provider}{other}{ROOT}"),
+        &format!("{PROVIDER}{local}"),
+    );
+    let (owner, input) = request.session_input(&host).unwrap();
+    let target = rustx_target(&input.cwd);
+    let before = owner.read_source_settings(&target).unwrap();
+    let mutation = |mutation| SourceMutation::Config { mutation };
+    owner
+        .write_source_settings(
+            &target,
+            &before.workspace.as_ref().unwrap().revision,
+            mutation(ConfigMutation::RestoreProvider {
+                id: "transport".into(),
+            }),
+        )
+        .unwrap();
+    let restored = owner.read_source_settings(&target).unwrap();
+    let workspace = restored
+        .workspace
+        .as_ref()
+        .unwrap()
+        .authored
+        .as_ref()
+        .unwrap();
+    assert!(
+        workspace
+            .providers
+            .as_ref()
+            .is_none_or(|providers| !providers.contains_key("transport"))
+    );
+    assert!(
+        workspace
+            .models
+            .as_ref()
+            .unwrap()
+            .contains_key("workspace-alias")
+    );
+    assert!(analyze(&request, &host).is_ok());
+
+    let delete = || {
+        mutation(ConfigMutation::Provider {
+            id: "transport".into(),
+            authored: None,
+        })
+    };
+    assert!(matches!(
+        owner.write_source_settings(&USER_TARGET, "stale", delete()),
+        Err(SettingsError::Conflict { .. })
+    ));
+    assert_eq!(
+        owner
+            .read_source_settings(&USER_TARGET)
+            .unwrap()
+            .user
+            .revision,
+        before.user.revision
+    );
+    owner
+        .write_source_settings(&USER_TARGET, &before.user.revision, delete())
+        .unwrap();
+    let after = owner.read_source_settings(&target).unwrap();
+    let user = after.user.authored.as_ref().unwrap();
+    assert_eq!(
+        user.providers.as_ref().unwrap().keys().collect::<Vec<_>>(),
+        ["other"]
+    );
+    assert_eq!(
+        user.models.as_ref().unwrap().keys().collect::<Vec<_>>(),
+        ["other-model"]
+    );
+    assert_eq!(
+        after.workspace.as_ref().unwrap().revision,
+        restored.workspace.as_ref().unwrap().revision
+    );
+}
+
+#[test]
 fn provider_secrets_are_not_read_back_and_cannot_be_retained_from_lower_scope() {
     use rustx::local_runtime::configuration::settings::{
         ConfigMutation, CredentialEdit, ProviderWrite, SettingsError, SourceMutation,

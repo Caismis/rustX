@@ -741,16 +741,13 @@ impl ApplicationState {
     /// commit, even in a Workspace with no Session worker to apply that edit.
     /// Only the catalog unit is published here. The captured generation still
     /// travels through the ordinary worker for existing Sessions.
-    pub(crate) fn publish_model_removal(
+    pub(crate) fn publish_model_removals(
         &mut self,
         workspace: Option<&std::path::Path>,
-        removed: &crate::model::catalog::ModelRef,
         credentials: &crate::credentials::CredentialSnapshot,
     ) {
         for (directory, available) in &mut self.available {
-            if workspace.is_some_and(|workspace| workspace != directory)
-                || available.models.model(removed).is_err()
-            {
+            if workspace.is_some_and(|workspace| workspace != directory) {
                 continue;
             }
             let Some(desired) = self
@@ -761,8 +758,11 @@ impl ApplicationState {
             else {
                 continue;
             };
-            if desired.models.model(removed).is_ok() {
-                // Removing a Workspace override can expose the User model.
+            if !available
+                .models
+                .model_refs()
+                .any(|model| desired.models.model(&model).is_err())
+            {
                 continue;
             }
             let candidate = available.clone().with_published_catalog(desired);

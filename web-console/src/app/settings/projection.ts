@@ -44,7 +44,7 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
   if (!document || mutation.kind !== 'config') return undefined;
   const unit = mutation.mutation;
   switch (unit.unit) {
-    case 'provider': return document.providers?.[unit.id];
+    case 'provider': case 'restore_provider': return document.providers?.[unit.id];
     case 'model': return document.models?.[unit.id];
     case 'root_model': return document.agent?.model;
     case 'native_tools': return document.agent?.tools?.builtin;
@@ -91,7 +91,7 @@ export function unitProvenancePath(mutation: SourceMutation): string | undefined
   if (mutation.kind === 'agent' || mutation.kind === 'repair_config' || mutation.kind === 'workflow') return undefined;
   const unit = mutation.mutation;
   switch (unit.unit) {
-    case 'provider': return `providers.${unit.id}`;
+    case 'provider': case 'restore_provider': return `providers.${unit.id}`;
     case 'model': return `models.${unit.id}`;
     case 'root_model': return 'agent.model';
     case 'native_tools': return 'agent.tools.builtin';
@@ -263,12 +263,14 @@ export function effectiveStateLabel(tx: Translate, effective: EffectiveFacts): s
  * document and unit address, enough to settle a write and identify drafts
  * of different units in the same document. */
 export type RevisionSelector =
-  | { kind: 'config'; unit?: Extract<SourceMutation, { kind: 'config' }>['mutation']['unit']; entry?: string }
+  | { kind: 'config'; unit?: Extract<SourceMutation, { kind: 'config' }>['mutation']['unit']; entry?: string; removesModels?: boolean }
   | { kind: 'mcp'; entry: string }
   | { kind: 'agent'; name: string };
 export function revisionSelector(mutation: SourceMutation): RevisionSelector {
   if (mutation.kind === 'config') {
     const config = mutation.mutation;
+    if (config.unit === 'restore_provider') return { kind: 'config', unit: 'provider', entry: config.id };
+    if (config.unit === 'provider' && config.authored === null) return { kind: 'config', unit: 'provider', entry: config.id, removesModels: true };
     return { kind: 'config', unit: config.unit, entry: 'id' in config ? config.id : 'name' in config ? config.name : undefined };
   }
   return mutation.kind === 'agent' ? { kind: 'agent', name: mutation.name }

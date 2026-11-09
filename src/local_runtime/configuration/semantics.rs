@@ -122,6 +122,18 @@ pub(in crate::local_runtime) fn authored_catalog(
     }
 }
 
+/// A model can reference a Provider owned by another source. If that Provider
+/// is removed, keep the authored model editable and omit it from live choices.
+pub(in crate::local_runtime) fn available_catalog(
+    layer: &RuntimeLayer,
+) -> crate::model::authoring::Catalog {
+    let mut catalog = authored_catalog(layer);
+    catalog
+        .models
+        .retain(|_, model| catalog.providers.contains_key(&model.provider));
+    catalog
+}
+
 /// Source-intrinsic native semantics: every constraint an authored document
 /// decides on its own (Issue #464).
 ///

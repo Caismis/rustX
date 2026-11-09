@@ -778,13 +778,14 @@ impl SessionRuntimeManager {
             use super::super::configuration::settings::{ConfigMutation, SourceMutation};
             target.validate().map_err(SourceSettingsError::Source)?;
             let mut application = owner.applications.lock();
-            let removed_model = match &mutation {
+            let removing_models = matches!(
+                &mutation,
                 SourceMutation::Config {
-                    mutation: ConfigMutation::Model { id, authored: None },
+                    mutation: ConfigMutation::Model { authored: None, .. }
+                        | ConfigMutation::Provider { authored: None, .. },
                     ..
-                } => crate::model::catalog::ModelRef::parse(id).ok(),
-                _ => None,
-            };
+                }
+            );
             let result = owner
                 .configuration
                 .write_source_settings(&target, &expected, mutation);
@@ -795,12 +796,8 @@ impl SessionRuntimeManager {
                 )
             {
                 owner.capture_source_consumers(&mut application, &target);
-                if let Some(model) = removed_model {
-                    application.publish_model_removal(
-                        target.workspace(),
-                        &model,
-                        &owner.credentials,
-                    );
+                if removing_models {
+                    application.publish_model_removals(target.workspace(), &owner.credentials);
                 }
                 owner.applications.notify(&application);
             }

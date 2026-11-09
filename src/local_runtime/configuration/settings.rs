@@ -258,6 +258,9 @@ pub enum ConfigMutation {
         id: String,
         authored: Option<ProviderWrite>,
     },
+    RestoreProvider {
+        id: String,
+    },
     Model {
         id: String,
         authored: Option<Model>,
@@ -638,7 +641,20 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
                     })
                 })
                 .transpose()?;
+            if provider.is_none()
+                && document
+                    .providers
+                    .as_ref()
+                    .is_some_and(|providers| providers.contains_key(&id))
+                && let Some(models) = &mut document.models
+            {
+                models.retain(|_, model| model.provider != id);
+            }
             identity_unit(&mut document.providers, id, provider);
+        }
+        M::RestoreProvider { id } => {
+            crate::model::catalog::ProviderId::parse(&id).map_err(|_| SettingsError::Invalid)?;
+            identity_unit(&mut document.providers, id, None);
         }
         M::Model { id, authored } => {
             crate::model::catalog::ModelRef::parse(&id).map_err(|_| SettingsError::Invalid)?;
@@ -1391,8 +1407,10 @@ impl UserConfigManager {
                     Some(mcp_candidate(original.as_deref(), id, authored)?)
                 }
                 SourceMutation::Config { mutation, .. } => {
-                    if scope == SourceScope::Workspace
-                        && matches!(mutation, ConfigMutation::AppServer { .. })
+                    if (scope == SourceScope::Workspace
+                        && matches!(mutation, ConfigMutation::AppServer { .. }))
+                        || (scope == SourceScope::User
+                            && matches!(mutation, ConfigMutation::RestoreProvider { .. }))
                     {
                         return Err(SettingsError::Invalid);
                     }

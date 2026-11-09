@@ -97,7 +97,8 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
     const entry = catalog.find(entry => entry.id === id);
     const model = entry?.authored ?? entry?.effective;
     const owner = providers.find(entry => entry.id === model?.provider);
-    return !model?.hidden && !(owner?.authored ?? owner?.effective)?.hidden;
+    const provider = owner?.authored ?? owner?.effective;
+    return !!model && !!provider && !model.hidden && !provider.hidden;
   });
   const application = observedResult(unitApplication(source.application, 'provider'));
   const closeModel = () => onFocus(selected ? { kind: 'provider', id: selected } : undefined);
