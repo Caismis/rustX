@@ -11,7 +11,7 @@ const jobStates = {
 const traceStates = {
   incomplete: 'common:state.incomplete', running: 'common:state.running', pending: 'common:state.pending',
   cancelling: 'common:state.cancelling', settling: 'common:state.settling', waiting: 'common:state.waiting',
-  completed: 'common:state.settled', failed: 'common:state.failed', cancelled: 'common:state.cancelled',
+  completed: 'common:state.settled', skipped: 'common:state.skipped', failed: 'common:state.failed', cancelled: 'common:state.cancelled',
   timed_out: 'common:state.timed_out', limited: 'common:state.limited', denied: 'common:state.denied',
   outcome_unknown: 'common:state.outcome_unknown', interrupted: 'common:state.interrupted',
 } satisfies Record<TraceState, TranslationKey>;

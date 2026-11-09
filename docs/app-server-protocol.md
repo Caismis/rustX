@@ -9,6 +9,10 @@ the Agent is idle. A skipped result is distinct from a completed checkpoint,
 and cancellation remains typed.
 The native `context_compaction_skipped` observation publishes the matching
 manual receipt and current context without a completed-compaction marker.
+Native Trace indexes `CompactionCancelled` and `CompactionSkipped` as distinct
+terminal states (`cancelled` and `skipped`), matched to their Started fact by
+operation ID. Both retain their actual end time after cold reads; neither
+supplies a successful checkpoint or projected Summary detail.
 
 App Server v73 extends automatic Session configuration commit and the large
 Workflow document transport with sequential Summary progress and manual outcomes.

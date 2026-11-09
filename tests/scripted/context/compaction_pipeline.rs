@@ -563,6 +563,11 @@ fn summary_request(text: &str) -> SummaryRequest {
     crate::context::summarizer::append_summary_message(&source, &mut rendered);
     SummaryRequest {
         fragment: Some(rustx::context::chunks::SummaryFragment {
+            sources: vec![rustx::context::chunks::SummarySource::User {
+                source: UserSource::Human,
+                kind: rustx::context::chunks::SummarySourceKind::Message,
+                earlier_summary: false,
+            }],
             ranges: vec![rustx::model::auxiliary::AuxiliarySourceRange {
                 projection_index: 0,
                 role: rustx::model::auxiliary::AuxiliarySourceRole::User,

@@ -13,18 +13,88 @@ use super::checkpoint::SummaryGenerationRef;
 use super::error::{ContextError, ContextErrorKind};
 use super::resources::ResourceLimits;
 use super::summarizer::{SummaryGeneration, SummaryRequest, append_summary_message};
-use crate::message::types::AssistantContentBlock;
+use crate::message::types::{
+    AssistantContentBlock, ContextKind, InboundKind, MessageBlock, UserSource,
+};
 use crate::model::SelectedModelInput;
 use crate::model::auxiliary::{
     AUXILIARY_SOURCE_RANGE_LIMIT_MAX, AuxiliarySourceRange, AuxiliarySourceRole,
 };
-use crate::model::projected::ModelMessageView;
+use crate::model::projected::{
+    ModelMessageView, ProjectedMessage, ProjectedUserKind, SemanticTransformation,
+};
 
 /// Detached, ordered portions of captured projected sources.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SummaryFragment {
     pub text: String,
     pub ranges: Vec<AuxiliarySourceRange>,
+    /// Provenance for each range, in the same order.
+    pub sources: Vec<SummarySource>,
+}
+
+/// Typed provenance of a fragment's projected occurrence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SummarySource {
+    User {
+        source: UserSource,
+        kind: SummarySourceKind,
+        earlier_summary: bool,
+    },
+    Assistant,
+    Tool,
+}
+
+/// Payload-free classification of a projected User occurrence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SummarySourceKind {
+    Message,
+    GoalContinuation,
+    CompactionContext,
+    Context(SummaryContextKind),
+}
+
+/// The kind of a projected context, without its potentially large payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SummaryContextKind {
+    NativeEnvironment,
+    GoalStatus,
+    RuntimeToolObservation,
+    ExtensionEnvironment,
+    AgentStatus,
+}
+
+impl From<&ProjectedUserKind> for SummarySourceKind {
+    fn from(kind: &ProjectedUserKind) -> Self {
+        match kind {
+            ProjectedUserKind::Message => Self::Message,
+            ProjectedUserKind::GoalContinuation(_) => Self::GoalContinuation,
+            ProjectedUserKind::CompactionContext => Self::CompactionContext,
+            ProjectedUserKind::Context(context) => Self::Context(context.into()),
+        }
+    }
+}
+
+impl From<&InboundKind> for SummarySourceKind {
+    fn from(kind: &InboundKind) -> Self {
+        match kind {
+            InboundKind::Message => Self::Message,
+            InboundKind::GoalContinuation(_) => Self::GoalContinuation,
+            InboundKind::Context(context) => Self::Context(context.into()),
+        }
+    }
+}
+
+impl From<&ContextKind> for SummaryContextKind {
+    fn from(kind: &ContextKind) -> Self {
+        match kind {
+            ContextKind::NativeEnvironment => Self::NativeEnvironment,
+            ContextKind::GoalStatus(_) => Self::GoalStatus,
+            ContextKind::RuntimeToolObservation => Self::RuntimeToolObservation,
+            ContextKind::ExtensionEnvironment => Self::ExtensionEnvironment,
+            ContextKind::AgentStatus(_) => Self::AgentStatus,
+        }
+    }
 }
 
 /// The separately attributed accepted result of the preceding Summary Call.
@@ -38,8 +108,39 @@ pub struct SummaryCarryover {
 struct Source {
     text: String,
     role: AuxiliarySourceRole,
+    identity: SummarySource,
     /// No `ToolCall` from the captured prefix remains without its result.
     group_end: bool,
+}
+
+fn source_identity(message: &crate::model::ModelInputMessage) -> SummarySource {
+    match message {
+        crate::model::ModelInputMessage::Canonical(MessageBlock::User(user)) => {
+            SummarySource::User {
+                source: user.source.clone(),
+                kind: SummarySourceKind::from(&user.kind),
+                earlier_summary: false,
+            }
+        }
+        crate::model::ModelInputMessage::Derived(derived) => match &derived.message {
+            ProjectedMessage::User { source, kind, .. } => SummarySource::User {
+                source: source.clone(),
+                kind: SummarySourceKind::from(kind),
+                earlier_summary: derived
+                    .transformations
+                    .contains(&SemanticTransformation::Summary),
+            },
+            ProjectedMessage::Assistant { .. } => SummarySource::Assistant,
+            ProjectedMessage::Tool { .. } => SummarySource::Tool,
+        },
+        crate::model::ModelInputMessage::Canonical(MessageBlock::Assistant(_)) => {
+            SummarySource::Assistant
+        }
+        crate::model::ModelInputMessage::Canonical(MessageBlock::Tool(_)) => SummarySource::Tool,
+        crate::model::ModelInputMessage::RequestOnly(_) => {
+            unreachable!("request-only input was rejected")
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -139,6 +240,7 @@ impl ChunkPlan {
             };
             let mut text = String::new();
             append_summary_message(message, &mut text);
+            let identity = source_identity(message);
             rendered_total = rendered_total.checked_add(text.len()).ok_or_else(|| {
                 failure(
                     ContextErrorKind::CannotFit,
@@ -155,6 +257,7 @@ impl ChunkPlan {
             sources.push(Source {
                 text,
                 role,
+                identity,
                 group_end: pending_count == 0,
             });
         }
@@ -330,6 +433,7 @@ impl ChunkPlan {
         output_tokens: Option<u32>,
     ) -> SummaryRequest {
         let mut ranges = Vec::with_capacity(endpoint.index - self.index + 1);
+        let mut sources = Vec::with_capacity(endpoint.index - self.index + 1);
         let mut text = String::new();
         for index in self.index..=endpoint.index {
             let source = &self.sources[index];
@@ -352,10 +456,15 @@ impl ChunkPlan {
                 byte_start: u32::try_from(start).expect("source body is bounded"),
                 byte_end: u32::try_from(end).expect("source body is bounded"),
             });
+            sources.push(source.identity.clone());
         }
         SummaryRequest {
             retired: Vec::new(),
-            fragment: Some(SummaryFragment { text, ranges }),
+            fragment: Some(SummaryFragment {
+                text,
+                ranges,
+                sources,
+            }),
             previous: previous.map(|value| SummaryCarryover {
                 text: value.text.clone(),
                 generation: value.generation.clone(),
@@ -377,6 +486,7 @@ impl ChunkPlan {
         if !request.retired.is_empty()
             || fragment.ranges.is_empty()
             || fragment.ranges.len() > AUXILIARY_SOURCE_RANGE_LIMIT_MAX
+            || fragment.sources.len() != fragment.ranges.len()
             || self.is_complete()
             || self.accepted >= self.bound
         {
@@ -393,6 +503,7 @@ impl ChunkPlan {
             let end = range.byte_end as usize;
             if range.projection_index as usize != index
                 || range.role != source.role
+                || fragment.sources[position] != source.identity
                 || start != offset
                 || end > source.text.len()
                 || end < start

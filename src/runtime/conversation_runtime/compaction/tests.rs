@@ -265,7 +265,15 @@ async fn summary_only_manual_compaction_skips_and_publishes_receipt() {
     let dir = tempfile::tempdir().expect("temp dir");
     let (runtime, model) = headless_runtime_with_options(
         &dir,
-        vec![summary_turn_script("retained facts")],
+        vec![text_turn_script(
+            &serde_json::json!({
+                "goal": "x",
+                "constraints_and_preferences": ["x"],
+                "progress": { "done": ["x"], "in_progress": ["x"], "blocked": ["x"] },
+                "key_decisions": ["x"], "next_steps": ["x"], "critical_context": ["x"]
+            })
+            .to_string(),
+        )],
         None,
         None,
         HeadlessRuntimeOptions {
@@ -284,7 +292,7 @@ async fn summary_only_manual_compaction_skips_and_publishes_receipt() {
     runtime.activate();
     let outcome = committed_view(runtime.compact_context(None, None).await.unwrap());
     assert!(runtime.coordinator_active_ids().unwrap().is_empty());
-    // Rewriting a projection containing only a Summary covers no new source.
+    // The shortest Summary cannot make further historical progress.
     let skipped = runtime
         .compact_context(Some("summary-only".to_owned().try_into().unwrap()), None)
         .await

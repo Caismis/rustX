@@ -1393,6 +1393,11 @@ fn historical_summary_input(
         SummaryRequest {
             fragment: Some(crate::context::chunks::SummaryFragment {
                 text,
+                sources: vec![crate::context::chunks::SummarySource::User {
+                    source: crate::message::types::UserSource::Human,
+                    kind: crate::context::chunks::SummarySourceKind::Message,
+                    earlier_summary: false,
+                }],
                 ranges: vec![crate::model::auxiliary::AuxiliarySourceRange {
                     projection_index: 0,
                     role: crate::model::auxiliary::AuxiliarySourceRole::User,

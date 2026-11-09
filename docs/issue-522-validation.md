@@ -18,6 +18,12 @@ Initial total Summary output is
 A frozen explicit reasoning budget requires at least that budget plus 1024
 visible JSON tokens. The admitted capability and Summary window must support
 this minimum. The Summary input allowance is `Cs - M(Cs) - Os`.
+Output-exhaustion recovery can grow total output up to the Summary capability
+and half its window, with extra headroom for an explicit reasoning budget,
+bounded by `Cs - M(Cs) - 1`. Primary input does not cap this recovery ceiling.
+Each increase reprices the same unaccepted source against the smaller Summary
+input allowance. The final visible Summary is checked independently against
+the complete primary request; reasoning Profile and output strategy stay frozen.
 
 For a 256000-token primary with 16000 output and a 128000-token thinking
 Summary model with 64000 output capability, `H=227200`, the trigger is
@@ -54,15 +60,47 @@ the preceding-call chain also preserves rejected and cancelled calls across
 Fork. Primary occupancy and Auxiliary usage remain separate, with missing
 usage components explicitly unknown.
 
+Every fragment repeats its captured source and kind, including the earlier
+Summary distinction, independently of generated carryover. Existing Summary-only
+history remains eligible for bounded reduction when it can make strict
+historical progress; fresh input stays protected. Native Trace records both
+cancelled and skipped operations as terminal with their actual end time and
+without inventing a successful checkpoint, including after cold reconstruction.
+
 ## Recorded verification
 
 Verification uses Rust 1.98.1, the locked provider emulator and the repository's
 FULL profile. The [PR checks](https://github.com/Caismis/rustX/pull/531/checks)
-record the required results for the final head: formatting, strict Clippy,
+record formatting, strict Clippy,
 Linux contracts and boundaries, full native macOS boundaries, generated v73
 protocol, complete TUI/Web/Host/launcher tests, production browser inputs,
 both real-browser shards and their coverage check. A selected, unfinished or
 unexecuted gate is not a passing result.
+
+The Linux deterministic-contract lane in
+[run 42136608086](https://github.com/Caismis/rustX/actions/runs/42136608086/job/127627030583)
+was cancelled: its unit/in-crate step was cancelled, and its pure-contract and
+coverage steps were skipped. That run does not verify the lane. The later
+[FULL run 42155602959](https://github.com/Caismis/rustX/actions/runs/42155602959)
+completed every selected gate successfully for `c8d6b7f435dacfef3e4740f934ca7eec1ecdc3e6`.
+That result does not establish verification of subsequent changes.
+
+Focused Linux verification passes 220 Rust tests in the all-feature harness:
+
+| Owner suite | Passing tests |
+| --- | ---: |
+| Scripted Context pipeline and runtime composition | 111 |
+| Native Trace, including interleaved terminals and cold reconstruction | 79 |
+| Manual compaction and receipts | 6 |
+| Dual-model policy | 6 |
+| Chunk planning and exact coverage | 7 |
+| Operation budgets and retry bounds | 11 |
+
+The Web trajectory and compaction-receipt suites pass all 143 tests with one
+worker. Generated v73 schema/TypeScript, Protocol/Web/TUI typechecks, the Web
+translation audit, `cargo fmt --all -- --check` and strict
+`cargo clippy --locked --offline --all-targets --all-features -- -D warnings`
+also pass. Node typechecks use the declared locked dependencies.
 
 Real HTTP conformance covers more than twelve accepted chunks, one authorized
 Native-to-Prompt downgrade, cross-Provider/Profile selection, repeated compaction

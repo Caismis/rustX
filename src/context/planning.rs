@@ -92,18 +92,17 @@ pub(crate) async fn summary_prefix(
             "protected Fresh Inbound or current Context begins before any eligible historical source",
         ));
     }
-    let Some(first_new) = input.iter().take(max).position(|message| !matches!(
+    let first_new = input.iter().take(max).position(|message| !matches!(
         message,
         ModelInputMessage::Derived(derived)
             if derived.transformations.contains(&crate::model::projected::SemanticTransformation::Summary)
-    )) else {
-        return Err(failure(
-            ContextErrorKind::NoEligibleHistory,
-            "the active history contains only an existing summary and no new eligible source",
-        ));
-    };
-    // Rewriting an existing Summary alone does not retire any new source.
-    min = min.max(first_new + 1);
+    ));
+    // Prefer retiring new source when available. A Summary alone can still
+    // need reduction after a smaller primary is selected or a provider
+    // reports overflow.
+    if let Some(first_new) = first_new {
+        min = min.max(first_new + 1);
+    }
     let mut pending = BTreeMap::<String, usize>::new();
     let mut pending_count = 0;
     let mut boundaries = Vec::new();
@@ -153,6 +152,16 @@ pub(crate) async fn summary_prefix(
     // request-only or staged inputs. The candidate uses the same accounting
     // path as the final checkpoint validation.
     let history_before = engine.estimate_model_input(input, "", &[]);
+    if first_new.is_none() && max == 1 && engine.supports_summary_floor() {
+        let mut minimum = input.range(1..input.len());
+        minimum.insert(0, minimum_summary());
+        if engine.estimate_model_input(&minimum, "", &[]) >= history_before {
+            return Err(failure(
+                ContextErrorKind::NoEligibleHistory,
+                "the existing Summary is already minimal and no new eligible source remains",
+            ));
+        }
+    }
     let mut search = Search {
         engine,
         input,

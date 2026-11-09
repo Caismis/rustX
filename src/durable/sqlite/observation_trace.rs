@@ -41,6 +41,8 @@ impl TraceFactKind {
             Self::CompactionStarted => "compaction_started",
             Self::CompactionCompleted => "compaction_completed",
             Self::CompactionFailed => "compaction_failed",
+            Self::CompactionCancelled => "compaction_cancelled",
+            Self::CompactionSkipped => "compaction_skipped",
             Self::BackgroundExecutionCommitted => "background_execution_committed",
             Self::BackgroundTerminalPublished => "background_terminal_published",
             Self::SubagentOwnershipCommitted => "subagent_ownership_committed",
@@ -56,7 +58,7 @@ impl TraceFactKind {
         }
     }
     /// Every native Trace fact kind.
-    pub(crate) const ALL: [Self; 32] = [
+    pub(crate) const ALL: [Self; 34] = [
         Self::AttemptStarted,
         Self::AttemptCompleted,
         Self::AttemptFailed,
@@ -77,6 +79,8 @@ impl TraceFactKind {
         Self::CompactionStarted,
         Self::CompactionCompleted,
         Self::CompactionFailed,
+        Self::CompactionCancelled,
+        Self::CompactionSkipped,
         Self::BackgroundExecutionCommitted,
         Self::BackgroundTerminalPublished,
         Self::SubagentOwnershipCommitted,

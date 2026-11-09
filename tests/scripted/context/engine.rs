@@ -368,7 +368,7 @@ async fn certified_summary_floor_can_prove_no_historical_progress() {
 }
 
 #[tokio::test]
-async fn selected_prefix_must_include_new_source_after_existing_summary() {
+async fn selected_prefix_prefers_new_source_and_skips_a_minimal_summary() {
     let history = vec![
         crate::context::planning::minimum_summary(),
         input(1).remove(0),
@@ -380,9 +380,18 @@ async fn selected_prefix_must_include_new_source_after_existing_summary() {
             .unwrap(),
         2
     );
+    let default = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: 1_000,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        Arc::new(DefaultTokenEstimator),
+    )
+    .unwrap();
     assert_eq!(
         plan(
-            &e,
+            &default,
             &history[..1],
             budgets(),
             &CompactionConstraints::default()
@@ -393,6 +402,7 @@ async fn selected_prefix_must_include_new_source_after_existing_summary() {
         ContextErrorKind::NoEligibleHistory
     );
 }
+
 #[tokio::test]
 async fn protected_current_generation_context_cannot_be_retired() {
     let e = engine(1000, 0, 0);

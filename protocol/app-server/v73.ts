@@ -3408,6 +3408,7 @@ export type TraceState =
   | 'completed'
   | 'failed'
   | 'cancelled'
+  | 'skipped'
   | 'timed_out'
   | 'limited'
   | 'denied'

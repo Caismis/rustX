@@ -87,7 +87,7 @@ impl SummaryRequest {
             let mut rendered = String::new();
             let mut offset = 0usize;
             let mut nonempty = false;
-            for range in &fragment.ranges {
+            for (position, range) in fragment.ranges.iter().enumerate() {
                 let size =
                     usize::try_from(range.byte_end - range.byte_start).expect("u32 fits usize");
                 if size > 0 && nonempty {
@@ -98,10 +98,19 @@ impl SummaryRequest {
                     .text
                     .get(offset..end)
                     .unwrap_or("[invalid source range]");
+                let identity = fragment
+                    .sources
+                    .get(position)
+                    .map_or_else(|| "invalid provenance".to_owned(), fragment_source_label);
                 let _ = writeln!(
                     rendered,
-                    "[source {} {:?} rendered UTF-8 bytes {}..{}]\n{}",
-                    range.projection_index, range.role, range.byte_start, range.byte_end, text
+                    "[source {} {:?}; {}; rendered UTF-8 bytes {}..{}]\n{}",
+                    range.projection_index,
+                    range.role,
+                    identity,
+                    range.byte_start,
+                    range.byte_end,
+                    text
                 );
                 offset = end;
                 nonempty |= size > 0;
@@ -135,6 +144,27 @@ impl SummaryRequest {
         }
         transcript.push_str(&self.render_transcript());
         summary_model_input(&transcript)
+    }
+}
+
+fn fragment_source_label(source: &super::chunks::SummarySource) -> String {
+    use super::chunks::SummarySource;
+
+    match source {
+        SummarySource::User {
+            source,
+            kind,
+            earlier_summary,
+        } => {
+            let summary = if *earlier_summary {
+                "Earlier summary; "
+            } else {
+                ""
+            };
+            format!("{summary}user source {source:?}; kind {kind:?}")
+        }
+        SummarySource::Assistant => "Assistant".to_owned(),
+        SummarySource::Tool => "Tool".to_owned(),
     }
 }
 

@@ -106,7 +106,6 @@ impl CompactionPolicy {
             })?;
         let automatic_ceiling = u64::from(summary_output_capability)
             .min(summary_window / 2)
-            .min(hard / 4)
             .max(summary_output);
         let reasoning_headroom = if reasoning_budget.is_some() {
             u64::from(minimum_output).saturating_add(u64::from(VISIBLE_SUMMARY_OUTPUT))
@@ -187,6 +186,16 @@ mod tests {
         assert_eq!(p.primary.reserve_tokens, 1);
         assert_eq!(p.primary.admissible_input_limit(1).unwrap(), 14);
         assert_eq!(p.budgets.summary_output_budget, 1);
+    }
+
+    #[test]
+    fn recovery_output_ceiling_uses_summary_capacity_instead_of_primary_input() {
+        let p = CompactionPolicy::resolve(16_000, 1_000, 128_000, 64_000).unwrap();
+        assert_eq!(p.budgets.summary_output_budget, 3_550);
+        assert_eq!(p.maximum_summary_output, 64_000);
+        let same_model = CompactionPolicy::resolve(16_000, 1_000, 16_000, 8_000).unwrap();
+        assert_eq!(same_model.budgets.summary_output_budget, 3_550);
+        assert_eq!(same_model.maximum_summary_output, 8_000);
     }
 
     #[test]
