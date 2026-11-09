@@ -10,7 +10,8 @@ use crate::durable::auxiliary::{
 use crate::events::types::RuntimeEvent;
 use crate::model::adapter::validation::{PreparedModelRequest, prepare_request_with_limit};
 use crate::model::auxiliary::{
-    AuxiliaryCallOutcome, AuxiliaryRequestEvidence, AuxiliaryUsageCompleteness,
+    AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryRequestEvidence,
+    AuxiliaryUsageCompleteness,
 };
 use crate::model::{
     AuxiliaryCallStart, ModelError, ModelErrorKind, ModelRequest, ModelRequestOwner,
@@ -222,9 +223,20 @@ impl Execution {
         );
         authority.check(&self.record.cancellation)?;
         self.prepared = Some(prepared.map_err(|error| {
+            let public_submission = matches!(
+                self.start.business_source,
+                AuxiliaryBusinessSource::Submission { .. }
+            );
             if provider_body_limit.is_some() && error.kind == ModelErrorKind::ContextWindowExceeded
             {
-                ContextError::new(ContextErrorKind::CannotFit, error.message)
+                let message = if public_submission {
+                    "auxiliary provider request exceeds 64 MiB".into()
+                } else {
+                    error.message
+                };
+                ContextError::new(ContextErrorKind::CannotFit, message)
+            } else if public_submission {
+                not_started("auxiliary history cannot be translated for the selected model")
             } else {
                 not_started(&error.message)
             }
