@@ -1,0 +1,55 @@
+{
+  "input": "/home/capi/.cache/rustx-pr485-history-growth-20261109/candidate-write-ledger.json",
+  "input_sha256": "f8cb8593c7460bf2e448840cf7bbb7f5c67615c8ba3de4d08486671c545a131a",
+  "scope": "Existing schema-105 commit-image-authenticated page ownership. Cost of two present indexes, not a prediction of net savings. Excludes table-row-width savings and any replacement lookup work.",
+  "rows": [
+    {
+      "history": 8,
+      "hot_turns": 32,
+      "target_owners": [
+        "sqlite_autoindex_observation_block_headers_2",
+        "observation_block_kind_idx"
+      ],
+      "wal_frames": 152,
+      "wal_frame_payload_bytes": 314944,
+      "main_bytes": 71680,
+      "combined_kib_per_turn": 11.798828125
+    },
+    {
+      "history": 32,
+      "hot_turns": 32,
+      "target_owners": [
+        "sqlite_autoindex_observation_block_headers_2",
+        "observation_block_kind_idx"
+      ],
+      "wal_frames": 195,
+      "wal_frame_payload_bytes": 404040,
+      "main_bytes": 147456,
+      "combined_kib_per_turn": 16.830322265625
+    },
+    {
+      "history": 64,
+      "hot_turns": 32,
+      "target_owners": [
+        "sqlite_autoindex_observation_block_headers_2",
+        "observation_block_kind_idx"
+      ],
+      "wal_frames": 231,
+      "wal_frame_payload_bytes": 478632,
+      "main_bytes": 151552,
+      "combined_kib_per_turn": 19.231689453125
+    },
+    {
+      "history": 96,
+      "hot_turns": 32,
+      "target_owners": [
+        "sqlite_autoindex_observation_block_headers_2",
+        "observation_block_kind_idx"
+      ],
+      "wal_frames": 269,
+      "wal_frame_payload_bytes": 557368,
+      "main_bytes": 243712,
+      "combined_kib_per_turn": 24.447021484375
+    }
+  ]
+}

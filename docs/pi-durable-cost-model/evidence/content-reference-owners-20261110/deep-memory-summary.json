@@ -1,0 +1,967 @@
+{
+  "scope": "One supplementary reverse-order pair, 16 sessions at 64 turns. Ordinary GNU anonymous PSS; no significance or exact causal percentage claim. All backup hashes, integrity, FKs and exact ordered messages checked.",
+  "rows": [
+    {
+      "side": "before",
+      "identity": {
+        "binary": "/home/capi/.cache/rustx-pr485-history-growth-20261109/kind-build/rustx",
+        "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+        "websockets": "10.4",
+        "affinity": [
+          2,
+          8
+        ],
+        "sessions": 16,
+        "history_turns": 64,
+        "widths": [
+          1,
+          4,
+          8
+        ],
+        "rounds": 16,
+        "cache_probes": false,
+        "protocol_version": 76,
+        "memory_only": true,
+        "rotate_active": false,
+        "idle_seconds": [],
+        "history_checkpoints": [
+          8,
+          32
+        ],
+        "session_names": "Explicit fixture names; automatic title generation is not part of this workload.",
+        "retirement": "Observe native idle after terminal delivery before starting another turn; CPU windows include these reads.",
+        "scope": "Actual native App Server over authenticated WebSocket. Single-process samples, not a production capacity/P99 guarantee. Driver and provider are siblings; only server PID resource counters are reported.",
+        "inputs": {
+          "benchmarks/runtime/app-server-capacity.py": "f6506d8c7fc8d5ce4967ea134c172d7f253cba8fb7b8154e424e4f36aa49a06c",
+          "benchmarks/runtime/app-server-capacity-provider.py": "28dc6717e77ebd0dcfa822bbf946beeb40ac8b12160039b6ac14716f3f9d70fc",
+          "test-support/fake-provider/README.md": "0aa4065df4fe86005ee7e597c83bc8579a71db9b66611cf94455071c8b6ffb2f",
+          "test-support/fake-provider/pyproject.toml": "28dd4c4052743e4768f56eebf10593c79a852a615cd63806409d246ebcd3bbfd",
+          "test-support/fake-provider/src/fake_provider/__init__.py": "617f9421bb7284c7bdd76ebd3ea2524560c1d31bd9fbd543e2f81c327a626491",
+          "test-support/fake-provider/src/fake_provider/__main__.py": "87f778f661598b62a8657162109317b68681a524d866166792002dc766246fd2",
+          "test-support/fake-provider/src/fake_provider/control.py": "9158550c555691bba1cce580ad793da12120ff2b4707644aa92cd8008d9ac978",
+          "test-support/fake-provider/src/fake_provider/measurement.py": "c91c8f0935e6c549b5a17e417e2234ef2873b30913a7d7f013223707f5d65807",
+          "test-support/fake-provider/src/fake_provider/protocols/__init__.py": "d720f8e42755b568c559304da1513a4b6a4646a536a3711fbd8c38ee70c4707a",
+          "test-support/fake-provider/src/fake_provider/protocols/anthropic_messages.py": "848a6dfd8fc89d70792486a62c88b05c93e5ae3bbd1a870f12ea75d1b2a9a080",
+          "test-support/fake-provider/src/fake_provider/protocols/base.py": "4c31d72916a399989746faed8f714461541aaacd1938568f37b136210097b693",
+          "test-support/fake-provider/src/fake_provider/protocols/openai_chat.py": "fe02dcaaf99c0b22969107c5f7682fdf6ea7961d31e3be1cce5f9895e4f93938",
+          "test-support/fake-provider/src/fake_provider/protocols/openai_responses.py": "f39e11c6047a69ab909727c6e6004b070236733186e76ef818811d2211e9f17f",
+          "test-support/fake-provider/src/fake_provider/scenario.py": "91ff968f699bbdc5b223063abe86f7757be57645017f29b1ccec0de4a934bc0a",
+          "test-support/fake-provider/src/fake_provider/scenarios/__init__.py": "f590153c6fd9e52ebb29c4f4993fadd3129c60bce206f79360acd35d9c60294f",
+          "test-support/fake-provider/src/fake_provider/scenarios/app_server.py": "1b4bbaf3fa18d4c41ee4868fa1273271b6c048f5e8c8447426ecd6fad558bdc1",
+          "test-support/fake-provider/src/fake_provider/scenarios/conformance.py": "60a159b17db2a7ffae52106b9dddeebc038896dfb7e822755b1c63f16e4aec6e",
+          "test-support/fake-provider/src/fake_provider/scenarios/observation.py": "21552ec3413629b9b56e7259af5d0cd25bd7fe7bc3fad0dd4ad1eff1775f476e",
+          "test-support/fake-provider/src/fake_provider/scenarios/runtime_benchmark.py": "c2f61ade0eaf4411de2c183fb6ec63c96ceec9e64483332ea109e6929e6ecfaf",
+          "test-support/fake-provider/src/fake_provider/scenarios/tui.py": "67839d0bbb6ecacd48ff1bfe54570281aecd3510c9a10c70dad09385ec72eb15",
+          "test-support/fake-provider/src/fake_provider/scenarios/web_console.py": "028de9c74c60fe98d00f61d59badb6d2978ef6d2451a2f894a713bbe39a027c8",
+          "test-support/fake-provider/src/fake_provider/server.py": "2e56301a65a929b68a1cd0f7a6158091503d436b055142e1e4746ed5cae56281",
+          "test-support/fake-provider/tests/conftest.py": "190a7dd7414f0f9b8767fef7391427f4f74830b227533d8672e90d70fd1eba75",
+          "test-support/fake-provider/tests/test_process_lifetime.py": "ed0fb6384386cdd96ba6454e41d47b1c51f605bfb62b649d30dcd8b57efae036",
+          "test-support/fake-provider/tests/test_protocols.py": "377615fb722007f996186c71e5fd8342e1521e731b1e292d776ef1fb03eeef40",
+          "test-support/fake-provider/tests/test_scenario.py": "e0aee81ddd65759ec0abeb01efa66544c45d204cc9989a28b4bc628927f30d9f",
+          "test-support/fake-provider/tests/test_server.py": "0c6eef0e49d71b1122950e68cd8f8fe29a80dca5d670ad0940cfe6224eb34224",
+          "test-support/fake-provider/uv.lock": "a4c153561d658be83df98308c24a668434a2b90911b299a5c8a8d0c080b8cec4"
+        },
+        "tokio_workers": 4
+      },
+      "phases": {
+        "empty_server": {
+          "anon_pss_mib": 16.30859375,
+          "retained_files": {
+            "other": {
+              "files": 3,
+              "logical_bytes": 920,
+              "allocated_bytes": 8192,
+              "largest_logical_bytes": 727
+            }
+          }
+        },
+        "metadata_only": {
+          "anon_pss_mib": 24.12890625,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16512,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15129
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            }
+          }
+        },
+        "empty_attached_1": {
+          "anon_pss_mib": 24.7109375,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16512,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15129
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 1,
+              "logical_bytes": 32768,
+              "allocated_bytes": 32768,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 1,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          }
+        },
+        "empty_attached_8": {
+          "anon_pss_mib": 37.15234375,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16512,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15129
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 8,
+              "logical_bytes": 262144,
+              "allocated_bytes": 262144,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 8,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          }
+        },
+        "empty_attached_16": {
+          "anon_pss_mib": 53.0703125,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16512,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15129
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          }
+        },
+        "subscribed_1": {
+          "anon_pss_mib": 53.32421875,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16512,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15129
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          }
+        },
+        "subscribed_8": {
+          "anon_pss_mib": 53.7265625,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16512,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15129
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          }
+        },
+        "subscribed_16": {
+          "anon_pss_mib": 54.21484375,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16512,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15129
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          }
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 54.29296875,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16512,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15129
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          }
+        },
+        "seeded_history_1": {
+          "anon_pss_mib": 80.58203125,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18224,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16841
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 6730368,
+              "allocated_bytes": 6750208,
+              "largest_logical_bytes": 420648
+            }
+          }
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 101.7109375,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18225,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16842
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 13533184,
+              "allocated_bytes": 13565952,
+              "largest_logical_bytes": 845824
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 34942720,
+              "allocated_bytes": 34996224,
+              "largest_logical_bytes": 2183920
+            }
+          }
+        },
+        "seeded_history_32": {
+          "anon_pss_mib": 161.828125,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18225,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16842
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 32090112,
+              "allocated_bytes": 32112640,
+              "largest_logical_bytes": 2007040
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 35033888,
+              "allocated_bytes": 35074048,
+              "largest_logical_bytes": 2196352
+            }
+          }
+        },
+        "seeded_history_64": {
+          "anon_pss_mib": 215.71484375,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18226,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16843
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 58902528,
+              "allocated_bytes": 58961920,
+              "largest_logical_bytes": 3684352
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 35199648,
+              "allocated_bytes": 35229696,
+              "largest_logical_bytes": 2219144
+            }
+          }
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 215.59765625,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18226,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16843
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 59121664,
+              "allocated_bytes": 59183104,
+              "largest_logical_bytes": 3698688
+            }
+          }
+        },
+        "reload_unload_cycle_0": {
+          "anon_pss_mib": 233.48046875,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18226,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16843
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 59121664,
+              "allocated_bytes": 59183104,
+              "largest_logical_bytes": 3698688
+            }
+          }
+        },
+        "reload_unload_cycle_1": {
+          "anon_pss_mib": 240.44140625,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18226,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16843
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 59121664,
+              "allocated_bytes": 59183104,
+              "largest_logical_bytes": 3698688
+            }
+          }
+        },
+        "reload_unload_cycle_2": {
+          "anon_pss_mib": 244.46484375,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18226,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16843
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 59121664,
+              "allocated_bytes": 59183104,
+              "largest_logical_bytes": 3698688
+            }
+          }
+        }
+      },
+      "verified_backups": 16
+    },
+    {
+      "side": "after",
+      "identity": {
+        "binary": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/reference-build/rustx",
+        "sha256": "44f2fa7aa05f88c07d21f8f8dc5dfa0c18ce3d820177f04530af964366c58286",
+        "websockets": "10.4",
+        "affinity": [
+          2,
+          8
+        ],
+        "sessions": 16,
+        "history_turns": 64,
+        "widths": [
+          1,
+          4,
+          8
+        ],
+        "rounds": 16,
+        "cache_probes": false,
+        "protocol_version": 76,
+        "memory_only": true,
+        "rotate_active": false,
+        "idle_seconds": [],
+        "history_checkpoints": [
+          8,
+          32
+        ],
+        "session_names": "Explicit fixture names; automatic title generation is not part of this workload.",
+        "retirement": "Observe native idle after terminal delivery before starting another turn; CPU windows include these reads.",
+        "scope": "Actual native App Server over authenticated WebSocket. Single-process samples, not a production capacity/P99 guarantee. Driver and provider are siblings; only server PID resource counters are reported.",
+        "inputs": {
+          "benchmarks/runtime/app-server-capacity.py": "f6506d8c7fc8d5ce4967ea134c172d7f253cba8fb7b8154e424e4f36aa49a06c",
+          "benchmarks/runtime/app-server-capacity-provider.py": "28dc6717e77ebd0dcfa822bbf946beeb40ac8b12160039b6ac14716f3f9d70fc",
+          "test-support/fake-provider/README.md": "0aa4065df4fe86005ee7e597c83bc8579a71db9b66611cf94455071c8b6ffb2f",
+          "test-support/fake-provider/pyproject.toml": "28dd4c4052743e4768f56eebf10593c79a852a615cd63806409d246ebcd3bbfd",
+          "test-support/fake-provider/src/fake_provider/__init__.py": "617f9421bb7284c7bdd76ebd3ea2524560c1d31bd9fbd543e2f81c327a626491",
+          "test-support/fake-provider/src/fake_provider/__main__.py": "87f778f661598b62a8657162109317b68681a524d866166792002dc766246fd2",
+          "test-support/fake-provider/src/fake_provider/control.py": "9158550c555691bba1cce580ad793da12120ff2b4707644aa92cd8008d9ac978",
+          "test-support/fake-provider/src/fake_provider/measurement.py": "c91c8f0935e6c549b5a17e417e2234ef2873b30913a7d7f013223707f5d65807",
+          "test-support/fake-provider/src/fake_provider/protocols/__init__.py": "d720f8e42755b568c559304da1513a4b6a4646a536a3711fbd8c38ee70c4707a",
+          "test-support/fake-provider/src/fake_provider/protocols/anthropic_messages.py": "848a6dfd8fc89d70792486a62c88b05c93e5ae3bbd1a870f12ea75d1b2a9a080",
+          "test-support/fake-provider/src/fake_provider/protocols/base.py": "4c31d72916a399989746faed8f714461541aaacd1938568f37b136210097b693",
+          "test-support/fake-provider/src/fake_provider/protocols/openai_chat.py": "fe02dcaaf99c0b22969107c5f7682fdf6ea7961d31e3be1cce5f9895e4f93938",
+          "test-support/fake-provider/src/fake_provider/protocols/openai_responses.py": "f39e11c6047a69ab909727c6e6004b070236733186e76ef818811d2211e9f17f",
+          "test-support/fake-provider/src/fake_provider/scenario.py": "91ff968f699bbdc5b223063abe86f7757be57645017f29b1ccec0de4a934bc0a",
+          "test-support/fake-provider/src/fake_provider/scenarios/__init__.py": "f590153c6fd9e52ebb29c4f4993fadd3129c60bce206f79360acd35d9c60294f",
+          "test-support/fake-provider/src/fake_provider/scenarios/app_server.py": "1b4bbaf3fa18d4c41ee4868fa1273271b6c048f5e8c8447426ecd6fad558bdc1",
+          "test-support/fake-provider/src/fake_provider/scenarios/conformance.py": "60a159b17db2a7ffae52106b9dddeebc038896dfb7e822755b1c63f16e4aec6e",
+          "test-support/fake-provider/src/fake_provider/scenarios/observation.py": "21552ec3413629b9b56e7259af5d0cd25bd7fe7bc3fad0dd4ad1eff1775f476e",
+          "test-support/fake-provider/src/fake_provider/scenarios/runtime_benchmark.py": "c2f61ade0eaf4411de2c183fb6ec63c96ceec9e64483332ea109e6929e6ecfaf",
+          "test-support/fake-provider/src/fake_provider/scenarios/tui.py": "67839d0bbb6ecacd48ff1bfe54570281aecd3510c9a10c70dad09385ec72eb15",
+          "test-support/fake-provider/src/fake_provider/scenarios/web_console.py": "028de9c74c60fe98d00f61d59badb6d2978ef6d2451a2f894a713bbe39a027c8",
+          "test-support/fake-provider/src/fake_provider/server.py": "2e56301a65a929b68a1cd0f7a6158091503d436b055142e1e4746ed5cae56281",
+          "test-support/fake-provider/tests/conftest.py": "190a7dd7414f0f9b8767fef7391427f4f74830b227533d8672e90d70fd1eba75",
+          "test-support/fake-provider/tests/test_process_lifetime.py": "ed0fb6384386cdd96ba6454e41d47b1c51f605bfb62b649d30dcd8b57efae036",
+          "test-support/fake-provider/tests/test_protocols.py": "377615fb722007f996186c71e5fd8342e1521e731b1e292d776ef1fb03eeef40",
+          "test-support/fake-provider/tests/test_scenario.py": "e0aee81ddd65759ec0abeb01efa66544c45d204cc9989a28b4bc628927f30d9f",
+          "test-support/fake-provider/tests/test_server.py": "0c6eef0e49d71b1122950e68cd8f8fe29a80dca5d670ad0940cfe6224eb34224",
+          "test-support/fake-provider/uv.lock": "a4c153561d658be83df98308c24a668434a2b90911b299a5c8a8d0c080b8cec4"
+        },
+        "tokio_workers": 4
+      },
+      "phases": {
+        "empty_server": {
+          "anon_pss_mib": 16.29296875,
+          "retained_files": {
+            "other": {
+              "files": 3,
+              "logical_bytes": 920,
+              "allocated_bytes": 8192,
+              "largest_logical_bytes": 727
+            }
+          }
+        },
+        "metadata_only": {
+          "anon_pss_mib": 24.9609375,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16496,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15113
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            }
+          }
+        },
+        "empty_attached_1": {
+          "anon_pss_mib": 27.17578125,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16496,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15113
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 1,
+              "logical_bytes": 32768,
+              "allocated_bytes": 32768,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 1,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          }
+        },
+        "empty_attached_8": {
+          "anon_pss_mib": 39.49609375,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16496,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15113
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 8,
+              "logical_bytes": 262144,
+              "allocated_bytes": 262144,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 8,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          }
+        },
+        "empty_attached_16": {
+          "anon_pss_mib": 54.5078125,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16496,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15113
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          }
+        },
+        "subscribed_1": {
+          "anon_pss_mib": 54.56640625,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16496,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15113
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          }
+        },
+        "subscribed_8": {
+          "anon_pss_mib": 55.84765625,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16496,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15113
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          }
+        },
+        "subscribed_16": {
+          "anon_pss_mib": 56.8984375,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16496,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15113
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          }
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 56.8984375,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 16496,
+              "allocated_bytes": 86016,
+              "largest_logical_bytes": 15113
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          }
+        },
+        "seeded_history_1": {
+          "anon_pss_mib": 82.2421875,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18208,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16825
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 8192000,
+              "allocated_bytes": 8192000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 6730368,
+              "allocated_bytes": 6750208,
+              "largest_logical_bytes": 420648
+            }
+          }
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 103.3984375,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18209,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16826
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 13533184,
+              "allocated_bytes": 13565952,
+              "largest_logical_bytes": 845824
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 34942720,
+              "allocated_bytes": 34996224,
+              "largest_logical_bytes": 2183920
+            }
+          }
+        },
+        "seeded_history_32": {
+          "anon_pss_mib": 162.3046875,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18209,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16826
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 32083968,
+              "allocated_bytes": 32112640,
+              "largest_logical_bytes": 2007040
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 35027672,
+              "allocated_bytes": 35061760,
+              "largest_logical_bytes": 2196352
+            }
+          }
+        },
+        "seeded_history_64": {
+          "anon_pss_mib": 213.484375,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18210,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16827
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 58904576,
+              "allocated_bytes": 58961920,
+              "largest_logical_bytes": 3684352
+            },
+            "shm": {
+              "files": 16,
+              "logical_bytes": 524288,
+              "allocated_bytes": 524288,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 16,
+              "logical_bytes": 35116768,
+              "allocated_bytes": 35147776,
+              "largest_logical_bytes": 2221216
+            }
+          }
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 213.4765625,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18210,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16827
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 59121664,
+              "allocated_bytes": 59183104,
+              "largest_logical_bytes": 3698688
+            }
+          }
+        },
+        "reload_unload_cycle_0": {
+          "anon_pss_mib": 221.45703125,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18210,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16827
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 59121664,
+              "allocated_bytes": 59183104,
+              "largest_logical_bytes": 3698688
+            }
+          }
+        },
+        "reload_unload_cycle_1": {
+          "anon_pss_mib": 221.515625,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18210,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16827
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 59121664,
+              "allocated_bytes": 59183104,
+              "largest_logical_bytes": 3698688
+            }
+          }
+        },
+        "reload_unload_cycle_2": {
+          "anon_pss_mib": 225.1484375,
+          "retained_files": {
+            "other": {
+              "files": 19,
+              "logical_bytes": 18210,
+              "allocated_bytes": 90112,
+              "largest_logical_bytes": 16827
+            },
+            "main": {
+              "files": 16,
+              "logical_bytes": 59121664,
+              "allocated_bytes": 59183104,
+              "largest_logical_bytes": 3698688
+            }
+          }
+        }
+      },
+      "verified_backups": 16
+    }
+  ]
+}
