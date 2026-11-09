@@ -118,11 +118,9 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     {agentEditor ? <div className={clsx(catalogCss.library, css.agentEditor)} key={lifetime}><SettingsFeedback active={visible}>
       {[readError, maintenanceError, convergenceError].filter(Boolean).map((error, index) => <SettingsNotice text={error} key={index} />)}
       {available && source ? <SettingsActorContext value={actor}><SourceContext value={source}>
-        <fieldset className={css.editor} disabled={!editable}>
-          <AgentEditor source={source} target={target} host={host} name={resourceFocus} initialDraft={newAgent}
-            client={client} discover={visible && editable} onScopeChange={changeCreationScope} onClose={closeAgent} loadMcpTools={loadMcpTools}
-            models={catalogIdentities(source, scope, 'models')} profiles={catalogProfiles(source, scope)} />
-        </fieldset>
+        <AgentEditor source={source} target={target} host={host} name={resourceFocus} initialDraft={newAgent} editable={editable}
+          client={client} discover={visible && editable} onScopeChange={changeCreationScope} onClose={closeAgent} loadMcpTools={loadMcpTools}
+          models={catalogIdentities(source, scope, 'models')} profiles={catalogProfiles(source, scope)} />
       </SourceContext></SettingsActorContext> : <>
         <Button size="sm" onClick={closeAgent}>{tx('resources:cancel')}</Button>
         <p className={catalogCss.state} role="status">{tx(available ? 'resources:loading' : 'resources:scope.unavailable')}</p>

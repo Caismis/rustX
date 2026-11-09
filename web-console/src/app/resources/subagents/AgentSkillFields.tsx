@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import type { SourceScope, SourceSettings, SourceToolSelection } from '../../../../../protocol/app-server/v77';
 import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
@@ -11,18 +12,21 @@ export function AgentSkillFields({ client, source, scope, active, value, change 
   value: SourceToolSelection; change: (next: SourceToolSelection) => void;
 }) {
   const tx = useTranslation();
+  const heading = useId();
   const catalog = useSkillCatalog(client, source, active, scope);
   const scopes = resourceScopes(scope);
   const skills = (catalog?.skills ?? []).filter(skill => !skill.disable_model_invocation && scopes.includes(skill.provenance.source));
   const selected = value === 'all' ? skills.map(skill => skill.catalog.name) : value;
   const names = new Set(skills.map(skill => skill.catalog.name));
   const unavailable = catalog && !catalog.error ? selected.filter(name => !names.has(name)) : [];
-  return <fieldset className={css.scopedTools}>
-    <legend>{tx('settings:extension-detail.skill-prompt-visibility')}</legend>
-    <div className={css.skillControls}>
-      <span>{tx('resources:subagents.all-skills')}</span>
-      <Switch label={tx('resources:subagents.all-skills')} checked={value === 'all'}
-        onChange={checked => change(checked ? 'all' : [])} />
+  return <div className={css.choiceGroup} role="group" aria-labelledby={heading}>
+    <div className={css.sectionHead}>
+      <h3 id={heading}>{tx('settings:extension-detail.skill-prompt-visibility')}</h3>
+      <div className={css.toolSwitch}>
+        <span>{tx('resources:subagents.all-skills')}</span>
+        <Switch label={tx('resources:subagents.all-skills')} checked={value === 'all'}
+          onChange={checked => change(checked ? 'all' : [])} />
+      </div>
     </div>
     {catalog?.error ? <p role="status">{tx('resources:subagents.skills-failed')}</p>
       : !catalog && client && active ? <p role="status">{tx('resources:subagents.discovering-skills')}</p>
@@ -34,9 +38,9 @@ export function AgentSkillFields({ client, source, scope, active, value, change 
         </ScopedChoices>;
       })}
     {!!unavailable.length && <div className={css.scopedChoices}>
-      <h4>{tx('resources:subagents.unavailable-skills')}</h4>
+      <span className={css.scopeHeading}>{tx('resources:subagents.unavailable-skills')}</span>
       <ResourceChoices label={tx('resources:subagents.unavailable-skills')} options={unavailable.map(name => ({ name }))}
         selected={selected} change={change} />
     </div>}
-  </fieldset>;
+  </div>;
 }

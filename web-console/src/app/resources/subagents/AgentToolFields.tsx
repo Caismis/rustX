@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { NamedAgentProfileDocument, SourceScope, SourceSettings, SourceToolSelection, WorkflowToolChoice, WorkflowToolSource } from '../../../../../protocol/app-server/v77';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
@@ -17,6 +17,7 @@ export function AgentToolFields({ source, scope, value, change, loadMcpTools }: 
   loadMcpTools?: LoadMcpTools;
 }) {
   const tx = useTranslation();
+  const heading = useId();
   const tools = value.tools ?? {};
   const sourceSelections = new Map(Object.entries(tools.sources ?? {}));
   const workflows = value.workflows ?? [];
@@ -26,9 +27,9 @@ export function AgentToolFields({ source, scope, value, change, loadMcpTools }: 
   const workflowEntries = entries.filter(entry => entry.family === 'workflow');
   const inherited = scope === 'user' && source.target.kind === 'workspace';
 
-  return <div className={css.toolChoices}>
-    <div className={css.toolChoicesHead}>
-      <h2>{tx('resources:subagents.tools')}</h2>
+  return <section className={css.section} aria-labelledby={heading}>
+    <div className={css.sectionHead}>
+      <h2 id={heading}>{tx('resources:subagents.tools')}</h2>
       {!!(tools.builtin?.length || sourceSelections.size || workflows.length) && <Button size="sm"
         onClick={() => change({ tools: { builtin: [], sources: {} }, workflows: [] })}>{tx('resources:subagents.clear-tools')}</Button>}
     </div>
@@ -36,7 +37,7 @@ export function AgentToolFields({ source, scope, value, change, loadMcpTools }: 
       <CheckboxList label={tx('settings:extension-detail.native-tools')} values={nativeTools}
         selected={tools.builtin ?? []} change={builtin => change({ tools: { ...tools, builtin } })} />
     </div>
-    <fieldset className={css.scopedTools}>
+    <fieldset className={css.choiceGroup}>
       <legend>{tx('resources:subagents.mcp-tools')}</legend>
       {scopes.map(owner => {
         // An inherited profile still belongs to Global, even if the current
@@ -58,7 +59,7 @@ export function AgentToolFields({ source, scope, value, change, loadMcpTools }: 
         </ScopedChoices>;
       })}
     </fieldset>
-    <fieldset className={css.scopedTools}>
+    <fieldset className={css.choiceGroup}>
       <legend>{tx('resources:subagents.workflows')}</legend>
       {workflowEntries.length > 0 && <p>{tx('resources:subagents.workflows-help')}</p>}
       {scopes.map(owner => {
@@ -72,7 +73,7 @@ export function AgentToolFields({ source, scope, value, change, loadMcpTools }: 
         </ScopedChoices>;
       })}
     </fieldset>
-  </div>;
+  </section>;
 }
 
 function McpServerTools({ scope, owner, name, selected, change, loadMcpTools }: {

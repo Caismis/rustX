@@ -7,7 +7,7 @@
 .path { overflow-wrap: anywhere; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .skill { max-height: 60vh; overflow: auto; margin-top: 20px; }
 .skill :first-child { margin-top: 0; }
-.agentEditor { padding-top: 16px; }
+.agentEditor { padding-block: 20px 0; scroll-padding-bottom: 76px; }
 
 @media (max-width: 600px) {
   .heading { flex-wrap: wrap; padding-bottom: 12px; }

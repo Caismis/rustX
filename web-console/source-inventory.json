@@ -8353,7 +8353,7 @@
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
       "destination": "web-console/src/app/resources/subagents/AgentEditor.tsx",
-      "treatment": "Extracted existing rustX native resource controls into independent resource modules; preserves the existing adapted disclosure and form presentation. Native source actors own revisions, inheritance and writes. Upstream source pin unchanged.",
+      "treatment": "Independent rustX resource editor with Harness-style section headings, setting rows and a shared save footer. Native source actors own revisions, inheritance and writes. Upstream source pin unchanged.",
       "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
       "retained_dependencies": [
         "../../../../../protocol/app-server/v77",
@@ -8415,7 +8415,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "65c1af4aab616c91837fff33188fc04eb66de89d4f21bc54dc5e937b91b63cbd"
+      "local_sha256": "f775efc345096dce642dc56525abfdbcdc43a10f3d561778920617c462bef717"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",

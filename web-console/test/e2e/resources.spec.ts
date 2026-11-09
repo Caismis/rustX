@@ -61,7 +61,7 @@ for(const width of [1440,390]) test(`independent resources have exact global and
    writeFileSync(join(directory,'SKILL.md'),`---\nname: ${name}\ndescription: Catalog entry ${index}.\n---\n# ${name}\nInstructions.\n`);
   }
   writeFileSync(f.settings,readFileSync(f.settings,'utf8')+'\n[agent]\nskills = ["global-guide"]\nagents = ["global-reviewer"]\n');
-  await page.setViewportSize({width,height:1000});await page.emulateMedia({colorScheme:'dark',reducedMotion:'reduce'});
+  await page.setViewportSize({width,height:1000});await page.emulateMedia({colorScheme:width === 390 ? 'dark' : 'light',reducedMotion:'reduce'});
   await routeWorkspaceHost(page,f);await page.goto('/');await connectRemote(page,f.endpoint,f.token);
   const draft=page.getByRole('textbox',{name:'Message',exact:true});await draft.fill('Keep my conversation draft');
   await page.getByRole('button',{name:'Skills',exact:true}).click();
@@ -119,8 +119,10 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect(naming.getByText('This name already exists.')).toBeVisible();
   await expect(saveNew).toBeDisabled();
   await naming.getByLabel('Name', { exact: true }).fill('auditor');
+  await expect(saveNew).toBeInViewport({ ratio: 1 });
   await naming.getByLabel('Description', { exact: true }).fill('Reviews code');
   await naming.getByLabel('System prompt', { exact: true }).fill('Check the changes carefully.');
+  await captureEvidence(agents, `subagent-profile-${width}`);
   await naming.getByRole('button', { name: 'Configuration scope', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Workspace A', exact: true }).click();
   await expect(naming.getByLabel('Name', { exact: true })).toHaveValue('auditor');
@@ -148,7 +150,17 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect(draftWorkflows.getByRole('group', { name: 'Workspace' })).toHaveCount(0);
   await draftMcp.getByRole('checkbox', { name: 'render_image' }).check();
   await expect(draftSkills.getByRole('region', { name: 'Workspace' })).toHaveCount(0);
+  const filter = draftSkills.getByRole('searchbox', { name: 'Filter options in Global' });
+  await filter.fill('reviewing changes');
   await draftSkills.getByRole('checkbox', { name: 'global-guide' }).check();
+  await filter.fill('entry 33');
+  await expect(draftSkills.getByRole('checkbox', { name: 'global-guide' })).toHaveCount(0);
+  await filter.press('Enter');
+  await expect(naming).toBeVisible();
+  await expect(draftSkills.getByRole('checkbox', { name: 'catalog-33' })).toBeVisible();
+  await expect(saveNew).toBeInViewport({ ratio: 1 });
+  await filter.fill('global-guide');
+  await expect(draftSkills.getByRole('checkbox', { name: 'global-guide' })).toBeChecked();
   await draftWorkflows.getByRole('checkbox', { name: 'global_flow' }).check();
   const guidance = naming.getByRole('switch', { name: 'Include AGENTS.md' });
   await expect(guidance).toBeChecked();

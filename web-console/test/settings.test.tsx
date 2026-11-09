@@ -240,13 +240,14 @@ it('edits an independent named-Agent whole resource with inherited model and ext
   await openResourceModule('subagents');
   await newSubagent('researcher');
   expect(screen.getByRole('button', { name: 'Inherit default Model' })).toBeTruthy();
-  expect((screen.getByLabelText('todo') as HTMLInputElement).checked).toBe(false);
+  const todo = screen.getByRole('switch', { name: 'Todo' });
+  expect(todo.getAttribute('aria-checked')).toBe('false');
   fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Research a topic' } });
   fireEvent.change(screen.getByLabelText('System prompt'), { target: { value: 'Read and report findings.' } });
   fireEvent.click(screen.getByLabelText('read'));
   fireEvent.click(screen.getByRole('button', { name: 'Clear tools' }));
   expect((screen.getByLabelText('read') as HTMLInputElement).checked).toBe(false);
-  fireEvent.click(screen.getByLabelText('read')); fireEvent.click(screen.getByLabelText('read_image')); fireEvent.click(screen.getByLabelText('todo'));
+  fireEvent.click(screen.getByLabelText('read')); fireEvent.click(screen.getByLabelText('read_image')); fireEvent.click(todo);
   fireEvent.click(screen.getByRole('button', { name: 'Save New subagent' }));
   await waitFor(() => expect(subject.request.mock.calls.find(([operation]) => operation.method === 'configuration/sourceWrite')?.[0]).toMatchObject({ params: { expected_revision: 'missing', mutation: { kind: 'agent', name: 'researcher', authored: { description: 'Research a topic', tools: { builtin: ['read', 'read_image'] }, plugins: { todo: { enabled: true } } } } } }));
 });
