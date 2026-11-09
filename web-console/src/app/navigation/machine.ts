@@ -414,10 +414,16 @@ export const shellNavigationMachine = setup({
       // startup selection before Native publishes executable controls.
       const restoringCommitted = returning && context.home.kind === 'session'
         && 'sessionId' in output.route && context.home.sessionId === output.route.sessionId;
-      const draftSession = output.route.kind === 'session-draft'
+      let draftSession = output.route.kind === 'session-draft'
         ? context.draftSession?.sessionId === output.route.sessionId ? context.draftSession
           : { sessionId: output.route.sessionId, intentRevision: context.intentRevision, intent: { recovery: true as const, destination: { kind: restoringCommitted ? 'restore-session' as const : 'session' as const, sessionId: output.route.sessionId, sidebar: false }, route: output.route, generation: output.pending.generation, authority: output.pending.authority } }
         : undefined;
+      // A primary-page visit does not replace the retained restore-eligible
+      // Session. Its next Home publication owns the current navigation revision.
+      if (returning && draftSession?.intent.destination.kind === 'restore-session'
+        && draftSession.intentRevision !== context.intentRevision) {
+        draftSession = { ...draftSession, intentRevision: context.intentRevision };
+      }
       return { dismissedSidebar: undefined, retry: context.retry && output.replay ? { ...context.retry, replay: output.replay } : undefined, draftSession, binding: preserveDraft ? context.binding : context.binding + 1, control, route: output.route, pending: undefined, error: undefined,
         command: (output.pending.destination.kind === 'session' || output.pending.destination.kind === 'restore-session') && output.pending.destination.command ? { request: output.pending.destination.command, route: output.route, generation: output.pending.generation } : undefined,
         restored: output.route.kind === 'session' && output.content ? { conversation: output.observation!.target.conversation_id, content: output.content } : preserveDraft && (returning || context.restored?.conversation === output.observation?.target.conversation_id) ? context.restored : undefined,

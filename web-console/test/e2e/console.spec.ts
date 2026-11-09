@@ -191,3 +191,33 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
   } catch (error) { console.error(fixture.diagnostics(), await page.locator('.notice').allTextContents(), wire.responses); throw error; }
   finally { try { await remote?.shutdown(); } finally { await stopDogfoodPage(page, fixture, passed); } }
 });
+
+for (const destination of ['Workflows', 'Scheduled Tasks', 'Settings']) test(`committed Session survives repeated offline ${destination}/Home returns and a page reload`, async ({ page }) => {
+  const fixture = await startDogfood();
+  let native: AppServerHost | undefined;
+  try {
+    native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+    const session = (await native.createSession({ cwd: fixture.workspaceA })).session;
+    await native.renameSession(session.id, 'Retained offline Session');
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
+    await page.locator(`button[data-session-id="${session.id}"]`).click();
+    await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
+    const route = () => page.evaluate(() => JSON.parse(localStorage.getItem('rustx-console-view-v3')!).route);
+    for (let round = 0; round < 2; round++) {
+      await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: destination, exact: true }).click();
+      if (round === 0) await connectionAction(page, 'Disconnect');
+      await returnHome(page);
+      await expect(page.getByLabel('Session title')).toHaveText('Retained offline Session');
+      await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session-draft');
+      await expect.poll(route).toEqual({ kind: 'session', sessionId: session.id });
+    }
+    await page.reload(); await connectRemote(page, fixture.endpoint, fixture.token);
+    await expect(page.getByLabel('Session title')).toHaveText('Retained offline Session');
+    await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
+    expect(await selectedSessionId(page)).toBe(session.id);
+    expect((await fixture.control('requests')).requests).toEqual([]);
+  } finally {
+    try { await native?.shutdown(); } finally { await stopDogfoodPage(page, fixture, false); }
+  }
+});

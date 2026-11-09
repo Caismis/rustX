@@ -198,7 +198,7 @@ it('a stale transient restore failure cannot replace a newer page or its saved h
   expect(ui.queryByText('Obsolete restore failure')).toBeNull();
 });
 
-it('a Home round trip keeps a cold explicit selection ephemeral until Native admits it', async () => {
+it.each(['Workflows', 'Scheduled Tasks', 'Settings'])('repeated %s/Home returns keep a cold explicit selection ephemeral until Native admits it', async page => {
   seed({ kind: 'session', sessionId: 'A' }, ['A']);
   server = newServer(); await server.attached('A');
   const ui = await mount();
@@ -206,10 +206,12 @@ it('a Home round trip keeps a cold explicit selection ephemeral until Native adm
   await click(ui, 'Open Session B');
   const pending = await server.waitFor('thread/resume', 2);
   expect(hints().route).toEqual({ kind: 'new-conversation' });
-  await click(ui, 'Workflows');
-  await click(ui, 'Home');
-  expect(document.querySelector('[data-shell-route="session-draft"]')).not.toBeNull();
-  expect(hints().route).toEqual({ kind: 'new-conversation' });
+  for (let round = 0; round < 2; round++) {
+    await click(ui, page);
+    await click(ui, 'Home');
+    expect(document.querySelector('[data-shell-route="session-draft"]')).not.toBeNull();
+    expect(hints().route).toEqual({ kind: 'new-conversation' });
+  }
   await act(async () => server.reply(pending));
   await waitFor(() => expect(hints().route).toEqual({ kind: 'session', sessionId: 'B' }));
   expect(title()).toBe('Session B');
@@ -238,21 +240,21 @@ it.each([false, true])('Connection Settings preserves startup restoration while 
   }
 });
 
-it('a committed Session stays selected across a disconnected Home return and a fresh page', async () => {
+it.each(['Workflows', 'Scheduled Tasks', 'Settings'])('a committed Session survives repeated offline %s/Home returns and a fresh page', async page => {
   server = newServer(); await server.attached('A', 'B');
   const ui = await mount(); await click(ui, 'Open Session B');
-  await click(ui, 'Settings');
-  await act(async () => server.client.disconnect());
-  await click(ui, 'Home');
-  expect(title()).toBe('Session B');
-  expect(document.querySelector('[data-shell-route="session-draft"]')).not.toBeNull();
-  expect(hints().route).toEqual({ kind: 'session', sessionId: 'B' });
-  await act(async () => server.connect());
-  await waitFor(() => expect(document.querySelector('[data-shell-route="session"]')).not.toBeNull());
-  expect(hints().route).toEqual({ kind: 'session', sessionId: 'B' });
+  for (let round = 0; round < 2; round++) {
+    await click(ui, page);
+    if (round === 0) await act(async () => server.client.disconnect());
+    await click(ui, 'Home');
+    expect(title()).toBe('Session B');
+    expect(document.querySelector('[data-shell-route="session-draft"]')).not.toBeNull();
+    expect(hints().route).toEqual({ kind: 'session', sessionId: 'B' });
+  }
   await act(async () => ui.unmount()); await server.client.disconnect(); server = newServer();
   await mount(); await act(async () => server.connect());
   await waitFor(() => expect(title()).toBe('Session B'));
+  expect(document.querySelector('[data-shell-route="session"]')).not.toBeNull();
 });
 
 it('a failed startup hint survives Settings while its same Home return awaits authorization', async () => {

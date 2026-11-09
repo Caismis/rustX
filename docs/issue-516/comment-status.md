@@ -1,6 +1,6 @@
 # PR 517 comment implementation status
 
-Checked on 2026-11-09, Asia/Shanghai, through review comment 6736369065 and the
+Checked on 2026-11-09, Asia/Shanghai, through review comment 6738080037 and the
 requested first-image/navigation policy. Current repairs cover retained geometry
 visibility across primary pages, v3 browser fixtures, committed Session recovery,
 proxy retirement, narrow child titles and the Native closed-peer test precondition.
@@ -41,6 +41,7 @@ These follow-ups are not represented as disabled placeholder controls.
 
 | Comment | Implementation status |
 | --- | --- |
+| [6738080037](https://github.com/Caismis/rustX/pull/517#issuecomment-6738080037) | Repeated Home publication renews the retained restore-eligible Session's hint revision. Cold explicit selections remain ephemeral; replacement navigation and authority retirement retain their protections. Component and real-Native browser regressions cover two offline primary-page/Home returns followed by a fresh App or page reload. The closed-peer framing test now creates and closes its peer in an isolated test process with both original error assertions; full Linux and macOS CI passed at `9f887269e`. Current validation is in [the repair report](comment-ci-repairs-20261109.md). |
 | [6736369065](https://github.com/Caismis/rustX/pull/517#issuecomment-6736369065) | Home activation reaches retained artifact geometry while preserving its canvas and fixed copy. The cold-MCP fixtures use explicit v3 Session routes with their original call-count assertions. Held Workspace reads assert the disabled preparation label, then the enabled Send action, with input and layout preservation. Real-App route and existing hidden surface/outline regressions cover visibility; the associated CI repairs and validation are recorded in [the repair report](comment-ci-repairs-20261109.md). |
 | [6681877806](https://github.com/Caismis/rustX/pull/517#issuecomment-6681877806) | Corrected the Scheduler documentation to describe Native's initial model capture and Session persistence when the UI omits `settings.model`. Later Workspace default changes do not replace that Session's selected model; this does not freeze other model configuration. This is based on native creation/capture code; the existing frontend test proves request omission only, and no native end-to-end regression is claimed. |
 | [6680895688](https://github.com/Caismis/rustX/pull/517#issuecomment-6680895688) | A settled Workspace source with no prospective approval mode now shows Native's configuration diagnostic, or a localized unavailable explanation, through the existing source owner and reread action. An available previously published Session catalog cannot admit sending. Actual reads still use the Send-preparation spinner; no waiting footer is restored. Two real-App regressions first failed because the settled diagnostic was absent, then passed with draft retention, blocked button/keyboard submission, reread preparation and repaired-source recovery without automatic sending. |
