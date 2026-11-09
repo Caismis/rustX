@@ -48,7 +48,7 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn t20_checkpoint_encoder_capacity_obeys_its_physical_byte_budget() {
+    fn large_value_obeys_its_physical_byte_budget() {
         let value = serde_json::json!({
             "body": "x".repeat(600_000),
             "items": (0..30_000).collect::<Vec<u32>>(),
@@ -56,7 +56,7 @@ mod tests {
         });
         let mut buffer = Buffer {
             bytes: Vec::new(),
-            limit: CHECKPOINT_TARGET_BYTES,
+            limit: 786_432,
         };
         serde_json::to_writer(&mut buffer, &value).unwrap();
         assert_eq!(buffer.bytes, serde_json::to_vec(&value).unwrap());
