@@ -163,7 +163,7 @@ it('reload retries the unresolved startup selection after a transient failure an
   expect(server.requests.some(row => row.request.method === 'session/read' && row.request.params.session_id === 'B')).toBe(true);
   expect(title()).toBe('Session B');
 });
-it.each(['Workflows', 'New Conversation', 'Open Session A'] as const)('a failed startup restore yields its saved hint to explicit %s intent', async name => {
+it.each(['Workflows', 'Scheduled Tasks', 'New Conversation', 'Open Session A'] as const)('a failed startup restore yields its saved hint to explicit %s intent', async name => {
   seed({kind:'session',sessionId:'B'}); server = newServer(); server.held.add('session/read');
   const ui = await mount(); await act(async () => server.connect());
   const pending = await server.waitFor('session/read', 1);
@@ -171,9 +171,14 @@ it.each(['Workflows', 'New Conversation', 'Open Session A'] as const)('a failed 
   const other = await server.waitFor('session/read', 2);
   server.held.delete('session/read'); await act(async () => server.reply(other));
   await click(ui, name);
-  expect(hints().route).toEqual(name === 'Open Session A' ? {kind:'session',sessionId:'A'} : name === 'Workflows' ? {kind:'workflows'} : {kind:'new-conversation',workspaceId:'workspace-a'});
+  expect(hints().route).toEqual(name === 'Open Session A' ? {kind:'session',sessionId:'A'} : name === 'Workflows' ? {kind:'workflows'} : name === 'Scheduled Tasks' ? {kind:'schedules'} : {kind:'new-conversation',workspaceId:'workspace-a'});
+  if (name === 'Workflows' || name === 'Scheduled Tasks') {
+    await click(ui, 'Home');
+    expect(server.client.isAttachmentControlCurrent('B', server.client.getSnapshot().views.B?.attachmentObservation)).toBe(false);
+    expect(hints().route).toEqual({kind:'new-conversation'});
+  }
 });
-it('a failed explicit Fork retires the unresolved startup hint even when its draft stays visible', async () => {
+it.each(['Settings', 'Workflows', 'Scheduled Tasks'])('a failed Fork keeps its startup hint retired through repeated %s/Home returns and a fresh page', async page => {
   seed({kind:'session',sessionId:'B'}); server = newServer(); server.held.add('session/read');
   const ui = await mount(); await act(async () => server.connect());
   const pending = await server.waitFor('session/read', 1);
@@ -186,6 +191,16 @@ it('a failed explicit Fork retires the unresolved startup hint even when its dra
   expect(ui.getByRole('alert').textContent).toContain('completed response');
   expect(document.querySelector('[data-shell-route="session-draft"]')).not.toBeNull();
   expect(hints().route).toEqual({kind:'new-conversation'});
+  for (let round = 0; round < 2; round++) {
+    await click(ui, page); await click(ui, 'Home');
+    expect(title()).toBe('Session B');
+    expect(server.client.isAttachmentControlCurrent('B', server.client.getSnapshot().views.B?.attachmentObservation)).toBe(false);
+    expect(hints().route).toEqual({kind:'new-conversation'});
+  }
+  await act(async () => ui.unmount()); await server.client.disconnect(); server = newServer();
+  await mount(); await act(async () => server.connect());
+  expect(title()).toBeUndefined();
+  expect(document.querySelector('[data-shell-route="new-conversation"]')).not.toBeNull();
 });
 it('a stale transient restore failure cannot replace a newer page or its saved hint', async () => {
   seed({kind:'session',sessionId:'B'}); server = newServer(); server.held.add('session/read');
@@ -196,6 +211,31 @@ it('a stale transient restore failure cannot replace a newer page or its saved h
   expect(document.querySelector('[data-workflows-level]')).not.toBeNull();
   expect(hints().route).toEqual({kind:'workflows'});
   expect(ui.queryByText('Obsolete restore failure')).toBeNull();
+});
+
+it('a failed replacement retires an admitted selection while its Native recovery remains pending', async () => {
+  server = newServer(); await server.attached('A', 'B');
+  const ui = await mount(); await click(ui, 'Open Session B');
+  const count = server.requests.filter(row => row.request.method === 'session/checkpoint').length;
+  server.held.add('session/checkpoint');
+  let recovery!: Promise<unknown>;
+  await act(async () => { recovery = server.client.refresh('B').catch(() => {}); });
+  await server.waitFor('session/checkpoint', count + 1);
+  await click(ui, 'Settings'); await click(ui, 'Home');
+  expect(hints().route).toEqual({kind:'session',sessionId:'B'});
+  expect(server.client.isAttachmentControlCurrent('B', server.client.getSnapshot().views.B?.attachmentObservation)).toBe(false);
+  await click(ui, 'Session actions for Session A');
+  await act(async () => fireEvent.click(ui.getByRole('menuitem', {name:'Fork session'})));
+  expect(ui.getByRole('alert').textContent).toContain('completed response');
+  for (const page of ['Settings', 'Workflows', 'Scheduled Tasks']) {
+    await click(ui, page); await click(ui, 'Home');
+    expect(hints().route).toEqual({kind:'new-conversation'});
+    expect(server.client.isAttachmentControlCurrent('B', server.client.getSnapshot().views.B?.attachmentObservation)).toBe(false);
+  }
+  await act(async () => ui.unmount()); await server.client.disconnect(); await recovery; server = newServer();
+  await mount(); await act(async () => server.connect());
+  expect(title()).toBeUndefined();
+  expect(document.querySelector('[data-shell-route="new-conversation"]')).not.toBeNull();
 });
 
 it.each(['Workflows', 'Scheduled Tasks', 'Settings'])('repeated %s/Home returns keep a cold explicit selection ephemeral until Native admits it', async page => {

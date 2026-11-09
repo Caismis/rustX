@@ -57,7 +57,8 @@ export interface ShellNavigationContext extends Omit<Input, 'route'> {
   retry?: ResponseRetry;
   command?: { request: CommandRequest; route: ShellRoute; generation: number };
   restored?: { conversation: string; content: UserInputBlock[] };
-  draftSession?: { sessionId: string; intent: Pending; intentRevision: number };
+  /** Admission history permits retaining hints, never executable authority. */
+  draftSession?: { sessionId: string; intent: Pending; intentRevision: number; wasAdmitted: boolean };
   /** Keep an unscoped New action's origin until its Workspace is classified. */
   draftWorkspaceSession?: string;
   publication?: { sidebar: boolean; intent?: Pending; control: object };
@@ -113,7 +114,8 @@ function pendingSessionDraft(context: ShellNavigationContext, pending: Pending, 
       && context.client.getSnapshot().views[sessionId]?.target?.conversation_id !== destination.conversationId;
   return { binding: replacing ? context.binding + 1 : context.binding,
     control: replacing ? {} : context.control,
-    route, draftSession: { sessionId, intent: pending, intentRevision } };
+    route, draftSession: { sessionId, intent: pending, intentRevision,
+      wasAdmitted: pending.recovery === true && !replacing && context.draftSession?.wasAdmitted === true } };
 }
 /** Disposable preparation owns publication only. Native calls below are finite
  * lifecycle commands: aborting this actor retires admission, never settlement. */
@@ -344,7 +346,17 @@ export const shellNavigationMachine = setup({
       && sessionRecoveryCurrent(context.client, context.route.sessionId),
   },
   actions: {
-    navigationIntent: assign(({ context }) => ({ intentRevision: context.intentRevision + 1 })),
+    navigationIntent: assign(({ context, event }) => {
+      const intentRevision = context.intentRevision + 1, draft = context.draftSession;
+      // Primary pages carry a currently eligible, previously admitted Home hint.
+      // Replacement intents and unadmitted startup drafts keep stale revisions.
+      if ((event.type === 'WORKFLOWS' || event.type === 'SCHEDULES')
+        && draft?.wasAdmitted && draft.intent.destination.kind === 'restore-session' && draft.intentRevision === context.intentRevision
+        && context.home.kind === 'session-draft' && context.home.sessionId === draft.sessionId) {
+        return { intentRevision, draftSession: { ...draft, intentRevision } };
+      }
+      return { intentRevision };
+    }),
     requestLeave: assign(({ context, event, self }) => {
       const intent = { event: event as NavigationEvent };
       context.workflows.send({ type: 'LEAVE', proceed: () => self.send({ type: 'WORKFLOW.LEFT', intent }), cancelled: () => self.send({ type: 'WORKFLOW.CANCELLED', intent }) });
@@ -383,7 +395,7 @@ export const shellNavigationMachine = setup({
       // Its own executable promotion retains this same binding.
       return { ...((destination.kind === 'restore-session' || destination.kind === 'session') ? pendingSessionDraft(context, pending, destination.sessionId) : {}), pending, retry, dismissedSidebar: undefined, command: undefined, error: undefined };
     }),
-    creationKnown: assign(({ context, event }) => event.type === 'CREATION.KNOWN' ? { route: { kind: 'session-draft' as const, sessionId: event.sessionId }, draftSession: { sessionId: event.sessionId, intent: event.pending, intentRevision: context.intentRevision } } : {}),
+    creationKnown: assign(({ context, event }) => event.type === 'CREATION.KNOWN' ? { route: { kind: 'session-draft' as const, sessionId: event.sessionId }, draftSession: { sessionId: event.sessionId, intent: event.pending, intentRevision: context.intentRevision, wasAdmitted: false } } : {}),
     create: assign(({ context, event }) => ({ pending: { destination: { kind: 'creation' as const, binding: event.type === 'CREATE' ? event.binding : String(context.binding) }, route: context.route, generation: context.client.getSnapshot().generation, authority: context.client.getSnapshot().authorityRevision }, command: undefined, error: undefined })),
     retire: assign({ dismissedSidebar: () => undefined, retry: () => undefined, draftSession: () => undefined, pending: () => undefined, command: () => undefined, error: () => undefined }),
     retirePreparation: assign(({ context }) => {
@@ -414,16 +426,10 @@ export const shellNavigationMachine = setup({
       // startup selection before Native publishes executable controls.
       const restoringCommitted = returning && context.home.kind === 'session'
         && 'sessionId' in output.route && context.home.sessionId === output.route.sessionId;
-      let draftSession = output.route.kind === 'session-draft'
+      const draftSession = output.route.kind === 'session-draft'
         ? context.draftSession?.sessionId === output.route.sessionId ? context.draftSession
-          : { sessionId: output.route.sessionId, intentRevision: context.intentRevision, intent: { recovery: true as const, destination: { kind: restoringCommitted ? 'restore-session' as const : 'session' as const, sessionId: output.route.sessionId, sidebar: false }, route: output.route, generation: output.pending.generation, authority: output.pending.authority } }
+          : { sessionId: output.route.sessionId, intentRevision: context.intentRevision, wasAdmitted: restoringCommitted, intent: { recovery: true as const, destination: { kind: restoringCommitted ? 'restore-session' as const : 'session' as const, sessionId: output.route.sessionId, sidebar: false }, route: output.route, generation: output.pending.generation, authority: output.pending.authority } }
         : undefined;
-      // A primary-page visit does not replace the retained restore-eligible
-      // Session. Its next Home publication owns the current navigation revision.
-      if (returning && draftSession?.intent.destination.kind === 'restore-session'
-        && draftSession.intentRevision !== context.intentRevision) {
-        draftSession = { ...draftSession, intentRevision: context.intentRevision };
-      }
       return { dismissedSidebar: undefined, retry: context.retry && output.replay ? { ...context.retry, replay: output.replay } : undefined, draftSession, binding: preserveDraft ? context.binding : context.binding + 1, control, route: output.route, pending: undefined, error: undefined,
         command: (output.pending.destination.kind === 'session' || output.pending.destination.kind === 'restore-session') && output.pending.destination.command ? { request: output.pending.destination.command, route: output.route, generation: output.pending.generation } : undefined,
         restored: output.route.kind === 'session' && output.content ? { conversation: output.observation!.target.conversation_id, content: output.content } : preserveDraft && (returning || context.restored?.conversation === output.observation?.target.conversation_id) ? context.restored : undefined,

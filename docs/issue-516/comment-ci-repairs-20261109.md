@@ -1,8 +1,9 @@
 # PR 517 comment and CI repairs
 
-These repairs address [review 6736369065](https://github.com/Caismis/rustX/pull/517#issuecomment-6736369065),
-[review 6738080037](https://github.com/Caismis/rustX/pull/517#issuecomment-6738080037)
-and the failures observed in [CI run 42582809101](https://github.com/Caismis/rustX/actions/runs/42582809101)
+These repairs address reviews [6736369065](https://github.com/Caismis/rustX/pull/517#issuecomment-6736369065),
+[6738080037](https://github.com/Caismis/rustX/pull/517#issuecomment-6738080037) and
+[6742233989](https://github.com/Caismis/rustX/pull/517#issuecomment-6742233989),
+together with failures observed in [CI run 42582809101](https://github.com/Caismis/rustX/actions/runs/42582809101)
 at `f03f842f5be626d1394afd1a9ab0bfc19ab37b4a`.
 
 ## Behavior
@@ -17,12 +18,15 @@ at `f03f842f5be626d1394afd1a9ab0bfc19ab37b4a`.
   disabled “Preparing to send…” action before the enabled “Send” action, retaining
   draft, selection, focus and composer geometry assertions.
 - A committed Session returning Home while disconnected retains a restore intent.
-  Publishing that same Home renews the restore hint's navigation revision, including
-  repeated Workflows, Scheduled Tasks and Settings visits. Reconnect and page reload
-  restore that Session. An uncommitted cold selection keeps its existing ephemeral
-  intent; explicit replacement navigation and authority changes retain their existing
-  protections. Regressions cover two offline round trips and a fresh App/client for
-  all three primary pages, plus repeated cold-selection returns before admission.
+  The retained editor records whether it was previously admitted; that history
+  permits hint retention but never grants executable controls. Workflows and
+  Scheduled Tasks carry an already-current hint revision forward only for the same
+  previously admitted Home editor. Home publication never renews a stale hint from
+  its destination tag alone. Unadmitted startup drafts, failed Fork replacements,
+  cold selections, cancellation and authority retirement retain their protections.
+  Regressions cover repeated offline round trips and fresh App/client restoration
+  for all three primary pages, failed Forks followed by repeated returns and reload,
+  and failed replacement while a previously admitted editor awaits Native recovery.
 - Narrow conversation headers use an 8px utility gap, preserving readable current
   child titles at 390px. Native child inspection keeps its existing width and
   horizontal-overflow assertions.
@@ -56,7 +60,7 @@ passes its existing reference without a baseline or noise-policy update.
 
 ## Verification
 
-- 473 related React/jsdom tests pass across 36 files. These ran in an isolated
+- 477 related React/jsdom tests pass across 36 files. These ran in an isolated
   Windows configuration with the production React/alias settings; Host startup
   prerequisites were excluded from that component check.
 - All six original framing tests pass against the production framing definitions
