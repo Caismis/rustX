@@ -137,6 +137,7 @@ async def main(a):
         'rounds': a.rounds, 'cache_probes': a.cache_probes,
         'protocol_version': PROTOCOL_VERSION, 'memory_only': a.memory_only,
         'rotate_active': a.rotate_active,
+        'idle_seconds': a.idle_seconds,
         'session_names': 'Explicit fixture names; automatic title generation is not part of this workload.',
         'retirement': 'Observe native idle after terminal delivery before starting another turn; CPU windows include these reads.',
         'scope': 'Actual native App Server over authenticated WebSocket. '
@@ -331,6 +332,13 @@ shutdown_deadline_ms = 30000
                 await asyncio.gather(*(turn(i) for i in range(start, min(start + 8, a.sessions))))
             if seed + 1 in [1, a.history]:
                 await sample(f'seeded_history_{seed + 1}')
+        if a.idle_seconds:
+            idle_began = time.monotonic()
+            for seconds in a.idle_seconds:
+                await asyncio.sleep(max(0, idle_began + seconds - time.monotonic()))
+                # Manager diagnostics do not access conversation SQLite. Every
+                # actor/subscription and its exact seeded history stay loaded.
+                await sample(f'idle_{seconds}s')
         if a.cache_probes:
             # All endpoints below still hold every actor and subscription.
             # Diagnostic RPCs touch manager metadata, not conversation SQLite.
@@ -587,11 +595,14 @@ if __name__ == '__main__':
     parser.add_argument('--rounds', type=int, default=16)
     parser.add_argument('--cpu-profiler', type=Path)
     parser.add_argument('--rotate-active', action='store_true', help='Advance the active session group each repeat instead of keeping a fixed prefix')
+    parser.add_argument('--idle-seconds', type=int, nargs='+', default=[], help='Sample unchanged loaded memory at these seconds after seeding; requires memory-only')
     parser.add_argument('--memory-only', action='store_true', help='Measure empty/seeded memory and native close/reload checks without active, browse, slow-consumer or cancel scenarios')
     parser.add_argument('--cache-probes', action='store_true', help='Measure page/statement idle windows, four warm sessions, Inspector and cold/warm128-session rotation')
     options = parser.parse_args()
     assert (1 if options.memory_only else 2) <= options.sessions <= 256
     assert options.memory_only or max(options.widths) <= options.sessions
     assert options.history > 0 and options.rounds > 0
+    assert not options.idle_seconds or (options.memory_only and not options.cache_probes
+        and options.idle_seconds == sorted(set(options.idle_seconds)) and min(options.idle_seconds) > 0)
     assert not options.cache_probes or options.sessions >= 8
     asyncio.run(main(options))
