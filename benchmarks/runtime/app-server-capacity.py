@@ -35,6 +35,27 @@ def counter(pid):
     return {name: (base / name).read_text() for name in ['stat', 'io', 'smaps_rollup', 'status']}
 
 
+def retained_files(root):
+    """Endpoint residency, not cumulative writes; include sparse allocation."""
+    result = {}
+    for path in root.rglob('*'):
+        try:
+            if not path.is_file():
+                continue
+            stat = path.stat()
+        except FileNotFoundError:
+            continue
+        kind = next((kind for suffix, kind in [('.sqlite-wal', 'wal'),
+                    ('.sqlite-shm', 'shm'), ('.sqlite', 'main')] if path.name.endswith(suffix)), 'other')
+        group = result.setdefault(kind, {'files': 0, 'logical_bytes': 0,
+                                         'allocated_bytes': 0, 'largest_logical_bytes': 0})
+        group['files'] += 1
+        group['logical_bytes'] += stat.st_size
+        group['allocated_bytes'] += stat.st_blocks * 512
+        group['largest_logical_bytes'] = max(group['largest_logical_bytes'], stat.st_size)
+    return result
+
+
 def effects(value):
     if isinstance(value, dict):
         if value.get('type') == 'attempt_settled':
@@ -252,7 +273,8 @@ shutdown_deadline_ms = 30000
             phases.append({'phase': name, 'monotonic_ns': time.monotonic_ns(),
                            'process': counter(process.pid), 'diagnostics': diagnostic['snapshot'],
                            'notifications': dict(sum((owner.notifications for owner in clients),
-                                                     collections.Counter()))})
+                                                     collections.Counter())),
+                           'retained_files': retained_files(out / 'runtime')})
             write(out / 'phases.json', phases)
 
         async def attach(session, observer=True, owner=client):
