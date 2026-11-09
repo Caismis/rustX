@@ -282,7 +282,7 @@ impl AgentExecution<'_> {
                             failure: AttemptFailure::Runtime { error },
                         });
                     }
-                    match &event {
+                    match event {
                         ModelEvent::Completed { finish_reason, .. } => {
                             // A provider that stopped at its own token limit
                             // is stating that the generation is incomplete.
@@ -290,7 +290,7 @@ impl AgentExecution<'_> {
                             // the canonical commit path, rather than
                             // committing a truncated assistant turn.
                             if let Some(failure) =
-                                GenerationGuard::classify_completion(finish_reason)
+                                GenerationGuard::classify_completion(&finish_reason)
                             {
                                 let error = self.settle_generation_anomaly(assembler, failure)?;
                                 stream_terminal = Some(StreamTerminal::Failed { error });
@@ -299,10 +299,8 @@ impl AgentExecution<'_> {
                             }
                         }
                         ModelEvent::Failed { error } => {
-                            self.settle_model_request_failure(assembler, error)?;
-                            stream_terminal = Some(StreamTerminal::Failed {
-                                error: error.clone(),
-                            });
+                            self.settle_model_request_failure(assembler, &error)?;
+                            stream_terminal = Some(StreamTerminal::Failed { error });
                         }
                         ModelEvent::Started => {
                             stream_started = true;
@@ -315,8 +313,8 @@ impl AgentExecution<'_> {
                                 return Err(terminal);
                             }
                         }
-                        _ => {
-                            self.publish_model_event(&event);
+                        event => {
+                            self.publish_model_event(event);
                             if let Some(terminal) = self.durable_failure_terminal_from_state() {
                                 return Err(terminal);
                             }
