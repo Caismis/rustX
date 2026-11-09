@@ -8,6 +8,7 @@ import { parseJson, isJsonNumber } from '../../presentation/primitives/json';
 import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { backgroundLaunch } from '../../bindings/jobs';
+import { READ_IMAGE_RECEIPT, READ_IMAGE_TOOL, readImageName } from '../../bindings/tools';
 import { traceStateLabel } from '../../bindings/status-labels';
 import { ToolDetails } from '../../presentation/agent/ToolDetails';
 import { recordedToolDetails } from '../../bindings/recorded-tool-details';
@@ -299,12 +300,13 @@ function MarkdownFragment({ text, preview, compact = false }: { text: string; pr
   </div>;
 }
 
-function Attachments({ artifacts, preview }: { artifacts: readonly TraceArtifact[]; preview: boolean }) {
+function Attachments({ artifacts, preview, imageName }: { artifacts: readonly TraceArtifact[]; preview: boolean; imageName?: string }) {
   const tx = useTranslation();
   if (!artifacts.length) return null;
   return <ul className={preview ? `${css.attachments} ${css.attachmentsPreview}` : css.attachments} aria-label={tx('trajectory:attachment.list')}>
     {artifacts.map(artifact => <li key={artifact.artifact_id} className={css.attachmentRow}>
-      <Artifact id={artifact.artifact_id} name={artifact.name ?? artifact.artifact_id} image={artifact.image} mimeType={artifact.mime_type ?? undefined} />
+      <Artifact id={artifact.artifact_id} name={artifact.name ?? (artifact.image ? imageName : undefined)} image={artifact.image}
+        mimeType={artifact.mime_type ?? undefined} inlineImage={artifact.image && imageName ? preview ? 'compact' : 'full' : undefined} />
     </li>)}
   </ul>;
 }
@@ -379,12 +381,17 @@ function MessageContent({ blocks, fallback, artifacts, rendered, preview = false
 }
 
 /** A Tool result's blocks, as Harness shows its output blocks. */
-function ToolResult({ record, detail, preview = false }: { record: TraceRecord; detail: Pick<ToolContent, 'result'> | null | undefined; preview?: boolean }) {
+function ToolResult({ record, detail, preview = false }: { record: TraceRecord; detail: Pick<ToolContent, 'result' | 'arguments'> | TraceDetail['tool']; preview?: boolean }) {
   const tx = useTranslation();
   const result = detail?.result;
   if (!result) return <><NoPayload>{tx(stateOf(record) === 'running' ? 'trajectory:code.running' : 'trajectory:record.no-result')}</NoPayload><Attachments artifacts={record.attachments} preview={preview} /></>;
   const error = result.outcome !== 'success';
   const artifacts = [...new Map([...record.attachments, ...result.attachments, ...blockArtifacts(result.blocks)].map(artifact => [artifact.artifact_id, artifact])).values()];
+  const imageRead = !error && record.tool?.tool_id === READ_IMAGE_TOOL && artifacts.some(artifact => artifact.image);
+  const args = detail?.arguments?.value;
+  const path = args && typeof args === 'object' && 'path' in args && typeof args.path === 'string' ? args.path : undefined;
+  const imageName = imageRead ? readImageName(path) ?? tx('tools:tool-card.read-image') : undefined;
+  const blocks = imageRead ? result.blocks.filter(block => block.type !== 'text' || block.text.truncated || block.text.text !== READ_IMAGE_RECEIPT) : result.blocks;
   const block = result.blocks.length === 1 ? result.blocks[0] : undefined;
   const value = block?.type === 'json' && !block.value.truncated ? block.value.value : undefined;
   const launch = !error ? backgroundLaunch(value, record.tool?.name ?? '') : undefined;
@@ -400,15 +407,15 @@ function ToolResult({ record, detail, preview = false }: { record: TraceRecord; 
   }
   const text = result.blocks.length === 1 && result.blocks[0]!.type === 'text' ? result.blocks[0]!.text.text : undefined;
   const json = text === undefined ? undefined : parseJsonContainer(text);
-  if (json !== undefined && !error) return <><Json value={json} label={tx('trajectory:record.result-json')} preview={preview} /><Attachments artifacts={artifacts} preview={preview} /></>;
+  if (json !== undefined && !error) return <><Json value={json} label={tx('trajectory:record.result-json')} preview={preview} /><Attachments artifacts={artifacts} preview={preview} imageName={imageName} /></>;
   return <div className={[css.resultBlocks, preview ? css.resultBlocksPreview : undefined, error ? css.errorPayload : undefined].filter(Boolean).join(' ')}>
     {error && result.detail?.text && <pre className={css.resultBlockText}>{result.detail.text}</pre>}
-    {result.blocks.map((block, index) => block.type === 'json'
+    {blocks.map((block, index) => block.type === 'json'
       ? <Json key={index} value={block.value.value} label={tx('trajectory:record.result-json')} preview={preview} error={error} />
       : block.type === 'image' || block.type === 'file' ? null
         : rawBlockContent(block) !== '' ? <pre key={index} className={css.resultBlockText}>{rawBlockContent(block)}</pre> : null)}
     {!result.blocks.length && !(error && result.detail?.text) && <pre className={`${css.resultBlockText} ${css.noOutputText}`}>{tx('trajectory:record.no-output')}</pre>}
-    <Attachments artifacts={artifacts} preview={preview} />
+    <Attachments artifacts={artifacts} preview={preview} imageName={imageName} />
   </div>;
 }
 
@@ -672,7 +679,9 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   const pending = record.has_detail && !detail && !resolved;
   const detailError = native?.error ?? error;
   const toolResult = (preview = false) => pending
-    ? <><DetailPending error={detailError} /><Attachments artifacts={record.attachments} preview={preview} /></>
+    ? <><DetailPending error={detailError} />
+      {(record.tool?.tool_id !== READ_IMAGE_TOOL || detailError) && <Attachments artifacts={record.attachments} preview={preview} />}
+    </>
     : <ToolResult record={record} detail={toolDetail} preview={preview} />;
   const schema = (preview = false) => inspection?.content.type === 'tool' && inspection.content.definition.type !== 'available'
     ? <NoPayload>{tx(inspection.content.definition.type === 'absent' ? 'trajectory:record.schema-absent' : 'trajectory:record.schema-unavailable')}</NoPayload>

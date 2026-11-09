@@ -11,6 +11,7 @@ import { ModelSelect } from '../src/presentation/agent/ModelSelect';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { Interactions } from '../src/app/agent/Interactions';
 import { Tool } from '../src/app/agent/Tool';
+import { FileLinks } from '../src/presentation/markdown/FileLinks';
 import { RpcFailure } from '../src/client/errors';
 import { toolCard } from '../src/bindings/tools';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
@@ -346,14 +347,18 @@ it('Bash without a description keeps the row quiet and exposes the command only 
  expect(ui.container.textContent).toContain('python3 generate_report.py');
  expect(ui.container.textContent).toContain('Native error');
 });
-it('image reads have a dedicated renderer and retain managed image references after replay', () => {
- const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'image-call', tool_id: 'tool-read-image', name: 'read_image', state: { type: 'settled', arguments: JSON.stringify({ path: 'sample.png' }), result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'image', artifact_id: 'artifact_1' }] } } };
- expect(toolCard(tool).variant).toBe('image');
- expect(toolCard(JSON.parse(JSON.stringify(tool)))).toEqual(toolCard(tool));
- const ui = render(<Tool tool={tool}/>);
+it('replayed image reads use the saved image and keep extra result text', () => {
+ const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'image-call', tool_id: 'tool-read-image', name: 'read_image', state: { type: 'settled', arguments: JSON.stringify({ path: '/workspace/sample.png' }), result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'Read static PNG image' }, { type: 'image', artifact_id: 'artifact_1' }, { type: 'text', text: 'Extra result text' }] } } };
+ const openFile = vi.fn();
+ const ui = render(<FileLinks value={openFile}><Tool tool={JSON.parse(JSON.stringify(tool))}/></FileLinks>);
  expect(ui.container.querySelector('[data-tool-renderer="image"]')).toBeTruthy();
- fireEvent.click(screen.getByText('read_image'));
- expect(ui.container.textContent).toContain('artifact_1');
+ fireEvent.click(ui.getByRole('button', { name: /^sample\.png$/ }));
+ expect(openFile).toHaveBeenCalledWith({ path: '/workspace/sample.png' });
+ expect(ui.queryByText('/workspace/sample.png')).toBeNull();
+ fireEvent.click(screen.getByText('Read image'));
+ expect(ui.getByText('/workspace/sample.png')).toBeTruthy();
+ expect(ui.getByText('Extra result text')).toBeTruthy();
+ expect(ui.container.textContent).not.toMatch(/artifact_1|Read static PNG image/);
 });
 
 

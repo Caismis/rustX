@@ -1598,6 +1598,16 @@ it('tool result attachments remain available in summary and result without an ex
   expect(within(screen.getByRole('tabpanel')).getByText('report.md')).toBeTruthy();
 });
 
+it('summarizes a successful image read by attachment count and retains its arguments', () => {
+  const record = traceTool(1, { preview: { text: 'Read static PNG image', truncated: false }, attachments: [{ artifact_id: 'shot', image: true }] });
+  Object.assign(record.tool!, { name: 'read_image', tool_id: 'tool-read-image', outcome: 'success', arguments: { text: '{"path":"sample.png"}', truncated: false } });
+  show(cacheOf([record]));
+  const imageRow = row('RecordRow', record.id);
+  expect(imageRow.textContent).toContain('Images ×1');
+  expect(imageRow.textContent).toContain('sample.png');
+  expect(imageRow.textContent).not.toContain('Read static PNG image');
+});
+
 it('Request markers retain canonical native state independently of error decoration', () => {
   show(cacheOf([traceRecord(0, { state: 'running' }), traceRecord(1, { state: 'completed' })]));
   expect(document.querySelector('[data-request-owner="trace:0"]')?.getAttribute('data-state')).toBe('running');

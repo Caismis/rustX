@@ -51,16 +51,37 @@ test('image row previews managed bytes and Bash description expands to authorita
   await page.keyboard.press('Escape');
   const image = page.locator('[data-tool-call-id="read-image"]');
   await expect(image).toHaveAttribute('data-tool-renderer', 'image');
+  await expect(image.getByRole('img', { name: 'sample.png', exact: true })).toHaveCount(0);
   await image.getByRole('button', { expanded: false }).click();
-  await image.getByRole('button', { name: /^Load attachment / }).click();
-  await expect(image.getByRole('img', { name: 'artifact_1', exact: true })).toBeVisible();
-  await expect.poll(() => image.getByRole('img', { name: 'artifact_1', exact: true }).evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth === 1)).toBe(true);
+  await expect(image.getByRole('img', { name: 'sample.png', exact: true })).toBeVisible();
+  await expect.poll(() => image.getByRole('img', { name: 'sample.png', exact: true }).evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth === 320)).toBe(true);
+  await expect(image).toContainText('/workspace/runs/sample.png');
+  await expect(image).not.toContainText(/artifact_1|Read static PNG image/);
+  const thumbnail = image.getByRole('button', { name: 'Open image sample.png' });
+  expect((await thumbnail.boundingBox())!.width).toBeLessThanOrEqual(240);
+  await thumbnail.click();
+  await expect(page.getByRole('dialog', { name: 'sample.png' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(thumbnail).toBeFocused();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   expect(errors).toEqual([]);
   await page.screenshot({ path: '/tmp/rustx-412-tools-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: '/tmp/rustx-412-tools-mobile.png', fullPage: true });
+
+  await page.goto(`${fixtureOrigin}/test/fixtures/activity.html?image-trace`);
+  const result = page.getByRole('tabpanel');
+  await expect(result.getByRole('img', { name: 'sample.png' })).toBeVisible();
+  expect((await result.getByRole('button', { name: 'Open image sample.png' }).boundingBox())!.width).toBe(48);
+  await page.getByRole('tab', { name: 'Result', exact: true }).click();
+  await expect(result.getByRole('img', { name: 'sample.png' })).toBeVisible();
+  await expect(result).not.toContainText(/artifact_1|Read static PNG image/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await result.getByRole('button', { name: 'Open image sample.png' }).click();
+  await expect(page.getByRole('dialog', { name: 'sample.png' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  expect(errors).toEqual([]);
 });
 
 test('header Jobs regroup on native settlement, clear ended output and remain reachable after scrolling', async ({ page }) => {

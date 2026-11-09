@@ -1,5 +1,6 @@
 import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
+import { READ_IMAGE_RECEIPT, READ_IMAGE_TOOL } from '../../bindings/tools';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness TrajectoryTable.tsx semantic cells; see PROVENANCE.md. */
 import type { ReactNode } from 'react';
 import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v77';
@@ -134,7 +135,9 @@ export function CellContent({ item }: { item: InspectableDisplayItem }) {
   if (record.tool) {
     const name = record.tool.name ?? record.tool.tool_id;
     const args = record.tool.arguments?.text;
-    const result = record.preview?.text ?? record.tool.detail?.text;
+    const preview = record.preview?.text;
+    const imageRead = record.tool.tool_id === READ_IMAGE_TOOL && record.tool.outcome === 'success' && record.attachments.some(artifact => artifact.image);
+    const result = (imageRead && (!preview || preview === READ_IMAGE_RECEIPT) ? attachmentSummary(tx, record) || preview : preview) ?? record.tool.detail?.text;
     const request = [name, args].filter(Boolean).join(' ');
     return <span className={result === undefined ? css.contentText : css.resultPreview} title={result === undefined ? request : `${request} → ${result}`}>
       <span className={result === undefined ? undefined : css.resultRequest}>
