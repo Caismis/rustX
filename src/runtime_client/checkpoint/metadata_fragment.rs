@@ -208,7 +208,8 @@ impl PreparedMetadata {
 
     #[cfg(test)]
     pub(crate) fn sort_into(&self, metadata: &mut ProjectionMetadata) {
-        *metadata = self.metadata(metadata.read_cut.clone());
+        metadata.content = self.content.sorted(|a, b| a.path.cmp(&b.path));
+        metadata.collections = self.collections.sorted(|a, b| a.domain.cmp(&b.domain));
     }
     pub(crate) fn fragment_budget(&self) -> Option<usize> {
         ProjectionMetadata::budget_with_arrays(
