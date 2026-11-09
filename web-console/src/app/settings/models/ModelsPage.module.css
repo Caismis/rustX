@@ -24,6 +24,7 @@
 .detailHeader { display: flex; align-items: center; gap: 8px; min-height: 28px; margin-bottom: 8px; }
 .section .detailHeader h3 { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; font-size: 16px; line-height: 24px; font-weight: 650; margin: 0; }
 .detailHeader h3 span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.section .providerRename { min-width: 0; height: 32px; font: inherit; }
 .section .iconButton { width: 28px; height: 28px; padding: 0; flex: none; border-radius: 7px; color: var(--dsw-alias-label-secondary); }
 .section .switch { width: 32px; height: 18px; }
 .switch > span { width: 14px; height: 14px; }

@@ -117,6 +117,7 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
         providers: BTreeMap::from([(
             provider.into(),
             Provider {
+                display_name: None,
                 hidden: false,
                 icon: None,
                 protocol,

@@ -85,7 +85,11 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
       landing.current?.focus();
     }
   }, [navigationProviders, selected, missing, focus?.kind, onFocus]);
-  const navigation = navigationProviders.filter(entry => entry.id.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const search = query.trim().toLocaleLowerCase();
+  const navigation = navigationProviders.filter(({ id, authored, effective }) => {
+    const name = (authored ?? effective)?.display_name;
+    return id.toLocaleLowerCase().includes(search) || name?.toLocaleLowerCase().includes(search);
+  });
   const providerEntry = navigationProviders.find(entry => entry.id === selected);
   const selectedProvider = providerEntry?.authored ?? providerEntry?.effective;
   const selectedModels = catalog.filter(entry => (entry.authored ?? entry.effective)?.provider === selected);
@@ -119,13 +123,14 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
           }}>
           {navigation.map(entry => {
             const provider = entry.authored ?? entry.effective;
+            const name = provider?.display_name ?? entry.id;
             const hasModels = catalog.some(item => {
               const model = item.authored ?? item.effective;
               return model?.provider === entry.id && !model.hidden;
             });
-            return <GridListItem id={entry.id} key={entry.id} textValue={entry.id} aria-label={entry.id} className={cards.provider}>
+            return <GridListItem id={entry.id} key={entry.id} textValue={name} aria-label={name} className={cards.provider}>
               <ProviderIcon icon={provider?.icon} size={16}/>
-              <span className={cards.providerName} title={entry.id}>{entry.id}</span>
+              <span className={cards.providerName} title={name}>{name}</span>
               <span className={cards.providerDot} data-state={provider?.hidden ? 'off' : provider && hasModels ? 'ready' : 'empty'} aria-hidden="true"/>
             </GridListItem>;
           })}
@@ -141,7 +146,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
             <Button size="sm" variant="toolbar" title={!selectedProvider ? tx('settings:models.save-provider-first') : undefined}
               disabled={!selectedProvider} onClick={() => setAdding('model')}>{tx('settings:models.add-model')}</Button>
           </div>
-          {selectedModels.length ? <GridList aria-label={tx('settings:models-page.models-of-provider-value', { p0: selected })} className={cards.modelList}>
+          {selectedModels.length ? <GridList aria-label={tx('settings:models-page.models-of-provider-value', { p0: selectedProvider?.display_name ?? selected })} className={cards.modelList}>
             {selectedModels.map(entry => <ModelRow key={entry.id} entry={entry} revision={revision} providerHidden={!selectedProvider || !!selectedProvider.hidden} canProbe={!!selectedProvider} probe={probe}
               scope={scope} restoresGlobal={scope === 'workspace' && !!source.user.authored?.models?.[entry.id]} settle={landing}
               onOpen={() => onFocus({ kind: 'model', id: entry.id, provider: selected })}/>)}
@@ -193,7 +198,7 @@ function ModelRow({ entry, revision, providerHidden, canProbe, probe, scope, res
       onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') event.stopPropagation(); }}>
       <Button size="sm" className={cards.iconButton} aria-label={tx('settings:models.test-model', { p0: model.id })}
         title={tx('settings:models.test-model', { p0: model.id })} aria-busy={status === 'checking'} data-probe={status}
-        disabled={!canProbe || !probe.available || status === 'checking'} onClick={() => { void probe.test(entry.id); }}><IconLinkOutline14/></Button>
+        disabled={!canProbe || !unit.admitted || !probe.available || status === 'checking'} onClick={() => { void probe.test(entry.id); }}><IconLinkOutline14/></Button>
       <Button size="sm" className={cards.iconButton} aria-label={tx('settings:models.edit-model')} title={tx('settings:models.edit-model')} onClick={onOpen}><IconEditOutline16 size={14}/></Button>
       {entry.authored && <ConfirmAction label={removeLabel} confirm={removeLabel}
         tone={restoresGlobal ? 'restore' : 'destructive'} settle={settle} disabled={removeDisabled} onConfirm={() => unit.submit(true)}
@@ -206,8 +211,6 @@ function ModelRow({ entry, revision, providerHidden, canProbe, probe, scope, res
         disabled={!entry.authored || providerHidden || !unit.admitted || unit.draft || unit.awaitingObservation}
         onChange={checked => unit.apply({ ...model, hidden: !checked })}/>
     </div>
-    <SettingsNotice text={status && status !== 'checking' ? tx(`settings:models.probe-${status}`) : undefined}
-      tone={status === 'connected' ? 'success' : undefined}/>
     <UnitOutcomeNotice title={entry.id} outcome={unit.outcome} />
   </GridListItem>;
 }

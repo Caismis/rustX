@@ -1,17 +1,17 @@
 import { SettingsNotice } from '../SettingsFeedback';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ProviderView, ProviderWrite, SourceScope } from '../../../../../protocol/app-server/v77';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Menu } from '../../../presentation/primitives/Menu';
 import { Switch } from '../../../presentation/primitives/Switch';
-import { IconEllipsisOutline16, IconTrashOutline16 } from '../../../presentation/primitives/icons';
+import { IconEditOutline16, IconEllipsisOutline16, IconTrashOutline16 } from '../../../presentation/primitives/icons';
 import { UnitOutcomeNotice, useUnitEditing } from '../forms/bridge';
 import { useSettingsActor } from '../machines/react';
 import { Choice, ConfirmAction } from '../primitives/aria';
 import { IconPicker, ProviderIcon } from './ProviderIcon';
 import { providerMutation, providerTemplates } from './ProviderTemplates';
-import { cancelProviderSave, flushProviderSave, scheduleProviderSave } from './provider-autosave';
+import { cancelProviderSave, flushProviderSave, holdProviderSave, scheduleProviderSave } from './provider-autosave';
 import cards from './ModelsPage.module.css';
 
 export function ProviderConnection({ id, scope, revision, authored, inherited, hasModels }: {
@@ -21,9 +21,9 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
   const tx = useTranslation();
   const actor = useSettingsActor();
   const unit = useUnitEditing<ProviderWrite>({
-    authored: authored && { hidden: authored.hidden, icon: authored.icon, protocol: authored.protocol, base_url: authored.base_url, credential: { kind: 'retain' } },
+    authored: authored && { display_name: authored.display_name, hidden: authored.hidden, icon: authored.icon, protocol: authored.protocol, base_url: authored.base_url, credential: { kind: 'retain' } },
     blank: {
-      icon: inherited?.icon, hidden: inherited?.hidden,
+      display_name: inherited?.display_name, icon: inherited?.icon, hidden: inherited?.hidden,
       protocol: inherited?.protocol ?? 'openai_chat_completions',
       base_url: inherited?.base_url ?? '',
       credential: { kind: 'literal', value: '' },
@@ -34,16 +34,26 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
   const identity = unit.identity;
   useEffect(() => () => flushProviderSave(actor, identity), [actor, identity]);
   const [menu, setMenu] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [invalidName, setInvalidName] = useState(0);
   const [iconPicker, setIconPicker] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [customizing, setCustomizing] = useState(false);
   const [attempted, setAttempted] = useState(0);
   const form = useRef<HTMLFormElement>(null);
   const keyEditor = useRef<HTMLDivElement>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
+  const nameEditing = useRef({ cancelled: false, composing: false });
+  useLayoutEffect(() => {
+    if (!renaming) return;
+    nameInput.current?.focus();
+    nameInput.current?.select();
+  }, [renaming]);
   const keyId = useId();
-  const title = tx('settings:models-page.provider-value', { p0: id });
   const value = unit.displayed;
   const inspecting = !!inherited && !authored && !customizing && !unit.draft;
+  const name = (inspecting ? inherited.display_name : value.display_name) ?? id;
+  const title = tx('settings:models-page.provider-value', { p0: name });
   const storedCredential = authored?.credential ?? (inspecting ? inherited.credential : undefined);
   const credential = (value.credential.kind === 'retain' || inspecting) && storedCredential?.type === 'environment'
     ? { kind: 'environment' as const, variable: storedCredential.variable } : value.credential;
@@ -72,6 +82,21 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
     if (endpointError || credentialError) setAttempted(attempt => attempt + 1);
     else flushProviderSave(actor, identity);
   };
+  const actionsTrigger = () => form.current?.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]');
+  const finishRename = (input: string) => {
+    setRenaming(false);
+    const next = input.trim();
+    if (nameEditing.current.cancelled || !next || next === name) {
+      flushProviderSave(actor, identity);
+      return;
+    }
+    if ([...next].length > 100 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(next)) {
+      setInvalidName(occurrence => occurrence + 1);
+      flushProviderSave(actor, identity);
+      return;
+    }
+    edit({ ...value, display_name: next === id ? undefined : next }, 'now');
+  };
 
   return <form ref={form} tabIndex={-1} aria-label={title} aria-busy={locked} className={cards.connection} noValidate
     onSubmit={event => { event.preventDefault(); flush(); }}
@@ -82,15 +107,31 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
     }}
     onBlur={event => {
       const leavingKey = keyEditor.current?.contains(event.target) && !keyEditor.current.contains(event.relatedTarget);
-      const leavingForm = event.target instanceof HTMLInputElement && !event.currentTarget.contains(event.relatedTarget);
+      const leavingForm = event.target instanceof HTMLInputElement && event.target !== nameInput.current && !event.currentTarget.contains(event.relatedTarget);
       if (leavingKey || leavingForm) {
         if (endpointError || credentialError) return;
         flush();
       }
     }}>
     <div className={cards.detailHeader}>
-      <h3 title={id} aria-label={title}><ProviderIcon icon={value.icon} size={18}/><span>{id}</span></h3>
-      {!creating && <Switch className={cards.switch} checked={!value.hidden} label={tx('settings:models.show-provider', { p0: id })}
+      <h3 title={name} aria-label={title}>
+        <ProviderIcon icon={value.icon} size={18}/>
+        {renaming ? <input ref={nameInput} className={cards.providerRename} type="text" defaultValue={name}
+          aria-label={tx('settings:models.provider-display-name')}
+          onCompositionStart={() => { nameEditing.current.composing = true; }}
+          onCompositionEnd={() => { nameEditing.current.composing = false; }}
+          onBlur={event => finishRename(event.currentTarget.value)}
+          onKeyDown={event => {
+            if (event.key !== 'Enter' && event.key !== 'Escape') return;
+            event.stopPropagation();
+            if (nameEditing.current.composing || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+            event.preventDefault();
+            nameEditing.current.cancelled = event.key === 'Escape';
+            actionsTrigger()?.focus();
+          }}/>
+          : <span>{name}</span>}
+      </h3>
+      {!creating && <Switch className={cards.switch} checked={!value.hidden} label={tx('settings:models.show-provider', { p0: name })}
         disabled={!authored || locked || endpointError || credentialError} onChange={checked => edit({ ...value, hidden: !checked }, 'now')}/>}
       <ConfirmAction
         label={tx('settings:bridge.remove-value', { p0: title })}
@@ -108,6 +149,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
           items={inspecting
             ? [{ id: 'customize', label: tx('settings:forms.customize') }]
             : [
+              { id: 'rename', label: tx('settings:models.rename-provider'), icon: <IconEditOutline16/>, disabled: locked || renaming },
               { id: 'icon', label: tx('settings:models.choose-icon') },
               { id: 'credential', label: tx(credential.kind === 'environment' ? 'settings:models.use-key' : 'settings:models.use-environment') },
               ...canDiscardCreation ? [{ id: 'discard-creation', label: tx('settings:copy.delete'), icon: <IconTrashOutline16/>, danger: true }] : [],
@@ -118,6 +160,12 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
             ]}
           onSelect={action => {
             setMenu(false);
+            if (action === 'rename' && !locked) {
+              // Combine the name and any pending connection edits in the next write.
+              holdProviderSave(actor, identity);
+              nameEditing.current = { cancelled: false, composing: false };
+              setRenaming(true);
+            }
             if (action === 'icon') setIconPicker(true);
             if (action === 'credential') changeCredential(credential.kind === 'environment' ? { kind: 'literal', value: '' } : { kind: 'environment', variable: '' });
             if (action === 'customize') setCustomizing(true);
@@ -128,7 +176,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
       />
     </div>
     {iconPicker && <IconPicker value={value.icon} onChange={icon => { if ((icon ?? null) !== (value.icon ?? null)) edit({ ...value, icon }, 'now'); }} onClose={() => setIconPicker(false)}
-      finalFocus={() => form.current?.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]') ?? false}/>}
+      finalFocus={() => actionsTrigger() ?? false}/>}
     {inspecting && <p className={cards.inherited}>{tx('settings:forms.using-global')}</p>}
     <fieldset disabled={inspecting} className={cards.connectionFields}>
       <label>{tx('settings:models-page.endpoint')}
@@ -165,6 +213,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
         </Button>
       </div>}
     </fieldset>
+    <SettingsNotice occurrence={invalidName} text={invalidName ? tx('settings:models.invalid-provider-display-name') : undefined}/>
     <SettingsNotice occurrence={attempted} text={attempted ? endpointError ? tx('settings:models.invalid-endpoint') : credentialError ? tx('settings:models.invalid-key') : undefined : undefined}/>
     <UnitOutcomeNotice title={title} outcome={unit.outcome}/>
     {unit.reviewNeeded && <div className={cards.connectionActions}>

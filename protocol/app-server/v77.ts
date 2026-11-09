@@ -9987,6 +9987,7 @@ export interface McpAuthoring {
  * via the `definition` "ProviderWrite".
  */
 export interface ProviderWrite {
+  display_name?: string | null;
   hidden?: boolean;
   icon?: string | null;
   protocol: ModelProtocol;
@@ -18636,6 +18637,7 @@ export interface RuntimeLayer {
  * via the `definition` "ProviderView".
  */
 export interface ProviderView {
+  display_name?: string | null;
   hidden?: boolean;
   icon?: string | null;
   protocol: ModelProtocol;

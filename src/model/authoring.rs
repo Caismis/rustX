@@ -25,6 +25,10 @@ fn version() -> u32 {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {
+    /// Display label. The Provider's map key remains its identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 100))]
+    pub display_name: Option<String>,
     /// Hide this entry from new model choices. Existing selections stay resolvable.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,

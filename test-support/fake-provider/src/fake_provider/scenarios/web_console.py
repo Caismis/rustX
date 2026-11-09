@@ -475,6 +475,17 @@ def web_model_errors() -> Scenario:
 SCENARIOS["web_model_errors"] = web_model_errors
 
 
+def web_model_probe() -> Scenario:
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Reply with OK.",))
+    return Scenario("web_model_probe",
+        Step(expected, Stream(Text("OK"), Finish())),
+        Step(expected, HttpError(401, {"error": {"message": "Fixture authentication rejected"}})),
+        Step(expected, Stream(Text("OK"), Finish())))
+
+
+SCENARIOS["web_model_probe"] = web_model_probe
+
+
 def web_model_deletion() -> Scenario:
     def reply(model: str, prompt: str, answer: str) -> Step:
         return Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=model, body_contains=(prompt,)),

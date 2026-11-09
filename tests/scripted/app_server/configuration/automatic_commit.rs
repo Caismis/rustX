@@ -1904,6 +1904,7 @@ async fn model_facts_follow_the_invocations_that_run() {
                 id: "local".into(),
                 authored: Some(
                     crate::local_runtime::configuration::settings::ProviderWrite {
+                        display_name: None,
                         hidden: false,
                         icon: None,
                         protocol: crate::model::ModelProtocol::OpenAiChatCompletions,

@@ -32,6 +32,13 @@ export function useSettingsFeedback() {
   return useContext(Feedback) !== undefined;
 }
 
+export function useSettingsNotification() {
+  const id = useId();
+  const portal = useDialogPortal();
+  const publish = useContext(Feedback);
+  return useCallback((text = '', tone?: 'success') => publish?.(id, text, portal, tone), [publish, id, portal]);
+}
+
 /** Repeated renders of the same failure do not restart its dismissal timer.
  * Shared editors can still present their own feedback outside Settings. */
 export function SettingsNotice({ text, tone, fallback, occurrence }: {

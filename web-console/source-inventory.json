@@ -667,7 +667,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "ffffda2f67dd71a066400acd101209c229c3c5d4c69fde60741bedcc0bcb3c9b"
+      "local_sha256": "99f9de0e2b54fc9ff58ce15390b031abac4a4742227f564935a1af3bde7ddee3"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -4099,7 +4099,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "1cd50a69bece65491d7d26de17fd1304f7e2ff7979c5f5a6f5be2f7767a8da83"
+      "local_sha256": "5fa99f1f8d2fa8ad862f97b46a3ca8f567929e1da089fd6e0f4bef439afdcb18"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",

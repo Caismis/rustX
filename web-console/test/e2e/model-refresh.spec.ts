@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
@@ -78,6 +78,119 @@ for (const width of [1440, 390]) test(`provider single-click navigation and work
   } catch (error) {
     await test.info().attach('native-diagnostics', {body:JSON.stringify(fixture.diagnostics()),contentType:'application/json'});
     throw error;
+  } finally { await fixture.stop(false); }
+});
+
+test('provider rename saves the display name without changing its models', async ({page}) => {
+  const fixture = await startDogfood();
+  try {
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await openSettingsPage(page, 'Models');
+    const actions = page.getByRole('button', {name:'Provider actions', exact:true});
+    const input = page.getByRole('textbox', {name:'Provider display name', exact:true});
+    const rename = async () => {
+      await actions.click();
+      await page.getByRole('menuitem', {name:'Rename', exact:true}).click();
+      await expect(input).toBeFocused();
+    };
+    const provider = (name: string) => page.getByRole('row', {name, exact:true});
+    const config = () => readFileSync(fixture.settings, 'utf8');
+    const model = provider('fixture/console-model');
+
+    await rename();
+    await input.fill('Discard this name');
+    await input.press('Escape');
+    await expect(input).toHaveCount(0);
+    await expect(actions).toBeFocused();
+    await expect(provider('fixture')).toBeVisible();
+    expect(config()).not.toContain('display_name');
+
+    await rename();
+    await input.fill('  OpenAI 工作网关  ');
+    await input.press('Enter');
+    await expect(provider('OpenAI 工作网关')).toBeVisible();
+    await expect(model).toBeVisible();
+    await expect.poll(config).toContain('display_name = "OpenAI 工作网关"');
+    expect(config()).toContain('[providers.fixture]');
+
+    await rename();
+    await input.fill('团队网关');
+    const url = page.getByRole('textbox', {name:'Base URL', exact:true});
+    await url.click();
+    await expect(provider('团队网关')).toBeVisible();
+    await url.fill(`${fixture.providerUrl}/v1/`);
+    await expect.poll(config).toContain(`base_url = "${fixture.providerUrl}/v1/"`);
+    expect(config()).toContain('display_name = "团队网关"');
+
+    await page.getByRole('button', {name:'Reload configuration', exact:true}).click();
+    const search = page.getByLabel('Find a Provider', {exact:true});
+    await search.fill('团队');
+    await expect(provider('团队网关')).toBeVisible();
+    await search.fill('fixture');
+    await expect(provider('团队网关')).toBeVisible();
+    await expect(model).toBeVisible();
+    await openEmptySession(page, fixture, 'Workspace A');
+    await expect(page.locator('[data-model-select]')).toContainText('fixture/console-model');
+  } finally { await fixture.stop(false); }
+});
+
+test('model probe feedback follows explicit tests across provider switches and model edits', async ({page}) => {
+  const fixture = await startDogfood('web_model_probe');
+  const wire = await wireProbe(page);
+  try {
+    appendFileSync(fixture.settings, `
+[providers.other]
+protocol = "openai_chat_completions"
+base_url = "${fixture.providerUrl}/v1"
+api_key = "$RUSTX_WEB_MODEL_PROBE_UNSET_KEY"
+
+[models."other/unconfigured"]
+provider = "other"
+id = "unconfigured"
+context_window = 128000
+max_output_tokens = 4096
+capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
+compat = { chat_reasoning_replay = "omit" }
+`);
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await openSettingsPage(page, 'Models');
+    const probe = page.getByRole('button', {name:'Test connection for console-model', exact:true});
+    const toast = page.locator('[data-toast]');
+    const outcomes = () => wire.responses.filter(response => response.method === 'model/probe').map(response => response.result?.outcome);
+    await probe.click();
+    await expect.poll(outcomes).toEqual(['connected']);
+    await expect(toast).toHaveText('Connection successful');
+    await probe.click();
+    await expect(toast).toContainText('The model request failed.');
+    await expect(toast).toHaveCount(0, { timeout: 8000 });
+
+    const other = page.getByRole('row', {name:'other', exact:true});
+    const primary = page.getByRole('row', {name:'fixture', exact:true});
+    const unavailable = page.getByRole('button', {name:'Test connection for unconfigured', exact:true});
+    await other.click();
+    await unavailable.click();
+    await expect(toast).toContainText('Could not use the saved model settings.');
+    await primary.click();
+    await expect(probe).toHaveAttribute('data-probe', 'rejected');
+    await expect(toast).toHaveCount(0, { timeout: 8000 });
+    await other.click();
+    await expect(unavailable).toHaveAttribute('data-probe', 'unavailable');
+    await expect(toast).toHaveCount(0);
+    await primary.click();
+    await expect(probe).toHaveAttribute('data-probe', 'rejected');
+    await expect(toast).toHaveCount(0);
+    const toggle = page.getByRole('switch', {name:'Show console-model in the model picker', exact:true});
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await expect(probe).not.toHaveAttribute('data-probe');
+    await expect(toast).toHaveCount(0);
+    await probe.click();
+    await expect.poll(outcomes).toEqual(['connected', 'rejected', 'unavailable', 'connected']);
+    await expect(toast).toHaveText('Connection successful');
   } finally { await fixture.stop(false); }
 });
 

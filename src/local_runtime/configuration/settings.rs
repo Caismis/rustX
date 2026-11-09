@@ -67,6 +67,9 @@ impl SourceTarget {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProviderView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 100))]
+    pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -78,6 +81,7 @@ pub struct ProviderView {
 impl From<Provider> for ProviderView {
     fn from(provider: Provider) -> Self {
         Self {
+            display_name: provider.display_name,
             icon: provider.icon,
             hidden: provider.hidden,
             protocol: provider.protocol,
@@ -114,6 +118,9 @@ pub enum CredentialEdit {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderWrite {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 100))]
+    pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -622,6 +629,7 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
                         return Err(SettingsError::Invalid);
                     }
                     Ok(Provider {
+                        display_name: authored.display_name,
                         icon: authored.icon,
                         hidden: authored.hidden,
                         protocol: authored.protocol,
@@ -754,6 +762,8 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
 fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
     #[derive(Serialize)]
     struct PrivateProvider {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display_name: Option<String>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         hidden: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -770,6 +780,7 @@ fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
     // its literal values here; only the wire projection redacts them.
     let document = document.project(
         |provider| PrivateProvider {
+            display_name: provider.display_name,
             icon: provider.icon,
             hidden: provider.hidden,
             protocol: provider.protocol,

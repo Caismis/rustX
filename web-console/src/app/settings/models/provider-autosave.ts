@@ -4,7 +4,7 @@ import { admitsSourceMutation } from '../machines/settings-target';
 import { providerMutation } from './ProviderTemplates';
 
 const IDLE_MS = 1200;
-const pendingSaves = new WeakMap<SettingsTargetActor, Map<string, { flush(): void; cancel(): void }>>();
+const pendingSaves = new WeakMap<SettingsTargetActor, Map<string, { flush(): void; hold(): void; cancel(): void }>>();
 
 /** Schedule one draft generation, even if its Provider detail unmounts. The
  * existing transaction owns the value and the target still owns CAS and I/O. */
@@ -18,7 +18,7 @@ export function scheduleProviderSave(actor: SettingsTargetActor, id: string, ide
   const { generation, selector } = unit.getSnapshot().context;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let ready = false;
-  const save = { flush, cancel };
+  const save = { flush, hold, cancel };
   saves.set(identity, save);
   const targetUpdates = actor.subscribe({ next: () => { if (ready) queueMicrotask(trySave); }, complete: cancel });
   const draftUpdates = unit.subscribe({ next: () => { if (ready) queueMicrotask(trySave); }, complete: cancel });
@@ -54,12 +54,21 @@ export function scheduleProviderSave(actor: SettingsTargetActor, id: string, ide
     trySave();
   }
 
+  function hold() {
+    clearTimeout(timer);
+    ready = false;
+  }
+
   if (trigger === 'now') flush();
   if (trigger === 'idle') timer = setTimeout(flush, IDLE_MS);
 }
 
 export function flushProviderSave(actor: SettingsTargetActor, identity: string) {
   pendingSaves.get(actor)?.get(identity)?.flush();
+}
+
+export function holdProviderSave(actor: SettingsTargetActor, identity: string) {
+  pendingSaves.get(actor)?.get(identity)?.hold();
 }
 
 export function cancelProviderSave(actor: SettingsTargetActor, identity: string) {

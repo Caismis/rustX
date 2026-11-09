@@ -25632,6 +25632,14 @@
     "ProviderView": {
       "type": "object",
       "properties": {
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 100
+        },
         "hidden": {
           "type": "boolean"
         },
@@ -39016,6 +39024,14 @@
     "ProviderWrite": {
       "type": "object",
       "properties": {
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 100
+        },
         "hidden": {
           "type": "boolean"
         },

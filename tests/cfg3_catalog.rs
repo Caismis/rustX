@@ -583,6 +583,7 @@ fn provider_secrets_are_not_read_back_and_cannot_be_retained_from_lower_scope() 
             mutation: ConfigMutation::Provider {
                 id: "transport".into(),
                 authored: Some(ProviderWrite {
+                    display_name: None,
                     hidden: false,
                     icon: None,
                     protocol: rustx::model::ModelProtocol::OpenAiResponses,
@@ -1164,7 +1165,7 @@ fn each_scope_enables_only_the_workflow_files_it_owns() {
 }
 
 #[test]
-fn provider_icons_round_trip_without_changing_model_resolution_or_exposing_secrets() {
+fn provider_display_metadata_round_trips_without_changing_model_resolution_or_exposing_secrets() {
     use rustx::local_runtime::configuration::settings::{
         ConfigMutation, CredentialEdit, ProviderWrite, SettingsError, SourceMutation,
     };
@@ -1172,7 +1173,11 @@ fn provider_icons_round_trip_without_changing_model_resolution_or_exposing_secre
     let (host, request) = sources(root.path(), &format!("{PROVIDER}{MODEL}{ROOT}"), "");
     let (owner, input) = request.session_input(&host).unwrap();
     let target = rustx_target(&input.cwd);
-    for icon in [Some("deepseek"), Some("openai"), None] {
+    for (icon, name) in [
+        (Some("deepseek"), Some("模型供应商")),
+        (Some("openai"), Some("Another display name")),
+        (None, None),
+    ] {
         let before = owner.read_source_settings(&target).unwrap();
         owner
             .write_source_settings(
@@ -1182,6 +1187,7 @@ fn provider_icons_round_trip_without_changing_model_resolution_or_exposing_secre
                     mutation: ConfigMutation::Provider {
                         id: "transport".into(),
                         authored: Some(ProviderWrite {
+                            display_name: name.map(str::to_owned),
                             hidden: false,
                             icon: icon.map(str::to_owned),
                             protocol: rustx::model::ModelProtocol::OpenAiResponses,
@@ -1196,12 +1202,9 @@ fn provider_icons_round_trip_without_changing_model_resolution_or_exposing_secre
             .unwrap();
         let after = owner.read_source_settings(&target).unwrap();
         let authored = after.workspace.as_ref().unwrap().authored.as_ref().unwrap();
-        assert_eq!(
-            authored.providers.as_ref().unwrap()["transport"]
-                .icon
-                .as_deref(),
-            icon
-        );
+        let provider = &authored.providers.as_ref().unwrap()["transport"];
+        assert_eq!(provider.icon.as_deref(), icon);
+        assert_eq!(provider.display_name.as_deref(), name);
         assert!(
             !serde_json::to_string(&after)
                 .unwrap()
@@ -1210,15 +1213,20 @@ fn provider_icons_round_trip_without_changing_model_resolution_or_exposing_secre
         assert!(analyze(&request, &host).is_ok());
         let bytes = std::fs::read_to_string(input.cwd.join("rustx.toml")).unwrap();
         assert_eq!(bytes.contains("icon ="), icon.is_some());
+        assert_eq!(bytes.contains("display_name ="), name.is_some());
     }
-    for icon in [
-        "",
-        "https://example.com/icon.svg",
-        "../openai",
-        "OpenAI",
-        "-openai",
-        "openai-",
-        &"a".repeat(65),
+    for (icon, name) in [
+        (Some(""), None),
+        (Some("https://example.com/icon.svg"), None),
+        (Some("../openai"), None),
+        (Some("OpenAI"), None),
+        (Some("-openai"), None),
+        (Some("openai-"), None),
+        (Some("a".repeat(65).as_str()), None),
+        (None, Some("")),
+        (None, Some(" leading space")),
+        (None, Some("two\nlines")),
+        (None, Some("模".repeat(101).as_str())),
     ] {
         let before = owner.read_source_settings(&target).unwrap();
         let bytes = std::fs::read(input.cwd.join("rustx.toml")).unwrap();
@@ -1229,8 +1237,9 @@ fn provider_icons_round_trip_without_changing_model_resolution_or_exposing_secre
                 mutation: ConfigMutation::Provider {
                     id: "transport".into(),
                     authored: Some(ProviderWrite {
+                        display_name: name.map(str::to_owned),
                         hidden: false,
-                        icon: Some(icon.into()),
+                        icon: icon.map(str::to_owned),
                         protocol: rustx::model::ModelProtocol::OpenAiResponses,
                         base_url: "https://workspace.invalid/v1".into(),
                         credential: CredentialEdit::Retain,
@@ -1238,7 +1247,10 @@ fn provider_icons_round_trip_without_changing_model_resolution_or_exposing_secre
                 },
             },
         );
-        assert!(matches!(result, Err(SettingsError::Invalid)), "{icon}");
+        assert!(
+            matches!(result, Err(SettingsError::Invalid)),
+            "{icon:?} {name:?}"
+        );
         assert_eq!(std::fs::read(input.cwd.join("rustx.toml")).unwrap(), bytes);
     }
     // Manual source edits obey the same native validation as managed writes.

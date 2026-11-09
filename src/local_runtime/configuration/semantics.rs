@@ -139,6 +139,19 @@ pub(in crate::local_runtime) fn source_semantics(
         .iter()
         .flat_map(|providers| providers.values())
     {
+        if let Some(name) = &provider.display_name
+            && (name.is_empty()
+                || name.trim() != name
+                || name.chars().count() > 100
+                || name.chars().any(char::is_control)
+                || name.contains(['\u{2028}', '\u{2029}']))
+        {
+            return Err(SemanticFailure::new(
+                "providers.*.display_name",
+                "invalid provider display name",
+                "use a single line of 1–100 characters without leading or trailing spaces".into(),
+            ));
+        }
         if let Some(icon) = &provider.icon
             && (icon.is_empty()
                 || icon.len() > 64

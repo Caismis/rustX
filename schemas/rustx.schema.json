@@ -606,6 +606,10 @@
             }
           ]
         },
+        "hidden": {
+          "description": "Hide this entry from new model choices. Existing selections stay resolvable.",
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
         },
@@ -902,6 +906,18 @@
         },
         "base_url": {
           "type": "string"
+        },
+        "display_name": {
+          "description": "Display label. The Provider's map key remains its identity.",
+          "maxLength": 100,
+          "minLength": 1,
+          "type": [
+            "string"
+          ]
+        },
+        "hidden": {
+          "description": "Hide this entry from new model choices. Existing selections stay resolvable.",
+          "type": "boolean"
         },
         "icon": {
           "description": "Presentation-only `LobeHub` icon slug. Never participates in model resolution.",
