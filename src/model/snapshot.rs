@@ -632,7 +632,7 @@ mod tests {
                             let native = match protocol {
                                 ModelProtocol::AnthropicMessages => Some(
                                     ProviderContinuationState::Anthropic(AnthropicContinuation {
-                                        opaque: serde_json::json!({"type":"thinking","thinking":"native", "signature":"original-signature"}),
+                                        opaque: serde_json::json!({"type":"thinking","thinking":"native", "signature":"original-signature"}).into(),
                                     }),
                                 ),
                                 ModelProtocol::OpenAiResponses if mode == 1 && batch == 1 => {
@@ -652,7 +652,7 @@ mod tests {
                                                 serde_json::json!({"type":"reasoning","id":"reasoning-native","encrypted_content":"original-encrypted"}),
                                                 serde_json::json!({"type":"function_call","id":"fc-a","call_id":"repeat-a","name":"tool","arguments":"{}"}),
                                                 serde_json::json!({"type":"function_call","id":"fc-b","call_id":"repeat-b","name":"tool","arguments":"{}"}),
-                                            ],
+                                            ].into(),
                                         },
                                     ))
                                 }
@@ -769,9 +769,9 @@ mod tests {
                             )
                             .unwrap();
                             match protocol {
-                                ModelProtocol::OpenAiChatCompletions => crate::model::adapter::openai::chat_completions::translate_request(input).unwrap(),
-                                ModelProtocol::OpenAiResponses => crate::model::adapter::openai::responses::translate_request(input,&tools,input.invocation.compat.responses_storage).unwrap(),
-                                ModelProtocol::AnthropicMessages => serde_json::to_value(crate::model::adapter::anthropic::mapping::translate_request(input).unwrap()).unwrap(),
+                                ModelProtocol::OpenAiChatCompletions => serde_json::to_value(crate::model::adapter::openai::chat_completions::translate_request(input).unwrap()).unwrap(),
+                                ModelProtocol::OpenAiResponses => serde_json::to_value(crate::model::adapter::openai::responses::translate_request(input,&tools,input.invocation.compat.responses_storage).unwrap()).unwrap(),
+                                ModelProtocol::AnthropicMessages => serde_json::to_value(crate::model::adapter::anthropic::mapping::translate_request(input,&tools).unwrap()).unwrap(),
                             }
                         };
                         let mut captured = translate(&request);

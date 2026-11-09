@@ -1557,7 +1557,7 @@ async fn cancellation_never_results_in_completed() {
 #[tokio::test]
 async fn continuation_state_propagates_losslessly() {
     let state = ProviderContinuationState::Anthropic(AnthropicContinuation {
-        opaque: serde_json::json!({"type":"thinking", "thinking":"Thinking.", "signature": "sig-1", "opaque": [1, 2, 3]}),
+        opaque: serde_json::json!({"type":"thinking", "thinking":"Thinking.", "signature": "sig-1", "opaque": [1, 2, 3]}).into(),
     });
     let call = ScriptedCall {
         id: "call-1",
@@ -1631,7 +1631,7 @@ async fn opaque_continuation_is_never_inspected() {
                     "encrypted_content": "opaque-bytes"
                 }),
                 serde_json::json!({"type":"function_call", "id":"fc_1", "call_id":"call-1", "name":"alpha", "arguments":"{}"}),
-            ],
+            ].into(),
         },
     );
     let call = ScriptedCall {
@@ -3386,7 +3386,7 @@ async fn unknown_tool_failure_leaves_pending_inbound_untouched() {
 #[tokio::test]
 async fn continuation_retained_across_inbound_drain() {
     let state = ProviderContinuationState::Anthropic(AnthropicContinuation {
-        opaque: serde_json::json!({"type":"thinking", "thinking":"Thinking.", "signature": "sig-1", "opaque": [1, 2, 3]}),
+        opaque: serde_json::json!({"type":"thinking", "thinking":"Thinking.", "signature": "sig-1", "opaque": [1, 2, 3]}).into(),
     });
     let (release, parked) = model_release();
     let model = fake(vec![

@@ -1,43 +1,20 @@
 //! `OpenAI` Chat Completions adapter.
 //!
 //! Implements the canonical [`ModelAdapter`] for `ModelProtocol::OpenAiChatCompletions`.
-//! Requests are translated from canonical `MessageBlock` values into typed
-//! SDK request values; the response stream is consumed through the SDK's
-//! BYOT facility as raw JSON so that unknown finish reasons and future chunk
-//! fields are tolerated instead of failing the whole stream.
-//!
-//! Chat Completions has no Responses-style continuation: the adapter rejects
-//! any non-`None` canonical continuation state before executing.
-//!
-//! # Opaque request parameters
-//!
-//! Canonical translation still uses the typed SDK request builder. Before
-//! sending, the typed request is serialized to a `serde_json::Value`,
-//! required to be an object, checked against the runtime-owned protected
-//! wire keys, and shallow-overlaid with the request's effective
-//! `requestParams`. The resulting value is sent through the SDK's BYOT
-//! streaming entry point, so there is exactly one HTTP implementation and no
-//! invented `extra_body` nesting level.
-//!
+//! Borrowed request views are serialized directly, with a checked shallow
+//! overlay for opaque request parameters. Response events remain raw JSON so
+//! unknown finish reasons and additional chunk fields are tolerated.
+//! Chat rejects native continuation, which belongs to Responses.
 //! No request-level reasoning control is ever synthesized: whatever the
 //! selected Model Profile configured is exactly what appears on the
 //! wire. Previous assistant reasoning uses `reasoning_content` by default;
 //! an optional override selects `reasoning` or omission. Reasoning stays
 //! separate from visible assistant text.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, VecDeque};
 
 use async_openai::error::OpenAIError;
-use async_openai::types::chat::{
-    ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
-    ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestAssistantMessageContentPart,
-    ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartRefusal,
-    ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessage,
-    ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage,
-    ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
-    ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionTools,
-    CreateChatCompletionRequestArgs, FunctionCall, FunctionObject,
-};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
@@ -55,12 +32,13 @@ use crate::model::adapter::traits::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
 use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
-use crate::model::catalog::{ChatReasoningReplay, ChatStreamUsage, ChatToolProtocol};
+use crate::model::catalog::{
+    ChatMaxTokensField, ChatReasoningReplay, ChatStreamUsage, ChatToolProtocol,
+};
 use crate::model::error::{
     MalformedToolProposalSource, ModelError, ModelErrorKind, is_context_window_error,
 };
 use crate::model::event::ModelEvent;
-use crate::model::invocation::finalize_provider_request;
 use crate::model::projected::ModelMessageView;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
 use crate::runtime::cancellation::CancellationSignal;
@@ -1408,164 +1386,110 @@ fn chat_stream_error(error: &serde_json::Value) -> ModelError {
     .normalized()
 }
 
-/// Translates a provider-neutral request into the final Chat Completions request
-/// JSON.
-///
-/// Canonical translation uses the typed SDK builder; the runtime-owned
-/// structural fields are then written explicitly onto the serialized object
-/// (including the compat-selected max-token spelling), and the effective
-/// opaque request parameters are shallow-overlaid last under the
-/// protected-key contract.
-pub(crate) fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelError> {
+#[derive(Serialize)]
+pub(crate) struct WireRequest<'a> {
+    model: &'a str,
+    messages: Vec<WireMessage<'a>>,
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<WireStreamOptions>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<WireTool<'a>>,
+    #[serde(flatten)]
+    params: Cow<'a, crate::model::invocation::RequestParams>,
+}
+
+#[derive(Serialize)]
+struct WireStreamOptions {
+    include_usage: bool,
+}
+
+#[derive(Serialize)]
+struct WireTool<'a> {
+    r#type: &'static str,
+    function: WireFunction<'a>,
+}
+
+#[derive(Serialize)]
+struct WireFunction<'a> {
+    name: &'a str,
+    description: &'a str,
+    parameters: &'a serde_json::Value,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "role", rename_all = "lowercase")]
+enum WireMessage<'a> {
+    System {
+        content: &'a str,
+    },
+    User {
+        content: Vec<WirePart<'a>>,
+    },
+    Assistant {
+        content: AssistantContent<'a>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        tool_calls: Vec<WireCall<'a>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning: Option<Cow<'a, str>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<Cow<'a, str>>,
+    },
+    Tool {
+        tool_call_id: serde_json::Value,
+        content: Vec<WirePart<'a>>,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum AssistantContent<'a> {
+    Parts(Vec<WirePart<'a>>),
+    Text(String),
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WirePart<'a> {
+    Text { text: Cow<'a, str> },
+    Refusal { refusal: &'a str },
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Serialize)]
+struct ImageUrl {
+    url: String,
+}
+
+#[derive(Serialize)]
+struct WireCall<'a> {
+    id: serde_json::Value,
+    r#type: &'static str,
+    function: WireCallFunction<'a>,
+}
+
+#[derive(Serialize)]
+struct WireCallFunction<'a> {
+    name: &'a str,
+    arguments: String,
+}
+
+pub(crate) fn translate_request(request: &ModelRequest) -> Result<WireRequest<'_>, ModelError> {
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
-    construct_request(request)
-}
-
-fn construct_request(request: &ModelRequest) -> Result<serde_json::Value, ModelError> {
-    let messages = translate_messages(request)?;
-    let assistant_reasoning: Vec<Option<String>> = messages
-        .iter()
-        .map(|message| message.reasoning.clone())
-        .collect();
-    let mut builder = CreateChatCompletionRequestArgs::default();
-    builder
-        .model(request.model().to_owned())
-        .messages(Vec::<ChatCompletionRequestMessage>::new());
-    if request.invocation.compat.chat_stream_usage == ChatStreamUsage::Supported {
-        builder.stream_options(ChatCompletionStreamOptions {
-            include_usage: Some(true),
-            include_obfuscation: None,
-        });
-    }
-    if !request.tools.is_empty() {
-        builder.tools(translate_tools(&request.tools));
-    }
-    let typed = builder
-        .build()
-        .map_err(|e| invalid_request(&format!("failed to build Chat Completions request: {e}")))?;
-    let mut value = {
-        #[cfg(feature = "issue-387-profile")]
-        let _profile = crate::model::adapter::profile::phase(
-            crate::model::adapter::profile::Phase::TypedToValue,
-        );
-        serde_json::to_value(&typed)
-    }
-    .map_err(|e| {
-        invalid_request(&format!(
-            "failed to serialize the Chat Completions request: {e}"
-        ))
-    })?;
-    value["messages"] = {
-        #[cfg(feature = "issue-387-profile")]
-        let _profile = crate::model::adapter::profile::phase(
-            crate::model::adapter::profile::Phase::TypedToValue,
-        );
-        serde_json::to_value(
-            messages
-                .iter()
-                .map(|message| &message.message)
-                .collect::<Vec<_>>(),
-        )
-    }
-    .map_err(|error| invalid_request(&format!("failed to serialize Chat messages: {error}")))?;
-    let wire_messages = value
-        .get_mut("messages")
-        .and_then(serde_json::Value::as_array_mut)
-        .ok_or_else(|| {
-            invalid_request("serialized Chat Completions request has no message array")
-        })?;
-    if wire_messages.len() != assistant_reasoning.len() {
-        return Err(invalid_request(
-            "serialized Chat Completions message count changed unexpectedly",
-        ));
-    }
-    let replay = request
-        .invocation
-        .compat
-        .chat_reasoning_replay
-        .unwrap_or_default();
-    for (wire_message, reasoning) in wire_messages.iter_mut().zip(assistant_reasoning) {
-        let Some(reasoning) = reasoning else {
-            continue;
-        };
-        let object = wire_message.as_object_mut().ok_or_else(|| {
-            invalid_request("serialized Chat Completions message is not an object")
-        })?;
-        if let Some(field) = replay.wire_name() {
-            object.insert(field.to_owned(), reasoning.into());
-        }
-    }
-    // Runtime-owned structural fields: streaming is always on, and exactly
-    // one max-token spelling is written, chosen by the model's compat
-    // metadata. Both spellings are protected, so no request parameter can add
-    // a second contradictory maximum.
-    value["stream"] = serde_json::Value::Bool(true);
-    value[request.invocation.compat.chat_max_tokens_field.wire_name()] =
-        request.max_output_tokens().into();
-    crate::model::adapter::correlation::encode(&mut value, ModelProtocol::OpenAiChatCompletions)
-        .map_err(invalid_request)?;
     #[cfg(feature = "issue-387-profile")]
-    let _profile =
-        crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
-    let value = finalize_provider_request(
-        value,
-        request.request_params(),
-        ModelProtocol::OpenAiChatCompletions,
-    )?;
-    crate::model::adapter::structured::finalize_request(value, request)
-}
-
-/// Translates the canonical message list into typed Chat Completions
-/// messages, rejecting canonical content the protocol cannot represent
-/// without changing its meaning.
-// The SDK's hosted-schema Tool content is text-only. This typed BYOT extension
-// defines rustX's single extended OpenAI-compatible multimodal Tool contract.
-#[derive(Serialize)]
-#[serde(untagged)]
-enum ChatMessage {
-    Standard(ChatCompletionRequestMessage),
-    Tool(MultimodalToolMessage),
-}
-
-#[derive(Serialize)]
-struct MultimodalToolMessage {
-    role: ToolRole,
-    tool_call_id: String,
-    content: Vec<ChatCompletionRequestUserMessageContentPart>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "lowercase")]
-enum ToolRole {
-    Tool,
-}
-
-struct TranslatedChatMessage {
-    message: ChatMessage,
-    reasoning: Option<String>,
-}
-
-fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessage>, ModelError> {
-    #[cfg(feature = "issue-387-profile")]
-    let _profile = crate::model::adapter::profile::phase(
+    let translation = crate::model::adapter::profile::phase(
         crate::model::adapter::profile::Phase::TranslateMessages,
     );
-    let mut system_messages = Vec::new();
-    let mut transcript_messages = Vec::new();
-    let reasoning_replay = request.invocation.compat.chat_reasoning_replay;
+    let mut messages = Vec::with_capacity(request.messages.len() + 1);
     if !request.effective_system_prompt.is_empty() {
-        system_messages.push(TranslatedChatMessage {
-            message: ChatMessage::Standard(ChatCompletionRequestMessage::System(
-                ChatCompletionRequestSystemMessage {
-                    content: ChatCompletionRequestSystemMessageContent::Text(
-                        request.effective_system_prompt.clone(),
-                    ),
-                    name: None,
-                },
-            )),
-            reasoning: None,
+        messages.push(WireMessage::System {
+            content: &request.effective_system_prompt,
         });
     }
     #[cfg(feature = "issue-387-profile")]
@@ -1576,178 +1500,162 @@ fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessag
     #[cfg(not(feature = "issue-387-profile"))]
     let blocks = &request.messages;
     for block in blocks {
-        let (translated, reasoning) = match block.view() {
-            ModelMessageView::User(user) => (
-                ChatMessage::Standard(translate_user_message(user, &request.images)?),
-                None,
-            ),
-            ModelMessageView::Assistant(assistant) => {
-                let (message, reasoning) =
-                    translate_assistant_message(assistant, reasoning_replay)?;
-                (
-                    ChatMessage::Standard(ChatCompletionRequestMessage::Assistant(message)),
-                    reasoning,
-                )
+        messages.push(match block.view() {
+            ModelMessageView::User(user) => {
+                let mut content = Vec::with_capacity(user.len());
+                for block in user {
+                    #[cfg(feature = "issue-387-profile")]
+                    crate::model::adapter::profile::block();
+                    match block {
+                        crate::message::types::UserContentBlock::Text(text) =>
+                            content.push(WirePart::Text { text: Cow::Borrowed(&text.text) }),
+                        crate::message::types::UserContentBlock::Image(image) =>
+                            content.push(chat_image_part(image, &request.images)?),
+                        _ => return Err(unsupported("OpenAI Chat Completions cannot represent canonical file references")),
+                    }
+                }
+                WireMessage::User { content }
             }
-            ModelMessageView::Tool(tool_call_id, result) => (
-                ChatMessage::Tool(translate_tool_message(
-                    tool_call_id,
-                    result,
-                    &request.images,
-                )?),
-                None,
-            ),
-            ModelMessageView::RequestOnly(carryover) => (
-                ChatMessage::Standard(translate_runtime_context(
-                    &carryover.render(),
-                    carryover.is_assistant(),
-                )),
-                None,
-            ),
-        };
-        let translated = TranslatedChatMessage {
-            message: translated,
-            reasoning,
-        };
-        if matches!(
-            &translated.message,
-            ChatMessage::Standard(ChatCompletionRequestMessage::System(_))
-        ) {
-            system_messages.push(translated);
-        } else {
-            transcript_messages.push(translated);
-        }
+            ModelMessageView::Assistant(assistant) =>
+                translate_assistant_message(assistant, request.invocation.compat.chat_reasoning_replay.unwrap_or_default())?,
+            ModelMessageView::Tool(tool_call_id, result) =>
+                translate_tool_message(tool_call_id, result, &request.images)?,
+            ModelMessageView::RequestOnly(carryover) if carryover.is_assistant() =>
+                WireMessage::Assistant {
+                    content: AssistantContent::Text(carryover.render()),
+                    tool_calls: Vec::new(),
+                    reasoning: None,
+                    reasoning_content: None,
+                },
+            ModelMessageView::RequestOnly(carryover) => WireMessage::User {
+                content: vec![WirePart::Text { text: Cow::Owned(carryover.render()) }],
+            },
+        });
     }
-    let mut messages = system_messages;
-    messages.extend(transcript_messages);
+    #[cfg(feature = "issue-387-profile")]
+    drop(translation);
     if messages.is_empty() {
         return Err(invalid_request(
             "a Chat Completions request requires at least one message",
         ));
     }
-    Ok(messages)
-}
-
-fn translate_runtime_context(text: &str, assistant: bool) -> ChatCompletionRequestMessage {
-    if assistant {
-        return ChatCompletionRequestMessage::Assistant(
-            async_openai::types::chat::ChatCompletionRequestAssistantMessage {
-                content: Some(ChatCompletionRequestAssistantMessageContent::Text(
-                    text.to_owned(),
-                )),
-                ..Default::default()
-            },
-        );
-    }
-    ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
-        content: ChatCompletionRequestUserMessageContent::Array(vec![
-            ChatCompletionRequestUserMessageContentPart::Text(
-                ChatCompletionRequestMessageContentPartText {
-                    text: text.to_owned(),
-                },
-            ),
-        ]),
-        name: None,
+    crate::model::adapter::correlation::encode_fields(|field| {
+        for message in &mut messages {
+            #[cfg(feature = "issue-387-profile")]
+            crate::model::adapter::profile::wire_item();
+            match message {
+                WireMessage::Assistant { tool_calls, .. } => {
+                    for call in tool_calls {
+                        field(true, &mut call.id);
+                    }
+                }
+                WireMessage::Tool { tool_call_id, .. } => field(false, tool_call_id),
+                _ => {}
+            }
+        }
+    })
+    .map_err(invalid_request)?;
+    #[cfg(feature = "issue-387-profile")]
+    let _params =
+        crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
+    let params = crate::model::adapter::structured::request_params(request)?;
+    let max = Some(request.max_output_tokens());
+    let (max_tokens, max_completion_tokens) = match request.invocation.compat.chat_max_tokens_field
+    {
+        ChatMaxTokensField::MaxTokens => (max, None),
+        ChatMaxTokensField::MaxCompletionTokens => (None, max),
+    };
+    Ok(WireRequest {
+        model: request.model(),
+        messages,
+        stream: true,
+        max_tokens,
+        max_completion_tokens,
+        stream_options: (request.invocation.compat.chat_stream_usage == ChatStreamUsage::Supported)
+            .then_some(WireStreamOptions {
+                include_usage: true,
+            }),
+        tools: translate_tools(&request.tools),
+        params,
     })
 }
 
-fn translate_user_message(
-    user: &[crate::message::types::UserContentBlock],
+fn translate_tool_message<'a>(
+    tool_call_id: &ToolCallId,
+    result: &crate::tools::types::ToolExecutionResult,
     images: &crate::model::images::ResolvedImages,
-) -> Result<ChatCompletionRequestMessage, ModelError> {
-    let mut parts = Vec::new();
-    for content in user {
-        #[cfg(feature = "issue-387-profile")]
-        crate::model::adapter::profile::block();
-        match content {
-            crate::message::types::UserContentBlock::Text(text) => {
-                parts.push(ChatCompletionRequestUserMessageContentPart::Text(
-                    ChatCompletionRequestMessageContentPartText {
-                        text: text.text.clone(),
-                    },
-                ));
+) -> Result<WireMessage<'a>, ModelError> {
+    let content = result
+        .image_projection()
+        .map_err(unsupported)?
+        .into_iter()
+        .map(|part| match part {
+            crate::tools::types::ModelToolResultPart::Text(text) => Ok(WirePart::Text {
+                text: Cow::Owned(text),
+            }),
+            crate::tools::types::ModelToolResultPart::Image(image) => {
+                chat_image_part(&image, images)
             }
-            crate::message::types::UserContentBlock::Image(image) => {
-                parts.push(chat_image_part(image, images)?);
-            }
-            crate::message::types::UserContentBlock::UploadedFile(_)
-            | crate::message::types::UserContentBlock::File(_) => {
-                return Err(unsupported(
-                    "OpenAI Chat Completions cannot represent canonical file references",
-                ));
-            }
-        }
-    }
-    Ok(ChatCompletionRequestMessage::User(
-        ChatCompletionRequestUserMessage {
-            content: ChatCompletionRequestUserMessageContent::Array(parts),
-            name: None,
-        },
-    ))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(WireMessage::Tool {
+        tool_call_id: tool_call_id.as_str().into(),
+        content,
+    })
 }
 
-/// Translates one canonical Assistant message into the provider's assistant
-/// message shape.
-///
-/// Like the OpenAI-compatible SDK path, concatenate exposed reasoning into
-/// one extension field. Opaque reasoning from another protocol has no Chat
-/// representation and is not replayed. The typed `OpenAI` SDK message and
-/// extension stay separate until the final BYOT JSON is assembled.
+fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<WireTool<'_>> {
+    tools
+        .iter()
+        .map(|tool| WireTool {
+            r#type: "function",
+            function: WireFunction {
+                name: &tool.name,
+                description: &tool.description,
+                parameters: &tool.input_schema,
+            },
+        })
+        .collect()
+}
+
 fn translate_assistant_message(
-    assistant: &[crate::message::types::AssistantContentBlock],
-    reasoning_replay: Option<ChatReasoningReplay>,
-) -> Result<
-    (
-        async_openai::types::chat::ChatCompletionRequestAssistantMessage,
-        Option<String>,
-    ),
-    ModelError,
-> {
+    assistant: &[AssistantContentBlock],
+    replay: ChatReasoningReplay,
+) -> Result<WireMessage<'_>, ModelError> {
     let mut parts = Vec::new();
     let mut tool_calls = Vec::new();
-    let mut reasoning = None;
+    let mut reasoning: Option<Cow<'_, str>> = None;
     for content in assistant {
         #[cfg(feature = "issue-387-profile")]
         crate::model::adapter::profile::block();
         match content {
-            AssistantContentBlock::Text(text) => {
-                parts.push(ChatCompletionRequestAssistantMessageContentPart::Text(
-                    ChatCompletionRequestMessageContentPartText {
-                        text: text.text.clone(),
-                    },
-                ));
-            }
-            AssistantContentBlock::Refusal(refusal) => {
-                parts.push(ChatCompletionRequestAssistantMessageContentPart::Refusal(
-                    ChatCompletionRequestMessageContentPartRefusal {
-                        refusal: refusal.text.clone(),
-                    },
-                ));
-            }
-            AssistantContentBlock::ToolCall(call) => {
-                let arguments = serde_json::to_string(&call.arguments).map_err(|e| {
-                    unsupported(format!(
-                        "tool call arguments are not JSON-serializable: {e}"
-                    ))
-                })?;
-                tool_calls.push(ChatCompletionMessageToolCalls::Function(
-                    ChatCompletionMessageToolCall {
-                        id: call.id.as_str().to_owned(),
-                        function: FunctionCall {
-                            name: call.name.clone(),
-                            arguments,
-                        },
-                    },
-                ));
-            }
+            AssistantContentBlock::Text(text) => parts.push(WirePart::Text {
+                text: Cow::Borrowed(&text.text),
+            }),
+            AssistantContentBlock::Refusal(refusal) => parts.push(WirePart::Refusal {
+                refusal: &refusal.text,
+            }),
+            AssistantContentBlock::ToolCall(call) => tool_calls.push(WireCall {
+                id: call.id.as_str().into(),
+                r#type: "function",
+                function: WireCallFunction {
+                    name: &call.name,
+                    arguments: serde_json::to_string(&call.arguments).map_err(|error| {
+                        unsupported(format!(
+                            "tool call arguments are not JSON-serializable: {error}"
+                        ))
+                    })?,
+                },
+            }),
             AssistantContentBlock::Reasoning(block) => {
-                // Omit is a translation policy, not a serialized-JSON
-                // cleanup step: this branch deliberately does nothing for
-                // that policy, without inspecting text or provider state.
-                if reasoning_replay != Some(ChatReasoningReplay::Omit)
-                    && let Some(text) = block.text.as_ref().filter(|text| !text.is_empty())
+                if replay != ChatReasoningReplay::Omit
+                    && let Some(text) = block.text.as_deref().filter(|text| !text.is_empty())
                 {
-                    reasoning.get_or_insert_with(String::new).push_str(text);
+                    if let Some(previous) = &mut reasoning {
+                        previous.to_mut().push_str(text);
+                    } else {
+                        reasoning = Some(Cow::Borrowed(text));
+                    }
                 }
             }
             AssistantContentBlock::Image(_) => {
@@ -1757,80 +1665,28 @@ fn translate_assistant_message(
             }
         }
     }
-    Ok((
-        async_openai::types::chat::ChatCompletionRequestAssistantMessage {
-            content: Some(ChatCompletionRequestAssistantMessageContent::Array(parts)),
-            tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
-            ..Default::default()
-        },
+    let (reasoning, reasoning_content) = match replay {
+        ChatReasoningReplay::Reasoning => (reasoning, None),
+        ChatReasoningReplay::ReasoningContent => (None, reasoning),
+        ChatReasoningReplay::Omit => (None, None),
+    };
+    Ok(WireMessage::Assistant {
+        content: AssistantContent::Parts(parts),
+        tool_calls,
         reasoning,
-    ))
-}
-
-/// Encode one request-owned PNG using the SDK image content part.
-fn chat_image_part(
-    image: &crate::message::content::ImageReference,
-    images: &crate::model::images::ResolvedImages,
-) -> Result<ChatCompletionRequestUserMessageContentPart, ModelError> {
-    use async_openai::types::chat::{ChatCompletionRequestMessageContentPartImage, ImageUrl};
-    Ok(ChatCompletionRequestUserMessageContentPart::ImageUrl(
-        ChatCompletionRequestMessageContentPartImage {
-            image_url: ImageUrl {
-                url: super::image_data_url(image, images).map_err(|error| unsupported(&error))?,
-                detail: None,
-            },
-        },
-    ))
-}
-
-/// Translates the canonical model-facing tool-result projection into the
-/// provider's tool-message shape. Projection policy, status rendering, and
-/// aggregate bounding are owned by the Tool Plane.
-fn translate_tool_message(
-    tool_call_id: &crate::runtime::identity::ToolCallId,
-    result: &crate::tools::types::ToolExecutionResult,
-    images: &crate::model::images::ResolvedImages,
-) -> Result<MultimodalToolMessage, ModelError> {
-    let parts = result
-        .image_projection()
-        .map_err(unsupported)?
-        .into_iter()
-        .map(|part| match part {
-            crate::tools::types::ModelToolResultPart::Text(text) => {
-                Ok(ChatCompletionRequestUserMessageContentPart::Text(
-                    ChatCompletionRequestMessageContentPartText { text },
-                ))
-            }
-            crate::tools::types::ModelToolResultPart::Image(image) => {
-                chat_image_part(&image, images)
-            }
-        })
-        .collect::<Result<Vec<_>, ModelError>>()?;
-    Ok(MultimodalToolMessage {
-        role: ToolRole::Tool,
-        content: parts,
-        tool_call_id: tool_call_id.as_str().to_owned(),
+        reasoning_content,
     })
 }
 
-/// Only model-facing tool fields are sent: name, description, and the input
-/// schema. Execution policy, replay policy, origin, and runtime semantics
-/// never reach the provider; the compiled model-facing definition is
-/// translated verbatim.
-fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<ChatCompletionTools> {
-    tools
-        .iter()
-        .map(|tool| {
-            ChatCompletionTools::Function(ChatCompletionTool {
-                function: FunctionObject {
-                    name: tool.name.clone(),
-                    description: Some(tool.description.clone()),
-                    parameters: Some((*tool.input_schema).clone()),
-                    strict: None,
-                },
-            })
-        })
-        .collect()
+fn chat_image_part<'a>(
+    image: &crate::message::content::ImageReference,
+    images: &crate::model::images::ResolvedImages,
+) -> Result<WirePart<'a>, ModelError> {
+    Ok(WirePart::ImageUrl {
+        image_url: ImageUrl {
+            url: super::image_data_url(image, images).map_err(|error| unsupported(&error))?,
+        },
+    })
 }
 
 fn unsupported(message: impl Into<String>) -> ModelError {

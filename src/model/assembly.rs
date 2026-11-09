@@ -1005,7 +1005,7 @@ mod tests {
             ModelEvent::ContinuationState {
                 block_index: ContentBlockIndex::new(0),
                 state: ProviderContinuationState::Anthropic(AnthropicContinuation {
-                    opaque: serde_json::json!({"signature": "opaque-state"}),
+                    opaque: serde_json::json!({"signature": "opaque-state"}).into(),
                 }),
             },
             text(1, "visible output"),

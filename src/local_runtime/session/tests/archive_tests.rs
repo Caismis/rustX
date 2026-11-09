@@ -1046,7 +1046,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
     let private = |secret: &str| {
         Some(ProviderContinuationState::Anthropic(
             AnthropicContinuation {
-                opaque: serde_json::json!(secret),
+                opaque: serde_json::json!(secret).into(),
             },
         ))
     };
@@ -1888,7 +1888,7 @@ async fn lossy_archive_reports_missing_old_encrypted_input_without_invalidating_
             text: None,
             provider_state: Some(crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(
                 crate::runtime::continuation::OpenAiResponsesContinuation::Stateless {
-                    items: vec![serde_json::json!({"type":"reasoning", "id":"rs-old", "encrypted_content":"OLD_ENCRYPTED_INPUT_BYTES"})],
+                    items: vec![serde_json::json!({"type":"reasoning", "id":"rs-old", "encrypted_content":"OLD_ENCRYPTED_INPUT_BYTES"})].into(),
                 },
             )),
         })],

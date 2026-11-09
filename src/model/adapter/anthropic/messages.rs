@@ -981,7 +981,9 @@ impl AnthropicStreamNormalizer {
                 });
                 Ok(vec![ModelEvent::ContinuationState {
                     block_index: *canonical_index,
-                    state: ProviderContinuationState::Anthropic(AnthropicContinuation { opaque }),
+                    state: ProviderContinuationState::Anthropic(AnthropicContinuation {
+                        opaque: opaque.into(),
+                    }),
                 }])
             }
             AnthropicBlockState::RedactedThinking {
@@ -1002,7 +1004,9 @@ impl AnthropicStreamNormalizer {
                 });
                 Ok(vec![ModelEvent::ContinuationState {
                     block_index: *canonical_index,
-                    state: ProviderContinuationState::Anthropic(AnthropicContinuation { opaque }),
+                    state: ProviderContinuationState::Anthropic(AnthropicContinuation {
+                        opaque: opaque.into(),
+                    }),
                 }])
             }
             AnthropicBlockState::ToolUse {

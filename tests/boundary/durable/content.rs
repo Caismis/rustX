@@ -814,7 +814,7 @@ fn t08_t12_t15_canonical_metadata_components_are_independent_bounded_sources() {
                             text: Some("visible text".into()),
                             provider_state: Some(ProviderContinuationState::Anthropic(
                                 AnthropicContinuation {
-                                    opaque: provider.clone(),
+                                    opaque: provider.clone().into(),
                                 },
                             )),
                         }),

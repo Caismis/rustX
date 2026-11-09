@@ -454,7 +454,7 @@ async fn run_continuation_case(
 
 fn anthropic_state() -> ProviderContinuationState {
     ProviderContinuationState::Anthropic(AnthropicContinuation {
-        opaque: serde_json::json!({"type":"thinking", "thinking":"native reasoning", "signature": "sig-1"}),
+        opaque: serde_json::json!({"type":"thinking", "thinking":"native reasoning", "signature": "sig-1"}).into(),
     })
 }
 
@@ -473,7 +473,7 @@ fn stateless_state() -> ProviderContinuationState {
                 "encrypted_content": "opaque"
             }),
             serde_json::json!({"type":"function_call", "id":"fc_1", "call_id":"call-1", "name":"alpha", "arguments":"{}"}),
-        ],
+        ].into(),
     })
 }
 
@@ -4440,13 +4440,15 @@ async fn mandatory_adapter_preflight_rejects_native_history_without_continuation
         (
             ModelProtocol::AnthropicMessages,
             ProviderContinuationState::Anthropic(AnthropicContinuation {
-                opaque: serde_json::json!({"type":"thinking","thinking":"native", "signature":""}),
+                opaque: serde_json::json!({"type":"thinking","thinking":"native", "signature":""})
+                    .into(),
             }),
         ),
         (
             ModelProtocol::OpenAiResponses,
             ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
-                items: vec![serde_json::json!({"type":"reasoning","id":"native", "summary":[]})],
+                items: vec![serde_json::json!({"type":"reasoning","id":"native", "summary":[]})]
+                    .into(),
             }),
         ),
     ];

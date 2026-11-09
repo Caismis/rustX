@@ -302,7 +302,7 @@ async fn chat_omit_ignores_unavailable_reasoning() {
                     provider_state: Some(
                         rustx::runtime::continuation::ProviderContinuationState::Anthropic(
                             rustx::runtime::continuation::AnthropicContinuation {
-                                opaque: serde_json::json!({"signature": "opaque"}),
+                                opaque: serde_json::json!({"signature": "opaque"}).into(),
                             },
                         ),
                     ),

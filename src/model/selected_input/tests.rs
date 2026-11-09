@@ -25,6 +25,18 @@ fn user(index: usize) -> ModelInputMessage {
     }))
 }
 
+#[test]
+fn borrowed_skip_does_not_visit_covered_leaves() {
+    let selected: SelectedModelInput = (0..257).map(user).collect();
+    let visits = ACTUAL_VISITS.with(std::cell::Cell::get);
+    let mut tail = selected.iter();
+    assert_eq!(tail.nth(253), Some(&user(253)));
+    assert_eq!(tail.next_back(), Some(&user(256)));
+    assert_eq!(tail.nth(1), Some(&user(255)));
+    assert_eq!(tail.next(), None);
+    assert_eq!(ACTUAL_VISITS.with(std::cell::Cell::get) - visits, 3);
+}
+
 fn mixed(scope: &ConversationId) -> Vec<ModelInputMessage> {
     let original = user(1);
     let source = original.as_canonical().unwrap();

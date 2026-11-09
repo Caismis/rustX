@@ -74,7 +74,6 @@ pub(crate) enum Phase {
     TranslateMessages,
     NativeCorrelation,
     WireCorrelation,
-    TypedToValue,
     FinalParams,
     HttpEncode,
 }
