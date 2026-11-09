@@ -2,18 +2,18 @@ import { SettingsNotice } from '../SettingsFeedback';
 import type { TranslationKey } from '../../../locale/translation';
 import { useTranslation } from '../../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted settings cards and request controls; see PROVENANCE.md. */
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { shallowEqual, useSelector } from '@xstate/react';
-import { GridList, GridListItem } from 'react-aria-components';
+import { Button as AriaButton, GridList, GridListItem } from 'react-aria-components';
 import type { Model, ModelLayer, ProviderView, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v77';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { Button } from '../../../presentation/primitives/Button';
 import { DialogSurface } from '../../../presentation/primitives/DialogSurface';
-import { IconApiOutline14, IconCloseOutline16, IconEditOutline16, IconLinkOutline14, IconPlusOutline16, IconRefreshOutline16 } from '../../../presentation/primitives/icons';
+import { IconApiOutline14, IconCloseOutline16, IconEditOutline16, IconLinkOutline14, IconPlusOutline16, IconRefreshOutline16, IconTrashOutline16 } from '../../../presentation/primitives/icons';
 import { TypedUnitForm, UnitForm, UnitOutcomeNotice, useUnitEditing, type UnitOptions } from '../forms/bridge';
 import { JsonObjectEditor } from '../forms/fields';
-import { Advanced, Choice, Search } from '../primitives/aria';
+import { Advanced, Choice, ConfirmAction, Search } from '../primitives/aria';
 import { catalogEntries, sourceView, type CatalogEntry, type SettingsTarget, observedResult, observedResultLabel, unitApplication } from '../projection';
 import type { PageFocus } from '../machines/navigation';
 import { useSettingsActor } from '../machines/react';
@@ -144,6 +144,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
           </div>
           {selectedModels.length ? <GridList aria-label={tx('settings:models-page.models-of-provider-value', { p0: selected })} className={cards.modelList}>
             {selectedModels.map(entry => <ModelRow key={entry.id} entry={entry} revision={revision} providerHidden={!selectedProvider || !!selectedProvider.hidden} canProbe={!!selectedProvider} probe={probe}
+              scope={scope} restoresGlobal={scope === 'workspace' && !!source.user.authored?.models?.[entry.id]} settle={landing}
               onOpen={() => onFocus({ kind: 'model', id: entry.id, provider: selected })}/>)}
           </GridList> : <p className={cards.emptyModels}>{tx('settings:models.empty-models')}</p>}
         </> : <div className={cards.unselected}><IconApiOutline14 size={28}/><p>{tx('settings:models.empty-providers')}</p>
@@ -156,7 +157,7 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
         blank={{}} revision={revision} mutation={authored => ({ kind: 'config', mutation: { unit: 'root_model', authored } })}
         removalNotice={<p>{tx('settings:models-page.new-sessions-fall-back-to-the-native-default-model-once-no-sourc')}</p>}>
         {(value, change) => <><p className={css.hint}>{tx('settings:models-page.this-is-the-model-new-sessions-start-from-it-is-not-the-model-an')}</p>
-          <ModelSelection value={value} change={change} models={visibleModels} profiles={profiles} /></>}
+          <DefaultModelSelection value={value} change={change} models={visibleModels} profiles={profiles} /></>}
       </UnitForm>
     </Advanced>
     {adding === 'provider' && <ProviderNameDialog revision={revision} exists={[...providers.map(entry => entry.id), ...draftedProviders]} onClose={() => setAdding(undefined)}
@@ -166,8 +167,9 @@ export function ModelsPage({ client, host, target, source, scope, revision, mode
   </section>;
 }
 
-function ModelRow({ entry, revision, providerHidden, canProbe, probe, onOpen }: {
-  entry: CatalogEntry<Model>; revision: string; providerHidden: boolean; canProbe: boolean; probe: ReturnType<typeof useModelProbe>; onOpen: () => void;
+function ModelRow({ entry, revision, providerHidden, canProbe, probe, scope, restoresGlobal, settle, onOpen }: {
+  entry: CatalogEntry<Model>; revision: string; providerHidden: boolean; canProbe: boolean; probe: ReturnType<typeof useModelProbe>;
+  scope: SourceScope; restoresGlobal: boolean; settle: RefObject<HTMLElement | null>; onOpen: () => void;
 }) {
   const tx = useTranslation();
   const model = entry.authored ?? entry.effective;
@@ -178,6 +180,9 @@ function ModelRow({ entry, revision, providerHidden, canProbe, probe, onOpen }: 
   if (!model) return null;
   const context = Number(model.context_window);
   const status = probe.states[entry.id];
+  const title = tx('settings:models-page.model-value', { p0: entry.id });
+  const removeLabel = tx(restoresGlobal ? 'settings:bridge.use-global-default-value' : 'settings:bridge.remove-value', { p0: title });
+  const removeDisabled = !unit.admitted || unit.busy || unit.awaitingObservation;
   return <GridListItem id={entry.id} textValue={model.id} aria-label={entry.id} onAction={onOpen} className={cards.modelRow} data-hidden={!!model.hidden || providerHidden}>
     <span className={cards.modelName} title={model.id}>{model.id}</span>
     <div className={cards.modelBadges}>
@@ -191,6 +196,13 @@ function ModelRow({ entry, revision, providerHidden, canProbe, probe, onOpen }: 
         title={tx('settings:models.test-model', { p0: model.id })} aria-busy={status === 'checking'} data-probe={status}
         disabled={!canProbe || !probe.available || status === 'checking'} onClick={() => { void probe.test(entry.id); }}><IconLinkOutline14/></Button>
       <Button size="sm" className={cards.iconButton} aria-label={tx('settings:models.edit-model')} title={tx('settings:models.edit-model')} onClick={onOpen}><IconEditOutline16 size={14}/></Button>
+      {entry.authored && <ConfirmAction label={removeLabel} confirm={removeLabel}
+        tone={restoresGlobal ? 'restore' : 'destructive'} settle={settle} disabled={removeDisabled} onConfirm={() => unit.submit(true)}
+        title={restoresGlobal ? tx('settings:bridge.use-the-global-default-for-value', { p0: title }) : tx('settings:bridge.remove-value-from-value-configuration', { p0: title, p1: tx(scope === 'workspace' ? 'settings:extension-detail.workspace' : 'settings:extension-detail.user') })}
+        description={<p>{tx(restoresGlobal ? 'settings:forms.restore-help' : 'settings:models-page.any-source-that-names-this-model-identity-keeps-naming-it-native')}</p>}
+        renderTrigger={(open, ref) => <AriaButton ref={ref} className={cards.iconButton} aria-label={removeLabel} isDisabled={removeDisabled} onPress={open}>
+          {restoresGlobal ? <IconRefreshOutline16 size={14}/> : <IconTrashOutline16 size={14}/>}
+        </AriaButton>}/>}
       <Switch className={cards.switch} checked={!model.hidden && !providerHidden} label={tx('settings:models.show-model', { p0: model.id })}
         disabled={!entry.authored || providerHidden || !unit.admitted || unit.draft || unit.awaitingObservation}
         onChange={checked => unit.apply({ ...model, hidden: !checked })}/>
@@ -237,9 +249,7 @@ function ModelDialog({ source, scope, revision, id, provider, suggestDeepSeek, o
         })}>{modelId}</Button>)}
     </div>}
     <TypedUnitForm<Model> {...options} title={title}
-      presentation="dialog" onCancel={close} onSaved={creating ? onClose : undefined}
-      removalNotice={<p>{tx('settings:models-page.any-source-that-names-this-model-identity-keeps-naming-it-native')}</p>}
-      >
+      presentation="dialog" removable={false} onCancel={close} onSaved={creating ? onClose : undefined}>
       {form => <ModelFields form={form} duplicate={creating ? duplicate : undefined} />}
     </TypedUnitForm>
   </DialogSurface>;
@@ -248,10 +258,25 @@ function ModelDialog({ source, scope, revision, id, provider, suggestDeepSeek, o
 /** The Model Profiles each model identity this scope reaches declares. */
 export type ModelProfiles = Readonly<Record<string, readonly string[]>>;
 
-/** The model-selection fields shared by the default model and a named Agent's
- * explicit child model. Both author a `ModelLayer`, so both reach exactly the
- * same controls and the same identity-discovery rule. */
-export function ModelSelection({ value, change, models, profiles }: { value: ModelLayer; change: (next: ModelLayer) => void; models: string[]; profiles: ModelProfiles }) {
+type ModelSelectionProps = { value: ModelLayer; change: (next: ModelLayer) => void; models: string[]; profiles: ModelProfiles };
+
+function DefaultModelSelection({ value, change, models, profiles }: ModelSelectionProps) {
+  const tx = useTranslation();
+  const choices = new Set(models);
+  if (value.model) choices.add(value.model);
+  // A new primary selection uses its own preset's parameters and output
+  // budget. The auxiliary models are configured independently in the source.
+  const { profile, request_params: _params, max_output_tokens: _limit, ...selection } = value;
+  return <>
+    <Choice label={tx('settings:models-page.model')} value={value.model ?? null} placeholder={tx('settings:copy.select-model')} disabled={choices.size === 0}
+      options={[...choices].map(id => [id, id])} onChange={model => change({ ...selection, model })}/>
+    <ModelProfileChoice label={tx('settings:models-page.profile')} profile={profile} profiles={profiles[value.model ?? ''] ?? []}
+      onChange={profile => change(profile ? { ...selection, profile } : selection)}/>
+  </>;
+}
+
+/** Full invocation settings for a named Agent. */
+export function ModelSelection({ value, change, models, profiles }: ModelSelectionProps) {
   const tx = useTranslation();
   const summary = value.summary_model;
   const title = value.title_model;
@@ -303,14 +328,22 @@ const REQUEST_FIELD_LABELS = {
 function ModelRequestFields<T extends RequestFields>({ value, change, profiles, variant = 'default' }: { value: T; change: (next: T) => void; profiles: readonly string[]; variant?: keyof typeof REQUEST_FIELD_LABELS }) {
   const tx = useTranslation();
   const labels = REQUEST_FIELD_LABELS[variant];
-  const selected = value.profile ?? '';
-  const choices = [...new Set([...profiles, ...(selected ? [selected] : [])])];
   return <>
-    {choices.length > 0 && <Choice label={tx(labels.profile)} value={selected}
-      options={[['', tx('settings:copy.model-default-profile')], ...choices.map(id => [id, id] as const)]}
-      onChange={profile => { const { profile: _, ...rest } = value; change((profile ? { ...rest, profile } : rest) as T); }} />}
+    <ModelProfileChoice label={tx(labels.profile)} profile={value.profile} profiles={profiles}
+      onChange={profile => { const { profile: _, ...rest } = value; change((profile ? { ...rest, profile } : rest) as T); }}/>
     <label>{tx(labels.limit)}<input type="number" min="1" value={value.max_output_tokens?.mode === 'limit' ? value.max_output_tokens.tokens : ''}
       onChange={event => change({ ...value, max_output_tokens: event.target.value ? { mode: 'limit', tokens: Number(event.target.value) } : { mode: 'catalog_default' } })} /></label>
     <JsonObjectEditor label={tx(labels.params)} value={value.request_params ?? undefined} change={request_params => change({ ...value, request_params })} />
   </>;
+}
+
+function ModelProfileChoice({ label, profile, profiles, onChange }: {
+  label: string; profile?: string | null; profiles: readonly string[]; onChange: (profile: string) => void;
+}) {
+  const tx = useTranslation();
+  const choices = new Set(profiles);
+  if (profile) choices.add(profile);
+  return choices.size > 0 ? <Choice label={label} value={profile ?? ''}
+    options={[['', tx('settings:copy.model-default-profile')], ...[...choices].map(id => [id, id] as const)]}
+    onChange={onChange}/> : null;
 }

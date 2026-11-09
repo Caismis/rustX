@@ -350,7 +350,6 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
       <SettingsNotice text={unit.reviewNeeded && unit.outcome.kind !== 'conflict' ? tx('settings:forms.changed-elsewhere') : undefined}
         fallback={<div className={css.review}><p role="status">{tx('settings:forms.changed-elsewhere')}</p></div>}/>
       <UnitOutcomeNotice title={title} outcome={unit.outcome} />
-      {presentation === 'dialog' && removal && <div className={css.unitRemoval}>{removal}</div>}
       </div>
       <div className={css.actions}>
         <Button variant="primary" type="submit" aria-label={`${tx('settings:bridge.save')} ${title}`} aria-busy={saving} disabled={!unit.draft || !unit.admitted}>{tx(saving ? 'settings:catalog.saving' : 'settings:bridge.save')}</Button>
@@ -367,7 +366,7 @@ function UnitShell<T>({ title, unit, redacted = false, removable, removalNotice,
           aria-label={`${workspace ? tx('settings:bridge.override') : tx('settings:bridge.author')} ${title}`}
           title={workspace ? tx('settings:bridge.author-this-unit-in-this-workspace-nothing-is-written-until-you') : tx('settings:bridge.author-this-unit-in-this-source-nothing-is-written-until-you-sav')}
           onClick={() => unit.edit(unit.displayed)}>{tx('settings:forms.customize')}</Button>}
-        {presentation !== 'dialog' && removal}
+        {removal}
         {(unit.intent || presentation === 'dialog') && <Button type="button" disabled={!unit.intent} onClick={unit.discard}>{presentation === 'dialog' ? tx('settings:models.reset-form') : tx('settings:bridge.discard-draft')}</Button>}
         {unit.reviewNeeded && <Button type="button" onClick={unit.review}>{tx('settings:bridge.use-reviewed-revision')}</Button>}
         {onCancel && <Button type="button" onClick={() => { unit.discard(); onCancel(); }}>{tx('settings:aria.cancel')}</Button>}

@@ -146,5 +146,4 @@
 .unitResource button[aria-haspopup=listbox] { background: transparent; }
 .settings .unit.unitResource .actions { position: static; justify-content: flex-end; margin: 12px 0 0; padding: 0; background: none; box-shadow: none; gap: 6px; }
 .unitResource .actions button { font-size: 12px; border-radius: 8px; }
-.unitRemoval { margin-top: 12px; }
 .unitDialog .actions > button[type=submit] { margin-left: 0; }

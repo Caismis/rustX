@@ -122,13 +122,16 @@ it('keeps reasoning membership coherent on add, delete, final delete and reset',
 it('preserves source-authored protocol overrides when editing unrelated Model fields', async () => {
   const model = { ...cfg3Effective().document.models!.main, capabilities: { ...cfg3Effective().document.models!.main.capabilities }, default_profile: 'deep', reasoning_profile_order: ['quick', 'deep'], profiles: { deep: { max_output_tokens: 2048, request_params: { reasoning: { effort: 'high' }, stop: [null] } }, quick: { request_params: {} } }, compat: { chat_max_tokens_field: 'max_completion_tokens' as const, chat_stream_usage: 'supported' as const, chat_reasoning_replay: 'omit' as const, chat_tool_protocol: 'native' as const } };
   const source = catalogSource('workspace', { models: { main: model } });
-  const { writes: write } = await renderEditor(modelDetail(source, 'workspace', 'exact', 'main'), { source, context: source });
+  source.user.authored!.models = { main: model };
+  const { writes: write, rerender } = await renderEditor(modelDetail(source, 'workspace', 'exact', 'main'), { source, context: source });
   // One unrelated field changes; everything else must survive the complete
   // object replacement untouched.
   fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'new-wire' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...model, id: 'new-wire' } } }, 'exact'));
-  await confirmAction('Use global default Model main');
+  rerender(<ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="exact"
+    models={['main']} profiles={{}} onFocus={noop} onRefresh={noop} />);
+  await confirmAction('Use global default Model main', within(screen.getByRole('row', { name: 'main' })));
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: null } }, 'exact'));
 });
 
@@ -294,22 +297,37 @@ it.each(['search', 'python:analysis'])('keeps all, none and exact Tool selection
 it('replaces default model intent and project guidance as independent native units on their own pages', async () => {
   // The default model belongs to the Models page and project guidance to the
   // Agent page: two user tasks, and two independent native semantic units.
-  const source = catalogSource('workspace', { agent: { model: { model: 'main', request_params: { temperature: .4 } } } });
+  const summary_model = { mode: 'explicit' as const, model: 'summary' };
+  const source = catalogSource('workspace', { agent: { model: {
+    model: 'main', profile: 'quick', request_params: { temperature: .4 },
+    max_output_tokens: { mode: 'limit', tokens: 4096 }, summary_model,
+  } } });
   const { writes: write, rerender } = await renderEditor(
-    <ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="root-r1" models={['main', 'summary']} profiles={{ main: ['deep', 'quick'] }} onFocus={noop} onRefresh={noop} />,
+    <ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="root-r1" models={['main', 'other', 'plain']}
+      profiles={{ main: ['deep', 'quick'], other: ['quick', 'high'] }} onFocus={noop} onRefresh={noop} />,
     { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const model = within(screen.getByRole('form', { name: 'Default model' }));
+  for (const label of ['Output limit', 'Request parameter overrides', 'Summary model', 'Title model', 'Classification model', 'BTW model']) {
+    expect(model.queryByLabelText(label, { exact: true })).toBeNull();
+  }
   await chooseOption('Profile', 'deep', model);
-  fireEvent.change(model.getByLabelText('Output limit'), { target: { value: '4096' } });
-  await chooseOption('Summary model', 'summary', model);
   fireEvent.click(model.getByRole('button', { name: 'Save Default model' }));
-  await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model', authored: { model: 'main', request_params: { temperature: .4 }, profile: 'deep', max_output_tokens: { mode: 'limit', tokens: 4096 }, summary_model: { mode: 'explicit', model: 'summary' } } } }, 'root-r1'));
-  // The model default profile is an omission, never a sentinel.
-  await chooseOption('Profile', 'Model default profile', model);
-  fireEvent.change(model.getByLabelText('Output limit'), { target: { value: '' } });
+  await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model',
+    authored: { model: 'main', profile: 'deep', summary_model },
+  } }, 'root-r1'));
+  await chooseOption('Profile', 'quick', model);
+  await chooseOption('Model', 'other', model);
+  expect(model.getByRole('button', { name: /Profile$/ }).textContent).toContain('Model default profile');
+  fireEvent.click(model.getByRole('button', { name: /Profile$/ }));
+  expect(screen.queryByRole('option', { name: 'deep' })).toBeNull();
+  fireEvent.click(screen.getByRole('option', { name: 'high' }));
+  await chooseOption('Model', 'plain', model);
+  expect(model.queryByRole('button', { name: /Profile$/ })).toBeNull();
   fireEvent.click(model.getByRole('button', { name: 'Save Default model' }));
-  await waitFor(() => expect(write.mock.calls.at(-1)?.[0]).toEqual({ kind: 'config', mutation: { unit: 'root_model', authored: { model: 'main', request_params: { temperature: .4 }, max_output_tokens: { mode: 'catalog_default' }, summary_model: { mode: 'explicit', model: 'summary' } } } }));
+  await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model',
+    authored: { model: 'plain', summary_model },
+  } }, 'root-r1'));
 
   rerender(<AgentPage document={{}} scope="workspace" revision="root-r1" />);
   const guidance = within(screen.getByRole('form', { name: 'Project guidance' }));
@@ -322,32 +340,21 @@ it('replaces default model intent and project guidance as independent native uni
   await waitFor(() => expect(write.mock.calls.at(-1)?.[0]).toMatchObject({ mutation: { authored: { inherit: false, files: ['REVIEW.md'] } } }));
 });
 
-it.each(['default', 'named Agent'] as const)('%s preserves and edits the complete explicit Summary Model independently', async owner => {
+it('a named Agent preserves and edits the complete explicit Summary Model independently', async () => {
   const summary = { mode: 'explicit' as const, model: 'summary-a', profile: 'deep', max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
   const model = { model: 'main', profile: 'fast', request_params: { temperature: .7 }, summary_model: summary };
   const models = ['main', 'summary-a', 'summary-b'];
   const profiles = { main: ['fast'], 'summary-a': ['deep'], 'summary-b': ['deep', 'quick'] };
-  let write!: Awaited<ReturnType<typeof renderEditor>>['writes'];
-  if (owner === 'default') {
-    const source = catalogSource('workspace', { agent: { model } });
-    ({ writes: write } = await renderEditor(<ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="r1" models={models} profiles={profiles} onFocus={noop} onRefresh={noop} />, { source, context: source }));
-  } else {
-    const source = cfg3Source();
-    source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
-    ({ writes: write } = await renderEditor(<SubagentDetail source={source} scope="workspace" revision="r1" models={models} profiles={profiles} name="reviewer" />, { source, context: source }));
-  }
-  if (owner === 'default') fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
-  const formName = owner === 'default' ? 'Default model' : 'Agent reviewer';
-  const saveName = owner === 'default' ? 'Save Default model' : 'Save Agent reviewer';
+  const source = cfg3Source();
+  source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
+  const { writes: write } = await renderEditor(<SubagentDetail source={source} scope="workspace" revision="r1" models={models} profiles={profiles} name="reviewer" />, { source, context: source });
   const commit = async (expected: ModelLayer) => {
     const before = write.mock.calls.length;
-    const form = screen.getByRole('form', { name: formName }) as HTMLFormElement;
+    const form = screen.getByRole('form', { name: 'Agent reviewer' }) as HTMLFormElement;
     expect(form.checkValidity()).toBe(true);
-    fireEvent.click(within(form).getByRole('button', { name: saveName }));
+    fireEvent.click(within(form).getByRole('button', { name: 'Save Agent reviewer' }));
     await waitFor(() => expect(write).toHaveBeenCalledTimes(before + 1));
-    expect(write.mock.calls.at(-1)).toEqual([owner === 'default'
-      ? { kind: 'config', mutation: { unit: 'root_model', authored: expected } }
-      : { kind: 'agent', name: 'reviewer', authored: { model: expected } }, 'r1']);
+    expect(write.mock.calls.at(-1)).toEqual([{ kind: 'agent', name: 'reviewer', authored: { model: expected } }, 'r1']);
   };
   // Changing identity must not discard any nested authored intent.
   await chooseOption('Summary model', 'summary-b');
@@ -368,32 +375,21 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
   await commit({ ...model, summary_model: { mode: 'explicit', model: 'summary-a' } });
 });
 
-it.each(['default', 'named Agent'] as const)('%s preserves and edits the complete explicit Title Model independently', async owner => {
+it('a named Agent preserves and edits the complete explicit Title Model independently', async () => {
   const title = { mode: 'explicit' as const, model: 'title-a', profile: 'deep', max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
   const model = { model: 'main', profile: 'fast', request_params: { temperature: .7 }, title_model: title };
   const models = ['main', 'title-a', 'title-b'];
   const profiles = { main: ['fast'], 'title-a': ['deep'], 'title-b': ['deep', 'quick'] };
-  let write!: Awaited<ReturnType<typeof renderEditor>>['writes'];
-  if (owner === 'default') {
-    const source = catalogSource('workspace', { agent: { model } });
-    ({ writes: write } = await renderEditor(<ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="r1" models={models} profiles={profiles} onFocus={noop} onRefresh={noop} />, { source, context: source }));
-  } else {
-    const source = cfg3Source();
-    source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
-    ({ writes: write } = await renderEditor(<SubagentDetail source={source} scope="workspace" revision="r1" models={models} profiles={profiles} name="reviewer" />, { source, context: source }));
-  }
-  if (owner === 'default') fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
-  const formName = owner === 'default' ? 'Default model' : 'Agent reviewer';
-  const saveName = owner === 'default' ? 'Save Default model' : 'Save Agent reviewer';
+  const source = cfg3Source();
+  source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
+  const { writes: write } = await renderEditor(<SubagentDetail source={source} scope="workspace" revision="r1" models={models} profiles={profiles} name="reviewer" />, { source, context: source });
   const commit = async (expected: ModelLayer) => {
     const before = write.mock.calls.length;
-    const form = screen.getByRole('form', { name: formName }) as HTMLFormElement;
+    const form = screen.getByRole('form', { name: 'Agent reviewer' }) as HTMLFormElement;
     expect(form.checkValidity()).toBe(true);
-    fireEvent.click(within(form).getByRole('button', { name: saveName }));
+    fireEvent.click(within(form).getByRole('button', { name: 'Save Agent reviewer' }));
     await waitFor(() => expect(write).toHaveBeenCalledTimes(before + 1));
-    expect(write.mock.calls.at(-1)).toEqual([owner === 'default'
-      ? { kind: 'config', mutation: { unit: 'root_model', authored: expected } }
-      : { kind: 'agent', name: 'reviewer', authored: { model: expected } }, 'r1']);
+    expect(write.mock.calls.at(-1)).toEqual([{ kind: 'agent', name: 'reviewer', authored: { model: expected } }, 'r1']);
   };
   // Changing identity must not discard any nested authored intent.
   await chooseOption('Title model', 'title-b');
@@ -417,9 +413,9 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
 it('the explicit Summary Model variant owns complete labels in each locale without changing native payloads', async () => {
   const summary = { mode: 'explicit' as const, model: 'summary-a', profile: 'deep', max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
   const model = { model: 'main', profile: 'main-profile', max_output_tokens: { mode: 'limit' as const, tokens: 4096 }, request_params: { temperature: .7 }, summary_model: summary };
-  const source = catalogSource('workspace', { agent: { model } });
-  const { writes: write, context } = await renderEditor(<ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="r1" models={['main', 'summary-a']} profiles={{ main: ['main-profile'], 'summary-a': ['deep', 'quick'] }} onFocus={noop} onRefresh={noop} />, { source, context: source });
-  fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
+  const source = cfg3Source();
+  source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
+  const { writes: write, context } = await renderEditor(<SubagentDetail source={source} scope="workspace" revision="r1" models={['main', 'summary-a']} profiles={{ main: ['main-profile'], 'summary-a': ['deep', 'quick'] }} name="reviewer" />, { source, context: source });
   const labels = (locale: 'en' | 'zh') => {
     const tx = translator(locale);
     const group = screen.getByRole('group', { name: tx('settings:models-page.explicit-summary-model-settings') });
@@ -451,10 +447,11 @@ it('the explicit Summary Model variant owns complete labels in each locale witho
 
   fireEvent.change(chinese.limit, { target: { value: '1024' } });
   const zh = translator('zh');
-  const form = screen.getByRole('form', { name: zh('settings:models-page.default-model') });
-  fireEvent.click(within(form).getByRole('button', { name: `${zh('settings:bridge.save')} ${zh('settings:models-page.default-model')}` }));
+  const title = zh('settings:extension-detail.agent-value', { p0: 'reviewer' });
+  const form = screen.getByRole('form', { name: title });
+  fireEvent.click(within(form).getByRole('button', { name: `${zh('settings:bridge.save')} ${title}` }));
   await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
-  expect(write.mock.calls[0]).toEqual([{ kind: 'config', mutation: { unit: 'root_model', authored: {
+  expect(write.mock.calls[0]).toEqual([{ kind: 'agent', name: 'reviewer', authored: { model: {
     ...model, summary_model: { ...summary, max_output_tokens: { mode: 'limit', tokens: 1024 } },
   } } }, 'r1']);
 });

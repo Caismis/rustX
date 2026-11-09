@@ -323,7 +323,7 @@ test('390 × 844: section menu, list → detail → back, long identities and no
 
   // Model detail through the Provider, with its long identity.
   await settings.getByRole('row', { name: longProvider, exact: true }).click();
-  await settings.getByRole('row', { name: longModel, exact: true }).click();
+  await settings.getByRole('row', { name: longModel, exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
   const modelDialog = page.getByRole('dialog', { name: `Model ${longModel}`, exact: true });
   await expect(modelDialog).toBeVisible();
   await expect(modelDialog.getByLabel('Model ID', {exact:true})).toBeVisible();
@@ -832,7 +832,7 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     await openSettingsPage(page, 'Models');
     const settings = settingsPage(page);
     await settings.getByRole('row', { name: longProvider, exact: true }).click();
-    await settings.getByRole('row', { name: longModel, exact: true }).click();
+    await settings.getByRole('row', { name: longModel, exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
     const model = page.getByRole('dialog', { name: `Model ${longModel}`, exact: true });
     await expect(model.getByRole('heading', { name: 'Edit Model', exact: true })).toBeVisible();
     await model.getByRole('button', { name: 'Advanced configuration', exact: true }).click();

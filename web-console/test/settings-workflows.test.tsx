@@ -92,7 +92,14 @@ it('S2-02 deleting a Model removes exactly that authored unit after confirmation
   s.source.user.authored!.models = { main: fullModel() };
   await user(s, 'Models');
   await openResourceRow('main');
-  await confirmAction('Remove Model main');
+  const editor = within(screen.getByRole('dialog', { name: 'Model main' }));
+  expect(editor.queryByRole('button', { name: 'Remove Model main' })).toBeNull();
+  fireEvent.click(editor.getByRole('button', { name: 'Close' }));
+  const row = within(screen.getByRole('row', { name: 'main' }));
+  fireEvent.click(row.getByRole('button', { name: 'Remove Model main' }));
+  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancel' }));
+  expect(writes(s)).toHaveLength(0);
+  await confirmAction('Remove Model main', row);
   await waitFor(() => expect(writes(s)).toHaveLength(1));
   expect(writes(s)[0].params.mutation).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: null } });
 });

@@ -35,11 +35,11 @@ function Popover(props: React.ComponentProps<typeof AriaPopover>) {
 
 /** A closed enum. Native remains the authority on which values are legal; this
  * control only presents the ones the call site offers. */
-export function Choice<T extends string>({ label, value, onChange, options, disabled = false, description }: {
-  label: string; value: T; onChange: (value: T) => void;
-  options: readonly (readonly [T, string])[]; disabled?: boolean; description?: ReactNode;
+export function Choice<T extends string>({ label, value, onChange, options, disabled = false, description, placeholder }: {
+  label: string; value: T | null; onChange: (value: T) => void;
+  options: readonly (readonly [T, string])[]; disabled?: boolean; description?: ReactNode; placeholder?: string;
 }) {
-  return <Select className={css.select} selectedKey={value} isDisabled={disabled} onSelectionChange={key => onChange(key as T)}>
+  return <Select className={css.select} selectedKey={value} placeholder={placeholder} isDisabled={disabled} onSelectionChange={key => { if (key !== null) onChange(key as T); }}>
     <Label>{label}</Label>
     <AriaButton className={css.selectTrigger}><SelectValue /><span aria-hidden="true">▾</span></AriaButton>
     {description && <Text slot="description" className={contentCss.hint}>{description}</Text>}

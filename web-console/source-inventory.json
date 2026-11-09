@@ -667,7 +667,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "1512202f1865a598e3b631183ef6d08d0cfe391d26615919dbe490e593dd9b7c"
+      "local_sha256": "25ac038275e9305409691bbc086114b3bf89e2713fae33a3e0e1fdbbd30f3403"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -2776,7 +2776,7 @@
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "treatment": "WEB-RESET-03: adapted provider outlined cards, filled editor modules, field rows, inventory badges, warnings and responsive details. Replaces obsolete app Settings CSS. rustX scope/revision presentation extensions; no business ownership. Compact model modality rows in the native profile editor. #392 repair: the inert field group of an inspected inherited resource definition has no frame of its own. #393: one page vocabulary scoped to the Settings section (page title/description, group headings, 16px-radius setting-row cards with a sticky draft action row, AA-contrast hints, badges and errors, designed pending state); narrow rules are container queries; unused rows/tabs/generation/content/model rules are deleted. Text fields follow DSH settings-form outline:none, while native checkboxes, selects and action keyboard indicators retain their existing styles. Issue #536: permanent primary rail, Home-only secondary sidebar and retained independent Settings page; native ownership and pinned upstream attribution preserved.",
       "upstream_sha256": "e248958cfe8e5d4c36cb48f8438c4210837d440786c930147b70021c90ac40eb",
-      "local_sha256": "d7a7e739807ac64f3afe66a3fe2831e6aa45344a384f957c84160c7c692dfb30",
+      "local_sha256": "e8936442f2d589032b7937de0ba261ffc3c3a716539e9b589472ca9b876ec689",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [

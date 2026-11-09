@@ -51,7 +51,7 @@ test('authority replacement hides a retained model dialog and releases its focus
   const errors = await start(page, 'Light', 1440);
   await openSettingsPage(page, 'Models');
   await settings(page).getByRole('row', { name: provider, exact: true }).click();
-  await settings(page).getByRole('row', { name: model, exact: true }).click();
+  await settings(page).getByRole('row', { name: model, exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
   await expect(editor(page).getByLabel('Context window', { exact: true })).toBeFocused();
   const before = await writes(page);
   await page.evaluate(() => (window as unknown as { rustxReplaceAuthority(): Promise<void> }).rustxReplaceAuthority());
@@ -128,7 +128,7 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await providers.evaluate(element => { element.scrollLeft = 0; });
     await expect(providers).toHaveJSProperty('scrollLeft', 0);
     await expectStableScreenshot(settings(page), `providers-${theme.toLowerCase()}-${width}.png`);
-    await settings(page).getByRole('row', {name:model, exact:true}).click();
+    await settings(page).getByRole('row', {name:model, exact:true}).getByRole('button', { name: 'Edit Model', exact: true }).click();
     const modal = editor(page);
     const context = modal.getByLabel('Context window', {exact:true});
     await expect(context).toBeFocused();
@@ -228,11 +228,11 @@ for (const theme of ['Light', 'Dark'] as const) for (const width of [1440,390]) 
     await context.fill('256000');
     await modal.getByRole('button', {name:'Cancel',exact:true}).click();
     await expect(modal).toHaveCount(0);
-    await settings(page).getByRole('row', {name:model, exact:true}).click();
+    await settings(page).getByRole('row', {name:model, exact:true}).getByRole('button', { name: 'Edit Model', exact: true }).click();
     await expect(context).toHaveValue('1048576'); // Explicit Cancel discards the whole unit.
     await context.fill('256000');
     await modal.getByRole('button', {name:'Close',exact:true}).click();
-    await settings(page).getByRole('row', {name:model, exact:true}).click();
+    await settings(page).getByRole('row', {name:model, exact:true}).getByRole('button', { name: 'Edit Model', exact: true }).click();
     await expect(context).toHaveValue('256000'); // Dismissal retains the actor-owned draft.
     await modal.getByRole('button', {name:'Reset form',exact:true}).click();
     await expect(context).toHaveValue('1048576');
@@ -276,7 +276,7 @@ test('Chinese settings use the same model dialog without Smart configuration', a
   await page.getByRole('group',{name:'外观',exact:true}).getByRole('button',{name:'深色',exact:true}).click();
   await page.getByRole('tab',{name:'模型',exact:true}).click();
   await page.getByRole('row',{name:provider,exact:true}).click();
-  await page.getByRole('row',{name:model,exact:true}).click();
+  await page.getByRole('row',{name:model,exact:true}).getByRole('button', { name: '编辑模型', exact: true }).click();
   const modal = page.getByRole('dialog',{name:`模型 ${model}`,exact:true});
   await expect(modal.getByLabel('模型 ID',{exact:true})).toHaveValue(model);
   await modal.getByRole('button',{name:'高级配置',exact:true}).click();

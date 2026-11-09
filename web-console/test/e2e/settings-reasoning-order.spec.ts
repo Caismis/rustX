@@ -40,7 +40,7 @@ reasoning_profile_order = [${id === 'a' ? '"low", "high"' : second}]
     await repair.getByRole('button', { name: 'Save Repair invalid source', exact: true }).click();
     await expect(repair).toHaveCount(0);
     await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
-    await settings.getByRole('row', { name: 'b', exact: true }).click();
+    await settings.getByRole('row', { name: 'b', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
     const modal = page.getByRole('dialog', { name: 'Model b', exact: true });
     await modal.getByRole('button', { name: 'Advanced configuration', exact: true }).click();
     const list = modal.getByRole('list', { name: 'Reasoning order (low to high)' });
@@ -82,7 +82,7 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     await openWorkspaceSettings(page, 'Workspace A');
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
     const open = async () => {
-      await settings.getByRole('row', { name: 'ordered', exact: true }).click();
+      await settings.getByRole('row', { name: 'ordered', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
       await page.getByRole('dialog', { name: 'Model ordered', exact: true }).getByRole('button', { name: 'Advanced configuration', exact: true }).click();
     };
     await open();

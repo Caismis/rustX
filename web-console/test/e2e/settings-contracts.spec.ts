@@ -55,23 +55,31 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
         await form.getByRole('button', { name: `Save ${title}`, exact: true }).click();
         await expect(settledSave(surface, title)).toBeVisible();
       };
+      if (owner === 'Root') {
+        await expect(form.getByLabel(`${auxiliary} model`, { exact: true })).toHaveCount(0);
+        await choose(form, 'Model', 'summary-b');
+        await choose(form, 'Profile', 'quick');
+        await save();
+        const root = readFileSync(join(fixture.workspaceA, 'rustx.toml'), 'utf8');
+        expect(root).toContain('model = "summary-b"');
+        expect(root).toContain('profile = "quick"');
+        expect(root).toContain(`${auxiliary.toLowerCase()}_model`);
+        expect(root).toMatch(/request_params = '\{"temperature":0\.2\}'/);
+        continue;
+      }
       await choose(form, `${auxiliary} model`, 'summary-b');
-      if (owner === 'Agent') {
-        await expect(form.getByLabel('Description', { exact: true })).toHaveValue('');
-        await expect(form.getByLabel('Instructions', { exact: true })).toHaveValue('');
-        await form.getByLabel('read', { exact: true }).check();
-      }
+      await expect(form.getByLabel('Description', { exact: true })).toHaveValue('');
+      await expect(form.getByLabel('Instructions', { exact: true })).toHaveValue('');
+      await form.getByLabel('read', { exact: true }).check();
       await save();
-      const sourceFile = owner === 'Root' ? join(fixture.workspaceA, 'rustx.toml') : join(fixture.workspaceA, '.agents/agents/optional.toml');
+      const sourceFile = join(fixture.workspaceA, '.agents/agents/optional.toml');
       const preserved = readFileSync(sourceFile, 'utf8');
-      if (owner === 'Agent') {
-        expect(preserved).not.toMatch(/^(description|instructions)\s*=/m);
-      }
+      expect(preserved).not.toMatch(/^(description|instructions)\s*=/m);
       for (const fact of ['summary-b', 'deep', '2048', '0.2']) expect(preserved).toContain(fact);
       // Native writes keep provider-native parameters as JSON strings.
       expect(preserved).toMatch(/request_params = '\{"temperature":0\.2\}'/);
       // Acknowledge then reread: clean forms follow the native source, not old drafts.
-      await surface.getByRole('button', { name: owner==='Root'?'Reload configuration':'Refresh', exact: true }).click();
+      await surface.getByRole('button', { name: 'Refresh', exact: true }).click();
       const nested = form.getByRole('group', { name: `Explicit ${auxiliary} Model settings`, exact: true });
       await expect(nested.getByRole('button', { name: new RegExp(`Profile \\(${auxiliary}\\)$`) })).toContainText('deep');
       await expect(nested.getByLabel(`Output limit (${auxiliary})`)).toHaveValue('2048');
@@ -84,10 +92,6 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       expect(authored).toContain('summary-b'); expect(authored).toContain('quick');
       expect(authored).toContain('1024');
       expect(authored).toMatch(/request_params = '\{"seed":7,"stop":\[null\]\}'/);
-      if (owner === 'Root') {
-        await nested.evaluate(el => el.scrollIntoView({ block: 'start' }));
-        await page.screenshot({ path: test.info().outputPath('summary-model-complete.png') });
-      }
       await choose(form, `${auxiliary} model`, 'Follow selected model'); await save();
       await expect(nested).toHaveCount(0);
     }

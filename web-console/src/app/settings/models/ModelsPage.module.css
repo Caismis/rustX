@@ -111,7 +111,7 @@
 .reasoningList button { padding: 0; width: 28px; margin-left: 4px; }
 .reasoningList button[aria-disabled=true] { opacity: 0.4; cursor: default; }
 
-.detailHeader button.iconButton { border: 0; background: transparent; display: grid; place-items: center; cursor: pointer; }
-.detailHeader button.iconButton:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+:is(.detailHeader, .modelActions [data-tone]) button.iconButton { border: 0; background: transparent; display: grid; place-items: center; cursor: pointer; }
+:is(.detailHeader, .modelActions [data-tone]) button.iconButton:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
 .section .iconButton[data-probe=connected] { color: var(--dsw-alias-state-success-primary); }
 .section .iconButton[data-probe=rejected], .section .iconButton[data-probe=timed_out] { color: var(--dsw-alias-state-error-primary); }
