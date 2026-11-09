@@ -6,6 +6,13 @@ use serde_json::Value;
 /// call label (required by stored continuation). Provider signatures and opaque
 /// replay values are untouched; only explicit wire correlation fields change.
 pub(crate) fn encode(value: &mut Value, protocol: ModelProtocol) -> Result<(), &'static str> {
+    encode_fields(|field| visit(value, protocol, field))
+}
+
+/// Apply the same occurrence labels to a typed wire request or a JSON body.
+pub(super) fn encode_fields(
+    mut visit: impl FnMut(&mut dyn FnMut(bool, &mut Value)),
+) -> Result<(), &'static str> {
     #[cfg(feature = "issue-387-profile")]
     let _profile = crate::model::adapter::profile::phase(
         crate::model::adapter::profile::Phase::WireCorrelation,
@@ -16,7 +23,9 @@ pub(crate) fn encode(value: &mut Value, protocol: ModelProtocol) -> Result<(), &
     // Wire strings cannot identify which of two unresolved occurrences owns
     // a result. Reject before editing the detached wire object, not after an
     // overwritten association has reached the provider or frozen metadata.
-    visit(value, protocol, |call, id| {
+    visit(&mut |call, id| {
+        #[cfg(feature = "issue-387-profile")]
+        crate::model::adapter::profile::wire_field();
         let source = id.as_str().unwrap_or_default();
         if source.is_empty() {
             invalid = Some("empty provider wire correlation ID");
@@ -33,10 +42,15 @@ pub(crate) fn encode(value: &mut Value, protocol: ModelProtocol) -> Result<(), &
     if let Some(error) = invalid {
         return Err(error);
     }
+    if raw.is_empty() {
+        return Ok(());
+    }
     let labels = crate::model::occurrence::wire_labels(&raw);
     let mut ordinal = 0;
     let mut pending = std::collections::BTreeMap::new();
-    visit(value, protocol, |call, id| {
+    visit(&mut |call, id| {
+        #[cfg(feature = "issue-387-profile")]
+        crate::model::adapter::profile::wire_field();
         let source = id.as_str().unwrap_or_default().to_owned();
         if call {
             let label = labels[ordinal].clone();
@@ -140,11 +154,6 @@ pub(crate) fn request_labels(
 }
 
 fn visit(value: &mut Value, protocol: ModelProtocol, mut field: impl FnMut(bool, &mut Value)) {
-    #[cfg(feature = "issue-387-profile")]
-    let mut field = |call, id: &mut Value| {
-        crate::model::adapter::profile::wire_field();
-        field(call, id);
-    };
     match protocol {
         ModelProtocol::OpenAiChatCompletions => {
             if let Some(messages) = value["messages"].as_array_mut() {
@@ -169,11 +178,7 @@ fn visit(value: &mut Value, protocol: ModelProtocol, mut field: impl FnMut(bool,
                     crate::model::adapter::profile::wire_item();
                     if let Some(blocks) = message["content"].as_array_mut() {
                         for block in blocks {
-                            match block["type"].as_str() {
-                                Some("tool_use") => field(true, &mut block["id"]),
-                                Some("tool_result") => field(false, &mut block["tool_use_id"]),
-                                _ => {}
-                            }
+                            visit_anthropic_block(block, &mut field);
                         }
                     }
                 }
@@ -192,6 +197,14 @@ fn visit(value: &mut Value, protocol: ModelProtocol, mut field: impl FnMut(bool,
                 }
             }
         }
+    }
+}
+
+pub(super) fn visit_anthropic_block(block: &mut Value, mut field: impl FnMut(bool, &mut Value)) {
+    match block["type"].as_str() {
+        Some("tool_use") => field(true, &mut block["id"]),
+        Some("tool_result") => field(false, &mut block["tool_use_id"]),
+        _ => {}
     }
 }
 #[cfg(test)]

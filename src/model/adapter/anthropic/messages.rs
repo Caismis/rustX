@@ -36,8 +36,8 @@ use crate::tools::types::ToolCallStart;
 
 use super::config::AnthropicAdapterConfig;
 use super::mapping::{
-    is_refusal, map_finish_reason, normalize_http_error, normalize_usage, stream_retry_disposition,
-    translate_request,
+    encode_request, is_refusal, map_finish_reason, normalize_http_error, normalize_usage,
+    stream_retry_disposition,
 };
 use super::wire::{WireEvent, WireUsage, parse_event};
 
@@ -98,7 +98,7 @@ impl ModelAdapter for AnthropicMessagesAdapter {
             Ok(validated) => validated,
             Err(error) => return model_stream_of_failure(error),
         };
-        let wire_request = match translate_request(&request, &validated) {
+        let wire_request = match encode_request(&request) {
             Ok(translated) => translated,
             Err(error) => return model_stream_of_failure(error),
         };
@@ -108,7 +108,7 @@ impl ModelAdapter for AnthropicMessagesAdapter {
             anthropic_version: self.anthropic_version.clone(),
             http_client: self.http_client.clone(),
             response_byte_limit: request.response_byte_limit,
-            wire_request: crate::model::adapter::provider_request(wire_request),
+            wire_request,
             normalizer: AnthropicStreamNormalizer::new(validated),
             cancellation,
         };
@@ -170,7 +170,7 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelStreamItem,
                 &url,
                 &anthropic_version,
                 &http_client,
-                &wire_request,
+                wire_request,
                 response_byte_limit,
                 cancellation.clone(),
             )
@@ -238,7 +238,7 @@ async fn open_stream(
     url: &str,
     anthropic_version: &str,
     http_client: &reqwest::Client,
-    wire_request: &crate::model::adapter::ProviderRequest,
+    wire_request: Vec<u8>,
     response_byte_limit: Option<usize>,
     cancellation: CancellationSignal,
 ) -> OpeningOutcome {
@@ -250,7 +250,7 @@ async fn open_stream(
         )
         .header("x-api-key", api_key)
         .header("anthropic-version", anthropic_version)
-        .json(wire_request)
+        .body(wire_request)
         .send();
     let response = tokio::select! {
         response = send => response,
@@ -402,7 +402,7 @@ enum AnthropicPhase {
         anthropic_version: String,
         http_client: reqwest::Client,
         response_byte_limit: Option<usize>,
-        wire_request: crate::model::adapter::ProviderRequest,
+        wire_request: Vec<u8>,
         normalizer: AnthropicStreamNormalizer,
         cancellation: CancellationSignal,
     },
@@ -412,7 +412,7 @@ enum AnthropicPhase {
         anthropic_version: String,
         http_client: reqwest::Client,
         response_byte_limit: Option<usize>,
-        wire_request: crate::model::adapter::ProviderRequest,
+        wire_request: Vec<u8>,
         normalizer: AnthropicStreamNormalizer,
         cancellation: CancellationSignal,
     },

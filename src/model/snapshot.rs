@@ -771,7 +771,7 @@ mod tests {
                             match protocol {
                                 ModelProtocol::OpenAiChatCompletions => crate::model::adapter::openai::chat_completions::translate_request(input).unwrap(),
                                 ModelProtocol::OpenAiResponses => crate::model::adapter::openai::responses::translate_request(input,&tools,input.invocation.compat.responses_storage).unwrap(),
-                                ModelProtocol::AnthropicMessages => crate::model::adapter::anthropic::mapping::translate_request(input,&tools).unwrap(),
+                                ModelProtocol::AnthropicMessages => serde_json::to_value(crate::model::adapter::anthropic::mapping::translate_request(input).unwrap()).unwrap(),
                             }
                         };
                         let mut captured = translate(&request);
