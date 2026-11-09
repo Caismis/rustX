@@ -148,15 +148,34 @@ fn interrupted_and_partial_writes_preserve_the_exact_offset() {
 
 #[test]
 fn closed_peer_is_a_channel_failure() {
+    const CHILD: &str = "RUSTX_CLOSED_PEER_FRAME_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // Other tests can fork while these descriptors exist. Create the pair
+        // after exec in an isolated test process so dropping the peer closes
+        // its final descriptor on Linux and macOS alike.
+        let qualified = concat!(module_path!(), "::closed_peer_is_a_channel_failure");
+        let (_, test) = qualified.split_once("::").unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "isolated closed-peer test failed:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains("1 passed"),
+            "the child must run the exact test"
+        );
+        return;
+    }
     let (mut sender, receiver) = pair();
-    // A concurrent child can retain the peer until exec. Close the shared
-    // endpoint explicitly so that descriptor lifetime cannot race this test.
-    let inherited_receiver = receiver.try_clone().unwrap();
-    receiver.shutdown(Shutdown::Both).unwrap();
     drop(receiver);
     assert!(write_frame(&mut sender, MSG_PROCESS_CONTROL_FAILURE, b"failure").is_err());
     assert!(nix::unistd::write(&sender, b"next frame").is_err());
-    drop(inherited_receiver);
 }
 
 #[test]

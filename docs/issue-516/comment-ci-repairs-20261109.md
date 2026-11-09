@@ -29,10 +29,11 @@ at `f03f842f5be626d1394afd1a9ab0bfc19ab37b4a`.
   handled!` before the repair; both lifecycle regressions pass afterward. Console
   evidence uses Playwright's per-test output directory and the same retirement
   helper.
-- The closed-peer Native framing test explicitly shuts down the shared peer
-  endpoint while retaining another descriptor. This models a concurrent child
-  retaining a descriptor until exec and makes the failure precondition independent
-  of descriptor close timing. Production framing behavior is unchanged.
+- The closed-peer Native framing test creates its socket pair after exec in an
+  isolated single-test process. Unrelated tests cannot fork a copy of that peer;
+  dropping it closes the final descriptor before either original error assertion.
+  The child must report exactly one executed test. This uses the repository's
+  existing test-process isolation pattern and preserves production framing behavior.
 
 ## Screenshot references
 
@@ -68,9 +69,16 @@ passes its existing reference without a baseline or noise-policy update.
   Shell and Scheduler references; Workflow editing and child inspection; and
   single/staggered Host retirement.
 
-The original macOS descriptor-watch timeout did not recur in the inspected retry;
-that retry instead exposed the closed-peer test precondition above. Current-head
-CI owns the full native and platform-specific verdict.
+The original macOS descriptor-watch timeout did not recur in the inspected retry.
+At `f5593279d`, the full Web/Host, TUI, Linux, browser and coverage jobs passed;
+the macOS suite passed 4,216 tests but retained the closed-peer failure. That
+[counterexample](https://github.com/Caismis/rustX/actions/runs/42602221278/job/129109346163)
+establishes that shutting down a peer with another live descriptor is insufficient
+for this assertion on macOS. Apple's [shutdown contract](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/shutdown.2.html)
+only describes operations on the specified endpoint, while the
+[Unix-domain send and disconnect implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/uipc_usrreq.c)
+distinguishes send closure from peer receive state. The isolated process establishes
+actual final close. Current-head CI owns the full platform-specific verdict.
 
 PR 517 remains draft. The existing 200ms first-model and below-50ms maximum-input
 acceptance gates remain open; these correctness and CI repairs do not certify the
