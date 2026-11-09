@@ -144,10 +144,10 @@ it('S2-03 each setting has exactly one primary editor across the six pages', asy
 
 // ── S2-04 Agent guidance and Tool permissions follow tasks ──────────────────
 
-it('S2-04 Agent holds identity and guidance; Tools & Permissions holds what the Agent may do', async () => {
+it('S2-04 Agent holds guidance; Tools & Permissions holds what the Agent may do', async () => {
   const s = cfg3Client();
   await user(s, 'Agent');
-  expect(forms()).toEqual(['Agent name', 'Description', 'Instructions', 'Project guidance']);
+  expect(forms()).toEqual(['Instructions', 'Project guidance']);
   await openSettingsPage('Tools & Permissions');
   expect(forms()).toEqual(['Approval mode', 'Built-in tools']);
   // Per-Tool policies are one task deeper, not scattered primary tabs.

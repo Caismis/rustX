@@ -121,10 +121,10 @@ test('desktop: six pages share one stable Harness frame, distinct icons and one 
 
   // Provider cards and the general Settings forms share the Harness spacing and radius.
   await openSettingsPage(page, 'Agent');
-  const identity = settings.getByRole('form', { name: 'Agent name' });
-  await expect(identity.getByRole('button', { name: 'Configuration details', exact: true })).toHaveCount(0);
-  await expect(identity).toHaveAttribute('data-authored', 'absent');
-  const unit = await settings.getByRole('form', { name: 'Agent name' }).evaluate(el => {
+  const instructions = settings.getByRole('form', { name: 'Instructions' });
+  await expect(instructions.getByRole('button', { name: 'Configuration details', exact: true })).toHaveCount(0);
+  await expect(instructions).toHaveAttribute('data-authored', 'absent');
+  const unit = await instructions.evaluate(el => {
     const style = getComputedStyle(el);
     return { height: el.getBoundingClientRect().height, padding: `${style.paddingTop} ${style.paddingLeft}`, radius: style.borderTopLeftRadius };
   });
@@ -163,21 +163,22 @@ test('Workspace inherited and overridden units, restore versus deletion, nested 
 
   // Overridden and dirty: the draft's Save / Discard row sticks in reach.
   await openSettingsPage(page, 'Agent');
-  const identity = settings.getByRole('form', { name: 'Agent name' });
-  await expect(identity).toHaveAttribute('data-authored', 'present');
-  await identity.getByLabel('Name', { exact: true }).fill('rustx-workspace-reviewer');
-  await expect(identity).toHaveAttribute('data-draft', 'true');
-  await expect(identity.getByRole('button', { name: 'Save Agent name' })).toBeEnabled();
-  await expect(identity.getByRole('button', { name: 'Discard' })).toBeVisible();
+  const instructions = settings.getByRole('form', { name: 'Instructions' });
+  await expect(settings.getByRole('form', { name: /^(Agent name|Description)$/ })).toHaveCount(0);
+  await expect(instructions).toHaveAttribute('data-authored', 'present');
+  await instructions.getByRole('textbox', { name: 'Instructions', exact: true }).fill('Review the changes and explain the impact.');
+  await expect(instructions).toHaveAttribute('data-draft', 'true');
+  await expect(instructions.getByRole('button', { name: 'Save Instructions' })).toBeEnabled();
+  await expect(instructions.getByRole('button', { name: 'Discard' })).toBeVisible();
   await expectStableScreenshot(settings, 'settings-workspace-override-light.png');
-  await identity.getByRole('button', { name: 'Discard' }).click();
-  await expect(identity).not.toHaveAttribute('data-draft', 'true');
+  await instructions.getByRole('button', { name: 'Discard' }).click();
+  await expect(instructions).not.toHaveAttribute('data-draft', 'true');
 
   // Restoring inheritance is an ordinary dialog, not a deletion; Escape closes
   // only that topmost layer and returns focus to its trigger inside Settings.
-  const restore = identity.getByRole('button', { name: 'Use global default Agent name', exact: true });
+  const restore = instructions.getByRole('button', { name: 'Use global default Instructions', exact: true });
   await restore.click();
-  const confirmation = page.getByRole('dialog', { name: 'Use the global default for Agent name?' });
+  const confirmation = page.getByRole('dialog', { name: 'Use the global default for Instructions?' });
   await expect(confirmation).toBeVisible();
   await expect(page.getByRole('alertdialog')).toHaveCount(0);
   await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
@@ -331,6 +332,26 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   await expectNoHorizontalOverflow(page);
   await modelDialog.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(settings.getByRole('heading', { level: 3, name: `Provider ${longProvider}` })).toBeVisible();
+
+  await openSettingsPage(page, 'Agent');
+  const guidance = settings.getByRole('form', { name: 'Project guidance' });
+  const automatic = guidance.getByRole('switch', { name: 'Automatically load project guidance' });
+  const advanced = guidance.getByRole('button', { name: 'Advanced options' });
+  const addFile = guidance.getByRole('button', { name: 'Add Guidance files' });
+  await expect(automatic).toBeChecked();
+  await expect(advanced).toHaveAttribute('aria-expanded', 'false');
+  await expect(addFile).toBeHidden();
+  await automatic.press('Space');
+  await expect(automatic).not.toBeChecked();
+  await advanced.click();
+  await addFile.click();
+  await guidance.getByRole('textbox', { name: 'Guidance files 1' }).fill('docs/REVIEW.md');
+  await expect(guidance.getByRole('button', { name: 'Save Project guidance' })).toBeEnabled();
+  await expectNoHorizontalOverflow(page);
+  await expectAccessible(page, settingsScope);
+  await expectStableScreenshot(page, 'settings-agent-mobile-dark.png');
+  await guidance.getByRole('button', { name: 'Discard' }).click();
+  await expect(automatic).toBeChecked();
 
   // Subagent details now belong to their independent resource module.
   const agents=await openResourceModule(page,'subagents','Workspace A');
@@ -628,9 +649,9 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
   const settings = settingsPage(page);
   await openWorkspaceSettings(page, 'Workspace A');
   await openSettingsPage(page, 'Agent');
-  const unit = settings.getByRole('form', { name: 'Agent name' });
-  const restore = unit.getByRole('button', { name: 'Use global default Agent name', exact: true });
-  const confirmation = page.getByRole('dialog', { name: 'Use the global default for Agent name?' });
+  const unit = settings.getByRole('form', { name: 'Instructions' });
+  const restore = unit.getByRole('button', { name: 'Use global default Instructions', exact: true });
+  const confirmation = page.getByRole('dialog', { name: 'Use the global default for Instructions?' });
   // This Workspace mutation travels through the native Product Host boundary.
   const writes = () => page.evaluate(() => (window as unknown as { rustxHeldWorkspaceWrites: () => number }).rustxHeldWorkspaceWrites());
   for (const dismissal of ['Cancel', 'Escape', 'outside'] as const) {
@@ -649,7 +670,7 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
   await page.keyboard.press('Enter');
   await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
   await page.keyboard.press('Tab');
-  await expect(confirmation.getByRole('button', { name: 'Use global default Agent name', exact: true })).toBeFocused();
+  await expect(confirmation.getByRole('button', { name: 'Use global default Instructions', exact: true })).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(confirmation).toHaveCount(0);
   await expect(restore).toBeDisabled();
@@ -660,7 +681,7 @@ test('confirming a restore of inheritance settles focus on its unit while the wr
   await expect(unit).toBeFocused();
   await releaseWrites(page);
   await expect.poll(writes).toBe(1);
-  await expect(settledSave(unit, 'Agent name')).toBeVisible();
+  await expect(settledSave(unit, 'Instructions')).toBeVisible();
   await expect(unit).toHaveAttribute('data-authored', 'absent');
   await expect(unit).toBeFocused();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

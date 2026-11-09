@@ -294,15 +294,13 @@ it.each(['search', 'python:analysis'])('keeps all, none and exact Tool selection
   }
 });
 
-it('replaces default model intent and project guidance as independent native units on their own pages', async () => {
-  // The default model belongs to the Models page and project guidance to the
-  // Agent page: two user tasks, and two independent native semantic units.
+it('replaces default model intent on the Models page', async () => {
   const summary_model = { mode: 'explicit' as const, model: 'summary' };
   const source = catalogSource('workspace', { agent: { model: {
     model: 'main', profile: 'quick', request_params: { temperature: .4 },
     max_output_tokens: { mode: 'limit', tokens: 4096 }, summary_model,
   } } });
-  const { writes: write, rerender } = await renderEditor(
+  const { writes: write } = await renderEditor(
     <ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="root-r1" models={['main', 'other', 'plain']}
       profiles={{ main: ['deep', 'quick'], other: ['quick', 'high'] }} onFocus={noop} onRefresh={noop} />,
     { source, context: source });
@@ -342,14 +340,23 @@ it('replaces default model intent and project guidance as independent native uni
     authored: { model: 'plain', title_model: { mode: 'explicit', model: 'other', profile: 'high' },
       summary_model: { mode: 'explicit', model: 'other', profile: 'quick' } },
   } }, 'root-r1'));
+});
 
-  rerender(<AgentPage document={{}} scope="workspace" revision="root-r1" />);
+it('saves project guidance and supplemental files after collapsing Advanced options', async () => {
+  const { writes: write } = await renderEditor(<AgentPage document={{}} revision="root-r1" />);
   const guidance = within(screen.getByRole('form', { name: 'Project guidance' }));
-  fireEvent.click(guidance.getByLabelText('Include project guidance'));
+  const automatic = guidance.getByRole('switch', { name: 'Automatically load project guidance' });
+  expect(automatic.getAttribute('aria-checked')).toBe('true');
+  const advanced = guidance.getByRole('button', { name: 'Advanced options' });
+  expect(advanced.getAttribute('aria-expanded')).toBe('false');
+  expect(guidance.queryByRole('button', { name: 'Add Guidance files' })).toBeNull();
+  fireEvent.click(automatic);
   fireEvent.click(guidance.getByRole('button', { name: 'Save Project guidance' }));
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'project_guidance', authored: { inherit: false } } }, 'root-r1'));
+  fireEvent.click(advanced);
   fireEvent.click(guidance.getByRole('button', { name: 'Add Guidance files' }));
   fireEvent.change(guidance.getByRole('textbox', { name: 'Guidance files 1' }), { target: { value: 'REVIEW.md' } });
+  fireEvent.click(advanced);
   fireEvent.click(guidance.getByRole('button', { name: 'Save Project guidance' }));
   await waitFor(() => expect(write.mock.calls.at(-1)?.[0]).toMatchObject({ mutation: { authored: { inherit: false, files: ['REVIEW.md'] } } }));
 });

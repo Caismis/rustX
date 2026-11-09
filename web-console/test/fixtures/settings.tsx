@@ -131,7 +131,7 @@ if (variant.get('write') === 'held') {
     const view = source[scope]!, authored = view.authored!;
     if (mutation.kind !== 'config' || !('authored' in mutation.mutation) || mutation.mutation.authored !== null) throw new Error('The held-write fixture commits removals only');
     if (mutation.mutation.unit === 'provider') delete authored.providers![mutation.mutation.id];
-    else if (mutation.mutation.unit === 'agent_identity') delete authored.agent_id;
+    else if (mutation.mutation.unit === 'instructions') delete authored.agent?.instructions;
     else throw new Error(`The held-write fixture has no removal of ${mutation.mutation.unit}`);
     view.revision = `${scope}-committed`;
     source.resolved = { ...source.user.authored, ...source.workspace!.authored };
