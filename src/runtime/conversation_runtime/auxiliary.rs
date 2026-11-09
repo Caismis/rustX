@@ -539,20 +539,6 @@ impl ConversationRuntime {
                     )
                 },
             )?;
-            crate::model::adapter::validation::validate_bounded_prepared_request(
-                &request,
-                64 * 1024 * 1024,
-            )
-            .map_err(|error| {
-                if error.kind == crate::model::ModelErrorKind::ContextWindowExceeded {
-                    ContextError::new(
-                        ContextErrorKind::CannotFit,
-                        "auxiliary provider request exceeds 64 MiB",
-                    )
-                } else {
-                    failure("auxiliary history cannot be translated for the selected model")
-                }
-            })?;
             if engine.estimate_frozen_request(&request)
                 > engine.soft_input_limit(invocation.max_output_tokens())?
             {
@@ -586,6 +572,7 @@ impl ConversationRuntime {
             Ok(FrozenCall {
                 start,
                 request,
+                provider_body_limit: Some(64 * 1024 * 1024),
                 invocation,
                 timeout,
                 resource_revision: resources.revision().get(),

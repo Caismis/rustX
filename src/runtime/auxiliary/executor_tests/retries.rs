@@ -1,9 +1,21 @@
 //! Deterministic production retries, including actual SQLite settlement gates.
 use super::*;
 use crate::events::types::RuntimeEvent;
+use crate::model::adapter::validation::{
+    PreparedModelRequest, PreparedOwnershipProbe, take_preparation_work,
+};
 use crate::model::{ModelError, ModelRetryDisposition};
 
+struct RetryOwnership {
+    prepared: PreparedOwnershipProbe,
+    media: Vec<(usize, usize)>,
+    work: (usize, usize),
+}
+
 struct RetryAdapter {
+    protocol: ModelProtocol,
+    close_at_preparation: Mutex<Option<Arc<AuxiliaryScope>>>,
+    owners: Mutex<Vec<RetryOwnership>>,
     failures: Vec<ModelError>,
     entries: tokio::sync::mpsc::UnboundedSender<usize>,
     release: Arc<Notify>,
@@ -14,7 +26,39 @@ struct RetryAdapter {
 
 impl ModelAdapter for RetryAdapter {
     fn protocol(&self) -> ModelProtocol {
-        ModelProtocol::OpenAiChatCompletions
+        if let Some(scope) = self.close_at_preparation.lock().unwrap().take() {
+            scope.close();
+        }
+        self.protocol
+    }
+    fn stream_prepared(
+        &self,
+        request: PreparedModelRequest,
+        cancellation: CancellationSignal,
+    ) -> ModelStream {
+        let probe = request.ownership_probe();
+        let media = request
+            .input()
+            .images
+            .values()
+            .map(|bytes| (bytes.as_ptr() as usize, bytes.len()))
+            .collect();
+        let mut owners = self.owners.lock().unwrap();
+        let work = take_preparation_work();
+        assert_eq!(work, if owners.is_empty() { (1, 1) } else { (0, 0) });
+        if let Some(first) = owners.first() {
+            assert_eq!(probe.body, first.prepared.body);
+            assert!(probe.body_lifetime.ptr_eq(&first.prepared.body_lifetime));
+            assert!(probe.input.ptr_eq(&first.prepared.input));
+            assert_eq!(media, first.media);
+        }
+        owners.push(RetryOwnership {
+            prepared: probe,
+            media,
+            work,
+        });
+        drop(owners);
+        self.stream(request.input().clone(), cancellation)
     }
     fn stream(&self, request: ModelRequest, _: CancellationSignal) -> ModelStream {
         assert_eq!(
@@ -128,9 +172,26 @@ fn retry_fixture(
     Arc<RetryAdapter>,
     tokio::sync::mpsc::UnboundedReceiver<usize>,
 ) {
+    retry_fixture_for_protocol(failures, ModelProtocol::OpenAiChatCompletions)
+}
+
+fn retry_fixture_for_protocol(
+    failures: Vec<ModelError>,
+    protocol: ModelProtocol,
+) -> (
+    Fixture,
+    Arc<RetryAdapter>,
+    tokio::sync::mpsc::UnboundedReceiver<usize>,
+) {
+    use crate::scripted_suites::support::model::{
+        FixtureModel, ScriptedAdapterFactory, fixture_session_model,
+    };
     let mut fixture = fixture(Script::Complete);
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
     let adapter = Arc::new(RetryAdapter {
+        protocol,
+        close_at_preparation: Mutex::default(),
+        owners: Mutex::default(),
         failures,
         entries: sender,
         release: Arc::new(Notify::new()),
@@ -138,12 +199,15 @@ fn retry_fixture(
         exited: Arc::new(AtomicBool::new(true)),
         exit_advance: Mutex::default(),
     });
-    let invocation = crate::scripted_suites::support::attempt_model_with_window(
-        adapter.clone(),
-        "retry-consumer",
-        32768,
-        128,
+    let invocation = fixture_session_model(
+        &[FixtureModel::text("fixture/retry-consumer", protocol)
+            .with_context_window(32768)
+            .with_max_output_tokens(128)],
+        "fixture/retry-consumer",
+        &ScriptedAdapterFactory::new(adapter.clone()),
     )
+    .snapshot()
+    .unwrap()
     .summary_invocation()
     .clone();
     fixture.frozen.request.invocation = invocation.invocation_config();
@@ -255,6 +319,12 @@ async fn cancellation_after_retry_scheduled_is_call_only_and_retains_permits_thr
         fixture.executor.reserve_general(&other).is_err(),
         "backoff retains the Call permit"
     );
+    {
+        let owners = adapter.owners.lock().unwrap();
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0].prepared.body_lifetime.strong_count(), 1);
+        assert_eq!(owners[0].prepared.input.strong_count(), 1);
+    }
     fixture.scope.close();
     drop(gates.release_ack);
     gates.confirming.await.unwrap();
@@ -265,6 +335,13 @@ async fn cancellation_after_retry_scheduled_is_call_only_and_retains_permits_thr
         ContextErrorKind::Cancelled
     );
     drop((one, two));
+    assert_eq!(
+        adapter.owners.lock().unwrap()[0]
+            .prepared
+            .body_lifetime
+            .strong_count(),
+        0
+    );
     let cut = fixture.store.auxiliary_audit_cut().unwrap();
     let requests = fixture
         .store
@@ -295,35 +372,104 @@ async fn cancellation_after_retry_scheduled_is_call_only_and_retains_permits_thr
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn retries_exhaust_at_three_fresh_physical_requests() {
-    let (fixture, adapter, mut entries) = retry_fixture(vec![transient(); 3]);
-    let call_id = fixture.reservation.call_id().clone();
-    let reply = fixture.reservation.submit(fixture.frozen).unwrap();
-    for ordinal in 0..3 {
-        assert_eq!(next_entry(&mut entries).await, ordinal);
-        if ordinal < 2 {
-            let gates = fixture.executor.hold_settlement_for_test();
-            adapter.release.notify_one();
-            gates.committed.await.unwrap();
-            fixture.clock.advance(2_000 << ordinal);
-            drop(gates.release_ack);
-            gates.confirming.await.unwrap();
-            gates.release_confirmation.send(()).unwrap();
+async fn preparation_cancellation_and_body_limit_precede_durable_start() {
+    for cancel in [false, true] {
+        let (mut fixture, adapter, mut entries) = retry_fixture(Vec::new());
+        let call_id = fixture.reservation.call_id().clone();
+        if cancel {
+            *adapter.close_at_preparation.lock().unwrap() = Some(fixture.scope.clone());
         } else {
-            adapter.release.notify_one();
+            fixture.frozen.provider_body_limit = Some(1);
         }
-    }
-    assert!(reply.await.unwrap().unwrap().output.is_err());
-    let cut = fixture.store.auxiliary_audit_cut().unwrap();
-    assert_eq!(
-        fixture
-            .store
-            .read_auxiliary_call_requests(&call_id, cut, None, 32)
+        let error = fixture
+            .reservation
+            .submit(fixture.frozen)
             .unwrap()
-            .len(),
-        3
-    );
-    assert_eq!(fixture.budget.authority().counts(), (3, 0));
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            error.kind,
+            if cancel {
+                ContextErrorKind::Cancelled
+            } else {
+                ContextErrorKind::CannotFit
+            }
+        );
+        assert!(entries.try_recv().is_err());
+        assert!(adapter.owners.lock().unwrap().is_empty());
+        assert_eq!(fixture.budget.authority().counts(), (0, 0));
+        let cut = fixture.store.auxiliary_audit_cut().unwrap();
+        assert!(
+            fixture
+                .store
+                .load_auxiliary_call(&call_id, cut)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            fixture
+                .executor
+                .reserve_general(
+                    &fixture
+                        .executor
+                        .general_scope(1, &CancellationSignal::new())
+                )
+                .is_ok()
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retries_exhaust_at_three_fresh_physical_requests() {
+    for protocol in [
+        ModelProtocol::OpenAiChatCompletions,
+        ModelProtocol::OpenAiResponses,
+        ModelProtocol::AnthropicMessages,
+    ] {
+        let (fixture, adapter, mut entries) =
+            retry_fixture_for_protocol(vec![transient(); 3], protocol);
+        let call_id = fixture.reservation.call_id().clone();
+        let reply = fixture.reservation.submit(fixture.frozen).unwrap();
+        for ordinal in 0..3 {
+            assert_eq!(next_entry(&mut entries).await, ordinal);
+            if ordinal < 2 {
+                let gates = fixture.executor.hold_settlement_for_test();
+                adapter.release.notify_one();
+                gates.committed.await.unwrap();
+                fixture.clock.advance(2_000 << ordinal);
+                drop(gates.release_ack);
+                gates.confirming.await.unwrap();
+                gates.release_confirmation.send(()).unwrap();
+            } else {
+                adapter.release.notify_one();
+            }
+        }
+        assert!(reply.await.unwrap().unwrap().output.is_err());
+        let cut = fixture.store.auxiliary_audit_cut().unwrap();
+        assert_eq!(
+            fixture
+                .store
+                .read_auxiliary_call_requests(&call_id, cut, None, 32)
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(fixture.budget.authority().counts(), (3, 0));
+
+        let owners = adapter.owners.lock().unwrap();
+        assert_eq!(
+            owners.iter().map(|owner| owner.work).collect::<Vec<_>>(),
+            [(1, 1), (0, 0), (0, 0)]
+        );
+        assert!(owners[0].prepared.body.1 > 0);
+        assert_eq!(owners[0].prepared.body_lifetime.strong_count(), 0);
+        assert_eq!(owners[0].prepared.input.strong_count(), 0);
+        eprintln!(
+            "{protocol:?}: three dispatches share one {} byte body; input and body dropped after settlement",
+            owners[0].prepared.body.1
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -391,6 +537,7 @@ fn business_child(
         FrozenCall {
             start,
             request,
+            provider_body_limit: None,
             invocation,
             timeout: ModelTimeoutPolicy::default(),
             resource_revision: 7,
@@ -676,6 +823,15 @@ async fn retry_keeps_selected_occurrences_and_captured_media_after_source_mutati
     next_entry(&mut entries).await;
     adapter.release.notify_one();
     assert!(reply.await.unwrap().unwrap().output.is_ok());
+    let owners = adapter.owners.lock().unwrap();
+    assert_eq!(owners[0].media.len(), 1);
+    assert_eq!(owners[0].media[0].1, bytes.len());
+    assert_eq!(owners[0].prepared.body_lifetime.strong_count(), 0);
+    assert_eq!(owners[0].prepared.input.strong_count(), 0);
+    eprintln!(
+        "one frozen media allocation, {} bytes across two sends",
+        bytes.len()
+    );
     let requests = adapter.requests.lock().unwrap();
     assert_eq!(requests[1].images[&image_id], bytes);
     assert_eq!(
