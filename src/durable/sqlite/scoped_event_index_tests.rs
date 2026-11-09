@@ -79,8 +79,6 @@ fn scoped_indexes_require_partial_predicates_and_previous_schema_is_rejected() {
                     "events_kind_idx"
                         | "events_attempt_kind_idx"
                         | "events_primary_request_kind_idx"
-                        | "events_workflow_node_run_kind_idx"
-                        | "events_workflow_node_instance_kind_idx"
                 ),
                 "{name}"
             );
@@ -104,11 +102,7 @@ fn scoped_indexes_require_partial_predicates_and_previous_schema_is_rejected() {
                     |row| row.get(0),
                 )
                 .unwrap();
-            let unfiltered = if original.contains(" WHERE ") {
-                original.split(" WHERE ").next().unwrap().to_owned()
-            } else {
-                original.replace("$.event.run_id.origin.type", "$.event.run_id.invalid_owner")
-            };
+            let (unfiltered, _) = original.split_once(" WHERE ").expect("partial index");
             connection
                 .execute_batch(&format!(
                     "SAVEPOINT invalid; DROP INDEX {name}; {unfiltered};"
@@ -123,14 +117,14 @@ fn scoped_indexes_require_partial_predicates_and_previous_schema_is_rejected() {
                 .unwrap();
         }
         connection
-            .execute("UPDATE rustx_store SET schema_version=71", [])
+            .execute("UPDATE rustx_store SET schema_version=97", [])
             .unwrap();
     }
     drop(store);
     assert!(matches!(
         SqliteConversationStore::open_existing(id, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
-            stored: 71,
+            stored: 97,
             expected: crate::durable::sqlite::SQLITE_SCHEMA_VERSION
         })
     ));
