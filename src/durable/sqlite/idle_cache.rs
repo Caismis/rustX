@@ -111,6 +111,26 @@ mod tests {
             rusqlite::ffi::SQLITE_DBSTATUS_STMT_USED,
         )
     }
+    fn inventory(store: &SqliteConversationStore) -> (i32, i32, i32, [u64; 3]) {
+        use rusqlite::ffi::{SQLITE_DBSTATUS_CACHE_USED, SQLITE_DBSTATUS_SCHEMA_USED};
+        use rusqlite::ffi::SQLITE_DBSTATUS_STMT_USED;
+        let slot = store.conn.available.lock().unwrap();
+        let connection = slot.connection.as_ref().unwrap();
+        let temp = connection.query_row(
+            "SELECT (SELECT count(*) FROM temp.event_observation_readiness),
+                    (SELECT count(*) FROM temp.transcript_observation_readiness),
+                    (SELECT count(*) FROM temp.event_observation_direct)",
+            [],
+            |row| Ok([row.get(0)?, row.get(1)?, row.get(2)?]),
+        ).unwrap();
+        (
+            memory(connection, SQLITE_DBSTATUS_CACHE_USED),
+            memory(connection, SQLITE_DBSTATUS_STMT_USED),
+            memory(connection, SQLITE_DBSTATUS_SCHEMA_USED),
+            temp,
+        )
+    }
+
     fn populated() -> (tempfile::TempDir, SqliteConversationStore) {
         let root = tempfile::tempdir().unwrap();
         let store = SqliteConversationStore::open(
@@ -135,21 +155,14 @@ mod tests {
     #[test]
     fn pages_then_statements_reclaim_without_reopening_or_changing_facts() {
         let (_root, store) = populated();
-        let before = plans(&store);
-        assert!(before > 100_000);
-        let cache_before = {
-            let slot = store.conn.available.lock().unwrap();
-            memory(
-                slot.connection.as_ref().unwrap(),
-                rusqlite::ffi::SQLITE_DBSTATUS_CACHE_USED,
-            )
-        };
+        let before = inventory(&store);
+        assert!(before.1 > 100_000);
         let manifest = Arc::clone(&store.conn.manifest);
         let now = age(&store.conn, PAGE_IDLE + Duration::from_secs(1));
         assert!(store.conn.reclaim_idle_cache(now).unwrap());
         assert_eq!(
             plans(&store),
-            before,
+            before.1,
             "page maintenance preserves prepared plans"
         );
         let cache_after = {
@@ -159,17 +172,19 @@ mod tests {
                 rusqlite::ffi::SQLITE_DBSTATUS_CACHE_USED,
             )
         };
-        assert!(cache_after < cache_before);
+        assert!(cache_after < before.0);
         let now = age(&store.conn, STATEMENT_IDLE + Duration::from_secs(1));
         assert!(store.conn.reclaim_idle_cache(now).unwrap());
         assert!(
             !store.conn.reclaim_idle_cache(now).unwrap(),
             "one reclamation per idle stage"
         );
-        assert_eq!(plans(&store), 0);
+        let after = inventory(&store);
+        assert_eq!(after.1, 0);
+        assert_eq!(after.2, before.2);
+        assert_eq!(after.3, before.3);
         eprintln!(
-            "{}",
-            serde_json::json!({"kind":"idle_cache_unit_probe","cache_before":cache_before,"cache_after":cache_after,"statements_before":before,"statements_after":0})
+            "SQLite (page bytes, statement bytes, schema bytes, TEMP readiness rows): before={before:?}, page idle cache={cache_after}, statement idle={after:?}"
         );
         assert!(Arc::ptr_eq(&manifest, &store.conn.manifest));
         assert_eq!(
