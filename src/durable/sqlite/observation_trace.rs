@@ -318,21 +318,38 @@ pub(super) fn facts(
     // headers. No original body and no growing multi-kind sort is read.
     let mut sequences = Vec::with_capacity(query.limit * query.kinds.len());
     for kind in &query.kinds {
+        if matches!(query.scope, TraceFactScope::Agent)
+            && !matches!(
+                kind,
+                TraceFactKind::ModelRequestStarted
+                    | TraceFactKind::ModelRequestCompleted
+                    | TraceFactKind::ModelRequestFailed
+            )
+        {
+            continue;
+        }
         let (index, predicate) = match query.scope {
             TraceFactScope::Owner { .. } => {
                 ("events_trace_owner_idx", "observation_trace_owner=?5")
             }
-            TraceFactScope::Agent => (
-                "events_primary_trace_kind_idx",
-                "observation_trace_fact_required=1 AND observation_kind IN ('model_request_started','model_request_completed','model_request_failed')",
-            ),
-            TraceFactScope::All => (
+            TraceFactScope::Agent | TraceFactScope::All => (
                 "events_primary_trace_kind_idx",
                 "observation_trace_fact_required=1",
             ),
         };
+        let (kind_column, kind_value) = if owner.is_some() {
+            (
+                "observation_kind",
+                rusqlite::types::Value::Text(kind.as_str().into()),
+            )
+        } else {
+            (
+                super::event_kind_key::OBSERVATION,
+                super::event_kind_key::parameter(kind.as_str()),
+            )
+        };
         let sql = format!(
-            "SELECT sequence FROM events INDEXED BY {index} WHERE observation_kind=?1 AND sequence<?2 AND sequence>?3 AND sequence<=?4 AND {predicate} ORDER BY sequence {} LIMIT ?6",
+            "SELECT sequence FROM events INDEXED BY {index} WHERE {kind_column}=?1 AND sequence<?2 AND sequence>?3 AND sequence<=?4 AND {predicate} ORDER BY sequence {} LIMIT ?6",
             if query.ascending { "ASC" } else { "DESC" }
         );
         let mut statement = connection
@@ -340,14 +357,7 @@ pub(super) fn facts(
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let rows = statement
             .query_map(
-                params![
-                    kind.as_str(),
-                    before,
-                    query.after,
-                    through,
-                    owner,
-                    query.limit
-                ],
+                params![kind_value, before, query.after, through, owner, query.limit],
                 |row| row.get::<_, u64>(0),
             )
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;

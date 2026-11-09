@@ -266,7 +266,20 @@ fn prompt(
 ) -> Result<String, ConversationStoreError> {
     #[cfg(test)]
     PROMPT_READS.with(|count| count.set(count.get() + 1));
-    let previous:u64=connection.query_row_cached("SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='attempt_started' AND sequence<?1",[start],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let previous: u64 = connection
+        .query_row_cached(
+            concat!(
+                "SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx WHERE ",
+                crate::durable::sqlite::event_kind_key::sql!(
+                    "json_extract(event_json,'$.event.type')"
+                ),
+                "=x'0002'",
+                " AND sequence<?1"
+            ),
+            [start],
+            |row| row.get(0),
+        )
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_prompt_holes_idx WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL AND sequence<=?1 AND ((attempt_id=?2) OR (attempt_id IS NULL AND sequence>?3 AND sequence<?4)))",params![through,attempt.as_str(),previous,start],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if missing {
         return Err(storage("turn input display source unavailable"));

@@ -348,7 +348,7 @@ fn count_conversation_store_open() {
 /// Version 98 indexes Workflow coordinates and nodes only for matching facts.
 /// Version 99 scopes the Agent request index to Agent-owned facts.
 /// Version 100 combines the scoped native indexes and observation layout with shared-control inbox semantics.
-pub const SQLITE_SCHEMA_VERSION: i64 = 102;
+pub const SQLITE_SCHEMA_VERSION: i64 = 105;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1407,6 +1407,7 @@ mod append_facts;
 mod attempt_start;
 
 mod event_insert;
+mod event_kind_key;
 
 mod native_request;
 

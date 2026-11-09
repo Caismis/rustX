@@ -259,8 +259,18 @@ mod scale {
         assert_eq!(execution_cost(&connection, &occupancy(cut)).0, 1);
         assert_eq!(execution_cost(&connection, &message(cut)).0, 1);
         for predicate in [
-            "json_extract(event_json, '$.event.type') = 'model_request_completed' AND json_type(event_json, '$.event.usage') = 'object'",
-            "json_extract(event_json, '$.event.type') = 'assistant_message_committed' AND json_extract(event_json, '$.event.message_id') = 'target'",
+            concat!(
+                crate::durable::sqlite::event_kind_key::sql!(
+                    "json_extract(event_json, '$.event.type')"
+                ),
+                " = x'0005' AND json_type(event_json, '$.event.usage') = 'object'"
+            ),
+            concat!(
+                crate::durable::sqlite::event_kind_key::sql!(
+                    "json_extract(event_json, '$.event.type')"
+                ),
+                " = x'0006' AND json_extract(event_json, '$.event.message_id') = 'target'"
+            ),
         ] {
             let mut statement = connection.prepare(&format!("SELECT event_json FROM events INDEXED BY events_kind_idx WHERE {predicate} ORDER BY sequence DESC LIMIT 1")).unwrap();
             let rows = statement

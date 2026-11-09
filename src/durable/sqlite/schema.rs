@@ -447,7 +447,11 @@ pub(super) fn presentation_statements(
     let mut statements = Vec::new();
     for kind in &query.kinds {
         let mut params = values.clone();
-        params.push(Value::Text((*kind).to_owned()));
+        params.push(if matches!(query.scope, FactScope::All) {
+            super::event_kind_key::parameter(kind)
+        } else {
+            Value::Text((*kind).to_owned())
+        });
         let kind_param = params.len();
         params.push(Value::Integer(seq_to_i64(query.after)?));
         let after_param = params.len();
@@ -455,8 +459,13 @@ pub(super) fn presentation_statements(
             i64::try_from(query.limit).map_err(|_| storage("fact limit"))?,
         ));
         let direction = if query.ascending { "ASC" } else { "DESC" };
+        let kind_column = if matches!(query.scope, FactScope::All) {
+            super::event_kind_key::NATIVE
+        } else {
+            "json_extract(event_json, '$.event.type')"
+        };
         let sql = format!("SELECT event_json FROM events INDEXED BY {index} WHERE sequence <= ?1 AND sequence < ?2{scope}
-                AND json_extract(event_json, '$.event.type') = ?{kind_param} AND sequence > ?{after_param}
+                AND {kind_column} = ?{kind_param} AND sequence > ?{after_param}
                 ORDER BY sequence {direction} LIMIT ?{}", params.len());
         statements.push((sql, params));
     }
@@ -477,10 +486,7 @@ pub(super) const PRESENTATION_INDEXES: &[(&str, &str)] = &[
         "events_message_id_kind_idx",
         "(json_extract(event_json, '$.event.message_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.message_id') IS NOT NULL",
     ),
-    (
-        "events_kind_idx",
-        "(json_extract(event_json, '$.event.type'))",
-    ),
+    ("events_kind_idx", super::event_kind_key::NATIVE),
     (
         "events_attempt_kind_idx",
         "(attempt_id, json_extract(event_json, '$.event.type'))",

@@ -323,10 +323,20 @@ fn trace_kind_candidates_remain_independent_of_changed_native_json_kind() {
             "UPDATE events SET event_json=json_set(event_json,'$.event.type','turn_started') WHERE sequence=?1",
             [original.sequence],
         ).unwrap();
-        let native_candidates: u64 = connection.query_row(
-            "SELECT COUNT(*) FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='attempt_started' AND sequence=?1",
-            [original.sequence], |row| row.get(0),
-        ).unwrap();
+        let native_candidates: u64 = connection
+            .query_row(
+                concat!(
+                    "SELECT COUNT(*) FROM events INDEXED BY events_kind_idx WHERE ",
+                    crate::durable::sqlite::event_kind_key::sql!(
+                        "json_extract(event_json,'$.event.type')"
+                    ),
+                    "=x'0002'",
+                    " AND sequence=?1"
+                ),
+                [original.sequence],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(native_candidates, 0);
     }
     assert_eq!(
