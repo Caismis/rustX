@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { captureEvidence } from './screenshot';
 
 const fixtureOrigin = `http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}`;
 for (const width of [1440, 390]) test(`workflow catalog counts three children before inspection and after reload at ${width}px`, async ({ page }, testInfo) => {
@@ -35,6 +36,18 @@ for (const width of [1440, 390]) test(`workflow catalog counts three children be
   await expect(child.getByRole('heading', { name: 'test report' })).toBeVisible();
   await page.getByRole('button', { name: parent, exact: true }).click();
   await expect(list).toHaveText('3 subagents');
+  await list.click();
+  await tree.getByRole('button', { name: 'Open explore in sidebar', exact: true }).click();
+  const sidebar = page.locator('[data-workbench]');
+  const aside = sidebar.locator('section[data-agent-id="workflow-agent-0"]');
+  await expect(aside.getByRole('heading', { name: 'explore report' })).toBeVisible();
+  await expect(aside.getByText('One-shot subagent record')).toBeVisible();
+  await expect(aside.getByRole('textbox')).toHaveCount(0);
+  await expect(aside.locator('[data-composer-card]')).toHaveCount(0);
+  await expect(aside.getByRole('button', { name: 'Reload turns', exact: true })).toHaveCount(0);
+  await expect(page.locator('#conversation-view section[data-agent-id]:visible')).toHaveCount(0);
+  await captureEvidence(page, `workflow-one-shot-sidebar-${width}`);
+  await sidebar.getByRole('button', { name: 'Collapse right sidebar', exact: true }).click();
   await page.evaluate(() => window.workflowCatalogFixture.refresh()); await expect(list).toHaveText('3 subagents');
   await page.reload(); await expect(list).toHaveText('3 subagents');
   expect(await page.evaluate(() => window.workflowCatalogFixture.statusReads())).toBe(0);

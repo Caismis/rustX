@@ -1,10 +1,11 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Header layout adapted from ui-subagent/SubagentHeaderLineage; see PROVENANCE.md. */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import type { RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v77';
+import type { AttachmentTarget, CheckpointPage, RuntimeClientAgent, AgentStatistics } from '../../../../protocol/app-server/v77';
 import type { AppServerClient } from '../../client/app-server';
 import { useClientSelector } from '../../client/selectors';
 import { useTranslation } from '../../locale/react';
 import { SubagentMenu } from './SubagentCatalog';
+import { SubagentObservationNotice } from './SubagentObservationNotice';
 import { AgentCard } from '../components/ActivityCards';
 import css from './Subagents.module.css';
 import conversationCss from '../../presentation/agent/Conversation.module.css';
@@ -15,7 +16,18 @@ import { workflowChildren } from '../../bindings/workflow-children';
 import { sameWorkflowView, useWorkflowContent } from './useWorkflowContent';
 
 const NO_AGENTS: RuntimeClientAgent[] = [];
-export function SubagentScope({ client, sessionId, children, openAside, onMode }: { client: AppServerClient; sessionId?: string; children: ReactNode; onMode?: (mode: 'chat' | 'trajectory') => void; openAside?: (agent: RuntimeClientAgent) => void }) {
+const WORKFLOW_ASIDE = 'workflow-child:';
+
+function workflowHeader(page: CheckpointPage, target: AttachmentTarget, id: string, activation: string): RuntimeClientAgent {
+  const header = page.items[0]?.value as unknown as RuntimeClientAgent | undefined;
+  if (page.items.length !== 1 || page.read_cut.conversation_id !== target.conversation_id
+    || page.domain !== `workflow_children.${activation}` || header?.agent_id !== id || header.activation_id !== activation) {
+    throw new Error('Workflow child source changed.');
+  }
+  return header;
+}
+
+export function SubagentScope({ client, sessionId, children, openAside, onMode }: { client: AppServerClient; sessionId?: string; children: ReactNode; onMode?: (mode: 'chat' | 'trajectory') => void; openAside?: (id: string, title: string) => void }) {
   const tx = useTranslation();
   const agents = useClientSelector(client, state => sessionId ? state.views[sessionId]?.snapshot?.agents : undefined) ?? NO_AGENTS;
   const agentRevision = useClientSelector(client, state => sessionId ? state.views[sessionId]?.checkpoint?.read_cut.domain_revisions.agents : undefined);
@@ -64,9 +76,7 @@ export function SubagentScope({ client, sessionId, children, openAside, onMode }
     const current = () => currentOwner.current === owner && navigation.current === intent && scope.current();
     const { page } = await client.request({ method: 'agent/status', params: { target, agent_id: id } }, 'domain_page', undefined, current);
     if (!current()) return;
-    const header = page.items[0]?.value as unknown as RuntimeClientAgent | undefined;
-    if (page.items.length !== 1 || page.domain !== `workflow_children.${activation}` || header?.agent_id !== id || header.activation_id !== activation) throw new Error('Workflow child source changed.');
-    open(id, { ...header, title }, true);
+    open(id, { ...workflowHeader(page, target, id, activation), title }, true);
     onMode?.('chat');
   };
   const close = (id: string) => setSelection(previous => previous?.owner === owner ? { owner, oneShot: new Set([...previous.oneShot ?? []].filter(key => key !== id)), id: previous.id === id ? undefined : previous.id, opened: previous.opened.filter(value => value.agent_id !== id), leases:new Map([...previous.leases??[]].filter(([key])=>key!==id)) } : previous);
@@ -88,7 +98,7 @@ export function SubagentScope({ client, sessionId, children, openAside, onMode }
       if (!inspection && page.read_cut.domain_revisions.agents !== (agentRevision ?? '0')) return;
       const value=page.items[0]?.value;
       if(page.items.length!==1 || page.read_cut.conversation_id!==target.conversation_id || !value || typeof value!=='object' || !('agent_id' in value) || value.agent_id!==source.agent_id || !('activation_id' in value) || !('child_conversation_id' in value)) throw new Error('Native Agent header source changed.');
-      const header=value as unknown as RuntimeClientAgent;
+      const header = inspection ? workflowHeader(page, target, source.agent_id, source.activation_id) : value as unknown as RuntimeClientAgent;
       setSelection(previous=>previous?.owner===owner&&previous.leases?.get(source.agent_id)===lease?{...previous,opened:previous.opened.map(agent=>agent.agent_id===header.agent_id?{ ...header, title: inspection ? source.title : header.title }:agent)}:previous);
       setHeaderError(previous=>previous?.owner===owner&&previous.lease===lease?undefined:previous);
     }).catch(error=>{if(current())setHeaderError({owner,id:source.agent_id,lease,message:String(error).slice(0,512)});}).finally(()=>{if(reads.flight===token)reads.flight=undefined;setHeaderWork(value=>value+1);});
@@ -106,7 +116,14 @@ export function SubagentScope({ client, sessionId, children, openAside, onMode }
       if (reading.error) metricErrors[agent.agent_id] = reading.error;
     } else if (readings.blocked) metricErrors[agent.agent_id] = tx('agent:usage.reads-unresolved');
   }
-  return <Context value={{ client, sessionId, onMode, agents: inventory, workflows, workflowChildren: workflowCatalog, metrics, metricErrors, full: selection?.owner === owner && selection.full, headerError: headerError?.owner===owner&&selection?.leases?.get(headerError.id)===headerError.lease?headerError.message:undefined, oneShot: selection?.owner === owner ? selection.oneShot : undefined, openWorkflow: target && scope.current() ? openWorkflow : undefined, close, selected: inventory.find(agent => agent.agent_id === id), openAside: openAside ? (id: string) => { const agent = inventory.find(agent => agent.agent_id === id); if (agent) openAside(agent); } : undefined, opened: residents.map(value => agents.find(agent => agent.agent_id === value.agent_id) ?? value), open }}>{children}</Context>;
+  return <Context value={{ client, sessionId, onMode, agents: inventory, workflows, workflowChildren: workflowCatalog, metrics, metricErrors, full: selection?.owner === owner && selection.full, headerError: headerError?.owner===owner&&selection?.leases?.get(headerError.id)===headerError.lease?headerError.message:undefined, oneShot: selection?.owner === owner ? selection.oneShot : undefined, openWorkflow: target && scope.current() ? openWorkflow : undefined,
+    openWorkflowAside: openAside && target && scope.current() ? child => {
+      openAside(WORKFLOW_ASIDE + JSON.stringify([child.agentId, child.activationId]), child.title);
+    } : undefined,
+    close, selected: inventory.find(agent => agent.agent_id === id), openAside: openAside ? (id: string) => {
+      const agent = inventory.find(agent => agent.agent_id === id);
+      if (agent && !(selection?.owner === owner && selection.oneShot?.has(id))) openAside(agent.agent_id, agent.title);
+    } : undefined, opened: residents.map(value => agents.find(agent => agent.agent_id === value.agent_id) ?? value), open }}>{children}</Context>;
 }
 export function SubagentHeader({ title }: { title: string }) {
   const tx = useTranslation(), scope = useSubagents();
@@ -138,18 +155,50 @@ export function SubagentSurface({ children, mode = 'chat' }: { children: ReactNo
   const scope = useSubagents(), tx = useTranslation();
   return <>{scope?.full && <p role="status">{tx('common:subagents.view-capacity')}</p>}{scope?.headerError && <p role="alert">{scope.headerError}</p>}<div className={css.parentSurface} hidden={!!scope?.selected}>{children}</div>
     {scope?.opened.map(agent => <div key={`${scope.sessionId}:${agent.agent_id}`} hidden={scope.selected?.agent_id !== agent.agent_id} className={`${conversationCss.scrollBody} ${css.childSurface}`} data-conversation-scroll>
-      <AgentCard inspection={scope.oneShot?.has(agent.agent_id)} close={() => scope.close(agent.agent_id)} onMode={scope.onMode} mode={mode} visible={scope.selected?.agent_id === agent.agent_id} agent={agent} metrics={scope.metrics[agent.agent_id]} metricsError={scope.metricErrors[agent.agent_id]} client={scope.client} sessionId={scope.sessionId}/>
+      <AgentCard oneShot={scope.oneShot?.has(agent.agent_id)} close={() => scope.close(agent.agent_id)} onMode={scope.onMode} mode={mode} visible={scope.selected?.agent_id === agent.agent_id} agent={agent} metrics={scope.metrics[agent.agent_id]} metricsError={scope.metricErrors[agent.agent_id]} client={scope.client} sessionId={scope.sessionId}/>
     </div>)}</>;
 }
 
-/** Sidebar chat uses the same native Agent conversation and resident composer. */
+/** Sidebar tabs carry the exact finite activation independently of main-chat selection. */
 export function SubagentAside({ id, visible }: { id: string; visible: boolean }) {
   const scope = useSubagents(), tx = useTranslation();
+  if (!scope) return <p role="status">{tx('common:activity.unavailable')}</p>;
+  if (id.startsWith(WORKFLOW_ASIDE)) {
+    const [agentId, activation] = JSON.parse(id.slice(WORKFLOW_ASIDE.length)) as [string, string];
+    return <WorkflowSubagentAside key={id} client={scope.client} sessionId={scope.sessionId} id={agentId} activation={activation} visible={visible}/>;
+  }
+  const agent = scope.agents.find(agent => agent.agent_id === id);
+  return agent ? <SubagentAsideView agent={agent} visible={visible} oneShot={scope.oneShot?.has(id)}/> : <p role="status">{tx('common:activity.unavailable')}</p>;
+}
+
+function WorkflowSubagentAside({ client, sessionId, id, activation, visible }: { client: AppServerClient; sessionId?: string; id: string; activation: string; visible: boolean }) {
+  const tx = useTranslation();
+  const admission = useClientSelector(client, state => sessionId ? state.views[sessionId]?.attachmentObservation : undefined);
+  const revision = useClientSelector(client, state => sessionId ? state.views[sessionId]?.snapshot?.workflows.revision : undefined);
+  const [read, setRead] = useState<{ owner: NonNullable<typeof admission>; agent?: RuntimeClientAgent; error?: unknown }>();
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (!visible || !sessionId || !admission) return;
+    const controller = new AbortController();
+    const current = () => !controller.signal.aborted && client.isAttachmentObservationCurrent(sessionId, admission);
+    if (!current()) return;
+    const target = admission.target;
+    void client.request({ method: 'agent/status', params: { target, agent_id: id } }, 'domain_page', undefined, current, controller.signal)
+      .then(({ page }) => { if (current()) setRead({ owner: admission, agent: workflowHeader(page, target, id, activation) }); })
+      .catch(error => { if (current()) setRead({ owner: admission, error }); });
+    return () => controller.abort();
+  }, [client, sessionId, admission, revision, id, activation, visible, retry]);
+  const current = read?.owner === admission ? read : undefined;
+  if (current?.agent) return <SubagentAsideView agent={current.agent} visible={visible} oneShot/>;
+  if (current) return <SubagentObservationNotice error={current.error} loading={false} disabled={!visible} retry={() => { setRead(undefined); setRetry(value => value + 1); }}/>;
+  return <p role="status">{tx(admission ? 'common:activity.loading' : 'common:activity.unavailable')}</p>;
+}
+
+function SubagentAsideView({ agent, visible, oneShot }: { agent: RuntimeClientAgent; visible: boolean; oneShot?: boolean }) {
+  const scope = useSubagents()!, tx = useTranslation();
   const [mode, setMode] = useState<'chat' | 'trajectory'>('chat');
-  const agent = scope?.agents.find(agent => agent.agent_id === id);
-  if (!scope || !agent) return <p role="status">{tx('common:activity.unavailable')}</p>;
   return <section className={`conversation-panel ${conversationCss.body} ${conversationCss.embeddedBody}`} data-content-phase="active">
     <div className={conversationCss.tabs} role="tablist" aria-label={tx('agent:conversation-header.conversation-view')}>{(['chat', 'trajectory'] as const).map(value => <button type="button" key={value} role="tab" aria-selected={value === mode} className={`${conversationCss.tab} ${value === mode ? conversationCss.tabActive : ''}`} onClick={() => setMode(value)}>{tx(value === 'chat' ? 'agent:conversation-header.chat' : 'agent:conversation-header.trajectory')}</button>)}</div>
-    <div className={`${conversationCss.scrollBody} ${css.aside}`} data-conversation-scroll><AgentCard inspection={scope.oneShot?.has(agent.agent_id)} onMode={setMode} mode={mode} embedded visible={visible} agent={agent} metrics={scope.metrics[id]} metricsError={scope.metricErrors[id]} client={scope.client} sessionId={scope.sessionId}/></div>
+    <div className={`${conversationCss.scrollBody} ${css.aside}`} data-conversation-scroll><AgentCard oneShot={oneShot} onMode={setMode} mode={mode} embedded visible={visible} agent={agent} metrics={scope.metrics[agent.agent_id]} metricsError={scope.metricErrors[agent.agent_id]} client={scope.client} sessionId={scope.sessionId}/></div>
   </section>;
 }

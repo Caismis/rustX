@@ -126,6 +126,12 @@ function WorkflowChildRow({ child, selected, close }: { child: WorkflowChild; se
             {child.instance.visit != null && child.instance.visit > 1 && ` · ${child.instance.visit}`}
           </span>
         </span>
+        {!selected && scope.openWorkflowAside && <Tooltip label={tx('common:subagents.open-aside', { name: child.title })} side="bottom" delayMs={500}>
+          <button type="button" className={css.sidebarButton} aria-label={tx('common:subagents.open-aside', { name: child.title })} disabled={pending}
+            onKeyDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); scope.openWorkflowAside?.(child); close(); }}>
+            <span aria-hidden="true"><IconChevronRightOutline14/></span>
+          </button>
+        </Tooltip>}
       </div>
     </div>
     {error && <p role="alert" className={css.notice}>{tx('common:subagents.workflow-open-failed')}</p>}

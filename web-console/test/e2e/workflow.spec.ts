@@ -46,6 +46,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     const childId = await child.getAttribute('data-workflow-activation-id');
     const runId = await run.getAttribute('data-workflow-run-id');
     await expect(run).toContainText('review_pr');
+    await expect(run.getByRole('button', { name: 'View review', exact: true })).toContainText('One-shot subagent · Read-only');
     const catalog = page.getByRole('button', { name: 'Subagents', exact: true });
     await expect(catalog).toHaveText('1 subagents');
     await catalog.click();
@@ -58,7 +59,9 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(childView).toHaveCount(1);
     await expect(childView).toContainText('Review the request and commit the result.');
     await expect(childView.getByRole('textbox')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Wait for current activation', exact: true })).toHaveCount(0);
+    await expect(childView.locator('[data-composer-card]')).toHaveCount(0);
+    await expect(page.locator('#subagent-header-actions').getByRole('button')).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Close Child view', exact: true })).toBeVisible();
     await page.screenshot({ path: '/tmp/rustx-workflow-child-chat.png' });
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     const childTrace = page.locator('[data-agent-id][data-view="trajectory"]:visible');
@@ -130,6 +133,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     expect(readFileSync(workflowPath, 'utf8')).toBe(workflow);
     expect(readFileSync(agentPath, 'utf8')).toBe(agent);
     expect((await fixture.control('requests')).requests).toHaveLength(4);
+    expect(wire.requests.filter(request => request.method === 'agent/sendMessage' || request.method === 'agent/interrupt' || request.method === 'agent/wait')).toHaveLength(0);
     expect(errors).toEqual([]); passed = true;
   } catch (error) { console.error(fixture.diagnostics()); throw error; }
   finally { await page.close(); await fixture.stop(passed); }

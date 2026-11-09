@@ -3979,7 +3979,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "a35d956c8387427293db78e2c14da4483a94fa5b7c279253228ee178ad63249c"
+      "local_sha256": "b47bd69fd19ae2d6a229d4108aea49b25e830e1ec4424bd3ecdef8083728ae3a"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -6530,13 +6530,14 @@
         "../../presentation/agent/Conversation.module.css",
         "../components/ActivityCards",
         "./SubagentCatalog",
+        "./SubagentObservationNotice",
         "./Subagents.module.css",
         "./subagent-context",
         "./useWorkflowContent",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "389c5af5e279e6eccb489acd197ced80cefcd571bcff9ca855b310eea90efb33"
+      "local_sha256": "817f81cfbd48251a0ab6d544599ff113b1445533791e561cb08796c94dfeb514"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -6678,7 +6679,15 @@
       ],
       "excluded_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "local_sha256": "ca4e7f2462c9899380ad0fb74506421a6d49e2e08d0a749bdb5c119895da4127"
+      "local_sha256": "d098d7bf2247362e5e2c8d6d36d7692bef6be43bcf2276f3b8ed5f061b898d22",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx",
+          "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
+          "upstream_sha256": "7df1f44bc2d7845ba4da7624157827202c40822e226ad487552f047434ddbf12",
+          "treatment": "Expose sidebar navigation for a one-shot child record while preserving the original finite activation address."
+        }
+      ]
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -7366,7 +7375,7 @@
         "Harness Cordis slots, stores and plugin runtime",
         "Harness Agent execution and session observation authority"
       ],
-      "local_sha256": "62da3871c2190b65394bbb27e2633cb19b366ace9f63862f02047d27808ab679",
+      "local_sha256": "8ee29d510de621cdd8cd1773e82e88a966087c1007f1bad6ce2745fdb0ace1f8",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
