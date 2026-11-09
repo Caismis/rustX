@@ -2724,6 +2724,112 @@ fn modified(path: &std::path::Path) -> notify::Event {
         .add_path(path.to_path_buf())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn removing_a_hidden_skill_entry_recovers_collection_admission() {
+    hidden_skill_budget_change(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn creating_a_hidden_skill_entry_invalidates_collection_admission() {
+    hidden_skill_budget_change(true).await;
+}
+
+/// Only the concrete hidden child notification reaches the watch loop. The
+/// capture gate proves routing completed before checking retained source truth
+/// and the catalog published into the resident runtime.
+async fn hidden_skill_budget_change(create: bool) {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let collection = fixture.workspaces[0].join(".agents/skills");
+        let package = collection.join("guide");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("SKILL.md"),
+            "---\nname: guide\ndescription: Guide\n---\n",
+        )
+        .unwrap();
+        for index in 0..if create { 2047 } else { 2048 } {
+            std::fs::write(collection.join(format!(".hidden-{index}")), "").unwrap();
+        }
+        let id = &fixture.sessions[0].id;
+        fixture.manager.load(id, None).await.unwrap();
+        select_all_skills(&fixture).await;
+        let runtime = fixture.manager.configuration_runtime(id).unwrap();
+        let captured_skills = || {
+            let applications = fixture.manager.applications.lock();
+            let discovery = &applications
+                .test_desired_source(&fixture.workspaces[0])
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .context
+                .as_ref()
+                .unwrap()
+                .skill_discovery;
+            (discovery.revision(), discovery.packages.len())
+        };
+        let catalog_size = || {
+            runtime
+                .runtime_resources()
+                .capability()
+                .model_skill_entries()
+                .len()
+        };
+        assert_eq!(catalog_size(), usize::from(create));
+        injected_only(&fixture);
+        let captured = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .source_watch_captured
+            .clone();
+        captured.arm();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let observe = async {
+            watch_settled(&fixture).await;
+            let before = captured_skills();
+            assert_eq!(before.1, usize::from(create));
+            let changed = collection.join(".hidden-2047");
+            let kind = if create {
+                std::fs::write(&changed, "").unwrap();
+                notify::EventKind::Create(notify::event::CreateKind::File)
+            } else {
+                std::fs::remove_file(&changed).unwrap();
+                notify::EventKind::Remove(notify::event::RemoveKind::File)
+            };
+            assert!(
+                fixture
+                    .manager
+                    .notify_source_watch(notify::Event::new(kind).add_path(changed))
+            );
+            captured.entered().await;
+            applied(&fixture, 0).await;
+            while !fixture.manager.applications.lock().worker_idle() {
+                tokio::task::yield_now().await;
+            }
+            let after = captured_skills();
+            assert_ne!(
+                after.0, before.0,
+                "hidden entry did not invalidate retained source discovery"
+            );
+            assert_eq!(after.1, usize::from(!create));
+            assert_eq!(
+                catalog_size(),
+                usize::from(!create),
+                "resident skill catalog was not published"
+            );
+            captured.release();
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
+        watched.unwrap();
+        fixture.close().await;
+    })
+    .await;
+}
+
 /// A newly selected instruction file whose first capture fails stays an
 /// input: fixing only that file, through its own notification, recovers the
 /// same resident runtime.

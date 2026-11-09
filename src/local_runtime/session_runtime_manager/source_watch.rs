@@ -173,9 +173,9 @@ fn skill_entry(root: &Path, rest: &Path, same: &impl Fn(&Path, &Path) -> bool) -
             ) {
                 return Some(directory.join(fixed));
             }
-            // A missing visible entry may be a removed collection branch.
-            return (!hidden(name) && !directory.join(SKILL_MARKDOWN_FILE).is_file())
-                .then(|| directory.join(name));
+            // Every direct entry participates in collection admission budgets,
+            // even when hidden and excluded from the discovered skill list.
+            return (!directory.join(SKILL_MARKDOWN_FILE).is_file()).then(|| directory.join(name));
         }
         if hidden(name) || directory.join(SKILL_MARKDOWN_FILE).is_file() {
             return None;
@@ -562,7 +562,7 @@ impl WatchPlan {
         path: &Path,
         same: &impl Fn(&Path, &Path) -> bool,
     ) -> impl Iterator<Item = SourceTarget> {
-        use crate::skills::discovery::{IGNORE_FILES, hidden};
+        use crate::skills::discovery::IGNORE_FILES;
         use crate::skills::package::SKILL_MARKDOWN_FILE;
 
         // The scanner has evaluated ignore rules for these parents. Match
@@ -584,7 +584,7 @@ impl WatchPlan {
                     entries
                         .into_iter()
                         .flatten()
-                        .filter(move |(_, package)| fixed || (!package && !hidden(name)))
+                        .filter(move |(_, package)| fixed || !package)
                         .map(|(target, _)| target.clone())
                 });
         let directories =
@@ -1844,14 +1844,15 @@ mod tests {
                 "{path:?}"
             );
         }
-        assert!(
+        assert_eq!(
             notified(
                 &collection.join(".hidden"),
                 &sources,
                 &same_entry,
                 &mut watches
             )
-            .is_empty()
+            .len(),
+            1
         );
         std::fs::rename(&candidate, collection.join("old")).unwrap();
         std::fs::write(&candidate, "a directory replaced by a file").unwrap();
@@ -1896,6 +1897,7 @@ mod tests {
         for changed in [
             definition,
             grouping.join("new-package"),
+            grouping.join(".hidden"),
             package.join("SKILL.md"),
         ] {
             assert!(
@@ -1904,7 +1906,10 @@ mod tests {
                 "{changed:?}"
             );
         }
-        for unrelated in [package.join("assets/note.md"), grouping.join(".hidden")] {
+        for unrelated in [
+            package.join("assets/note.md"),
+            grouping.join(".hidden/note.md"),
+        ] {
             assert!(
                 plan.skill_owners(&unrelated, &same_entry).next().is_none(),
                 "{unrelated:?}"

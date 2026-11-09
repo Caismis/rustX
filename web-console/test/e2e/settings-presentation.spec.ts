@@ -316,6 +316,11 @@ test('390 × 844: section menu, list → detail → back, long identities and no
   await expect(detail.getByRole('heading', { level: 3 })).toHaveText(longProvider);
   const transport = settings.getByRole('row', { name: 'transport', exact: true });
   await expect(transport).toBeVisible();
+  // Provider rows form a horizontal scroller at this width. Clicking a
+  // partially visible row may leave either scroll offset, so capture the
+  // declared first-provider view after bringing that row fully into view.
+  await transport.scrollIntoViewIfNeeded();
+  await expect(transport).toBeInViewport({ ratio: 1 });
   await expectNoHorizontalOverflow(page);
   await expectStableScreenshot(page, 'settings-provider-detail-mobile-dark.png');
   await transport.click();

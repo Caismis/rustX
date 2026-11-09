@@ -2432,7 +2432,7 @@ Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
 [configuration application](configuration.md#save-and-automatic-application).
 
-Skills use the ordered pi and shared collections described in
+Skills use the ordered rustX collections described in
 [Skill discovery](skill-discovery.md). The first valid name wins. The prompt
 advertises selected names, descriptions, and instruction paths. Instructions
 are read through an available file-reading tool when a task matches.
@@ -4753,14 +4753,18 @@ unknown outcome rather than pretending otherwise.
 ### Layer 5: Agent resources
 
 `.agents` defines Skills, named Agents, Workflows, Managed Python packages and
-MCP servers at exactly User and Workspace roots. Each same-name Workspace
-identity replaces one whole User resource before validation. Invalid winners
-stay invalid; they cannot expose lower definitions through fallback.
+MCP servers at exactly User and Workspace roots. For resources other than
+Skills, each same-name Workspace identity replaces one whole User resource
+before validation. Invalid winners stay invalid; they cannot expose lower
+definitions through fallback. Skills select the first valid definition in
+Workspace-then-User discovery order and deduplicate instruction-file aliases;
+their file and directory symlinks may resolve outside either collection.
 
 [CFG3 configuration](configuration.md) specifies paths, selection, bounded
 ordered diagnostics, native authoring, semantic overlay and demand. Resource
-existence is independent of Root authority. Skill prompts expose metadata and
-absolute roots for progressive disclosure. Python and MCP lifecycle owners
+existence is independent of Root authority. Skill prompts expose names,
+descriptions and concrete absolute instruction locations for progressive
+disclosure. Python and MCP lifecycle owners
 materialize only admitted finite demand.
 
 

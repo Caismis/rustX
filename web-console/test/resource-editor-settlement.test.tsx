@@ -43,17 +43,22 @@ it.each<Editor>(['model', 'new-agent', 'edit-agent', 'mcp'])('%s closes only aft
 it.each<Editor>(['model', 'new-agent', 'edit-agent', 'mcp'])('%s keeps the first post-commit divergence visible without replaying its write', async kind => {
   await exercise(kind, false);
 });
+it.each<Editor>(['model', 'new-agent', 'edit-agent', 'mcp'])('%s keeps a newer draft open when the previous commit is observed later', async kind => {
+  await exercise(kind, false, true);
+});
 
-async function exercise(kind: Editor, exact: boolean) {
+async function exercise(kind: Editor, exact: boolean, newerDraft = false) {
   const source = cfg3Source();
   if (kind === 'edit-agent') source.agents.push({ name: 'helper', scope: 'user', source: {
     path: '/agents/helper.toml', revision: 'agent-1', authored: { description: 'Before' },
   } });
   const acknowledgement = deferred<void>(), observation = deferred<SourceSettings>();
+  const delayedObservation = deferred<SourceSettings>();
+  let reads = 0;
   let mutation: SourceMutation | undefined;
   const authority = settingsAuthority(source, {
     write: async (_expected, value) => { mutation = value; await acknowledgement.promise; return { acknowledgement: { revision: 'r2' } }; },
-    reread: () => observation.promise,
+    reread: () => reads++ === 0 ? observation.promise : delayedObservation.promise,
   });
   actors.push(authority.actor);
   render(<Surface actor={authority.actor} kind={kind} />);
@@ -74,7 +79,7 @@ async function exercise(kind: Editor, exact: boolean) {
   expect(screen.getByRole('form')).toBe(form);
   if (kind === 'model') expect(screen.getByRole('dialog', { name: 'Add Model' })).toBeTruthy();
   const next = structuredClone(source);
-  if (exact) {
+  if (exact || newerDraft) {
     if (mutation?.kind === 'config' && mutation.mutation.unit === 'model') {
       next.user.revision = 'r2';
       next.user.authored!.models![mutation.mutation.id] = mutation.mutation.authored!;
@@ -86,7 +91,7 @@ async function exercise(kind: Editor, exact: boolean) {
         retained_env: mutation.authored!.retained_env ?? [], retained_headers: mutation.authored!.retained_headers ?? [] };
     } else throw new Error('Expected editor mutation');
   }
-  await act(async () => observation.resolve(next));
+  await act(async () => observation.resolve(exact ? next : structuredClone(source)));
   if (exact) await waitFor(() => expect(kind === 'model' ? screen.queryByRole('dialog', { name: 'Add Model' }) : screen.queryByRole('form')).toBeNull());
   else {
     expect(screen.getByRole('form')).toBe(form);
@@ -98,6 +103,23 @@ async function exercise(kind: Editor, exact: boolean) {
     fireEvent.click(review);
     expect(screen.getByRole('form')).toBe(form);
     if (kind === 'model') expect(screen.getByRole('dialog', { name: 'Add Model' })).toBeTruthy();
+    if (newerDraft) {
+      const label = kind === 'model' ? 'Model ID' : kind === 'mcp' ? 'Command' : 'Description';
+      const value = kind === 'model' ? 'newer-model' : kind === 'mcp' ? 'newer-server' : 'Newer description';
+      if (kind === 'new-agent') fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'helper' } });
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+      const unit = Object.values(authority.context().units)[0];
+      expect(unit.getSnapshot().matches({ intent: 'dirty' })).toBe(true);
+      act(() => authority.actor.send({ type: 'REFRESH' }));
+      await waitFor(() => expect(reads).toBe(2));
+      await act(async () => delayedObservation.resolve(next));
+      expect(unit.getSnapshot().matches({ mutation: 'settled' })).toBe(true);
+      expect(unit.getSnapshot().matches({ intent: 'dirty' })).toBe(true);
+      expect(unit.getSnapshot().matches({ lifetime: 'live' })).toBe(true);
+      expect(screen.getByRole('form')).toBe(form);
+      expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe(value);
+      if (kind === 'model') expect(screen.getByRole('dialog', { name: 'Add Model' })).toBeTruthy();
+    }
   }
   expect(authority.writes).toHaveBeenCalledTimes(1);
 }

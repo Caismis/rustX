@@ -68,12 +68,12 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
     ? !!definition.url && /^https?:\/\//.test(definition.url) : !!definition.command?.trim());
   useEffect(() => {
     if (unit.outcome.kind === 'submitting' || unit.outcome.kind === 'committed') submitted.current = true;
-    if (submitted.current && unit.settled) {
+    if (submitted.current && unit.completion !== undefined) {
       submitted.current = false;
       onEditorDraftChange(undefined);
       close();
     }
-  }, [unit.outcome, unit.settled, close, onEditorDraftChange]);
+  }, [unit.outcome, unit.completion, close, onEditorDraftChange]);
   const chooseMode = (next: 'form'|'json') => {
     if (next === mode) return;
     if (next === 'form') {

@@ -39,13 +39,19 @@ Settings is organized by product task into seven sections:
 | **Advanced** | Context limits, timeouts, concurrent subagent limits, environment variables and **Rescan configuration files**. **Auto Repair** appears for a repair receipt, a malformed document or an explicit inspection request. **Connection** is a sub-surface of Advanced, not a separate Settings section. |
 
 Provider icons can be searched and selected from the locally bundled LobeHub catalog.
-The icon is saved with the Provider, follows the same Save/discard and scope rules,
+The icon is automatically saved with the Provider under the same scope rules,
 and changes presentation only. The default icon clears that optional selection.
 
-A Provider without Models is valid setup in progress. Save its connection before
-adding Models. The Model dialog owns the complete creation draft and validates
-required fields, duplicate identities and token limits before submitting; it
-closes after the saved source is observed. Every Model inherits its Provider's
+A Provider without Models is valid setup in progress. Its valid connection edits
+are automatically saved after an idle interval or field completion; credential
+text waits for blur. Pending generations belong to the existing unit actor,
+survive detail unmount and wait for target-wide admission and an exact reviewed
+revision. Failed submissions are not automatically retried. The Model dialog owns
+the complete creation draft and validates required fields, duplicate identities
+and token limits before submitting; it
+closes only after its submission is exactly observed with no newer draft
+generation or unfinished editing intent. Native settlement of an older
+submission cannot close a newer editing flow. Every Model inherits its Provider's
 API format. Existing credentials stay redacted, and changing credential mode
 replaces the previous mode's fields.
 

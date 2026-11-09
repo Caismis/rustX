@@ -3118,27 +3118,32 @@ the launch-boundary policy inheritance.
   replace atomically. Agent selection never overrides invocation policy. Process
   bindings and User-only `app_server` policy remain process-owned.
 - **Project resource authority follows provenance, not absolute spelling.**
-  Project-origin Skills, Subagent definitions, AGENTS.md and path-valued
+  Project-origin Subagent definitions, AGENTS.md and path-valued
   MCP command/cwd must resolve within the canonical Workspace. Traversal,
   absolute paths, symlink targets and external `--config` cannot widen that
   authority. Initial preparation rechecks frozen path authority; candidate preparation rechecks
   its candidate from pinned slots. Failed candidates never replace the current
   generation. Automatic project roots and instruction/Workflow reads follow the
   same rule. Host/CLI resources and execution paths remain separate authorities;
-  this is not an OS sandbox.
+  this is not an OS sandbox. Skills follow the separate discovery and lazy
+  Tool-loading contract below.
 - **Canonical discovery establishes existence, never Agent authority.** Both
   roots supply Skills, named Agents, Workflows, MCP definitions and Python packages.
-  Workspace reserves a same-name identity before parsing, replacing the complete
-  User resource. A malformed Workspace winner never falls back to User. Unused
-  malformed resources yield bounded ordered diagnostics; selected invalid resources
+  For named Agents, Workflows, MCP and Python packages, Workspace reserves a
+  same-name identity before parsing, replacing the complete User resource. A
+  malformed Workspace winner never falls back to User. Skills instead select
+  the first valid definition in Workspace-then-User discovery order and
+  deduplicate aliases to the same instruction file. Skill file and directory
+  symlinks may resolve outside collections; broken links and cycles are skipped.
+  Unused malformed resources yield bounded ordered diagnostics; selected invalid resources
   fail typed resolution/admission. MCP/Python discovery has no materialization effects.
 - **Skill selection is prompt visibility; loading stays lazy.** Root and named
   Agents independently select `"all"`, exact names, or `[]`. The system prompt
-  supplies resolved absolute User and Workspace collection roots, without enumerating
-  every absolute package path. Package bodies are read through progressive disclosure.
-  Visibility is not filesystem authorization. Workspace whole-package shadowing
-  applies even when the higher package is malformed. A package declaring
-  `disable-model-invocation` remains outside model-facing prompt visibility.
+  enumerates selected names, descriptions and concrete absolute instruction
+  locations. Bodies and supporting files are read lazily through ordinary Tools
+  under their existing authorization rules. Visibility is not filesystem
+  authorization. A package declaring `disable-model-invocation` remains outside
+  model-facing prompt visibility.
 - **Discovery and admission are independent.** Whole project Agents replace user
   Agents without merging instructions or capabilities. `agent.agents` and
   `agent.workflows` select delegation and Workflow invocation capabilities from

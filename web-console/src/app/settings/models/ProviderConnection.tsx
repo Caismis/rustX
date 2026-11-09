@@ -11,7 +11,6 @@ import { useSettingsActor } from '../machines/react';
 import { Choice, ConfirmAction } from '../primitives/aria';
 import { IconPicker, ProviderIcon } from './ProviderIcon';
 import { providerMutation, providerTemplates } from './ProviderTemplates';
-import { cancelProviderSave, flushProviderSave, holdProviderSave, scheduleProviderSave } from './provider-autosave';
 import cards from './ModelsPage.module.css';
 
 export function ProviderConnection({ id, scope, revision, authored, inherited, hasModels }: {
@@ -36,7 +35,8 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
     mutation: value => providerMutation(id, value, restores),
   });
   const identity = unit.identity;
-  useEffect(() => () => flushProviderSave(actor, identity), [actor, identity]);
+  const autosave = (action: 'idle' | 'blur' | 'now' | 'flush' | 'hold' | 'cancel') => actor.send({ type: 'UNIT.AUTOSAVE', identity, action });
+  useEffect(() => () => actor.send({ type: 'UNIT.AUTOSAVE', identity, action: 'flush' }), [actor, identity]);
   const [menu, setMenu] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [invalidName, setInvalidName] = useState(0);
@@ -75,8 +75,8 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
     setAttempted(0);
     unit.edit(next);
     const errors = connectionErrors(next);
-    if (errors.endpointError || errors.credentialError) cancelProviderSave(actor, identity);
-    else scheduleProviderSave(actor, id, identity, trigger);
+    if (errors.endpointError || errors.credentialError) autosave('cancel');
+    else autosave(trigger ?? 'idle');
   };
   const changeCredential = (next: ProviderWrite['credential']) =>
     // Acknowledgement redacts the new literal. Wait until the user finishes
@@ -85,19 +85,19 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
   const flush = () => {
     if (!unit.draft) return;
     if (endpointError || credentialError) setAttempted(attempt => attempt + 1);
-    else flushProviderSave(actor, identity);
+    else autosave('flush');
   };
   const actionsTrigger = () => form.current?.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]');
   const finishRename = (input: string) => {
     setRenaming(false);
     const next = input.trim();
     if (nameEditing.current.cancelled || !next || next === name) {
-      flushProviderSave(actor, identity);
+      autosave('flush');
       return;
     }
     if ([...next].length > 100 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(next)) {
       setInvalidName(occurrence => occurrence + 1);
-      flushProviderSave(actor, identity);
+      autosave('flush');
       return;
     }
     edit({ ...value, display_name: next === id ? undefined : next }, 'now');
@@ -145,7 +145,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
         description={tx(restores ? 'settings:forms.restore-help' : hasModels ? 'settings:models.delete-provider-and-models' : 'settings:forms.delete-help')}
         tone={restores ? 'restore' : 'destructive'} settle={form} onConfirm={() => {
           if (!unit.admitted || locked) return;
-          cancelProviderSave(actor, identity);
+          autosave('cancel');
           unit.submit(true);
         }}
         renderTrigger={(open, ref) => <Menu open={menu} align="end" compact autoFocus onClose={() => setMenu(false)}
@@ -166,15 +166,15 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
             setMenu(false);
             if (action === 'rename' && !locked) {
               // Combine the name and any pending connection edits in the next write.
-              holdProviderSave(actor, identity);
+              autosave('hold');
               nameEditing.current = { cancelled: false, composing: false };
               setRenaming(true);
             }
             if (action === 'icon') setIconPicker(true);
             if (action === 'credential') changeCredential(credential.kind === 'environment' ? { kind: 'literal', value: '' } : { kind: 'environment', variable: '' });
             if (action === 'customize') setCustomizing(true);
-            if (action === 'discard-creation') { cancelProviderSave(actor, identity); unit.discard(); }
-            if (action === 'retry') scheduleProviderSave(actor, id, identity, 'now');
+            if (action === 'discard-creation') { autosave('cancel'); unit.discard(); }
+            if (action === 'retry') autosave('now');
             if (action === 'delete') open();
           }}/>}
       />
@@ -223,7 +223,7 @@ export function ProviderConnection({ id, scope, revision, authored, inherited, h
     {unit.reviewNeeded && <div className={cards.connectionActions}>
       <Button size="sm" disabled={locked || !unit.admitted || endpointError || credentialError} onClick={() => {
         unit.review();
-        scheduleProviderSave(actor, id, identity, 'now');
+        autosave('now');
       }}>{tx('settings:models.apply-provider-changes')}</Button>
     </div>}
   </form>;

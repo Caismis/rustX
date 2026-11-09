@@ -55,6 +55,10 @@ replacement, ignore-file edits and collection recreation are observed without
 walking package assets. Configuration capture compares the same discovered
 definitions on both sides of the capture fence for both collections. Changes
 to linked instruction files and linked collection directories are also observed.
+Every direct entry in a scanned collection or grouping directory participates
+in its admission budget, including hidden entries, so their creation/removal
+also invalidates source discovery. Hidden subtrees remain unobserved and package
+assets remain outside configuration scanning.
 
 A body/asset edit or semantically identical YAML produces no configuration
 revision, capability preparation or `configuration_applied` fact. Changes outside

@@ -8,7 +8,7 @@ import { SettingsNotice } from '../SettingsFeedback';
 import { SourceContext } from '../source-context';
 import { useSettingsActor, useUnitTransaction } from '../machines/react';
 import { admitsSourceMutation, committedUnit, unitOutcome, type MutationOutcome } from '../machines/settings-target';
-import { awaitingCommitObservation, committed as unitCommitted, discardable, requiresReview } from '../machines/unit-transaction';
+import { awaitingCommitObservation, committed as unitCommitted, discardable, editingCompletion, requiresReview } from '../machines/unit-transaction';
 import {
   revisionSelector, shadowedDefinition, unitFacts, unitOwnership,
   type ShadowedDefinition,
@@ -126,6 +126,9 @@ export interface UnitEditing<T> {
    * commit whose first read diverged is still unresolved and is never saved
    * completion, even though the target has finished its post-write read. */
   readonly settled: boolean;
+  /** The submission that completed this editing generation, with no remaining
+   * intent. An older settled commit never completes a newer draft generation. */
+  readonly completion: number | undefined;
   readonly busy: boolean;
   readonly admitted: boolean;
   readonly reviewNeeded: boolean;
@@ -228,6 +231,8 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
   // cannot retire, so only the absence of a live transaction allows the
   // target's observed outcome to stand for completed settlement.
   const settled = snapshot ? snapshot.matches({ mutation: 'settled' }) : outcome.kind === 'saved' && outcome.observed;
+  const retiredCompletion = useSelector(actor, target => target.context.completions[identity]);
+  const completion = snapshot ? editingCompletion(snapshot) : retiredCompletion;
   const resets = useSelector(actor, target => target.context.resets[identity] ?? 0);
   const draft = transaction?.draft as { value: T } | undefined;
   const unparsed = authoredPresent && authored === undefined;
@@ -257,7 +262,7 @@ export function useUnitEditing<T>({ authored, authoredPresent = authored !== und
   const begin = (value: T) => actor.send({ type: 'UNIT.EDIT', identity, selector, revision, value });
   return {
     identity, displayed, outcome, resets, draft: draft !== undefined, authoredPresent, unparsed,
-    overriding: draft !== undefined || authoredPresent, inheritance, committed, settled, busy, admitted,
+    overriding: draft !== undefined || authoredPresent, inheritance, committed, settled, completion, busy, admitted,
     base, observed, scope, facts, configUnit: unitMutation.kind === 'config',
     definition, shadowed, awaitingObservation, writable,
     // For a value-inherited unit an edit is an unambiguous override
@@ -480,11 +485,11 @@ export function TypedUnitForm<T>({ title, children, removable = true, removalNot
     },
   }) as TypedUnitForm<T>;
   useEffect(() => {
-    if (submitted.current && unit.settled) {
+    if (submitted.current && unit.completion !== undefined) {
       submitted.current = false;
       onSaved?.();
     }
-  }, [unit.settled, onSaved]);
+  }, [unit.completion, onSaved]);
   useEffect(() => {
     if (sameValue(reflected.current, unit.displayed)) return;
     // The actor's value moved for a reason that is not this form's editing:

@@ -233,7 +233,24 @@ base       following ⇄ pinned
 mutation   idle → submitting → acknowledged.{awaitingObservation → diverged} → settled
                             ↘ unconfirmed
 lifetime   live → retired (terminal)
+autosave   off ⇄ debouncing / held → ready → off
 ```
+
+Provider autosave is another orthogonal region on this same unit actor. It owns
+the debounce timer and the pending draft generation across editor unmount; it
+never copies the authored value. The UI sends field-edit, blur, hold, flush and
+cancel gestures. Once ready, the actor asks its target to submit only when the
+existing admission barrier and exact reviewed revision permit it. Observations
+and explicit review wake that wait. Submission consumes the pending generation;
+a rejection or uncertain outcome cannot replay it. Stopping the actor cancels
+its timer. No external WeakMap, subscription or queued mutation owns this work.
+
+Native mutation settlement and editor completion are separate facts. The unit
+records the settled submission token and its draft generation; shared
+`editingCompletion` accepts it only while the same generation is clean and owns
+no remaining edit intent. The target retains that proof when the unit retires.
+Typed forms, Agent and MCP editors consume that same completion contract, so
+late settlement of an older submission cannot close a newer draft.
 
 A clean Remove is exactly `intent.clean` + `base.pinned`: delete intent pins the
 reviewed revision without manufacturing a fake value draft. A late

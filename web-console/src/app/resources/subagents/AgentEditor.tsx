@@ -51,11 +51,11 @@ export function AgentEditor({ source, target, host, name, models, profiles, init
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
   const submitted = useRef(false);
   useEffect(() => {
-    if (submitted.current && unit.settled) {
+    if (submitted.current && unit.completion !== undefined) {
       submitted.current = false;
       onClose();
     }
-  }, [unit.settled, onClose]);
+  }, [unit.completion, onClose]);
 
   const close = () => { unit.discard(); onClose(); };
   const value = unit.displayed;

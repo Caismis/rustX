@@ -53,12 +53,14 @@ There is no Root Tool or Plugin ceiling over the named profile. Invocation
 parameters remain bounded execution data under the existing override admission
 owner; they are never another persistent configuration layer.
 
-Skill discovery captures both absolute roots and shadows whole packages before
-parsing. A malformed Workspace winner never reveals the lower User package.
-Unused invalid resources produce ordered bounded diagnostics. Selecting an
-invalid or unavailable resource fails typed resolution/admission. Root and named
-Skills share progressive disclosure: the prompt identifies the two absolute
-roots and selected names/descriptions without enumerating absolute package paths.
+Skill discovery visits Workspace then User collections and selects the first
+valid definition for each name. Invalid definitions do not reserve names;
+aliases to the same instruction file are deduplicated. File and directory
+symlinks may resolve outside collections, while broken links and cycles are
+skipped. Unused invalid resources produce ordered bounded diagnostics. Selecting
+an unavailable resource fails typed resolution/admission. Root and named Skills
+share progressive disclosure: the prompt lists selected names, descriptions and
+concrete absolute instruction locations, with bodies read lazily through Tools.
 Skill visibility does not restrict a file-reading Tool's filesystem authority.
 Versions freeze normalized frontmatter definitions, not package bytes. A local
 child reuses the admitted live SKILL.md location without copying its resources.

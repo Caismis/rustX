@@ -1,11 +1,11 @@
 import { assign, enqueueActions, fromPromise, raise, setup, stateIn, type ActorRefFrom, type SnapshotFrom } from 'xstate';
-import type { ConfigurationApplication, Model, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v77';
+import type { ConfigurationApplication, Model, ProviderWrite, SourceMutation, SourceSettings } from '../../../../../protocol/app-server/v77';
 import { isOutcomeUncertain, RpcFailure } from '../../../client/errors';
 import type { ConnectionState } from '../../../client/contracts';
 import { WorkspaceHostError } from '../../../workspaces/host';
 import { applicationScope, revisionSelector, selectedRevision, separateUnitsInDocument, type RevisionSelector, type SettingsTarget } from '../projection';
 import type { ConfigurationPort, WriteOutcome } from './port';
-import { unitTransactionMachine } from './unit-transaction';
+import { autosaveReady, editingCompletion, unitTransactionMachine } from './unit-transaction';
 
 export type UnitTransactionRef = ActorRefFrom<typeof unitTransactionMachine>;
 
@@ -100,6 +100,9 @@ export interface SettingsTargetContext {
    * about. Set by the submission that produces the outcome, so discarding that
    * unit's browser intent can retire a failed outcome that describes it. */
   outcomeUnit?: string;
+  /** A retired unit's proven editor completion. New authoring or submission
+   * invalidates it; native mutation outcomes retain their separate meaning. */
+  completions: Record<string, number>;
   /** The read order a Workspace write reserved for its own authoritative
    * reread, named by the token of the submission that reserved it.
    *
@@ -153,6 +156,8 @@ export type SettingsTargetEvent =
   | { type: 'UNIT.SUBMIT'; identity: string; selector: RevisionSelector; revision: string; mutation: SourceMutation }
   | { type: 'UNIT.RETIRED'; identity: string }
   | { type: 'UNIT.RESET'; identity: string }
+  | { type: 'UNIT.AUTOSAVE'; identity: string; action: 'idle' | 'blur' | 'now' | 'flush' | 'hold' | 'cancel' }
+  | { type: 'AUTOSAVE.CHECK' }
   /** Raised once `UNIT.DISCARD` has been forwarded to the unit, so the
    * `mutation` region answers the same gesture from whatever state it is in. */
   | { type: 'INTENT.DISCARDED'; identity: string }
@@ -360,6 +365,23 @@ export const settingsTargetMachine = setup({
     discardsOutcomeUnit: ({ context, event }) => event.type === 'INTENT.DISCARDED' && event.identity === context.outcomeUnit,
   },
   actions: {
+    forwardAutosave: enqueueActions(({ context, event, enqueue }) => {
+      const { identity, action } = event as Extract<SettingsTargetEvent, { type: 'UNIT.AUTOSAVE' }>;
+      const unit = context.units[identity];
+      if (unit) enqueue.sendTo(unit, { type: 'AUTOSAVE', action });
+    }),
+    drainAutosave: enqueueActions(({ context, enqueue }) => {
+      if (!admitsSourceMutation(context)) return;
+      for (const unit of Object.values(context.units)) {
+        const snapshot = unit.getSnapshot(), { identity, selector, base, observed, draft } = snapshot.context;
+        if (!autosaveReady(snapshot) || selector.kind !== 'config' || selector.unit !== 'provider' || !selector.entry
+          || base !== observed || base !== context.observation![context.observation!.target.kind]?.revision) continue;
+        enqueue.sendTo(unit, { type: 'AUTOSAVE', action: 'cancel' });
+        enqueue.raise({ type: 'UNIT.SUBMIT', identity, selector, revision: base,
+          mutation: { kind: 'config', mutation: { unit: 'provider', id: selector.entry, authored: draft!.value as ProviderWrite } } });
+        break;
+      }
+    }),
     applyTransport: assign({
       connection: ({ context, event }) => event.type === 'TRANSPORT' ? event.connection : context.connection,
       generation: ({ context, event }) => event.type === 'TRANSPORT' ? event.generation : context.generation,
@@ -489,6 +511,7 @@ export const settingsTargetMachine = setup({
       const request = event as Extract<SettingsTargetEvent, { type: 'UNIT.EDIT' | 'UNIT.SUBMIT' }>;
       if (context.units[request.identity]) return;
       enqueue.assign({
+        completions: Object.fromEntries(Object.entries(context.completions).filter(([identity]) => identity !== request.identity)),
         units: ({ context: current, spawn }) => ({
           ...current.units,
           [request.identity]: spawn('unitTransaction', {
@@ -518,8 +541,12 @@ export const settingsTargetMachine = setup({
       const identity = (event as Extract<SettingsTargetEvent, { type: 'UNIT.RETIRED' }>).identity;
       const unit = context.units[identity];
       if (!unit) return;
+      const token = editingCompletion(unit.getSnapshot());
       enqueue.stopChild(unit);
       enqueue.assign({
+        completions: token === undefined
+          ? Object.fromEntries(Object.entries(context.completions).filter(([key]) => key !== identity))
+          : { ...context.completions, [identity]: token },
         units: ({ context: current }) => Object.fromEntries(Object.entries(current.units).filter(([key]) => key !== identity)),
       });
     }),
@@ -541,6 +568,7 @@ export const settingsTargetMachine = setup({
       // mutation's outcome.
       enqueue.assign({
         nextToken: () => token + 1,
+        completions: Object.fromEntries(Object.entries(context.completions).filter(([identity]) => identity !== request.identity)),
         rejection: () => undefined,
         outcomeUnit: () => request.identity,
         submission: () => ({ identity: request.identity, token, selector, expected: unit.getSnapshot().context.base }),
@@ -609,6 +637,7 @@ export const settingsTargetMachine = setup({
     convergenceError: '',
     maintenanceError: '',
     units: {},
+    completions: {},
     resets: {},
     nextToken: 1,
   }),
@@ -898,7 +927,9 @@ export const settingsTargetMachine = setup({
     'UNIT.REVIEW': { actions: 'forwardReview' },
     'UNIT.DISCARD': { actions: ['forwardDiscard', raise(({ event }) => ({ type: 'INTENT.DISCARDED' as const, identity: event.identity }))] },
     'UNIT.RETIRED': { actions: ['retireUnit', 'countReset'] },
-    'UNIT.RESET': { actions: 'countReset' },
+    'UNIT.RESET': { actions: ['countReset', raise({ type: 'AUTOSAVE.CHECK' })] },
+    'UNIT.AUTOSAVE': { actions: 'forwardAutosave' },
+    'AUTOSAVE.CHECK': { actions: 'drainAutosave' },
   },
 });
 
