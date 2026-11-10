@@ -1058,19 +1058,14 @@ fn request_cardinality_and_call_terminal_absorbing_rules_are_enforced() {
 
 #[test]
 fn required_schema_indexes_and_constraints_are_current() {
-    assert_eq!(SQLITE_SCHEMA_VERSION, 108);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 109);
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     let connection = store.lock().unwrap();
     for index in [
         "auxiliary_requests_open_idx",
-        "auxiliary_requests_request_idx",
         "auxiliary_requests_terminal_idx",
         "auxiliary_audit_offset_idx",
         "auxiliary_audit_call_idx",
-        "auxiliary_audit_request_idx",
-        "auxiliary_audit_sequence_idx",
-        "auxiliary_calls_started_idx",
-        "auxiliary_calls_settled_idx",
         "request_owners_source_idx",
         "events_auxiliary_call_id_kind_idx",
         "events_auxiliary_fact_type_idx",
@@ -1241,16 +1236,16 @@ fn missing_required_index_is_rejected_without_schema_rewrite() {
 fn falsely_named_indexes_are_rejected_without_schema_rewrite() {
     for (expected_name, corruption) in [
         (
-            "auxiliary_audit_sequence_idx",
-            "DROP INDEX auxiliary_audit_sequence_idx;
-             CREATE INDEX auxiliary_audit_sequence_idx
+            "auxiliary_audit_call_idx",
+            "DROP INDEX auxiliary_audit_call_idx;
+             CREATE INDEX auxiliary_audit_call_idx
                  ON auxiliary_audit_facts(kind,audit_offset);",
         ),
         (
-            "auxiliary_audit_request_idx",
-            "DROP INDEX auxiliary_audit_request_idx;
-             CREATE INDEX auxiliary_audit_request_idx
-                 ON auxiliary_audit_facts(call_id,sequence);",
+            "auxiliary_requests_terminal_idx",
+            "DROP INDEX auxiliary_requests_terminal_idx;
+             CREATE INDEX auxiliary_requests_terminal_idx
+                 ON auxiliary_requests(request_id,terminal_sequence);",
         ),
     ] {
         let directory = tempfile::tempdir().unwrap();
@@ -1308,7 +1303,7 @@ fn auxiliary_frontier_queries_use_bounded_index_seeks() {
     assert!(
         derived
             .iter()
-            .any(|detail| detail.contains("auxiliary_audit_sequence_idx")),
+            .any(|detail| detail.contains("INTEGER PRIMARY KEY")),
         "{derived:?}"
     );
     assert!(
@@ -1317,6 +1312,50 @@ fn auxiliary_frontier_queries_use_bounded_index_seeks() {
             .any(|detail| detail.starts_with("SCAN auxiliary_audit_facts")),
         "{derived:?}"
     );
+}
+
+#[test]
+fn rowid_frontier_work_does_not_grow_with_auxiliary_history() {
+    use crate::durable::sqlite::auxiliary::audit::AUXILIARY_AUDIT_FRONTIER_SQL;
+    use rusqlite::StatementStatus;
+
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    let mut connection = store.lock().unwrap();
+    let transaction = connection.transaction().unwrap();
+    let mut previous = 0;
+    for history in [8, 64, 512, 4096] {
+        for sequence in previous + 1..=history {
+            transaction.execute(
+                "INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json) VALUES(?1,?2,1,'conversation','time','{}')",
+                params![sequence, format!("aux-event-{sequence}")],
+            ).unwrap();
+            transaction
+                .execute(
+                    "INSERT INTO auxiliary_calls(call_id,started_sequence) VALUES(?1,?2)",
+                    params![format!("call-{sequence}"), sequence],
+                )
+                .unwrap();
+            transaction.execute(
+                "INSERT INTO auxiliary_audit_facts(sequence,audit_offset,kind,call_id) VALUES(?1,?1,'call_started',?2)",
+                params![sequence, format!("call-{sequence}")],
+            ).unwrap();
+        }
+        for cut in [1, history / 2, history] {
+            let mut statement = transaction.prepare(AUXILIARY_AUDIT_FRONTIER_SQL).unwrap();
+            let found: (i64, i64) = statement
+                .query_row([cut], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap();
+            assert_eq!(found, (cut, cut));
+            assert_eq!(statement.get_status(StatementStatus::FullscanStep), 0);
+            assert_eq!(statement.get_status(StatementStatus::Sort), 0);
+            assert!(
+                statement.get_status(StatementStatus::VmStep) <= 16,
+                "H={history}"
+            );
+        }
+        previous = history;
+    }
+    transaction.rollback().unwrap();
 }
 
 #[test]

@@ -538,13 +538,8 @@ pub(in crate::durable::sqlite) fn store_transcript_header(
         kind,
         "attempt_terminal" | "interaction_event" | "configuration_event"
     ) {
-        connection
-            .query_row(
-                "SELECT sequence FROM events WHERE event_id=?1",
-                [id],
-                |row| row.get(0),
-            )
-            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
+        crate::durable::sqlite::journal::find_event_sequence(connection, id)?
+            .ok_or_else(|| storage("transcript event identity is missing"))?
     } else {
         0
     };

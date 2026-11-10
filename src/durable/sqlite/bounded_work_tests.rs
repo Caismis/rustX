@@ -871,7 +871,9 @@ fn bounded_work_workflow_tool_parent_seeks_kind_without_a_turn_prefix_gap() {
         assert_eq!(ambiguous.sorts, 0);
         assert!(ambiguous.steps < 60);
     }
-    query_work::assert_flat(&samples, 30, 0, 0);
+    // Owner normalization adds a fixed metadata seek; exact step equality
+    // across the hundredfold history range remains mandatory.
+    query_work::assert_flat(&samples, 40, 0, 0);
 }
 
 #[test]
