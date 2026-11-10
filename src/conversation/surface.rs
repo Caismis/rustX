@@ -235,14 +235,10 @@ pub struct ConversationSurface {
     /// The first revision represented by the bounded hot operation suffix.
     /// Revisions before this base remain durable-store reads after restart.
     history_base_revision: SurfaceRevision,
-    /// The active identity order at `history_base_revision`.
-    history_base_active: Vec<MessageId>,
+    /// Length of the immutable selection prefix at `history_base_revision`.
+    history_base_len: usize,
     /// The installed durable projection activation, cached as head metadata.
     compaction_generation: u64,
-    /// The bounded operation suffix accepted after the hot bootstrap base.
-    /// The durable `ConversationStore` owns the prefix before
-    /// `history_base_revision`.
-    ops: Vec<SurfaceOp>,
     /// Read instrumentation for current-head versus historical access.
     access: Arc<SurfaceAccess>,
 }
@@ -252,9 +248,8 @@ impl PartialEq for ConversationSurface {
         self.active == other.active
             && self.revision == other.revision
             && self.history_base_revision == other.history_base_revision
-            && self.history_base_active == other.history_base_active
+            && self.history_base_len == other.history_base_len
             && self.compaction_generation == other.compaction_generation
-            && self.ops == other.ops
     }
 }
 
@@ -269,12 +264,11 @@ impl ConversationSurface {
         compaction_generation: u64,
     ) -> Self {
         Self {
-            history_base_active: active.ids(),
+            history_base_len: active.len(),
             active,
             revision,
             history_base_revision: revision,
             compaction_generation,
-            ops: Vec::new(),
             access: Arc::new(SurfaceAccess::default()),
         }
     }
@@ -383,10 +377,8 @@ impl ConversationSurface {
         &mut self,
         message: Arc<MessageBlock>,
     ) -> SurfaceRevision {
-        let message_id = message.id().clone();
-        debug_assert!(!self.is_active(&message_id));
+        debug_assert!(!self.is_active(message.id()));
         self.active.append(message);
-        self.ops.push(SurfaceOp::Append { message_id });
         self.revision = self.revision.next();
         self.revision
     }
@@ -395,9 +387,9 @@ impl ConversationSurface {
     /// revision. Revisions before a durable bootstrap base are read through
     /// the `ConversationStore` rather than materialized here.
     ///
-    /// Reconstruction replays the bounded operation suffix only: it never
-    /// reads the Message Ledger, and later mutations never change the
-    /// reconstruction of an earlier retained revision.
+    /// Append-only membership makes every retained revision an exact prefix of
+    /// the current selection. No duplicate operation log or Ledger read is
+    /// needed, and later appends cannot change an earlier revision.
     ///
     /// # Errors
     ///
@@ -412,24 +404,29 @@ impl ConversationSurface {
             .checked_sub(self.history_base_revision.get())
             .ok_or(SurfaceError::UnknownRevision(revision))?;
         let upto = usize::try_from(offset).map_err(|_| SurfaceError::UnknownRevision(revision))?;
-        if upto > self.ops.len() {
-            return Err(SurfaceError::UnknownRevision(revision));
-        }
         self.access.history_read(upto);
-        let mut active = self.history_base_active.clone();
-        for op in &self.ops[..upto] {
-            match op {
-                SurfaceOp::Append { message_id } => active.push(message_id.clone()),
-            }
-        }
-        Ok(active)
+        Ok(self
+            .active
+            .iter()
+            .take(self.history_base_len + upto)
+            .map(|message| message.id().clone())
+            .collect())
     }
 
-    /// The bounded accepted operation suffix, in acceptance order.
+    /// Materializes the accepted operation suffix in acceptance order.
+    /// The selection already owns these identities; audit reads create their
+    /// own result rather than retaining a second history in the hot state.
     #[must_use]
-    pub fn ops(&self) -> &[SurfaceOp] {
-        self.access.history_read(self.ops.len());
-        &self.ops
+    pub fn ops(&self) -> Vec<SurfaceOp> {
+        self.access
+            .history_read(self.active.len() - self.history_base_len);
+        self.active
+            .iter()
+            .skip(self.history_base_len)
+            .map(|message| SurfaceOp::Append {
+                message_id: message.id().clone(),
+            })
+            .collect()
     }
 }
 

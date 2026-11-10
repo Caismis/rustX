@@ -91,6 +91,7 @@ impl RuntimeClientProjection {
             transcript_bindings: prepared_capture::PreparedBindingHead::default(),
             transcript_head: crate::observation::transcript::PreparedTranscriptHead::default(),
             foreground_content: Vec::new(),
+            #[cfg(test)]
             prepared_messages: std::collections::BTreeMap::new(),
             bootstrap_transcript_through: 0,
             #[cfg(test)]

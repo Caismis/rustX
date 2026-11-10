@@ -6852,6 +6852,11 @@ mod attempt_first_turn_tests {
     include!("attempt_first_turn_tests.rs");
 }
 
+mod canonical_owner_tests {
+    use super::*;
+    include!("canonical_owner_tests.rs");
+}
+
 mod model_turn_settlement_tests {
     use super::*;
     include!("model_turn_settlement_tests.rs");
