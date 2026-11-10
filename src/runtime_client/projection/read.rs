@@ -6,13 +6,14 @@ use super::AttemptId;
 use super::ContentBlockIndex;
 #[cfg(test)]
 use super::ForegroundToolState;
+#[cfg(test)]
+use super::MessageId;
 use super::ReadDomainCut;
 use super::prepared_attempt;
 use super::prepared_capture;
 use super::{
-    Arc, CheckpointSeed, InboundDrainView, InboundItemView, MessageBlock, MessageId,
-    RuntimeClientCursor, RuntimeClientError, RuntimeClientEvent, RuntimeClientProjection,
-    RuntimeClientTranscriptCursor,
+    Arc, CheckpointSeed, InboundDrainView, InboundItemView, MessageBlock, RuntimeClientCursor,
+    RuntimeClientError, RuntimeClientEvent, RuntimeClientProjection, RuntimeClientTranscriptCursor,
 };
 
 impl RuntimeClientProjection {
@@ -614,6 +615,7 @@ impl RuntimeClientProjection {
         self.prepared_terminals.extend(positions);
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare_message_headers(
         &mut self,
         headers: Vec<(
