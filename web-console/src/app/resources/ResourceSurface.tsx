@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
-import type { SkillDescriptor, SkillDisplayWrite, SourceScope, SourceSettings } from '../../../../protocol/app-server/v77';
+import type { SkillDescriptor, SourceScope, SourceSettings } from '../../../../protocol/app-server/v77';
 import { bindResourceTransfer } from '../../workspaces/resource-transfer';
 import type { AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
@@ -26,6 +26,7 @@ import { useMcpProbes } from './mcp/useMcpProbes';
 import { TransferDialog, type TransferIntent } from './shared/ResourceTransfer';
 import { ResourceAvailability } from './shared/ResourceAvailability';
 import { ResourceBrowser } from './shared/ResourceBrowser';
+import type { SkillDisplayWriter } from './skills/SkillDisplayDialog';
 import { AgentEditor, type AgentDraft } from './subagents/AgentEditor';
 import type { LoadMcpTools } from './subagents/AgentToolFields';
 import { SubagentList } from './subagents/SubagentList';
@@ -163,19 +164,19 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     actor.send({ type: 'REFRESH' });
     if (showingWorkspace && module !== 'skills') globalActor.send({ type: 'REFRESH' });
   };
-  const bindSkillDisplayWrite = (skill: SkillDescriptor) => {
+  const bindSkillDisplayWrite = (skill: SkillDescriptor): SkillDisplayWriter | undefined => {
     const expected_revision = skill.display?.revision;
     if (!expected_revision || !editable) return;
     const { endpoint, authorityRevision } = client.getSnapshot();
     const hostAuthority = authority.capture();
-    return async (authored: SkillDisplayWrite) => {
+    return async (authored, upload) => {
       const current = () => {
         const snapshot = client.getSnapshot();
         return snapshot.endpoint === endpoint && snapshot.authorityRevision === authorityRevision && snapshot.connection === 'connected';
       };
       const unavailable = () => new Error(tx('resources:scope.unavailable'));
       if (!current()) throw unavailable();
-      const mutation = { kind: 'skill_display' as const, name: skill.catalog.name, authored };
+      const mutation = { kind: 'skill_display' as const, name: skill.catalog.name, authored, upload };
       if (skill.provenance.source === 'user') {
         await client.request({ method: 'configuration/sourceWrite', params: { target: { kind: 'user' }, expected_revision, mutation } },
           'sources_written', undefined, current);

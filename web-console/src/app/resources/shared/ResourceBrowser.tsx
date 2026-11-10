@@ -76,9 +76,9 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
     </ResourceGroup>}
     {focus && <SkillDetail key={focus} client={client} source={source} name={focus} display={skillsByName.get(focus)?.display} close={() => onFocus(undefined)} />}
     {editing?.skill.display && <SkillDisplayDialog name={editing.skill.catalog.name} display={editing.skill.display}
-      close={() => setEditing(undefined)} save={async authored => {
+      close={() => setEditing(undefined)} save={async (authored, upload) => {
         try {
-          await editing.write(authored);
+          await editing.write(authored, upload);
         } finally {
           setRefresh(value => value + 1);
         }

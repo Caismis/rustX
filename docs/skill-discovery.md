@@ -51,9 +51,12 @@ When display fields are missing, the card uses the skill's name and description
 from `SKILL.md` and the default icon.
 
 For skills installed in the global or workspace skill directory, open the card
-menu and choose **Edit display information**. Saving updates
-`agents/openai.yaml` and preserves its other fields. The skill's identifier,
-instructions, and runtime description come from `SKILL.md`.
+menu and choose **Edit display information**. **Upload image** previews a local
+image in the editor. On save, rustX stores it in the skill's `assets/` directory
+and sets `interface.icon_small` to its relative path. Identical uploads reuse
+the same asset. Saving preserves other metadata and leaves existing asset
+files in place. The skill's identifier, instructions, and runtime description
+come from `SKILL.md`.
 
 ## Version and configuration semantics
 

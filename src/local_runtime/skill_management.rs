@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 mod display;
-pub use display::SkillDisplayWrite;
 use display::{SkillDisplay, read_display};
+pub use display::{SkillDisplayWrite, SkillIconUpload};
 
 const SKILL_PAGE_DATA_BYTES: usize = 131_072;
 const SKILL_DESCRIPTION_PREVIEW_BYTES: usize = 4096;

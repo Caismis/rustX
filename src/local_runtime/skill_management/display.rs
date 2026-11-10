@@ -1,6 +1,8 @@
 //! Optional skill presentation metadata, read only for the management catalog.
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
+use std::ffi::OsStr;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 
@@ -66,6 +68,13 @@ pub enum SkillIconMediaType {
     Svg,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SkillIconUpload {
+    pub media_type: SkillIconMediaType,
+    pub data_base64: String,
+}
+
 const SIDECAR: &str = "agents/openai.yaml";
 const INTERFACE: &str = "interface";
 const FIELDS: [(&str, usize); 5] = [
@@ -110,18 +119,79 @@ fn asset(directory: &PackageDirectory, value: &str) -> Option<SkillDisplayIcon> 
         _ => return None,
     };
     let bytes = read(directory, path, MAX_ICON_BYTES).ok()??;
-    let matches_type = match media_type {
-        SkillIconMediaType::Png => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
-        SkillIconMediaType::Jpeg => bytes.starts_with(b"\xff\xd8\xff"),
-        SkillIconMediaType::Webp => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
-        SkillIconMediaType::Svg => {
-            std::str::from_utf8(&bytes).is_ok_and(|xml| xml.contains("<svg"))
-        }
-    };
-    matches_type.then(|| SkillDisplayIcon::Asset {
+    media_type.matches(&bytes).then(|| SkillDisplayIcon::Asset {
         media_type,
         data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
     })
+}
+
+impl SkillIconMediaType {
+    fn matches(&self, bytes: &[u8]) -> bool {
+        match self {
+            Self::Png => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+            Self::Jpeg => bytes.starts_with(b"\xff\xd8\xff"),
+            Self::Webp => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
+            Self::Svg => std::str::from_utf8(bytes).is_ok_and(|xml| xml.contains("<svg")),
+        }
+    }
+
+    const fn extension(&self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+            Self::Webp => "webp",
+            Self::Svg => "svg",
+        }
+    }
+}
+
+impl SkillIconUpload {
+    fn decode(&self) -> Result<(String, Vec<u8>), SettingsError> {
+        if self.data_base64.len() as u64 > MAX_ICON_BYTES.div_ceil(3) * 4 {
+            return Err(SettingsError::Invalid);
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&self.data_base64)
+            .map_err(|_| SettingsError::Invalid)?;
+        if bytes.len() as u64 > MAX_ICON_BYTES || !self.media_type.matches(&bytes) {
+            return Err(SettingsError::Invalid);
+        }
+        let name = format!(
+            "icon-{:x}.{}",
+            Sha256::digest(&bytes),
+            self.media_type.extension()
+        );
+        Ok((name, bytes))
+    }
+}
+
+fn publish_asset(root: &Path, name: &str, bytes: &[u8]) -> Result<SourceDirectory, SettingsError> {
+    let directory = SourceDirectory::create_directory(&root.join("assets"))
+        .map_err(|_| SettingsError::Io)?
+        .with_byte_limit(MAX_ICON_BYTES);
+    let name = OsStr::new(name);
+    directory.confirm().map_err(|_| SettingsError::Io)?;
+    // Publish an immutable asset before the sidecar can point to it. Identical
+    // uploads reuse the same file, and a failed sidecar write leaves its old icon usable.
+    let existing = directory.read(name).map_err(|_| SettingsError::Io)?;
+    if existing.is_none() {
+        let staged = directory.stage(bytes).map_err(|_| SettingsError::Io)?;
+        match directory.link(&staged, name) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err(SettingsError::Io),
+        }
+    }
+    if directory
+        .read(name)
+        .map_err(|_| SettingsError::Io)?
+        .as_deref()
+        != Some(bytes)
+    {
+        return Err(SettingsError::Invalid);
+    }
+    directory.sync().map_err(|_| SettingsError::Io)?;
+    Ok(directory)
 }
 
 fn iconify(value: &str) -> Option<SkillDisplayIcon> {
@@ -266,7 +336,8 @@ impl UserConfigManager {
         target: &SourceTarget,
         name: &str,
         expected: &str,
-        authored: SkillDisplayWrite,
+        mut authored: SkillDisplayWrite,
+        upload: Option<&SkillIconUpload>,
     ) -> Result<String, SettingsError> {
         let discovered = self
             .discover_skills(target.workspace())
@@ -306,9 +377,21 @@ impl UserConfigManager {
                 actual,
             });
         }
+        let asset = upload.map(SkillIconUpload::decode).transpose()?;
+        if let Some((name, _)) = &asset {
+            authored.icon_small = Some(format!("./assets/{name}"));
+            authored.icon_large = None;
+            authored.icon = None;
+        }
         let bytes = candidate(original.as_deref(), authored)?;
         if package_root(package).as_deref() != Some(&root) {
             return Err(SettingsError::Invalid);
+        }
+        if let Some((name, bytes)) = &asset {
+            let assets = publish_asset(&root, name, bytes)?;
+            if !assets.holds() || !directory.holds() {
+                return Err(SettingsError::Invalid);
+            }
         }
         self.publish_locked(
             &directory,

@@ -429,9 +429,15 @@ impl AppServerConnection {
                     SourceMutation::Agent { name, authored } => {
                         SourceMutation::Agent { name, authored }
                     }
-                    SourceMutation::SkillDisplay { name, authored } => {
-                        SourceMutation::SkillDisplay { name, authored }
-                    }
+                    SourceMutation::SkillDisplay {
+                        name,
+                        authored,
+                        upload,
+                    } => SourceMutation::SkillDisplay {
+                        name,
+                        authored,
+                        upload,
+                    },
                     SourceMutation::ResourceTransfer {
                         from,
                         operation,

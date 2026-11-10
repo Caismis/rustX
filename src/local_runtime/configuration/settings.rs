@@ -370,6 +370,8 @@ pub enum SourceMutation<D = Box<crate::workflow_file::WorkflowFileDocument>> {
     SkillDisplay {
         name: String,
         authored: super::super::skill_management::SkillDisplayWrite,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        upload: Option<super::super::skill_management::SkillIconUpload>,
     },
     /// Copy or move a resource between User and the addressed Workspace.
     /// The expected revision belongs to the source resource document.
@@ -1388,8 +1390,18 @@ impl UserConfigManager {
             SourceMutation::Workflow { id, .. } => {
                 super::super::workflow_authoring::file_path(self, target, id)
             }
-            SourceMutation::SkillDisplay { name, authored } => {
-                return self.write_skill_display(target, name, expected, authored.clone());
+            SourceMutation::SkillDisplay {
+                name,
+                authored,
+                upload,
+            } => {
+                return self.write_skill_display(
+                    target,
+                    name,
+                    expected,
+                    authored.clone(),
+                    upload.as_ref(),
+                );
             }
             SourceMutation::ResourceTransfer {
                 from,

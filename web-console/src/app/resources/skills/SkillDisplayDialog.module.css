@@ -1,7 +1,58 @@
-.form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 12px; }
+.dialog[role="dialog"] { width: min(480px, 100%); }
+
+.form fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+
 .form fieldset label { display: grid; gap: 4px; min-width: 0; padding: 0; }
-.form fieldset textarea { min-height: 64px; }
-.form small { color: var(--dsw-alias-label-secondary); }
-.icon { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.icon span { overflow-wrap: anywhere; }
-.error { margin: 0; overflow-wrap: anywhere; color: var(--dsw-alias-state-error-primary); }
+.form fieldset textarea { min-height: 68px; }
+.form small { color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
+
+.iconSection {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 12px;
+}
+
+.iconSection h3 { margin: 0; font-size: 13px; line-height: 20px; font-weight: 600; }
+.preview { display: flex; align-items: center; gap: 12px; min-width: 0; }
+
+.iconTile {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-3);
+  border: 1px solid var(--dsw-alias-border-l3);
+}
+
+.iconInfo { display: grid; min-width: 0; gap: 2px; overflow-wrap: anywhere; }
+.iconInfo strong { font-size: 13px; font-weight: 600; }
+.iconActions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+
+.iconPicker {
+  height: 28px;
+  padding: 0 10px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.iconPicker:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.iconPicker:disabled { opacity: 0.4; cursor: not-allowed; }
+.assetPaths summary { padding: 0; cursor: pointer; color: var(--dsw-alias-label-secondary); }
+.pathFields { display: grid; gap: 8px; margin-top: 8px; }
+.form .error { margin: 0; overflow-wrap: anywhere; color: var(--dsw-alias-state-error-primary); }

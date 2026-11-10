@@ -1,8 +1,9 @@
 import AxeBuilder from '@axe-core/playwright';
 import {expect,test,type Locator,type Page} from '@playwright/test';
-import {existsSync,mkdirSync,readFileSync,symlinkSync,writeFileSync} from 'node:fs';
+import {existsSync,mkdirSync,readdirSync,readFileSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {PNG} from 'pngjs';
 import {startDogfood} from './dogfood-server';
 import {routeWorkspaceHost} from './workspace-host';
 import {connectRemote,newSubagent,openResourceModule,openSettingsPage,returnHome} from './shell-actions';
@@ -26,8 +27,10 @@ async function checkCatalogView(scope: Locator, item: Locator) {
   expect(await scope.locator(':scope > div').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
 }
 
-test('skill cards render and edit package display information from the workspace', async ({page}) => {
+test('skill cards render, edit and upload package display information from the workspace', async ({page}) => {
   const f = await startDogfood();
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
   try {
     const global = join(f.directory, 'home/rustx/.agents/skills/pdf-guide');
     const local = join(f.workspaceA, '.agents/skills/review-guide');
@@ -38,7 +41,9 @@ test('skill cards render and edit package display information from the workspace
     }
     mkdirSync(join(global, 'agents'));
     mkdirSync(join(global, 'assets'));
-    writeFileSync(join(global, 'assets/pdf.svg'), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="red"/></svg>');
+    const globalAssets = join(global, 'assets');
+    const originalIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="red"/></svg>';
+    writeFileSync(join(globalAssets, 'pdf.svg'), originalIcon);
     const globalMetadata = join(global, 'agents/openai.yaml');
     const localMetadata = join(local, 'agents/openai.yaml');
     writeFileSync(globalMetadata, [
@@ -47,7 +52,7 @@ test('skill cards render and edit package display information from the workspace
       'policy:', '  allow_implicit_invocation: false', '',
     ].join('\n'));
 
-    await page.setViewportSize({width: 390, height: 844});
+    await page.setViewportSize({width: 1440, height: 1000});
     await routeWorkspaceHost(page, f);
     await page.goto('/');
     await connectRemote(page, f.endpoint, f.token);
@@ -64,7 +69,16 @@ test('skill cards render and edit package display information from the workspace
       await page.getByRole('menuitem', {name: 'Edit display information', exact: true}).click();
       return page.getByRole('dialog', {name: 'Edit display information', exact: true});
     };
+    const upload = async (editor: Locator, file: {name: string; mimeType: string; buffer: Buffer}) => {
+      const choosing = page.waitForEvent('filechooser');
+      await editor.getByRole('button', {name: 'Upload image', exact: true}).click();
+      await (await choosing).setFiles(file);
+    };
+    const updatedIcon = {
+      name: 'updated-pdf.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(originalIcon.replace('red', '#5369dc')),
+    };
     const globalEditor = await edit('PDF Toolkit');
+    await globalEditor.getByText('Existing asset paths', {exact: true}).click();
     await expect(globalEditor.getByLabel('Small icon path')).toHaveValue('./assets/pdf.svg');
     await globalEditor.getByLabel('Short description').fill('Review PDF pages');
     await globalEditor.getByRole('button', {name: 'Save', exact: true}).click();
@@ -76,28 +90,91 @@ test('skill cards render and edit package display information from the workspace
     const staleEditor = await edit('PDF Toolkit');
     const externalEdit = readFileSync(globalMetadata, 'utf8').replace('Review PDF pages', 'Inspect a PDF');
     writeFileSync(globalMetadata, externalEdit);
-    await staleEditor.getByLabel('Short description').fill('Stale description');
+    await upload(staleEditor, updatedIcon);
+    await expect(staleEditor.getByText(updatedIcon.name)).toBeVisible();
     await staleEditor.getByRole('button', {name: 'Save', exact: true}).click();
     await expect(staleEditor.getByRole('alert')).toBeVisible();
     expect(readFileSync(globalMetadata, 'utf8')).toBe(externalEdit);
+    expect(readdirSync(globalAssets)).toEqual(['pdf.svg']);
     await staleEditor.getByRole('button', {name: 'Cancel', exact: true}).click();
     await expect(pdf).toContainText('Inspect a PDF');
 
+    const uploadedPreview = `data:image/svg+xml;base64,${updatedIcon.buffer.toString('base64')}`;
+    const previewOnly = await edit('PDF Toolkit');
+    await upload(previewOnly, updatedIcon);
+    await expect(previewOnly.locator('img')).toHaveAttribute('src', uploadedPreview);
+    await previewOnly.getByRole('button', {name: 'Cancel', exact: true}).click();
+    expect(readdirSync(globalAssets)).toEqual(['pdf.svg']);
+    expect(readFileSync(globalMetadata, 'utf8')).toBe(externalEdit);
+
+    const globalUpload = await edit('PDF Toolkit');
+    await upload(globalUpload, {name: 'too-big.png', mimeType: 'image/png', buffer: Buffer.alloc(32 * 1024 + 1)});
+    await expect(globalUpload.getByRole('alert')).toContainText('32 KiB');
+    await expect(globalUpload.getByRole('button', {name: 'Save', exact: true})).toBeDisabled();
+    await upload(globalUpload, updatedIcon);
+    await expect(globalUpload.locator('img')).toHaveAttribute('src', uploadedPreview);
+    await expect(globalUpload.getByRole('alert')).toHaveCount(0);
+    await captureEvidence(globalUpload, 'skill-icon-upload-desktop');
+    await globalUpload.getByRole('button', {name: 'Save', exact: true}).click();
+    await expect(pdf.locator('img')).toHaveAttribute('src', uploadedPreview);
+    const globalYaml = readFileSync(globalMetadata, 'utf8');
+    const globalIconPath = globalYaml.match(/icon_small: (\.\/assets\/icon-[0-9a-f]{64}\.svg)/)?.[1];
+    expect(globalIconPath).toBeDefined();
+    expect(readFileSync(join(global, globalIconPath!))).toEqual(updatedIcon.buffer);
+    expect(readFileSync(join(globalAssets, 'pdf.svg'), 'utf8')).toBe(originalIcon);
+    expect(globalYaml).toContain('brand_color:');
+    const savedGlobalAssets = readdirSync(globalAssets);
+    const repeatUpload = await edit('PDF Toolkit');
+    await upload(repeatUpload, updatedIcon);
+    await expect(repeatUpload.getByText(updatedIcon.name)).toBeVisible();
+    await repeatUpload.getByRole('button', {name: 'Save', exact: true}).click();
+    await expect(repeatUpload).toHaveCount(0);
+    expect(readdirSync(globalAssets)).toEqual(savedGlobalAssets);
+
+    await page.setViewportSize({width: 390, height: 844});
     const workspaceEditor = await edit('review-guide');
     await workspaceEditor.getByLabel('Display name').fill('Review Toolkit');
     await workspaceEditor.getByLabel('Short description').fill('Review workspace changes');
-    await workspaceEditor.getByRole('button', {name: 'Choose icon', exact: true}).click();
+    await workspaceEditor.getByRole('button', {name: 'Choose Iconify icon', exact: true}).click();
     await workspaceEditor.getByRole('searchbox').fill('book-open');
     await workspaceEditor.getByRole('option', {name: 'book-open', exact: true}).click();
-    await captureEvidence(workspaceEditor, 'skill-display-editor-mobile');
     await workspaceEditor.getByRole('button', {name: 'Save', exact: true}).click();
     const review = skills.getByRole('listitem', {name: 'Review Toolkit', exact: true});
     await expect(review).toContainText('Review workspace changes');
     await expect(review.locator('svg.iconify')).toBeVisible();
     expect(readFileSync(localMetadata, 'utf8')).toContain('icon: lucide:book-open');
     expect(readFileSync(join(local, 'SKILL.md'), 'utf8')).toBe(instructions('review-guide'));
+
+    const png = new PNG({width: 32, height: 32});
+    for (let i = 0; i < png.data.length; i += 4) png.data.set([74, 150, 105, 255], i);
+    const image = {name: 'workspace-icon.png', mimeType: 'image/png', buffer: PNG.sync.write(png)};
+    const workspaceUpload = await edit('Review Toolkit');
+    await upload(workspaceUpload, image);
+    const workspacePreview = `data:image/png;base64,${image.buffer.toString('base64')}`;
+    await expect(workspaceUpload.locator('img')).toHaveAttribute('src', workspacePreview);
+    await captureEvidence(workspaceUpload, 'skill-icon-upload-mobile');
+    // An assets directory redirected outside this skill must refuse the upload.
+    const localAssets = join(local, 'assets');
+    symlinkSync(globalAssets, localAssets);
+    await workspaceUpload.getByRole('button', {name: 'Save', exact: true}).click();
+    await expect(workspaceUpload.getByRole('alert')).toBeVisible();
+    expect(readFileSync(localMetadata, 'utf8')).toContain('icon: lucide:book-open');
+    expect(readdirSync(globalAssets)).toEqual(savedGlobalAssets);
+    unlinkSync(localAssets);
+    await workspaceUpload.getByRole('button', {name: 'Save', exact: true}).click();
+    await expect(review.locator('img')).toHaveAttribute('src', workspacePreview);
+    const localYaml = readFileSync(localMetadata, 'utf8');
+    const localIconPath = localYaml.match(/icon_small: (\.\/assets\/icon-[0-9a-f]{64}\.png)/)?.[1];
+    expect(localIconPath).toBeDefined();
+    expect(readFileSync(join(local, localIconPath!))).toEqual(image.buffer);
+    expect(localYaml).not.toContain('icon: lucide:book-open');
+    expect(readFileSync(globalMetadata, 'utf8')).toBe(globalYaml);
+    const reopened = await edit('Review Toolkit');
+    await expect(reopened.locator('img')).toHaveAttribute('src', workspacePreview);
+    await reopened.getByRole('button', {name: 'Cancel', exact: true}).click();
     await review.getByRole('button', {name: 'Review Toolkit', exact: true}).click();
     await expect(page.getByRole('dialog', {name: 'Review Toolkit', exact: true})).toContainText('Original instructions.');
+    expect(errors).toEqual([]);
   } finally { await f.stop(false); }
 });
 

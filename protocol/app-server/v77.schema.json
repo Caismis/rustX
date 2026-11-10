@@ -38498,6 +38498,16 @@
             "authored": {
               "$ref": "#/$defs/SkillDisplayWrite"
             },
+            "upload": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SkillIconUpload"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "kind": {
               "type": "string",
               "const": "skill_display"
@@ -39246,6 +39256,22 @@
         "glob",
         "grep",
         "bash"
+      ]
+    },
+    "SkillIconUpload": {
+      "type": "object",
+      "properties": {
+        "media_type": {
+          "$ref": "#/$defs/SkillIconMediaType"
+        },
+        "data_base64": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "media_type",
+        "data_base64"
       ]
     },
     "TransferOperation": {

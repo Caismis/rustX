@@ -2219,6 +2219,7 @@ export type SourceMutation =
   | {
       name: string;
       authored: SkillDisplayWrite;
+      upload?: SkillIconUpload | null;
       kind: 'skill_display';
     }
   | {
@@ -2553,6 +2554,11 @@ export type ApprovalMode = 'policy' | 'full_access';
  * via the `definition` "NativeTool".
  */
 export type NativeTool = 'read' | 'write' | 'edit' | 'glob' | 'grep' | 'bash';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillIconMediaType".
+ */
+export type SkillIconMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/svg+xml';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "TransferOperation".
@@ -3116,11 +3122,6 @@ export type SkillDisplayIcon =
       name: string;
       kind: 'iconify';
     };
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SkillIconMediaType".
- */
-export type SkillIconMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/svg+xml';
 /**
  * One typed generation-scoped Skill discovery fact.
  *
@@ -10374,6 +10375,14 @@ export interface SkillDisplayWrite {
   icon_small?: string | null;
   icon_large?: string | null;
   icon?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillIconUpload".
+ */
+export interface SkillIconUpload {
+  media_type: SkillIconMediaType;
+  data_base64: string;
 }
 /**
  * How people see the Workflow in the library and editor. Never part of the

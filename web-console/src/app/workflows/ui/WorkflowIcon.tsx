@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/react-dom';
 import clsx from 'clsx';
 import { Icon } from '@iconify/react/offline';
@@ -19,8 +19,8 @@ export function WorkflowIcon({ icon, size = 18, className }: { icon?: string | n
 
 /** The chosen icon as a tile; clicking it floats a searchable grid over the
  * bundled set beside it. Choosing, Escape or a press outside closes it. */
-export function IconPicker({ value, onChange, disabled, className, preview }: {
-  value: string; onChange: (icon: string) => void; disabled?: boolean; className?: string; preview?: ReactNode;
+export function IconPicker({ value, onChange, disabled, className, label }: {
+  value: string; onChange: (icon: string) => void; disabled?: boolean; className?: string; label?: string;
 }) {
   const tx = useTranslation();
   const [open, setOpen] = useState(false);
@@ -42,9 +42,9 @@ export function IconPicker({ value, onChange, disabled, className, preview }: {
   return <div ref={root} className={css.anchor}
     // Escape closes the panel first; the enclosing dialog skips a handled key.
     onKeyDown={event => { if (open && event.key === 'Escape') { event.preventDefault(); setOpen(false); } }}>
-    <button ref={refs.setReference} type="button" className={clsx(css.tile, className)} aria-haspopup="listbox" aria-expanded={open}
-      aria-label={tx('workflows:icon.choose')} title={tx('workflows:icon.choose')} disabled={disabled} onClick={() => setOpen(value => !value)}>
-      {preview ?? <WorkflowIcon icon={value} size={22} />}
+    <button ref={refs.setReference} type="button" className={clsx(!label && css.tile, className)} aria-haspopup="listbox" aria-expanded={open}
+      aria-label={label ?? tx('workflows:icon.choose')} title={label ?? tx('workflows:icon.choose')} disabled={disabled} onClick={() => setOpen(value => !value)}>
+      {label ?? <WorkflowIcon icon={value} size={22} />}
     </button>
     {open && <div ref={refs.setFloating} style={floatingStyles} className={css.panel}>
       <IconGrid value={value} onChange={icon => { onChange(icon); setOpen(false); }} />
