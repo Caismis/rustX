@@ -203,6 +203,14 @@ impl AppServerConnection {
                 .map_err(|error| source_read_error(&error))?;
                 Ok(MethodResult::SourceValueChunk { chunk })
             }
+            Method::ModelProbe {
+                target,
+                model,
+                source,
+            } => {
+                let outcome = self.host.manager().probe_model(target, model, source).await;
+                Ok(MethodResult::ModelProbe { outcome })
+            }
             Method::McpProbe {
                 target,
                 id,
@@ -332,11 +340,12 @@ impl AppServerConnection {
                 target,
                 source,
                 cursor,
+                expected_scope,
             } => {
                 let catalog = self
                     .host
                     .manager()
-                    .workflow_tool_catalog(target, source, cursor)
+                    .workflow_tool_catalog(target, source, cursor, expected_scope)
                     .await
                     .map_err(source_error)?;
                 Ok(MethodResult::WorkflowToolCatalog { catalog })
@@ -409,6 +418,9 @@ impl AppServerConnection {
                 use crate::local_runtime::configuration::settings::SourceMutation;
                 use crate::local_runtime::workflow_authoring::WorkflowEdit;
                 let mutation = match mutation {
+                    SourceMutation::GlobalGuidance { document } => {
+                        SourceMutation::GlobalGuidance { document }
+                    }
                     SourceMutation::RepairConfig { document } => {
                         SourceMutation::RepairConfig { document }
                     }

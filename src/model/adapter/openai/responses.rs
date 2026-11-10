@@ -1331,24 +1331,8 @@ pub(crate) fn translate_request(
     let _ = tools;
     // The effective opaque request parameters are overlaid last, after every
     // runtime-owned continuation/input/tool/output field is present.
-    let wire_calls = request_value["input"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|item| item["type"] == "function_call")
-        .filter_map(|item| item["call_id"].as_str().map(str::to_owned))
-        .collect::<Vec<_>>();
-    if !native_correlations_preserved(
-        &request.messages,
-        request.continuation.is_some(),
-        &wire_calls,
-    ) {
-        return Err(invalid_request(
-            "repeated correlation IDs would edit a complete encrypted native output unit",
-        ));
-    }
-    crate::model::adapter::correlation::encode(&mut request_value, ModelProtocol::OpenAiResponses)
-        .map_err(invalid_request)?;
+    crate::model::adapter::correlation::encode(&mut request_value, request)
+        .map_err(|error| invalid_request(&error))?;
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
@@ -1375,6 +1359,7 @@ fn translate_inputs(
         crate::model::adapter::profile::Phase::TranslateMessages,
     );
     let mut input_items: Vec<serde_json::Value> = Vec::new();
+    let mut replayed_messages = Vec::new();
     let instructions: Vec<String> = if request.effective_system_prompt.is_empty() {
         Vec::new()
     } else {
@@ -1403,38 +1388,36 @@ fn translate_inputs(
                     "native continuation boundary is not Assistant output",
                 ));
             };
-            if retained_stateless_output(assistant)?.as_ref() != Some(items) {
+            if retained_stateless_output(assistant, request.invocation.replay_origin().as_ref())?
+                .as_ref()
+                != Some(items)
+            {
                 return Err(invalid_request(
                     "stateless continuation lacks its complete accepted output unit",
                 ));
             }
-            // The preserved provider-native output items are replayed first,
-            // then the canonical context after the continuation boundary.
-            // Opaque items (including encrypted reasoning) pass through
-            // verbatim and are never re-translated.
-            input_items.extend(items.iter().cloned());
-            tail_after_boundary(request)?
+            // Stateless output contains no earlier input. Replay the full
+            // history; translate_assistant_inputs substitutes each owned native
+            // output bundle exactly once, including the accepted boundary.
+            request.messages.clone()
         }
     };
-    #[cfg(feature = "issue-387-profile")]
-    let profiled_blocks =
-        (request.messages.len() - blocks.len()..)
-            .zip(&blocks)
-            .map(|(index, block)| {
-                crate::model::adapter::profile::item(index);
-                block
-            });
-    #[cfg(feature = "issue-387-profile")]
-    let blocks = profiled_blocks;
-    #[cfg(not(feature = "issue-387-profile"))]
-    let blocks = &blocks;
-    for block in blocks {
+    let origin = request.invocation.replay_origin();
+    let start = request.messages.len() - blocks.len();
+    for (index, block) in (start..).zip(&blocks) {
+        #[cfg(feature = "issue-387-profile")]
+        crate::model::adapter::profile::item(index);
         match block.view() {
             ModelMessageView::User(user) => {
                 input_items.push(translate_user_input(user, &request.images)?);
             }
             ModelMessageView::Assistant(assistant) => {
-                input_items.extend(translate_assistant_inputs(assistant)?);
+                let (message, items) = translate_assistant_inputs(assistant, origin.as_ref())?;
+                if let Some(message) = message {
+                    replayed_messages.push((input_items.len(), index));
+                    input_items.push(message);
+                }
+                input_items.extend(items);
             }
             ModelMessageView::Tool(tool_call_id, result) => {
                 input_items.push(translate_tool_result(
@@ -1443,24 +1426,61 @@ fn translate_inputs(
                     &request.images,
                 )?);
             }
-            ModelMessageView::RequestOnly(carryover) => {
-                let (role, kind) = if carryover.is_assistant() {
-                    ("assistant", "output_text")
-                } else {
-                    ("user", "input_text")
-                };
-                input_items.push(serde_json::json!({
-                    "type": "message",
-                    "role": role,
-                    "content": [{
-                        "type": kind,
-                        "text": carryover.render(),
-                    }]
-                }));
+            ModelMessageView::RequestOnly(context) if context.is_assistant() => {
+                replayed_messages.push((input_items.len(), index));
+                input_items.push(replayed_assistant_message(vec![replayed_output_text(
+                    &context.render(),
+                )]));
             }
+            ModelMessageView::RequestOnly(context) => input_items.push(serde_json::json!({
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": context.render(),
+                }]
+            })),
         }
     }
+    assign_replayed_message_ids(&mut input_items, replayed_messages);
     Ok((input_items, instructions, previous_response_id))
+}
+
+fn replayed_output_text(text: &str) -> serde_json::Value {
+    serde_json::json!({"type": "output_text", "text": text, "annotations": []})
+}
+
+fn replayed_assistant_message(content: Vec<serde_json::Value>) -> serde_json::Value {
+    let mut message = serde_json::json!({
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+    });
+    message["content"] = serde_json::Value::Array(content);
+    message
+}
+
+fn assign_replayed_message_ids(input: &mut [serde_json::Value], replayed: Vec<(usize, usize)>) {
+    if replayed.is_empty() {
+        return;
+    }
+    // Only synthesized messages receive IDs. Reserve every retained item ID,
+    // including items that come after a synthesized message in the request.
+    let mut occupied: BTreeSet<_> = input
+        .iter()
+        .filter_map(|item| item["id"].as_str().map(str::to_owned))
+        .collect();
+    for (position, coordinate) in replayed {
+        let base = format!("msg_rustx_{coordinate}");
+        let mut id = base.clone();
+        for suffix in 1.. {
+            if occupied.insert(id.clone()) {
+                break;
+            }
+            id = format!("{base}_{suffix}");
+        }
+        input[position]["id"] = id.into();
+    }
 }
 
 /// Input after the actual accepted output explicitly bound to native continuation.
@@ -1508,15 +1528,17 @@ fn translate_user_input(
     }))
 }
 
+type TranslatedAssistant = (Option<serde_json::Value>, Vec<serde_json::Value>);
+
 fn translate_assistant_inputs(
     assistant: &[crate::message::types::AssistantContentBlock],
-) -> Result<Vec<serde_json::Value>, ModelError> {
-    if let Some(items) = retained_stateless_output(assistant)? {
+    origin: Option<&crate::model::replay::ReplayOrigin>,
+) -> Result<TranslatedAssistant, ModelError> {
+    if let Some(items) = retained_stateless_output(assistant, origin)? {
         // The native bundle already contains the accepted text/calls. Replaying
         // those typed views again would duplicate the prior generation.
-        return Ok(items);
+        return Ok((None, items));
     }
-    let mut items = Vec::new();
     let mut message_content = Vec::new();
     let mut tool_calls = Vec::new();
     for content in assistant {
@@ -1524,10 +1546,7 @@ fn translate_assistant_inputs(
         crate::model::adapter::profile::block();
         match content {
             AssistantContentBlock::Text(text) => {
-                message_content.push(serde_json::json!({
-                    "type": "input_text",
-                    "text": text.text,
-                }));
+                message_content.push(replayed_output_text(&text.text));
             }
             AssistantContentBlock::Refusal(refusal) => {
                 message_content.push(serde_json::json!({
@@ -1536,32 +1555,18 @@ fn translate_assistant_inputs(
                 }));
             }
             AssistantContentBlock::Reasoning(reasoning) => {
-                // Canonical readable reasoning text is not sufficient evidence
-                // to reconstruct a provider-native reasoning item: provider
-                // ids, summary structure, and encrypted content cannot be
-                // fabricated. Only lossless preserved provider-native state
-                // is replayed; anything else fails explicitly instead of
-                // degrading into a fabricated summary item.
-                match &reasoning.provider_state {
-                    // Stored continuation adds a state-only canonical block even
-                    // when the response contains no reasoning. On a fresh request
-                    // (including a model switch), that pointer is not input content;
-                    // the surrounding canonical text/calls/results are replayed.
-                    Some(ProviderContinuationState::OpenAiResponses(
-                        OpenAiResponsesContinuation::Stored { .. },
-                    )) if reasoning.text.as_deref().is_none_or(str::is_empty) => {}
-                    Some(ProviderContinuationState::OpenAiResponses(
-                        OpenAiResponsesContinuation::Stateless { items: preserved },
-                    )) => {
-                        items.extend(preserved.iter().cloned());
-                    }
-                    _ => {
-                        return Err(unsupported(
-                            "canonical reasoning text alone is not sufficient to reconstruct \
-                             an OpenAI Responses reasoning item; preserved provider-native \
-                             reasoning state is required for replay",
-                        ));
-                    }
+                // Complete native Responses output was validated and returned
+                // above. Other history (Chat reasoning, foreign thinking, or
+                // summaries from stored responses) has no native replay unit.
+                // Like pi's cross-model conversion, carry its readable text as
+                // ordinary assistant output. Never invent a reasoning item or
+                // serialize opaque foreign state / stored response pointers.
+                if let Some(text) = reasoning
+                    .text
+                    .as_deref()
+                    .filter(|text| !text.trim().is_empty())
+                {
+                    message_content.push(replayed_output_text(text));
                 }
             }
             AssistantContentBlock::ToolCall(call) => {
@@ -1584,29 +1589,26 @@ fn translate_assistant_inputs(
             }
         }
     }
-    if !message_content.is_empty() {
-        items.push(serde_json::json!({
-            "type": "message",
-            "role": "assistant",
-            "content": message_content,
-        }));
-    }
-    items.extend(tool_calls);
-    Ok(items)
+    let message =
+        (!message_content.is_empty()).then(|| replayed_assistant_message(message_content));
+    Ok((message, tool_calls))
 }
 
 fn retained_stateless_output(
     assistant: &[AssistantContentBlock],
+    origin: Option<&crate::model::replay::ReplayOrigin>,
 ) -> Result<Option<Vec<serde_json::Value>>, ModelError> {
     let units = assistant
         .iter()
         .filter_map(|block| match block {
-            AssistantContentBlock::Reasoning(reasoning) => match &reasoning.provider_state {
-                Some(ProviderContinuationState::OpenAiResponses(
-                    OpenAiResponsesContinuation::Stateless { items },
-                )) => Some(items),
-                _ => None,
-            },
+            AssistantContentBlock::Reasoning(reasoning) if reasoning.belongs_to(origin) => {
+                match &reasoning.provider_state {
+                    Some(ProviderContinuationState::OpenAiResponses(
+                        OpenAiResponsesContinuation::Stateless { items },
+                    )) => Some(items),
+                    _ => None,
+                }
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -1896,94 +1898,8 @@ fn unsupported(message: impl Into<String>) -> ModelError {
     }
 }
 
-/// Native encrypted output units cannot inherit newly invented call labels.
-/// Generic older batches may be relabeled, while native units stay exact.
-fn native_correlations_preserved<'a>(
-    messages: impl IntoIterator<Item = &'a crate::model::ModelInputMessage>,
-    continuation: bool,
-    wire_calls: &[String],
-) -> bool {
-    let labels = crate::model::occurrence::wire_labels(wire_calls);
-    if labels == wire_calls {
-        return true;
-    }
-    // A continuation replays one accepted native output unit, not arbitrary
-    // repeated historical occurrences. Duplicate IDs in that unit are invalid.
-    if continuation {
-        return false;
-    }
-    let mut ordinal = 0;
-    #[cfg(feature = "issue-387-profile")]
-    let _profile = crate::model::adapter::profile::phase(
-        crate::model::adapter::profile::Phase::NativeCorrelation,
-    );
-    #[cfg(feature = "issue-387-profile")]
-    let messages = messages.into_iter().enumerate().map(|(index, message)| {
-        crate::model::adapter::profile::item(index);
-        message
-    });
-    for message in messages {
-        if let ModelMessageView::Assistant(content) = message.view() {
-            let native=content.iter().any(|block|matches!(block,AssistantContentBlock::Reasoning(reasoning) if matches!(reasoning.provider_state,Some(crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {..})))));
-            for block in content {
-                #[cfg(feature = "issue-387-profile")]
-                crate::model::adapter::profile::block();
-                if matches!(block, AssistantContentBlock::ToolCall(_)) {
-                    if native && labels.get(ordinal) != wire_calls.get(ordinal) {
-                        return false;
-                    }
-                    ordinal += 1;
-                }
-            }
-        }
-    }
-    true
-}
-
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn native_output_unit_never_receives_invented_wire_correlation_ids() {
-        use super::native_correlations_preserved;
-        use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, ReasoningBlock};
-        use crate::model::ModelInputMessage;
-        use crate::runtime::continuation::OpenAiResponsesContinuation;
-        let call = crate::tools::types::ToolCall {
-            id: crate::runtime::identity::ToolCallId::new("repeat"),
-            tool_id: crate::runtime::identity::ToolId::new("tool"),
-            name: "tool".into(),
-            arguments: serde_json::json!({}),
-        };
-        let native = ModelInputMessage::Canonical(crate::message::types::MessageBlock::Assistant(AssistantMessageBlock {
-            id:crate::runtime::identity::MessageId::new("native"),content:vec![AssistantContentBlock::Reasoning(ReasoningBlock {text:None,provider_state:Some(crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless { items:vec![serde_json::json!({"type":"reasoning","id":"rs-native","encrypted_content":"opaque-native"}),serde_json::json!({"type":"function_call","id":"fc-native","call_id":"repeat","name":"tool","arguments":"{}"})] }))}),AssistantContentBlock::ToolCall(call.clone())],
-        }));
-        let generic = ModelInputMessage::Canonical(crate::message::types::MessageBlock::Assistant(
-            AssistantMessageBlock {
-                id: crate::runtime::identity::MessageId::new("generic"),
-                content: vec![AssistantContentBlock::ToolCall(call)],
-            },
-        ));
-        let ids = vec!["repeat".to_owned(), "repeat".to_owned()];
-        assert!(!native_correlations_preserved(
-            &[native.clone(), generic.clone()],
-            false,
-            &ids
-        ));
-        assert!(
-            native_correlations_preserved(&[generic, native.clone()], false, &ids),
-            "only an older generic batch is renamed; the native unit remains exact"
-        );
-        assert!(!native_correlations_preserved(
-            &[native.clone(), native],
-            false,
-            &ids
-        ));
-        assert!(
-            !native_correlations_preserved(&[], true, &ids),
-            "a continuation cannot arbitrarily replay repeated native occurrences"
-        );
-    }
-
     use super::{translate_tool_result, translate_tools};
     use crate::message::content::TextBlock;
     use crate::message::types::ToolMessageBlock;

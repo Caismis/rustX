@@ -26,7 +26,7 @@ const native = vi.hoisted(() => {
       const request = message as ObservedRequest;
       state.requests.push(request);
       for (const waiter of state.waiters.splice(0)) waiter();
-      if (request.method === 'initialize') queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result: { type: 'initialized', authority_id: 'fixture-app-server-authority', protocol_version: 75, capabilities: nativeCapabilities } }));
+      if (request.method === 'initialize') queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result: { type: 'initialized', authority_id: 'fixture-app-server-authority', protocol_version: 77, capabilities: nativeCapabilities } }));
       return Promise.resolve();
     }
     onMessage(listener: (record: unknown) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
@@ -71,7 +71,7 @@ it('mutation wins: an in-flight configuration mutation completes before removal 
   answer(submitted);
   const [reread] = await awaitMethod('configuration/sourcesRead');
   answer(reread);
-  await expect(configuration).resolves.toEqual({ kind: 'write', commit: { acknowledgement:{target:(submitted.params as {target:import('../../protocol/app-server/v75').SourceTarget}).target,revision:'workspace-1'}, reread: { status: 'observed', projection: cfg3Source() } } });
+  await expect(configuration).resolves.toEqual({ kind: 'write', commit: { acknowledgement:{target:(submitted.params as {target:import('../../protocol/app-server/v77').SourceTarget}).target,revision:'workspace-1'}, reread: { status: 'observed', projection: cfg3Source() } } });
   expect(native.state.requests.filter(request => request.method === 'configuration/sourceWrite')).toHaveLength(1);
   expect(native.state.requests.filter(request => request.method === 'configuration/reconcile')).toHaveLength(0);
   await removal;
@@ -118,7 +118,7 @@ it('a confirmed write keeps its acknowledgement when the post-write reread fails
   const result = await configuration;
   expect(result.kind).toBe('write');
   if (result.kind !== 'write') throw new Error('expected a write outcome');
-  expect(result.commit.acknowledgement).toEqual({target:(submitted.params as {target:import('../../protocol/app-server/v75').SourceTarget}).target,revision:'workspace-1'});
+  expect(result.commit.acknowledgement).toEqual({target:(submitted.params as {target:import('../../protocol/app-server/v77').SourceTarget}).target,revision:'workspace-1'});
   expect(result.commit.reread.status).toBe('failed');
   expect(String((result.commit.reread as { error: unknown }).error)).toContain('native reread failed');
   // Exactly one write reached native; the failure never caused a replay.
@@ -140,6 +140,17 @@ it('a queued metadata removal checks Host scope only when its registration lane 
   expect(await removal).toMatchObject({ kind: 'authority_replaced', uncertain: false });
   expect((await host.listWorkspaces()).workspaces).toEqual(baseline.workspaces);
   expect(readFileSync(config.metadataFile, 'utf8')).toContain(alpha.id);
+});
+
+it('relays that the App Server lacks model connection testing for the Workspace', async () => {
+  const { host, endpoint } = fixture();
+  const [workspace] = (await host.listWorkspaces()).workspaces;
+  const operation = host.configureWorkspace(workspace.id, endpoint, {
+    kind: 'model_probe', model: 'fixture/native', source: { user_revision: 'user-1', workspace_revision: 'workspace-1' },
+  });
+  const [request] = await awaitMethod('model/probe');
+  native.state.transport!.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Method not found' } });
+  await expect(operation).rejects.toMatchObject({ kind: 'model_probe_unsupported', uncertain: false });
 });
 
 it('MCP probes hold the authorized registration lane until native cleanup acknowledges',async()=>{

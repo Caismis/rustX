@@ -3,7 +3,7 @@ use crate::capabilities::{AvailableToolCatalog, CapabilityAvailability, Capabili
 use crate::local_runtime::configuration::generation::AuthoredConfiguration;
 use crate::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
 use crate::runtime::agent_profile::{
-    AgentProfile, AgentProfileAuthority, AgentProfileKind, AgentScope, resolve_agent_profile,
+    AgentProfile, AgentProfileAuthority, AgentScope, resolve_agent_profile,
 };
 use crate::runtime::identity::{
     CapabilityRevision, ConversationId, SessionId, SessionNodeId, ToolId,
@@ -155,12 +155,12 @@ fn fixture_with_executor(
     let model_source = format!(
         r#"
 [providers.local]
+protocol = "openai_chat_completions"
 base_url = "{}"
 api_key = "{}"
 [models."local/model"]
 provider = "local"
 id = "model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 [models."local/model".capabilities]
@@ -203,12 +203,8 @@ chat_reasoning_replay = "omit"
             execution_deadline: None,
             tools: Vec::new(),
             skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-            project_instructions: crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                inherit: false,
-                files: Vec::new(),
-            },
+            inherit_project_instructions: false,
             extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-            agents: BTreeSet::new(),
             workflows: BTreeSet::new(),
         },
         root.join("reviewer.md"),
@@ -254,18 +250,20 @@ chat_reasoning_replay = "omit"
             &BTreeMap::new(),
         );
     }
-    let root_profile =
-        AgentProfile::from_document(&config.agent, AgentProfileKind::Root, Vec::new()).unwrap();
+    let root_profile = config.agent.lower().unwrap();
     let root_profile = resolve_agent_profile(
         &root_profile,
         &AgentProfileAuthority {
             tools: &available,
             availability: &availability,
             skills: &skills,
-            agents: &agents.names().into_iter().cloned().collect(),
             workflows: &catalog.enabled_ids(),
             scope: AgentScope::Root,
         },
+    )
+    .with_root_agents(
+        &config.agent.agents,
+        &agents.names().into_iter().cloned().collect(),
     );
     let binding = ScheduleBinding {
         session_id: SessionId::new("ses_01900000-0000-7000-8000-000000000001"),

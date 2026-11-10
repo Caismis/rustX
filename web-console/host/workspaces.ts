@@ -1,5 +1,5 @@
 import { checkWorkflowDocument, readWorkflowSource, withWorkflowDocument, type WorkflowRequest } from '../../protocol/app-server/workflow-documents.ts';
-import { materializeSource } from '../../protocol/app-server/source-observation.ts';
+import { readSourceSettings } from '../../protocol/app-server/source-observation.ts';
 import { analysisMatches } from '../../protocol/app-server/workflow-analysis.ts';
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
 import { OfficeDocuments } from './documents/operation.ts';
@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread, WorkflowHostOperation, WorkflowHostResult, WorkflowReread } from '../src/workspaces/host.ts';
-import { AppServerClient } from '../../tui/src/app-server/client.ts';
+import { AppServerClient, AppServerRequestError } from '../../tui/src/app-server/client.ts';
 import { WebSocketTransport } from '../../tui/src/app-server/websocket-transport.ts';
 import { DesktopAdapter } from './desktop.ts';
 import { readDesktopSession } from './desktop-session.ts';
@@ -145,7 +145,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
     return this.readFile(scope, read, FILE_PREVIEW_LIMITS.fileBytes, signal);
   }
-  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v75.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
+  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v77.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
     this.mutationScope(scope); validateDeliveryObservation(read, file);
     if (this.config.nativeFilesystem !== 'shared') throw new Error('Native filesystem observation unavailable on this Product Host');
     const probe = async (signal: AbortSignal) => {
@@ -488,12 +488,21 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     } finally { await client.close(); }
   }
   async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult> {
-    return this.nativeLane(id, async () => (await this.resolveWorkspace(id, endpoint)).cwd, async (client, cwd, current) => {
+    return this.nativeLane(id, () => this.resolveExpectedDirectory(id, endpoint, operation.expected_directory), async (client, cwd, current) => {
       const target = { kind: 'workspace' as const, directory: cwd };
       const readSource = async () => {
-        const result = await client.call('configuration/sourcesRead', {target}, 'source_settings');
-        return materializeSource(result.projection, async(reference,offset)=>(await client.call('configuration/sourceValueRead',{target,reference,offset,max_bytes:65536},'source_value_chunk')).chunk, ()=>true);
+        return readSourceSettings(async()=>(await client.call('configuration/sourcesRead', {target}, 'source_settings')).projection, async(reference,offset)=>(await client.call('configuration/sourceValueRead',{target,reference,offset,max_bytes:65536},'source_value_chunk')).chunk, ()=>true);
       };
+      if (operation.kind === 'model_probe') {
+        const { outcome } = await client.call('model/probe', { target, model: operation.model, source: operation.source }, 'model_probe').catch(error => {
+          if (error instanceof AppServerRequestError && error.error.code === -32601) {
+            throw new WorkspaceHostError('App Server does not support model connection tests', 'model_probe_unsupported');
+          }
+          throw error;
+        });
+        if (!await current()) throw new Error('Workspace authority changed');
+        return { kind: 'model_probe', outcome };
+      }
       if (operation.kind === 'mcp_probe') {
         const { result } = await client.call('mcp/probe', { target, id: operation.id, expected_revision: operation.expected_revision }, 'mcp_probe');
         if (!await current()) throw new Error('Workspace authority changed');
@@ -520,6 +529,14 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       return { kind: operation.kind, projection };
     });
   }
+
+  private async resolveExpectedDirectory(id: string, endpoint: string, expected?: string) {
+    const { cwd } = await this.resolveWorkspace(id, endpoint);
+    // Both strings originate at this canonical Host/native boundary. The
+    // expected directory is a fence only; the registered location selects I/O.
+    if (expected !== undefined && expected !== cwd) throw new WorkspaceHostError('Workspace directory changed', 'workspace_unavailable');
+    return cwd;
+  }
   /** Native Workflow file authoring in exactly this registered Workspace of
    * exactly the Product Host authority that admitted the transaction. A
    * replaced authority is `authority_replaced` even when it reuses the
@@ -532,7 +549,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     // dispatch, validate the authority before mapping the registration.
     const resolve = async () => {
       this.mutationScope(scope);
-      try { return (await this.resolveWorkspace(id, scope.endpoint)).cwd; }
+      try { return await this.resolveExpectedDirectory(id, scope.endpoint, operation.kind === 'tool_catalog' ? operation.expected_directory : undefined); }
       catch (cause) { throw new WorkspaceHostError(cause instanceof Error ? cause.message : String(cause), 'workspace_unavailable'); }
     };
     const run = async (client: AppServerClient, cwd: string, current: () => Promise<boolean>): Promise<WorkflowHostResult> => {
@@ -563,7 +580,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           return { kind: 'enable' };
         }
         case 'tool_catalog': {
-          const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source, cursor: operation.cursor }, 'workflow_tool_catalog');
+          const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source, cursor: operation.cursor, expected_scope: operation.expected_scope }, 'workflow_tool_catalog');
           await unchanged();
           return { kind: 'tool_catalog', catalog };
         }
@@ -581,7 +598,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         case 'write': {
           // The native write is the linearization point; its reread is a
           // separate fact that can fail without undoing the commit.
-          const commit = (edit: import('../../protocol/app-server/v75.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
+          const commit = (edit: import('../../protocol/app-server/v77.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
           const acknowledgement = operation.edit.operation === 'replace' ? await withWorkflowDocument(client, request, target, operation.edit.document, reference => commit({ operation: 'replace', document: reference })) : await commit(operation.edit);
           let reread: WorkflowReread;
           try {
@@ -641,7 +658,11 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
     value!.kind === 'list' ? fields(['kind'])
       : value!.kind === 'enable' ? fields(['kind', 'id', 'expected_revision', 'enabled']) && id() && typeof value!.expected_revision === 'string' && typeof value!.enabled === 'boolean'
       : value!.kind === 'read' ? fields(['kind', 'id']) && id()
-        : value!.kind === 'tool_catalog' ? fields(['kind', 'source', 'cursor']) && (value!.source == null || typeof value!.source === 'string' && value!.source.length > 0 && value!.source.length <= 256) && catalogCursor(value!.cursor)
+        : value!.kind === 'tool_catalog' ? fields(['kind', 'source', 'cursor', 'expected_scope', 'expected_directory'])
+          && (value!.source == null || typeof value!.source === 'string' && value!.source.length > 0 && value!.source.length <= 256)
+          && (value!.expected_scope == null || value!.source != null && (value!.expected_scope === 'user' || value!.expected_scope === 'workspace'))
+          && (value!.expected_directory === undefined || typeof value!.expected_directory === 'string' && value!.expected_directory.length > 0)
+          && catalogCursor(value!.cursor)
         : value!.kind === 'model_choices' ? fields(['kind', 'query', 'expected_revision']) && choicesQuery(value!.query) && (value!.expected_revision == null || typeof value!.expected_revision === 'string')
         : value!.kind === 'analyze' ? fields(['kind', 'id', 'document', 'generation', 'query']) && id() && object(value!.document) && typeof value!.generation === 'string' && value!.generation.length > 0 && value!.generation.length <= 64 && (value!.query == null || object(value!.query))
         : value!.kind === 'check' ? fields(['kind', 'id', 'document']) && id() && object(value!.document)

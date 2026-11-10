@@ -1,4 +1,4 @@
-schema_version = 10
+schema_version = 11
 
 [agent.model]
 model = "example/demo-model"
@@ -7,13 +7,13 @@ model = "example/demo-model"
 # JSON-encoded object strings, passed opaquely to the provider.
 # TOML configuration; fixed Workflows use YAML and model-facing resources use Markdown.
 [providers.example]
+protocol = "openai_chat_completions"
 base_url = "https://api.example.invalid/v1"
 api_key = "$RUSTX_EXAMPLE_API_KEY"
 
 [models."example/demo-model"]
 provider = "example"
 id = "demo-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 

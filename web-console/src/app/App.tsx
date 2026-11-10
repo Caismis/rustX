@@ -36,7 +36,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { useActorRef, useSelector } from '@xstate/react';
 import { shellNavigationMachine, isHomeRoute, committedRouteCurrent, draftSessionCurrent, type ShellNavigationActor } from './navigation/machine';
 import type { AppServerClient } from '../client/app-server';
-import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v75';
+import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v77';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { type ResponseAction } from './commands/native';
 import { available, commands } from './commands/registry';
@@ -72,6 +72,9 @@ import { draftPreparations } from './new-conversation/preparation';
 import { workflowSurfaceMachine, type WorkflowSurfaceActor } from './workflows/machines/surface';
 import { createWorkflowPort } from './workflows/port';
 import { WorkflowsSurface } from './workflows/ui/WorkflowsSurface';
+import { ResourceSurface } from './resources/ResourceSurface';
+import {McpIcon} from './resources/mcp/McpIcon';
+import {IconAgentPresetOutline16,IconCodeOutline16} from '../presentation/primitives/icons';
 import { IconWorkflow } from './workflows/ui/icons';
 import { TaskManagerPage } from './scheduler/TaskManagerPage';
 import { TaskDetail, TaskTabTitle } from './scheduler/TaskDetail';
@@ -332,11 +335,14 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     else shell.send({ type: 'SETTINGS', destination: { type: 'OPEN.OWNER', directory: owner.directory } });
   };
   const openTaskSession = (task: TaskRef) => open(task.session_id, undefined, undefined, { nodeId: task.node_id, conversationId: task.id.conversation_id });
-  return <TaskNavigationProvider value={{ openTask: (task, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openTask(taskKey(task), title); }, openTasks: () => shell.send({ type: 'SCHEDULES' }) }}><SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={agent => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(agent.agent_id, agent.title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ChangesReviewContext value={request => { previewOpener.current=document.activeElement as HTMLElement; previewOwner.showWorkbench(); fileWorkbench.current?.openChanges(request); }}><AppFrame home={home} initialSidebarPreference={initialSidebarPreference} onSidebarPreferenceChange={saveShellLayout} sidebarPublication={routeState.context.publication} dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation}
+  return <TaskNavigationProvider value={{ openTask: (task, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openTask(taskKey(task), title); }, openTasks: () => shell.send({ type: 'SCHEDULES' }) }}><SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={(id, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(id, title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ChangesReviewContext value={request => { previewOpener.current=document.activeElement as HTMLElement; previewOwner.showWorkbench(); fileWorkbench.current?.openChanges(request); }}><AppFrame home={home} initialSidebarPreference={initialSidebarPreference} onSidebarPreferenceChange={saveShellLayout} sidebarPublication={routeState.context.publication} dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation}
     primary={geometry => <PrimaryNavigationRail label={tx('sidebar:navigation.label')} activeId={home ? 'home' : primaryRoute.kind}
       items={[
         { id: 'home', label: tx('sidebar:navigation.home'), icon: <IconHomeOutline16 size={18}/>, controls: 'home-sidebar', expanded: geometry.sidebarExpanded, select: () => { if (home) geometry.expandSidebar(); else shell.send({ type: 'HOME' }); } },
         { id: 'workflows', label: tx('workflows:nav.label'), icon: <IconWorkflow size={18}/>, select: () => shell.send({ type: 'WORKFLOWS' }) },
+        { id: 'subagents', label: tx('resources:subagents.nav'), icon: <IconAgentPresetOutline16/>, select: () => shell.send({type:'RESOURCES',module:'subagents'}) },
+        { id: 'mcp', label: tx('resources:mcp.title'), icon: <McpIcon/>, select: () => shell.send({type:'RESOURCES',module:'mcp'}) },
+        { id: 'skills', label: tx('resources:skills.title'), icon: <IconCodeOutline16/>, select: () => shell.send({type:'RESOURCES',module:'skills'}) },
         { id: 'schedules', label: tx('sidebar:navigation.schedules'), icon: <IconClockOutline16 size={18}/>, select: () => shell.send({ type: 'SCHEDULES' }) },
       ]}
       settings={{ id: 'settings', label: tx('settings:settings.settings'), icon: <IconSettingsOutline16 size={18}/>, select: () => shell.send({ type: 'SETTINGS' }) }}
@@ -383,6 +389,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     </OverlayScope>
     {primaryRoute.kind === 'schedules' && <TaskManagerPage client={client} newTask={() => createInWorkspace()} openSession={openTaskSession}/>}
     {primaryRoute.kind === 'workflows' && <WorkflowsSurface surface={workflows} authority={workspaceAuthority} />}
+    {(['subagents','mcp','skills'] as const).map(module=><OverlayScope key={`${module}:${state.authorityRevision}`} className="primary-page" active={primaryRoute.kind===module}><ResourceSurface module={module} visible={primaryRoute.kind===module} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} initialWorkspace={workspace}/></OverlayScope>)}
     <div className="primary-page" hidden={!home} inert={!home}><FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={view ? 'session-title' : undefined} aria-label={view ? undefined : tx('agent:conversation-header.product-title')}>
       <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen}
@@ -406,7 +413,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       <ConversationQuestionPanels client={client} sessionId={view?.id}>
       <ArtifactContext.Provider value={artifacts}><SubagentSurface mode={conversationMode}><div className={agentCss.scrollBody} data-conversation-scroll>
       <ConversationLive previewCurrent={previewCurrent} onMode={setConversationMode} client={client} sessionId={view?.id} mode={conversationMode} retry={routeState.context.retry} forking={forkingResponse} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}/>
-      <ConversationSeat intakeCommitted={center.kind !== 'session-draft'} draftOwner={composerDraft} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
+      <ConversationSeat visible={home} intakeCommitted={center.kind !== 'session-draft'} draftOwner={composerDraft} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         workspacePicked={id => { if (newConversationCurrent()) { shell.send({ type: 'DRAFT.WORKSPACE', workspaceId: id }); rememberWorkspace(id); } }}
         transitioning={!!routeState.context.retry} binding={String(draftBinding)} current={center.kind !== 'session' && routeState.context.draftSession ? startupCurrent : newConversationCurrent} executable={home && center.kind === 'session'} consumed={consumed} restored={restored}

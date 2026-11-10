@@ -32,9 +32,4 @@ button.header:disabled { cursor: progress; }
 .toggle svg { flex: none; width: 14px; height: 14px; }
 @media (pointer: coarse) { .row, .toggle { min-height: 44px; } }
 
-.preview { max-height: 100%; overflow: hidden; }
-
-.previewPath { flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; color: var(--dsw-alias-label-tertiary); font-family: var(--ds-font-family-code); font-size: 12px; line-height: 20px; white-space: nowrap; }
-.preview [data-diff-note='metadata'], .preview [data-diff-hunk-header] { display: none; }
-
-.card > span, .list > li > span { display: block; width: 100%; }
+.card > span:not([hidden]), .list > li > span:not([hidden]) { display: block; width: 100%; }

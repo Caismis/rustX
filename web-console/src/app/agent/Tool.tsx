@@ -1,8 +1,8 @@
 import { useToolInspection } from './tool-inspection';
 import { useTranslation } from '../../locale/react';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v75';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v77';
 import { useToolInput } from './tool-source';
-import { toolCard } from '../../bindings/tools';
+import { readImageName, toolCard } from '../../bindings/tools';
 import { askUserRecord, askUserRow } from '../../bindings/ask-user';
 import { questionPanelKey, useQuestionPanels } from './QuestionPanels';
 import { AgentConversationContext } from './subagent-context';
@@ -12,6 +12,7 @@ import { presentRow } from '../../bindings/present';
 import { recordedToolDetails } from '../../bindings/recorded-tool-details';
 import { IconChecklistOutline14 } from '../../presentation/primitives/icons';
 import { ToolCard } from '../../presentation/agent/ToolCard';
+import { FileLinks } from '../../presentation/markdown/FileLinks';
 import { ToolArtifacts } from '../components/Artifact';
 import { DomainActivity, domainActivity } from './DomainActivity';
 import { GoalActivity, goalActivityLabel } from './GoalActivity';
@@ -26,7 +27,7 @@ export function Tool({ tool: original, messageId }: { tool: ForegroundToolExecut
   const key = JSON.stringify([disclosure?.scope, message === undefined ? ['locator', canonicalLocatorKey(locator)] : ['message', message], original.block_index]);
   const open = disclosure?.open(key) ?? false;
   const input = useToolInput(original, open), tool = input.tool;
-  const tx = useTranslation(), inspect = useToolInspection(tool);
+  const tx = useTranslation(), inspect = useToolInspection(tool), openFile = useContext(FileLinks);
   if (domainActivity(tool)) return <DomainActivity tool={tool}/>;
   const question = tool.tool_id === 'tool-ask-user' ? askUserRow(tool) : undefined;
   if (question) {
@@ -43,5 +44,16 @@ export function Tool({ tool: original, messageId }: { tool: ForegroundToolExecut
   const body = tool.committed_result ?? (tool.state.type === 'settled' ? tool.state.result : undefined);
   const view = toolCard(tool);
   const details = view.state === 'success' && body?.status.type === 'success' ? recordedToolDetails(tool.tool_id, body.content, tx) : undefined;
-  return <ToolCard disclosure={disclosure ? { open, toggle: () => { if (!open) input.expand(); disclosure.toggle(key); } } : undefined} onExpand={input.expand} body={input.pending ? <p role="status">{tx('common:activity.loading')}</p> : input.error ? <p role="alert">{input.error} <button type="button" onClick={input.retry}>{tx('agent:message.retry-tool')}</button></p> : undefined} inspect={inspect} tool={{ ...view, ...(tool.tool_id === 'tool-todo' ? { title: tx('tools:todo.title'), icon: <IconChecklistOutline14/> } : {}), details, summary: details?.summary ?? details?.empty ?? view.summary, artifacts: body ? <ToolArtifacts result={body}/> : undefined }}/>;
+  const readImage = view.variant === 'image';
+  const imageName = readImageName(view.path);
+  const title = readImage ? tx('tools:tool-card.read-image') : tool.tool_id === 'tool-todo' ? tx('tools:todo.title') : view.title;
+  const openPath = readImage && openFile && view.path && !['failure', 'cancelled', 'uncertain'].includes(view.state) ? () => openFile({ path: view.path! }) : undefined;
+  const summary = readImage && view.path === view.summary ? imageName ?? view.summary : view.summary;
+  return <ToolCard disclosure={disclosure ? { open, toggle: () => { if (!open) input.expand(); disclosure.toggle(key); } } : undefined}
+    onExpand={input.expand} onOpenPath={openPath}
+    body={input.pending ? <p role="status">{tx('common:activity.loading')}</p> : input.error ? <p role="alert">{input.error} <button type="button" onClick={input.retry}>{tx('agent:message.retry-tool')}</button></p> : undefined}
+    inspect={inspect}
+    tool={{ ...view, title, ...(tool.tool_id === 'tool-todo' ? { icon: <IconChecklistOutline14/> } : {}),
+      details, summary: details?.summary ?? details?.empty ?? summary,
+      artifacts: body ? <ToolArtifacts result={body} imageName={view.imageResult ? imageName ?? title : undefined}/> : undefined }}/>;
 }

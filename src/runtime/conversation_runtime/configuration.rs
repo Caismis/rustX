@@ -745,7 +745,7 @@ impl ConversationRuntime {
             .configuration
             .as_ref()
             .ok_or("candidate has no configuration")?;
-        let model = SessionModelState::new(generation.models.clone(), selection)
+        let model = SessionModelState::restore(generation.models.clone(), selection)
             .map_err(|error| error.to_string())?;
         validate_model_context(&generation.config.context_policy(), &model)
             .map_err(|error| error.message)?;
@@ -780,10 +780,7 @@ impl ConversationRuntime {
         validate_model_context(&binding.configuration.config.context_policy(), &model)
             .map_err(|error| error.message)?;
         if let Some(capability) = &mut candidate.capability {
-            capability.set_context_profile(
-                &binding.configuration.config.agent,
-                &binding.root_agent_project_files,
-            );
+            capability.set_context_profile(&binding.configuration.config.agent);
         }
         if let Some(resources) = &mut candidate.resources {
             resources.set_context_binding(binding);

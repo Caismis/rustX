@@ -134,7 +134,7 @@ async fn issue459_removed_model_with_instructions_change_commits_and_recovers_ex
         let selected = runtime.model_view();
         issue459_edit(&fixture, |document| {
             issue459_replace_a_with_c(document);
-            issue459_set_instructions(document, "issue459 new instructions");
+            set_file_guidance(&fixture, "issue459 new instructions");
         })
         .await;
         let application = applied(&fixture, 0).await;
@@ -158,7 +158,7 @@ async fn issue459_removed_model_with_instructions_change_commits_and_recovers_ex
         assert_eq!(view.effective, selected.effective);
         let committed = runtime.runtime_resources().configuration().unwrap().clone();
         assert_eq!(
-            committed.config.agent.instructions,
+            guidance(runtime.runtime_resources().project_context_files()),
             "issue459 new instructions"
         );
         assert_ne!(
@@ -166,7 +166,7 @@ async fn issue459_removed_model_with_instructions_change_commits_and_recovers_ex
             old.authored.component_revisions[&ApplyUnit::Instructions]
         );
         assert_eq!(
-            retained().config().agent.instructions,
+            guidance(&retained().project_context_files),
             "issue459 new instructions"
         );
         assert!(matches!(
@@ -246,7 +246,7 @@ async fn issue459_cold_session_receives_mixed_publication_on_residency() {
         let mut changed = fixture.manager.configuration_changes();
         issue459_edit(&fixture, |document| {
             issue459_replace_a_with_c(document);
-            issue459_set_instructions(document, "issue459 new instructions");
+            set_file_guidance(&fixture, "issue459 new instructions");
         })
         .await;
         while !fixture.manager.applications.is_deferred(id.as_str()) {
@@ -258,7 +258,7 @@ async fn issue459_cold_session_receives_mixed_publication_on_residency() {
         assert_eq!(cold.binding_revision, before.binding_revision);
         assert_eq!(cold.source_revisions, before.source_revisions);
         assert_eq!(
-            cold.config().agent.instructions,
+            guidance(&cold.project_context_files),
             "issue459 adopted instructions"
         );
 
@@ -278,12 +278,7 @@ async fn issue459_cold_session_receives_mixed_publication_on_residency() {
         assert_eq!(view.configured, model("local/a"));
         assert!(view.unavailable.as_deref().unwrap().contains("local/a"));
         assert_eq!(
-            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
-                &runtime
-            )
-            .unwrap()
-            .root_agent
-            .instructions,
+            guidance(runtime.runtime_resources().project_context_files()).to_owned(),
             "issue459 new instructions"
         );
         assert!(matches!(
@@ -303,13 +298,7 @@ async fn issue459_cold_session_receives_mixed_publication_on_residency() {
         assert_eq!(runtime.model_view(), view);
         assert_eq!(retained().session_model(), &model("local/c"));
         assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
+            guidance(runtime.runtime_resources().project_context_files()),
             "issue459 new instructions"
         );
         assert!(fixture.provider.request_bodies().is_empty());

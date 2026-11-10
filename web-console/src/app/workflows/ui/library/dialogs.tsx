@@ -3,13 +3,14 @@ import { useSelector } from '@xstate/react';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Modal } from '../../../../presentation/primitives/Modal';
 import { useTranslation } from '../../../../locale/react';
-import type { WorkflowFileDocument } from '../../../../../../protocol/app-server/v75';
+import type { WorkflowFileDocument } from '../../../../../../protocol/app-server/v77';
 import type { LibraryConfirmation, WorkflowLibraryActor } from '../../machines/library';
 import { setDisplay } from '../../document/presentation';
 import { classifyFailure, type WorkflowFailure } from '../../port';
 import { FailureText } from '../notices';
 import { DEFAULT_WORKFLOW_ICON, IconPicker } from '../WorkflowIcon';
 import css from '../Workflows.module.css';
+import catalog from '../../../../presentation/catalog/Catalog.module.css';
 
 /** The native identity rule, checked early for presentation; native decides. */
 const ID = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -74,7 +75,7 @@ export function LibraryDialog({ confirmation, scopeLabel, library }: {
       {facts(file.relative_path)}
       <dl className={css.facts}><dt>{tx('workflows:dialog.revision')}</dt><dd><code>{file.revision.slice(0, 19)}</code></dd></dl>
       {file.shadows_global && <p className={css.warning}>{tx('workflows:dialog.delete-override')}</p>}
-      <p className={css.muted}>{tx('workflows:dialog.delete-selection')}</p>
+      <p className={catalog.muted}>{tx('workflows:dialog.delete-selection')}</p>
       {error}
     </div>
   </Modal>;
@@ -118,7 +119,7 @@ function InfoDialog({ confirmation, scopeLabel, library, busy }: { confirmation:
   const title = tx(editing ? 'workflows:dialog.edit-title' : 'workflows:dialog.new-title');
   if (editing && (!source || 'failure' in source)) return <Modal open onClose={dismiss} title={title} closeLabel={tx('workflows:dialog.close')} className={css.createDialog}
     footer={<Button variant="outline" onClick={dismiss}>{tx('workflows:dialog.cancel')}</Button>}>
-    {source ? <p className={css.error} role="alert"><FailureText failure={source.failure} /></p> : <p className={css.muted} role="status">{tx('workflows:dialog.loading')}</p>}
+    {source ? <p className={css.error} role="alert"><FailureText failure={source.failure} /></p> : <p className={catalog.muted} role="status">{tx('workflows:dialog.loading')}</p>}
   </Modal>;
   return <InfoForm confirmation={confirmation} scopeLabel={scopeLabel} library={library} busy={busy} title={title} source={source && !('failure' in source) ? source : undefined} />;
 }

@@ -210,11 +210,9 @@ fn committed_echo_package_is_discovered_by_production_python_discovery() {
 #[test]
 fn committed_example_skill_is_found_by_project_agents_discovery() {
     let workspace_path = examples_root();
-    let workspace = Workspace::new(&workspace_path).expect("example workspace");
-    let outcome = SkillDiscovery::with_config(
-        &workspace,
-        SkillDiscoveryConfig::workspace_root(workspace_path.join(".agents/skills")),
-    )
+    let outcome = SkillDiscovery::with_config(SkillDiscoveryConfig::workspace_root(
+        workspace_path.join(".agents/skills"),
+    ))
     .discover();
     assert_eq!(
         outcome

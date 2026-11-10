@@ -137,7 +137,7 @@ pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/so
 Every initialized trusted connection can use committed-delivery APIs (see `/files`).
 The same token file may contain an opaque capability or a host-issued HS256 JWT.
 
-Both modes use App Server protocol v75. `--config` and `--runtime-root` bind the owned
+Both modes use App Server protocol v77. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
 paths are absolute server paths. The TUI never parses authored configuration or
@@ -237,7 +237,7 @@ or adopts it.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v75)
+  -> initialize (App Server protocol v77)
   -> thread/start or choose a durable Session
   -> resolve the exact Session/node; begin thread/resume and editable connecting
        -> first explicit Send records session/submissionIntent

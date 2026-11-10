@@ -20,6 +20,7 @@ mod ask_user_feedback;
 mod capability_boundary;
 mod context_boundary;
 mod live;
+mod model_switching;
 mod openai_chat;
 mod openai_responses;
 mod request_params;

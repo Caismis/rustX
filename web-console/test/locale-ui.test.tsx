@@ -155,7 +155,7 @@ it('Session renaming never promotes a localized fallback title into native data 
 });
 
 it.each(['en', 'zh'] as const)('policy display choices preserve exact native values in %s', async locale => {
-  const { PolicyFields } = await import('../src/app/settings/tools/ToolsPage');
+  const { PolicyFields } = await import('../src/app/settings/forms/PolicyFields');
   act(() => localeController.setLocale(locale));
   const change = vi.fn(), tx = translator(locale);
   render(<PolicyFields value={{}} change={change}/>);

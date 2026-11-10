@@ -223,9 +223,16 @@ async fn thread_status_busy_metadata_lock_recovers_without_a_semantic_wake() {
         let id = f.id(0).await;
         let connection = AppServerConnection::new(f.host.clone());
         initialize(&connection).await;
+        // Park only after the observer's initial successful capture has fully
+        // returned. No in-flight capture can race the baseline/subscription or
+        // publish an old recovery while the test holds a native source lock.
+        let probe = f.manager.probe(&id);
+        probe.status_before_wait.arm();
         let managed = f.load(0).await.unwrap().unwrap();
-        let before = read(&connection, &id).await;
-        assert_eq!(before.status, ThreadStatus::Idle);
+        probe.status_before_wait.entered().await;
+        // Use that completed native publication as the baseline. A separate
+        // strong read could need recovery while its observer is parked here.
+        let before = next_status(&connection, &id, &ThreadStatus::Idle).await;
         let mut changes = f.manager.status_notifications();
         let gate = std::sync::Arc::new(Gate::default());
         let release = gate.arm_scoped();
@@ -257,11 +264,14 @@ async fn thread_status_busy_metadata_lock_recovers_without_a_semantic_wake() {
         assert!(f.provider.request_bodies().is_empty());
         drop(release);
         held.await.unwrap();
+        // Resume the actual wait, not an unconditional capture: recovery must
+        // be driven by the failed read's retained wake without a semantic change.
+        probe.status_before_wait.release();
         loop {
             if let ThreadStatusEvent::Changed(status)=changes.recv().await.unwrap()
                 && status.thread_id==id
                 && status.status==crate::local_runtime::session_runtime_manager::status::ThreadRuntimeStatus::Idle {
-                assert!(status.revision>before.status_revision);
+                assert!(status.revision>before.revision);
                 break;
             }
         }

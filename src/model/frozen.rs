@@ -465,13 +465,13 @@ mod tests {
     use crate::model::types::ModelProtocol;
 
     const M1: &str = r#"[providers.local]
+protocol = "openai_chat_completions"
 base_url = "http://127.0.0.1:9/v1"
 api_key = "$RUSTX_FROZEN_KEY"
 
 [models."local/m"]
 provider = "local"
 id = "m"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 request_params = '{"temperature":0.25}'
@@ -600,13 +600,13 @@ chat_reasoning_replay = "omit"
     #[test]
     fn a_frozen_profile_is_complete_and_immune_to_later_catalog_edits() {
         const PROFILED: &str = r#"[providers.local]
+protocol = "openai_chat_completions"
 base_url = "http://127.0.0.1:9/v1"
 api_key = "$RUSTX_FROZEN_KEY"
 
 [models."local/m"]
 provider = "local"
 id = "m"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 default_profile = "fast"

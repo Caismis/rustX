@@ -3,7 +3,7 @@ import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { sourceObservation } from '../../../../protocol/app-server/source-observation';
-import type { SourceFieldPage, CheckpointPage, ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v75';
+import type { SourceFieldPage, CheckpointPage, ModelCatalogView, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v77';
 import { AppServerClient } from '../../client/app-server';
 import { isOutcomeUncertain } from '../../client/errors';
 import type { SessionView } from '../../client/contracts';
@@ -76,7 +76,9 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
    ++epoch.current; setBlocked(true); setBusy(false); setError(''); setSelectionError(''); guard.current = false;
    if(!draft&&view?.observationState!=='checkpointLoading'&&view?.observationState!=='subscribePending')load(true);
    return () => { ++epoch.current; };
- }, [target?.attachment_id, generation, view?.snapshot?.resources?.revision, view?.snapshot?.model_status?.binding_revision]);
+ // Attachment IDs and revisions are local to a native Session. Switching to
+ // another Session must reread even when those local counters are identical.
+ }, [scope, view?.snapshot?.resources?.revision, view?.snapshot?.model_status?.binding_revision]);
  useEffect(()=>{if(!draft&&view?.observationState==='following'&&blocked)load();},[view?.observationState]);
  const mutate = async (operation: () => Promise<unknown>, requested: SessionModelConfig) => {
    if (pending || guard.current || blocked || busy || !attached || selection.current?.scope === scope) return false;
@@ -160,7 +162,7 @@ export function AgentControls({ client, view, draft, coldSource, blocked: pendin
  const picker: ModelPickerState = { nextPage: sourceChoices ? nextSourcePage : nextPage, choices: modelChoices, current: currentModel, profile: currentProfile, effectiveProfile,
    disabled: draft ? draft.disabled || !choices : disabled || (connecting ? !coldCatalog : blocked), loading: draft ? !draft.source : connecting ? !coldSource : busy && !catalog,
    error: draft ? draftError : queued?.error ?? coldError ?? (view?.modelMutation?.status === 'uncertain' ? tx('agent:copy.outcome-uncertain-no-replay-reconnect-and-reread-authority-before-continuing') : error), choose };
- const toolbar = <div ref={root} className="agent-control"><ModelSelect binding={JSON.stringify([generation, target?.attachment_id, draft?.source?.target])} choices={picker.choices}
+ const toolbar = <div ref={root} className="agent-control"><ModelSelect binding={JSON.stringify([generation, view?.id, target, draft?.source?.target])} choices={picker.choices}
    current={picker.current} profile={picker.profile} effectiveProfile={picker.effectiveProfile} disabled={draft ? draft.disabled || !choices : disabled} loading={draft ? !draft.source : connecting ? !coldSource : blocked} error={picker.error} load={load}
    choose={choose} nextPage={picker.nextPage}/>
    {!draft && modelStatus?.available === false && <p role="status">{tx('common:activity.model-unavailable')}</p>}

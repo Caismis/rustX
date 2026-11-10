@@ -126,7 +126,7 @@ fn sparse_gigabytes_and_thousands_of_assets_cost_only_bounded_header_io() {
 }
 
 #[test]
-fn malformed_prefixes_are_bounded_cancellable_and_diagnosed() {
+fn malformed_prefixes_are_diagnosed_and_large_definitions_are_loaded() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     std::fs::create_dir(root.join("guide")).unwrap();
@@ -136,26 +136,43 @@ fn malformed_prefixes_are_bounded_cancellable_and_diagnosed() {
         assert!(outcome.packages.is_empty());
         assert_eq!(outcome.diagnostics.len(), 1);
     }
-    let mut file = std::fs::File::create(root.join("guide/SKILL.md")).unwrap();
-    file.write_all(b"---\nname: guide\ndescription: ").unwrap();
-    file.set_len(4 * 1024 * 1024 * 1024).unwrap();
-    super::frontmatter::READ_BYTES.with(|v| v.set(0));
-    assert!(
-        super::frontmatter::read(&root.join("guide"), &CancellationSignal::new())
-            .unwrap_err()
-            .contains("1 MiB")
+    let note = "x".repeat(1024 * 1024 + 1);
+    std::fs::write(
+        root.join("guide/SKILL.md"),
+        format!("\u{feff}---\rname: guide\rdescription: Guide\rmetadata:\r  note: {note}\r---\r"),
+    )
+    .unwrap();
+    let outcome = SkillDiscovery::user_root(root.clone()).discover();
+    assert_eq!(
+        outcome.packages[0].metadata()["note"].as_str(),
+        Some(note.as_str())
     );
-    super::frontmatter::READ_BYTES
-        .with(|v| assert!(v.get() <= super::frontmatter::MAX_FRONTMATTER_BYTES as u64 + 4096));
+    assert!(outcome.diagnostics.is_empty());
     let signal = CancellationSignal::new();
     signal.cancel();
     super::frontmatter::READ_BYTES.with(|v| v.set(0));
     assert!(
-        super::frontmatter::read(&root.join("guide"), &signal)
+        super::frontmatter::read(&root.join("guide/SKILL.md"), &signal)
             .unwrap_err()
             .contains("cancelled")
     );
     super::frontmatter::READ_BYTES.with(|v| assert_eq!(v.get(), 0));
+}
+
+#[test]
+fn unterminated_frontmatter_stops_at_the_prefix_budget() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().canonicalize().unwrap().join("SKILL.md");
+    let mut file = std::fs::File::create(&path).unwrap();
+    file.write_all(b"---\nname: guide\ndescription: ").unwrap();
+    file.set_len(64 * 1024 * 1024).unwrap();
+    super::frontmatter::READ_BYTES.with(|count| count.set(0));
+    let error = super::frontmatter::read(&path, &CancellationSignal::new()).unwrap_err();
+    assert!(error.contains("frontmatter exceeds"), "{error}");
+    super::frontmatter::READ_BYTES.with(|count| {
+        let limit = super::frontmatter::MAX_FRONTMATTER_BYTES as u64;
+        assert!((limit..=limit + 4096).contains(&count.get()));
+    });
 }
 
 #[test]
@@ -176,7 +193,7 @@ fn prefix_cancellation_and_definition_replacement_use_deterministic_io_hooks() {
         }));
     });
     assert!(
-        super::frontmatter::read(&root.join("guide"), &CancellationSignal::new())
+        super::frontmatter::read(&root.join("guide/SKILL.md"), &CancellationSignal::new())
             .unwrap_err()
             .contains("changed during")
     );
@@ -189,7 +206,7 @@ fn prefix_cancellation_and_definition_replacement_use_deterministic_io_hooks() {
         .with(|hook| *hook.borrow_mut() = Some(Box::new(move || cancel.cancel())));
     super::frontmatter::READ_BYTES.with(|count| count.set(0));
     assert!(
-        super::frontmatter::read(&root.join("guide"), &signal)
+        super::frontmatter::read(&root.join("guide/SKILL.md"), &signal)
             .unwrap_err()
             .contains("cancelled")
     );

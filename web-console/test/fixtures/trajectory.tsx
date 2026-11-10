@@ -6,7 +6,7 @@ import { workflowTraceFixture } from '../workflow-trace-fixture';
 import { workflowTraceRefreshFixture } from './workflow-trace-refresh';
 import { completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace } from '../../src/client/trace';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, semanticLedgerRecords, structuralSearchRecords, traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
-import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v75';
+import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v77';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -53,10 +53,15 @@ const agentRecords = [
   traceRecord(35, { kind: 'context', request: null, agent_id: 'parser-review', preview: text('Agent parser-review sent a message: parser review completed.') }),
 ];
 const backgroundJobs = params.has('background-jobs');
+const launchReceipt = { job_id: 'job-launched', state: 'starting', tool: 'bash', output_path: '/workspace/output.txt' };
+const waitReceipt = { job_id: 'job-launched', tool: 'bash', state: 'outcome_unknown', result: { status: { type: 'outcome_unknown', detail: 'External result was not proven' } } };
+const backgroundNotice = 'Background execution job-launched (bash) settled: outcome_unknown';
+const backgroundNoticeId = 'background-job-launched-terminal';
 const backgroundRecords = [
-  traceTool(20),
-  traceRecord(21, { kind: 'background', request: null, native_id: 'job-launched', originating_tool_call_id: 'call-20', state: 'outcome_unknown', preview: null }),
-  traceTool(22, { tool: { ...traceTool(22).tool!, tool_id: 'tool-job_wait', name: 'job_wait' } }),
+  traceTool(20, { preview: text(JSON.stringify(launchReceipt)), tool: { ...traceTool(20).tool!, arguments: text('{"command":"sleep 5","execution_mode":"background"}') } }),
+  traceRecord(21, { kind: 'background', request: null, native_id: 'job-launched', originating_tool_call_id: 'call-20', state: 'outcome_unknown', preview: text('Internal execution audit') }),
+  traceRecord(22, { kind: 'context', request: null, message_id: backgroundNoticeId, preview: { text: backgroundNotice, truncated: true } }),
+  traceTool(23, { preview: text(JSON.stringify(waitReceipt)), tool: { ...traceTool(23).tool!, tool_id: 'tool-job_wait', name: 'job_wait', arguments: text('{"job_id":"job-launched"}') } }),
 ];
 const long = params.has('long'); const threshold = params.has('threshold');
 const renumber = params.has('renumber');
@@ -111,10 +116,20 @@ function Fixture() {
         setCache(current => {
           const n = Number(id.split(':')[1]); const record = current.page.records.find(record => record.id === id)!;
           const detail = record.kind === 'tool' ? toolDetail(n) : record.kind === 'request' ? requestDetail(n) : requestDetail(n, { kind: record.kind, request: null, messages: [] });
-          if (backgroundJobs && n === 20) detail.tool!.result!.blocks = [{ type: 'json', value: { value: { job_id: 'job-launched', state: 'starting', tool: 'bash', output_path: '/workspace/output.txt' }, truncated: false } }];
-          if (backgroundJobs && n === 22) {
+          if (backgroundJobs && n === 20) {
+            detail.tool!.arguments = { value: { command: 'sleep 5', execution_mode: 'background' }, truncated: false };
+            detail.tool!.source!.text = text('sleep 5');
+            detail.tool!.result!.blocks = [{ type: 'json', value: { value: launchReceipt, truncated: false } }];
+          }
+          if (backgroundJobs && n === 22) detail.messages = [{
+            role: 'user', message_id: backgroundNoticeId, source: 'runtime',
+            blocks: [{ type: 'text', text: text(`${backgroundNotice}\n\nResult:\nExternal result was not proven`) }], truncated: false,
+          }];
+          if (backgroundJobs && n === 23) {
             detail.tool!.name = 'job_wait'; detail.tool!.tool_id = 'tool-job_wait';
-            detail.tool!.result!.blocks = [{ type: 'json', value: { value: { job_id: 'job-launched', tool: 'bash', state: 'outcome_unknown', result: { status: { type: 'outcome_unknown', detail: 'External result was not proven' } } }, truncated: false } }];
+            detail.tool!.source = null;
+            detail.tool!.arguments = { value: { job_id: 'job-launched' }, truncated: false };
+            detail.tool!.result!.blocks = [{ type: 'json', value: { value: waitReceipt, truncated: false } }];
           }
           if (detail.request) {
             detail.request.messages.push(...(record.request?.context_additions ?? []).map(context => { if (context.message_id == null) throw new Error('Finite fixture Context needs its original inline identity.'); return { role: 'user' as const, message_id: context.message_id, provenance_source:null, provenance: {type:'original' as const,conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',content_digest:'fixture-digest',locator:null,message_id_source:null,source:{conversation_id:'conv_36524fd8-f674-7fc2-8125-06d01fee0e18',message_id:context.message_id,content_digest:'fixture-digest'}}, source: 'runtime', blocks: [{ type: 'text' as const, text: text(`Full content: ${context.preview?.text}`) }], truncated: false }; }));

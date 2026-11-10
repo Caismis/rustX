@@ -488,6 +488,10 @@ pub fn runtime_fallback_generation_safety_policy(max_output_tokens: u32) -> Gene
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelInvocationConfig {
+    /// Frozen provider/endpoint fingerprint, when the invocation has a catalog
+    /// binding. Unattributed invocations cannot authorize native reasoning replay.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay_binding: Option<String>,
     /// The provider-facing model identifier.
     pub model: String,
     /// The protocol the adapter must speak.
@@ -508,6 +512,20 @@ pub struct ModelInvocationConfig {
     pub compat: ModelCompat,
 }
 
+impl ModelInvocationConfig {
+    /// The exact owner of reasoning produced by this frozen invocation.
+    #[must_use]
+    pub fn replay_origin(&self) -> Option<super::replay::ReplayOrigin> {
+        self.replay_binding
+            .as_ref()
+            .map(|binding| super::replay::ReplayOrigin {
+                binding: binding.clone(),
+                protocol: self.protocol,
+                model: self.model.clone(),
+            })
+    }
+}
+
 /// The immutable resolved model invocation of one attempt (or one explicit
 /// summary model).
 ///
@@ -523,6 +541,7 @@ pub struct ModelInvocationConfig {
 #[derive(Clone)]
 pub struct ResolvedModelInvocation {
     provider: ProviderId,
+    replay_binding: String,
     model_ref: ModelRef,
     wire_model: String,
     adapter: Arc<dyn ModelAdapter>,
@@ -540,6 +559,7 @@ pub struct ResolvedModelInvocation {
 impl fmt::Debug for ResolvedModelInvocation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ResolvedModelInvocation")
+            .field("replay_binding", &self.replay_binding)
             .field("model", &self.model_ref)
             .field("wire_model", &self.wire_model)
             .field("protocol", &self.protocol)
@@ -562,6 +582,7 @@ impl PartialEq for ResolvedModelInvocation {
     /// and they share the same adapter binding.
     fn eq(&self, other: &Self) -> bool {
         self.model_ref == other.model_ref
+            && self.replay_binding == other.replay_binding
             && self.wire_model == other.wire_model
             && self.protocol == other.protocol
             && self.context_window == other.context_window
@@ -663,6 +684,7 @@ impl ResolvedModelInvocation {
     #[must_use]
     pub fn invocation_config(&self) -> ModelInvocationConfig {
         ModelInvocationConfig {
+            replay_binding: Some(self.replay_binding.clone()),
             model: self.wire_model.clone(),
             protocol: self.protocol,
             max_output_tokens: self.effective_output_tokens,
@@ -697,6 +719,10 @@ impl ResolvedModelInvocation {
     ) -> Self {
         Self {
             provider: frozen.binding.provider.clone(),
+            replay_binding: super::replay::binding_id(
+                frozen.binding.provider.as_str(),
+                &frozen.binding.base_url,
+            ),
             model_ref: frozen.model.clone(),
             wire_model: frozen.wire_model.clone(),
             adapter,
@@ -1247,6 +1273,7 @@ impl ModelBindingRegistry {
 
         Ok(ResolvedModelInvocation {
             provider: provider.id().clone(),
+            replay_binding: super::replay::binding_id(provider.id().as_str(), provider.base_url()),
             model_ref: analyzed.model,
             wire_model: model.id.as_str().to_owned(),
             adapter,
@@ -1553,6 +1580,39 @@ pub fn validate_content_modalities<'a>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unattributed_invocation_is_readable_but_cannot_authorize_native_replay() {
+        let config = crate::scripted_suites::common::simple_request(
+            crate::model::ModelProtocol::OpenAiResponses,
+            "model",
+            "prompt",
+        )
+        .invocation;
+        let origin = config.replay_origin();
+        let reasoning = crate::message::types::ReasoningBlock {
+            origin: origin.clone(),
+            text: None,
+            provider_state: None,
+        };
+        assert!(reasoning.belongs_to(origin.as_ref()));
+        let mut data = serde_json::to_value(&config).unwrap();
+        data.as_object_mut().unwrap().remove("replay_binding");
+        let unattributed: super::ModelInvocationConfig = serde_json::from_value(data).unwrap();
+        assert!(unattributed.replay_origin().is_none());
+        assert!(!reasoning.belongs_to(unattributed.replay_origin().as_ref()));
+        let unknown = crate::message::types::ReasoningBlock {
+            origin: None,
+            ..reasoning
+        };
+        assert!(!unknown.belongs_to(None));
+        assert_eq!(
+            serde_json::from_value::<super::ModelInvocationConfig>(
+                serde_json::to_value(config.clone()).unwrap()
+            )
+            .unwrap(),
+            config
+        );
+    }
     #[test]
     fn cfg233_provider_error_redaction_preserves_failure_semantics() {
         use crate::model::{

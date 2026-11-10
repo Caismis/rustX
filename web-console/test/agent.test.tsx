@@ -1,8 +1,8 @@
 import { domainReceipt } from './fixture';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v75';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v77';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { ComposerDraft } from '../src/app/composer/draft';
 import { localeController } from '../src/locale/controller';
@@ -11,6 +11,8 @@ import { ModelSelect } from '../src/presentation/agent/ModelSelect';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { Interactions } from '../src/app/agent/Interactions';
 import { Tool } from '../src/app/agent/Tool';
+import { ToolInspectionContext } from '../src/app/agent/tool-inspection';
+import { FileLinks } from '../src/presentation/markdown/FileLinks';
 import { RpcFailure } from '../src/client/errors';
 import { toolCard } from '../src/bindings/tools';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
@@ -346,16 +348,36 @@ it('Bash without a description keeps the row quiet and exposes the command only 
  expect(ui.container.textContent).toContain('python3 generate_report.py');
  expect(ui.container.textContent).toContain('Native error');
 });
-it('image reads have a dedicated renderer and retain managed image references after replay', () => {
- const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'image-call', tool_id: 'tool-read-image', name: 'read_image', state: { type: 'settled', arguments: JSON.stringify({ path: 'sample.png' }), result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'image', artifact_id: 'artifact_1' }] } } };
- expect(toolCard(tool).variant).toBe('image');
- expect(toolCard(JSON.parse(JSON.stringify(tool)))).toEqual(toolCard(tool));
- const ui = render(<Tool tool={tool}/>);
+it('replayed image reads use the saved image and keep extra result text', () => {
+ const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'image-call', tool_id: 'tool-read-image', name: 'read_image', state: { type: 'settled', arguments: JSON.stringify({ path: '/workspace/sample.png' }), result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'Read static PNG image' }, { type: 'image', artifact_id: 'artifact_1' }, { type: 'text', text: 'Extra result text' }] } } };
+ const openFile = vi.fn();
+ const ui = render(<FileLinks value={openFile}><Tool tool={JSON.parse(JSON.stringify(tool))}/></FileLinks>);
  expect(ui.container.querySelector('[data-tool-renderer="image"]')).toBeTruthy();
- fireEvent.click(screen.getByText('read_image'));
- expect(ui.container.textContent).toContain('artifact_1');
+ const path = ui.getByRole('button', { name: /^sample\.png$/ });
+ expect(path.closest('[role="button"]')).toBeNull();
+ fireEvent.click(path);
+ expect(openFile).toHaveBeenCalledWith({ path: '/workspace/sample.png' });
+ expect(ui.queryByText('/workspace/sample.png')).toBeNull();
+ fireEvent.click(screen.getByRole('button', { name: 'Read image', expanded: false }));
+ expect(ui.getByText('/workspace/sample.png')).toBeTruthy();
+ expect(ui.getByText('Extra result text')).toBeTruthy();
+ expect(ui.container.textContent).not.toMatch(/artifact_1|Read static PNG image/);
 });
 
+
+it('keeps the trace inspector reachable for an image read with a deferred result', async () => {
+  const occurrence = { locator: { type: 'by_message_id' as const, message_id: 'assistant' }, block_index: 0 };
+  const tool: ForegroundToolExecution = {
+    occurrence, block_index: 0, call_id: 'image', tool_id: 'tool-read-image', name: 'read_image',
+    assembly_complete: true, committed_result_deferred: true,
+    state: { type: 'running', arguments: '{"path":"/workspace/sample.png"}' },
+  };
+  const inspect = vi.fn(async () => {});
+  render(<ToolInspectionContext value={inspect}><Tool tool={tool}/></ToolInspectionContext>);
+  fireEvent.click(screen.getByRole('button', { name: /Read image.*sample\.png/, expanded: false }));
+  fireEvent.click(screen.getByRole('button', { name: 'Inspect' }));
+  await waitFor(() => expect(inspect).toHaveBeenCalledWith({ occurrence, call_id: 'image', tool_id: 'tool-read-image' }));
+});
 
 it('preloads the model catalog and reopens the menu without another read or loading state', async () => {
   modelFixture(); server.held.add('session/models'); await server.attached('A'); render(<Control/>);
@@ -513,7 +535,7 @@ it('a late acknowledgement for the current-model gesture cannot report success a
 
 /** One Model, `example/chat`, whose Profiles resolve like native: a pinned
  * Profile is itself, an absent one follows the catalog's current default. */
-function profileFixture(configured: import('../../protocol/app-server/v75').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
+function profileFixture(configured: import('../../protocol/app-server/v77').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
   const state = { profiles, defaultProfile: profiles.length ? 'balanced' : undefined as string | undefined, revision: 1 };
   const base = cfg3Effective().effective_model;
   const resolve = (config: typeof configured) => ({ ...base, configured: config, effective: { ...base.effective!, model: config.model, profile: config.profile ?? state.defaultProfile ?? null } });
@@ -585,7 +607,7 @@ it.each(['menu', 'slash'] as const)('%s reselects the current model with its com
   const before = server.client.getSnapshot().views.A.snapshot;
   await chooseCurrent();
   const mutation = await server.waitFor('session/setModel', 1);
-  expect(mutation.params).toEqual({ target: server.target('A'), config: configured });
+  expect(mutation.params).toEqual({ target: server.target('A'), config: configured, recover_unavailable_auxiliary: true });
   expect(server.client.getSnapshot().views.A.snapshot).toBe(before);
   if (surface === 'slash') expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLInputElement).value).toBe('/model');
   ui.rerender(surface === 'menu' ? <Control/> : <SlashControl/>);
@@ -634,7 +656,7 @@ it('a Draft equivalent choice stays local, while a deliberate current-model choi
   expect(server.client.getSnapshot().views.A.modelIntent?.config).toEqual(configured);
   await act(async () => { server.reply(opening); await attaching; });
   const mutation = await server.waitFor('session/setModel', 1);
-  expect(mutation.params).toEqual({ target: server.target('A'), config: configured });
+  expect(mutation.params).toEqual({ target: server.target('A'), config: configured, recover_unavailable_auxiliary: true });
   await act(async () => server.reply(mutation));
   expect(count('session/setModel')).toBe(1);
 });
@@ -950,4 +972,37 @@ it.each(['reply', 'expired'] as const)('revalidates a deferred selection when th
  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('other');
  expect(count('session/setModel')).toBe(1);
+});
+
+it('rereads the Session model and closes the old picker when attachments have the same local sequence', async () => {
+ modelFixture();
+ const models = new Map(['A', 'B'].map(id => {
+   const model = structuredClone(server.snapshots.get('A')!.model!);
+   model.configured.model = model.effective!.model = id === 'A' ? 'exact/model' : 'other';
+   return [id, model];
+ }));
+ for (const id of ['A', 'B']) server.snapshots.set(id, { ...snapshot(id), model_status: { available: true, body_deferred: true, binding_revision: '1' } });
+ await server.attached('A', 'B');
+ // Native Attachment IDs are local to each Session's runtime host.
+ const state = server.client.getSnapshot();
+ const views = Object.fromEntries(Object.entries(state.views).map(([id, view]) => [id, { ...view, target: { ...view.target!, attachment_id: 'attachment-1' } }]));
+ vi.spyOn(server.client, 'getSnapshot').mockReturnValue({ ...state, views });
+ vi.spyOn(server.client, 'isAttachmentControlCurrent').mockReturnValue(true);
+ const catalog = vi.spyOn(server.client.reads, 'modelCatalogRead').mockResolvedValue({catalog:{models:[]},page:domainReceipt('model_catalog.models',[]).page});
+ const modelRead = vi.spyOn(server.client.reads, 'modelRead').mockImplementation(async target => models.get(target.session_id)!);
+ function Selected({id}: {id:string}) { return <AgentControls client={server.client} view={server.client.getSnapshot().views[id]}/>; }
+ const ui = render(<Selected id="A"/>);
+ const trigger = () => screen.getByRole('button', {name:'Model and thinking effort'});
+ await waitFor(() => expect(trigger().textContent).toContain('exact/model'));
+ fireEvent.click(trigger());
+ expect(trigger().getAttribute('aria-expanded')).toBe('true');
+ ui.rerender(<Selected id="B"/>);
+ await waitFor(() => expect(trigger().textContent).toContain('other'));
+ expect(trigger().getAttribute('aria-expanded')).toBe('false');
+ expect(screen.queryByRole('menu')).toBeNull();
+ ui.rerender(<Selected id="A"/>);
+ await waitFor(() => expect(trigger().textContent).toContain('exact/model'));
+ expect(catalog).toHaveBeenCalledTimes(3);
+ expect(modelRead.mock.calls.map(([target]) => target.session_id)).toEqual(['A','B','A']);
+ expect(count('session/setModel')).toBe(0);
 });

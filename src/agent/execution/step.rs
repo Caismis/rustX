@@ -481,7 +481,7 @@ impl<'a> AgentExecution<'a> {
         assistant_message_id: MessageId,
         assembler: ModelEventAssembler,
     ) -> Option<Terminal> {
-        let turn_assembly = match assembler.finish() {
+        let mut turn_assembly = match assembler.finish() {
             Ok(assembly) => assembly,
             Err(error) => {
                 return Some(Terminal::Failed {
@@ -489,6 +489,17 @@ impl<'a> AgentExecution<'a> {
                 });
             }
         };
+        let origin = self
+            .request
+            .model
+            .primary()
+            .invocation_config()
+            .replay_origin();
+        for block in &mut turn_assembly.content {
+            if let crate::message::types::AssistantContentBlock::Reasoning(reasoning) = block {
+                reasoning.origin.clone_from(&origin);
+            }
+        }
         // The pending fresh inbound turn is consumed by the first successful
         // model invocation, including a successful ToolCalls response: the
         // model has already observed the inbound turn, so the following

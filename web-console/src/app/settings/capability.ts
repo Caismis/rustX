@@ -1,11 +1,11 @@
 import type { Translate } from '../../locale/translation';
-import type { ResourceFamily } from '../../../../protocol/app-server/v75';
+import type { ResourceFamily } from '../../../../protocol/app-server/v77';
 import type { ExtensionFamily } from './projection';
 
 /** What the native App Server actually lets a client do to one resource family.
  *
  * This is derived from the generated protocol, not from the shape the pages
- * would like to have. At App Server v75 the complete set of source-authoring
+ * would like to have. At App Server v77 the complete set of source-authoring
  * operations is `SourceMutation`:
  *
  * ```text

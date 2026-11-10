@@ -1921,6 +1921,7 @@ async fn class_c_restart_issues_no_provider_request_of_its_own() {
                 Vec::new(),
                 crate::runtime::RuntimeResourceRevision::new(1),
                 crate::model::ModelInvocationConfig {
+                    replay_binding: Some("test-binding".into()),
                     model: "model-before-restart".to_owned(),
                     protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
                     max_output_tokens: 64,
@@ -2056,6 +2057,7 @@ async fn class_e_restart_issues_no_replacement_request() {
                 Vec::new(),
                 crate::runtime::RuntimeResourceRevision::new(1),
                 crate::model::ModelInvocationConfig {
+                    replay_binding: Some("test-binding".into()),
                     model: "model-before-restart".to_owned(),
                     protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
                     max_output_tokens: 64,

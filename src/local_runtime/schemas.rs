@@ -14,7 +14,7 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
         (
             "agent.schema.json",
             serde_json::to_value(crate::toml_authoring::source_schema::<
-                super::config::AgentProfileDocument,
+                super::config::NamedAgentProfileDocument,
             >())
             .expect("schema serializes"),
         ),

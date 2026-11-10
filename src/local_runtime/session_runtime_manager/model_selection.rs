@@ -8,14 +8,25 @@ impl SessionRuntimeManager {
     /// Native ownership starts before capture and survives loss of the RPC.
     /// Capture and commit share the source fence; model resolution holds neither
     /// that fence nor Attempt admission. No source files are ingested here.
+    #[cfg(test)]
     pub(crate) async fn set_model(
         &self,
         session: &SessionId,
         selection: crate::model::session::SessionModelConfig,
     ) -> Result<(crate::model::session::SessionModelView, u64), ModelSelectionError> {
+        self.set_model_with_recovery(session, selection, false)
+            .await
+    }
+
+    pub(crate) async fn set_model_with_recovery(
+        &self,
+        session: &SessionId,
+        selection: crate::model::session::SessionModelConfig,
+        recover_unavailable_auxiliary: bool,
+    ) -> Result<(crate::model::session::SessionModelView, u64), ModelSelectionError> {
         self.set_model_update(
             session,
-            ModelSelectionInput::Configuration(Box::new(selection)),
+            ModelSelectionInput::Configuration(Box::new(selection), recover_unavailable_auxiliary),
         )
         .await
     }
@@ -75,10 +86,13 @@ impl SessionRuntimeManager {
             let identity = application.view(session.as_ref()).map(|view| view.desired);
             (runtime, candidate, adopted, expected_settings, identity)
         };
-        let selection = match input {
-            ModelSelectionInput::Configuration(selection) => *selection,
-            ModelSelectionInput::Catalog(choice) => candidate.catalog_selection(&choice)?,
+        let (mut selection, recover) = match input {
+            ModelSelectionInput::Configuration(selection, recover) => (*selection, recover),
+            ModelSelectionInput::Catalog(choice) => (candidate.catalog_selection(&choice)?, true),
         };
+        if recover {
+            candidate.recover_auxiliary_models(&mut selection);
+        }
         let candidate = runtime.resolve_model_selection(candidate, selection.clone())?;
         #[cfg(test)]
         owner
@@ -177,6 +191,6 @@ impl From<super::super::session::SessionError> for ModelSelectionError {
 
 /// Native selection inputs share the existing capture/resolve/commit owner.
 enum ModelSelectionInput {
-    Configuration(Box<crate::model::session::SessionModelConfig>),
+    Configuration(Box<crate::model::session::SessionModelConfig>, bool),
     Catalog(crate::model::session::CatalogModelSelection),
 }

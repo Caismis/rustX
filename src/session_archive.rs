@@ -739,6 +739,7 @@ mod tests {
         let message = MessageBlock::Assistant(AssistantMessageBlock {
             id: crate::runtime::identity::MessageId::new("safe"),
             content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                origin: None,
                 text: Some("authored Authorization: Bearer sk-literal".into()),
                 provider_state: Some(
                     crate::runtime::continuation::ProviderContinuationState::Anthropic(

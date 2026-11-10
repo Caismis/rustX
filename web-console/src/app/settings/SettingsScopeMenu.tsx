@@ -1,10 +1,11 @@
+import { SettingsNotice } from './SettingsFeedback';
 import { useEffect, useState } from 'react';
 import type { ProductHostWorkspace, ProductHostWorkspaces } from '../../workspaces/host';
 import { useTranslation } from '../../locale/react';
 import { Menu } from '../../presentation/primitives/Menu';
 import { IconChevronDownOutline14, IconFolderClose16 } from '../../presentation/primitives/icons';
 import { settingsTargetKey, userSettingsTarget, workspaceSettingsTarget, type SettingsTarget } from './projection';
-import css from './extensions/ResourceCatalog.module.css';
+import css from '../resources/shared/ResourceCatalog.module.css';
 
 function UserScopeIcon() {
   return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="13" rx="2"/><path d="M12 16v5m-4 0h8"/></svg>;
@@ -38,6 +39,6 @@ export function SettingsScopeMenu({ target, host, onSelect, userLabel, disabled 
         ...(loading ? [{id:'loading',label:tx('settings:catalog.loading-workspaces'),disabled:true}] : []),
       ]}
       onSelect={id => { const workspace = workspaces.find(row => `workspace:${row.id}` === id); setOpen(false); if (id === settingsTargetKey(target)) return; if (id === 'user') onSelect(userSettingsTarget); else if (workspace) onSelect(workspaceSettingsTarget(workspace.id, workspace.displayName)); }}/>
-    {error && <p role="alert">{error}</p>}
+    <SettingsNotice text={error}/>
   </div>;
 }

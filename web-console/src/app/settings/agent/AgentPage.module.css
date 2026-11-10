@@ -1,0 +1,26 @@
+.guidanceRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+}
+
+.guidanceRow > button {
+  flex: none;
+}
+
+.instructions {
+  display: grid;
+  gap: 8px;
+}
+
+.instructions code {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.instructions textarea {
+  min-height: 180px;
+}

@@ -12,4 +12,3 @@ builtin = ["read"]
 
 [agents_md]
 inherit = false
-files = [".agents/agents/reviewer/AGENTS.md"]

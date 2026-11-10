@@ -318,13 +318,8 @@ mod tests {
                 execution_deadline: None,
                 tools,
                 skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(skills),
-                project_instructions:
-                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                        inherit: true,
-                        files: Vec::new(),
-                    },
+                inherit_project_instructions: true,
                 extensions,
-                agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
             std::path::PathBuf::from("/w/reviewer.md"),

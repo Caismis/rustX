@@ -53,6 +53,7 @@ fn live_invocation(
     storage: ResponsesStorageMode,
 ) -> ModelInvocationConfig {
     ModelInvocationConfig {
+        replay_binding: Some("test-binding".into()),
         model: model.to_owned(),
         protocol,
         max_output_tokens: 256,

@@ -25,7 +25,7 @@ export function useSettingsActor(): SettingsTargetActor {
  * attachment is the only thing this binding tells the actor: the transport is
  * delivered to it by its `ConfigurationSystem`, so no read, reconnect or
  * convergence ever depends on this component rendering. */
-export function useSettingsTarget(client: AppServerClient, target: SettingsTarget, host: ProductHostWorkspaces | undefined, enabled = true) {
+export function useSettingsTarget(client: AppServerClient, target: SettingsTarget, host: ProductHostWorkspaces | undefined, enabled = true, presentationKey?: string) {
   const transport = useClientSelector(client, transportSelection, sameValue);
   // The Product Host object identity is a presentation detail that may change
   // on any render; the port and its actor are bound to the authority instead.
@@ -43,7 +43,7 @@ export function useSettingsTarget(client: AppServerClient, target: SettingsTarge
     const system = configurationSystem(client);
     system.retainTarget(actor);
     return () => system.releaseTarget(actor);
-  }, [actor, client, enabled]);
+  }, [actor, client, enabled, presentationKey]);
   return { actor, transport };
 }
 

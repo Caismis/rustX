@@ -459,10 +459,7 @@ impl ResolvedSubagentSpec {
             extensions: self.extensions.clone(),
             agents: BTreeSet::new(),
             workflows: BTreeSet::new(),
-            project_instructions: crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                inherit: false,
-                files: self.project_instructions.clone(),
-            },
+            inherit_project_instructions: true,
             diagnostics: self.selection.diagnostics.clone(),
         }
     }
@@ -916,7 +913,6 @@ impl SubagentResolver {
                     tools: capability.available_tools(),
                     availability: resources.capability_availability(),
                     skills: capability.skills(),
-                    agents: &catalog.names().into_iter().cloned().collect(),
                     workflows: &resources.workflows().enabled_ids(),
                     scope: AgentScope::OneShotChild,
                 },
@@ -1195,24 +1191,16 @@ fn resolve_model(
     })
 }
 
-/// Composes the child's frozen project instruction chain.
-///
-/// `inherit = true` prepends the invoking generation's normal chain, in its
-/// own deterministic root-to-leaf order, before the definition's explicit
-/// files in configured order. `inherit = false` freezes the explicit files
-/// only. The child performs no ancestor discovery of its own in either case.
+/// Reuses the invoking generation's frozen AGENTS.md chain when enabled.
 pub(crate) fn resolve_project_instructions(
     definition: &NamedAgentDefinition,
     resources: &RuntimeResourceSnapshot,
 ) -> Vec<ProjectContextFile> {
-    let policy = definition.project_instructions();
-    let mut files = if policy.inherit {
+    if definition.inherits_project_instructions() {
         resources.project_context_files().to_vec()
     } else {
         Vec::new()
-    };
-    files.extend(policy.files.iter().cloned());
-    files
+    }
 }
 
 /// The exact inputs of the effective-profile framing.
@@ -1847,16 +1835,11 @@ mod tests {
                 execution_deadline: None,
                 tools,
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                project_instructions:
-                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                        inherit: true,
-                        files: Vec::new(),
-                    },
+                inherit_project_instructions: true,
                 extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
                     crate::context::AgentStatusConfig::default(),
                 )
                 .and_todo(),
-                agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
             std::path::PathBuf::from("/w/explore.md"),
@@ -2023,7 +2006,6 @@ mod tests {
                 tools: &available,
                 availability: &availability,
                 skills: &skills,
-                agents: &BTreeSet::new(),
                 workflows: &BTreeSet::new(),
                 scope: AgentScope::OneShotChild,
             };
@@ -2090,7 +2072,6 @@ mod tests {
                 tools: &available,
                 availability: &ready(),
                 skills: &skills,
-                agents: &BTreeSet::new(),
                 workflows: &BTreeSet::new(),
                 scope: AgentScope::OneShotChild,
             },
@@ -2238,13 +2219,8 @@ mod tests {
                 execution_deadline: None,
                 tools,
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                project_instructions:
-                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                        inherit: true,
-                        files: Vec::new(),
-                    },
+                inherit_project_instructions: true,
                 extensions,
-                agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
             std::path::PathBuf::from("/w/reviewer.md"),
@@ -2314,16 +2290,11 @@ mod tests {
                     execution_deadline: None,
                     tools: Vec::new(),
                     skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                    project_instructions:
-                        crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                            inherit: true,
-                            files: Vec::new(),
-                        },
+                    inherit_project_instructions: true,
                     extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
                         crate::context::AgentStatusConfig::default(),
                     )
                     .and_todo(),
-                    agents: std::collections::BTreeSet::default(),
                     workflows: std::collections::BTreeSet::default(),
                 },
                 std::path::PathBuf::from("/w/research.md"),
@@ -2338,16 +2309,11 @@ mod tests {
                     execution_deadline: None,
                     tools: Vec::new(),
                     skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                    project_instructions:
-                        crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                            inherit: true,
-                            files: Vec::new(),
-                        },
+                    inherit_project_instructions: true,
                     extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
                         crate::context::AgentStatusConfig::default(),
                     )
                     .and_todo(),
-                    agents: std::collections::BTreeSet::default(),
                     workflows: std::collections::BTreeSet::default(),
                 },
                 std::path::PathBuf::from("/w/explore.md"),
@@ -2446,10 +2412,7 @@ mod tests {
             // an override would have replaced away.
             "An entirely different routing description.".to_owned(), instructions: "instructions".to_owned(), model: None, execution_deadline: None, tools: vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
-            }], skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(vec!["some-skill".to_owned()]), project_instructions: crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                inherit: true,
-                files: Vec::new(),
-            }, extensions: crate::extensions::NativeAgentExtensions::with_agent_status(crate::context::AgentStatusConfig::default()).and_todo(), agents: std::collections::BTreeSet::default(), workflows: std::collections::BTreeSet::default() }, std::path::PathBuf::from("/w/reviewer.md"))
+            }], skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(vec!["some-skill".to_owned()]), inherit_project_instructions: true, extensions: crate::extensions::NativeAgentExtensions::with_agent_status(crate::context::AgentStatusConfig::default()).and_todo(), workflows: std::collections::BTreeSet::default() }, std::path::PathBuf::from("/w/reviewer.md"))
         .expect("definition");
 
         let mut relabelled = spec.clone();

@@ -1,15 +1,17 @@
+import { settledSave } from './shell-actions';
 import{domainOriginalValue}from '../../../protocol/app-server/domain-observation';
 import { followRoot, readApplication, readEffective, readSource } from './source-reading';
 import { expect, test } from '@playwright/test';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { returnHome, connectRemote, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { returnHome, connectRemote, openSettingsPage } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { diagnosticCut } from './wire-diagnostics';
-import type { AttachmentTarget, TraceRequestDetail } from '../../../protocol/app-server/v75';
+import { captureEvidence } from './screenshot';
+import type { AttachmentTarget, TraceRequestDetail } from '../../../protocol/app-server/v77';
 
 function immutable(request: TraceRequestDetail) {
   const { usage: _usage, failure: _failure, generation: _generation, ...input } = request;
@@ -37,7 +39,7 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     const trace = async () => (await remote.client.call('session/trace', { target: attachedA.target, limit: 32 }, 'trace')).page;
     const detail = async (record_id: string) => {
       const {page}=await remote.client.call('session/traceDetail',{target:attachedA.target,record_id},'domain_page');
-      const value=await domainOriginalValue<import('../../../protocol/app-server/v75').TraceDetail>(page,{
+      const value=await domainOriginalValue<import('../../../protocol/app-server/v77').TraceDetail>(page,{
         current:()=>!remote.client.closed,
         page:async(previous,offset)=>(await remote.client.call('conversation/checkpointPage',{target:attachedA.target,agent_id:null,cut:previous.read_cut,domain:previous.domain,offset,limit:32},'checkpoint_page')).page,
         value:async(previous,item,offset)=>(await remote.client.call('conversation/checkpointValueRead',{target:attachedA.target,agent_id:null,cut:previous.read_cut,domain:previous.domain,item_offset:Number(item.offset),path:[],offset,max_bytes:65536},'checkpoint_value_chunk')).chunk});
@@ -53,24 +55,19 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     // independent failure and adopted binding while A prepares successfully.
     writeFileSync(join(f.workspaceB, 'rustx.toml'), '[invalid TOML');
     await routeWorkspaceHost(page, f); await page.goto('/'); await connectRemote(page, f.endpoint, f.token);
-    await openWorkspaceSettings(page, 'Workspace A');
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
     await openSettingsPage(page, 'Agent');
-    await settings.getByLabel('Instructions', { exact: true }).fill('TRACE_NEW_INSTRUCTIONS');
-    await settings.getByRole('button', { name: 'Save Root instructions', exact: true }).click();
-    await expect(settings.getByText('Root instructions saved.')).toBeVisible();
-    await returnHome(page);
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await settings.getByRole('button', { name: 'Open User Settings', exact: true }).click();
+    await settings.getByRole('textbox', { name: 'Global instructions', exact: true }).fill('TRACE_NEW_INSTRUCTIONS');
+    await settings.getByRole('button', { name: 'Save instructions', exact: true }).click();
+    await expect(settledSave(settings, 'instructions')).toBeVisible();
     await openSettingsPage(page, 'Tools & Permissions');
     await settings.getByLabel('read', { exact: true }).uncheck();
-    await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
-    await expect(settings.getByText('Native Tools saved.')).toBeVisible();
+    await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
+    await expect(settledSave(settings, 'Built-in tools')).toBeVisible();
     const source = await readSource(remote,{kind:'user'});
-    const workspaceA = (await f.workspaceHost.host.listWorkspaces()).workspaces.find(workspace => workspace.displayName === 'Workspace A')!;
-    const workspaceSource = await f.workspaceHost.host.configureWorkspace(workspaceA.id, f.endpoint, { kind: 'read' });
-    if (workspaceSource.kind !== 'read') throw new Error('Expected native Workspace reread');
-    expect(workspaceSource.projection.workspace?.authored?.agent?.instructions).toBe('TRACE_NEW_INSTRUCTIONS');
+    expect(source.global_guidance?.authored).toBe('TRACE_NEW_INSTRUCTIONS');
+    expect(readFileSync(source.global_guidance!.path, 'utf8')).toBe('TRACE_NEW_INSTRUCTIONS');
     expect(source.user.authored?.agent?.tools?.builtin).not.toContain('read');
     const application = (id: string) => readApplication(remote, id);
     // A is busy: native keeps the prepared change waiting and never asks for consent.
@@ -116,7 +113,8 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     expect(after.previous_system_prompt).toEqual(before.effective_system_prompt);
     expect(immutable(await detail(oldRecord.id))).toEqual(before);
     expect((await f.control('requests')).requests).toHaveLength(2);
-    expect(wire.requests.filter(request => request.method === 'configuration/sourceWrite')).toHaveLength(1);
+    expect(wire.requests.filter(request => request.method === 'configuration/sourceWrite').map(request => request.params.mutation.kind))
+      .toEqual(['global_guidance', 'config']);
     expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(0);
     await returnHome(page);
     await remote.client.call('session/detach', { target: attachedA.target }, 'detached');
@@ -137,10 +135,9 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     await page.screenshot({ path: '/tmp/rustx-configuration-chat-mobile.png' });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
-    await page.locator(`[data-trace-id="${committed.id}"]`).first().click();
-    await expect(page.getByRole('complementary', { name: 'Event details' }).locator('[data-configuration-instructions]')).toContainText('TRACE_NEW_INSTRUCTIONS');
     const boundary = page.locator(`[data-display-type="SystemPromptCell"][data-owner="${current.id}"]`);
     await expect(boundary).toContainText('System Prompt and Tools Updated');
+    await expect(page.locator(`[data-owner="${committed.id}"], [data-timeline-span="configuration"]`)).toHaveCount(0);
     await boundary.click();
     await page.getByRole('tab', { name: 'Diff', exact: true }).click();
     const inspector = page.getByRole('complementary', { name: 'Event details' });
@@ -149,7 +146,13 @@ test('T1-17 X03 X04 X05 X06 X09 Settings save/reread, busy boundary, automatic c
     await expect(page.getByRole('complementary', { name: 'Event details' }).getByRole('tabpanel')).toContainText('TRACE_NEW_INSTRUCTIONS');
     await expect(inspector.getByRole('heading', { name: 'Tools', exact: true })).toBeVisible();
     await expect(inspector.getByRole('tabpanel')).toContainText('-    "name": "read"');
-    await page.screenshot({ path: '/tmp/rustx-system-trajectory-desktop.png' });
+    await captureEvidence(page, 'request-configuration-diff-desktop');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(inspector.getByRole('tabpanel')).toContainText('TRACE_NEW_INSTRUCTIONS');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await captureEvidence(page, 'request-configuration-diff-mobile');
+    expect(wire.requests.some(request => request.method === 'session/traceDetail' && request.params.record_id === committed.id)).toBe(false);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(browserErrors).toEqual([]);
     passed = true;
   } catch (error) {
