@@ -743,7 +743,8 @@ async fn t15_source_fields_and_many_small_revisions_page_with_exact_cut_evidence
             .unwrap();
         let title = crate::local_runtime::authoring::AuxiliaryModelAuthoring::Explicit {
             model: crate::model::catalog::ModelRef::parse("local/b").unwrap(),
-            profile: None, request_params: crate::toml_authoring::AuthoredRequestParams::default(),
+            profile: crate::local_runtime::authoring::AuxiliaryProfileAuthoring::ModelDefault {},
+            request_params: crate::toml_authoring::AuthoredRequestParams::default(),
             max_output_tokens: Some(crate::local_runtime::authoring::ModelOutput::Limit { tokens: 128 }),
         };
         native.user.authored.as_mut().unwrap().agent.as_mut().unwrap().model.as_mut().unwrap().auxiliary = Some(title.clone());

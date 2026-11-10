@@ -104,9 +104,9 @@ fn request_view(
         .map_err(RuntimeClientError::observation_store_error)?;
     let previous = predecessor
         .as_ref()
-        .and_then(|previous| previous.auxiliary.as_ref().map(|_| previous.start_sequence));
+        .and_then(|previous| previous.summary.as_ref().map(|_| previous.start_sequence));
     if let Some(previous_header) = predecessor {
-        value["predecessor"] = serde_json::json!({"availability":if previous_header.auxiliary.is_some(){"available"}else{"unavailable"},"request_id":previous_header.request_id,"request_id_source":previous_header.source});
+        value["predecessor"] = serde_json::json!({"availability":if previous_header.summary.is_some(){"available"}else{"unavailable"},"request_id":previous_header.request_id,"request_id_source":previous_header.source});
         value["previous_system_prompt"] = if let Some(previous) = previous {
             let field = store
                 .request_field_header_at(previous, cut.through, &["effective_system_prompt".into()])

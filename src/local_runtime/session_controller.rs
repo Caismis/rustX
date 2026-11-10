@@ -625,7 +625,7 @@ impl SessionController {
         id: &SessionId,
     ) -> Result<SessionSummary, SessionError> {
         let snapshot = self.catalog.lock().await.clone();
-        snapshot.auxiliary(id)
+        snapshot.summary(id)
     }
     /// # Errors
     /// Invalid pagination is rejected; the projection opens no conversation store.

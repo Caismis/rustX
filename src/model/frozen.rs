@@ -240,7 +240,7 @@ impl FrozenModelSpec {
             }
         };
         export(&mut self.primary.binding, "PRIMARY");
-        export(&mut self.auxiliary.0.binding, "SUMMARY");
+        export(&mut self.summary.0.binding, "SUMMARY");
     }
     /// Rehydrate only the private credential capture committed with this authority.
     pub(crate) fn restore_admitted_credentials(
@@ -251,8 +251,8 @@ impl FrozenModelSpec {
             &self.primary.binding,
             credentials,
         )?);
-        self.auxiliary.0.binding.resolved_credential =
-            Some(resolve_frozen_credential(&self.auxiliary.0.binding, credentials)?);
+        self.summary.0.binding.resolved_credential =
+            Some(resolve_frozen_credential(&self.summary.0.binding, credentials)?);
         Ok(())
     }
 
@@ -294,7 +294,7 @@ impl FrozenModelSpec {
         credentials: &dyn CredentialEnvironment,
     ) -> Result<(ResolvedModelInvocation, AttemptSummaryModel), ModelInvocationError> {
         let primary = self.primary.materialize(credentials)?;
-        let summary = AttemptSummaryModel::frozen(self.auxiliary.0.materialize(credentials)?);
+        let summary = AttemptSummaryModel::frozen(self.summary.0.materialize(credentials)?);
         Ok((primary, summary))
     }
 
@@ -303,8 +303,8 @@ impl FrozenModelSpec {
     #[must_use]
     pub fn catalog_view(&self) -> ModelCatalogView {
         let mut models = vec![self.primary.catalog_model_view()];
-        if self.auxiliary.0.model != self.primary.model {
-            models.push(self.auxiliary.0.catalog_model_view());
+        if self.summary.0.model != self.primary.model {
+            models.push(self.summary.0.catalog_model_view());
         }
         ModelCatalogView { models }
     }
@@ -318,7 +318,7 @@ impl FrozenModelSpec {
     ) -> Option<crate::model::catalog::CatalogModelReadView<'_>> {
         let model = match ordinal {
             0 => &self.primary,
-            1 if self.auxiliary.0.model != self.primary.model => self.auxiliary.0.as_ref(),
+            1 if self.summary.0.model != self.primary.model => self.summary.0.as_ref(),
             _ => return None,
         };
         Some(crate::model::catalog::CatalogModelReadView {
@@ -344,8 +344,8 @@ impl Serialize for FrozenCatalogReadView<'_> {
         struct Models<'a>(&'a FrozenModelSpec);
         impl Serialize for Models<'_> {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                let extra = (self.0.auxiliary.0.model != self.0.primary.model)
-                    .then_some(self.0.auxiliary.0.as_ref());
+                let extra = (self.0.summary.0.model != self.0.primary.model)
+                    .then_some(self.0.summary.0.as_ref());
                 let mut seq = serializer.serialize_seq(Some(1 + usize::from(extra.is_some())))?;
                 for model in std::iter::once(&self.0.primary).chain(extra) {
                     seq.serialize_element(&crate::model::catalog::CatalogModelReadView {
@@ -434,7 +434,7 @@ fn resolve_frozen_credential(
 
 #[cfg(test)]
 mod tests {
-    use super::{FrozenModelSpec, FrozenSummaryModel};
+    use super::FrozenModelSpec;
     use crate::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
     use crate::model::invocation::ModelBindingRegistry;
     use crate::model::session::SessionModelConfig;
@@ -497,7 +497,7 @@ chat_reasoning_replay = "omit"
         assert_eq!(primary.provider(), resolved.provider());
         assert_eq!(primary.model_ref(), resolved.model_ref());
         assert_eq!(summary.invocation().model_ref(), resolved.model_ref());
-        assert_eq!(decoded.auxiliary.0.model, decoded.primary.model);
+        assert_eq!(decoded.summary.0.model, decoded.primary.model);
     }
 
     /// The declared credential source crosses as a *source*, never as a

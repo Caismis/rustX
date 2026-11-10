@@ -361,7 +361,7 @@ impl RuntimeClientProjection {
         } else {
             self.source_state.source_unavailable = true;
         }
-        let summary = &receipt.auxiliary;
+        let summary = &receipt.summary;
         let matches_live = self.publication_start.as_ref().is_some_and(|start| {
             summary.stream_id.as_ref() == Some(&start.stream_id)
                 && summary.message_id.as_ref() == Some(&start.message_id)
@@ -372,7 +372,7 @@ impl RuntimeClientProjection {
         });
         let settlement_record =
             crate::observation::transcript::RuntimeClientPublicationSettlementRecord {
-                settlement: receipt.auxiliary.clone().into(),
+                settlement: receipt.summary.clone().into(),
                 transcript_cursor: receipt.transcript_cursor.into(),
                 read_cut: receipt.read_cut.clone(),
             };
@@ -419,7 +419,7 @@ impl RuntimeClientProjection {
         if receipt.header.deferred || audit.is_none() {
             return vec![RuntimeClientEvent::AssistantPublicationDeferredSettled {
                 attempt_id,
-                settlement: receipt.auxiliary.into(),
+                settlement: receipt.summary.into(),
                 settlement_head: self.snapshot.publication_settlements.clone(),
                 audit: audit.map(Box::new),
                 transcript_cursor: receipt.transcript_cursor.into(),

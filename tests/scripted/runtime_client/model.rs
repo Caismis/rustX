@@ -399,7 +399,10 @@ async fn the_identity_receipt_and_checkpoint_keep_the_redacted_session_model() {
         Some(ModelProfileId::new("on")),
         "the model's declared default profile is selected"
     );
-    assert_eq!(model.auxiliary, Some(AuxiliaryModelView::Session { effective: _ }));
+    assert!(matches!(
+        model.auxiliary,
+        Some(AuxiliaryModelView::Session { .. })
+    ));
 
     // The effective capabilities are the intersection, not the raw claim.
     assert!(
@@ -868,10 +871,10 @@ async fn the_attempt_view_reports_the_model_it_was_admitted_with() {
         model_ref("alpha/model-a"),
         "the settled attempt still reports the model it ran with"
     );
-    assert_eq!(
-        attempt.model.as_ref().unwrap().auxiliary,
-        AuxiliaryModelView::Session { effective: _ }
-    );
+    assert!(matches!(
+        attempt.model.as_ref().unwrap().summary,
+        AuxiliaryModelView::Session { .. }
+    ));
 }
 
 /// The incremental A -> B invariant, proven from the event stream alone.

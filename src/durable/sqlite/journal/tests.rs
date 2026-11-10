@@ -141,7 +141,7 @@ fn agent_authorities_reopen_from_private_capture_without_journal_secrets() {
     let mut summary = authority.resolved.model.primary.clone();
     summary.binding.credential = CredentialSource::Environment("AUTHORED_PROVIDER".into());
     summary.binding.resolved_credential = Some(ResolvedCredential::new("captured-provider"));
-    authority.resolved.model.auxiliary =
+    authority.resolved.model.summary =
         crate::model::frozen::FrozenSummaryModel(Box::new(summary));
     let mut source: SourceCredentials = serde_json::from_value(serde_json::json!({
         "environment": {"TOKEN":"$AUTHORED_SOURCE"}, "headers":{"Authorization":"$AUTHORED_SOURCE"}
@@ -276,7 +276,7 @@ fn agent_authorities_reopen_from_private_capture_without_journal_secrets() {
         authority
             .resolved
             .model
-            .auxiliary
+            .summary
             .0
             .binding
             .resolved_credential

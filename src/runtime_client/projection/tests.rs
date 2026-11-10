@@ -6197,7 +6197,7 @@ fn t14_t19_hidden_canonical_dependency_fences_a_native_audit_without_a_t_gap() {
     assert_eq!(fixture.audit.transcript_cursor.get(), 1);
     publish_source_fact(&mut projection, |projection| {
         projection.apply(ConversationObservation::AuditSettled {
-            attempt_id: fixture.audit.auxiliary.attempt_id.clone().unwrap(),
+            attempt_id: fixture.audit.summary.attempt_id.clone().unwrap(),
             receipt: fixture.audit.clone(),
         });
     });

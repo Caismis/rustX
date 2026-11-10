@@ -877,13 +877,13 @@ fn apply_command(
     let old = snapshot.clone();
     match mutation {
         ScheduleMutation::UpdateMetadata { title, .. } => {
-            snapshot.auxiliary.clone_from(title);
+            snapshot.title.clone_from(title);
         }
         ScheduleMutation::Update { title, text, .. } => {
             if !bounded(title, text) {
                 return Ok(invalid("invalid title or reminder bounds"));
             }
-            snapshot.auxiliary.clone_from(title);
+            snapshot.title.clone_from(title);
             if !matches!(snapshot.target, ScheduleTarget::ConversationInbound { .. }) {
                 return Ok(invalid("Workflow target needs an explicit Workflow update"));
             }
@@ -900,7 +900,7 @@ fn apply_command(
             }) else {
                 return Ok(invalid("Workflow update requires native preparation"));
             };
-            snapshot.auxiliary.clone_from(title);
+            snapshot.title.clone_from(title);
             snapshot.target = ScheduleTarget::Workflow {
                 pinned: Box::new(pinned.clone()),
                 arguments: arguments.clone(),

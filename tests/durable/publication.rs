@@ -4214,7 +4214,7 @@ fn t14_t19_t20_audit_settlement_head_uses_exact_native_positions_without_body_re
         receipts[32].header.publication_settlement.as_ref().unwrap()
     );
     assert_eq!(store.publication_settlement_head(&audit_cut).unwrap(), head);
-    connection.execute("DELETE FROM observation_headers WHERE reference_kind='publication_audit' AND reference_id=?1",[receipts[32].auxiliary.stream_id.as_ref().unwrap().as_str()]).unwrap();
+    connection.execute("DELETE FROM observation_headers WHERE reference_kind='publication_audit' AND reference_id=?1",[receipts[32].summary.stream_id.as_ref().unwrap().as_str()]).unwrap();
     assert!(
         store.publication_settlement_head(&cut).is_err(),
         "missing layout is unavailable, never a smaller authoritative head"
@@ -4236,8 +4236,8 @@ fn t10_t19_audit_layout_failure_retains_positive_native_settlement_receipt() {
         .terminalize_publication_audit(&start.stream_id, fixed_time())
         .unwrap();
     assert_eq!(audit.kind, PublicationAuditKind::Incomplete);
-    assert_eq!(receipt.auxiliary.kind, audit.kind);
-    assert_eq!(receipt.auxiliary.block_count, 1);
+    assert_eq!(receipt.summary.kind, audit.kind);
+    assert_eq!(receipt.summary.block_count, 1);
     assert!(receipt.header.deferred && receipt.header.display.is_none());
     let record = receipt.header.publication_settlement.unwrap();
     assert_eq!(
@@ -4308,7 +4308,7 @@ fn t08_t14_t15_t19_audit_blocks_advance_past_giant_proposal_metadata_and_exact_r
         .terminalize_publication_audit(&start.stream_id, fixed_time())
         .unwrap();
     assert!(receipt.header.deferred);
-    assert_eq!(receipt.auxiliary.block_count, 73);
+    assert_eq!(receipt.summary.block_count, 73);
     let first = store
         .audit_block_header_page(&receipt.read_cut, receipt.transcript_cursor.get(), 0, 32)
         .unwrap();

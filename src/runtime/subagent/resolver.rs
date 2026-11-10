@@ -2495,7 +2495,7 @@ mod tests {
             let mut invocation = frozen_invocation();
             mutate(&mut invocation);
             let mut spec = base.clone();
-            spec.model.auxiliary =
+            spec.model.summary =
                 crate::model::frozen::FrozenSummaryModel(Box::new(invocation));
             spec
         };
@@ -2607,11 +2607,11 @@ mod tests {
         );
 
         let mut explicit_summary = base.clone();
-        explicit_summary.model.auxiliary =
+        explicit_summary.model.summary =
             crate::model::frozen::FrozenSummaryModel(Box::new(frozen_invocation()));
         let explicit_identity = explicit_summary.profile_digest();
         let mut rebound_summary = explicit_summary.clone();
-        rebind(&mut rebound_summary.model.auxiliary.0);
+        rebind(&mut rebound_summary.model.summary.0);
         assert_eq!(
             rebound_summary.profile_digest(),
             explicit_identity,

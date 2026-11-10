@@ -86,7 +86,7 @@ impl Request {
     }
     pub(super) fn layout_completed(&mut self) {
         if self.0 {
-            record(|active| active.auxiliary.layout_completed = true);
+            record(|active| active.summary.layout_completed = true);
         }
     }
 }
@@ -98,11 +98,11 @@ impl Drop for Request {
         let Some(mut active) = ACTIVE.with(|slot| slot.borrow_mut().take()) else {
             return;
         };
-        active.auxiliary.source_us = active.started.elapsed().as_micros();
-        active.auxiliary.tracked_identities = active.identities.len();
+        active.summary.source_us = active.started.elapsed().as_micros();
+        active.summary.tracked_identities = active.identities.len();
         // All serialized fields are fixed scalar types. No source identity text,
         // payload, error, path, or diagnostic-set contents enter the output.
-        if let Some(line) = active.auxiliary.line() {
+        if let Some(line) = active.summary.line() {
             eprintln!("{line}");
         }
     }
@@ -142,30 +142,30 @@ impl Drop for Timer {
         let elapsed = started.elapsed().as_micros();
         record(|active| {
             let value = match self.phase {
-                Phase::Capture => &mut active.auxiliary.capture_us,
-                Phase::Scalar => &mut active.auxiliary.scalar_us,
-                Phase::Authenticate => &mut active.auxiliary.authenticate_us,
-                Phase::Paths => &mut active.auxiliary.paths_us,
-                Phase::Length => &mut active.auxiliary.length_us,
+                Phase::Capture => &mut active.summary.capture_us,
+                Phase::Scalar => &mut active.summary.scalar_us,
+                Phase::Authenticate => &mut active.summary.authenticate_us,
+                Phase::Paths => &mut active.summary.paths_us,
+                Phase::Length => &mut active.summary.length_us,
             };
             *value += elapsed;
         });
     }
 }
 pub(super) fn auth_call() {
-    record(|active| active.auxiliary.auth_calls += 1);
+    record(|active| active.summary.auth_calls += 1);
 }
 pub(super) fn origin_root_load() {
-    record(|active| active.auxiliary.origin_root_loads += 1);
+    record(|active| active.summary.origin_root_loads += 1);
 }
 pub(super) fn path_hop(depth: u8) {
     record(|active| {
-        active.auxiliary.path_hops += 1;
-        active.auxiliary.max_path_hops = active.auxiliary.max_path_hops.max(depth);
+        active.summary.path_hops += 1;
+        active.summary.max_path_hops = active.summary.max_path_hops.max(depth);
     });
 }
 pub(super) fn source_node_load() {
-    record(|active| active.auxiliary.source_node_loads += 1);
+    record(|active| active.summary.source_node_loads += 1);
 }
 pub(super) fn proof_visit(
     connection: &Connection,
@@ -175,7 +175,7 @@ pub(super) fn proof_visit(
     target: bool,
 ) {
     record(|active| {
-        active.auxiliary.authenticated_targets += u64::from(target);
+        active.summary.authenticated_targets += u64::from(target);
         let identity = Identity {
             native_id: native.id,
             native_digest: native.digest,
@@ -191,11 +191,11 @@ pub(super) fn proof_visit(
 impl Active {
     fn visit(&mut self, identity: Identity, write_token: u64) {
         if let Some(previous) = self.identities.get_mut(&identity) {
-            self.auxiliary.repeated_identities += 1;
+            self.summary.repeated_identities += 1;
             if *previous == write_token {
-                self.auxiliary.same_write_token_repeats += 1;
+                self.summary.same_write_token_repeats += 1;
             } else {
-                self.auxiliary.write_invalidated_repeats += 1;
+                self.summary.write_invalidated_repeats += 1;
             }
             *previous = write_token;
         } else if self.identities.len() < IDENTITY_LIMIT {
@@ -203,7 +203,7 @@ impl Active {
         } else {
             // This counts untracked visits, not distinct overflow identities.
             // Repetition counters become lower bounds when this is nonzero.
-            self.auxiliary.overflow_visits += 1;
+            self.summary.overflow_visits += 1;
         }
     }
 }
@@ -235,20 +235,20 @@ mod tests {
         active.visit(identity(0), 10);
         active.visit(identity(0), 10);
         active.visit(identity(0), 11);
-        assert_eq!(active.auxiliary.repeated_identities, 2);
-        assert_eq!(active.auxiliary.same_write_token_repeats, 1);
-        assert_eq!(active.auxiliary.write_invalidated_repeats, 1);
+        assert_eq!(active.summary.repeated_identities, 2);
+        assert_eq!(active.summary.same_write_token_repeats, 1);
+        assert_eq!(active.summary.write_invalidated_repeats, 1);
         for id in 1..=u64::try_from(IDENTITY_LIMIT).unwrap() {
             active.visit(identity(id), 11);
         }
         let capacity = active.identities.capacity();
         assert_eq!(active.identities.len(), IDENTITY_LIMIT);
-        assert_eq!(active.auxiliary.overflow_visits, 1);
+        assert_eq!(active.summary.overflow_visits, 1);
         active.visit(identity(u64::MAX), 11);
         active.visit(identity(u64::MAX), 11);
         assert_eq!(active.identities.capacity(), capacity);
-        assert_eq!(active.auxiliary.overflow_visits, 3);
-        assert_eq!(active.auxiliary.repeated_identities, 2);
+        assert_eq!(active.summary.overflow_visits, 3);
+        assert_eq!(active.summary.repeated_identities, 2);
     }
 
     #[test]

@@ -126,7 +126,7 @@ fn main() {
         cache: std::cell::RefCell::default(),
     };
     let report = check(&steps, &targets, host, &jobs, REQUIREMENTS, &discovery);
-    for line in &report.auxiliary {
+    for line in &report.summary {
         println!("{line}");
     }
     if !report.findings.is_empty() {
@@ -833,7 +833,7 @@ fn check(
             let arguments = step.libtest(&step.filters, &step.skips);
             match discovery.runnable(&step.features, target, &arguments) {
                 Ok((runnable, ignored)) => {
-                    report.auxiliary.push(format!(
+                    report.summary.push(format!(
                         "{}: {target}: {} runnable, {ignored} ignored selected",
                         step.label(),
                         runnable.len()

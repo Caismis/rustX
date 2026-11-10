@@ -1416,7 +1416,7 @@ fn primary_request_predecessor_filters_auxiliary_start_before_limit() {
     assert_eq!(predecessor.request_id.as_ref(), Some(&first_request_id));
     assert_eq!(
         predecessor
-            .auxiliary
+            .summary
             .as_ref()
             .map(|summary| &summary.request_id),
         Some(&Some(first_request_id))
