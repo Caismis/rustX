@@ -107,7 +107,7 @@ impl RuntimeClientProjection {
                 attempt_id: attempt_id.clone(),
                 message_id: message_id.clone(),
                 block_index: source.block_index,
-                call,
+                call: Box::new(call),
             });
         }
     }

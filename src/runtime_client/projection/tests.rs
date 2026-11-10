@@ -1184,7 +1184,7 @@ impl LiveStatusClient {
                             .iter()
                             .any(|existing| existing.status_message_id == status.status_message_id)
                         {
-                            self.statuses.push(status.clone());
+                            self.statuses.push(status.as_ref().clone());
                         }
                     }
                 }
