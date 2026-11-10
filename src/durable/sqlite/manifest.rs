@@ -311,7 +311,7 @@ fn persist_node(
                 "INSERT INTO native_input_items(item_json) VALUES(?1)",
                 [json],
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Some(nonnegative(
             connection.last_insert_rowid(),
             "native input item id",
