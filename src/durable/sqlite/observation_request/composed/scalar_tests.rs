@@ -705,8 +705,14 @@ fn geometry_only_headers_authenticate_raw_chunks_without_changing_native_history
         "a future request remains unavailable at the historical cut"
     );
     assert_eq!(field_in(&connection, &root, &key).unwrap().3, b"\"\"");
-    let original_bytes =
-        super::super::index::load_blob(&connection, root.scalar.bytes.hash).unwrap();
+    let original_bytes = super::super::index::load_blob(
+        &connection,
+        super::super::index::BlobRef {
+            id: root.scalar.bytes.id,
+            hash: root.scalar.bytes.hash,
+        },
+    )
+    .unwrap();
     connection
         .execute(
             "UPDATE request_source_pages SET bytes=x'7b7d' WHERE hash=?1",

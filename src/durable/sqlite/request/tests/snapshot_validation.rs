@@ -328,7 +328,7 @@ pub(super) fn deny_selected_input_bodies(
     use rusqlite::hooks::{AuthAction, Authorization};
     match context.action {
         AuthAction::Read {
-            table_name: "native_input_nodes",
+            table_name: "native_input_items",
             column_name: "item_json",
         } => Authorization::Deny,
         _ => Authorization::Allow,

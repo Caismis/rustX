@@ -114,9 +114,20 @@ fn request_fragment_split_visits_geometry_once_and_preserves_both_authenticated_
         assert!(prefix.is_none());
         assert_eq!(take_field_preview_work(), new_work);
         assert_eq!(
-            serde_json::to_vec(&suffix).unwrap(),
-            serde_json::to_vec(&expected.1).unwrap()
+            (suffix.length, suffix.max_path, suffix.max_key_path),
+            (
+                expected.1.length,
+                expected.1.max_path,
+                expected.1.max_key_path
+            )
         );
+        for offset in (0..suffix.length).step_by(8192) {
+            let end = (offset + 8192).min(suffix.length);
+            assert_eq!(
+                bytes(&suffix_only, &suffix, offset, end).unwrap(),
+                bytes(&old, &expected.1, offset, end).unwrap()
+            );
+        }
     }
 }
 

@@ -21,11 +21,13 @@ fn fact() -> Fact {
 fn fragment() -> Fragment {
     Fragment {
         bytes: index::Reference {
+            id: 1,
             hash: [255; 32],
             last: "00000000000000000000".into(),
             depth: 0,
         },
         fields: index::Reference {
+            id: 1,
             hash: [128; 32],
             last: "F[\"🙂\"]".into(),
             depth: 1,
@@ -178,7 +180,10 @@ fn compact_request_nodes_roots_and_templates_keep_every_native_coordinate() {
         content: Content::Leaf {
             leaf: Leaf {
                 variants: vec![0; 80],
-                templates: vec![[128; 32]],
+                templates: vec![index::BlobRef {
+                    id: 1,
+                    hash: [128; 32],
+                }],
             },
         },
     };

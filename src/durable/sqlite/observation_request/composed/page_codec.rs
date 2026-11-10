@@ -1,6 +1,6 @@
 //! Bounded binary pages with independent, full UTF-8 keys.
 use super::{ConversationStoreError, FANOUT, Hash, PAGE_BYTES, Page, Reference, storage};
-const MAGIC: &[u8; 5] = b"RXSP\x03";
+const MAGIC: &[u8; 5] = b"RXSP\x04";
 const KEY_BYTES: usize = 4160;
 const VALUE_BYTES: usize = 40_960;
 pub(super) const HEADER: usize = 8;
@@ -11,7 +11,7 @@ pub(super) fn leaf_size(key: &str, value: &[u8]) -> usize {
         .saturating_add(value.len())
 }
 pub(super) fn branch_size(reference: &Reference) -> usize {
-    35_usize.saturating_add(reference.last.len())
+    43_usize.saturating_add(reference.last.len())
 }
 pub(super) fn encode(page: &Page) -> Result<Vec<u8>, ConversationStoreError> {
     let (tag, count) = match page {
@@ -71,6 +71,7 @@ pub(super) fn encode(page: &Page) -> Result<Vec<u8>, ConversationStoreError> {
             for child in children {
                 put_key(&mut bytes, &child.last);
                 bytes.push(child.depth);
+                bytes.extend_from_slice(&child.id.to_le_bytes());
                 bytes.extend_from_slice(&child.hash);
             }
         }
@@ -140,11 +141,18 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Page, ConversationStoreError> {
             for _ in 0..count {
                 let last = cursor.key()?;
                 let depth = cursor.take(1)?[0];
+                let id =
+                    u64::from_le_bytes(cursor.take(8)?.try_into().expect("eight-byte page id"));
                 let hash: Hash = cursor
                     .take(32)?
                     .try_into()
                     .map_err(|_| storage("fragment hash size"))?;
-                children.push(Reference { hash, last, depth });
+                children.push(Reference {
+                    id,
+                    hash,
+                    last,
+                    depth,
+                });
             }
             Page::Branch { children }
         }

@@ -616,18 +616,18 @@ pub(super) fn bytes(
 pub(super) fn store_template(
     connection: &Connection,
     template: &Template,
-) -> Result<index::Hash, ConversationStoreError> {
+) -> Result<index::BlobRef, ConversationStoreError> {
     index::store_blob(connection, &super::record::encode(template, 65536)?)
 }
 pub(super) fn load_template(
     connection: &Connection,
-    digest: index::Hash,
+    digest: index::BlobRef,
 ) -> Result<Template, ConversationStoreError> {
     load_template_reusing(connection, digest, None)
 }
 pub(super) fn load_template_reusing(
     connection: &Connection,
-    digest: index::Hash,
+    digest: index::BlobRef,
     captured: Option<CapturedTemplate>,
 ) -> Result<Template, ConversationStoreError> {
     #[cfg(test)]

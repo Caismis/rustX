@@ -365,7 +365,7 @@ fn t10_t14_t19_request_shape_optional_insert_failure_preserves_native_r_c_j() {
                 },
             )
             .unwrap();
-        connection.execute_batch("CREATE TEMP TRIGGER refuse_request_shape BEFORE INSERT ON request_source_nodes BEGIN SELECT test_request_shape_insert(); SELECT RAISE(FAIL,'optional request shape'); END;").unwrap();
+        connection.execute_batch("CREATE TEMP TRIGGER refuse_request_shape BEFORE UPDATE OF source_metadata ON native_input_nodes WHEN NEW.source_metadata IS NOT NULL BEGIN SELECT test_request_shape_insert(); SELECT RAISE(FAIL,'optional request shape'); END;").unwrap();
     }
     let snapshot = shape_snapshot(&store, 1);
     let committed = store
@@ -391,7 +391,7 @@ fn t10_t14_t19_request_shape_optional_insert_failure_preserves_native_r_c_j() {
         let connection = store.lock().unwrap();
         for table in [
             "request_source_pages",
-            "request_source_nodes",
+            "native_input_nodes WHERE source_metadata IS NOT NULL",
             "request_source_roots",
         ] {
             let count: u64 = connection
@@ -473,27 +473,32 @@ pub(super) fn mutate_source_json(
     id: &rusqlite::types::Value,
     mutation: impl FnOnce(&mut serde_json::Value),
 ) {
+    let column = if table == "native_input_nodes" {
+        "source_metadata"
+    } else {
+        "metadata"
+    };
     let raw: Vec<u8> = connection
         .query_row(
-            &format!("SELECT metadata FROM {table} WHERE {key}=?1"),
+            &format!("SELECT {column} FROM {table} WHERE {key}=?1"),
             [id],
             |row| row.get(0),
         )
         .unwrap();
     let mut value = match table {
-        "request_source_nodes" => observation_request::composed::inspect_node_record(&raw),
+        "native_input_nodes" => observation_request::composed::inspect_node_record(&raw),
         "request_source_roots" => observation_request::composed::inspect_root_record(&raw),
         _ => unreachable!("closed source metadata corruption fixture"),
     };
     mutation(&mut value);
     let bytes = match table {
-        "request_source_nodes" => observation_request::composed::encode_test_node_record(value),
+        "native_input_nodes" => observation_request::composed::encode_test_node_record(value),
         "request_source_roots" => observation_request::composed::encode_test_root_record(value),
         _ => unreachable!("closed source metadata corruption fixture"),
     };
     connection
         .execute(
-            &format!("UPDATE {table} SET metadata=?2 WHERE {key}=?1"),
+            &format!("UPDATE {table} SET {column}=?2 WHERE {key}=?1"),
             params![id, bytes],
         )
         .unwrap();
@@ -516,15 +521,15 @@ pub(super) fn corrupt_request_shape(
             };
             connection
                 .execute(
-                    &format!("UPDATE request_source_nodes SET metadata={value} WHERE native_id=?1"),
+                    &format!("UPDATE native_input_nodes SET source_metadata={value} WHERE id=?1"),
                     [shape],
                 )
                 .unwrap();
         }
         "missing_middle" => mutate_source_json(
             connection,
-            "request_source_nodes",
-            "native_id",
+            "native_input_nodes",
+            "id",
             &i64::try_from(shape).unwrap().into(),
             |value| {
                 let variants = value["content"]["leaf"]["leaf"]["variants"]
@@ -541,7 +546,7 @@ pub(super) fn corrupt_request_shape(
             assert_eq!(
                 connection
                     .execute(
-                        "DELETE FROM request_source_nodes WHERE native_id=?1",
+                        "UPDATE native_input_nodes SET source_native_digest=NULL,source_hash=NULL,source_metadata=NULL WHERE id=?1",
                         [shape]
                     )
                     .unwrap(),
@@ -549,10 +554,10 @@ pub(super) fn corrupt_request_shape(
             );
         }
         "wrong_real_shape" => {
-            let other: Vec<u8> = connection.query_row("SELECT metadata FROM request_source_nodes WHERE native_id!=?1 ORDER BY native_id LIMIT 1", [shape], |row| row.get(0)).unwrap();
+            let other: Vec<u8> = connection.query_row("SELECT source_metadata FROM native_input_nodes WHERE id!=?1 ORDER BY id LIMIT 1", [shape], |row| row.get(0)).unwrap();
             connection
                 .execute(
-                    "UPDATE request_source_nodes SET metadata=?2 WHERE native_id=?1",
+                    "UPDATE native_input_nodes SET source_metadata=?2 WHERE id=?1",
                     params![shape, other],
                 )
                 .unwrap();
@@ -560,7 +565,7 @@ pub(super) fn corrupt_request_shape(
         "shape_hash" | "header_digest" => {
             connection
                 .execute(
-                    "UPDATE request_source_nodes SET hash=zeroblob(32) WHERE native_id=?1",
+                    "UPDATE native_input_nodes SET source_hash=zeroblob(32) WHERE id=?1",
                     [shape],
                 )
                 .unwrap();
@@ -568,7 +573,7 @@ pub(super) fn corrupt_request_shape(
         "native_digest" => {
             connection
                 .execute(
-                    "UPDATE request_source_nodes SET native_digest=zeroblob(32) WHERE native_id=?1",
+                    "UPDATE native_input_nodes SET source_native_digest=zeroblob(32) WHERE id=?1",
                     [shape],
                 )
                 .unwrap();
@@ -751,7 +756,7 @@ fn t14_t19_t20_request_shape_rows_grow_with_new_immutable_items_and_request_anch
         let work = observation_request::composed::take_work();
         let oracle = shape_oracle(&store, &snapshot, sequence);
         let connection = store.lock().unwrap();
-        let (nodes, leaves): (u64,u64) = connection.query_row("SELECT count(*),sum(n.count=1) FROM request_source_nodes s JOIN native_input_nodes n ON n.id=s.native_id", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+        let (nodes, leaves): (u64,u64) = connection.query_row("SELECT count(*),sum(count=1) FROM native_input_nodes WHERE source_metadata IS NOT NULL", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
         if turn == 1 {
             assert_eq!(leaves, snapshot.input.len() as u64);
         } else {
@@ -780,7 +785,7 @@ fn t14_t19_t20_request_shape_rows_grow_with_new_immutable_items_and_request_anch
         );
         let maximum: u64 = connection
             .query_row(
-                "SELECT max(length(metadata)) FROM request_source_nodes",
+                "SELECT max(length(source_metadata)) FROM native_input_nodes",
                 [],
                 |row| row.get(0),
             )
@@ -800,13 +805,14 @@ fn t14_t19_t20_request_shape_rows_grow_with_new_immutable_items_and_request_anch
 pub(super) fn selected_template_hash(connection: &Connection, shape: u64) -> Vec<u8> {
     let raw: Vec<u8> = connection
         .query_row(
-            "SELECT metadata FROM request_source_nodes WHERE native_id=?1",
+            "SELECT source_metadata FROM native_input_nodes WHERE id=?1",
             [shape],
             |row| row.get(0),
         )
         .unwrap();
     let metadata = observation_request::composed::inspect_node_record(&raw);
-    serde_json::from_value(metadata["content"]["leaf"]["leaf"]["templates"][0].clone()).unwrap()
+    serde_json::from_value(metadata["content"]["leaf"]["leaf"]["templates"][0]["hash"].clone())
+        .unwrap()
 }
 
 #[test]
@@ -879,7 +885,7 @@ fn t10_t14_t19_malformed_rehashed_shape_metadata_is_still_rejected() {
         let connection = store.lock().unwrap();
         let raw: Vec<u8> = connection
             .query_row(
-                "SELECT metadata FROM request_source_nodes WHERE native_id=?1",
+                "SELECT source_metadata FROM native_input_nodes WHERE id=?1",
                 [shape],
                 |row| row.get(0),
             )
@@ -897,7 +903,7 @@ fn t10_t14_t19_malformed_rehashed_shape_metadata_is_still_rejected() {
         let digest = <sha2::Sha256 as sha2::Digest>::digest(&changed);
         connection
             .execute(
-                "UPDATE request_source_nodes SET metadata=?2,hash=?3 WHERE native_id=?1",
+                "UPDATE native_input_nodes SET source_metadata=?2,source_hash=?3 WHERE id=?1",
                 params![shape, changed, digest.as_slice()],
             )
             .unwrap();
@@ -990,12 +996,24 @@ fn t08_t12_t19_request_shape_absent_caller_paths_are_distinct_from_missing_nativ
             .unwrap()
             .unwrap()
             .id;
-        connection.execute_batch("CREATE TEMP TABLE saved_shape_anchor AS SELECT * FROM request_source_nodes WHERE 0").unwrap();
-        assert_eq!(connection.execute("INSERT INTO saved_shape_anchor SELECT * FROM request_source_nodes WHERE native_id=?1", [missing]).unwrap(), 1);
+        connection
+            .execute_batch(
+                "CREATE TEMP TABLE saved_shape_anchor AS SELECT * FROM native_input_nodes WHERE 0",
+            )
+            .unwrap();
         assert_eq!(
             connection
                 .execute(
-                    "DELETE FROM request_source_nodes WHERE native_id=?1",
+                    "INSERT INTO saved_shape_anchor SELECT * FROM native_input_nodes WHERE id=?1",
+                    [missing]
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .execute(
+                    "UPDATE native_input_nodes SET source_native_digest=NULL,source_hash=NULL,source_metadata=NULL WHERE id=?1",
                     [missing]
                 )
                 .unwrap(),
@@ -1012,12 +1030,10 @@ fn t08_t12_t19_request_shape_absent_caller_paths_are_distinct_from_missing_nativ
             Err(ConversationStoreError::Storage(_))
         ));
         let saved: u64 = connection
-            .query_row("SELECT native_id FROM saved_shape_anchor", [], |row| {
-                row.get(0)
-            })
+            .query_row("SELECT id FROM saved_shape_anchor", [], |row| row.get(0))
             .unwrap();
         assert_eq!(saved, missing);
-        connection.execute_batch("INSERT INTO request_source_nodes SELECT * FROM saved_shape_anchor; DROP TABLE saved_shape_anchor;").unwrap();
+        connection.execute_batch("UPDATE native_input_nodes SET (source_native_digest,source_hash,source_metadata)=(SELECT source_native_digest,source_hash,source_metadata FROM saved_shape_anchor) WHERE id=(SELECT id FROM saved_shape_anchor); DROP TABLE saved_shape_anchor;").unwrap();
     }
     assert_shape_oracle(&store, &snapshot, sequence, &oracle);
     assert_eq!(store.read_events(None, 32).unwrap().events, journal);

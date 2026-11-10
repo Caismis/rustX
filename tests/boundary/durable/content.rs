@@ -1116,25 +1116,22 @@ fn timed_request_snapshot(
 }
 
 fn assert_request_source_point_indexes(connection: &rusqlite::Connection, sequence: u64) {
-    let hash_index: String = connection
+    let indexes: u64 = connection
         .query_row(
-            "SELECT name FROM pragma_index_list('request_source_pages') WHERE \"unique\"=1 AND origin='pk'",
-            [], |row| row.get(0),
+            "SELECT count(*) FROM pragma_index_list('request_source_pages')",
+            [],
+            |row| row.get(0),
         )
         .unwrap();
-    let columns: Vec<String> = connection
-        .prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")
-        .unwrap()
-        .query_map([&hash_index], |row| row.get(0))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    assert_eq!(columns, ["hash"]);
+    assert_eq!(
+        indexes, 0,
+        "Source pages use the numeric rowid without a global hash index"
+    );
     for (sql, key, expected) in [
         (
-            "EXPLAIN QUERY PLAN SELECT CASE WHEN typeof(bytes)='blob' AND length(bytes)<=65536 THEN bytes END FROM request_source_pages WHERE hash=?1",
-            rusqlite::types::Value::Blob(vec![0; 32]),
-            format!("SEARCH request_source_pages USING INDEX {hash_index} (hash=?)"),
+            "EXPLAIN QUERY PLAN SELECT CASE WHEN typeof(bytes)='blob' AND length(bytes)<=65536 THEN bytes END FROM request_source_pages WHERE id=?1 AND hash=zeroblob(32)",
+            rusqlite::types::Value::Integer(1),
+            "SEARCH request_source_pages USING INTEGER PRIMARY KEY (rowid=?)".to_owned(),
         ),
         (
             "EXPLAIN QUERY PLAN SELECT metadata,checksum FROM request_source_roots WHERE source_id=?1",
