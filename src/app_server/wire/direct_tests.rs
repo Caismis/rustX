@@ -17,6 +17,7 @@ native!(
     Request,
     Response,
     protocol::Notification,
+    protocol::ServerRequest,
     crate::app_server::product_host::FileRead
 );
 
@@ -118,7 +119,7 @@ fn direct_wire_preserves_exact_native_record_limit_and_errors() {
 struct Direct<'a, T>(&'a T);
 impl<T: Serialize + schemars::JsonSchema> Serialize for Direct<'_, T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let schema = crate::observation::structural_json::root::<T>();
+        let schema = crate::observation::structural_json::codec::<T>();
         crate::observation::structural_json::serialize_wire(self.0, &schema, serializer)
     }
 }
@@ -148,4 +149,44 @@ fn direct_wire_preserves_opaque_numbers_float_normalization_and_tuple_rules() {
     assert_eq!(legacy["exact"], u64::MAX.to_string());
     assert!(legacy["opaque"]["wide"].is_number());
     assert!(legacy["tuple"][0].is_number());
+}
+
+#[test]
+fn compact_plans_preserve_export_artifact_identity() {
+    let schema = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&super::super::schema::protocol_schema()).unwrap()
+    );
+    assert_eq!(
+        schema,
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/protocol/app-server/v78.schema.json"
+        ))
+    );
+    let fixtures = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&super::super::schema::fixtures()).unwrap()
+    );
+    assert_eq!(
+        fixtures,
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/protocol/app-server/fixtures.json"
+        ))
+    );
+}
+
+#[test]
+fn every_typed_fixture_matches_native_serialization_oracle() {
+    use protocol::{ProtocolMessage, ServerMessage};
+    for fixture in super::super::schema::fixtures() {
+        match fixture {
+            ProtocolMessage::Request(value) => assert_wire(value.as_ref()),
+            ProtocolMessage::Response(value) => assert_wire(&value),
+            ProtocolMessage::Notification(value) => assert_wire(&value),
+            ProtocolMessage::ServerMessage(ServerMessage::Request(value)) => assert_wire(&value),
+            _ => {}
+        }
+    }
 }

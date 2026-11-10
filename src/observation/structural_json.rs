@@ -7,7 +7,7 @@ use serde::ser::{
 };
 use serde_json::Value;
 
-mod plan;
+pub(crate) mod plan;
 #[cfg(test)]
 mod plan_tests;
 use plan::{Unsigned, View};
@@ -54,6 +54,7 @@ fn resolve<'a>(schema: &'a Value, root: &'a Value) -> &'a Value {
     }
     schema
 }
+#[cfg(test)]
 fn child<'a>(schema: &'a Value, root: &'a Value, key: Option<&str>) -> &'a Value {
     if schema.is_null() {
         return schema;
@@ -77,6 +78,7 @@ fn child<'a>(schema: &'a Value, root: &'a Value, key: Option<&str>) -> &'a Value
     }
     branch_child(schema, root, key)
 }
+#[cfg(test)]
 fn branch_child<'a>(schema: &'a Value, root: &'a Value, key: Option<&str>) -> &'a Value {
     if schema.is_null() {
         return schema;
@@ -93,6 +95,7 @@ fn branch_child<'a>(schema: &'a Value, root: &'a Value, key: Option<&str>) -> &'
     }
     &Value::Null
 }
+#[cfg(test)]
 fn element<'a>(schema: &'a Value, root: &'a Value, index: usize) -> &'a Value {
     let schema = resolve(schema, root);
     schema["prefixItems"]
@@ -114,12 +117,14 @@ fn selected_schema<'a>(root: &'a Value, path: &[String]) -> &'a Value {
     schema
 }
 
-pub(crate) struct Encoded<'a, T: ?Sized> {
+#[cfg(test)]
+pub(crate) struct BorrowedEncoded<'a, T: ?Sized> {
     pub value: &'a T,
     pub schema: &'a Value,
     pub root: &'a Value,
 }
-impl<T: Serialize + ?Sized> Serialize for Encoded<'_, T> {
+#[cfg(test)]
+impl<T: Serialize + ?Sized> Serialize for BorrowedEncoded<'_, T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         #[cfg(test)]
         if LEGACY_PLAN.with(std::cell::Cell::get) {
@@ -132,11 +137,11 @@ impl<T: Serialize + ?Sized> Serialize for Encoded<'_, T> {
                 },
             });
         }
-        let plan = encoding_plan(self.schema, self.root);
+        let plan = plan::Plan::new(self.schema, self.root);
         self.value.serialize(Encoder {
             serializer,
             wire: false,
-            schema: plan.select(self.schema).expect("compiled encoding root"),
+            schema: plan.root(),
         })
     }
 }
@@ -167,13 +172,12 @@ struct Encoder<'a, S> {
 /// source-domain encoding.
 pub(crate) fn serialize_wire<T: Serialize + ?Sized, S: serde::Serializer>(
     value: &T,
-    schema: &Value,
+    plan: &plan::Plan,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    let plan = encoding_plan(schema, schema);
     value.serialize(Encoder {
         serializer,
-        schema: plan.select(schema).expect("compiled envelope schema"),
+        schema: plan.root(),
         wire: true,
     })
 }
@@ -728,137 +732,133 @@ macro_rules! mapping {
 }
 mapping!(SerializeStruct);
 mapping!(SerializeStructVariant);
-/// Immutable schemas depend only on their compile-time DTO type. Sharing them
-/// avoids repeating the schema graph walk for every indexed Source field.
-/// The vocabulary is finite monomorphized DTOs, never client-controlled keys.
+/// Runtime codecs retain only their compact immutable plan. The complete schema
+/// is generated from the same `JsonSchema` implementation on demand and released.
+#[derive(Default)]
 struct SchemaOwner {
-    schema: std::sync::Arc<Value>,
     plan: std::sync::OnceLock<std::sync::Arc<plan::Plan>>,
     #[cfg(test)]
     plan_builds: std::sync::atomic::AtomicUsize,
 }
-impl SchemaOwner {
-    fn encoding_plan(&self) -> std::sync::Arc<plan::Plan> {
-        self.plan
-            .get_or_init(|| {
-                #[cfg(test)]
-                self.plan_builds
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                std::sync::Arc::new(plan::Plan::new(&self.schema, &self.schema))
-            })
-            .clone()
-    }
-}
 #[derive(Default)]
 struct SchemaCache {
     roots: std::collections::BTreeMap<&'static str, std::sync::Arc<SchemaOwner>>,
-    owners: std::collections::HashMap<usize, std::sync::Arc<SchemaOwner>>,
 }
 static SCHEMAS: std::sync::LazyLock<std::sync::Mutex<SchemaCache>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(SchemaCache::default()));
 
-fn encoding_plan(schema: &Value, root: &Value) -> std::sync::Arc<plan::Plan> {
-    let cached = SCHEMAS
+fn cached_codec<T>(create: impl FnOnce() -> plan::Plan) -> std::sync::Arc<plan::Plan> {
+    let owner = SCHEMAS
         .lock()
-        .expect("native schemas")
-        .owners
-        .get(&(std::ptr::from_ref(root) as usize))
-        .cloned();
-    if let Some(owner) = cached {
-        let plan = owner.encoding_plan();
-        if plan.select(schema).is_some() {
-            return plan;
-        }
-    }
-    // Arbitrary borrowed test/inspection schemas never enter the type cache.
-    std::sync::Arc::new(plan::Plan::new(schema, root))
-}
-pub(crate) fn root<T: schemars::JsonSchema>() -> std::sync::Arc<Value> {
-    let identity = std::any::type_name::<T>();
-    if let Some(owner) = SCHEMAS
-        .lock()
-        .expect("native schemas")
+        .expect("native codecs")
         .roots
-        .get(identity)
-        .cloned()
-    {
-        return owner.schema.clone();
-    }
-    // Generate outside the cache boundary: custom schemas may request another
-    // native type. Decoding needs only the schema; a first actual encoding
-    // compiles the winning owner's plan once, outside the global cache lock.
-    let schema = std::sync::Arc::new(
+        .entry(std::any::type_name::<T>())
+        .or_insert_with(|| {
+            std::sync::Arc::new(SchemaOwner {
+                plan: std::sync::OnceLock::new(),
+                #[cfg(test)]
+                plan_builds: std::sync::atomic::AtomicUsize::new(0),
+            })
+        })
+        .clone();
+    owner
+        .plan
+        .get_or_init(|| {
+            #[cfg(test)]
+            owner
+                .plan_builds
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            std::sync::Arc::new(create())
+        })
+        .clone()
+}
+
+pub(crate) fn codec<T: schemars::JsonSchema>() -> std::sync::Arc<plan::Plan> {
+    cached_codec::<T>(|| {
+        let schema =
+            serde_json::to_value(schemars::schema_for!(T)).expect("native structural schema");
+        plan::Plan::new(&schema, &schema)
+    })
+}
+pub(crate) fn codec_from_bytes<T: schemars::JsonSchema>(
+    bytes: &[u8],
+) -> std::sync::Arc<plan::Plan> {
+    cached_codec::<T>(|| plan::Plan::from_bytes(bytes))
+}
+
+#[cfg(test)]
+pub(crate) fn schema_root<T: schemars::JsonSchema>() -> std::sync::Arc<Value> {
+    std::sync::Arc::new(
         serde_json::to_value(schemars::schema_for!(T)).expect("native structural schema"),
-    );
-    let mut cache = SCHEMAS.lock().expect("native schemas");
-    if let Some(existing) = cache.roots.get(identity) {
-        return existing.schema.clone();
+    )
+}
+
+pub(crate) fn root<T: schemars::JsonSchema>() -> std::sync::Arc<plan::Plan> {
+    codec::<T>()
+}
+
+/// A selected codec root; its stable node IDs belong to the same immutable plan.
+pub(crate) struct Encoded<'a, T: ?Sized> {
+    pub value: &'a T,
+    pub schema: &'a plan::Plan,
+    pub root: &'a plan::Plan,
+}
+impl<T: Serialize + ?Sized> Serialize for Encoded<'_, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        debug_assert!(std::ptr::eq(self.schema, self.root));
+        self.value.serialize(Encoder {
+            serializer,
+            wire: false,
+            schema: self.schema.root(),
+        })
     }
-    let owner = std::sync::Arc::new(SchemaOwner {
-        schema: schema.clone(),
-        plan: std::sync::OnceLock::new(),
-        #[cfg(test)]
-        plan_builds: std::sync::atomic::AtomicUsize::new(0),
-    });
-    cache
-        .owners
-        .insert(std::sync::Arc::as_ptr(&schema) as usize, owner.clone());
-    cache.roots.insert(identity, owner);
-    schema
+}
+
+struct TypedEncoded<'a, T: ?Sized> {
+    value: &'a T,
+    plan: std::sync::Arc<plan::Plan>,
+}
+impl<T: Serialize + ?Sized> Serialize for TypedEncoded<'_, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.value.serialize(Encoder {
+            serializer,
+            wire: false,
+            schema: self.plan.root(),
+        })
+    }
+}
+pub(crate) fn encoded<T: Serialize + schemars::JsonSchema>(value: &T) -> impl Serialize + '_ {
+    TypedEncoded {
+        value,
+        plan: codec::<T>(),
+    }
 }
 pub(crate) fn to_writer<T: Serialize + schemars::JsonSchema, W: std::io::Write>(
     writer: W,
     value: &T,
 ) -> serde_json::Result<()> {
-    let root = root::<T>();
-    serde_json::to_writer(
-        writer,
-        &Encoded {
-            value,
-            schema: &root,
-            root: &root,
-        },
-    )
+    serde_json::to_writer(writer, &encoded(value))
 }
 
 pub(crate) fn decode<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
     mut value: Value,
 ) -> serde_json::Result<T> {
-    fn visit(value: &mut Value, schema: &Value, root: &Value) {
-        let mut schema = resolve(schema, root);
-        for keyword in ["oneOf", "anyOf"] {
-            if let Some(branches) = schema[keyword].as_array() {
-                for branch in branches {
-                    let candidate = resolve(branch, root);
-                    if let Some(properties) = candidate["properties"].as_object() {
-                        let tagged: Vec<_> = properties
-                            .iter()
-                            .filter_map(|(key, property)| {
-                                property.get("const").map(|expected| (key, expected))
-                            })
-                            .collect();
-                        if !tagged.is_empty()
-                            && tagged
-                                .iter()
-                                .all(|(key, expected)| value.get(*key) == Some(*expected))
-                        {
-                            schema = candidate;
-                            break;
-                        }
-                    }
+    fn visit(value: &mut Value, mut schema: View<'_>) {
+        for kind in 0..2 {
+            let mut index = 0;
+            while let Some(branch) = schema.branch(kind, index) {
+                index += 1;
+                if branch.matches_tagged(value) {
+                    schema = branch;
+                    break;
                 }
             }
         }
-        if schema["format"] == "uint64"
-            && schema["maximum"]
-                .as_f64()
-                .is_none_or(|maximum| maximum > 9_007_199_254_740_991.0)
-        {
-            if let Some(number) = value.as_str().and_then(|value| {
-                value
-                    .parse::<u64>()
+        if schema.unsigned() == Unsigned::Decimal {
+            if let Some(number) = value.as_str().and_then(|text| {
+                text.parse::<u64>()
                     .ok()
-                    .filter(|number| number.to_string() == value)
+                    .filter(|number| number.to_string() == text)
             }) {
                 *value = Value::from(number);
             }
@@ -867,19 +867,19 @@ pub(crate) fn decode<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
         match value {
             Value::Object(fields) => {
                 for (key, value) in fields {
-                    visit(value, child(schema, root, Some(key)), root);
+                    visit(value, schema.child(Some(key)));
                 }
             }
             Value::Array(items) => {
                 for (index, value) in items.iter_mut().enumerate() {
-                    visit(value, element(schema, root, index), root);
+                    visit(value, schema.element(index));
                 }
             }
             _ => {}
         }
     }
-    let root = root::<T>();
-    visit(&mut value, &root, &root);
+    let plan = codec::<T>();
+    visit(&mut value, plan.root());
     serde_json::from_value(value)
 }
 
@@ -909,7 +909,7 @@ mod tests {
         );
         PROPERTY_WORK.with(|work| work.set((0, 0)));
         MAP_KEY_WORK.with(|work| work.set(0));
-        let encoded = Encoded {
+        let encoded = BorrowedEncoded {
             value,
             schema,
             root: schema,
@@ -947,7 +947,7 @@ mod tests {
             .read_cut
             .domain_revisions
             .insert("trace".into(), u64::MAX);
-        let schema = root::<crate::runtime_client::checkpoint::RuntimeClientCheckpoint>();
+        let schema = schema_root::<crate::runtime_client::checkpoint::RuntimeClientCheckpoint>();
         let expected = property_encoding(&checkpoint, &schema, true);
         let (_, old_fallbacks) = PROPERTY_WORK.with(std::cell::Cell::get);
         let actual = property_encoding(&checkpoint, &schema, false);
@@ -998,7 +998,7 @@ mod tests {
             "native coordinate validation remains active"
         );
         assert_eq!(property_encoding(&Custom, &schema, false), expected);
-        let schema = root::<Tagged>();
+        let schema = schema_root::<Tagged>();
         for source in [
             Tagged::Record {
                 sequence: u64::MAX,
@@ -1153,7 +1153,7 @@ mod tests {
         );
         assert_eq!(
             crate::observation::preflight::bounded_fit(
-                &Encoded {
+                &BorrowedEncoded {
                     value: &unsafe_opaque,
                     schema: &Value::Null,
                     root: &Value::Null,
@@ -1178,7 +1178,7 @@ mod tests {
         ] {
             let expected = serde_json::to_vec(&source).unwrap();
             lookup_work();
-            let actual = serde_json::to_vec(&Encoded {
+            let actual = serde_json::to_vec(&BorrowedEncoded {
                 value: &source,
                 schema: &Value::Null,
                 root: &Value::Null,
@@ -1191,7 +1191,7 @@ mod tests {
             lookup_work();
             assert_eq!(
                 crate::observation::preflight::bounded_fit(
-                    &Encoded {
+                    &BorrowedEncoded {
                         value: &source,
                         schema: &Value::Null,
                         root: &Value::Null,
@@ -1240,11 +1240,11 @@ mod tests {
                 "row/fields": {"type": "object", "properties": properties}}
         });
         let expected = serde_json::to_vec(&rows).unwrap();
-        let plan = encoding_plan(&schema, &schema);
+        let plan = plan::Plan::new(&schema, &schema);
         lookup_work();
         let actual = serde_json::to_vec(&ValueAt {
             value: &rows,
-            schema: plan.select(&schema).unwrap(),
+            schema: plan.root(),
             wire: false,
         })
         .unwrap();
@@ -1261,18 +1261,18 @@ mod tests {
             "allOf": [{"items": {"format": "uint64"}}]
         });
         let source = ("first", "second");
-        let plan = encoding_plan(&schema, &schema);
+        let plan = plan::Plan::new(&schema, &schema);
         lookup_work();
         let encoded = serde_json::to_vec(&ValueAt {
             value: &source,
-            schema: plan.select(&schema).unwrap(),
+            schema: plan.root(),
             wire: false,
         })
         .unwrap();
         assert_eq!(lookup_work(), (0, 0));
         assert_eq!(encoded, serde_json::to_vec(&source).unwrap());
         let source = ("first", "second", u64::MAX);
-        let encoded = serde_json::to_value(Encoded {
+        let encoded = serde_json::to_value(BorrowedEncoded {
             value: &source,
             schema: &schema,
             root: &schema,
@@ -1304,7 +1304,7 @@ mod tests {
                 sequence: u64::MAX,
                 opaque: serde_json::json!({"exact": u64::MAX}),
             };
-            let encoded = serde_json::to_value(Encoded {
+            let encoded = serde_json::to_value(BorrowedEncoded {
                 value: &source,
                 schema: &schema,
                 root: &schema,
@@ -1318,7 +1318,7 @@ mod tests {
                 label: "water 水\n\"".into(),
             };
             assert_eq!(
-                serde_json::to_value(Encoded {
+                serde_json::to_value(BorrowedEncoded {
                     value: &source,
                     schema: &schema,
                     root: &schema
@@ -1331,7 +1331,7 @@ mod tests {
         let schema = serde_json::json!({"prefixItems": [
             {"format": "uint64"}, {"allOf": [{"items": {"format": "uint64"}}]}
         ]});
-        let encoded = serde_json::to_value(Encoded {
+        let encoded = serde_json::to_value(BorrowedEncoded {
             value: &source,
             schema: &schema,
             root: &schema,
@@ -1344,7 +1344,7 @@ mod tests {
         let source = std::collections::BTreeMap::from([("original", u64::MAX)]);
         let schema = serde_json::json!({"additionalProperties": {"format": "uint64"}});
         assert_eq!(
-            serde_json::to_value(Encoded {
+            serde_json::to_value(BorrowedEncoded {
                 value: &source,
                 schema: &schema,
                 root: &schema
@@ -1398,11 +1398,10 @@ mod tests {
         opaque: Value,
     }
     #[test]
-    fn t20_native_structural_schema_is_shared_by_type_without_source_data() {
-        let first = root::<SignedDomain>();
-        let second = root::<SignedDomain>();
+    fn t20_native_numeric_plan_is_shared_by_type_without_source_data() {
+        let first = codec::<SignedDomain>();
+        let second = codec::<SignedDomain>();
         assert!(std::sync::Arc::ptr_eq(&first, &second));
-        assert!(first.get("$defs").is_some() || first.get("properties").is_some());
     }
     #[test]
     fn t11_signed_native_quantities_match_wire_safe_integer_contract() {
@@ -1469,12 +1468,12 @@ mod tests {
         assert_eq!(encoded["rows"][0]["quantity"], 65_536);
         assert_eq!(encoded["request_params"]["opaque"], u64::MAX);
         assert_eq!(encoded["indexed"][1]["bytes"], u64::MAX.to_string());
-        let root = root::<NativeDomain>();
+        let root = schema_root::<NativeDomain>();
         let path = vec!["rows".into(), "0".into(), "bytes".into()];
         let mut selected = Vec::new();
         serde_json::to_writer(
             &mut selected,
-            &Encoded {
+            &BorrowedEncoded {
                 value: &source.rows[0].bytes,
                 schema: selected_schema(&root, &path),
                 root: &root,

@@ -2,17 +2,15 @@
 //! unchanged. The same Rust-derived schemas drive the codec and code generation:
 //! unbounded uint64 domains are exact text; explicitly bounded quantities and
 //! platform-sized collection indices are safe JSON integers.
+use crate::observation::structural_json::{codec, plan::View};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const SAFE: u64 = 9_007_199_254_740_991;
 
 fn exact(schema: &Value) -> bool {
-    schema["format"] == "uint64"
-        && schema
-            .get("maximum")
-            .and_then(Value::as_f64)
-            .is_none_or(|max| max > 9_007_199_254_740_991.0)
+    crate::observation::structural_json::plan::unsigned(schema)
+        == crate::observation::structural_json::plan::Unsigned::Decimal
 }
 
 /// Canonical unsigned decimal syntax, including the u64 upper bound.
@@ -51,7 +49,8 @@ fn encode_defaults(node: &mut Value, root: &Value) {
         Value::Object(object) => {
             if let Some(mut default) = object.remove("default") {
                 let subschema = Value::Object(object.clone());
-                let _ = convert(&mut default, &subschema, root, true);
+                let plan = crate::observation::structural_json::plan::Plan::new(&subschema, root);
+                let _ = plan.root().convert_wire(&mut default, true);
                 object.insert("default".to_owned(), default);
             }
             for value in object.values_mut() {
@@ -121,6 +120,7 @@ pub(super) fn schema(mut schema: Value) -> Value {
     schema
 }
 
+#[cfg(test)]
 fn convert(value: &mut Value, schema: &Value, root: &Value, encode: bool) -> Result<(), String> {
     if value.is_null() {
         return Ok(());
@@ -146,7 +146,11 @@ fn convert(value: &mut Value, schema: &Value, root: &Value, encode: bool) -> Res
     {
         return Ok(());
     }
-    if exact(schema) {
+    if schema["format"] == "uint64"
+        && schema["maximum"]
+            .as_f64()
+            .is_none_or(|maximum| maximum > 9_007_199_254_740_991.0)
+    {
         if encode {
             let number = value.as_u64().ok_or("exact domain requires native u64")?;
             *value = Value::from(number.to_string());
@@ -294,14 +298,11 @@ const REQUEST_PARAMS: [&str; 2] = ["request_params", "requestParams"];
 /// [`crate::model::invocation::exact_json_number`]); free-form JSON elsewhere,
 /// even under a key of the same name, keeps its own semantics.
 pub(super) fn request_params_numbers_are_exact(json: &str) -> bool {
-    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-    let schema = SCHEMA.get_or_init(|| {
-        serde_json::to_value(schemars::schema_for!(super::protocol::Request)).expect("Rust schema")
-    });
-    request_params_numbers_are_exact_in(json, schema)
+    let plan = <super::protocol::Request as Envelope>::codec();
+    request_params_numbers_are_exact_in(json, plan.root())
 }
 
-fn request_params_numbers_are_exact_in(json: &str, schema: &Value) -> bool {
+fn request_params_numbers_are_exact_in(json: &str, schema: View<'_>) -> bool {
     enum Frame {
         /// The byte span of the current key token, quotes included.
         Object {
@@ -352,7 +353,7 @@ fn request_params_numbers_are_exact_in(json: &str, schema: &Value) -> bool {
                             Frame::Array { index } => Some(Segment::Index(index)),
                         })
                         .collect::<Option<Vec<_>>>();
-                    if path.is_some_and(|path| declares_request_params(schema, schema, &path)) {
+                    if path.is_some_and(|path| declares_request_params(schema, &path)) {
                         return false;
                     }
                 }
@@ -387,45 +388,54 @@ enum Segment {
 /// Whether `path` from a value of `schema` passes through a declared
 /// [`REQUEST_PARAMS`] property. Undeclared members (`additionalProperties`)
 /// and free-form values never do.
-fn declares_request_params(schema: &Value, root: &Value, path: &[Segment]) -> bool {
-    if schema["$ref"]
-        .as_str()
-        .and_then(|reference| reference.strip_prefix('#'))
-        .and_then(|pointer| root.pointer(pointer))
-        .is_some_and(|target| declares_request_params(target, root, path))
-    {
-        return true;
-    }
-    if ["oneOf", "anyOf", "allOf"].iter().any(|keyword| {
-        schema[*keyword].as_array().is_some_and(|branches| {
-            branches
-                .iter()
-                .any(|branch| declares_request_params(branch, root, path))
-        })
-    }) {
-        return true;
+fn declares_request_params(schema: View<'_>, path: &[Segment]) -> bool {
+    for kind in 0..3 {
+        let mut index = 0;
+        while let Some(branch) = schema.branch(kind, index) {
+            index += 1;
+            if declares_request_params(branch, path) {
+                return true;
+            }
+        }
     }
     let Some((first, rest)) = path.split_first() else {
         return false;
     };
     match first {
-        Segment::Key(key) => match schema["properties"].get(key) {
+        Segment::Key(key) => match schema.property_named(key) {
             Some(_) if REQUEST_PARAMS.contains(&key.as_str()) => true,
-            Some(property) => declares_request_params(property, root, rest),
-            None => {
-                schema["additionalProperties"].is_object()
-                    && declares_request_params(&schema["additionalProperties"], root, rest)
-            }
+            Some(property) => declares_request_params(property, rest),
+            None => schema
+                .additional()
+                .is_some_and(|schema| declares_request_params(schema, rest)),
         },
-        Segment::Index(index) => schema["prefixItems"]
-            .get(index)
-            .or_else(|| schema["items"].is_object().then_some(&schema["items"]))
-            .is_some_and(|items| declares_request_params(items, root, rest)),
+        Segment::Index(index) => schema
+            .array_item(*index)
+            .is_some_and(|schema| declares_request_params(schema, rest)),
     }
 }
 
 pub(super) trait Envelope: schemars::JsonSchema + 'static {
+    fn codec() -> &'static std::sync::Arc<crate::observation::structural_json::plan::Plan>;
     fn serialize_native<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error>;
+}
+
+// Sharing the writer type also shares the nested DTO serializer instances
+// across envelopes; the admission bound and error ordering stay identical.
+struct RecordBudget(usize);
+impl std::io::Write for RecordBudget {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.checked_sub(bytes.len()).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                "native record exceeds limit",
+            )
+        })?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 struct Native<'a, T>(&'a T);
@@ -444,12 +454,8 @@ pub(super) fn bounded_envelope<T: Envelope>(value: &T) -> impl Serialize + '_ {
     struct Wire<'a, T>(&'a T);
     impl<T: Envelope> Serialize for Wire<'_, T> {
         fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            let schema = crate::observation::structural_json::root::<T>();
-            crate::observation::structural_json::serialize_wire(
-                &Native(self.0),
-                &schema,
-                serializer,
-            )
+            let schema = T::codec();
+            crate::observation::structural_json::serialize_wire(&Native(self.0), schema, serializer)
         }
     }
     Wire(value)
@@ -461,29 +467,15 @@ thread_local! { static NATIVE_PASSES: std::cell::Cell<usize> = const { std::cell
 pub(super) fn take_native_passes() -> usize {
     NATIVE_PASSES.with(|passes| passes.replace(0))
 }
-fn workflow_document_schema() -> &'static Value {
-    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-    SCHEMA.get_or_init(|| {
-        serde_json::to_value(schemars::schema_for!(
-            crate::workflow_file::WorkflowFileDocument
-        ))
-        .expect("Workflow schema")
-    })
-}
-
 /// Decode a claimed callback result through the ordinary App Server numeric
 /// contract. Envelope correlation deliberately precedes domain validation.
 pub(super) fn interaction_response_from_value(
     mut value: Value,
 ) -> Result<crate::runtime::interaction::InteractionResponse, String> {
-    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-    let schema = SCHEMA.get_or_init(|| {
-        serde_json::to_value(schemars::schema_for!(
-            crate::runtime::interaction::InteractionResponse
-        ))
-        .expect("Interaction response schema")
-    });
-    convert(&mut value, schema, schema, false)?;
+    codec::<crate::runtime::interaction::InteractionResponse>()
+        .root()
+        .convert_wire(&mut value, false)
+        .map_err(str::to_owned)?;
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
@@ -494,8 +486,11 @@ pub(crate) fn workflow_document_to_bytes(
 ) -> Result<Vec<u8>, String> {
     document.validate().map_err(|error| error.reason)?;
     let mut value = serde_json::to_value(document).map_err(|error| error.to_string())?;
-    let schema = workflow_document_schema();
-    convert(&mut value, schema, schema, true)?;
+    let plan = codec::<crate::workflow_file::WorkflowFileDocument>();
+    let schema = plan.root();
+    schema
+        .convert_wire(&mut value, true)
+        .map_err(str::to_owned)?;
     let mut output = crate::bounded_file::LimitedWriter::new(
         Vec::new(),
         super::workflow_documents::MAX_TRANSFER_BYTES,
@@ -508,11 +503,14 @@ pub(crate) fn workflow_document_from_json(
     json: &str,
 ) -> Result<crate::workflow_file::WorkflowFileDocument, String> {
     let StrictValue(mut value) = serde_json::from_str(json).map_err(|error| error.to_string())?;
-    let schema = workflow_document_schema();
+    let plan = codec::<crate::workflow_file::WorkflowFileDocument>();
+    let schema = plan.root();
     if !request_params_numbers_are_exact_in(json, schema) {
         return Err("Workflow request parameter number is not binary64-exact".into());
     }
-    convert(&mut value, schema, schema, false)?;
+    schema
+        .convert_wire(&mut value, false)
+        .map_err(str::to_owned)?;
     serde_json::from_value(value).map_err(|error| error.to_string())
 }
 
@@ -522,15 +520,12 @@ pub(crate) fn write_workflow_check_report(
     report: &crate::local_runtime::workflow_authoring::WorkflowCheckReport,
     writer: impl std::io::Write,
 ) -> Result<(), String> {
-    static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-    let schema = SCHEMA.get_or_init(|| {
-        serde_json::to_value(schemars::schema_for!(
-            crate::local_runtime::workflow_authoring::WorkflowCheckReport
-        ))
-        .expect("Workflow report schema")
-    });
+    let plan = codec::<crate::local_runtime::workflow_authoring::WorkflowCheckReport>();
+    let schema = plan.root();
     let mut value = serde_json::to_value(report).map_err(|error| error.to_string())?;
-    convert(&mut value, schema, schema, true)?;
+    schema
+        .convert_wire(&mut value, true)
+        .map_err(str::to_owned)?;
     serde_json::to_writer(writer, &value).map_err(|error| error.to_string())
 }
 
@@ -548,8 +543,18 @@ pub(crate) fn workflow_check_report_from_json(
 }
 
 macro_rules! envelope {
-    ($ty:ty) => {
+    ($ty:ty, $name:ident) => {
         impl Envelope for $ty {
+            fn codec() -> &'static std::sync::Arc<crate::observation::structural_json::plan::Plan> {
+                static PLAN: std::sync::OnceLock<
+                    std::sync::Arc<crate::observation::structural_json::plan::Plan>,
+                > = std::sync::OnceLock::new();
+                PLAN.get_or_init(|| {
+                    crate::observation::structural_json::codec_from_bytes::<$ty>(include_bytes!(
+                        concat!("wire/codecs/", stringify!($name), ".mpk")
+                    ))
+                })
+            }
             fn serialize_native<S: serde::Serializer>(
                 &self,
                 serializer: S,
@@ -561,23 +566,11 @@ macro_rules! envelope {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
                 // Bound the original native record before wire numeric validation.
                 // The final wire encoding is checked independently by the writer.
-                struct Budget(usize);
-                impl std::io::Write for Budget {
-                    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-                        self.0 = self.0.checked_sub(bytes.len()).ok_or_else(|| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::FileTooLarge,
-                                "native record exceeds limit",
-                            )
-                        })?;
-                        Ok(bytes.len())
-                    }
-                    fn flush(&mut self) -> std::io::Result<()> {
-                        Ok(())
-                    }
-                }
-                serde_json::to_writer(Budget(super::transport::MAX_MESSAGE_BYTES), &Native(self))
-                    .map_err(|error| {
+                serde_json::to_writer(
+                    RecordBudget(super::transport::MAX_MESSAGE_BYTES),
+                    &Native(self),
+                )
+                .map_err(|error| {
                     if error.io_error_kind() == Some(std::io::ErrorKind::FileTooLarge) {
                         serde::ser::Error::custom("native record exceeds limit")
                     } else {
@@ -589,24 +582,54 @@ macro_rules! envelope {
         }
         impl<'de> Deserialize<'de> for $ty {
             fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-                let schema = SCHEMA.get_or_init(|| {
-                    serde_json::to_value(schemars::schema_for!($ty)).expect("Rust schema")
-                });
+                let plan = <$ty as Envelope>::codec();
                 let StrictValue(mut value) = StrictValue::deserialize(deserializer)?;
-                convert(&mut value, schema, schema, false).map_err(serde::de::Error::custom)?;
+                plan.root()
+                    .convert_wire(&mut value, false)
+                    .map_err(serde::de::Error::custom)?;
                 <$ty>::deserialize(value).map_err(serde::de::Error::custom)
+            }
+        }
+        #[cfg(test)]
+        mod $name {
+            fn generated() -> Vec<u8> {
+                let schema = serde_json::to_value(schemars::schema_for!($ty)).unwrap();
+                crate::observation::structural_json::plan::Plan::new(&schema, &schema).to_bytes()
+            }
+            #[test]
+            fn descriptor_matches_rust_schema() {
+                let generated = generated();
+                assert_eq!(
+                    generated.as_slice(),
+                    include_bytes!(concat!("wire/codecs/", stringify!($name), ".mpk")),
+                    "regenerate with cargo test --lib regenerate_native_numeric_codec -- --ignored"
+                );
+                assert_eq!(<$ty as super::Envelope>::codec().to_bytes(), generated);
+                assert!(std::sync::Arc::ptr_eq(
+                    <$ty as super::Envelope>::codec(),
+                    &crate::observation::structural_json::codec::<$ty>()
+                ));
+            }
+            #[test]
+            #[ignore = "updates generated codec assets"]
+            fn regenerate_native_numeric_codec() {
+                let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(concat!(
+                    "src/app_server/wire/codecs/",
+                    stringify!($name),
+                    ".mpk"
+                ));
+                std::fs::write(path, generated()).unwrap();
             }
         }
     };
 }
-envelope!(super::protocol::Request);
-envelope!(super::protocol::Response);
-envelope!(super::protocol::Notification);
-envelope!(super::protocol::ServerRequest);
+envelope!(crate::app_server::protocol::Request, request);
+envelope!(crate::app_server::protocol::Response, response);
+envelope!(crate::app_server::protocol::Notification, notification);
+envelope!(crate::app_server::protocol::ServerRequest, server_request);
 // The private Host carrier uses the same exact attachment identities as the
 // ordinary protocol, without adding its operation to the public Method space.
-envelope!(super::product_host::FileRead);
+envelope!(crate::app_server::product_host::FileRead, file_read);
 
 /// The complete public JSON Schema, with the same numeric rules as the codec.
 pub(super) fn protocol_schema() -> Value {
@@ -634,6 +657,8 @@ pub(super) fn protocol_schema() -> Value {
 
 #[cfg(test)]
 mod direct_tests;
+#[cfg(test)]
+mod plan_contract_tests;
 
 #[cfg(test)]
 mod tests {
