@@ -400,7 +400,7 @@ impl AttemptModelSnapshot {
     /// Profile or Session request-parameter overrides by assumption.
     #[must_use]
     pub fn summary_invocation(&self) -> &ResolvedModelInvocation {
-        self.auxiliary.invocation()
+        self.summary.invocation()
     }
 
     /// The redacted client-facing projection of this snapshot.
@@ -408,7 +408,7 @@ impl AttemptModelSnapshot {
     pub fn view(&self) -> AttemptModelView {
         AttemptModelView {
             primary: self.primary.view(),
-            summary: AuxiliaryModelView::from_invocation(self.auxiliary.invocation()),
+            summary: AuxiliaryModelView::from_invocation(self.summary.invocation()),
         }
     }
 }
@@ -1027,7 +1027,7 @@ impl ModelCatalogReadSource {
             ModelAuthority::Catalog(registry) => registry.catalog().catalog().model_count(),
             ModelAuthority::Frozen(frozen) => {
                 1 + usize::from(
-                    frozen.auxiliary.0.model != frozen.primary.model,
+                    frozen.summary.0.model != frozen.primary.model,
                 )
             }
         }

@@ -1058,9 +1058,9 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
         let mut title_invocation = native.effective_model.effective.clone().unwrap();
         title_invocation.model = crate::model::catalog::ModelRef::parse("local/b").unwrap();
         title_invocation.max_output_tokens = 128;
-        native.effective_model.auxiliary = Some(crate::model::session::AuxiliaryModelView::Explicit { effective: 
-            Box::new(title_invocation },
-        ));
+        native.effective_model.auxiliary = Some(crate::model::session::AuxiliaryModelView::Explicit {
+            effective: Box::new(title_invocation),
+        });
         let mut inline_native = native.clone();
         inline_native.provenance.clear();
         inline_native.available_tools.clear();
