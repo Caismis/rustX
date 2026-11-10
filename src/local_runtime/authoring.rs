@@ -330,9 +330,9 @@ impl AuxiliaryProfileAuthoring {
         match policy {
             crate::model::AuxiliaryProfileSelection::Lowest => Self::Lowest {},
             crate::model::AuxiliaryProfileSelection::ModelDefault => Self::ModelDefault {},
-            crate::model::AuxiliaryProfileSelection::Explicit { id } => Self::Explicit {
-                id: id.clone(),
-            },
+            crate::model::AuxiliaryProfileSelection::Explicit { id } => {
+                Self::Explicit { id: id.clone() }
+            }
         }
     }
 }

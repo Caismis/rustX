@@ -315,7 +315,7 @@ and Chat frame contract are documented in [CHAT.md](../web-console/CHAT.md).
 `job_id` and terminal lifecycle; `agents`/`agent_updated` carry stable `agent_id`,
 parent lineage, child ConversationId, current/latest activation identity and explicit
 Admitting/Active/Stopping/Inactive/Unavailable state. Controls route directly to each domain owner. A
-resumed activation updates the same Agent row. Only current v77 generated artifacts are retained, following repository policy;
+resumed activation updates the same Agent row. Only current v78 generated artifacts are retained, following repository policy;
 Older peers are rejected without a compatibility decoder. See
 [Jobs and continuable Agents](jobs-and-agents.md).
 
@@ -515,7 +515,7 @@ The [local Web launcher](../web-console/CONNECTION.md) implements delivery throu
 a separate browser launch-token exchange and a process-ephemeral browser proof in
 origin-scoped sessionStorage (not a Cookie). A dedicated header authenticates
 same-origin carrier APIs. Its bootstrap returns the exact native
-endpoint/token; the browser then connects directly using the v77 subprotocols above.
+endpoint/token; the browser then connects directly using the v78 subprotocols above.
 The browser launch credential is never a valid substitute for the native credential.
 Remote Web attachment is explicit Settings configuration. Neither browser login
 nor remote attachment grants Product Host Workspace filesystem authority.
@@ -981,7 +981,7 @@ fenced. Attachment cleanup does not grant durable deletion authority.
 
 ## Attachment and observation lifetime
 
-Protocol v77 admits independently closable writable clients of one native
+Protocol v78 admits independently closable writable clients of one native
 Conversation. They share its existing execution authority and have independent
 subscriptions. Detach/connection loss release only that client's resources;
 accepted work, pending native interactions, residency and durable history remain
@@ -1117,8 +1117,8 @@ DTO's standalone serde/schema representation.
 
 Generated client-neutral artifacts are in `protocol/app-server/`:
 
-- `v77.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
-- `v77.ts`: TypeScript generated from that schema using pinned
+- `v78.schema.json`: complete JSON Schema generated with Schemars from Rust DTOs.
+- `v78.ts`: TypeScript generated from that schema using pinned
   `json-schema-to-typescript` and its committed pnpm lockfile.
 - `fixtures.json`: serialized Rust messages, including nulls, string/numeric
   request IDs, timestamps, exact domains above 2^53 and lossless Questionnaire
@@ -1390,7 +1390,7 @@ commit receipt cannot publish it. Historical `session/trace` independently captu
 a represented semantic prefix and native lifecycle snapshot on live hosts, without
 folding observations or changing the live cursor. Inactive durable inspection
 captures its own SQLite frontier and has no live publication boundary.
-This remains mandatory protocol v77; no compatibility path is provided.
+This remains mandatory protocol v78; no compatibility path is provided.
 
 ### Fork editor input
 
@@ -1436,7 +1436,7 @@ boundary.
 
 ## Exact pending inbound controls (WEB-06)
 
-Protocol v77 includes `inbound/edit { target, expected, text }` and
+Protocol v78 includes `inbound/edit { target, expected, text }` and
 `inbound/remove { target, expected }`. `target` is the ordinary exact Session,
 Conversation, runtime incarnation and exact attachment authority.
 `expected` contains the native `sequence`, `message_id` and `revision` from
@@ -1632,7 +1632,7 @@ There are no `mcp/connect`, `mcp/status` or `mcp/disconnect` settings methods.
 Configuration reads never acquire external MCP resources; runtime
 connections belong exclusively to the native capability generation owner.
 
-Protocol v77 uses one `SourceTarget`: `{kind:"user"}` or
+Protocol v78 uses one `SourceTarget`: `{kind:"user"}` or
 `{kind:"workspace",directory:"/canonical/native/context"}`. Source read, write and
 reconcile have no Session parameter; mutations carry no second scope authority.
 Product Host translates an authorized registered Workspace ID into this native
@@ -2010,7 +2010,7 @@ the authored unit in that scope. Clients never write whole config documents.
 
 ## Current Session lifecycle contract
 
-Initialization requires exactly v77 and WebSocket requires `rustx.app-server.v78`.
+Initialization requires exactly v78 and WebSocket requires `rustx.app-server.v78`.
 v76 and all earlier versions are rejected without fallback. Rust DTOs generate
 `v77.ts`, `v77.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.

@@ -712,7 +712,9 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
         let summarized = SessionModelConfig {
             auxiliary: AuxiliaryModelPolicy::Explicit {
                 model: ModelRef::parse("local/a").unwrap(),
-                profile: crate::model::AuxiliaryProfileSelection::Explicit { id: ModelProfileId::new("creative") },
+                profile: crate::model::AuxiliaryProfileSelection::Explicit {
+                    id: ModelProfileId::new("creative"),
+                },
                 request_params: serde_json::Map::new(),
                 max_output_tokens: None,
             },
@@ -1068,7 +1070,9 @@ fn raw_request(call: crate::app_server::protocol::Method, literal: &str) -> Stri
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
     use crate::app_server::{connection::AppServerConnection, protocol::*};
-    use crate::local_runtime::authoring::{AuxiliaryModelAuthoring, AuxiliaryProfileAuthoring, ModelLayer};
+    use crate::local_runtime::authoring::{
+        AuxiliaryModelAuthoring, AuxiliaryProfileAuthoring, ModelLayer,
+    };
     use crate::local_runtime::config::NamedAgentProfileDocument;
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::authoring::Profile;
@@ -1272,7 +1276,9 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
     use crate::app_server::{connection::AppServerConnection, protocol::*};
-    use crate::local_runtime::authoring::{AuxiliaryModelAuthoring, AuxiliaryProfileAuthoring, ModelLayer};
+    use crate::local_runtime::authoring::{
+        AuxiliaryModelAuthoring, AuxiliaryProfileAuthoring, ModelLayer,
+    };
     use crate::local_runtime::config::NamedAgentProfileDocument;
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::authoring::Profile;

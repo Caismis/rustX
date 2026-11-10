@@ -206,7 +206,9 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
         // Summary view is genuinely larger than a transport record.
         let summary = AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse(&enormous_model).unwrap(),
-            profile: crate::model::AuxiliaryProfileSelection::Explicit { id: ModelProfileId::parse(&enormous_profile).unwrap() },
+            profile: crate::model::AuxiliaryProfileSelection::Explicit {
+                id: ModelProfileId::parse(&enormous_profile).unwrap(),
+            },
             request_params: serde_json::Map::default(),
             max_output_tokens: Some(128),
         };

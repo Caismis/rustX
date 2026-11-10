@@ -311,9 +311,12 @@ pub(crate) fn same_session_invocation(
         auxiliary_selection(left_catalog, left),
         auxiliary_selection(right_catalog, right),
     ) {
-        (Ok(left_aux), Ok(right_aux)) => {
-            left_catalog.same_invocation(&left_aux, right_catalog, &right_aux, RequestParamsLayer::AuxiliaryOverrides)
-        }
+        (Ok(left_aux), Ok(right_aux)) => left_catalog.same_invocation(
+            &left_aux,
+            right_catalog,
+            &right_aux,
+            RequestParamsLayer::AuxiliaryOverrides,
+        ),
         _ => false,
     }
 }
@@ -343,14 +346,16 @@ pub(crate) fn analyze_session_model_config(
 /// The frozen auxiliary invocation of one attempt (Summary and shared consumers).
 #[derive(Debug, Clone, PartialEq)]
 pub struct AttemptSummaryModel {
+    follows_session: bool,
     invocation: Box<ResolvedModelInvocation>,
 }
 
 impl AttemptSummaryModel {
-    /// Freeze one already-resolved auxiliary invocation.
+    /// Freeze one already-resolved auxiliary invocation and its authored mode.
     #[must_use]
-    pub fn frozen(invocation: ResolvedModelInvocation) -> Self {
+    pub fn frozen(follows_session: bool, invocation: ResolvedModelInvocation) -> Self {
         Self {
+            follows_session,
             invocation: Box::new(invocation),
         }
     }
@@ -359,6 +364,17 @@ impl AttemptSummaryModel {
     #[must_use]
     pub fn invocation(&self) -> &ResolvedModelInvocation {
         &self.invocation
+    }
+
+    /// Client projection preserving Follow Session vs Explicit authorship.
+    #[must_use]
+    pub fn view(&self) -> AuxiliaryModelView {
+        let effective = Box::new(self.invocation.view());
+        if self.follows_session {
+            AuxiliaryModelView::Session { effective }
+        } else {
+            AuxiliaryModelView::Explicit { effective }
+        }
     }
 }
 
@@ -408,7 +424,7 @@ impl AttemptModelSnapshot {
     pub fn view(&self) -> AttemptModelView {
         AttemptModelView {
             primary: self.primary.view(),
-            summary: AuxiliaryModelView::from_invocation(self.summary.invocation()),
+            summary: self.summary.view(),
         }
     }
 }
@@ -909,10 +925,7 @@ impl Serialize for AttemptModelReadSource {
         use serde::ser::SerializeStruct;
         let mut view = serializer.serialize_struct("AttemptModelView", 2)?;
         view.serialize_field("primary", &self.snapshot.primary().read_view())?;
-        view.serialize_field(
-            "summary",
-            &AuxiliaryModelView::from_invocation(self.snapshot.summary_invocation()),
-        )?;
+        view.serialize_field("summary", &self.snapshot.summary_policy().view())?;
         view.end()
     }
 }
@@ -1026,9 +1039,7 @@ impl ModelCatalogReadSource {
         match &self.0 {
             ModelAuthority::Catalog(registry) => registry.catalog().catalog().model_count(),
             ModelAuthority::Frozen(frozen) => {
-                1 + usize::from(
-                    frozen.summary.0.model != frozen.primary.model,
-                )
+                1 + usize::from(frozen.summary.0.model != frozen.primary.model)
             }
         }
     }
@@ -1121,7 +1132,7 @@ impl Serialize for DisplayReadView<'_> {
     }
 }
 
-/// Build the auxiliary ModelSelection for one Session configuration.
+/// Build the auxiliary `ModelSelection` for one Session configuration.
 pub(crate) fn auxiliary_selection(
     catalog: &crate::model::catalog::ModelCatalog,
     config: &SessionModelConfig,
@@ -1147,7 +1158,7 @@ pub(crate) fn auxiliary_selection(
     let definition = catalog.model(&model)?;
     Ok(ModelSelection {
         model,
-        profile: resolve_auxiliary_profile(definition, profile)?,
+        profile: resolve_auxiliary_profile(definition, profile),
         request_params: request_params.clone(),
         max_output_tokens,
     })
@@ -1157,22 +1168,22 @@ pub(crate) fn auxiliary_selection(
 fn resolve_auxiliary_profile(
     model: &crate::model::catalog::ModelDefinition,
     selection: &AuxiliaryProfileSelection,
-) -> Result<Option<ModelProfileId>, ModelInvocationError> {
+) -> Option<ModelProfileId> {
     match selection {
         AuxiliaryProfileSelection::Lowest => {
             if let Some(order) = &model.reasoning_profile_order {
-                Ok(Some(
+                Some(
                     order
                         .first()
                         .expect("catalog validation rejects empty reasoning_profile_order")
                         .clone(),
-                ))
+                )
             } else {
-                Ok(model.default_profile.clone())
+                model.default_profile.clone()
             }
         }
-        AuxiliaryProfileSelection::ModelDefault => Ok(model.default_profile.clone()),
-        AuxiliaryProfileSelection::Explicit { id } => Ok(Some(id.clone())),
+        AuxiliaryProfileSelection::ModelDefault => model.default_profile.clone(),
+        AuxiliaryProfileSelection::Explicit { id } => Some(id.clone()),
     }
 }
 
@@ -1186,7 +1197,10 @@ fn resolve(
         &auxiliary_selection(registry.catalog().catalog(), config)?,
         RequestParamsLayer::AuxiliaryOverrides,
     )?;
-    Ok((primary, AttemptSummaryModel::frozen(auxiliary)))
+    Ok((
+        primary,
+        AttemptSummaryModel::frozen(!config.auxiliary.is_explicit(), auxiliary),
+    ))
 }
 
 /// The redacted client-facing projection of the session model state.
@@ -1237,12 +1251,6 @@ impl AuxiliaryModelView {
         match policy {
             AuxiliaryModelPolicy::Session { .. } => Self::Session { effective },
             AuxiliaryModelPolicy::Explicit { .. } => Self::Explicit { effective },
-        }
-    }
-
-    fn from_invocation(invocation: &ResolvedModelInvocation) -> Self {
-        Self::Session {
-            effective: Box::new(invocation.view()),
         }
     }
 }
@@ -1532,8 +1540,7 @@ request_params = '{{"effort":"high"}}'
         };
         assert_eq!(error.layer, RequestParamsLayer::SessionOverrides);
         config.request_params.clear();
-        let AuxiliaryModelPolicy::Explicit { request_params, .. } = &mut config.auxiliary
-        else {
+        let AuxiliaryModelPolicy::Explicit { request_params, .. } = &mut config.auxiliary else {
             unreachable!()
         };
         request_params.insert("messages".into(), serde_json::json!([]));
@@ -1550,7 +1557,11 @@ request_params = '{{"effort":"high"}}'
         let catalog = example_catalog();
         let mut config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
         for (model, profile, budget) in [
-            ("example/missing", AuxiliaryProfileSelection::ModelDefault, None),
+            (
+                "example/missing",
+                AuxiliaryProfileSelection::ModelDefault,
+                None,
+            ),
             (
                 "example/demo-model",
                 AuxiliaryProfileSelection::Explicit {

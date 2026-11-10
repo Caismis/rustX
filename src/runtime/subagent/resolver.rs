@@ -2495,8 +2495,7 @@ mod tests {
             let mut invocation = frozen_invocation();
             mutate(&mut invocation);
             let mut spec = base.clone();
-            spec.model.summary =
-                crate::model::frozen::FrozenSummaryModel(Box::new(invocation));
+            spec.model.summary = crate::model::frozen::FrozenSummaryModel(Box::new(invocation));
             spec
         };
 

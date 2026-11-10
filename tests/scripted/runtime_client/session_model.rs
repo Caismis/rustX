@@ -928,7 +928,9 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
         request_params: common::request_params(serde_json::json!({"seed": null})),
         auxiliary: AuxiliaryModelPolicy::Explicit {
             model: summary.reference(),
-            profile: crate::model::AuxiliaryProfileSelection::Explicit { id: ModelProfileId::new(summary_profile) },
+            profile: crate::model::AuxiliaryProfileSelection::Explicit {
+                id: ModelProfileId::new(summary_profile),
+            },
             request_params: common::request_params(serde_json::json!({"summary_seed": [null]})),
             max_output_tokens: None,
         },

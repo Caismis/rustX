@@ -251,8 +251,10 @@ impl FrozenModelSpec {
             &self.primary.binding,
             credentials,
         )?);
-        self.summary.0.binding.resolved_credential =
-            Some(resolve_frozen_credential(&self.summary.0.binding, credentials)?);
+        self.summary.0.binding.resolved_credential = Some(resolve_frozen_credential(
+            &self.summary.0.binding,
+            credentials,
+        )?);
         Ok(())
     }
 
@@ -294,7 +296,10 @@ impl FrozenModelSpec {
         credentials: &dyn CredentialEnvironment,
     ) -> Result<(ResolvedModelInvocation, AttemptSummaryModel), ModelInvocationError> {
         let primary = self.primary.materialize(credentials)?;
-        let summary = AttemptSummaryModel::frozen(self.summary.0.materialize(credentials)?);
+        let summary = AttemptSummaryModel::frozen(
+            !self.configured.auxiliary.is_explicit(),
+            self.summary.0.materialize(credentials)?,
+        );
         Ok((primary, summary))
     }
 

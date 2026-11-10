@@ -6241,7 +6241,7 @@ chat_reasoning_replay = "omit"
                             "done".to_owned(),
                             return_node(BTreeMap::from([(
                                 "summary".to_owned(),
-                                reference("review.auxiliary"),
+                                reference("review.summary"),
                             )])),
                         ),
                     ]);
@@ -6503,7 +6503,7 @@ block:
                     "done".to_owned(),
                     return_node(BTreeMap::from([(
                         "summary".to_owned(),
-                        reference("review.auxiliary"),
+                        reference("review.summary"),
                     )])),
                 ),
             ]),
