@@ -296,10 +296,13 @@ it('keeps auxiliary model settings editable after the primary model is removed',
   fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const form = within(screen.getByRole('form', { name: 'Default model' }));
   fireEvent.click(form.getByRole('button', { name: 'Auxiliary models' }));
+  // Re-assert an explicit auxiliary after a Follow-session detour so Save has a
+  // real authored change while the missing primary model stays editable.
+  await chooseOption('Auxiliary model', 'Follow selected model', form);
   await chooseOption('Auxiliary model', 'main', form);
   fireEvent.click(form.getByRole('button', { name: 'Save Default model' }));
   await waitFor(() => expect(writes).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'root_model', authored: {
-      model: 'removed', auxiliary: { mode: 'explicit', model: 'main' },
+      model: 'removed', auxiliary: { mode: 'explicit', model: 'main', profile: { mode: 'lowest' } },
   } } }, source.user.revision));
 });
 

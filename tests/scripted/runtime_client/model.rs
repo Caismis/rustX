@@ -1150,7 +1150,7 @@ async fn model_set_protected_keys_use_serialization_neutral_diagnostics() {
             serde_json::json!({"model": "alpha/model-a", "auxiliary": {
                 "mode": "explicit", "model": "summary/summary-model", "request_params": {"messages": []}
             }}),
-            "explicit summary",
+            "auxiliary",
         ),
     ] {
         let config: SessionModelConfig =

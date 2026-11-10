@@ -310,7 +310,7 @@ function AuxiliaryModelSelections({ value, change, models, profiles }: ModelSele
       options={[['', tx('settings:copy.follow-selected-model')], ...identities(auxiliary.mode === 'explicit' ? auxiliary.model : undefined).map(id => [id, id] as const)]}
       onChange={model => setAuxiliary(model
         ? { ...(auxiliary.mode === 'explicit' ? auxiliary : { profile: auxiliary.profile, request_params: auxiliary.request_params, max_output_tokens: auxiliary.max_output_tokens }), mode: 'explicit', model }
-        : { mode: 'session', profile: auxiliary.profile ?? { mode: 'lowest' }, request_params: auxiliary.request_params, max_output_tokens: auxiliary.max_output_tokens })} />
+        : { mode: 'session', profile: { mode: 'lowest' } })} />
     <Choice label={tx('settings:models-page.auxiliary-profile-strategy')} value={profileMode}
       options={[
         ['lowest', tx('settings:models-page.auxiliary-profile-lowest')],

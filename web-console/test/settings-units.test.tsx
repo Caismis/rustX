@@ -314,7 +314,7 @@ it('replaces default model intent on the Models page', async () => {
   for (const label of ['Output limit', 'Request parameter overrides']) {
     expect(model.queryByLabelText(label, { exact: true })).toBeNull();
   }
-  expect(model.queryByRole('button', { name: /Auxiliary model$/ })).toBeNull();
+  expect(model.getByRole('button', { name: 'Auxiliary models' })).toBeTruthy();
   await chooseOption('Profile', 'deep', model);
   fireEvent.click(model.getByRole('button', { name: 'Save Default model' }));
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model',
@@ -333,7 +333,7 @@ it('replaces default model intent on the Models page', async () => {
     authored: { model: 'plain', auxiliary },
   } }, 'root-r1'));
 
-  fireEvent.click(model.getByRole('button', { name: 'Auxiliary model' }));
+  fireEvent.click(model.getByRole('button', { name: 'Auxiliary models' }));
   await chooseOption('Auxiliary model', 'other', model);
   await chooseOption('Auxiliary reasoning profile', 'Explicit profile', model);
   await chooseOption('Auxiliary profile', 'quick', model);

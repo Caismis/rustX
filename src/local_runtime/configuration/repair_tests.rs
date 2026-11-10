@@ -421,7 +421,7 @@ fn native_tool_entries_are_classified_by_the_native_domain() {
 
 #[test]
 fn explicit_schema_versions_are_normalized_and_omission_is_preserved() {
-    for from in [0_i64, 8, 9, 10, 12, 99, -1] {
+    for from in [0_i64, 8, 9, 10, 99, -1] {
         let text = format!("schema_version = {from} # authored\n");
         assert_eq!(
             changes(&text),
@@ -430,6 +430,7 @@ fn explicit_schema_versions_are_normalized_and_omission_is_preserved() {
         assert_eq!(candidate(&text), "schema_version = 12 # authored\n");
     }
     assert!(changes("schema_version = 12\n").is_empty());
+    assert!(changes("schema_version = 12 # authored\n").is_empty());
     assert!(changes("[agent]\ndescription = 'x'\n").is_empty());
     assert!(!candidate("[agent]\nstale = 1\n").contains("schema_version"));
     // A non-integer version is a type error, not version metadata.

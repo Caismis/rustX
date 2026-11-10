@@ -616,7 +616,7 @@ async fn headless_first_submission_waits_ten_seconds_for_exact_selected_tools() 
     crate::launch_fixture::write_document(
         &root.path().join("rustx.toml"),
         &toml::to_string_pretty(&serde_json::json!({
-            "schema_version":11,
+            "schema_version":12,
             "context":{"reserve_tokens":0,"keep_recent_tokens":0},
             "agent":{"model":{"model":"scripted/scripted"},
                 "tools":{"builtin":["read"],"sources":{SERVER_NAME:[TOOL_NAME]}}},
