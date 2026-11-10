@@ -631,7 +631,7 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
     );
 }
 
-/// `summaryModel.mode = "session"` sends the summary to the admitted
+/// `auxiliary.mode = "session"` sends the summary to the admitted
 /// attempt's own primary invocation, subject only to the documented context
 /// summary output cap.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -723,7 +723,7 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
     assert_eq!(requests[2].max_output_tokens(), 300);
 }
 
-/// `summaryModel.mode = "explicit"` resolves a different catalog
+/// `auxiliary.mode = "explicit"` resolves a different catalog
 /// model/provider/profile through the same resolution path, and the
 /// resolution is **frozen at admission**: mutating live session state during
 /// the attempt cannot change that attempt's summary model.
@@ -780,10 +780,9 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
     let decoy = Provider::new(BETA, "decoy-summary", vec![one_turn_stop()]);
 
     let initial = SessionModelConfig {
-        title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-        summary_model: AuxiliaryModelPolicy::Explicit {
+        auxiliary: AuxiliaryModelPolicy::Explicit {
             model: summary.reference(),
-            profile: None,
+            profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
             request_params: rustx::model::RequestParams::new(),
             max_output_tokens: None,
         },
@@ -807,10 +806,9 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
     let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
         id: RequestId::new(2),
         config: Box::new(SessionModelConfig {
-            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: AuxiliaryModelPolicy::Explicit {
+            auxiliary: AuxiliaryModelPolicy::Explicit {
                 model: decoy.reference(),
-                profile: None,
+                profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                 request_params: rustx::model::RequestParams::new(),
                 max_output_tokens: None,
             },
@@ -928,10 +926,9 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
     let selected = |primary: &str, summary_profile: &str| SessionModelConfig {
         profile: Some(ModelProfileId::new(primary)),
         request_params: common::request_params(serde_json::json!({"seed": null})),
-        title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-        summary_model: AuxiliaryModelPolicy::Explicit {
+        auxiliary: AuxiliaryModelPolicy::Explicit {
             model: summary.reference(),
-            profile: Some(ModelProfileId::new(summary_profile)),
+            profile: crate::model::AuxiliaryProfileSelection::Explicit { id: ModelProfileId::new(summary_profile) },
             request_params: common::request_params(serde_json::json!({"summary_seed": [null]})),
             max_output_tokens: None,
         },
@@ -1209,7 +1206,7 @@ fn a_session_override_may_not_claim_a_profile_owned_key() {
     ] {
         for layer in [
             RequestParamsLayer::SessionOverrides,
-            RequestParamsLayer::SummaryOverrides,
+            RequestParamsLayer::AuxiliaryOverrides,
         ] {
             let selection = rustx::model::ModelSelection {
                 request_params: common::request_params(contested.clone()),
@@ -1311,10 +1308,9 @@ async fn a_rejected_model_update_changes_nothing() {
         },
         // An unresolvable explicit summary model.
         SessionModelConfig {
-            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: AuxiliaryModelPolicy::Explicit {
+            auxiliary: AuxiliaryModelPolicy::Explicit {
                 model: ModelRef::parse("alpha/missing").expect("reference"),
-                profile: None,
+                profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                 request_params: rustx::model::RequestParams::new(),
                 max_output_tokens: None,
             },
@@ -1322,10 +1318,9 @@ async fn a_rejected_model_update_changes_nothing() {
         },
         // A protected wire key in the explicit summary overrides.
         SessionModelConfig {
-            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: AuxiliaryModelPolicy::Explicit {
+            auxiliary: AuxiliaryModelPolicy::Explicit {
                 model: alpha.reference(),
-                profile: None,
+                profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                 request_params: common::request_params(serde_json::json!({"stream": false})),
                 max_output_tokens: None,
             },

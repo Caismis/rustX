@@ -4,7 +4,7 @@ import type { Theme } from '../appearance';
 import { useState, type ReactNode } from 'react';
 import { SettingsScopeMenu } from './SettingsScopeMenu';
 import { shallowEqual, useSelector } from '@xstate/react';
-import type { SourceScope } from '../../../../protocol/app-server/v77';
+import type { SourceScope } from '../../../../protocol/app-server/v78';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';

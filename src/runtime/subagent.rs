@@ -453,7 +453,7 @@ impl NativeExecutionContext {
 
     pub(crate) fn resolve_workflow_model(
         &self,
-        policy: &crate::model::AuxiliaryModelPolicy,
+        policy: &crate::model::DirectModelPolicy,
     ) -> Result<crate::model::ResolvedModelInvocation, crate::model::ModelInvocationError> {
         self.inner.models.resolve(
             &policy

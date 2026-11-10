@@ -579,7 +579,7 @@ async fn t15_t20_native_agent_source_shares_immutable_authority_and_releases_own
     plane
         .registry
         .with_observation_value_by_id(cut, &admitted.child_agent_id, |view| {
-            assert_eq!(view.title, authority.title.as_ref());
+            assert_eq!(view.auxiliary, authority.title.as_ref());
             assert!(plane.registry.state.try_lock().is_ok());
         })
         .unwrap();
@@ -594,7 +594,7 @@ async fn t15_t20_native_agent_source_shares_immutable_authority_and_releases_own
                 plane.registry.state.try_lock().is_ok(),
                 "native field serialization cannot hold the activation/lifecycle mutex"
             );
-            assert_eq!(view.title, authority.title.as_ref());
+            assert_eq!(view.auxiliary, authority.title.as_ref());
             assert_eq!(view.state, original.state);
             assert_eq!(view.activation_id, &admitted.subagent_id);
             plane

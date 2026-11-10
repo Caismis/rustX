@@ -145,7 +145,7 @@
             "configured": {
               "model": "scripted/scripted",
               "requestParams": {},
-              "summaryModel": {
+              "auxiliary": {
                 "mode": "session"
               }
             },
@@ -1466,7 +1466,7 @@
                     "configured": {
                       "model": "scripted/scripted",
                       "requestParams": {},
-                      "summaryModel": {
+                      "auxiliary": {
                         "mode": "session"
                       }
                     },
@@ -18495,7 +18495,7 @@
             "configured": {
               "model": "scripted/scripted",
               "requestParams": {},
-              "summaryModel": {
+              "auxiliary": {
                 "mode": "session"
               }
             },

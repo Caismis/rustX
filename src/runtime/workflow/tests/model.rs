@@ -295,7 +295,7 @@ fn completed(text: &str, reason: ModelFinishReason) -> Vec<ModelStreamItem> {
 }
 fn model_definition(
     output: WorkflowModelOutput,
-    policy: crate::model::AuxiliaryModelPolicy,
+    policy: crate::model::DirectModelPolicy,
 ) -> WorkflowDefinition {
     // The answer is the model's text, or its structured object.
     let answer = match &output {
@@ -328,7 +328,7 @@ fn model_definition(
 }
 fn model_program(
     output: WorkflowModelOutput,
-    policy: crate::model::AuxiliaryModelPolicy,
+    policy: crate::model::DirectModelPolicy,
 ) -> WorkflowProgram {
     compile_test(model_definition(output, policy)).unwrap()
 }
@@ -594,7 +594,7 @@ async fn text_preserves_exact_bytes_and_structured_native_and_prompt_publish_onl
         ),
     ] {
         let plane = workflow_test_plane(1);
-        let program = model_program(output.clone(), crate::model::AuxiliaryModelPolicy::Session);
+        let program = model_program(output.clone(), crate::model::DirectModelPolicy::Session);
         let (context, executor, mut entries, _) = setup(
             &plane,
             &program,
@@ -733,7 +733,7 @@ async fn invalid_model_results_never_commit_or_advance() {
         ),
     ] {
         let plane = workflow_test_plane(1);
-        let program = model_program(output, crate::model::AuxiliaryModelPolicy::Session);
+        let program = model_program(output, crate::model::DirectModelPolicy::Session);
         let (context, executor, mut entries, _) = setup(&plane, &program, items, false);
         let runtime = workflow_runtime(&plane);
         let run = start(&runtime, context, workflow_cancellation().1);
@@ -757,7 +757,7 @@ async fn cancellation_before_admission_and_before_commit_has_no_late_success() {
         let plane = workflow_test_plane(1);
         let program = model_program(
             WorkflowModelOutput::Text {},
-            crate::model::AuxiliaryModelPolicy::Session,
+            crate::model::DirectModelPolicy::Session,
         );
         let (context, executor, mut entries, _) = setup(
             &plane,
@@ -798,7 +798,7 @@ async fn cancelled_wait_drains_confirmed_settlement_before_releasing_capacity() 
     let plane = workflow_test_plane(1);
     let program = model_program(
         WorkflowModelOutput::Text {},
-        crate::model::AuxiliaryModelPolicy::Session,
+        crate::model::DirectModelPolicy::Session,
     );
     let (context, executor, mut entries, _) = setup(
         &plane,
@@ -956,17 +956,17 @@ async fn fourth_parallel_capacity_wait_is_cancelled_without_dispatch() {
 
 #[tokio::test]
 async fn session_and_explicit_profile_remain_frozen_while_a_node_is_pending() {
-    use crate::model::AuxiliaryModelPolicy;
+    use crate::model::DirectModelPolicy;
     for explicit in [false, true] {
         let policy = if explicit {
-            AuxiliaryModelPolicy::Explicit {
+            DirectModelPolicy::Explicit {
                 model: ModelRef::parse("fixture/explicit").unwrap(),
                 profile: Some(crate::model::catalog::ModelProfileId::new("precise")),
                 request_params: crate::model::invocation::RequestParams::default(),
                 max_output_tokens: None,
             }
         } else {
-            AuxiliaryModelPolicy::Session
+            DirectModelPolicy::Session
         };
         let plane = workflow_test_plane(1);
         let program = model_program(WorkflowModelOutput::Text {}, policy);
@@ -1010,7 +1010,7 @@ async fn cancellation_after_confirmed_request_start_prevents_provider_dispatch()
     let plane = workflow_test_plane(1);
     let program = model_program(
         WorkflowModelOutput::Text {},
-        crate::model::AuxiliaryModelPolicy::Session,
+        crate::model::DirectModelPolicy::Session,
     );
     let (context, executor, mut entries, _) = setup(
         &plane,
@@ -1058,7 +1058,7 @@ async fn abandoned_workflow_wait_keeps_descendant_until_auxiliary_confirmation()
     let plane = workflow_test_plane(1);
     let program = model_program(
         WorkflowModelOutput::Text {},
-        crate::model::AuxiliaryModelPolicy::Session,
+        crate::model::DirectModelPolicy::Session,
     );
     let (context, executor, mut entries, _) = setup(
         &plane,
@@ -1094,7 +1094,7 @@ async fn required_write_failure_is_unknown_and_never_business_success() {
     let plane = workflow_test_plane(1);
     let program = model_program(
         WorkflowModelOutput::Text {},
-        crate::model::AuxiliaryModelPolicy::Session,
+        crate::model::DirectModelPolicy::Session,
     );
     let (context, executor, mut entries, _) = setup(
         &plane,
@@ -1155,7 +1155,7 @@ async fn physical_retry_keeps_one_call_identity_and_identical_frozen_request() {
     let output = WorkflowModelOutput::JsonSchema {
         schema: schema(json!({"ok":{"type":"boolean"}}), &["ok"]),
     };
-    let program = model_program(output, crate::model::AuxiliaryModelPolicy::Session);
+    let program = model_program(output, crate::model::DirectModelPolicy::Session);
     let clock = Arc::new(crate::runtime::ManualMonotonicClock::new());
     let transient = crate::model::ModelError {
         kind: crate::model::ModelErrorKind::Transport,
@@ -1240,7 +1240,7 @@ async fn capacity_wait_observes_owner_closure_without_a_permit_release() {
     let plane = workflow_test_plane(1);
     let program = model_program(
         WorkflowModelOutput::Text {},
-        crate::model::AuxiliaryModelPolicy::Session,
+        crate::model::DirectModelPolicy::Session,
     );
     let (context, executor, mut entries, _) = setup(
         &plane,
@@ -1327,7 +1327,7 @@ async fn lifecycle_contention_waits_for_commit_release_without_capacity_wake() {
     let plane = workflow_test_plane(1);
     let program = model_program(
         WorkflowModelOutput::Text {},
-        crate::model::AuxiliaryModelPolicy::Session,
+        crate::model::DirectModelPolicy::Session,
     );
     let (context, executor, mut entries, _) = setup(
         &plane,
@@ -1373,7 +1373,7 @@ async fn lifecycle_contention_cancellation_dispatches_no_call() {
     let plane = workflow_test_plane(1);
     let program = model_program(
         WorkflowModelOutput::Text {},
-        crate::model::AuxiliaryModelPolicy::Session,
+        crate::model::DirectModelPolicy::Session,
     );
     let (context, executor, mut entries, _) = setup(
         &plane,
@@ -1417,7 +1417,7 @@ async fn lifecycle_contention_owner_close_exits_without_commit_release() {
     let plane = workflow_test_plane(1);
     let program = model_program(
         WorkflowModelOutput::Text {},
-        crate::model::AuxiliaryModelPolicy::Session,
+        crate::model::DirectModelPolicy::Session,
     );
     let (context, executor, mut entries, _) = setup(
         &plane,

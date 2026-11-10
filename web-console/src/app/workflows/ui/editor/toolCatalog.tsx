@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { WorkflowToolSource } from '../../../../../../protocol/app-server/v77';
+import type { WorkflowToolSource } from '../../../../../../protocol/app-server/v78';
 import { readToolCatalog, type WorkflowScopePort } from '../../port';
 
 export type ToolCatalogState = { status: 'idle' | 'loading' | 'failed' } | { status: 'ready'; sources: readonly WorkflowToolSource[] };

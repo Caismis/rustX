@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import type { FileComparison } from '../../../../protocol/app-server/v77';
+import type { FileComparison } from '../../../../protocol/app-server/v78';
 import type { ChangesReviewRequest } from '../changes-review';
 import { useTranslation } from '../../locale/react';
 import { DiffBlock, localDiffHunks } from '../../presentation/primitives/DiffBlock';

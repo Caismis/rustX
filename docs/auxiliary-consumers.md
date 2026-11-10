@@ -104,12 +104,13 @@ before RequestStarted. Input that cannot fit is rejected; this path never invoke
 compaction or silently truncates historical text. Existing image projection rules
 still determine the supported image subset.
 
-`classification_model` and `btw_model` source policies independently choose
-`mode = "session"` or an explicit catalog model/profile/request parameters/output
-limit, using the same native policy resolver as Title. They are exposed in native
-settings, effective readers and Web Settings. Session whole-state policies are
-`classificationModel` and `btwModel`; primary model changes preserve both. Policy
-resolution is frozen at admission. A duplicate returns before resolution.
+Classification and BTW share the Session's one Auxiliary Model policy with
+Summary and Title: `mode = "session"` or an explicit catalog model, with an
+independent Profile strategy (`lowest` by default, `model_default`, or an
+explicit Profile id), request parameters, and output limit. Native settings,
+effective readers, and Web Settings expose that single policy. Primary model
+changes preserve it. Resolution is frozen at each consumer's admission
+boundary. A duplicate returns before resolution.
 
 ## Retention, delivery and browser behavior
 

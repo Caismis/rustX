@@ -18,7 +18,7 @@ test('automatic configuration repair is announced once and inspected at its exac
     const user = readFileSync(fixture.settings, 'utf8');
     expect(user).not.toContain('legacy_root');
     expect(user).not.toContain('unknown_permission');
-    expect(user).toMatch(/^schema_version = 11\n/);
+    expect(user).toMatch(/^schema_version = 12\n/);
     const backups = readdirSync(join(fixture.directory, 'runtime/configuration-backups'));
     expect(backups).toHaveLength(1);
     expect(readFileSync(join(fixture.directory, 'runtime/configuration-backups', backups[0]), 'utf8')).toContain('legacy_root = true');

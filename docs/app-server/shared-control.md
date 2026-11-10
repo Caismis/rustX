@@ -4,7 +4,7 @@ This is the implementation contract for issue #532. The implementation base is
 `4ecd28b8834d91566404ccc24a601ba7cf2e9b7d`. The reference is OpenAI Codex
 `rust-v0.166.0`, resolved to immutable commit
 `6ff1e1ca3b30fc8b914720681fcf5fe62e95f856`.
-The public protocol is App Server v77, with Runtime Client v84, Session catalog
+The public protocol is App Server v78, with Runtime Client v85, Session catalog
 v19, SQLite v86 and Runtime Manifest v5. Earlier protocols and storage layouts
 are rejected; there is no compatibility reader or alternate gateway.
 
@@ -68,7 +68,7 @@ network credential flags are rejected for stdio. Initialize does not authenticat
   `now >= nbf - skew`. Additional role/scope/Thread claims grant no permission tier.
 
 A native client sends `Authorization: Bearer <credential>`. A browser offers
-`rustx.app-server.v77` and `rustx-token.<base64url-no-pad(credential bytes)>`. Encode the ASCII bearer bytes
+`rustx.app-server.v78` and `rustx-token.<base64url-no-pad(credential bytes)>`. Encode the ASCII bearer bytes
 with RFC 4648 URL-safe Base64 and omit padding; native Authorization sends the
 original bytes. There is no raw-token subprotocol alternative. Both reach the same verifier.
 The server selects only the normal protocol, never echoes the secret, and rejects

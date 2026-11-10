@@ -67,27 +67,28 @@ pub(crate) fn admit_agent(
 }
 
 fn frozen_model(model: ModelRef) -> FrozenModelSpec {
+    let invocation = |model: ModelRef| FrozenModelInvocation {
+        binding: FrozenProviderBinding {
+            resolved_credential: Some(ResolvedCredential::new("test-only-secret")),
+            provider: ProviderId::new("test"),
+            base_url: "http://127.0.0.1:9/v1".to_owned(),
+            credential: CredentialSource::Environment("RUSTX_TEST_FROZEN_KEY".to_owned()),
+        },
+        model,
+        wire_model: "test-model".into(),
+        protocol: ModelProtocol::OpenAiChatCompletions,
+        context_window: 128_000,
+        model_max_output_tokens: 512,
+        max_output_tokens: 512,
+        profile: None,
+        request_params: RequestParams::new(),
+        capabilities: ModelCapabilities::text_only(),
+        declared_capabilities: ModelCapabilities::text_only(),
+        compat: ModelCompat::default(),
+    };
     FrozenModelSpec {
         configured: SessionModelConfig::of(model.clone()),
-        primary: FrozenModelInvocation {
-            binding: FrozenProviderBinding {
-                resolved_credential: Some(ResolvedCredential::new("test-only-secret")),
-                provider: ProviderId::new("test"),
-                base_url: "http://127.0.0.1:9/v1".to_owned(),
-                credential: CredentialSource::Environment("RUSTX_TEST_FROZEN_KEY".to_owned()),
-            },
-            model,
-            wire_model: "test-model".into(),
-            protocol: ModelProtocol::OpenAiChatCompletions,
-            context_window: 128_000,
-            model_max_output_tokens: 512,
-            max_output_tokens: 512,
-            profile: None,
-            request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(),
-            declared_capabilities: ModelCapabilities::text_only(),
-            compat: ModelCompat::default(),
-        },
-        summary: FrozenSummaryModel::Session,
+        primary: invocation(model.clone()),
+        summary: FrozenSummaryModel(Box::new(invocation(model))),
     }
 }

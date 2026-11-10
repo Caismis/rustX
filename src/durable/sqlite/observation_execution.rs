@@ -55,7 +55,7 @@ pub(super) fn summary_at_sequence(
     bytes
         .map(|bytes| {
             decode_layout(&bytes)
-                .map(|layout| layout.summary)
+                .map(|layout| layout.auxiliary)
                 .map_err(|error| storage(error.to_string()))
         })
         .transpose()
@@ -65,7 +65,7 @@ pub(super) fn summary(
     attempt: &AttemptId,
     through: u64,
 ) -> Result<AttemptExecutionSummary, ConversationStoreError> {
-    Ok(layout(connection, attempt, through)?.summary)
+    Ok(layout(connection, attempt, through)?.auxiliary)
 }
 pub(super) fn required(event: &RuntimeEventEnvelope) -> bool {
     if event.attempt_id.is_none() {
@@ -93,7 +93,7 @@ pub(super) fn summary_selected(
     sequence: u64,
     through: u64,
 ) -> Result<AttemptExecutionSummary, ConversationStoreError> {
-    Ok(selected_layout(connection, sequence, through)?.summary)
+    Ok(selected_layout(connection, sequence, through)?.auxiliary)
 }
 fn selected_layout(
     connection: &Connection,
@@ -146,7 +146,7 @@ pub(super) fn event(
     }
     match &event.event {
         RuntimeEvent::AttemptStarted { .. } => {
-            state.summary.started_at = Some(event.timestamp);
+            state.auxiliary.started_at = Some(event.timestamp);
         }
         RuntimeEvent::ModelRequestStarted {
             request_id, model, ..
@@ -175,9 +175,9 @@ pub(super) fn event(
             )?;
         }
         RuntimeEvent::AssistantMessageCommitted { message_id } => {
-            state.summary.closing_message_id =
+            state.auxiliary.closing_message_id =
                 (message_id.as_str().len() <= 256).then(|| message_id.clone());
-            state.summary.closing_ledger_position = connection
+            state.auxiliary.closing_ledger_position = connection
                 .query_row(
                     "SELECT position FROM message_ledger WHERE message_id=?1",
                     [message_id.as_str()],
@@ -185,7 +185,7 @@ pub(super) fn event(
                 )
                 .optional()
                 .map_err(|error| storage(error.to_string()))?;
-            state.summary.closing_identity_sequence = Some(event.sequence);
+            state.auxiliary.closing_identity_sequence = Some(event.sequence);
             let _ = super::optional_display_layout(connection, || {
                 super::content::index_utf8_field(
                     connection,
@@ -198,22 +198,22 @@ pub(super) fn event(
         }
         RuntimeEvent::AttemptCompleted { finish_reason, .. } => {
             let (reason, deferred) = finite_finish_reason(finish_reason);
-            state.summary.finish_reason = Some(reason);
-            state.summary.finish_reason_deferred = deferred;
-            state.summary.finish_reason_sequence = Some(event.sequence);
-            close(&mut state.summary, event, "attempt_completed");
+            state.auxiliary.finish_reason = Some(reason);
+            state.auxiliary.finish_reason_deferred = deferred;
+            state.auxiliary.finish_reason_sequence = Some(event.sequence);
+            close(&mut state.auxiliary, event, "attempt_completed");
         }
         RuntimeEvent::AttemptCancelled { .. } => {
-            close(&mut state.summary, event, "attempt_cancelled");
+            close(&mut state.auxiliary, event, "attempt_cancelled");
         }
         RuntimeEvent::AttemptFailed { error, .. } => {
-            attempt_failed(connection, event, error, &mut state.summary)?;
+            attempt_failed(connection, event, error, &mut state.auxiliary)?;
         }
         RuntimeEvent::AttemptTimedOut { .. } => {
-            close(&mut state.summary, event, "attempt_timed_out");
+            close(&mut state.auxiliary, event, "attempt_timed_out");
         }
         RuntimeEvent::AttemptLimitExceeded { .. } => {
-            close(&mut state.summary, event, "attempt_limit_exceeded");
+            close(&mut state.auxiliary, event, "attempt_limit_exceeded");
         }
         _ => {}
     }
@@ -224,9 +224,9 @@ fn seal_execution(
     sequence: u64,
     state: &mut ExecutionLayout,
 ) -> Result<(), ConversationStoreError> {
-    state.summary.models_next_offset = ((state.summary.models.len() as u64)
-        < state.summary.models_total)
-        .then_some(state.summary.models.len() as u64);
+    state.auxiliary.models_next_offset = ((state.auxiliary.models.len() as u64)
+        < state.auxiliary.models_total)
+        .then_some(state.auxiliary.models.len() as u64);
     finish_timing(state);
     while crate::observation::bounded::bounded_bytes(
         state,
@@ -234,10 +234,10 @@ fn seal_execution(
     )
     .is_none()
     {
-        if state.summary.models.pop().is_none() {
+        if state.auxiliary.models.pop().is_none() {
             return Err(storage("native execution essentials exceed header bound"));
         }
-        state.summary.models_next_offset = Some(state.summary.models.len() as u64);
+        state.auxiliary.models_next_offset = Some(state.auxiliary.models.len() as u64);
     }
     connection
         .execute(
@@ -272,15 +272,15 @@ fn request_started(
     model: &str,
     state: &mut ExecutionLayout,
 ) -> Result<(), ConversationStoreError> {
-    state.summary.requests = state
-        .summary
+    state.auxiliary.requests = state
+        .auxiliary
         .requests
         .checked_add(1)
         .ok_or_else(|| storage("request count exhausted"))?;
     state.first_request_sequence.get_or_insert(event.sequence);
-    state.summary.last_request_sequence = Some(event.sequence);
-    state.summary.last_request_id = (request_id.as_str().len() <= 512).then(|| request_id.clone());
-    state.summary.last_request_id_source = (state.summary.last_request_id.is_none()).then(|| {
+    state.auxiliary.last_request_sequence = Some(event.sequence);
+    state.auxiliary.last_request_id = (request_id.as_str().len() <= 512).then(|| request_id.clone());
+    state.auxiliary.last_request_id_source = (state.auxiliary.last_request_id.is_none()).then(|| {
         request_source(
             event.sequence,
             super::observation_request_summary::serialized_bytes(&request_id.as_str())
@@ -296,21 +296,21 @@ fn request_started(
         )
         .map_err(|error| storage(error.to_string()))?;
     if !known {
-        let ordinal = state.summary.models_total;
+        let ordinal = state.auxiliary.models_total;
         let end = super::optional_display_layout(connection, || {
             super::content::index_model_name(connection, event.sequence, model)
         })?
         .unwrap_or(0);
-        connection.execute("INSERT INTO observation_models(attempt_id,ordinal,first_sequence,request_alias,request_encoded_bytes,model_hash,encoded_bytes,owner_anchor) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![attempt.as_str(),ordinal,event.sequence,state.summary.last_request_id.as_ref().map(RequestId::as_str),super::observation_request_summary::serialized_bytes(&request_id.as_str())?,model_hash,end,state.owner_anchor]).map_err(|error|storage(error.to_string()))?;
-        state.summary.models_total += 1;
-        if ordinal == state.summary.models.len() as u64
+        connection.execute("INSERT INTO observation_models(attempt_id,ordinal,first_sequence,request_alias,request_encoded_bytes,model_hash,encoded_bytes,owner_anchor) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![attempt.as_str(),ordinal,event.sequence,state.auxiliary.last_request_id.as_ref().map(RequestId::as_str),super::observation_request_summary::serialized_bytes(&request_id.as_str())?,model_hash,end,state.owner_anchor]).map_err(|error|storage(error.to_string()))?;
+        state.auxiliary.models_total += 1;
+        if ordinal == state.auxiliary.models.len() as u64
             && ordinal < HEADER_PAGE_MAX as u64
             && end > 0
             && end <= 1024
         {
-            state.summary.models.push(model.to_owned());
-            if crate::observation::bounded::bounded_bytes(&state.summary, 12_288).is_none() {
-                state.summary.models.pop();
+            state.auxiliary.models.push(model.to_owned());
+            if crate::observation::bounded::bounded_bytes(&state.auxiliary, 12_288).is_none() {
+                state.auxiliary.models.pop();
             }
         }
     }
@@ -327,8 +327,8 @@ fn request_settled(
 ) -> Result<(), ConversationStoreError> {
     state.terminals += 1;
     if let Some(usage) = usage {
-        state.summary.reports += 1;
-        crate::durable::response::add_usage(&mut state.summary.usage, usage);
+        state.auxiliary.reports += 1;
+        crate::durable::response::add_usage(&mut state.auxiliary.usage, usage);
     }
     let start:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_request_id_kind_idx WHERE json_extract(event_json,'$.event.request_id')=?1 AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![request_id.as_str(),event.sequence],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
     if state.first_request_sequence.is_some() && state.first_request_sequence == start {
@@ -503,7 +503,7 @@ pub(super) fn models_at(
         return Err(ConversationStoreError::InvalidContentRange);
     }
     let state = selected_layout(connection, sequence, through)?;
-    let summary = state.summary;
+    let summary = state.auxiliary;
     if offset > summary.models_total {
         return Err(ConversationStoreError::InvalidContentRange);
     }
@@ -588,7 +588,7 @@ pub(super) fn model_value_at(
         return Err(ConversationStoreError::InvalidContentRange);
     }
     let state = selected_layout(connection, sequence, through)?;
-    let total = state.summary.models_total;
+    let total = state.auxiliary.models_total;
     let source:Option<(u64,u64)>=connection.query_row("SELECT first_sequence,encoded_bytes FROM observation_models WHERE owner_anchor=?1 AND ordinal=?2 AND ordinal<?3 AND first_sequence<=?4",params![state.owner_anchor,ordinal,total,through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
     let (request, end) = source.ok_or_else(|| {
         ConversationStoreError::InvalidReference("model name source unavailable".into())
@@ -685,7 +685,7 @@ pub(super) fn failure_at(
     {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    let summary = layout_at(connection, sequence)?.summary;
+    let summary = layout_at(connection, sequence)?.auxiliary;
     let event = summary
         .terminal_sequence
         .filter(|_| summary.failure.is_some())
@@ -722,9 +722,9 @@ pub(super) fn finite_finish_reason(
 }
 
 fn finish_timing(state: &mut ExecutionLayout) {
-    if let Some(end) = state.summary.ended_at {
+    if let Some(end) = state.auxiliary.ended_at {
         let total_duration_ms = state
-            .summary
+            .auxiliary
             .started_at
             .filter(|start| *start <= end)
             .and_then(|start| {
@@ -733,7 +733,7 @@ fn finish_timing(state: &mut ExecutionLayout) {
                     .try_into()
                     .ok()
             });
-        let duration = (state.terminals == state.summary.requests
+        let duration = (state.terminals == state.auxiliary.requests
             && !state.duration_invalid
             && state.observed_output)
             .then_some(state.generation_ms);
@@ -747,7 +747,7 @@ fn finish_timing(state: &mut ExecutionLayout) {
             generation_ms: duration,
             output_tokens_per_second,
         };
-        state.summary.timing = (timing
+        state.auxiliary.timing = (timing
             != crate::durable::response::CompletedResponseTiming::default())
         .then_some(timing);
     }

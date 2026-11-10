@@ -1,4 +1,4 @@
-schema_version = 11
+schema_version = 12
 agent_id = "default-agent"
 
 [context]
@@ -40,12 +40,11 @@ request_params = '{"top_p":0.9}'
 mode = "limit"
 tokens = 2048
 
-[agent.model.summary_model]
+# Shared Auxiliary Model for Summary, Title, Classification, and BTW.
+# Omitted profile defaults to Lowest for the selected model.
+[agent.model.auxiliary]
 mode = "session"
-
-# Automatic title uses the same follow/explicit policy and freezes at admission.
-[agent.model.title_model]
-mode = "session"
+profile = { mode = "lowest" }
 
 # Each Plugin is one atomic overlay unit. Omitted Plugins are off.
 [agent.plugins]

@@ -419,12 +419,12 @@ async fn removing_a_nested_repository_and_its_index_entry_records_the_gitlink_de
             .get("remove-nested")
             .unwrap()
             .clone();
-        assert_eq!(completed.summary.total, 1, "tracked={tracked}");
-        assert_eq!(completed.summary.files[0].display, "nested");
+        assert_eq!(completed.auxiliary.total, 1, "tracked={tracked}");
+        assert_eq!(completed.auxiliary.files[0].display, "nested");
         assert_eq!(
             (
-                completed.summary.files[0].added,
-                completed.summary.files[0].deleted
+                completed.auxiliary.files[0].added,
+                completed.auxiliary.files[0].deleted
             ),
             (0, 1)
         );
@@ -480,10 +480,10 @@ async fn replacing_a_nested_repository_samples_the_actual_file_or_symlink_endpoi
                 .unwrap()
                 .clone();
             assert_eq!(
-                completed.summary.total, 1,
+                completed.auxiliary.total, 1,
                 "remove_from_index={remove_from_index}, symbolic={symbolic}"
             );
-            assert_eq!(completed.summary.files[0].display, "nested");
+            assert_eq!(completed.auxiliary.files[0].display, "nested");
             let (before, after) = completed.trees.as_ref().unwrap();
             assert!(
                 git(

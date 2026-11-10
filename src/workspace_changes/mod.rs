@@ -68,7 +68,7 @@ impl ChangesStore {
             .lock()
             .expect("workspace changes")
             .get(attempt.as_str())
-            .map(|record| record.summary.clone())
+            .map(|record| record.auxiliary.clone())
     }
 
     pub(crate) async fn comparison(

@@ -433,7 +433,7 @@ async fn issue459_unavailable_selection_survives_reload_and_cold_binding() {
             assert_eq!(view.configured, b);
             assert!(view.unavailable.as_deref().unwrap().contains("local/b"));
             // Nothing is resolved for, or substituted into, a removed selection.
-            assert!(view.effective.is_none() && view.summary.is_none());
+            assert!(view.effective.is_none() && view.auxiliary.is_none());
             assert!(
                 runtime
                     .model_catalog()
@@ -742,13 +742,12 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
         applied(&fixture, 0).await;
         let summary_on = |model: &str| AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse(model).unwrap(),
-            profile: None,
+            profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
             request_params: RequestParams::new(),
             max_output_tokens: Some(256),
         };
         let with_summary = |profile, summary| SessionModelConfig {
-            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: summary,
+            auxiliary: summary,
             ..issue459_pinned(profile)
         };
         fixture
@@ -768,7 +767,7 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
         settled(&fixture, 0).await;
         let view = runtime.model_view();
         assert!(view.unavailable.as_deref().unwrap().contains("fast"));
-        assert_eq!(view.configured.summary_model, summary_on("local/b"));
+        assert_eq!(view.configured.auxiliary, summary_on("local/b"));
         // Replacing the primary keeps the explicit Summary, as both clients send it.
         let view = fixture
             .manager
@@ -777,7 +776,7 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
             .unwrap()
             .0;
         assert!(view.unavailable.is_none());
-        let Some(AuxiliaryModelView::Explicit(summary)) = &view.summary else {
+        let Some(AuxiliaryModelView::Explicit { effective: summary }) = &view.auxiliary else {
             panic!("explicit summary")
         };
         assert_eq!(
@@ -825,7 +824,7 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
         let mut changed = with_summary(None, summary_on("local/b"));
         let AuxiliaryModelPolicy::Explicit {
             max_output_tokens, ..
-        } = &mut changed.summary_model
+        } = &mut changed.auxiliary
         else {
             unreachable!()
         };
@@ -848,8 +847,8 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
             .0;
         assert!(recovered.unavailable.is_none());
         assert_eq!(
-            recovered.configured.summary_model,
-            AuxiliaryModelPolicy::Session
+            recovered.configured.auxiliary,
+            AuxiliaryModelPolicy::default()
         );
         settled(&fixture, 0).await;
         // A complete valid configuration corrects both.
@@ -860,7 +859,7 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
             .unwrap()
             .0;
         assert!(view.unavailable.is_none());
-        assert_eq!(view.configured.summary_model, summary_on("local/a"));
+        assert_eq!(view.configured.auxiliary, summary_on("local/a"));
         assert!(fixture.provider.request_bodies().is_empty());
         fixture.close().await;
     }))

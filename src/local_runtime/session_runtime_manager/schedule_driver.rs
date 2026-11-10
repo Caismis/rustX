@@ -147,7 +147,7 @@ impl SessionRuntimeManager {
             Ok(ScheduleOperationResult::Summary(summary)) => {
                 if index
                     .get(&binding.conversation_id)
-                    .is_some_and(|entry| entry.summary.generation > summary.generation)
+                    .is_some_and(|entry| entry.auxiliary.generation > summary.generation)
                 {
                     return;
                 }
@@ -160,7 +160,7 @@ impl SessionRuntimeManager {
                 health.enabled = summary.enabled;
                 match index.get_mut(&binding.conversation_id) {
                     Some(entry) => {
-                        if summary.generation > entry.summary.generation {
+                        if summary.generation > entry.auxiliary.generation {
                             entry.retry_at = 0;
                         }
                         entry.summary = summary;
@@ -268,7 +268,7 @@ impl SessionRuntimeManager {
     }
     async fn prune_schedule_source(&self, entry: &mut Indexed, deadline: u64, actions: &mut usize) {
         let binding = &entry.binding;
-        if expired_history(&entry.summary, self.schedule_clock.now())
+        if expired_history(&entry.auxiliary, self.schedule_clock.now())
             && *actions < ACTION_BATCH
             && self.clock.now_millis() < deadline
         {
@@ -285,8 +285,8 @@ impl SessionRuntimeManager {
                 .await;
             match result {
                 Ok(ScheduleOperationResult::Pruned { generation, .. }) => {
-                    entry.summary.generation = generation;
-                    entry.summary.oldest_completed_utc = None;
+                    entry.auxiliary.generation = generation;
+                    entry.auxiliary.oldest_completed_utc = None;
                 }
                 Err(e) => self.schedule_wait_reason(&binding.conversation_id, Some(diagnostic(e))),
                 _ => unreachable!("typed retention operation"),
@@ -309,10 +309,10 @@ impl SessionRuntimeManager {
             if let Ok(ScheduleOperationResult::Summary(summary)) =
                 self.schedule_until(deadline, read).await
             {
-                if summary.generation >= entry.summary.generation {
+                if summary.generation >= entry.auxiliary.generation {
                     entry.summary = summary;
                 }
-                if let Some(trigger) = entry.summary.ready.first() {
+                if let Some(trigger) = entry.auxiliary.ready.first() {
                     *actions += 1;
                     let result = self
                         .schedule_until(deadline, self.activate_scheduled_target(binding, trigger))
@@ -335,7 +335,7 @@ impl SessionRuntimeManager {
         let binding = &entry.binding;
         let mut more = false;
         if entry
-            .summary
+            .auxiliary
             .next_due_utc
             .is_some_and(|due| due <= self.schedule_clock.now())
             && *actions < ACTION_BATCH
@@ -351,7 +351,7 @@ impl SessionRuntimeManager {
             );
             if let Ok(ScheduleOperationResult::DuePage(page)) =
                 self.schedule_until(deadline, read).await
-                && page.generation >= entry.summary.generation
+                && page.generation >= entry.auxiliary.generation
             {
                 let mut visited = 0;
                 for candidate in &page.candidates {
@@ -421,11 +421,11 @@ impl SessionRuntimeManager {
             .filter(|(_, entry)| {
                 entry.available
                     && entry.retry_at <= now
-                    && (entry.summary.next_due_utc.is_some_and(|due| due <= utc)
-                        || !entry.summary.ready.is_empty()
-                        || expired_history(&entry.summary, utc))
+                    && (entry.auxiliary.next_due_utc.is_some_and(|due| due <= utc)
+                        || !entry.auxiliary.ready.is_empty()
+                        || expired_history(&entry.auxiliary, utc))
             })
-            .map(|(id, entry)| (entry.last_served_at, entry.summary.next_due_utc, id.clone()))
+            .map(|(id, entry)| (entry.last_served_at, entry.auxiliary.next_due_utc, id.clone()))
             .collect();
         ready.sort();
         let deadline = now.saturating_add(DISPATCH_MS).min(outer_deadline);
@@ -466,12 +466,12 @@ impl SessionRuntimeManager {
         let utc = self.schedule_clock.now();
         let mut deadline = next_scan.min(now.saturating_add(RECONCILE_MS));
         for entry in index.values().filter(|entry| entry.available) {
-            if let Some(due) = entry.summary.next_due_utc {
+            if let Some(due) = entry.auxiliary.next_due_utc {
                 let due =
                     now.saturating_add(u64::try_from((due - utc).num_milliseconds()).unwrap_or(0));
                 deadline = deadline.min(due.max(entry.retry_at));
             }
-            if !entry.summary.ready.is_empty() || expired_history(&entry.summary, utc) {
+            if !entry.auxiliary.ready.is_empty() || expired_history(&entry.auxiliary, utc) {
                 deadline = deadline.min(entry.retry_at);
             }
         }

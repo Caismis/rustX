@@ -1,6 +1,6 @@
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { isOutcomeUncertain } from './errors';
-import type { AttachmentTarget, SessionModelConfig, SessionModelView } from '../../../protocol/app-server/v77';
+import type { AttachmentTarget, SessionModelConfig, SessionModelView } from '../../../protocol/app-server/v78';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, SessionView } from './contracts';
 
@@ -70,8 +70,7 @@ export class ModelSelection {
     const operation = { generation, status: 'in-flight' as const };
     this.port.setSession(id, { modelMutation: operation });
     try {
-      const hasExplicitAuxiliary = [config.summaryModel, config.titleModel, config.classificationModel, config.btwModel]
-        .some(policy => policy?.mode === 'explicit');
+      const hasExplicitAuxiliary = config.auxiliary?.mode === 'explicit';
       await this.port.request({ method: 'session/setModel', params: {
         target, config, ...(recoverCarriedAuxiliary && hasExplicitAuxiliary ? { recover_unavailable_auxiliary: true } : {}),
       } }, 'model_set');

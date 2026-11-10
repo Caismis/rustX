@@ -58,7 +58,7 @@ it('confirms a deferred model body after attachment before sending with the sele
 it('opts into carrying removed auxiliary references only for picker selections', async () => {
   const attach = server.client.attach('A');
   const opening = await server.waitFor('thread/resume', 1);
-  const config = { model: 'replacement', summaryModel: { mode: 'explicit' as const, model: 'old-summary' } };
+  const config = { model: 'replacement', auxiliary: { mode: 'explicit' as const, model: 'old-summary' } };
   const chosen = server.client.prepareAgentModel('A', config);
   server.reply(opening);
   await attach;

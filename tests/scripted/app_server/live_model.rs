@@ -165,10 +165,9 @@ async fn active_profile_selection_is_durable_and_reconnect_preserves_frozen_atte
             profile: Some(ModelProfileId::new("high")),
             request_params: crate::scripted_suites::common::request_params(json!({"seed": 7})),
             max_output_tokens: Some(777),
-            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: AuxiliaryModelPolicy::Explicit {
+            auxiliary: AuxiliaryModelPolicy::Explicit {
                 model: ModelRef::parse("local/b").unwrap(),
-                profile: None,
+                profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                 request_params: crate::scripted_suites::common::request_params(
                     json!({"temperature": 0.2}),
                 ),

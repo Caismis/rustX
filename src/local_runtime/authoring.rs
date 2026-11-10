@@ -237,13 +237,7 @@ pub struct ModelLayer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<ModelOutput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary_model: Option<AuxiliaryModelAuthoring>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title_model: Option<AuxiliaryModelAuthoring>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub classification_model: Option<AuxiliaryModelAuthoring>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub btw_model: Option<AuxiliaryModelAuthoring>,
+    pub auxiliary: Option<AuxiliaryModelAuthoring>,
 }
 partial!(ContextLayer {
     reserve_tokens: u64,
@@ -314,12 +308,50 @@ impl IdleLiveness {
 }
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AuxiliaryProfileAuthoring {
+    Lowest {},
+    ModelDefault {},
+    Explicit { id: ModelProfileId },
+}
+impl Default for AuxiliaryProfileAuthoring {
+    fn default() -> Self {
+        Self::Lowest {}
+    }
+}
+impl AuxiliaryProfileAuthoring {
+    fn resolve(self) -> crate::model::AuxiliaryProfileSelection {
+        match self {
+            Self::Lowest {} => crate::model::AuxiliaryProfileSelection::Lowest,
+            Self::ModelDefault {} => crate::model::AuxiliaryProfileSelection::ModelDefault,
+            Self::Explicit { id } => crate::model::AuxiliaryProfileSelection::Explicit { id },
+        }
+    }
+    fn from_policy(policy: &crate::model::AuxiliaryProfileSelection) -> Self {
+        match policy {
+            crate::model::AuxiliaryProfileSelection::Lowest => Self::Lowest {},
+            crate::model::AuxiliaryProfileSelection::ModelDefault => Self::ModelDefault {},
+            crate::model::AuxiliaryProfileSelection::Explicit { id } => Self::Explicit {
+                id: id.clone(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuxiliaryModelAuthoring {
-    Session {},
+    Session {
+        #[serde(default)]
+        profile: AuxiliaryProfileAuthoring,
+        #[serde(default)]
+        request_params: AuthoredRequestParams,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_output_tokens: Option<ModelOutput>,
+    },
     Explicit {
         model: ModelRef,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        profile: Option<ModelProfileId>,
+        #[serde(default)]
+        profile: AuxiliaryProfileAuthoring,
         #[serde(default)]
         request_params: AuthoredRequestParams,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -329,7 +361,15 @@ pub enum AuxiliaryModelAuthoring {
 impl AuxiliaryModelAuthoring {
     fn resolve(self) -> AuxiliaryModelPolicy {
         match self {
-            Self::Session {} => AuxiliaryModelPolicy::Session,
+            Self::Session {
+                profile,
+                request_params,
+                max_output_tokens,
+            } => AuxiliaryModelPolicy::Session {
+                profile: profile.resolve(),
+                request_params: request_params.0,
+                max_output_tokens: max_output_tokens.and_then(ModelOutput::resolve),
+            },
             Self::Explicit {
                 model,
                 profile,
@@ -337,9 +377,33 @@ impl AuxiliaryModelAuthoring {
                 max_output_tokens,
             } => AuxiliaryModelPolicy::Explicit {
                 model,
-                profile,
+                profile: profile.resolve(),
                 request_params: request_params.0,
                 max_output_tokens: max_output_tokens.and_then(ModelOutput::resolve),
+            },
+        }
+    }
+    fn from_policy(policy: &AuxiliaryModelPolicy) -> Self {
+        match policy {
+            AuxiliaryModelPolicy::Session {
+                profile,
+                request_params,
+                max_output_tokens,
+            } => Self::Session {
+                profile: AuxiliaryProfileAuthoring::from_policy(profile),
+                request_params: AuthoredRequestParams(request_params.clone()),
+                max_output_tokens: max_output_tokens.map(|tokens| ModelOutput::Limit { tokens }),
+            },
+            AuxiliaryModelPolicy::Explicit {
+                model,
+                profile,
+                request_params,
+                max_output_tokens,
+            } => Self::Explicit {
+                model: model.clone(),
+                profile: AuxiliaryProfileAuthoring::from_policy(profile),
+                request_params: AuthoredRequestParams(request_params.clone()),
+                max_output_tokens: max_output_tokens.map(|tokens| ModelOutput::Limit { tokens }),
             },
         }
     }
@@ -488,66 +552,7 @@ pub(super) fn serialize_profile_model<S: serde::Serializer>(
             max_output_tokens: model
                 .max_output_tokens
                 .map(|tokens| ModelOutput::Limit { tokens }),
-            summary_model: Some(match &model.summary_model {
-                AuxiliaryModelPolicy::Session => AuxiliaryModelAuthoring::Session {},
-                AuxiliaryModelPolicy::Explicit {
-                    model,
-                    profile,
-                    request_params,
-                    max_output_tokens,
-                } => AuxiliaryModelAuthoring::Explicit {
-                    model: model.clone(),
-                    profile: profile.clone(),
-                    request_params: AuthoredRequestParams(request_params.clone()),
-                    max_output_tokens: max_output_tokens
-                        .map(|tokens| ModelOutput::Limit { tokens }),
-                },
-            }),
-            title_model: Some(match &model.title_model {
-                AuxiliaryModelPolicy::Session => AuxiliaryModelAuthoring::Session {},
-                AuxiliaryModelPolicy::Explicit {
-                    model,
-                    profile,
-                    request_params,
-                    max_output_tokens,
-                } => AuxiliaryModelAuthoring::Explicit {
-                    model: model.clone(),
-                    profile: profile.clone(),
-                    request_params: AuthoredRequestParams(request_params.clone()),
-                    max_output_tokens: max_output_tokens
-                        .map(|tokens| ModelOutput::Limit { tokens }),
-                },
-            }),
-            classification_model: Some(match model.classification_model.as_ref() {
-                AuxiliaryModelPolicy::Session => AuxiliaryModelAuthoring::Session {},
-                AuxiliaryModelPolicy::Explicit {
-                    model,
-                    profile,
-                    request_params,
-                    max_output_tokens,
-                } => AuxiliaryModelAuthoring::Explicit {
-                    model: model.clone(),
-                    profile: profile.clone(),
-                    request_params: AuthoredRequestParams(request_params.clone()),
-                    max_output_tokens: max_output_tokens
-                        .map(|tokens| ModelOutput::Limit { tokens }),
-                },
-            }),
-            btw_model: Some(match model.btw_model.as_ref() {
-                AuxiliaryModelPolicy::Session => AuxiliaryModelAuthoring::Session {},
-                AuxiliaryModelPolicy::Explicit {
-                    model,
-                    profile,
-                    request_params,
-                    max_output_tokens,
-                } => AuxiliaryModelAuthoring::Explicit {
-                    model: model.clone(),
-                    profile: profile.clone(),
-                    request_params: AuthoredRequestParams(request_params.clone()),
-                    max_output_tokens: max_output_tokens
-                        .map(|tokens| ModelOutput::Limit { tokens }),
-                },
-            }),
+            auxiliary: Some(AuxiliaryModelAuthoring::from_policy(&model.auxiliary)),
         })
         .serialize(serializer)
 }
@@ -569,17 +574,8 @@ impl ModelLayer {
         model.profile = self.profile;
         model.max_output_tokens = self.max_output_tokens.and_then(ModelOutput::resolve);
         model.request_params = self.request_params.unwrap_or_default().0;
-        if let Some(summary) = self.summary_model {
-            model.summary_model = summary.resolve();
-        }
-        if let Some(title) = self.title_model {
-            model.title_model = title.resolve();
-        }
-        if let Some(classification) = self.classification_model {
-            model.classification_model = Box::new(classification.resolve());
-        }
-        if let Some(btw) = self.btw_model {
-            model.btw_model = Box::new(btw.resolve());
+        if let Some(auxiliary) = self.auxiliary {
+            model.auxiliary = auxiliary.resolve();
         }
         Ok(model)
     }
@@ -623,10 +619,7 @@ impl RuntimeLayer {
             "agent.model.profile",
             "agent.model.request_params",
             "agent.model.max_output_tokens",
-            "agent.model.summary_model",
-            "agent.model.title_model",
-            "agent.model.classification_model",
-            "agent.model.btw_model",
+            "agent.model.auxiliary",
             "context.reserve_tokens",
             "context.keep_recent_tokens",
             "context.summary_output_cap",
@@ -1007,24 +1000,16 @@ tokens = 1024
 model = "p/m"
 profile = "fast"
 request_params = '{"future":{"nested":[1,"text",{"new":true},null]},"text":"x","flag":false,"temperature":0.7}'
-[agent.model.summary_model]
+[agent.model.auxiliary]
 mode = "explicit"
 model = "p/s"
-profile = "summary"
+profile = { mode = "explicit", id = "summary" }
 request_params = '''
 {"vendor": ["text", [1, 2], {"arbitrary": "yes", "unset": null}]}
 '''
-[agent.model.summary_model.max_output_tokens]
+[agent.model.auxiliary.max_output_tokens]
 mode = "limit"
 tokens = 256
-[agent.model.title_model]
-mode = "explicit"
-model = "p/t"
-profile = "short"
-request_params = '{"title_tag": [null, "exact"]}'
-[agent.model.title_model.max_output_tokens]
-mode = "limit"
-tokens = 128
 "#;
 
     #[test]
@@ -1036,30 +1021,35 @@ tokens = 128
             model.request_params["future"]["nested"][3],
             serde_json::Value::Null
         );
-        let summary = model.summary_selection().unwrap();
-        assert_eq!(summary.profile.as_ref().unwrap().as_str(), "summary");
-        assert_eq!(summary.max_output_tokens, Some(256));
+        let crate::model::session::AuxiliaryModelPolicy::Explicit {
+            model: auxiliary_model,
+            profile,
+            request_params,
+            max_output_tokens,
+        } = &model.auxiliary
+        else {
+            panic!("expected explicit auxiliary");
+        };
+        assert_eq!(auxiliary_model.as_str(), "p/s");
         assert_eq!(
-            summary.request_params["vendor"][2]["unset"],
-            serde_json::Value::Null
+            profile,
+            &crate::model::AuxiliaryProfileSelection::Explicit {
+                id: crate::model::catalog::ModelProfileId::parse("summary").unwrap(),
+            }
         );
-        let title = model.title_selection().unwrap();
-        assert_eq!(title.model.as_str(), "p/t");
-        assert_eq!(title.profile.unwrap().as_str(), "short");
-        assert_eq!(title.max_output_tokens, Some(128));
+        assert_eq!(*max_output_tokens, Some(256));
         assert_eq!(
-            title.request_params["title_tag"],
-            serde_json::json!([null, "exact"])
+            request_params["vendor"][2]["unset"],
+            serde_json::Value::Null
         );
         // Named Agent documents use the same selection authoring.
         let written = crate::toml_authoring::write(&config.agent).unwrap();
         let table = written.parse::<toml::Table>().unwrap();
         assert!(table["model"]["request_params"].is_str(), "{written}");
         assert!(
-            table["model"]["summary_model"]["request_params"].is_str(),
+            table["model"]["auxiliary"]["request_params"].is_str(),
             "{written}"
         );
-        assert!(table["model"]["title_model"]["request_params"].is_str());
         assert_eq!(table["model"]["profile"].as_str(), Some("fast"));
         let again: super::super::config::AgentProfileDocument =
             crate::toml_authoring::parse(written.as_bytes()).unwrap();
@@ -1075,11 +1065,7 @@ tokens = 128
         let json = serde_json::to_value(&config.agent).unwrap();
         assert_eq!(json["model"]["profile"], "fast");
         assert_eq!(
-            json["model"]["title_model"]["request_params"]["title_tag"],
-            serde_json::json!([null, "exact"])
-        );
-        assert_eq!(
-            json["model"]["summary_model"]["request_params"]["vendor"][2]["unset"],
+            json["model"]["auxiliary"]["request_params"]["vendor"][2]["unset"],
             serde_json::Value::Null
         );
         assert_eq!(
@@ -1106,12 +1092,12 @@ tokens = 128
         for (prefix, path) in [
             ("[agent.model]\nmodel = 'p/m'", "agent.model.request_params"),
             (
-                "[agent.model]\nmodel = 'p/m'\n[agent.model.summary_model]\nmode = 'explicit'\nmodel = 'p/s'",
-                "agent.model.summary_model.request_params",
+                "[agent.model]\nmodel = 'p/m'\n[agent.model.auxiliary]\nmode = 'explicit'\nmodel = 'p/s'",
+                "agent.model.auxiliary.request_params",
             ),
             (
-                "[agent.model]\nmodel = 'p/m'\n[agent.model.title_model]\nmode = 'explicit'\nmodel = 'p/t'",
-                "agent.model.title_model.request_params",
+                "[agent.model]\nmodel = 'p/m'\n[agent.model.auxiliary]\nmode = 'explicit'\nmodel = 'p/t'",
+                "agent.model.auxiliary.request_params",
             ),
         ] {
             for (json, reason) in [

@@ -139,19 +139,14 @@ export function renderModel(state: PresentationState): string {
     }
   }
 
-  const summary = session.summary ?? session.configured.summaryModel;
+  const auxiliary = session.configured.auxiliary;
   lines.push(
-    `- summary model: ${
-      summary == null || summary.mode === "session"
-        ? "follows the attempt's primary model"
-        : `\`${summary.model}\``
+    `- auxiliary model: ${
+      auxiliary == null || auxiliary.mode === "session"
+        ? "follows the Session primary model with an independent profile strategy"
+        : `\`${auxiliary.model}\``
     }`,
   );
-
-  const title = session.title ?? session.configured.titleModel;
-  lines.push(`- title model: ${title == null || title.mode === "session"
-    ? "follows the Session's primary model at title admission"
-    : `\`${title.model}\``}`);
 
   const attempt = state.attempt;
   if (attempt !== undefined) {

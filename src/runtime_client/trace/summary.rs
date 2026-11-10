@@ -52,7 +52,7 @@ impl PreviousRequest {
     pub(super) fn identity(&self) -> TraceRequestPredecessor {
         match &self.0 {
             None => TraceRequestPredecessor::NotApplicable,
-            Some(previous) if previous.summary.is_some() => TraceRequestPredecessor::Available {
+            Some(previous) if previous.auxiliary.is_some() => TraceRequestPredecessor::Available {
                 request_id: previous.request_id.clone(),
                 request_id_source: previous.source.clone(),
             },
@@ -73,7 +73,7 @@ impl PreviousRequest {
                 TraceSystemPromptState::Initial,
                 TraceToolCatalogState::Initial,
             ),
-            Some(previous) => match &previous.summary {
+            Some(previous) => match &previous.auxiliary {
                 None => (
                     TraceSystemPromptState::PreviousUnavailable,
                     TraceToolCatalogState::PreviousUnavailable,

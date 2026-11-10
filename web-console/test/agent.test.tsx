@@ -2,7 +2,7 @@ import { domainReceipt } from './fixture';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v77';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v78';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { ComposerDraft } from '../src/app/composer/draft';
 import { localeController } from '../src/locale/controller';
@@ -69,7 +69,7 @@ async function openModels() {
 it('selects a profile during execution without changing its frozen profile, parameters, output limit or summary', async () => {
  modelFixture();
  const initial = server.snapshots.get('A')!;
- initial.model!.configured = { model: 'exact/model', profile: 'deliberate', requestParams: { temperature: 0.2 }, maxOutputTokens: 777, summaryModel: { mode: 'explicit', model: 'summary/original' } };
+ initial.model!.configured = { model: 'exact/model', profile: 'deliberate', requestParams: { temperature: 0.2 }, maxOutputTokens: 777, auxiliary: { mode: 'explicit', model: 'summary/original' } };
  initial.model!.effective!.requestParams = { effort: 'high', temperature: 0.2 };
  initial.model!.effective!.maxOutputTokens = 777;
  const frozen = { primary: structuredClone(initial.model!.effective!), summary: { ...structuredClone(initial.model!.effective!), mode: 'explicit' as const, model: 'summary/original' } };
@@ -535,7 +535,7 @@ it('a late acknowledgement for the current-model gesture cannot report success a
 
 /** One Model, `example/chat`, whose Profiles resolve like native: a pinned
  * Profile is itself, an absent one follows the catalog's current default. */
-function profileFixture(configured: import('../../protocol/app-server/v77').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
+function profileFixture(configured: import('../../protocol/app-server/v78').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
   const state = { profiles, defaultProfile: profiles.length ? 'balanced' : undefined as string | undefined, revision: 1 };
   const base = cfg3Effective().effective_model;
   const resolve = (config: typeof configured) => ({ ...base, configured: config, effective: { ...base.effective!, model: config.model, profile: config.profile ?? state.defaultProfile ?? null } });
@@ -585,7 +585,7 @@ async function chooseRow(name: string) {
 
 it.each(['menu', 'slash'] as const)('%s reselects the current model with its complete configuration, waits for native confirmation and never mutates from renders or reads', async surface => {
   const configured = { model: 'example/chat', profile: 'fast', requestParams: { top_k: 40, nested: [null, { seed: 7 }] }, maxOutputTokens: 512,
-    summaryModel: { mode: 'explicit' as const, model: 'example/summary', profile: 'short', request_params: { temperature: 0.1 }, max_output_tokens: 64 } };
+    auxiliary: { mode: 'explicit' as const, model: 'example/summary', profile: 'short', request_params: { temperature: 0.1 }, max_output_tokens: 64 } };
   const fixture = profileFixture(configured);
   const initial = server.snapshots.get('A')!;
   const frozen = { primary: { ...initial.model!.effective!, requestParams: { original: true }, maxOutputTokens: 777 }, summary: { mode: 'session' as const } };
@@ -632,7 +632,7 @@ it.each(['menu', 'slash'] as const)('%s reselects the current model with its com
 it('a Draft equivalent choice stays local, while a deliberate current-model choice during attachment queues the complete native selection', async () => {
   const catalog = modelFixture();
   const configured = { model: 'exact/model', profile: 'brief', requestParams: { temperature: 0.2 }, maxOutputTokens: 777,
-    summaryModel: { mode: 'explicit' as const, model: 'other', request_params: { summary_tag: 'keep' }, max_output_tokens: 333 } };
+    auxiliary: { mode: 'explicit' as const, model: 'other', request_params: { summary_tag: 'keep' }, max_output_tokens: 333 } };
   const source = cfg3Source();
   source.session_models = { kind: 'available', catalog: { models: catalog }, default_model: configured };
   const chosen: typeof configured[] = [];
@@ -662,7 +662,7 @@ it('a Draft equivalent choice stays local, while a deliberate current-model choi
 });
 
 it('the Session effort pane has one row per native strength and its named default follows native defaults', async () => {
-  const independent = { model: 'example/chat', requestParams: { top_k: 40, nested: [null] }, maxOutputTokens: 512, summaryModel: { mode: 'explicit' as const, model: 'example/chat', profile: 'fast', request_params: { temperature: 0.1 } } };
+  const independent = { model: 'example/chat', requestParams: { top_k: 40, nested: [null] }, maxOutputTokens: 512, auxiliary: { mode: 'explicit' as const, model: 'example/chat', profile: 'fast', request_params: { temperature: 0.1 } } };
   profileFixture(independent); await server.attached('A'); render(<Control/>);
   let menu = await profileMenu();
   expect(menu.current('balanced')).toBe(true);
@@ -712,8 +712,8 @@ it('choosing the selected Model keeps a pinned Profile; the default action clear
 });
 
 it('switching the primary Model resets primary settings and keeps the explicit Summary policy whole; native rejection is shown, not worked around', async () => {
-  const summaryModel = { mode: 'explicit' as const, model: 'example/summary', profile: 'short', request_params: { temperature: 0.1, nested: [null] }, max_output_tokens: 64 };
-  profileFixture({ model: 'example/chat', profile: 'fast', requestParams: { top_k: 40 }, maxOutputTokens: 256, summaryModel }, ['example/chat', 'example/other']);
+  const auxiliary = { mode: 'explicit' as const, model: 'example/summary', profile: 'short', request_params: { temperature: 0.1, nested: [null] }, max_output_tokens: 64 };
+  profileFixture({ model: 'example/chat', profile: 'fast', requestParams: { top_k: 40 }, maxOutputTokens: 256, auxiliary }, ['example/chat', 'example/other']);
   await server.attached('A'); render(<Control/>);
   const chooseModel = async (name: string) => {
     await openModels();
@@ -724,16 +724,16 @@ it('switching the primary Model resets primary settings and keeps the explicit S
   // A → B: the exact whole-state payload carries the complete Summary policy;
   // the primary Profile pin, request overrides and output limit are reset.
   await chooseModel('example/other');
-  expect(sent()).toEqual([{ model: 'example/other', summaryModel }]);
-  expect(configured()).toEqual({ model: 'example/other', summaryModel });
+  expect(sent()).toEqual([{ model: 'example/other', auxiliary }]);
+  expect(configured()).toEqual({ model: 'example/other', auxiliary });
   // A Profile on the same Model changes only the pin.
   await profileMenu();
   await chooseRow('fast');
-  expect(sent().at(-1)).toEqual({ model: 'example/other', summaryModel, profile: 'fast' });
+  expect(sent().at(-1)).toEqual({ model: 'example/other', auxiliary, profile: 'fast' });
   // Returning to the Model default clears only the pin; repeats reach native.
   await profileMenu();
   await chooseRow('balanced');
-  expect(sent().at(-1)).toEqual({ model: 'example/other', summaryModel });
+  expect(sent().at(-1)).toEqual({ model: 'example/other', auxiliary });
   await profileMenu();
   await chooseRow('balanced');
   await chooseModel('example/other');
@@ -744,14 +744,14 @@ it('switching the primary Model resets primary settings and keeps the explicit S
   await openModels(); fireEvent.click(screen.getByRole('menuitem', { name: 'Model' })); await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'example/chat' })));
   await waitFor(() => expect(screen.getAllByRole('alert').some(row => row.textContent?.includes('Summary refused by native'))).toBe(true));
   expect(sent()).toEqual([
-    { model: 'example/other', summaryModel },
-    { model: 'example/other', summaryModel, profile: 'fast' },
-    { model: 'example/other', summaryModel },
-    { model: 'example/other', summaryModel },
-    { model: 'example/other', summaryModel },
-    { model: 'example/chat', summaryModel },
+    { model: 'example/other', auxiliary },
+    { model: 'example/other', auxiliary, profile: 'fast' },
+    { model: 'example/other', auxiliary },
+    { model: 'example/other', auxiliary },
+    { model: 'example/other', auxiliary },
+    { model: 'example/chat', auxiliary },
   ]);
-  expect(configured()).toEqual({ model: 'example/other', summaryModel });
+  expect(configured()).toEqual({ model: 'example/other', auxiliary });
 });
 
 it('a catalog default change moves a following Session and leaves a pinned one, as native resolves them', async () => {
@@ -774,7 +774,7 @@ it('a catalog default change moves a following Session and leaves a pinned one, 
 });
 
 it('a pinned Profile a Model without Profiles no longer declares is identified and cleared explicitly, keeping every other setting', async () => {
-  const independent = { model: 'example/chat', requestParams: { top_k: 40 }, maxOutputTokens: 1024, summaryModel: { mode: 'explicit' as const, model: 'example/summary' } };
+  const independent = { model: 'example/chat', requestParams: { top_k: 40 }, maxOutputTokens: 1024, auxiliary: { mode: 'explicit' as const, model: 'example/summary' } };
   profileFixture({ ...independent, profile: 'fast' }, ['example/chat'], []); await server.attached('A'); render(<Control/>);
   let menu = await profileMenu();
   expect(menu.trigger()).toContain('example/chat'); expect(menu.trigger()).toContain('fast');
@@ -806,7 +806,7 @@ it('a pinned Profile a Model without Profiles no longer declares is identified a
 it('a published catalog that removes the pinned Profile leaves it configured and unavailable; a published Profile recovers it with the Summary policy kept', async () => {
   // Issue #459: native publishes the catalog anyway and reports the pin
   // unavailable, keeping the invocation it last resolved as a display fact.
-  const independent = { model: 'example/chat', summaryModel: { mode: 'explicit' as const, model: 'example/summary' } };
+  const independent = { model: 'example/chat', auxiliary: { mode: 'explicit' as const, model: 'example/summary' } };
   const fixture = profileFixture({ ...independent, profile: 'fast' }, ['example/chat'], ['balanced', 'fast', 'deep']); await server.attached('A'); render(<Control/>);
   server.snapshots.set('A', { ...server.snapshots.get('A')!, model: { ...server.snapshots.get('A')!.model!, unavailable: 'model example/chat declares no profile "fast"' } });
   await act(async () => fixture.publish(['balanced', 'deep'], 'balanced'));
@@ -889,15 +889,15 @@ it('T13/T19 an unloaded Audit receipt creates no placeholder Chat row or executi
 });
 
 it('automatically reads a deferred model configuration before selection and keeps its independent Summary policy', async () => {
- const summaryModel = { mode: 'explicit' as const, model: 'example/summary', request_params: { temperature: 0.1 }, max_output_tokens: 64 };
- profileFixture({ model: 'example/chat', profile: 'fast', summaryModel }, ['example/chat', 'example/other']);
+ const auxiliary = { mode: 'explicit' as const, model: 'example/summary', request_params: { temperature: 0.1 }, max_output_tokens: 64 };
+ profileFixture({ model: 'example/chat', profile: 'fast', auxiliary }, ['example/chat', 'example/other']);
  await server.attached('A');
  const observed = server.client.getSnapshot().views.A.snapshot!;
  observed.model = undefined; observed.model_status = { available: true, body_deferred: true, binding_revision: '1' };
  render(<Control/>); await openModels();
  expect(count('session/model')).toBeGreaterThan(0);
  fireEvent.click(screen.getByRole('menuitem', { name: 'Model' })); await chooseRow('example/other');
- expect(sent()).toEqual([{ model: 'example/other', summaryModel }]);
+ expect(sent()).toEqual([{ model: 'example/other', auxiliary }]);
  expect(screen.queryByText('Loading…', { exact: true })).toBeNull();
 });
 

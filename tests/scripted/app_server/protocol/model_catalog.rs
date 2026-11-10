@@ -402,7 +402,7 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
         let diagnostic = model.unavailable.clone().expect("reported unavailable");
         assert!(diagnostic.contains("fast"), "{diagnostic}");
         assert_eq!(model.effective, selected.effective);
-        assert_eq!(model.summary, selected.summary);
+        assert_eq!(model.auxiliary, selected.auxiliary);
         assert_eq!(
             managed.client().checkpoint().unwrap().snapshot.attempt.unwrap().model,
             admitted

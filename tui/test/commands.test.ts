@@ -60,7 +60,7 @@ function deferred<T>(): {
 
 it("T19 bounded binary content remains exact bytes with an explicit Base64 view", async () => {
   const h = await harness();
-  const ref: import("../../protocol/app-server/v77.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v78.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"binary-source"}, block_index: 0 },
     representation: "binary_bytes", version: 1, content_revision: 1, readable_end: 3,
@@ -439,16 +439,13 @@ describe("CommandDispatcher", () => {
   });
 
   it("changes the model only through model_catalog_get + model_set", async () => {
-    const summaryPolicy = {
+    const auxiliaryPolicy = {
       mode: "explicit" as const,
       model: "summary/model-s",
-      profile: "compact",
+      profile: { mode: "explicit" as const, id: "compact" },
       request_params: { summary_tag: "keep" },
       max_output_tokens: 300,
     };
-    const titlePolicy = { ...summaryPolicy, model: "title/model-t", max_output_tokens: 128 };
-    const classificationPolicy = { ...summaryPolicy, model: "classifier/model-c" };
-    const btwPolicy = { mode: "session" as const };
     const h = await harness(
       snapshot({
         model: {
@@ -458,10 +455,7 @@ describe("CommandDispatcher", () => {
             profile: "on",
             requestParams: { temperature: 0.2 },
             maxOutputTokens: 777,
-            summaryModel: summaryPolicy,
-            titleModel: titlePolicy,
-            classificationModel: classificationPolicy,
-            btwModel: btwPolicy,
+            auxiliary: auxiliaryPolicy,
           },
         },
         attempt: {
@@ -510,10 +504,7 @@ describe("CommandDispatcher", () => {
     assert.deepEqual(paramsOf(modelSet, "session/setModel").config, {
       model: "beta/model-b",
       requestParams: {},
-      summaryModel: summaryPolicy,
-      titleModel: titlePolicy,
-      classificationModel: classificationPolicy,
-      btwModel: btwPolicy,
+      auxiliary: auxiliaryPolicy,
     });
     h.transport.respond(modelSet.id, {type:"model_set",settings_revision:"1"});
     const confirmedModelRead = await nextRequest(h,"session/model");
@@ -966,7 +957,7 @@ describe("CommandDispatcher", () => {
       current.configured.profile = "previous";
       current.configured.requestParams = { temperature: 0.5 };
       current.configured.maxOutputTokens = 2048;
-      current.configured.summaryModel = {
+      current.configured.auxiliary = {
         mode: "explicit",
         model: "alpha/summary",
         request_params: { temperature: 0.2 },
@@ -994,7 +985,7 @@ describe("CommandDispatcher", () => {
     const h = await harness();
     const choosing = h.dispatcher.selectModel(catalogModel("alpha/model-a"));
     const current = sessionModel("alpha/model-a");
-    current.configured = { model: "alpha/model-a", profile: "high", requestParams: { temperature: 0.3 }, maxOutputTokens: 777, summaryModel: { mode: "explicit", model: "alpha/summary" } };
+    current.configured = { model: "alpha/model-a", profile: "high", requestParams: { temperature: 0.3 }, maxOutputTokens: 777, auxiliary: { mode: "explicit", model: "alpha/summary" } };
     const read = await nextRequest(h, "session/model");
     h.transport.respond(read.id, domainReceipt('model',[current]));
     const set = await nextRequest(h, "session/setModel");

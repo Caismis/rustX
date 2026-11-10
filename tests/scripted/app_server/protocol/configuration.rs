@@ -746,11 +746,11 @@ async fn t15_source_fields_and_many_small_revisions_page_with_exact_cut_evidence
             profile: None, request_params: crate::toml_authoring::AuthoredRequestParams::default(),
             max_output_tokens: Some(crate::local_runtime::authoring::ModelOutput::Limit { tokens: 128 }),
         };
-        native.user.authored.as_mut().unwrap().agent.as_mut().unwrap().model.as_mut().unwrap().title_model = Some(title.clone());
+        native.user.authored.as_mut().unwrap().agent.as_mut().unwrap().model.as_mut().unwrap().auxiliary = Some(title.clone());
         let inline = source::bounded(&native).unwrap().inline.unwrap();
-        assert_eq!(inline.user.authored.as_ref().unwrap().agent.as_ref().unwrap().model.as_ref().unwrap().title_model, Some(title.clone()));
+        assert_eq!(inline.user.authored.as_ref().unwrap().agent.as_ref().unwrap().model.as_ref().unwrap().auxiliary, Some(title.clone()));
         let mut authored = native.user.authored.as_ref().unwrap().agent.as_ref().unwrap().model.clone().unwrap();
-        let crate::local_runtime::authoring::AuxiliaryModelAuthoring::Explicit { request_params, .. } = authored.title_model.as_mut().unwrap() else { unreachable!() };
+        let crate::local_runtime::authoring::AuxiliaryModelAuthoring::Explicit { request_params, .. } = authored.auxiliary.as_mut().unwrap() else { unreachable!() };
         request_params.0.insert("exact_title_payload".into(), serde_json::Value::String("é\n".repeat(20_000)));
         native.user.authored.as_mut().unwrap().agent.as_mut().unwrap().model = Some(authored.clone());
         let title_agent_index = u64::try_from(native.agents.len()).unwrap();
@@ -894,8 +894,8 @@ async fn t15_source_fields_and_many_small_revisions_page_with_exact_cut_evidence
             title_offset = next;
         }
         let title_entry: serde_json::Value = serde_json::from_slice(&title_bytes).unwrap();
-        assert_eq!(title_entry["source"]["authored"]["model"]["title_model"]["request_params"]["exact_title_payload"], "é\n".repeat(20_000));
-        native.user.authored.as_mut().unwrap().agent.as_mut().unwrap().model.as_mut().unwrap().title_model = Some(title);
+        assert_eq!(title_entry["source"]["authored"]["model"]["auxiliary"]["request_params"]["exact_title_payload"], "é\n".repeat(20_000));
+        native.user.authored.as_mut().unwrap().agent.as_mut().unwrap().model.as_mut().unwrap().auxiliary = Some(title);
         assert_eq!(source::read(&native, title_reference, 0, 1).unwrap_err(), "source read cut expired");
         native.prospective_diagnostic.as_mut().unwrap().push('x');
         assert_eq!(
@@ -960,10 +960,10 @@ async fn t15_cold_settings_deferred_value_advances_with_exact_catalog_revision()
         settings.model = Some(crate::model::session::SessionModelConfig::of(
             crate::model::catalog::ModelRef::parse("local/a").unwrap(),
         ));
-        settings.model.as_mut().unwrap().title_model =
+        settings.model.as_mut().unwrap().auxiliary =
             crate::model::session::AuxiliaryModelPolicy::Explicit {
                 model: crate::model::catalog::ModelRef::parse("local/b").unwrap(),
-                profile: None,
+                profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                 request_params: serde_json::from_value(
                     serde_json::json!({"title_payload": "exact"}),
                 )
@@ -1049,17 +1049,17 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
             .unwrap();
         let title = crate::model::session::AuxiliaryModelPolicy::Explicit {
             model: crate::model::catalog::ModelRef::parse("local/b").unwrap(),
-            profile: None,
+            profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
             request_params: serde_json::from_value(serde_json::json!({"title_payload": "exact"}))
                 .unwrap(),
             max_output_tokens: Some(128),
         };
-        native.effective_model.configured.title_model = title.clone();
+        native.effective_model.configured.auxiliary = title.clone();
         let mut title_invocation = native.effective_model.effective.clone().unwrap();
         title_invocation.model = crate::model::catalog::ModelRef::parse("local/b").unwrap();
         title_invocation.max_output_tokens = 128;
-        native.effective_model.title = Some(crate::model::session::AuxiliaryModelView::Explicit(
-            Box::new(title_invocation),
+        native.effective_model.auxiliary = Some(crate::model::session::AuxiliaryModelView::Explicit { effective: 
+            Box::new(title_invocation },
         ));
         let mut inline_native = native.clone();
         inline_native.provenance.clear();
@@ -1071,7 +1071,7 @@ async fn t15_effective_configuration_preserves_all_fields_and_advancing_pages() 
                 .unwrap()
                 .effective_model
                 .configured
-                .title_model,
+                .auxiliary,
             title
         );
         native.effective_model.configured.request_params.insert(

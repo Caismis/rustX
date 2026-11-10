@@ -166,7 +166,7 @@ struct Setup {
     /// Tokens of recent history kept literal.
     keep_recent_tokens: u64,
     /// The explicit summary-model policy, when the session declares one.
-    summary_model: Option<String>,
+    auxiliary: Option<String>,
     /// Explicit Skill resources for this isolated provider fixture.
     skill_paths: Vec<PathBuf>,
     responses_stateless: bool,
@@ -180,7 +180,7 @@ impl Setup {
             context_window: 128_000,
             reserve_tokens: 1_024,
             keep_recent_tokens: 8_192,
-            summary_model: None,
+            auxiliary: None,
             skill_paths: Vec::new(),
             responses_stateless: false,
         }
@@ -872,8 +872,8 @@ fn text_capabilities() -> serde_json::Value {
 
 fn session_json(setup: &Setup) -> String {
     let mut model = serde_json::json!({"model": setup.model});
-    if let Some(summary) = &setup.summary_model {
-        model["summary_model"] = serde_json::json!({"mode": "explicit", "model": summary});
+    if let Some(summary) = &setup.auxiliary {
+        model["auxiliary"] = serde_json::json!({"mode": "explicit", "model": summary});
     }
     let document = serde_json::json!({
         "agent_id": "agent-issue47",
@@ -1632,7 +1632,7 @@ async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
 // it together preserves the request ordering that is the whole point.
 #[allow(clippy::too_many_lines)]
 async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
-    for (scenario, summary_model, expected_summary_model) in [
+    for (scenario, auxiliary, expected_summary_model) in [
         ("compaction_session_summary", None, CHAT_MODEL),
         (
             "compaction_explicit_summary",
@@ -1647,7 +1647,7 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
             context_window: COMPACTION_CONTEXT_WINDOW,
             reserve_tokens: COMPACTION_RESERVE_TOKENS,
             keep_recent_tokens: 256,
-            summary_model,
+            auxiliary,
             ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
         };
         let driver = Driver::start(&emulator, &setup).await;
@@ -1745,7 +1745,7 @@ async fn summary_retry_reuses_frozen_wire_input_and_commits_one_checkpoint() {
         context_window: COMPACTION_CONTEXT_WINDOW,
         reserve_tokens: COMPACTION_RESERVE_TOKENS,
         keep_recent_tokens: 256,
-        summary_model: Some(format!("emulator/{SUMMARY_MODEL}")),
+        auxiliary: Some(format!("emulator/{SUMMARY_MODEL}")),
         ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
     };
     let driver = Driver::start(&emulator, &setup).await;
@@ -1810,7 +1810,7 @@ async fn summary_retry_reuses_frozen_wire_input_and_commits_one_checkpoint() {
 // it together preserves the request ordering that is the whole point.
 #[allow(clippy::too_many_lines)]
 async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies() {
-    for (scenario, summary_model, expected_summary_model) in [
+    for (scenario, auxiliary, expected_summary_model) in [
         ("compaction_twice_session_summary", None, CHAT_MODEL),
         (
             "compaction_twice_explicit_summary",
@@ -1825,7 +1825,7 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
             context_window: COMPACTION_CONTEXT_WINDOW,
             reserve_tokens: COMPACTION_RESERVE_TOKENS,
             keep_recent_tokens: 256,
-            summary_model,
+            auxiliary,
             ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
         };
         let driver = Driver::start(&emulator, &setup).await;
@@ -2034,8 +2034,7 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
     // The first attempt is provably in flight and has already been billed
     // its provider request.
     let next_model = SessionModelConfig {
-        title_model: AuxiliaryModelPolicy::Session,
-        summary_model: AuxiliaryModelPolicy::Session,
+        auxiliary: AuxiliaryModelPolicy::default(),
         ..SessionModelConfig::of(
             ModelRef::parse(&format!("emulator/{SECOND_MODEL}"))
                 .expect("the second model reference parses"),
@@ -2673,7 +2672,7 @@ async fn image_coverage_driver(scenario: &str, model: &str) -> Option<(Driver, P
     setup.images = true;
     if scenario == "image_coverage_overflow_retry" {
         setup.keep_recent_tokens = setup.context_window;
-        setup.summary_model = Some("emulator/summary-model".into());
+        setup.auxiliary = Some("emulator/summary-model".into());
     }
     let driver = Driver::start_in(root, &emulator, &setup).await;
     Some((driver, emulator))

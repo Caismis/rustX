@@ -3,7 +3,7 @@ import {test} from 'node:test';
 import {summaryFor,threadFor} from '../../protocol/app-server/testing.ts';
 import {AppServerClient} from '../src/app-server/client.ts';
 import {AppServerHost} from '../src/app-server/host.ts';
-import type {ThreadStatusEntry} from '../../protocol/app-server/v77.ts';
+import type {ThreadStatusEntry} from '../../protocol/app-server/v78.ts';
 import {FakeTransport} from './support/app-server-peer.ts';
 import {harness,SERVER_CAPABILITIES} from './support/app-server-harness.ts';
 import {sessionView} from './support/fixtures.ts';

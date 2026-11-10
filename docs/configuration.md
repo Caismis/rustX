@@ -102,7 +102,7 @@ parser; the App Server deletes them from a source at its native boundaries
 before parsing, together with a few other exactly recognizable constructs (see
 [Automatic source repair](#automatic-source-repair-464)). TOML tables and arrays
 preserve authored omission versus explicit empty values. The current document
-version is `schema_version = 11`.
+version is `schema_version = 12`.
 
 | Top-level field | Owner and meaning |
 | --- | --- |
@@ -371,27 +371,26 @@ applies independently. An omitted `profile` selects `default_profile`; an
 unknown or inapplicable explicit profile fails without fallback.
 
 The Root `agent.model` object contains `model` and optional `profile`,
-`request_params`, `max_output_tokens`, `summary_model`, and `title_model`. An output limit is
-`{ mode = "catalog_default" }` or `{ mode = "limit", tokens = 2048 }`. Summary and Title
-selection use the same native policy: `{ mode = "session" }` or `{ mode = "explicit", model = "...", ... }`
-with independent `profile`, output and request settings. An absent policy follows the
-Session primary. TOML auxiliary `request_params` is a JSON object string, while
-native/client protocol values are structured objects. Both apply the same shallow
-overlay, Profile key ownership, protected fields and Model hard output limit. The whole selection is
-replaced together. Domain defaults are evaluated inside that winning object.
-An admitted Attempt freezes the complete resolved invocation — Model, Profile,
-output budget and parameters — so later configuration changes
-affect only later admissions.
+`request_params`, `max_output_tokens`, and one shared `auxiliary` policy. An output limit is
+`{ mode = "catalog_default" }` or `{ mode = "limit", tokens = 2048 }`. Auxiliary selection is
+`{ mode = "session" }` or `{ mode = "explicit", model = "..." }` with an independent Profile
+strategy `{ mode = "lowest" }` (default), `{ mode = "model_default" }`, or
+`{ mode = "explicit", id = "..." }`. An omitted auxiliary policy means Follow Session + Lowest.
+Lowest uses the first Profile in that model's validated `reasoning_profile_order`; with no order,
+the model default Profile (or unprofiled parameters) is used. Follow Session selects the Session
+primary model without copying its already-resolved Profile or Session request-parameter overrides.
+TOML auxiliary `request_params` is a JSON object string, while native/client protocol values are
+structured objects. Both apply the same shallow overlay, Profile key ownership, protected fields
+and Model hard output limit. The whole selection is replaced together. Domain defaults are evaluated
+inside that winning object. An admitted Attempt freezes the complete resolved invocation — Model,
+Profile, output budget and parameters — so later configuration changes affect only later admissions.
 
-Automatic Title captures its independent invocation at admission using the current
-Session model and resource revision fences. A later settings change cannot restart
-that operation or reset its source eligibility. Technical retries reuse that captured
-invocation. Summary keeps the parent Attempt snapshot, or the independent manual
-Compaction admission snapshot. Bounded source/effective/model views retain both
-auxiliary policies in inline values, deferred reads and current-revision collection
-pages. These observations grant no execution authority. Web Settings exposes Title
-selection alongside Summary; native, Web and TUI primary-model changes preserve
-explicit auxiliary choices.
+Summary, Title, Classification, and BTW share this one policy and each freeze at their own admission
+boundary. Technical retries reuse that captured invocation. Bounded source/effective/model views
+retain the shared auxiliary policy in inline values, deferred reads and current-revision collection
+pages. These observations grant no execution authority. Web Settings and TUI expose one Auxiliary
+Model picker and Profile strategy; native, Web and TUI primary-model changes preserve an explicit
+auxiliary choice.
 
 ### Root Agent
 

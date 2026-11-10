@@ -1624,38 +1624,6 @@ export type AttemptId = string;
  */
 export type ModelProfileId = string;
 /**
- * A Session auxiliary invocation follows primary or selects a catalog model.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AuxiliaryModelPolicy".
- */
-export type AuxiliaryModelPolicy =
-  | {
-      mode: 'session';
-    }
-  | {
-      /**
-       * The catalog model reference.
-       */
-      model: string;
-      /**
-       * The selected Model Profile; the model's `default_profile` is used
-       * when absent.
-       */
-      profile?: ModelProfileId | null;
-      /**
-       * The explicit auxiliary request-parameter overrides.
-       */
-      request_params?: {
-        [k: string]: unknown;
-      };
-      /**
-       * The explicit auxiliary output-budget override.
-       */
-      max_output_tokens?: number | null;
-      mode: 'explicit';
-    };
-/**
  * Manual compaction correlation: 1..64 ASCII letters, digits, underscores or hyphens; not an idempotency key.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -2447,13 +2415,31 @@ export type ModelOutput =
  */
 export type AuxiliaryModelAuthoring =
   | {
+      profile?: AuxiliaryProfileAuthoring;
+      request_params?: RequestParams;
+      max_output_tokens?: ModelOutput | null;
       mode: 'session';
     }
   | {
       model: ModelRef;
-      profile?: ModelProfileId | null;
+      profile?: AuxiliaryProfileAuthoring;
       request_params?: RequestParams;
       max_output_tokens?: ModelOutput | null;
+      mode: 'explicit';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliaryProfileAuthoring".
+ */
+export type AuxiliaryProfileAuthoring =
+  | {
+      mode: 'lowest';
+    }
+  | {
+      mode: 'model_default';
+    }
+  | {
+      id: ModelProfileId;
       mode: 'explicit';
     };
 /**
@@ -5228,48 +5214,18 @@ export type SourceInspection =
       status: 'unavailable';
     };
 /**
- * The redacted client-facing projection of an auxiliary policy.
+ * The redacted client-facing projection of the shared auxiliary policy.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "AuxiliaryModelView".
  */
 export type AuxiliaryModelView =
   | {
+      effective: ModelInvocationView1;
       mode: 'session';
     }
   | {
-      /**
-       * An authored Model identity. Its spelling has no provider or wire semantics.
-       */
-      model: string;
-      /**
-       * The model interaction protocol an adapter must speak.
-       */
-      protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
-      /**
-       * The model's context window in tokens.
-       */
-      contextWindow: number;
-      /**
-       * The model's configured maximum output tokens.
-       */
-      modelMaxOutputTokens: number;
-      /**
-       * The effective output budget.
-       */
-      maxOutputTokens: number;
-      /**
-       * The selected Model Profile, when the model declares any.
-       */
-      profile?: ModelProfileId | null;
-      /**
-       * The effective opaque provider request parameters.
-       */
-      requestParams?: {
-        [k: string]: unknown;
-      };
-      capabilities: ModelCapabilities2;
-      declaredCapabilities: ModelCapabilities3;
+      effective: ModelInvocationView2;
       mode: 'explicit';
     };
 /**
@@ -9110,6 +9066,115 @@ export type CapabilitySourceStateView =
       type: 'unavailable';
     };
 /**
+ * Shared Auxiliary Model policy for Summary, Title, Classification, and BTW.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliaryModelPolicy".
+ */
+export type AuxiliaryModelPolicy =
+  | {
+      /**
+       * Profile strategy for the Session primary model.
+       */
+      profile?:
+        | {
+            mode: 'lowest';
+          }
+        | {
+            mode: 'model_default';
+          }
+        | {
+            /**
+             * The identity of one Model Profile declared by a model.
+             *
+             * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+             * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+             * the profile's output default and
+             * `request_params`.
+             */
+            id: string;
+            mode: 'explicit';
+          };
+      /**
+       * Auxiliary request-parameter overrides; never inherit Session overrides.
+       */
+      request_params?: {
+        [k: string]: unknown;
+      };
+      /**
+       * Auxiliary output-budget override.
+       */
+      max_output_tokens?: number | null;
+      mode: 'session';
+    }
+  | {
+      /**
+       * The catalog model reference.
+       */
+      model: string;
+      /**
+       * Profile strategy for that model.
+       */
+      profile?:
+        | {
+            mode: 'lowest';
+          }
+        | {
+            mode: 'model_default';
+          }
+        | {
+            /**
+             * The identity of one Model Profile declared by a model.
+             *
+             * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+             * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+             * the profile's output default and
+             * `request_params`.
+             */
+            id: string;
+            mode: 'explicit';
+          };
+      /**
+       * Explicit auxiliary request-parameter overrides.
+       */
+      request_params?: {
+        [k: string]: unknown;
+      };
+      /**
+       * Explicit auxiliary output-budget override.
+       */
+      max_output_tokens?: number | null;
+      mode: 'explicit';
+    };
+/**
+ * Profile strategy for Auxiliary consumers, typed separately from a Profile ID.
+ *
+ * A real Profile named `lowest` remains addressable through [`Self::Explicit`];
+ * the strategy name never collides with an authored Profile identity.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliaryProfileSelection".
+ */
+export type AuxiliaryProfileSelection =
+  | {
+      mode: 'lowest';
+    }
+  | {
+      mode: 'model_default';
+    }
+  | {
+      /**
+       * The identity of one Model Profile declared by a model.
+       *
+       * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+       * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+       * the profile's output default and
+       * `request_params`.
+       */
+      id: string;
+      mode: 'explicit';
+    };
+/**
  * The terminal outcome delivered to the semantic waiter.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9432,10 +9497,42 @@ export interface SessionModelConfig {
    */
   maxOutputTokens?: number | null;
   /**
-   * The compaction summary model policy.
+   * Shared Auxiliary Model policy for every Auxiliary consumer.
    */
-  summaryModel?:
+  auxiliary?:
     | {
+        /**
+         * Profile strategy for the Session primary model.
+         */
+        profile?:
+          | {
+              mode: 'lowest';
+            }
+          | {
+              mode: 'model_default';
+            }
+          | {
+              /**
+               * The identity of one Model Profile declared by a model.
+               *
+               * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+               * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+               * the profile's output default and
+               * `request_params`.
+               */
+              id: string;
+              mode: 'explicit';
+            };
+        /**
+         * Auxiliary request-parameter overrides; never inherit Session overrides.
+         */
+        request_params?: {
+          [k: string]: unknown;
+        };
+        /**
+         * Auxiliary output-budget override.
+         */
+        max_output_tokens?: number | null;
         mode: 'session';
       }
     | {
@@ -9444,53 +9541,39 @@ export interface SessionModelConfig {
          */
         model: string;
         /**
-         * The selected Model Profile; the model's `default_profile` is used
-         * when absent.
+         * Profile strategy for that model.
          */
-        profile?: ModelProfileId | null;
+        profile?:
+          | {
+              mode: 'lowest';
+            }
+          | {
+              mode: 'model_default';
+            }
+          | {
+              /**
+               * The identity of one Model Profile declared by a model.
+               *
+               * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+               * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+               * the profile's output default and
+               * `request_params`.
+               */
+              id: string;
+              mode: 'explicit';
+            };
         /**
-         * The explicit auxiliary request-parameter overrides.
+         * Explicit auxiliary request-parameter overrides.
          */
         request_params?: {
           [k: string]: unknown;
         };
         /**
-         * The explicit auxiliary output-budget override.
+         * Explicit auxiliary output-budget override.
          */
         max_output_tokens?: number | null;
         mode: 'explicit';
       };
-  /**
-   * The independent automatic title model policy.
-   */
-  titleModel?:
-    | {
-        mode: 'session';
-      }
-    | {
-        /**
-         * The catalog model reference.
-         */
-        model: string;
-        /**
-         * The selected Model Profile; the model's `default_profile` is used
-         * when absent.
-         */
-        profile?: ModelProfileId | null;
-        /**
-         * The explicit auxiliary request-parameter overrides.
-         */
-        request_params?: {
-          [k: string]: unknown;
-        };
-        /**
-         * The explicit auxiliary output-budget override.
-         */
-        max_output_tokens?: number | null;
-        mode: 'explicit';
-      };
-  classificationModel?: AuxiliaryModelPolicy;
-  btwModel?: AuxiliaryModelPolicy;
 }
 /**
  * A native catalog choice at the exact resource generation the client read.
@@ -9996,10 +10079,7 @@ export interface ModelLayer {
   profile?: ModelProfileId | null;
   request_params?: RequestParams | null;
   max_output_tokens?: ModelOutput | null;
-  summary_model?: AuxiliaryModelAuthoring | null;
-  title_model?: AuxiliaryModelAuthoring | null;
-  classification_model?: AuxiliaryModelAuthoring | null;
-  btw_model?: AuxiliaryModelAuthoring | null;
+  auxiliary?: AuxiliaryModelAuthoring | null;
 }
 /**
  * The authored Todo extension (Issue #259).
@@ -14501,41 +14581,11 @@ export interface AttemptModelView {
    */
   summary:
     | {
+        effective: ModelInvocationView1;
         mode: 'session';
       }
     | {
-        /**
-         * An authored Model identity. Its spelling has no provider or wire semantics.
-         */
-        model: string;
-        /**
-         * The model interaction protocol an adapter must speak.
-         */
-        protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
-        /**
-         * The model's context window in tokens.
-         */
-        contextWindow: number;
-        /**
-         * The model's configured maximum output tokens.
-         */
-        modelMaxOutputTokens: number;
-        /**
-         * The effective output budget.
-         */
-        maxOutputTokens: number;
-        /**
-         * The selected Model Profile, when the model declares any.
-         */
-        profile?: ModelProfileId | null;
-        /**
-         * The effective opaque provider request parameters.
-         */
-        requestParams?: {
-          [k: string]: unknown;
-        };
-        capabilities: ModelCapabilities2;
-        declaredCapabilities: ModelCapabilities3;
+        effective: ModelInvocationView2;
         mode: 'explicit';
       };
 }
@@ -14614,41 +14664,78 @@ export interface ModelCapabilities1 {
   jsonSchemaOutput?: boolean;
 }
 /**
- * The effective capabilities.
+ * The concrete auxiliary invocation.
  */
-export interface ModelCapabilities2 {
+export interface ModelInvocationView1 {
   /**
-   * The accepted input modalities.
+   * An authored Model identity. Its spelling has no provider or wire semantics.
    */
-  inputModalities: Modality[];
+  model: string;
   /**
-   * The produced output modalities.
+   * The model interaction protocol an adapter must speak.
    */
-  outputModalities: Modality[];
+  protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
   /**
-   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
-   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   * The model's context window in tokens.
    */
-  jsonSchemaOutput?: boolean;
+  contextWindow: number;
+  /**
+   * The model's configured maximum output tokens.
+   */
+  modelMaxOutputTokens: number;
+  /**
+   * The effective output budget.
+   */
+  maxOutputTokens: number;
+  /**
+   * The selected Model Profile, when the model declares any.
+   */
+  profile?: ModelProfileId | null;
+  /**
+   * The effective opaque provider request parameters.
+   */
+  requestParams?: {
+    [k: string]: unknown;
+  };
+  capabilities: ModelCapabilities;
+  declaredCapabilities: ModelCapabilities1;
 }
 /**
- * The raw capabilities the catalog claims, for clients that want to
- * explain why an effective capability is absent.
+ * The concrete auxiliary invocation.
  */
-export interface ModelCapabilities3 {
+export interface ModelInvocationView2 {
   /**
-   * The accepted input modalities.
+   * An authored Model identity. Its spelling has no provider or wire semantics.
    */
-  inputModalities: Modality[];
+  model: string;
   /**
-   * The produced output modalities.
+   * The model interaction protocol an adapter must speak.
    */
-  outputModalities: Modality[];
+  protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
   /**
-   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
-   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   * The model's context window in tokens.
    */
-  jsonSchemaOutput?: boolean;
+  contextWindow: number;
+  /**
+   * The model's configured maximum output tokens.
+   */
+  modelMaxOutputTokens: number;
+  /**
+   * The effective output budget.
+   */
+  maxOutputTokens: number;
+  /**
+   * The selected Model Profile, when the model declares any.
+   */
+  profile?: ModelProfileId | null;
+  /**
+   * The effective opaque provider request parameters.
+   */
+  requestParams?: {
+    [k: string]: unknown;
+  };
+  capabilities: ModelCapabilities;
+  declaredCapabilities: ModelCapabilities1;
 }
 /**
  * Facts frozen together with the attempt model under native admission.
@@ -15901,21 +15988,15 @@ export interface SessionModelView {
    * Absent only when the Session was loaded with an already unavailable
    * selection.
    */
-  effective?: ModelInvocationView1 | null;
+  effective?: ModelInvocationView3 | null;
   /**
-   * The summary policy last resolved for `configured`, absent exactly
-   * when `effective` is.
+   * The shared auxiliary policy last resolved for `configured`, absent
+   * exactly when `effective` is.
    */
-  summary?: AuxiliaryModelView | null;
-  /**
-   * The independent Title policy last resolved for this configuration.
-   */
-  title?: AuxiliaryModelView | null;
-  classification?: AuxiliaryModelView | null;
-  btw?: AuxiliaryModelView | null;
+  auxiliary?: AuxiliaryModelView | null;
   /**
    * Why the Session's published Model Catalog does not admit
-   * `configured`. While present, `effective` and `summary` are display
+   * `configured`. While present, `effective` and `auxiliary` are display
    * facts only: no new Attempt is admitted until a valid selection is
    * committed, and nothing falls back to a default.
    */
@@ -15951,10 +16032,42 @@ export interface SessionModelConfig1 {
    */
   maxOutputTokens?: number | null;
   /**
-   * The compaction summary model policy.
+   * Shared Auxiliary Model policy for every Auxiliary consumer.
    */
-  summaryModel?:
+  auxiliary?:
     | {
+        /**
+         * Profile strategy for the Session primary model.
+         */
+        profile?:
+          | {
+              mode: 'lowest';
+            }
+          | {
+              mode: 'model_default';
+            }
+          | {
+              /**
+               * The identity of one Model Profile declared by a model.
+               *
+               * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+               * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+               * the profile's output default and
+               * `request_params`.
+               */
+              id: string;
+              mode: 'explicit';
+            };
+        /**
+         * Auxiliary request-parameter overrides; never inherit Session overrides.
+         */
+        request_params?: {
+          [k: string]: unknown;
+        };
+        /**
+         * Auxiliary output-budget override.
+         */
+        max_output_tokens?: number | null;
         mode: 'session';
       }
     | {
@@ -15963,53 +16076,39 @@ export interface SessionModelConfig1 {
          */
         model: string;
         /**
-         * The selected Model Profile; the model's `default_profile` is used
-         * when absent.
+         * Profile strategy for that model.
          */
-        profile?: ModelProfileId | null;
+        profile?:
+          | {
+              mode: 'lowest';
+            }
+          | {
+              mode: 'model_default';
+            }
+          | {
+              /**
+               * The identity of one Model Profile declared by a model.
+               *
+               * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+               * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+               * the profile's output default and
+               * `request_params`.
+               */
+              id: string;
+              mode: 'explicit';
+            };
         /**
-         * The explicit auxiliary request-parameter overrides.
+         * Explicit auxiliary request-parameter overrides.
          */
         request_params?: {
           [k: string]: unknown;
         };
         /**
-         * The explicit auxiliary output-budget override.
+         * Explicit auxiliary output-budget override.
          */
         max_output_tokens?: number | null;
         mode: 'explicit';
       };
-  /**
-   * The independent automatic title model policy.
-   */
-  titleModel?:
-    | {
-        mode: 'session';
-      }
-    | {
-        /**
-         * The catalog model reference.
-         */
-        model: string;
-        /**
-         * The selected Model Profile; the model's `default_profile` is used
-         * when absent.
-         */
-        profile?: ModelProfileId | null;
-        /**
-         * The explicit auxiliary request-parameter overrides.
-         */
-        request_params?: {
-          [k: string]: unknown;
-        };
-        /**
-         * The explicit auxiliary output-budget override.
-         */
-        max_output_tokens?: number | null;
-        mode: 'explicit';
-      };
-  classificationModel?: AuxiliaryModelPolicy;
-  btwModel?: AuxiliaryModelPolicy;
 }
 /**
  * The redacted client-facing projection of one resolved model invocation.
@@ -16023,7 +16122,7 @@ export interface SessionModelConfig1 {
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ModelInvocationView".
  */
-export interface ModelInvocationView1 {
+export interface ModelInvocationView3 {
   /**
    * An authored Model identity. Its spelling has no provider or wire semantics.
    */
@@ -19080,8 +19179,8 @@ export interface CatalogModelView {
    * The configured maximum output tokens.
    */
   maxOutputTokens: number;
-  declaredCapabilities: ModelCapabilities4;
-  effectiveCapabilities: ModelCapabilities5;
+  declaredCapabilities: ModelCapabilities2;
+  effectiveCapabilities: ModelCapabilities3;
   /**
    * The declared Model Profiles in deterministic order.
    */
@@ -19116,7 +19215,7 @@ export interface CatalogModelView {
 /**
  * The capabilities the catalog claims.
  */
-export interface ModelCapabilities4 {
+export interface ModelCapabilities2 {
   /**
    * The accepted input modalities.
    */
@@ -19134,7 +19233,7 @@ export interface ModelCapabilities4 {
 /**
  * The capabilities the runtime can actually deliver today.
  */
-export interface ModelCapabilities5 {
+export interface ModelCapabilities3 {
   /**
    * The accepted input modalities.
    */
@@ -20825,7 +20924,7 @@ export interface ToolCallOccurrenceRef1 {
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ModelCapabilities".
  */
-export interface ModelCapabilities6 {
+export interface ModelCapabilities4 {
   /**
    * The accepted input modalities.
    */

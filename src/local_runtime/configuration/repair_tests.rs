@@ -217,7 +217,7 @@ fn the_issue_example_converges_to_its_documented_result() {
     let plan = plan(before.as_bytes()).unwrap();
     assert_eq!(
         String::from_utf8(plan.candidate.clone()).unwrap(),
-        "schema_version = 11\n\n[agent.tools]\nbuiltin = [\"read\", \"grep\"]\n\n[agent.plugins.todo]\nenabled = true\n"
+        "schema_version = 12\n\n[agent.tools]\nbuiltin = [\"read\", \"grep\"]\n\n[agent.plugins.todo]\nenabled = true\n"
     );
     assert_eq!(
         plan.changes,
@@ -349,11 +349,11 @@ approval = "always"
 
 #[test]
 fn comments_and_unrelated_bytes_survive_deletions() {
-    let text = "# head comment\nschema_version = 11 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\nstale = 'x'\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"nope\",\n  \"grep\",\n]\n";
+    let text = "# head comment\nschema_version = 12 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\nstale = 'x'\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"nope\",\n  \"grep\",\n]\n";
     let repaired = candidate(text);
     assert_eq!(
         repaired,
-        "# head comment\nschema_version = 11 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"grep\",\n]\n"
+        "# head comment\nschema_version = 12 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"grep\",\n]\n"
     );
 }
 
@@ -427,9 +427,9 @@ fn explicit_schema_versions_are_normalized_and_omission_is_preserved() {
             changes(&text),
             vec![ConfigRepairChange::UpdatedSchemaVersion { from, to: 11 }]
         );
-        assert_eq!(candidate(&text), "schema_version = 11 # authored\n");
+        assert_eq!(candidate(&text), "schema_version = 12 # authored\n");
     }
-    assert!(changes("schema_version = 11\n").is_empty());
+    assert!(changes("schema_version = 12\n").is_empty());
     assert!(changes("[agent]\ndescription = 'x'\n").is_empty());
     assert!(!candidate("[agent]\nstale = 1\n").contains("schema_version"));
     // A non-integer version is a type error, not version metadata.
@@ -440,11 +440,11 @@ fn explicit_schema_versions_are_normalized_and_omission_is_preserved() {
 
 #[test]
 fn tagged_unions_close_only_their_selected_variant() {
-    let text = "[agent.model]\nmodel = 'local/a'\n[agent.model.summary_model]\nmode = 'explicit'\nmodel = 'local/a'\nlegacy = true\n[tool_deadline_policy.idle_liveness_ms]\nmode = 'window'\nmilliseconds = 5\nextra = 1\n";
+    let text = "[agent.model]\nmodel = 'local/a'\n[agent.model.auxiliary]\nmode = 'explicit'\nmodel = 'local/a'\nlegacy = true\n[tool_deadline_policy.idle_liveness_ms]\nmode = 'window'\nmilliseconds = 5\nextra = 1\n";
     assert_eq!(
         changes(text),
         vec![
-            removed("agent.model.summary_model"),
+            removed("agent.model.auxiliary"),
             removed("tool_deadline_policy.idle_liveness_ms"),
         ]
     );
@@ -3212,7 +3212,7 @@ fn a_repair_candidate_exactly_at_the_bound_is_published_and_readable() {
     );
     let published = std::fs::read(fixture.path(&SourceTarget::User)).unwrap();
     assert_eq!(published.len(), bound());
-    assert!(published.starts_with(b"schema_version = 11\n"));
+    assert!(published.starts_with(b"schema_version = 12\n"));
     // The normal native reader accepts exactly what was published.
     let read = fixture
         .manager

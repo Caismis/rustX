@@ -327,11 +327,11 @@ for (const replaceLastProvider of [false, true]) test(replaceLastProvider
   const native = await AppServerHost.connectRemote({endpoint:fixture.endpoint, token:fixture.token});
   try {
     appendFileSync(fixture.settings, `
-[agent.model.summary_model]
+[agent.model.auxiliary]
 mode = "explicit"
 model = "fixture/console-model"
 
-[agent.model.title_model]
+[agent.model.auxiliary]
 mode = "explicit"
 model = "fixture/second-model"
 `);
@@ -457,7 +457,7 @@ compat = { chat_reasoning_replay = "omit" }
     await send.click();
     await expect(page.getByText('Old conversation continues after reselecting.', {exact:true})).toBeVisible();
     const selection = (await native.readSettings(oldId)).settings.model;
-    expect(selection).toMatchObject({summaryModel:{mode:'session'}, titleModel:{mode:'session'}});
+    expect(selection).toMatchObject({auxiliary:{mode:'session'}});
     expect(wire.requests.filter(request => request.method === 'initialize')).toHaveLength(1);
   } catch (error) {
     await test.info().attach('native-diagnostics', {body:JSON.stringify(fixture.diagnostics()),contentType:'application/json'});

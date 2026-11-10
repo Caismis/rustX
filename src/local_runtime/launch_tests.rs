@@ -3010,9 +3010,9 @@ mod session_resolution {
             .request_params
             .insert("custom".into(), json!("secret-model-parameter"));
         model.max_output_tokens = Some(1024);
-        model.summary_model = AuxiliaryModelPolicy::Explicit {
+        model.auxiliary = AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse("host/two").unwrap(),
-            profile: None,
+            profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
             request_params: serde_json::Map::default(),
             max_output_tokens: Some(512),
         };

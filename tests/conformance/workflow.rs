@@ -295,7 +295,7 @@ fn models_json(emulator: &ProviderEmulator) -> String {
     models_json_for_base_url(&emulator.openai_base_url())
 }
 
-const CONFIG: &str = r#"schema_version = 11
+const CONFIG: &str = r#"schema_version = 12
 agent_id = "agent-issue83"
 
 [context]

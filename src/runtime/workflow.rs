@@ -1403,7 +1403,7 @@ pub enum WorkflowNodeProgram {
 pub struct WorkflowModelProgram {
     /// Classifier exits; ordinary Model calls have none.
     pub classes: Vec<WorkflowClassifierClass>,
-    pub model: crate::model::session::AuxiliaryModelPolicy,
+    pub model: crate::model::session::DirectModelPolicy,
     pub messages: Vec<WorkflowModelMessage>,
     pub output: WorkflowModelOutput,
     pub retry: Option<WorkflowRetry>,
@@ -3163,7 +3163,7 @@ fn validate_prompt(
 }
 
 fn validate_model(
-    model: &crate::model::session::AuxiliaryModelPolicy,
+    model: &crate::model::session::DirectModelPolicy,
     messages: &[WorkflowModelMessage],
     output: &WorkflowModelOutput,
     available: &SchemaMap,
@@ -3294,10 +3294,10 @@ fn validate_model_output(
 /// Protocol-specific ownership, Profile defaults and output maxima are checked
 /// by the existing model resolver against the invoking Attempt's registry.
 fn validate_model_policy(
-    policy: &crate::model::session::AuxiliaryModelPolicy,
+    policy: &crate::model::session::DirectModelPolicy,
 ) -> Result<(), WorkflowCompileError> {
-    use crate::model::session::AuxiliaryModelPolicy;
-    let AuxiliaryModelPolicy::Explicit {
+    use crate::model::session::DirectModelPolicy;
+    let DirectModelPolicy::Explicit {
         model,
         profile,
         request_params,
@@ -6241,7 +6241,7 @@ chat_reasoning_replay = "omit"
                             "done".to_owned(),
                             return_node(BTreeMap::from([(
                                 "summary".to_owned(),
-                                reference("review.summary"),
+                                reference("review.auxiliary"),
                             )])),
                         ),
                     ]);
@@ -6503,7 +6503,7 @@ block:
                     "done".to_owned(),
                     return_node(BTreeMap::from([(
                         "summary".to_owned(),
-                        reference("review.summary"),
+                        reference("review.auxiliary"),
                     )])),
                 ),
             ]),

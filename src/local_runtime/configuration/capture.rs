@@ -261,7 +261,6 @@ impl UserConfigManager {
                 .unwrap_or_else(|| config.initial_model()),
         )
         .map_err(|e| e.to_string())?;
-        let summary = summary.as_ref().unwrap_or(&primary);
         config
             .context_policy()
             .validate_budgets(

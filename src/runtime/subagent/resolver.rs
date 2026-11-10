@@ -1266,15 +1266,8 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
     // invocation" — and the explicit one is framed by the SAME helper as the
     // primary, so no behavior-affecting summary field can be dropped from
     // the identity while the equivalent primary field is kept.
-    match summary {
-        crate::model::frozen::FrozenSummaryModel::Session => {
-            field(&mut hasher, "model_summary", "session");
-        }
-        crate::model::frozen::FrozenSummaryModel::Explicit(invocation) => {
-            field(&mut hasher, "model_summary", "explicit");
-            frame_frozen_model_invocation(&mut hasher, "model_summary", invocation);
-        }
-    }
+    field(&mut hasher, "model_summary", "auxiliary");
+    frame_frozen_model_invocation(&mut hasher, "model_summary", &summary.0);
     // Tool and Skill selections are semantically unordered and arrive
     // canonically ordered and deduplicated, so the framing preserves that
     // order without imposing a second one.
@@ -2386,7 +2379,7 @@ mod tests {
                     crate::model::catalog::ModelRef::parse("local/model-a").expect("model"),
                 ),
                 primary: frozen_invocation(),
-                summary: crate::model::frozen::FrozenSummaryModel::Session,
+                summary: crate::model::frozen::FrozenSummaryModel(Box::new(frozen_invocation())),
             },
             tools: Vec::new(),
             resource_sources: BTreeSet::new(),
@@ -2502,16 +2495,13 @@ mod tests {
             let mut invocation = frozen_invocation();
             mutate(&mut invocation);
             let mut spec = base.clone();
-            spec.model.summary =
-                crate::model::frozen::FrozenSummaryModel::Explicit(Box::new(invocation));
+            spec.model.auxiliary =
+                crate::model::frozen::FrozenSummaryModel(Box::new(invocation));
             spec
         };
 
         let mut variants = vec![
-            // "follows the session primary" and "an explicit invocation that
-            // happens to equal the primary" are two different policies.
             base.clone(),
-            explicit(&|_| {}),
             explicit(&|invocation| {
                 invocation.model =
                     crate::model::catalog::ModelRef::parse("local/model-b").expect("model");
@@ -2617,19 +2607,15 @@ mod tests {
         );
 
         let mut explicit_summary = base.clone();
-        explicit_summary.model.summary =
-            crate::model::frozen::FrozenSummaryModel::Explicit(Box::new(frozen_invocation()));
+        explicit_summary.model.auxiliary =
+            crate::model::frozen::FrozenSummaryModel(Box::new(frozen_invocation()));
         let explicit_identity = explicit_summary.profile_digest();
         let mut rebound_summary = explicit_summary.clone();
-        if let crate::model::frozen::FrozenSummaryModel::Explicit(invocation) =
-            &mut rebound_summary.model.summary
-        {
-            rebind(invocation);
-        }
+        rebind(&mut rebound_summary.model.auxiliary.0);
         assert_eq!(
             rebound_summary.profile_digest(),
             explicit_identity,
-            "an explicit summary's provider binding is excluded exactly like the primary's"
+            "an auxiliary summary's provider binding is excluded exactly like the primary's"
         );
 
         let mut reconfigured = base.clone();

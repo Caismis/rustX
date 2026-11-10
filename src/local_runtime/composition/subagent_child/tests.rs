@@ -537,7 +537,7 @@ async fn ext256_a_child_projects_only_its_frozen_extension_composition() {
     // enables the extension and configures it differently.
     std::fs::write(
         dir.path().join("workspace/rustx.toml"),
-        r#"schema_version = 11
+        r#"schema_version = 12
 agent_id = "agent-host"
 
 [context]
@@ -703,7 +703,7 @@ async fn ext256_child_materialization_never_rereads_configuration_for_its_extens
     let dir = lab();
     std::fs::write(
         dir.path().join("workspace/rustx.toml"),
-        r#"schema_version = 11
+        r#"schema_version = 12
 agent_id = "agent-host"
 
 [context]

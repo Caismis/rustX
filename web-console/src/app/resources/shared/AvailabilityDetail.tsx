@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted resource controls; see PROVENANCE.md. */
-import type {SourceSettings,SourceScope,SourceToolSelection,NativePolicyOverrideDocument} from '../../../../../protocol/app-server/v77';
+import type {SourceSettings,SourceScope,SourceToolSelection,NativePolicyOverrideDocument} from '../../../../../protocol/app-server/v78';
 import {useTranslation} from '../../../locale/react';
 import {UnitForm} from '../../settings/forms/bridge';
 import {Selection} from '../../settings/forms/controls';

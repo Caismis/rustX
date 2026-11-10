@@ -87,16 +87,7 @@
                 "configured": {
                   "model": "scripted/scripted",
                   "requestParams": {},
-                  "summaryModel": {
-                    "mode": "session"
-                  },
-                  "titleModel": {
-                    "mode": "session"
-                  },
-                  "classificationModel": {
-                    "mode": "session"
-                  },
-                  "btwModel": {
+                  "auxiliary": {
                     "mode": "session"
                   }
                 },
@@ -896,16 +887,7 @@
                 "configured": {
                   "model": "scripted/scripted",
                   "requestParams": {},
-                  "summaryModel": {
-                    "mode": "session"
-                  },
-                  "titleModel": {
-                    "mode": "session"
-                  },
-                  "classificationModel": {
-                    "mode": "session"
-                  },
-                  "btwModel": {
+                  "auxiliary": {
                     "mode": "session"
                   }
                 },
@@ -1353,16 +1335,7 @@
                 "configured": {
                   "model": "scripted/scripted",
                   "requestParams": {},
-                  "summaryModel": {
-                    "mode": "session"
-                  },
-                  "titleModel": {
-                    "mode": "session"
-                  },
-                  "classificationModel": {
-                    "mode": "session"
-                  },
-                  "btwModel": {
+                  "auxiliary": {
                     "mode": "session"
                   }
                 },
@@ -2297,16 +2270,7 @@
                 "configured": {
                   "model": "scripted/scripted",
                   "requestParams": {},
-                  "summaryModel": {
-                    "mode": "session"
-                  },
-                  "titleModel": {
-                    "mode": "session"
-                  },
-                  "classificationModel": {
-                    "mode": "session"
-                  },
-                  "btwModel": {
+                  "auxiliary": {
                     "mode": "session"
                   }
                 },
@@ -2728,16 +2692,7 @@
                 "configured": {
                   "model": "scripted/scripted",
                   "requestParams": {},
-                  "summaryModel": {
-                    "mode": "session"
-                  },
-                  "titleModel": {
-                    "mode": "session"
-                  },
-                  "classificationModel": {
-                    "mode": "session"
-                  },
-                  "btwModel": {
+                  "auxiliary": {
                     "mode": "session"
                   }
                 },
@@ -3212,16 +3167,7 @@
                         "configured": {
                           "model": "scripted/scripted",
                           "requestParams": {},
-                          "summaryModel": {
-                            "mode": "session"
-                          },
-                          "titleModel": {
-                            "mode": "session"
-                          },
-                          "classificationModel": {
-                            "mode": "session"
-                          },
-                          "btwModel": {
+                          "auxiliary": {
                             "mode": "session"
                           }
                         },
@@ -3786,16 +3732,7 @@
                 "configured": {
                   "model": "scripted/scripted",
                   "requestParams": {},
-                  "summaryModel": {
-                    "mode": "session"
-                  },
-                  "titleModel": {
-                    "mode": "session"
-                  },
-                  "classificationModel": {
-                    "mode": "session"
-                  },
-                  "btwModel": {
+                  "auxiliary": {
                     "mode": "session"
                   }
                 },
@@ -4327,16 +4264,7 @@
                 "configured": {
                   "model": "scripted/scripted",
                   "requestParams": {},
-                  "summaryModel": {
-                    "mode": "session"
-                  },
-                  "titleModel": {
-                    "mode": "session"
-                  },
-                  "classificationModel": {
-                    "mode": "session"
-                  },
-                  "btwModel": {
+                  "auxiliary": {
                     "mode": "session"
                   }
                 },
@@ -5956,16 +5884,7 @@
                 "configured": {
                   "model": "scripted/scripted",
                   "requestParams": {},
-                  "summaryModel": {
-                    "mode": "session"
-                  },
-                  "titleModel": {
-                    "mode": "session"
-                  },
-                  "classificationModel": {
-                    "mode": "session"
-                  },
-                  "btwModel": {
+                  "auxiliary": {
                     "mode": "session"
                   }
                 },

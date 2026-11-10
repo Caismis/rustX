@@ -75,19 +75,22 @@ pub fn attempt_model(
 /// resolution under test.
 pub fn attempt_model_view(reference: &str) -> rustx::model::AttemptModelView {
     let capabilities = rustx::model::ModelCapabilities::text_only();
+    let primary = rustx::model::ModelInvocationView {
+        model: rustx::model::ModelRef::parse(reference).expect("a valid model reference"),
+        protocol: rustx::model::ModelProtocol::OpenAiChatCompletions,
+        context_window: 128_000,
+        model_max_output_tokens: 4096,
+        max_output_tokens: 4096,
+        profile: None,
+        request_params: rustx::model::RequestParams::new(),
+        capabilities: capabilities.clone(),
+        declared_capabilities: capabilities,
+    };
     rustx::model::AttemptModelView {
-        primary: rustx::model::ModelInvocationView {
-            model: rustx::model::ModelRef::parse(reference).expect("a valid model reference"),
-            protocol: rustx::model::ModelProtocol::OpenAiChatCompletions,
-            context_window: 128_000,
-            model_max_output_tokens: 4096,
-            max_output_tokens: 4096,
-            profile: None,
-            request_params: rustx::model::RequestParams::new(),
-            capabilities: capabilities.clone(),
-            declared_capabilities: capabilities,
+        summary: rustx::model::AuxiliaryModelView::Session {
+            effective: Box::new(primary.clone()),
         },
-        summary: rustx::model::AuxiliaryModelView::Session,
+        primary,
     }
 }
 

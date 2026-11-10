@@ -89,12 +89,8 @@ pub enum RequestParamsLayer {
     ModelProfile,
     /// The session's request-parameter overrides.
     SessionOverrides,
-    /// An explicit summary model's request-parameter overrides.
-    SummaryOverrides,
-    /// An explicit title model's request-parameter overrides.
-    TitleOverrides,
-    ClassificationOverrides,
-    BtwOverrides,
+    /// Shared auxiliary model request-parameter overrides.
+    AuxiliaryOverrides,
     /// The effective parameters at final wire construction.
     EffectiveRequest,
 }
@@ -105,10 +101,7 @@ impl fmt::Display for RequestParamsLayer {
             Self::ModelParams => "model request parameters",
             Self::ModelProfile => "model profile request parameters",
             Self::SessionOverrides => "session request-parameter overrides",
-            Self::SummaryOverrides => "explicit summary request-parameter overrides",
-            Self::TitleOverrides => "explicit title request-parameter overrides",
-            Self::ClassificationOverrides => "explicit classification request-parameter overrides",
-            Self::BtwOverrides => "explicit btw request-parameter overrides",
+            Self::AuxiliaryOverrides => "auxiliary request-parameter overrides",
             Self::EffectiveRequest => "effective request parameters",
         })
     }
@@ -946,12 +939,7 @@ impl ModelInvocationError {
     #[must_use]
     pub fn classification(&self) -> (&'static str, &'static str) {
         let overrides = |layer: RequestParamsLayer| match layer {
-            RequestParamsLayer::SummaryOverrides => "agent.model.summary_model.request_params",
-            RequestParamsLayer::TitleOverrides => "agent.model.title_model.request_params",
-            RequestParamsLayer::ClassificationOverrides => {
-                "agent.model.classification_model.request_params"
-            }
-            RequestParamsLayer::BtwOverrides => "agent.model.btw_model.request_params",
+            RequestParamsLayer::AuxiliaryOverrides => "agent.model.auxiliary.request_params",
             RequestParamsLayer::ModelParams | RequestParamsLayer::ModelProfile => {
                 "models.*.request_params"
             }
@@ -1810,12 +1798,12 @@ mod tests {
         let error = validate_request_params_layer(
             &params(serde_json::json!({"store": false})),
             ModelProtocol::OpenAiResponses,
-            RequestParamsLayer::SummaryOverrides,
+            RequestParamsLayer::AuxiliaryOverrides,
         )
         .expect_err("must fail");
         assert_eq!(error.key, "store");
-        assert_eq!(error.layer, RequestParamsLayer::SummaryOverrides);
+        assert_eq!(error.layer, RequestParamsLayer::AuxiliaryOverrides);
         let wrapped = ModelInvocationError::ProtectedKey(error);
-        assert!(wrapped.to_string().contains("summary"));
+        assert!(wrapped.to_string().contains("auxiliary"));
     }
 }

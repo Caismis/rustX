@@ -19052,79 +19052,34 @@
       ]
     },
     "AuxiliaryModelView": {
-      "description": "The redacted client-facing projection of an auxiliary policy.",
+      "description": "The redacted client-facing projection of the shared auxiliary policy.",
       "oneOf": [
         {
-          "description": "The auxiliary invocation follows the primary model.",
+          "description": "Follow Session primary model with an independently resolved Profile.",
           "type": "object",
           "properties": {
+            "effective": {
+              "description": "The concrete auxiliary invocation.",
+              "$ref": "#/$defs/ModelInvocationView"
+            },
             "mode": {
               "type": "string",
               "const": "session"
             }
           },
+          "additionalProperties": false,
           "required": [
-            "mode"
-          ],
-          "additionalProperties": false
+            "mode",
+            "effective"
+          ]
         },
         {
-          "description": "The auxiliary invocation uses this resolved explicit invocation.",
+          "description": "An explicitly selected catalog model with its resolved invocation.",
           "type": "object",
           "properties": {
-            "model": {
-              "description": "The fully qualified model reference.",
-              "$ref": "#/$defs/ModelRef"
-            },
-            "protocol": {
-              "description": "The protocol of the binding.",
-              "$ref": "#/$defs/ModelProtocol"
-            },
-            "contextWindow": {
-              "description": "The model's context window in tokens.",
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "modelMaxOutputTokens": {
-              "description": "The model's configured maximum output tokens.",
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0,
-              "maximum": 4294967295
-            },
-            "maxOutputTokens": {
-              "description": "The effective output budget.",
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0,
-              "maximum": 4294967295
-            },
-            "profile": {
-              "description": "The selected Model Profile, when the model declares any.",
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelProfileId"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "requestParams": {
-              "description": "The effective opaque provider request parameters.",
-              "type": "object",
-              "additionalProperties": true,
-              "default": {}
-            },
-            "capabilities": {
-              "description": "The effective capabilities.",
-              "$ref": "#/$defs/ModelCapabilities"
-            },
-            "declaredCapabilities": {
-              "description": "The raw capabilities the catalog claims, for clients that want to\nexplain why an effective capability is absent.",
-              "$ref": "#/$defs/ModelCapabilities"
+            "effective": {
+              "description": "The concrete auxiliary invocation.",
+              "$ref": "#/$defs/ModelInvocationView"
             },
             "mode": {
               "type": "string",
@@ -19134,13 +19089,7 @@
           "additionalProperties": false,
           "required": [
             "mode",
-            "model",
-            "protocol",
-            "contextWindow",
-            "modelMaxOutputTokens",
-            "maxOutputTokens",
-            "capabilities",
-            "declaredCapabilities"
+            "effective"
           ]
         }
       ]
@@ -21448,39 +21397,8 @@
             }
           ]
         },
-        "summary": {
-          "description": "The summary policy last resolved for `configured`, absent exactly\nwhen `effective` is.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AuxiliaryModelView"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "title": {
-          "description": "The independent Title policy last resolved for this configuration.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AuxiliaryModelView"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "classification": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AuxiliaryModelView"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "btw": {
+        "auxiliary": {
+          "description": "The shared auxiliary policy last resolved for `configured`, absent\nexactly when `effective` is.",
           "anyOf": [
             {
               "$ref": "#/$defs/AuxiliaryModelView"
@@ -21491,7 +21409,7 @@
           ]
         },
         "unavailable": {
-          "description": "Why the Session's published Model Catalog does not admit\n`configured`. While present, `effective` and `summary` are display\nfacts only: no new Attempt is admitted until a valid selection is\ncommitted, and nothing falls back to a default.",
+          "description": "Why the Session's published Model Catalog does not admit\n`configured`. While present, `effective` and `auxiliary` are display\nfacts only: no new Attempt is admitted until a valid selection is\ncommitted, and nothing falls back to a default.",
           "type": [
             "string",
             "null"
@@ -21538,30 +21456,15 @@
           "minimum": 0,
           "maximum": 4294967295
         },
-        "summaryModel": {
-          "description": "The compaction summary model policy.",
+        "auxiliary": {
+          "description": "Shared Auxiliary Model policy for every Auxiliary consumer.",
           "$ref": "#/$defs/AuxiliaryModelPolicy",
           "default": {
-            "mode": "session"
-          }
-        },
-        "titleModel": {
-          "description": "The independent automatic title model policy.",
-          "$ref": "#/$defs/AuxiliaryModelPolicy",
-          "default": {
-            "mode": "session"
-          }
-        },
-        "classificationModel": {
-          "$ref": "#/$defs/AuxiliaryModelPolicy",
-          "default": {
-            "mode": "session"
-          }
-        },
-        "btwModel": {
-          "$ref": "#/$defs/AuxiliaryModelPolicy",
-          "default": {
-            "mode": "session"
+            "mode": "session",
+            "profile": {
+              "mode": "lowest"
+            },
+            "request_params": {}
           }
         }
       },
@@ -21571,24 +21474,47 @@
       ]
     },
     "AuxiliaryModelPolicy": {
-      "description": "A Session auxiliary invocation follows primary or selects a catalog model.",
+      "description": "Shared Auxiliary Model policy for Summary, Title, Classification, and BTW.",
       "oneOf": [
         {
-          "description": "Generation follows the primary invocation captured by the consumer.",
+          "description": "Select the admitted Session primary model; Profile is independent.",
           "type": "object",
           "properties": {
+            "profile": {
+              "description": "Profile strategy for the Session primary model.",
+              "$ref": "#/$defs/AuxiliaryProfileSelection",
+              "default": {
+                "mode": "lowest"
+              }
+            },
+            "request_params": {
+              "description": "Auxiliary request-parameter overrides; never inherit Session overrides.",
+              "type": "object",
+              "additionalProperties": true,
+              "default": {}
+            },
+            "max_output_tokens": {
+              "description": "Auxiliary output-budget override.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
             "mode": {
               "type": "string",
               "const": "session"
             }
           },
+          "additionalProperties": false,
           "required": [
             "mode"
-          ],
-          "additionalProperties": false
+          ]
         },
         {
-          "description": "Generation uses an explicitly configured catalog model.",
+          "description": "Select an explicit catalog model for auxiliary work.",
           "type": "object",
           "properties": {
             "model": {
@@ -21596,24 +21522,20 @@
               "$ref": "#/$defs/ModelRef"
             },
             "profile": {
-              "description": "The selected Model Profile; the model's `default_profile` is used\nwhen absent.",
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelProfileId"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "description": "Profile strategy for that model.",
+              "$ref": "#/$defs/AuxiliaryProfileSelection",
+              "default": {
+                "mode": "lowest"
+              }
             },
             "request_params": {
-              "description": "The explicit auxiliary request-parameter overrides.",
+              "description": "Explicit auxiliary request-parameter overrides.",
               "type": "object",
               "additionalProperties": true,
               "default": {}
             },
             "max_output_tokens": {
-              "description": "The explicit auxiliary output-budget override.",
+              "description": "Explicit auxiliary output-budget override.",
               "type": [
                 "integer",
                 "null"
@@ -21631,6 +21553,58 @@
           "required": [
             "mode",
             "model"
+          ]
+        }
+      ]
+    },
+    "AuxiliaryProfileSelection": {
+      "description": "Profile strategy for Auxiliary consumers, typed separately from a Profile ID.\n\nA real Profile named `lowest` remains addressable through [`Self::Explicit`];\nthe strategy name never collides with an authored Profile identity.",
+      "oneOf": [
+        {
+          "description": "First Profile in the model's validated `reasoning_profile_order`.\n\nWith no order, use the model's default Profile; with no Profiles, use\nunprofiled model parameters.",
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "lowest"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The model's declared `default_profile`, or unprofiled parameters.",
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "model_default"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "An exact Profile ID on the selected model.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "description": "The Profile identity; missing or inapplicable IDs fail clearly.",
+              "$ref": "#/$defs/ModelProfileId"
+            },
+            "mode": {
+              "type": "string",
+              "const": "explicit"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "id"
           ]
         }
       ]
@@ -25887,37 +25861,7 @@
             }
           ]
         },
-        "summary_model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AuxiliaryModelAuthoring"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "title_model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AuxiliaryModelAuthoring"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "classification_model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AuxiliaryModelAuthoring"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "btw_model": {
+        "auxiliary": {
           "anyOf": [
             {
               "$ref": "#/$defs/AuxiliaryModelAuthoring"
@@ -25972,6 +25916,26 @@
         {
           "type": "object",
           "properties": {
+            "profile": {
+              "$ref": "#/$defs/AuxiliaryProfileAuthoring",
+              "default": {
+                "mode": "lowest"
+              }
+            },
+            "request_params": {
+              "$ref": "#/$defs/RequestParams",
+              "default": {}
+            },
+            "max_output_tokens": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelOutput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "mode": {
               "type": "string",
               "const": "session"
@@ -25989,14 +25953,10 @@
               "$ref": "#/$defs/ModelRef"
             },
             "profile": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelProfileId"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/$defs/AuxiliaryProfileAuthoring",
+              "default": {
+                "mode": "lowest"
+              }
             },
             "request_params": {
               "$ref": "#/$defs/RequestParams",
@@ -26021,6 +25981,53 @@
           "required": [
             "mode",
             "model"
+          ]
+        }
+      ]
+    },
+    "AuxiliaryProfileAuthoring": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "lowest"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "model_default"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ModelProfileId"
+            },
+            "mode": {
+              "type": "string",
+              "const": "explicit"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "id"
           ]
         }
       ]

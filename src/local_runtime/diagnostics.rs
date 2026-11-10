@@ -355,7 +355,7 @@ impl Report {
             .diagnostics
             .iter()
             .position(|diagnostic| match self.validity {
-                Validity::Invalid => diagnostic.classification == "error",
+                Validity::Invalid => diagnostic.auxiliary == "error",
                 Validity::Incomplete => {
                     matches!(
                         diagnostic.category,
