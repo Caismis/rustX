@@ -1260,8 +1260,11 @@ fn append_history_message(
                         assistant,
                         block: result.occurrence.block_index,
                     },
-                    wire_id: crate::model::occurrence::ProviderWireCorrelationId(
+                    wire_id: Some(crate::model::occurrence::ProviderWireCorrelationId(
                         wire_id.to_string(),
+                    )),
+                    native_origins: crate::model::occurrence::native_origins(
+                        &selected_messages[call_message as usize],
                     ),
                 },
             );
@@ -1423,8 +1426,11 @@ fn compile_history(
                     assistant,
                     block: tool.canonical_source.block_index,
                 },
-                wire_id: crate::model::occurrence::ProviderWireCorrelationId(
+                wire_id: Some(crate::model::occurrence::ProviderWireCorrelationId(
                     tool.wire_id.to_string(),
+                )),
+                native_origins: crate::model::occurrence::native_origins(
+                    &compiled.messages[tool.call.message.item_index as usize],
                 ),
             });
         }
@@ -1502,8 +1508,11 @@ fn compile_history(
                             assistant,
                             block: result.occurrence.block_index,
                         },
-                        wire_id: crate::model::occurrence::ProviderWireCorrelationId(
+                        wire_id: Some(crate::model::occurrence::ProviderWireCorrelationId(
                             wire_id.to_string(),
+                        )),
+                        native_origins: crate::model::occurrence::native_origins(
+                            &messages[call_message as usize],
                         ),
                     });
                 }

@@ -37,6 +37,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
+mod associations;
 mod fragment;
 mod header_capture;
 mod manifest_store;
@@ -1825,7 +1826,7 @@ fn corrupt_frozen_request_revision_metadata_fails_closed() {
         let connection = request_store.conn.lock().unwrap();
         let json: String = connection
             .query_row(
-                "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+                "SELECT snapshot_json FROM request_snapshot_payloads WHERE request_id=?1",
                 [snapshot.request_id.as_str()],
                 |row| row.get(0),
             )
@@ -1834,7 +1835,7 @@ fn corrupt_frozen_request_revision_metadata_fails_closed() {
         value["canonical_frontier"] = serde_json::json!(999_u64);
         connection
             .execute(
-                "UPDATE request_snapshots SET canonical_frontier=999,snapshot_json=?1 WHERE request_id=?2",
+                "UPDATE request_snapshot_payloads SET snapshot_json=?1 WHERE request_id=?2",
                 params![value.to_string(), snapshot.request_id.as_str()],
             )
             .unwrap();
@@ -2167,7 +2168,7 @@ fn oversized_frozen_record_is_rejected_before_body_decode() {
         .lock()
         .unwrap()
         .execute(
-            "UPDATE request_snapshots SET snapshot_json=CAST(zeroblob(67108865) AS TEXT)",
+            "UPDATE request_snapshot_payloads SET snapshot_json=CAST(zeroblob(67108865) AS TEXT)",
             [],
         )
         .unwrap();

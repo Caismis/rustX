@@ -330,6 +330,21 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
         ("surface_head", &["revision", "compaction_generation"]),
         ("request_configurations", &["digest", "configuration_json"]),
         (
+            "request_snapshot_payloads",
+            &["request_id", "snapshot_json"],
+        ),
+        (
+            "tool_association_nodes",
+            &[
+                "id",
+                "parent_id",
+                "parent_digest",
+                "digest",
+                "count",
+                "association_json",
+            ],
+        ),
+        (
             "request_snapshots",
             &[
                 "observation_step_anchor",
@@ -346,7 +361,6 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "input_count",
                 "started_sequence",
                 "completed_sequence",
-                "snapshot_json",
             ],
         ),
         (
@@ -553,6 +567,8 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
         ("agent_authorities", "agent_id"),
         ("events", "event_id"),
         ("request_snapshots", "request_id"),
+        ("request_snapshot_payloads", "request_id"),
+        ("tool_association_nodes", "digest"),
         ("request_configurations", "digest"),
         ("projection_checkpoints", "checkpoint_id"),
         ("compaction_operations", "operation_id"),
@@ -712,7 +728,6 @@ pub(in crate::durable::sqlite) fn verify_witness_field_order(
         ),
         ("request_snapshots", "previous_request_id", REQUEST_WITNESS),
         ("request_snapshots", "request_id", REQUEST_WITNESS),
-        ("request_snapshots", "snapshot_json", REQUEST_WITNESS),
         (
             "request_trace_catalogs",
             "provisional_message_id",

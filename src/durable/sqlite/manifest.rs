@@ -455,14 +455,23 @@ impl MutationColumns {
                 })
             }
             (
-                "native_input_nodes" | "projection_head" | "projection_checkpoints",
+                "native_input_nodes"
+                | "tool_association_nodes"
+                | "projection_head"
+                | "projection_checkpoints",
                 PreUpdateCase::Insert(_),
             ) => table == "projection_head",
             (
                 "events" | "projection_activations" | "bootstrap_identity",
                 PreUpdateCase::Delete(_),
             )
-            | ("native_input_nodes" | "projection_head" | "projection_checkpoints", _)
+            | (
+                "native_input_nodes"
+                | "tool_association_nodes"
+                | "projection_head"
+                | "projection_checkpoints",
+                _,
+            )
             | (_, PreUpdateCase::Unknown) => true,
             _ => false,
         }

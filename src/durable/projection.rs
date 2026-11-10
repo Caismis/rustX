@@ -63,7 +63,7 @@ pub struct RequestHistoryCut {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoricalModelInput {
-    pub tool_associations: imbl::Vector<crate::model::occurrence::HistoricalToolAssociation>,
+    pub tool_associations: crate::model::occurrence::ToolAssociationHistory,
     pub cut: RequestHistoryCut,
     pub messages: crate::model::SelectedModelInput,
     pub input_manifest: crate::model::SelectedInputManifest,
