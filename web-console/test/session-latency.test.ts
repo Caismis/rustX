@@ -127,6 +127,26 @@ describe('latency evidence for a cold preview superseded by attachment', () => {
     rows.push({ ...rows[0], nodeId: 'node-b' });
     expect(supersededHistoryReads(rows)).toEqual([rows[0]]);
   });
+
+  it('accepts a Retry/switchNode handoff once resume carries the selected Session and Node', () => {
+    // Mirrors browser evidence after session/branch + session/switchNode: the
+    // observer must annotate thread/resume from the switchNode Conversation
+    // owner, because resume itself only names threadId on the wire.
+    const rows = evidence();
+    rows[0] = { ...rows[0], sessionId: 'ses-retry', nodeId: 'node-retry', start: 100, end: 150 };
+    rows[1] = {
+      ...rows[1],
+      sessionId: 'ses-retry',
+      nodeId: 'node-retry',
+      threadId: 'conv-retry',
+      target: JSON.stringify(['ses-retry', 'conv-retry', '2', 'attachment-1']),
+      start: 120,
+      end: 200,
+    };
+    rows[2] = { ...rows[2], target: rows[1].target, start: 200, end: 210 };
+    rows[3] = { ...rows[3], target: rows[1].target, start: 210, end: 220 };
+    expect(supersededHistoryReads(rows)).toEqual([rows[0]]);
+  });
 });
 
 describe('latency evidence for recovered native status capture', () => {

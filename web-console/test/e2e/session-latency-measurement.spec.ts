@@ -18,6 +18,16 @@ async function observeLatency(page: Page) {
     window.__sessionLatency = evidence;
     const NativeSocket = window.WebSocket;
     let connectionSequence = 0;
+    // thread/resume only names a Conversation on the wire. Map each known
+    // Conversation back to its Session/Node so cold-preview recovery can prove
+    // the overlapping stale history belonged to the same node that attached.
+    const conversationOwner = new Map<string, { sessionId: string; nodeId: string }>();
+    const rememberConversation = (sessionId: unknown, nodeId: unknown, conversationId: unknown) => {
+      if (typeof sessionId === 'string' && sessionId && typeof nodeId === 'string' && nodeId
+        && typeof conversationId === 'string' && conversationId) {
+        conversationOwner.set(conversationId, { sessionId, nodeId });
+      }
+    };
     const attachmentIdentity = (target?: Record<string, unknown>) => {
       if (!target) return undefined;
       const identity = [target.session_id, target.conversation_id, target.runtime_incarnation, target.attachment_id];
@@ -29,14 +39,46 @@ async function observeLatency(page: Page) {
       constructor(url: string | URL, protocols?: string | string[]) {
         super(url, protocols);
         this.addEventListener('message', event => {
-          const reply = JSON.parse(event.data) as { id?: unknown; error?: { data?: { kind?: string } }; result?: { type?: string; target?: Record<string, unknown>; thread?: { id?: string } } };
+          const reply = JSON.parse(event.data) as {
+            id?: unknown;
+            error?: { data?: { kind?: string } };
+            result?: {
+              type?: string;
+              target?: Record<string, unknown>;
+              thread?: { id?: string };
+              node?: { id?: string; conversation_id?: string };
+              session?: { id?: string; active_node?: string; active_conversation_id?: string };
+            };
+          };
           const row = this.calls.get(reply.id);
           if (row) {
             row.end = performance.now(); row.bytes = event.data.length;
             row.error = reply.error ? reply.error.data?.kind || 'untyped_rpc_error' : undefined;
             row.resultType = reply.result?.type;
-            if (row.method === 'thread/resume' && !row.error) row.target = attachmentIdentity(reply.result?.target);
-            if (row.method === 'thread/read' && !row.error) row.resultThreadId = reply.result?.thread?.id;
+            if (!row.error && reply.result) {
+              if (row.method === 'session/node' && reply.result.node) {
+                rememberConversation(row.sessionId, reply.result.node.id, reply.result.node.conversation_id);
+              }
+              if (row.method === 'session/switchNode' && reply.result.session) {
+                const targetSession = row.target ? JSON.parse(row.target)[0] : undefined;
+                rememberConversation(
+                  reply.result.session.id ?? row.sessionId ?? targetSession,
+                  reply.result.session.active_node ?? row.nodeId,
+                  reply.result.session.active_conversation_id,
+                );
+              }
+              if (row.method === 'thread/resume') {
+                row.target = attachmentIdentity(reply.result.target);
+                const sessionId = typeof reply.result.target?.session_id === 'string' ? reply.result.target.session_id : undefined;
+                const conversationId = typeof reply.result.target?.conversation_id === 'string'
+                  ? reply.result.target.conversation_id
+                  : row.threadId;
+                const owner = conversationId ? conversationOwner.get(conversationId) : undefined;
+                row.sessionId = sessionId ?? owner?.sessionId;
+                row.nodeId = owner?.nodeId;
+              }
+              if (row.method === 'thread/read') row.resultThreadId = reply.result.thread?.id;
+            }
             this.calls.delete(reply.id);
           }
         });
