@@ -57,12 +57,15 @@ pub(super) fn persist(
         }
         id
     } else {
-        connection
+        let inserted = connection
             .execute_cached(
                 "INSERT INTO tool_association_origin_sets(digest,origins_json) VALUES(?1,?2)",
                 params![digest.as_slice(), json],
             )
             .map_err(|e| super::super::sqlite_error(&e, e.to_string()))?;
+        if inserted != 1 {
+            return Err(invalid("Tool origin-set insert was ignored"));
+        }
         #[cfg(test)]
         WRITTEN.with(|work| {
             let (rows, bytes) = work.get();
