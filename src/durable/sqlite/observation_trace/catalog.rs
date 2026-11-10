@@ -5,12 +5,15 @@ use crate::durable::sqlite::statements::FixedStatements;
 use sha2::{Digest, Sha256};
 
 // A sealed catalog is never repaired on reuse. Changes to any member invalidate
-// the whole completeness proof, including negative ToolId lookups. These durable
-// triggers also observe edits made through another connection or after reopen.
-pub(in crate::durable::sqlite) const INVALIDATIONS: [&str; 3] = [
+// the whole completeness proof, including negative ToolId lookups. The version
+// identity must also remain sealed: a changed identity cannot let a future
+// request adopt unrelated members. These durable triggers also observe edits
+// made through another connection or after reopen.
+pub(in crate::durable::sqlite) const INVALIDATIONS: [&str; 4] = [
     "CREATE TRIGGER request_trace_definition_inserted AFTER INSERT ON request_trace_definitions WHEN (SELECT complete FROM request_trace_catalog_versions WHERE id=NEW.catalog_id)=1 BEGIN UPDATE request_trace_catalog_versions SET complete=0 WHERE id=NEW.catalog_id; END",
     "CREATE TRIGGER request_trace_definition_updated AFTER UPDATE ON request_trace_definitions BEGIN UPDATE request_trace_catalog_versions SET complete=0 WHERE id IN (OLD.catalog_id,NEW.catalog_id); END",
     "CREATE TRIGGER request_trace_definition_deleted AFTER DELETE ON request_trace_definitions BEGIN UPDATE request_trace_catalog_versions SET complete=0 WHERE id=OLD.catalog_id; END",
+    "CREATE TRIGGER request_trace_catalog_version_updated AFTER UPDATE OF id,configuration_digest,tool_count ON request_trace_catalog_versions BEGIN UPDATE request_trace_catalog_versions SET complete=0 WHERE id=NEW.id; END",
 ];
 
 pub(in crate::durable::sqlite) fn create_schema(
