@@ -656,8 +656,8 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 observation_delivery_total INTEGER CHECK(observation_delivery_total IS NULL OR observation_delivery_total>=0),
                 native_transcript INTEGER,
                 human_activity_at TEXT,
-                human_activity_seconds INTEGER,
-                human_activity_nanos INTEGER,
+                human_activity_max_seconds INTEGER,
+                human_activity_max_nanos INTEGER,
                 opening_preview TEXT,
                 ordinary_user INTEGER NOT NULL DEFAULT 0 CHECK(ordinary_user IN (0,1)),
                 ordinary_human INTEGER NOT NULL DEFAULT 0 CHECK(ordinary_human IN (0,1)),
@@ -895,6 +895,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 settlement TEXT,
                 PRIMARY KEY(stream_id, call_id)
             );
+            CREATE INDEX IF NOT EXISTS publication_proposals_call_idx ON publication_proposals(call_id);
             CREATE TABLE IF NOT EXISTS publication_audits (
                 stream_id TEXT PRIMARY KEY,
                 audit_json TEXT NOT NULL
@@ -963,21 +964,23 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
             CREATE UNIQUE INDEX IF NOT EXISTS events_observation_turn_ordinal_idx ON events(observation_turn_ordinal) WHERE observation_turn_ordinal IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_turn_anchor_idx ON events(observation_turn_anchor) WHERE observation_turn_header IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_idx ON events(attempt_id) WHERE observation_turn_prompt_positive=1;
-            CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_holes_idx ON events(sequence) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_holes_idx ON events(attempt_id) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL;
             CREATE INDEX IF NOT EXISTS events_execution_owner_idx ON events(observation_execution_owner) WHERE observation_execution IS NOT NULL;
             CREATE TABLE IF NOT EXISTS lifecycle_state (
                 lifecycle_key TEXT PRIMARY KEY,
                 terminal_event_id TEXT
             );
             CREATE INDEX IF NOT EXISTS message_ledger_append_position_idx ON message_ledger(position,first_append_revision) WHERE first_append_revision IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS message_ledger_transcript_position_idx ON message_ledger(position) WHERE native_transcript IS NOT NULL;
             CREATE INDEX IF NOT EXISTS message_ledger_todo_idx ON message_ledger(position) WHERE native_todo=1;
             CREATE INDEX IF NOT EXISTS message_ledger_opening_idx ON message_ledger(position) WHERE ordinary_user=1;
-            CREATE INDEX IF NOT EXISTS message_ledger_human_activity_idx ON message_ledger(human_activity_seconds,human_activity_nanos,position) WHERE human_activity_at IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS message_ledger_human_activity_idx ON message_ledger(position) WHERE human_activity_at IS NOT NULL;
             CREATE INDEX IF NOT EXISTS message_ledger_boundary_holes_idx ON message_ledger(first_append_revision) WHERE ordinary_user=1 AND boundary_indexed=0 AND first_append_revision IS NOT NULL;
 
             CREATE INDEX IF NOT EXISTS request_snapshots_canonical_frontier_idx ON request_snapshots(canonical_frontier);
             CREATE INDEX IF NOT EXISTS publication_frames_unindexed_idx ON publication_frames(stream_id,sequence) WHERE observation_indexed=0;
-            CREATE INDEX IF NOT EXISTS publication_streams_settlement_idx ON publication_streams(settlement);
+            CREATE INDEX IF NOT EXISTS publication_streams_owner_idx ON publication_streams(attempt_id,turn_id,stream_id);
+            CREATE INDEX IF NOT EXISTS publication_streams_open_idx ON publication_streams(stream_id) WHERE settlement IS NULL;
             CREATE INDEX IF NOT EXISTS publication_streams_message_settlement_idx ON publication_streams(message_id,settlement);",
         )
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("create schema: {error}")))?;

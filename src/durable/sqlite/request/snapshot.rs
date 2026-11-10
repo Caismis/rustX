@@ -280,19 +280,17 @@ pub(in crate::durable::sqlite) const REQUEST_START_PROBE_SQL: &str =
       AND json_extract(event_json,'$.event.type')='model_request_started'
     ORDER BY sequence LIMIT 2";
 
-pub(in crate::durable::sqlite) const REQUEST_OUTCOME_PROBE_SQL: &str = "SELECT event_json FROM (
-    SELECT event_json,sequence FROM (
-        SELECT event_json,sequence FROM events INDEXED BY events_request_id_kind_idx
+pub(in crate::durable::sqlite) const REQUEST_OUTCOME_PROBE_SQL: &str =
+    "SELECT event_json FROM events WHERE sequence=(SELECT min(sequence) FROM (
+    SELECT (SELECT sequence FROM events INDEXED BY events_request_id_kind_idx
         WHERE json_extract(event_json,'$.event.request_id')=?1
           AND json_extract(event_json,'$.event.type')='model_request_completed'
-        ORDER BY sequence LIMIT 1)
+        ORDER BY sequence LIMIT 1) AS sequence
     UNION ALL
-    SELECT event_json,sequence FROM (
-        SELECT event_json,sequence FROM events INDEXED BY events_request_id_kind_idx
+    SELECT (SELECT sequence FROM events INDEXED BY events_request_id_kind_idx
         WHERE json_extract(event_json,'$.event.request_id')=?1
           AND json_extract(event_json,'$.event.type')='model_request_failed'
-        ORDER BY sequence LIMIT 1))
-    ORDER BY sequence LIMIT 1";
+        ORDER BY sequence LIMIT 1)))";
 
 #[cfg(test)]
 thread_local! {

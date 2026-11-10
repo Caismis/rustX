@@ -2880,7 +2880,7 @@ fn assert_complete_canonical_index_plans(connection: &rusqlite::Connection) {
             "message_ledger_opening_idx",
         ),
         (
-            "EXPLAIN QUERY PLAN SELECT human_activity_at FROM message_ledger INDEXED BY message_ledger_human_activity_idx WHERE human_activity_at IS NOT NULL AND position<=14 ORDER BY human_activity_seconds DESC,human_activity_nanos DESC LIMIT 1",
+            "EXPLAIN QUERY PLAN SELECT human_activity_max_seconds,human_activity_max_nanos FROM message_ledger INDEXED BY message_ledger_human_activity_idx WHERE human_activity_at IS NOT NULL AND position<=14 ORDER BY position DESC LIMIT 1",
             "message_ledger_human_activity_idx",
         ),
     ] {
