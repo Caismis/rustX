@@ -16,7 +16,7 @@ enum Recursive {
 
 #[test]
 fn compiled_schema_plan_matches_recursive_interpreter_bytes_and_admission() {
-    let schema = root::<Recursive>();
+    let schema = schema_root::<Recursive>();
     for quantity in [0, -9_007_199_254_740_991, i64::MIN] {
         let value = Recursive::Branch {
             sequence: u64::MAX,
@@ -56,19 +56,13 @@ fn compiled_schema_plan_preserves_null_reference_selection_and_branch_order() {
 
 #[test]
 fn compiled_schema_plan_reuses_type_plan_for_exact_length_and_output() {
-    let schema = root::<Recursive>();
-    let first = encoding_plan(&schema, &schema);
+    let first = codec::<Recursive>();
     let tagged = Recursive::Leaf {
         quantity: 0,
         opaque: Value::Null,
     };
     TAG_VALUE_WORK.with(|work| work.set(0));
-    serde_json::to_vec(&Encoded {
-        value: &tagged,
-        schema: &schema,
-        root: &schema,
-    })
-    .unwrap();
+    serde_json::to_vec(&encoded(&tagged)).unwrap();
     assert_eq!(
         TAG_VALUE_WORK.with(std::cell::Cell::get),
         1,
@@ -79,14 +73,10 @@ fn compiled_schema_plan_reuses_type_plan_for_exact_length_and_output() {
             sequence,
             children: Vec::new(),
         };
-        let next = encoding_plan(&schema, &schema);
+        let next = codec::<Recursive>();
         assert!(std::sync::Arc::ptr_eq(&first, &next));
         lookup_work();
-        let encoded = Encoded {
-            value: &source,
-            schema: &schema,
-            root: &schema,
-        };
+        let encoded = encoded(&source);
         let bytes = serde_json::to_vec(&encoded).unwrap();
         assert_eq!(lookup_work(), (0, 0));
         // The exact byte threshold is independent of the conservative admission
@@ -111,19 +101,19 @@ fn cached_owner<T>() -> std::sync::Arc<SchemaOwner> {
         .lock()
         .unwrap()
         .roots
-        .get(std::any::type_name::<T>())
-        .expect("schema was requested")
+        .entry(std::any::type_name::<T>())
+        .or_insert_with(|| std::sync::Arc::new(SchemaOwner::default()))
         .clone()
 }
 
 #[test]
-fn structural_decode_does_not_compile_an_encoding_plan() {
+fn structural_decode_and_encoding_share_one_schema_free_plan() {
     #[derive(Debug, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
     struct DecodeOnly {
         sequence: u64,
         opaque: Value,
     }
-    let schema = root::<DecodeOnly>();
+    let schema = schema_root::<DecodeOnly>();
     let owner = cached_owner::<DecodeOnly>();
     assert!(owner.plan.get().is_none());
     assert_eq!(
@@ -139,10 +129,10 @@ fn structural_decode_does_not_compile_an_encoding_plan() {
         assert_eq!(decoded.sequence, u64::MAX);
         assert_eq!(decoded.opaque, source["opaque"]);
     }
-    assert!(owner.plan.get().is_none());
+    assert!(owner.plan.get().is_some());
     assert_eq!(
         owner.plan_builds.load(std::sync::atomic::Ordering::Relaxed),
-        0
+        1
     );
 
     let decoded: DecodeOnly = decode(source.clone()).unwrap();
@@ -164,7 +154,7 @@ fn concurrent_first_encoders_compile_one_shared_type_plan() {
         sequence: u64,
         opaque: Value,
     }
-    let schema = root::<ConcurrentFirstEncode>();
+    let schema = schema_root::<ConcurrentFirstEncode>();
     let owner = cached_owner::<ConcurrentFirstEncode>();
     assert!(owner.plan.get().is_none());
     let value = ConcurrentFirstEncode {
@@ -177,11 +167,10 @@ fn concurrent_first_encoders_compile_one_shared_type_plan() {
         let handles: Vec<_> = (0..8)
             .map(|_| {
                 scope.spawn(|| {
-                    let root = root::<ConcurrentFirstEncode>();
                     barrier.wait();
                     let mut bytes = Vec::new();
                     to_writer(&mut bytes, &value).unwrap();
-                    (encoding_plan(&root, &root), bytes)
+                    (codec::<ConcurrentFirstEncode>(), bytes)
                 })
             })
             .collect();
@@ -216,4 +205,38 @@ impl std::io::Write for Capped {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+#[test]
+fn compact_plans_share_identical_subgraphs_and_outlive_schema_json() {
+    #[derive(Serialize)]
+    struct Pair {
+        left: u64,
+        right: u64,
+    }
+    let schema = serde_json::json!({"properties": {
+        "left": {"format":"uint64"}, "right": {"format":"uint64"}
+    }});
+    let plan = plan::Plan::new(&schema, &schema);
+    drop(schema);
+    let View::Compiled(_, left) = plan.root().property_named("left").unwrap() else {
+        unreachable!()
+    };
+    let View::Compiled(_, right) = plan.root().property_named("right").unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(left, right, "identical vocabulary is compiled once");
+    let bytes = serde_json::to_vec(&ValueAt {
+        value: &Pair {
+            left: u64::MAX,
+            right: u64::MAX,
+        },
+        schema: plan.root(),
+        wire: false,
+    })
+    .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&bytes).unwrap(),
+        serde_json::json!({"left":u64::MAX.to_string(),"right":u64::MAX.to_string()})
+    );
 }

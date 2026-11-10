@@ -64,12 +64,7 @@ pub fn decode_domain_value<T: serde::de::DeserializeOwned + schemars::JsonSchema
 pub(crate) fn structural_value<T: serde::Serialize + schemars::JsonSchema>(
     value: &T,
 ) -> Option<serde_json::Value> {
-    let schema = crate::observation::structural_json::root::<T>();
-    let encoded = crate::observation::structural_json::Encoded {
-        value,
-        schema: &schema,
-        root: &schema,
-    };
+    let encoded = crate::observation::structural_json::encoded(value);
     bounded_item(&encoded, CHECKPOINT_ITEM_BYTES).map(|(_, value)| value)
 }
 pub(crate) fn bounded_item_bytes(value: &impl Serialize, limit: usize) -> Option<Vec<u8>> {
@@ -82,12 +77,7 @@ pub(crate) fn bounded_structural_len_with_budget<T: Serialize + schemars::JsonSc
     limit: usize,
     prepared_budget: Option<usize>,
 ) -> Option<usize> {
-    let schema = crate::observation::structural_json::root::<T>();
-    let encoded = crate::observation::structural_json::Encoded {
-        value,
-        schema: &schema,
-        root: &schema,
-    };
+    let encoded = crate::observation::structural_json::encoded(value);
     if prepared_budget.is_none_or(|budget| budget > limit) {
         #[cfg(test)]
         record_capture_work(5);
