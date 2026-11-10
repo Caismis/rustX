@@ -38,7 +38,6 @@ use crate::message::types::{
 };
 use crate::model::ModelRequestOwner;
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, InteractionId, TurnId};
-use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
 
 /// The attempt and turn envelope one interaction audit fact is pinned to.
@@ -1097,16 +1096,11 @@ pub(in crate::durable::sqlite) fn validate_event_reference_with_requests(
                     crate::runtime::subagent::terminal_settlement_event_id(subagent_id)
                 }
             };
-            let terminal: Option<String> = transaction
-                .query_row(
-                    "SELECT event_json FROM events WHERE event_id=?1",
-                    [terminal_id.as_str()],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|error| {
-                    storage(format!("physical settlement terminal lookup: {error}"))
-                })?;
+            let terminal = super::find_event_json_by_id(
+                transaction,
+                terminal_id.as_str(),
+                "physical settlement terminal lookup",
+            )?;
             let terminal = terminal.ok_or_else(|| {
                 ConversationStoreError::InvalidReference(
                     "physical settlement without terminal publication".into(),

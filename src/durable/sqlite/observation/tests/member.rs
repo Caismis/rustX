@@ -1086,12 +1086,12 @@ pub(in crate::durable::sqlite) fn assert_faulted_terminal_originals(
         .event_transcript_cursor(&terminal.event_id)
         .unwrap()
         .unwrap();
-    let (unavailable, terminal_id): (bool,u64) = store.lock().unwrap().query_row(
+    let (unavailable, terminal_sequence): (bool,u64) = store.lock().unwrap().query_row(
         "SELECT e.observation_unavailable,l.terminal_sequence FROM events e JOIN lifecycle_state l ON l.lifecycle_key=?2 WHERE e.sequence=?1",
         params![terminal.sequence,format!("attempt:{}",terminal.attempt_id.as_ref().unwrap())], |row| Ok((row.get(0)?,row.get(1)?)),
     ).unwrap();
     assert!(unavailable);
-    assert_eq!(terminal_id, terminal.sequence);
+    assert_eq!(terminal_sequence, terminal.sequence);
     let witness = store
         .observation_event_witness(terminal.sequence, terminal.sequence)
         .unwrap();

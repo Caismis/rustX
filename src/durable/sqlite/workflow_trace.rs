@@ -11,7 +11,11 @@ mod query_work;
 // These queries seek the exact run or visit before applying the immutable
 // Journal cut. In particular, missing I/O and terminal facts do not scan
 // later visits or unrelated runs to prove absence.
-pub(super) const TOOL_START_SQL: &str = "SELECT sequence FROM events INDEXED BY events_observation_tool_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_id=?2 AND json_extract(event_json,'$.event.type')='tool_execution_started' AND sequence<=?3 LIMIT 2";
+pub(super) const TOOL_START_SQL: &str = concat!(
+    "SELECT sequence FROM events INDEXED BY events_observation_tool_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_key = ",
+    crate::durable::sqlite::event_owner_key::attempt_parameter!("?2"),
+    " AND json_extract(event_json,'$.event.type')='tool_execution_started' AND sequence<=?3 LIMIT 2"
+);
 
 const RUN_TOTAL_SQL: &str = "SELECT count(*) FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE json_extract(event_json,'$.event.instance.block.run')=?3 AND json_extract(event_json,'$.event.type')='workflow_node_started' AND sequence>?1 AND sequence<=?2";
 const RUN_REVISION_SQL: &str = "SELECT max(sequence) FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE json_extract(event_json,'$.event.instance.block.run')=?3 AND json_extract(event_json,'$.event.type') IN ('workflow_node_started','workflow_node_waiting','workflow_node_settled') AND sequence>?1 AND sequence<=?2";

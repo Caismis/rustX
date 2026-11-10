@@ -883,7 +883,11 @@ fn latest_event(
     let bound = before.map(seq_to_i64).transpose()?.unwrap_or(i64::MAX);
     let (sql, parameters) = if let Some(attempt) = attempt {
         (
-            "SELECT sequence,observation_json,observation_witness FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')=?2 AND sequence<=?3 AND sequence<?4 ORDER BY sequence DESC LIMIT 1",
+            concat!(
+                "SELECT sequence,observation_json,observation_witness FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ",
+                crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"),
+                " AND json_extract(event_json,'$.event.type')=?2 AND sequence<=?3 AND sequence<?4 ORDER BY sequence DESC LIMIT 1"
+            ),
             vec![
                 rusqlite::types::Value::Text(attempt.to_string()),
                 rusqlite::types::Value::Text(kind.into()),

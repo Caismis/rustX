@@ -4,6 +4,10 @@ use self::reference::validate_event_reference_with_requests;
 use super::{append_facts, attempt_start, event_insert, native_request};
 use crate::durable::sqlite::statements::FixedStatements;
 #[cfg(test)]
+mod identity_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod identity_write_tests;
+#[cfg(test)]
 mod tests;
 
 use super::sqlite_error;
@@ -756,6 +760,11 @@ pub(in crate::durable::sqlite) fn persist_event_tx_with_requests(
             }
         }
     }
+    if find_event_sequence(transaction, event.event_id.as_str())?.is_some() {
+        return Err(storage(
+            "insert runtime event: UNIQUE constraint failed: events.event_id",
+        ));
+    }
     let json = encode(&event, "runtime event")?;
     if let Some(inserted) = event_insert::prepared(
         guard,
@@ -1176,22 +1185,62 @@ pub(super) fn runtime_event_dependency_name(event: &RuntimeEvent) -> &'static st
     }
 }
 
+// The first seek is only a candidate: exact scalar identity is always checked.
+const EVENT_SEQUENCE_SQL: &str = "SELECT min(sequence),count(*) FROM (
+    SELECT sequence FROM events WHERE sequence=?2 AND event_id=?1
+    UNION ALL SELECT sequence FROM events INDEXED BY events_alias_idx
+    WHERE event_id=?1 AND event_id != conversation_id || '-event-' || sequence AND sequence!=?2)";
+
+pub(super) fn find_event_sequence(
+    connection: &rusqlite::Connection,
+    event_id: &str,
+) -> Result<Option<u64>, ConversationStoreError> {
+    if event_id.is_empty() {
+        return Ok(None);
+    }
+    let candidate = event_id
+        .rsplit_once("-event-")
+        .and_then(|(_, suffix)| suffix.parse::<i64>().ok())
+        .filter(|sequence| *sequence > 0)
+        .unwrap_or(0);
+    let (sequence, matches): (Option<u64>, u8) = connection
+        .query_row_cached(EVENT_SEQUENCE_SQL, params![event_id, candidate], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .map_err(|error| sqlite_error(&error, format!("event identity probe: {error}")))?;
+    if matches > 1 {
+        return Err(storage(
+            "event identity has conflicting sequence and alias rows",
+        ));
+    }
+    Ok(sequence)
+}
+
 pub(super) fn find_event_by_id(
-    transaction: &Transaction<'_>,
+    connection: &rusqlite::Connection,
     event_id: &EventId,
 ) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
-    let Some(json) = transaction
-        .query_row(
-            "SELECT event_json FROM events WHERE event_id=?1",
-            [event_id.as_str()],
+    find_event_json_by_id(connection, event_id.as_str(), "event identity probe")?
+        .map(|json| decode(&json, "event identity"))
+        .transpose()
+}
+
+pub(super) fn find_event_json_by_id(
+    connection: &rusqlite::Connection,
+    event_id: &str,
+    lookup: &str,
+) -> Result<Option<String>, ConversationStoreError> {
+    let Some(sequence) = find_event_sequence(connection, event_id)? else {
+        return Ok(None);
+    };
+    connection
+        .query_row_cached(
+            "SELECT event_json FROM events WHERE sequence=?1",
+            [sequence],
             |row| row.get::<_, String>(0),
         )
         .optional()
-        .map_err(|error| sqlite_error(&error, format!("event identity probe: {error}")))?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(decode(&json, "event identity")?))
+        .map_err(|error| sqlite_error(&error, format!("{lookup}: {error}")))
 }
 
 /// Compares a retried event with its durable copy. Event Journal sequence is
