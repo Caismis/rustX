@@ -42,7 +42,7 @@ it('a single-Model catalog reaches every configured Profile state without switch
 });
 
 it('a same-Model Profile change keeps every independent setting; a different Model resets primary settings and keeps the auxiliary policy', () => {
-  const auxiliary: SessionModelConfig['auxiliary'] = { mode: 'explicit', model: 'example/summary', profile: 'short', request_params: { temperature: 0.1 }, max_output_tokens: 64 };
+  const auxiliary: SessionModelConfig['auxiliary'] = { mode: 'explicit', model: 'example/summary', profile: { mode: 'explicit', id: 'short' }, request_params: { temperature: 0.1 }, max_output_tokens: 64 };
   const configured: SessionModelConfig = {
     model: chat,
     profile: 'fast',
@@ -81,7 +81,7 @@ it('switching the primary Model agrees with the TUI `/model X` contract', () => 
   // through model_catalog_get + model_set". The TUI sends
   // `{ model, requestParams: {}, auxiliary }`; an omitted `requestParams`
   // is natively the same empty object.
-  const auxiliary: SessionModelConfig['auxiliary'] = { mode: 'explicit', model: 'summary/model-s', profile: 'compact', request_params: { summary_tag: 'keep' }, max_output_tokens: 300 };
+  const auxiliary: SessionModelConfig['auxiliary'] = { mode: 'explicit', model: 'summary/model-s', profile: { mode: 'explicit', id: 'compact' }, request_params: { summary_tag: 'keep' }, max_output_tokens: 300 };
   const configured: SessionModelConfig = { model: 'alpha/model-a', profile: 'on', requestParams: { temperature: 0.2 }, maxOutputTokens: 777, auxiliary };
   const tui: SessionModelConfig = { model: 'beta/model-b', requestParams: {}, auxiliary };
   const { requestParams, ...native } = tui;

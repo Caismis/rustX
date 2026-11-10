@@ -20,6 +20,6 @@ const call = (method, params) => new Promise((resolve, reject) => {
   socket.send(JSON.stringify({ jsonrpc:'2.0', id, method, params }));
 });
 try {
-  await call('initialize', { protocol_version:77, client:{name:'standalone-example',version:'1'}, presentation:{images:false,questionnaires:false,reviews:false} });
+  await call('initialize', { protocol_version:78, client:{name:'standalone-example',version:'1'}, presentation:{images:false,questionnaires:false,reviews:false} });
   console.log(JSON.stringify(await call('server/info', {}), null, 2));
 } finally { clearTimeout(timeout); socket.close(); }

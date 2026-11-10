@@ -150,7 +150,7 @@ describe("initialization", () => {
       protocol_version: 56,
       capabilities: CAPABILITIES,
     });
-    await assert.rejects(pending, /negotiated protocol 56, this client speaks 77/);
+    await assert.rejects(pending, /negotiated protocol 56, this client speaks 78/);
     assert.equal(transport.log.count("initialize"), 1);
     assert.ok(transport.closed, "invalid initialization does not retain a listener slot");
   });

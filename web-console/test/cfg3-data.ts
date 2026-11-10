@@ -14,7 +14,7 @@ export function cfg3Effective(): EffectiveConfiguration {
     root_agent: { model: { model: 'main' }, tools: { builtin: [], sources: {} }, skills: [], plugins: {}, agents: [], workflows: [] },
     context: { reserveTokens: '4096', keepRecentTokens: '8192' }, model_timeout: {}, tool_deadline: {}, child_capacity: { maxConcurrent: 4 }, approval_mode: 'policy', provenance: {},
     resources: { definitions: [], resource_diagnostics: [], agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [] }, available_tools: [],
-    effective_model: { configured: { model: 'server-frozen-model' }, effective: { model: 'server-frozen-model', protocol: 'openai_responses', contextWindow: 128000, modelMaxOutputTokens: 8192, maxOutputTokens: 8192, capabilities, declaredCapabilities: capabilities }, summary: { mode: 'session' } },
+    effective_model: { configured: { model: 'server-frozen-model' }, effective: { model: 'server-frozen-model', protocol: 'openai_responses', contextWindow: 128000, modelMaxOutputTokens: 8192, maxOutputTokens: 8192, capabilities, declaredCapabilities: capabilities }, auxiliary: { mode: 'session', effective: { model: 'server-frozen-model', protocol: 'openai_responses', contextWindow: 128000, modelMaxOutputTokens: 8192, maxOutputTokens: 8192, capabilities, declaredCapabilities: capabilities } } },
   };
 }
 

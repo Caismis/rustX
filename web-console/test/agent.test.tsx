@@ -72,7 +72,8 @@ it('selects a profile during execution without changing its frozen profile, para
  initial.model!.configured = { model: 'exact/model', profile: 'deliberate', requestParams: { temperature: 0.2 }, maxOutputTokens: 777, auxiliary: { mode: 'explicit', model: 'summary/original' } };
  initial.model!.effective!.requestParams = { effort: 'high', temperature: 0.2 };
  initial.model!.effective!.maxOutputTokens = 777;
- const frozen = { primary: structuredClone(initial.model!.effective!), summary: { ...structuredClone(initial.model!.effective!), mode: 'explicit' as const, model: 'summary/original' } };
+ const primary = structuredClone(initial.model!.effective!);
+ const frozen = { primary, summary: { mode: 'explicit' as const, effective: { ...structuredClone(primary), model: 'summary/original' } } };
  initial.attempt = { ...running().attempt!, model: frozen };
  await server.attached('A'); render(<Control/>); await openModels();
  expect((screen.getByRole('button', { name: 'Model and thinking effort' }) as HTMLButtonElement).disabled).toBe(false);
@@ -585,10 +586,11 @@ async function chooseRow(name: string) {
 
 it.each(['menu', 'slash'] as const)('%s reselects the current model with its complete configuration, waits for native confirmation and never mutates from renders or reads', async surface => {
   const configured = { model: 'example/chat', profile: 'fast', requestParams: { top_k: 40, nested: [null, { seed: 7 }] }, maxOutputTokens: 512,
-    auxiliary: { mode: 'explicit' as const, model: 'example/summary', profile: 'short', request_params: { temperature: 0.1 }, max_output_tokens: 64 } };
+    auxiliary: { mode: 'explicit' as const, model: 'example/summary', profile: { mode: 'explicit' as const, id: 'short' }, request_params: { temperature: 0.1 }, max_output_tokens: 64 } };
   const fixture = profileFixture(configured);
   const initial = server.snapshots.get('A')!;
-  const frozen = { primary: { ...initial.model!.effective!, requestParams: { original: true }, maxOutputTokens: 777 }, summary: { mode: 'session' as const } };
+  const primary = { ...initial.model!.effective!, requestParams: { original: true }, maxOutputTokens: 777 };
+  const frozen = { primary, summary: { mode: 'session' as const, effective: primary } };
   initial.attempt = { ...running().attempt!, model: frozen };
   await server.attached('A');
   const ui = render(surface === 'menu' ? <Control/> : <SlashControl/>);
@@ -662,7 +664,7 @@ it('a Draft equivalent choice stays local, while a deliberate current-model choi
 });
 
 it('the Session effort pane has one row per native strength and its named default follows native defaults', async () => {
-  const independent = { model: 'example/chat', requestParams: { top_k: 40, nested: [null] }, maxOutputTokens: 512, auxiliary: { mode: 'explicit' as const, model: 'example/chat', profile: 'fast', request_params: { temperature: 0.1 } } };
+  const independent = { model: 'example/chat', requestParams: { top_k: 40, nested: [null] }, maxOutputTokens: 512, auxiliary: { mode: 'explicit' as const, model: 'example/chat', profile: { mode: 'explicit' as const, id: 'fast' }, request_params: { temperature: 0.1 } } };
   profileFixture(independent); await server.attached('A'); render(<Control/>);
   let menu = await profileMenu();
   expect(menu.current('balanced')).toBe(true);
@@ -712,7 +714,7 @@ it('choosing the selected Model keeps a pinned Profile; the default action clear
 });
 
 it('switching the primary Model resets primary settings and keeps the explicit Summary policy whole; native rejection is shown, not worked around', async () => {
-  const auxiliary = { mode: 'explicit' as const, model: 'example/summary', profile: 'short', request_params: { temperature: 0.1, nested: [null] }, max_output_tokens: 64 };
+  const auxiliary = { mode: 'explicit' as const, model: 'example/summary', profile: { mode: 'explicit' as const, id: 'short' }, request_params: { temperature: 0.1, nested: [null] }, max_output_tokens: 64 };
   profileFixture({ model: 'example/chat', profile: 'fast', requestParams: { top_k: 40 }, maxOutputTokens: 256, auxiliary }, ['example/chat', 'example/other']);
   await server.attached('A'); render(<Control/>);
   const chooseModel = async (name: string) => {
