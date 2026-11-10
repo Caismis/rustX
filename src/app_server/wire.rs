@@ -146,7 +146,11 @@ fn convert(value: &mut Value, schema: &Value, root: &Value, encode: bool) -> Res
     {
         return Ok(());
     }
-    if exact(schema) {
+    if schema["format"] == "uint64"
+        && schema["maximum"]
+            .as_f64()
+            .is_none_or(|maximum| maximum > 9_007_199_254_740_991.0)
+    {
         if encode {
             let number = value.as_u64().ok_or("exact domain requires native u64")?;
             *value = Value::from(number.to_string());
@@ -653,6 +657,8 @@ pub(super) fn protocol_schema() -> Value {
 
 #[cfg(test)]
 mod direct_tests;
+#[cfg(test)]
+mod plan_contract_tests;
 
 #[cfg(test)]
 mod tests {
