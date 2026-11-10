@@ -542,11 +542,6 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
         "observation_headers",
         &["transcript_position"],
     )?;
-    crate::durable::sqlite::schema::shape::verify_unique_columns(
-        connection,
-        "observation_block_headers",
-        &["message_id", "block_index"],
-    )?;
     super::schema::shape::verify_unique_columns(
         connection,
         "observation_headers",
@@ -570,6 +565,19 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
     if !blocks.contains("CHECK(length(header_json)<=16384)") || clustered {
         return Err(ConversationStoreError::IncompatibleSchema(
             "invalid finite native observation metadata layout".into(),
+        ));
+    }
+    let columns: bool = connection.query_row(
+        "SELECT count(*)=4 AND sum(name='ledger_position' AND type='INTEGER' AND [notnull]=1 AND pk=1 AND cid=0)=1 AND sum(name='block_index' AND type='INTEGER' AND [notnull]=1 AND pk=2 AND cid=1)=1 AND sum(name='header_json' AND type='BLOB' AND [notnull]=1 AND pk=0 AND cid=2)=1 AND sum(name='message_id' AND type='TEXT' AND [notnull]=1 AND pk=0 AND cid=3)=1 FROM pragma_table_info('observation_block_headers')",
+        [], |row| row.get(0),
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let parent: bool = connection.query_row(
+        "SELECT count(*)=2 AND count(DISTINCT id)=1 AND sum(seq=0 AND [from]='ledger_position' AND [table]='message_ledger' AND [to]='position')=1 AND sum(seq=1 AND [from]='message_id' AND [table]='message_ledger' AND [to]='message_id')=1 FROM pragma_foreign_key_list('observation_block_headers')",
+        [], |row| row.get(0),
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    if !columns || !parent {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "canonical block headers require one bound native Ledger coordinate".into(),
         ));
     }
     super::schema::shape::verify_unique_columns(
@@ -617,7 +625,7 @@ fn block_bytes(
     kind: &str,
     value: Option<serde_json::Value>,
     field: &[&str],
-) -> Result<Vec<u8>, ConversationStoreError> {
+) -> Result<(Vec<u8>, u64), ConversationStoreError> {
     use crate::observation::content::{ContentRepresentation as Rep, ContentSource};
     let conversation = identity(connection)?;
     let block_index = crate::message::types::ContentBlockIndex::new(
@@ -694,8 +702,9 @@ fn block_bytes(
         value,
         content,
     };
-    bounded_bytes(&header, HEADER_ENCODED_MAX)
-        .ok_or_else(|| storage("canonical block identity exceeds finite descriptor budget"))
+    let bytes = bounded_bytes(&header, HEADER_ENCODED_MAX)
+        .ok_or_else(|| storage("canonical block identity exceeds finite descriptor budget"))?;
+    Ok((bytes, position))
 }
 
 fn block(
@@ -713,8 +722,15 @@ fn block(
     });
     let value = bounded_bytes(body, 1024)
         .map(|bytes| serde_json::from_slice(&bytes).expect("native canonical block encoding"));
-    let bytes = block_bytes(connection, message, index, kind, value, field)?;
-    connection.execute_cached("INSERT INTO observation_block_headers(message_id,block_index,header_json,ledger_position) VALUES(?1,?2,?3,(SELECT position FROM message_ledger WHERE message_id=?1)) ON CONFLICT(message_id,block_index) DO UPDATE SET header_json=excluded.header_json",params![message.id().as_str(),index,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let (bytes, position) = block_bytes(connection, message, index, kind, value, field)?;
+    // This exact capture resolved the native owner. The next block resolves
+    // again: an INSERT trigger may have invalidated that earlier evidence.
+    // MessageId remains binding evidence, not a second access coordinate. A
+    // trigger cannot replace the native owner between capture and insertion.
+    let changed=connection.execute_cached("INSERT INTO observation_block_headers(ledger_position,block_index,header_json,message_id) VALUES(?1,?2,?3,?4) ON CONFLICT(ledger_position,block_index) DO UPDATE SET header_json=excluded.header_json WHERE observation_block_headers.message_id=excluded.message_id",params![position,index,bytes,message.id().as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    if changed != 1 {
+        return Err(storage("canonical block identity differs"));
+    }
     Ok(())
 }
 pub(super) fn blocks(
