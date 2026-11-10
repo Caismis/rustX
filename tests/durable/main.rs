@@ -80,7 +80,14 @@ fn checkpoint(
         call_sources: vec![],
         result_call: None,
     }];
-    items.extend(history.items.into_iter().skip(retired));
+    let checkpoint = store.projection_head().unwrap();
+    items.extend(
+        history
+            .checkpoint_items(checkpoint.as_ref())
+            .unwrap()
+            .into_iter()
+            .skip(retired),
+    );
     let operation_id =
         rustx::runtime::identity::CompactionOperationId::new(format!("operation:{id}"));
     store

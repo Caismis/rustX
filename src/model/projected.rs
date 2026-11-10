@@ -21,14 +21,11 @@ impl CanonicalMessageRef {
     /// Panics only if the canonical body cannot serialize.
     #[must_use]
     pub fn of(conversation_id: &ConversationId, message: &MessageBlock) -> Self {
-        use sha2::{Digest, Sha256};
-        let mut digest = Sha256::new();
-        serde_json::to_writer(DigestWriter(&mut digest), message)
-            .expect("canonical body serializes");
+        let (_, digest) = canonical_body_identity(message);
         Self {
             conversation_id: conversation_id.clone(),
             message_id: message.id().clone(),
-            content_digest: format!("{:x}", digest.finalize()),
+            content_digest: format!("{digest:x}"),
         }
     }
     /// Verify the exact immutable dependency, including provenance metadata.
@@ -37,11 +34,39 @@ impl CanonicalMessageRef {
         self.message_id == *message.id() && Self::of(&self.conversation_id, message) == *self
     }
 }
-pub(crate) struct DigestWriter<'a>(pub(crate) &'a mut sha2::Sha256);
-impl std::io::Write for DigestWriter<'_> {
+/// One native serialization implementation for canonical body authentication.
+pub(crate) fn canonical_body_identity(
+    message: &MessageBlock,
+) -> (usize, sha2::digest::Output<sha2::Sha256>) {
+    let mut writer = DigestWriter::default();
+    serde_json::to_writer(&mut writer, message).expect("canonical body serializes");
+    writer.finish()
+}
+
+pub(crate) struct DigestWriter {
+    digest: sha2::Sha256,
+    bytes: usize,
+}
+impl Default for DigestWriter {
+    fn default() -> Self {
+        use sha2::Digest;
+        Self {
+            digest: sha2::Sha256::new(),
+            bytes: 0,
+        }
+    }
+}
+impl DigestWriter {
+    pub(crate) fn finish(self) -> (usize, sha2::digest::Output<sha2::Sha256>) {
+        use sha2::Digest;
+        (self.bytes, self.digest.finalize())
+    }
+}
+impl std::io::Write for DigestWriter {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         use sha2::Digest;
-        self.0.update(bytes);
+        self.bytes += bytes.len();
+        self.digest.update(bytes);
         #[cfg(test)]
         super::selected_input::record_hash_work(bytes.len(), 0);
         Ok(bytes.len())

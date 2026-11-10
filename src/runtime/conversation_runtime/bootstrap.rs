@@ -1074,11 +1074,14 @@ impl ConversationRuntime {
             .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
         let active: Vec<_> = history
             .messages
-            .into_iter()
-            .filter_map(|m| m.as_canonical().cloned())
+            .shared_iter()
+            .filter(|m| m.as_canonical().is_some())
             .collect();
-        let ids = active.iter().map(|m| m.id().clone()).collect();
-        ConversationState::from_durable_head(
+        let ids = active
+            .iter()
+            .map(|m| m.canonical_id().expect("canonical Ledger body").clone())
+            .collect();
+        ConversationState::from_shared_durable_head(
             active,
             ids,
             SurfaceRevision::new(history.cut.ledger.0),

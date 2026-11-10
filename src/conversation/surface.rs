@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 
 use super::selection::CanonicalSelection;
+#[cfg(test)]
 use crate::message::types::MessageBlock;
 use crate::runtime::identity::MessageId;
 
@@ -362,8 +363,18 @@ impl ConversationSurface {
     ///
     /// Returns [`SurfaceError::AlreadyActive`] when the identity is already
     /// active; an identity is never active twice.
-    pub fn append(&mut self, message: Arc<MessageBlock>) -> Result<SurfaceRevision, SurfaceError> {
-        let message_id = message.id().clone();
+    ///
+    /// # Panics
+    /// Panics if the supplied body is not canonical.
+    pub fn append(
+        &mut self,
+        message: Arc<crate::model::ModelInputMessage>,
+    ) -> Result<SurfaceRevision, SurfaceError> {
+        let message_id = message
+            .as_canonical()
+            .expect("canonical Surface body")
+            .id()
+            .clone();
         if self.is_active(&message_id) {
             return Err(SurfaceError::AlreadyActive(message_id));
         }
@@ -375,9 +386,11 @@ impl ConversationSurface {
     /// append cannot be followed by a recoverable Surface error.
     pub(crate) fn append_after_validation(
         &mut self,
-        message: Arc<MessageBlock>,
+        message: Arc<crate::model::ModelInputMessage>,
     ) -> SurfaceRevision {
-        debug_assert!(!self.is_active(message.id()));
+        debug_assert!(
+            !self.is_active(message.as_canonical().expect("canonical Surface body").id())
+        );
         self.active.append(message);
         self.revision = self.revision.next();
         self.revision
@@ -436,15 +449,17 @@ mod tests {
     fn id(s: &str) -> MessageId {
         MessageId::new(s)
     }
-    fn body(s: &str) -> Arc<MessageBlock> {
+    fn body(s: &str) -> Arc<crate::model::ModelInputMessage> {
         use crate::message::types::{InboundKind, UserMessageBlock, UserSource};
-        Arc::new(MessageBlock::User(UserMessageBlock {
-            id: id(s),
-            content: Vec::new(),
-            source: UserSource::Human,
-            kind: InboundKind::Message,
-            timestamp: None,
-        }))
+        Arc::new(crate::model::ModelInputMessage::Canonical(
+            MessageBlock::User(UserMessageBlock {
+                id: id(s),
+                content: Vec::new(),
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            }),
+        ))
     }
     fn selected(s: &str) -> CanonicalSelection {
         let mut result = CanonicalSelection::default();
