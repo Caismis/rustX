@@ -219,7 +219,7 @@ pub(super) fn assert_header_capture_fault(trigger: &str) {
 #[test]
 fn t10_t19_request_header_placeholder_failure_rolls_back_only_optional_layout() {
     for trigger in [
-        "CREATE TEMP TRIGGER refuse_captured_offsets BEFORE INSERT ON request_source_nodes BEGIN SELECT RAISE(FAIL,'optional Source node'); END;",
+        "CREATE TEMP TRIGGER refuse_captured_offsets BEFORE UPDATE OF source_metadata ON native_input_nodes WHEN NEW.source_metadata IS NOT NULL BEGIN SELECT RAISE(FAIL,'optional Source node'); END;",
         "CREATE TEMP TRIGGER remove_captured_header BEFORE INSERT ON request_source_roots BEGIN SELECT RAISE(FAIL,'optional original witness'); END;",
     ] {
         assert_header_capture_fault(trigger);

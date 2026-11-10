@@ -30,6 +30,7 @@ mod width_table;
 pub(in crate::durable::sqlite) fn install_workspace(
     connection: &Connection,
 ) -> Result<(), ConversationStoreError> {
+    index::install_cache(connection)?;
     connection
         .execute_batch("CREATE TEMP TABLE request_source_fact_spool(key TEXT PRIMARY KEY,value BLOB NOT NULL) WITHOUT ROWID")
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("install request capture workspace: {error}")))
@@ -121,7 +122,7 @@ struct Leaf {
     #[serde(deserialize_with = "record::variants")]
     variants: Vec<u8>,
     #[serde(deserialize_with = "record::templates")]
-    templates: Vec<index::Hash>,
+    templates: Vec<index::BlobRef>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -457,3 +458,6 @@ pub(in crate::durable::sqlite) fn inspect_index_page(bytes: &[u8]) -> serde_json
 pub(in crate::durable::sqlite) fn encode_test_index_page(page: serde_json::Value) -> Vec<u8> {
     index::encode_test_page(page)
 }
+
+#[cfg(test)]
+mod append_cost_tests;

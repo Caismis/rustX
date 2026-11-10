@@ -1,4 +1,5 @@
-//! Persistent native ordered input. A leaf is an occurrence, not an identity set.
+//! Persistent ordered input using a skew-binary append forest.
+//! A leaf is an occurrence, not an identity set.
 use std::ops::{Index, IndexMut};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -133,6 +134,8 @@ pub(crate) struct InputNode {
     pub actual: Option<Arc<ModelInputMessage>>,
     pub count: usize,
     pub height: u8,
+    // A complete skew tree has 2^k-1 occurrences; other nodes link the forest.
+    skew: bool,
     pub frozen_count: usize,
     metrics: OnceLock<InputMetrics>,
     pub digest: OnceLock<[u8; 32]>,
@@ -160,6 +163,7 @@ impl Clone for InputNode {
             actual: self.actual.clone(),
             count: self.count,
             height: self.height,
+            skew: self.skew,
             frozen_count: self.frozen_count,
             metrics: OnceLock::new(),
             digest: OnceLock::new(),
@@ -379,6 +383,7 @@ impl InputNode {
             actual: Some(Arc::new(value)),
             count: 1,
             height: 1,
+            skew: true,
             frozen_count: 0,
             metrics: OnceLock::new(),
             digest: OnceLock::new(),
@@ -398,6 +403,7 @@ impl InputNode {
             actual,
             count: 1,
             height: 1,
+            skew: true,
             frozen_count: 1,
             metrics: OnceLock::new(),
             digest: OnceLock::new(),
@@ -411,6 +417,9 @@ impl InputNode {
         Arc::new(Self {
             count: left.count + right.count,
             height: 1 + left.height.max(right.height),
+            skew: right.count == 1
+                && matches!(&left.kind, InputNodeKind::Branch { left: a, right: b }
+                    if a.skew && b.skew && a.count == b.count),
             frozen_count: left.frozen_count + right.frozen_count,
             metrics: OnceLock::new(),
             kind: InputNodeKind::Branch { left, right },
@@ -419,6 +428,31 @@ impl InputNode {
             budget: OnceLock::new(),
             stored: Mutex::new(None),
         })
+    }
+    /// Reverse of Okasaki's skew-binary cons: at most one carry, hence at
+    /// most three new branches, even when every historical root is retained.
+    /// The binary encoding preserves the existing ordered occurrence reader.
+    fn append(root: Arc<Self>, leaf: Arc<Self>) -> Arc<Self> {
+        if !root.skew
+            && let InputNodeKind::Branch { left, right } = &root.kind
+            && right.skew
+        {
+            if left.skew && left.count == right.count {
+                return Self::branch(root, leaf);
+            }
+            if !left.skew
+                && let InputNodeKind::Branch {
+                    left: rest,
+                    right: previous,
+                } = &left.kind
+                && previous.skew
+                && previous.count == right.count
+            {
+                let tree = Self::branch(Self::branch(previous.clone(), right.clone()), leaf);
+                return Self::branch(rest.clone(), tree);
+            }
+        }
+        Self::branch(root, leaf)
     }
     fn join(left: Arc<Self>, right: Arc<Self>) -> Arc<Self> {
         if left.height > right.height + 1 {
@@ -566,7 +600,7 @@ pub(crate) struct SelectionOrigin {
 pub(crate) enum SelectionEdit {
     Append { index: usize, node: Arc<InputNode> },
 }
-/// Exact ordered frozen native input with path-copying append/edit operations.
+/// Exact ordered frozen input with constant-allocation append and persistent edits.
 /// Serialization retains the original logical flat-array representation.
 #[derive(Debug, Clone, Default)]
 pub struct SelectedInputManifest {
@@ -627,7 +661,7 @@ impl SelectedInputManifest {
         let leaf = InputNode::leaf(freeze(scope, &message), Some(message));
         selected.root = Some(self.root.as_ref().map_or_else(
             || leaf.clone(),
-            |root| InputNode::join(root.clone(), leaf.clone()),
+            |root| InputNode::append(root.clone(), leaf.clone()),
         ));
         if selected.origin.is_some() {
             selected.edits.push_back(SelectionEdit::Append {
@@ -728,11 +762,10 @@ impl SelectedInputManifest {
     /// Appends a frozen occurrence without a producer semantic certificate.
     pub fn push(&mut self, item: FrozenModelInput) {
         let leaf = InputNode::leaf(item, None);
-        self.root = Some(
-            self.root
-                .take()
-                .map_or_else(|| leaf.clone(), |root| InputNode::join(root, leaf.clone())),
-        );
+        self.root = Some(self.root.take().map_or_else(
+            || leaf.clone(),
+            |root| InputNode::append(root, leaf.clone()),
+        ));
         self.semantic = None;
         self.origin = None;
         self.edits.clear();
@@ -1056,12 +1089,10 @@ impl SelectedModelInput {
     /// Appends an actual value, without manufacturing frozen provenance.
     pub fn push(&mut self, value: ModelInputMessage) {
         let leaf = InputNode::actual_leaf(value);
-        self.0.root = Some(
-            self.0
-                .root
-                .take()
-                .map_or_else(|| leaf.clone(), |root| InputNode::join(root, leaf.clone())),
-        );
+        self.0.root = Some(self.0.root.take().map_or_else(
+            || leaf.clone(),
+            |root| InputNode::append(root, leaf.clone()),
+        ));
         self.0.semantic = None;
         self.0.origin = None;
         self.0.edits.clear();

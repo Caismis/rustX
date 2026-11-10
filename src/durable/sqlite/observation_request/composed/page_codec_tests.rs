@@ -3,9 +3,10 @@ fn connection() -> Connection {
     let connection = Connection::open_in_memory().unwrap();
     connection
         .execute_batch(
-            "CREATE TABLE request_source_pages(hash BLOB PRIMARY KEY,bytes BLOB NOT NULL)",
+            "CREATE TABLE request_source_pages(id INTEGER PRIMARY KEY,hash BLOB NOT NULL,bytes BLOB NOT NULL)",
         )
         .unwrap();
+    install_cache(&connection).unwrap();
     connection
 }
 #[test]
@@ -13,7 +14,7 @@ fn compact_page_has_exact_versioned_lexical_bytes() {
     let page = Page::Leaf {
         entries: vec![("F[]".into(), b"1.00".to_vec())],
     };
-    let expected = b"RXSP\x03\x00\x01\x00\x03\x00F[]\x04\x00\x00\x001.00";
+    let expected = b"RXSP\x04\x00\x01\x00\x03\x00F[]\x04\x00\x00\x001.00";
     assert_eq!(codec::encode(&page).unwrap(), expected);
     let Page::Leaf { entries } = codec::decode(expected).unwrap() else {
         panic!("leaf expected")
@@ -21,14 +22,16 @@ fn compact_page_has_exact_versioned_lexical_bytes() {
     assert_eq!(entries, vec![("F[]".to_owned(), b"1.00".to_vec())]);
     let branch = Page::Branch {
         children: vec![Reference {
+            id: 1,
             hash: [7; 32],
             last: "key".into(),
             depth: 3,
         }],
     };
     let encoded = codec::encode(&branch).unwrap();
-    assert_eq!(&encoded[..14], b"RXSP\x03\x01\x01\x00\x03\x00key\x03");
-    assert_eq!(&encoded[14..], &[7; 32]);
+    assert_eq!(&encoded[..14], b"RXSP\x04\x01\x01\x00\x03\x00key\x03");
+    assert_eq!(&encoded[14..22], &1_u64.to_le_bytes());
+    assert_eq!(&encoded[22..], &[7; 32]);
     let Page::Branch { children } = codec::decode(&encoded).unwrap() else {
         panic!("branch expected")
     };
@@ -54,9 +57,9 @@ fn compact_page_rejects_lengths_counts_versions_trailing_and_legacy() {
         assert!(codec::decode(&changed).is_err());
     }
     for raw in [
-        b"RXSP\x03\x00\x01\x00\x41\x10".as_slice(),
-        b"RXSP\x03\x00\x01\x00\x00\x00\xff\xff\xff\xff",
-        b"RXSP\x03\x00\x01\x00\x01\x00\xff",
+        b"RXSP\x04\x00\x01\x00\x41\x10".as_slice(),
+        b"RXSP\x04\x00\x01\x00\x00\x00\xff\xff\xff\xff",
+        b"RXSP\x04\x00\x01\x00\x01\x00\xff",
         b"RXSP\x01\x00\x01\x00\x01\x00k\x01\x00\x00\x00v",
         br#"{"type":"leaf","entries":[["k","dg=="]]}"#,
     ] {
@@ -117,11 +120,13 @@ fn compact_page_preserves_authentication_and_navigation_rejection() {
         Page::Branch {
             children: vec![
                 Reference {
+                    id: 1,
                     hash: [0; 32],
                     last: "a".into(),
                     depth: 0,
                 },
                 Reference {
+                    id: 1,
                     hash: [0; 32],
                     last: "b".into(),
                     depth: 1,
@@ -215,6 +220,7 @@ fn full_keys_preserve_unicode_and_exact_leaf_and_branch_geometry() {
         .iter()
         .enumerate()
         .map(|(i, key)| Reference {
+            id: 1,
             hash: [u8::try_from(i).unwrap(); 32],
             last: (*key).into(),
             depth: 0,
@@ -222,7 +228,7 @@ fn full_keys_preserve_unicode_and_exact_leaf_and_branch_geometry() {
         .collect::<Vec<_>>();
     let size = 8 + children
         .iter()
-        .map(|child| 35 + child.last.len())
+        .map(|child| 43 + child.last.len())
         .sum::<usize>();
     let encoded = codec::encode(&Page::Branch { children }).unwrap();
     assert_eq!(encoded.len(), size);
@@ -275,7 +281,7 @@ fn full_key_builder_and_decoder_agree_at_the_exact_page_limit() {
 #[test]
 fn full_keys_have_no_predecessor_dependency_and_reject_the_prefix_format() {
     for tag in [0_u8, 1] {
-        let mut raw = b"RXSP\x03".to_vec();
+        let mut raw = b"RXSP\x04".to_vec();
         raw.push(tag);
         raw.extend_from_slice(&2_u16.to_le_bytes());
         for key in ["水", "汉"] {
@@ -285,6 +291,7 @@ fn full_keys_have_no_predecessor_dependency_and_reject_the_prefix_format() {
                 raw.extend_from_slice(&0_u32.to_le_bytes());
             } else {
                 raw.push(0);
+                raw.extend_from_slice(&1_u64.to_le_bytes());
                 raw.extend_from_slice(&[0; 32]);
             }
         }
@@ -354,7 +361,7 @@ fn full_key_pages_preserve_multilevel_lookup_and_immutable_roots() {
                 .sum::<usize>(),
             Page::Branch { children } => children
                 .iter()
-                .map(|child| 35 + child.last.len())
+                .map(|child| 43 + child.last.len())
                 .sum::<usize>(),
         };
         assert!(bytes.len() <= PAGE_BYTES && full <= PAGE_BYTES);

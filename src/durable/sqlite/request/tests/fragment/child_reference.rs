@@ -55,6 +55,7 @@ pub(super) fn replace_captured_child(
         )
         .unwrap();
     reference["hash"] = serde_json::json!(digest.as_slice());
+    reference["id"] = serde_json::json!(connection.last_insert_rowid());
     original
 }
 

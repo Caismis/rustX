@@ -372,7 +372,7 @@ fn native_selected_leaf_corruption_and_logical_byte_limit_are_explicit() {
     assert!(load_bounded(&connection, Some(root), exact.len() - 1).is_err());
     connection
         .execute(
-            "UPDATE native_input_nodes SET item_json='null' WHERE id=?1",
+            "UPDATE native_input_items SET item_json='null' WHERE id=(SELECT item_id FROM native_input_nodes WHERE id=?1)",
             [root.id],
         )
         .unwrap();
@@ -513,7 +513,7 @@ fn bounded_manifest_load_verifies_each_leaf_once_and_preserves_the_exact_budget(
     let transaction = connection.transaction().unwrap();
     let length: usize = transaction
         .query_row(
-            "SELECT octet_length(item_json) FROM native_input_nodes WHERE id=?1",
+            "SELECT octet_length(i.item_json) FROM native_input_items i JOIN native_input_nodes n ON n.item_id=i.id WHERE n.id=?1",
             [leaf.id],
             |row| row.get(0),
         )
@@ -528,4 +528,140 @@ fn bounded_manifest_load_verifies_each_leaf_once_and_preserves_the_exact_budget(
     assert_eq!(super::take_node_read_work(), (0, 1));
     assert!(load_bounded(&transaction, Some(leaf), length + 1).is_err());
     assert_eq!(super::take_node_read_work(), (0, 1));
+}
+
+#[test]
+fn append_write_cost_by_history() {
+    let mut connection = connection();
+    let owner = Owner::uninstalled();
+    let scope = ConversationId::generate();
+    let message = message(0);
+    let mut input = SelectedInputManifest::default();
+    let mut saved = Vec::new();
+    for history in 0..=4096 {
+        if [8, 64, 512, 4096].contains(&history) {
+            let before: (u64, u64) = connection.query_row(
+                "SELECT (SELECT count(*) FROM native_input_nodes)+(SELECT count(*) FROM native_input_items),(SELECT coalesce(sum(payload),0) FROM dbstat WHERE name IN ('native_input_nodes','native_input_items'))", [], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
+            let next = input.append(&scope, &message);
+            let transaction = connection.transaction().unwrap();
+            let selection = persist(&transaction, &next, &owner).unwrap();
+            let root = selection.root;
+            transaction.commit().unwrap();
+            selection.commit(&owner);
+            let after: (u64, u64) = connection.query_row(
+                "SELECT (SELECT count(*) FROM native_input_nodes)+(SELECT count(*) FROM native_input_items),(SELECT coalesce(sum(payload),0) FROM dbstat WHERE name IN ('native_input_nodes','native_input_items'))", [], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
+            eprintln!(
+                "APPEND_COST H={history} rows={} bytes={}",
+                after.0 - before.0,
+                after.1 - before.1
+            );
+            assert_eq!(load(&connection, root).unwrap(), next);
+            saved.push((root, next));
+        }
+        let before_changes = connection.total_changes();
+        let transaction = connection.transaction().unwrap();
+        input = input.append(&scope, &message);
+        let selection = persist(&transaction, &input, &owner).unwrap();
+        transaction.commit().unwrap();
+        selection.commit(&owner);
+        assert!(
+            connection.total_changes() - before_changes <= 5,
+            "H={history}"
+        );
+    }
+    for (root, expected) in saved {
+        assert_eq!(load(&connection, root).unwrap(), expected);
+    }
+}
+
+#[test]
+fn colocated_source_mutation_preserves_native_seats_but_native_mutation_revokes_them() {
+    let mut connection = connection();
+    let owner = Owner::install(
+        &connection,
+        super::super::append_validation::Owner::uninstalled(),
+        super::super::observation_response::Owner::uninstalled(),
+        super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .unwrap();
+    let scope = ConversationId::generate();
+    let input = SelectedInputManifest::from_messages(&scope, &[message(1)]);
+    let transaction = connection.transaction().unwrap();
+    let selection = persist(&transaction, &input, &owner).unwrap();
+    let root = selection.root.unwrap();
+    transaction.commit().unwrap();
+    selection.commit(&owner);
+    let epoch = owner.epoch.load(Ordering::Acquire);
+    connection.execute("UPDATE native_input_nodes SET source_native_digest=zeroblob(32),source_hash=zeroblob(32),source_metadata=x'7b' WHERE id=?1", [root.id]).unwrap();
+    assert_eq!(owner.epoch.load(Ordering::Acquire), epoch);
+    assert_eq!(load(&connection, Some(root)).unwrap(), input);
+    let changes = connection.total_changes();
+    assert_eq!(
+        persist(&connection, &input, &owner).unwrap().root,
+        Some(root)
+    );
+    assert_eq!(connection.total_changes(), changes);
+    connection
+        .execute(
+            "UPDATE native_input_items SET item_json='null' WHERE id=(SELECT item_id FROM native_input_nodes WHERE id=?1)",
+            [root.id],
+        )
+        .unwrap();
+    assert!(owner.epoch.load(Ordering::Acquire) > epoch);
+    assert!(load(&connection, Some(root)).is_err());
+}
+
+#[test]
+fn frozen_body_insert_preserves_cancellation_and_rolls_back() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::{Arc, atomic::AtomicBool};
+
+    let mut connection = connection();
+    let input = SelectedInputManifest::from_messages(&ConversationId::generate(), &[message(1)]);
+    let owner = Owner::uninstalled();
+    let interrupt = Arc::new(AtomicBool::new(false));
+    let armed = interrupt.clone();
+    connection
+        .authorizer(Some(move |context: AuthContext<'_>| {
+            if matches!(
+                context.action,
+                AuthAction::Insert {
+                    table_name: "native_input_items"
+                }
+            ) {
+                armed.store(true, Ordering::SeqCst);
+            }
+            Authorization::Allow
+        }))
+        .unwrap();
+    connection
+        .progress_handler(1, Some(move || interrupt.swap(false, Ordering::SeqCst)))
+        .unwrap();
+    {
+        let transaction = connection.transaction().unwrap();
+        let result = persist(&transaction, &input, &owner);
+        assert!(
+            matches!(result, Err(ConversationStoreError::OperationCancelled)),
+            "{result:?}"
+        );
+    }
+    connection
+        .progress_handler(0, None::<fn() -> bool>)
+        .unwrap();
+    connection
+        .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+        .unwrap();
+    for table in ["native_input_items", "native_input_nodes"] {
+        let count: u64 = connection
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+    let transaction = connection.transaction().unwrap();
+    let selected = persist(&transaction, &input, &owner).unwrap();
+    let root = selected.root;
+    transaction.commit().unwrap();
+    selected.commit(&owner);
+    assert_eq!(load(&connection, root).unwrap(), input);
 }

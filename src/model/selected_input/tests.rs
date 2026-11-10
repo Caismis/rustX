@@ -121,13 +121,13 @@ fn flat_semantic(messages: &[ModelInputMessage]) -> String {
     format!("{:x}", digest.finalize())
 }
 
-fn assert_avl(node: &InputNode) -> (usize, u8) {
+fn assert_geometry(node: &InputNode) -> (usize, u8) {
     let (count, height) = match &node.kind {
         InputNodeKind::Leaf(_) => (1, 1),
         InputNodeKind::Branch { left, right } => {
-            let (left_count, left_height) = assert_avl(left);
-            let (right_count, right_height) = assert_avl(right);
-            assert!(left_height.abs_diff(right_height) <= 1);
+            let (left_count, left_height) = assert_geometry(left);
+            let (right_count, right_height) = assert_geometry(right);
+            assert!(node.height <= 64);
             (left_count + right_count, 1 + left_height.max(right_height))
         }
     };
@@ -181,7 +181,7 @@ fn assert_flat(
         serde_json::to_vec(&flat_frozen(scope, flat)).unwrap()
     );
     if let Some(root) = &selected.root {
-        assert_eq!(assert_avl(root).0, flat.len());
+        assert_eq!(assert_geometry(root).0, flat.len());
     }
 }
 
@@ -299,9 +299,9 @@ fn selected_append_insert_replace_share_old_leaves_with_logarithmic_actual_node_
         let inserted = old.insert(&scope, count / 2, &message);
         assert_delta_work(take_node_work(), height);
         assert_shared_leaves(&old, &inserted, None, Some(count / 2));
-        assert_avl(appended.root.as_ref().unwrap());
-        assert_avl(replaced.root.as_ref().unwrap());
-        assert_avl(inserted.root.as_ref().unwrap());
+        assert_geometry(appended.root.as_ref().unwrap());
+        assert_geometry(replaced.root.as_ref().unwrap());
+        assert_geometry(inserted.root.as_ref().unwrap());
         assert_eq!(serde_json::to_vec(&old).unwrap(), old_bytes);
     }
 }
@@ -443,4 +443,29 @@ fn cold_freeze_rejects_overbudget_before_constructing_cloning_or_hashing_input()
     assert_eq!(take_node_work(), (0, 0, 0, 0));
     assert_eq!(take_hash_work(), (0, 0));
     assert_eq!(snapshot, before);
+}
+
+#[test]
+fn skew_append_allocates_at_most_four_nodes_with_all_old_cuts_retained() {
+    let scope = ConversationId::generate();
+    let mut selected = SelectedInputManifest::default();
+    let mut roots = Vec::new();
+    for history in 0..8192 {
+        let message = user(history);
+        take_node_work();
+        selected = selected.append(&scope, &message);
+        let work = take_node_work();
+        assert_eq!((work.0, work.2, work.3), (1, 0, 0), "H={history}: {work:?}");
+        assert!(work.1 <= 3, "H={history}: {work:?}");
+        assert!(selected.root.as_ref().unwrap().height <= 40);
+        roots.push(selected.clone());
+    }
+    for history in [8, 64, 512, 4096, 8192] {
+        let old = &roots[history - 1];
+        assert_eq!(old.len(), history);
+        let expected = flat_frozen(&scope, &[user(0), user(history - 1)]);
+        assert_eq!(old.get(0), Some(&expected[0]));
+        assert_eq!(old.get(history - 1), Some(&expected[1]));
+        assert_eq!(old.messages().get(history / 2), Some(&user(history / 2)));
+    }
 }

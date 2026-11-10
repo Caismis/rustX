@@ -24,7 +24,7 @@ fn t08_t14_t19_request_roots_finalize_once_with_exact_legacy_geometry_and_checks
                 },
             )
             .unwrap();
-        connection.execute_batch("CREATE TEMP TRIGGER count_source_update AFTER UPDATE ON request_source_nodes BEGIN SELECT test_source_update(); END;").unwrap();
+        connection.execute_batch("CREATE TEMP TRIGGER count_source_update AFTER UPDATE OF source_metadata ON native_input_nodes WHEN OLD.source_metadata IS NOT NULL BEGIN SELECT test_source_update(); END;").unwrap();
     }
     let mut retained = Vec::new();
     for turn in 1..=2 {
@@ -115,7 +115,7 @@ fn t10_t14_t19_certified_root_finalization_failure_rolls_back_only_optional_sour
         let connection = store.lock().unwrap();
         for table in [
             "request_source_roots",
-            "request_source_nodes",
+            "native_input_nodes WHERE source_metadata IS NOT NULL",
             "request_source_pages",
         ] {
             assert_eq!(
@@ -167,22 +167,22 @@ fn reused_request_source_rejects_invalid_existing_rows_without_rebuilding_them()
                 )
                 .unwrap();
             let original: (Vec<u8>, Vec<u8>, Vec<u8>) = connection.query_row(
-                "SELECT native_digest,hash,metadata FROM request_source_nodes WHERE native_id=?1",
+                "SELECT source_native_digest,source_hash,source_metadata FROM native_input_nodes WHERE id=?1",
                 [root], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             ).unwrap();
             connection
                 .execute_batch("PRAGMA ignore_check_constraints=ON")
                 .unwrap();
             let mutation = match damage {
-                "hash_type" => "hash='not bytes'",
-                "hash_length" => "hash=zeroblob(33)",
-                "native_digest" => "native_digest=zeroblob(32)",
-                "metadata" => "metadata=x'7b'",
+                "hash_type" => "source_hash='not bytes'",
+                "hash_length" => "source_hash=zeroblob(33)",
+                "native_digest" => "source_native_digest=zeroblob(32)",
+                "metadata" => "source_metadata=x'7b'",
                 _ => unreachable!(),
             };
             connection
                 .execute(
-                    &format!("UPDATE request_source_nodes SET {mutation} WHERE native_id=?1"),
+                    &format!("UPDATE native_input_nodes SET {mutation} WHERE id=?1"),
                     [root],
                 )
                 .unwrap();
@@ -205,12 +205,12 @@ fn reused_request_source_rejects_invalid_existing_rows_without_rebuilding_them()
         {
             let connection = store.lock().unwrap();
             let unchanged: bool = connection.query_row(
-                "SELECT NOT (native_digest=?2 AND hash=?3 AND metadata=?4) FROM request_source_nodes WHERE native_id=?1",
+                "SELECT NOT (source_native_digest=?2 AND source_hash=?3 AND source_metadata=?4) FROM native_input_nodes WHERE id=?1",
                 params![root, original.0, original.1, original.2], |row| row.get(0),
             ).unwrap();
             assert!(unchanged, "{damage}: corrupt row must not be rebuilt");
             connection.execute(
-                "UPDATE request_source_nodes SET native_digest=?2,hash=?3,metadata=?4 WHERE native_id=?1",
+                "UPDATE native_input_nodes SET source_native_digest=?2,source_hash=?3,source_metadata=?4 WHERE id=?1",
                 params![root, original.0, original.1, original.2],
             ).unwrap();
         }
@@ -242,7 +242,7 @@ fn missing_request_source_row_is_captured_for_the_next_request() {
     {
         let connection = store.lock().unwrap();
         assert_eq!(connection.execute(
-            "DELETE FROM request_source_nodes WHERE native_id=(SELECT input_root FROM request_snapshots WHERE request_id=?1)",
+            "UPDATE native_input_nodes SET source_native_digest=NULL,source_hash=NULL,source_metadata=NULL WHERE id=(SELECT input_root FROM request_snapshots WHERE request_id=?1)",
             [first.request_id.as_str()],
         ).unwrap(), 1);
     }
@@ -308,9 +308,9 @@ fn prepared_request_children_still_detect_later_sibling_trigger_mutation() {
         {
             let connection = store.lock().unwrap();
             if native {
-                connection.execute_batch("CREATE TEMP TRIGGER rewrite_prior_native AFTER INSERT ON request_source_nodes WHEN EXISTS(SELECT 1 FROM request_source_nodes WHERE native_id<NEW.native_id) BEGIN UPDATE native_input_nodes SET digest=zeroblob(32) WHERE id=(SELECT min(native_id) FROM request_source_nodes); END;").unwrap();
+                connection.execute_batch("CREATE TEMP TRIGGER rewrite_prior_native AFTER UPDATE OF source_metadata ON native_input_nodes WHEN NEW.source_metadata IS NOT NULL AND EXISTS(SELECT 1 FROM native_input_nodes WHERE id<NEW.id) BEGIN UPDATE native_input_nodes SET digest=zeroblob(32) WHERE id=(SELECT min(id) FROM native_input_nodes); END;").unwrap();
             } else {
-                connection.execute_batch("CREATE TEMP TRIGGER rewrite_prior_source AFTER INSERT ON request_source_nodes BEGIN UPDATE request_source_nodes SET metadata=x'7b' WHERE native_id<NEW.native_id; END;").unwrap();
+                connection.execute_batch("CREATE TEMP TRIGGER rewrite_prior_source AFTER UPDATE OF source_metadata ON native_input_nodes WHEN NEW.source_metadata IS NOT NULL BEGIN UPDATE native_input_nodes SET source_metadata=x'7b' WHERE id<NEW.id; END;").unwrap();
             }
         }
         let snapshot = fragment_snapshot(&store, 1, 0);
@@ -328,7 +328,7 @@ fn prepared_request_children_still_detect_later_sibling_trigger_mutation() {
         let connection = store.lock().unwrap();
         for table in [
             "request_source_roots",
-            "request_source_nodes",
+            "native_input_nodes WHERE source_metadata IS NOT NULL",
             "request_source_pages",
         ] {
             assert_eq!(
@@ -380,9 +380,9 @@ fn request_root_proof_detects_scalar_trigger_changes_and_rolls_back_optional_sou
         {
             let connection = store.lock().unwrap();
             let target = if native {
-                "UPDATE native_input_nodes SET digest=zeroblob(32) WHERE id=(SELECT max(native_id) FROM request_source_nodes)"
+                "UPDATE native_input_nodes SET digest=zeroblob(32) WHERE id=(SELECT max(id) FROM native_input_nodes)"
             } else {
-                "UPDATE request_source_nodes SET metadata=x'7b' WHERE native_id=(SELECT max(native_id) FROM request_source_nodes)"
+                "UPDATE native_input_nodes SET source_metadata=x'7b' WHERE id=(SELECT max(id) FROM native_input_nodes)"
             };
             connection.execute_batch(&format!("CREATE TEMP TRIGGER rewrite_root_after_scalar AFTER INSERT ON request_source_scalars BEGIN {target}; END;")).unwrap();
         }
@@ -401,7 +401,7 @@ fn request_root_proof_detects_scalar_trigger_changes_and_rolls_back_optional_sou
         let connection = store.lock().unwrap();
         for table in [
             "request_source_roots",
-            "request_source_nodes",
+            "native_input_nodes WHERE source_metadata IS NOT NULL",
             "request_source_pages",
             "request_source_scalars",
         ] {
