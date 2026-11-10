@@ -21,6 +21,7 @@ use crate::runtime::identity::{
     AttemptId, CheckpointId, CompactionOperationId, ConversationId, EventId,
 };
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 
 fn invalid(message: impl Into<String>) -> ConversationStoreError {
     ConversationStoreError::InvalidReference(message.into())
@@ -1195,6 +1196,7 @@ type PendingTailCalls = std::collections::BTreeMap<
         crate::model::projected::CanonicalMessageRef,
         crate::runtime::identity::ToolCallId,
         crate::runtime::identity::ToolId,
+        Arc<Vec<[u8; 32]>>,
     ),
 >;
 fn append_history_message(
@@ -1221,6 +1223,7 @@ fn append_history_message(
     };
     match message {
         crate::message::types::MessageBlock::Assistant(assistant) => {
+            let origins = crate::model::occurrence::native_origins(&value.view());
             for (block, content) in assistant.content.iter().enumerate() {
                 if let crate::message::types::AssistantContentBlock::ToolCall(call) = content {
                     let block = u32::try_from(block)
@@ -1237,13 +1240,14 @@ fn append_history_message(
                             reference.clone(),
                             call.id.clone(),
                             call.tool_id.clone(),
+                            Arc::clone(&origins),
                         ),
                     );
                 }
             }
         }
         crate::message::types::MessageBlock::Tool(result) => {
-            let (call_message, call_block, assistant, wire_id, tool_id) = pending
+            let (call_message, call_block, assistant, wire_id, tool_id, native_origins) = pending
                 .remove(&result.occurrence)
                 .ok_or_else(|| invalid("orphan canonical Tail ToolResult"))?;
             if result.tool_call_id != wire_id || result.tool_id != tool_id {
@@ -1263,9 +1267,7 @@ fn append_history_message(
                     wire_id: Some(crate::model::occurrence::ProviderWireCorrelationId(
                         wire_id.to_string(),
                     )),
-                    native_origins: crate::model::occurrence::native_origins(
-                        &selected_messages[call_message as usize],
-                    ),
+                    native_origins,
                 },
             );
         }
@@ -1406,6 +1408,7 @@ fn compile_history(
             .map_err(|e| e.to_string())
         })
         .map_err(invalid)?;
+        let mut origins = std::collections::HashMap::new();
         for tool in &compiled.tools {
             let item = &checkpoint.candidate.items[tool.call.message.item_index as usize];
             let assistant = match &item.message {
@@ -1429,8 +1432,14 @@ fn compile_history(
                 wire_id: Some(crate::model::occurrence::ProviderWireCorrelationId(
                     tool.wire_id.to_string(),
                 )),
-                native_origins: crate::model::occurrence::native_origins(
-                    &compiled.messages[tool.call.message.item_index as usize],
+                native_origins: Arc::clone(
+                    origins
+                        .entry(tool.call.message.item_index)
+                        .or_insert_with(|| {
+                            crate::model::occurrence::native_origins(
+                                &compiled.messages[tool.call.message.item_index as usize].view(),
+                            )
+                        }),
                 ),
             });
         }
@@ -1466,6 +1475,9 @@ fn compile_history(
                 .map_err(|_| invalid("request occurrence overflow"))?;
             match &message {
                 crate::message::types::MessageBlock::Assistant(assistant) => {
+                    let origins = crate::model::occurrence::native_origins(
+                        &crate::model::projected::ModelMessageView::from(&message),
+                    );
                     for (block, content) in assistant.content.iter().enumerate() {
                         if let crate::message::types::AssistantContentBlock::ToolCall(call) =
                             content
@@ -1486,15 +1498,17 @@ fn compile_history(
                                     ),
                                     call.id.clone(),
                                     call.tool_id.clone(),
+                                    Arc::clone(&origins),
                                 ),
                             );
                         }
                     }
                 }
                 crate::message::types::MessageBlock::Tool(result) => {
-                    let (call_message, call_block, assistant, wire_id, tool_id) = pending_tail
-                        .remove(&result.occurrence)
-                        .ok_or_else(|| invalid("orphan canonical Tail ToolResult"))?;
+                    let (call_message, call_block, assistant, wire_id, tool_id, native_origins) =
+                        pending_tail
+                            .remove(&result.occurrence)
+                            .ok_or_else(|| invalid("orphan canonical Tail ToolResult"))?;
                     if result.tool_call_id != wire_id || result.tool_id != tool_id {
                         return Err(invalid(
                             "Tail ToolResult disagrees with physical call occurrence",
@@ -1511,9 +1525,7 @@ fn compile_history(
                         wire_id: Some(crate::model::occurrence::ProviderWireCorrelationId(
                             wire_id.to_string(),
                         )),
-                        native_origins: crate::model::occurrence::native_origins(
-                            &messages[call_message as usize],
-                        ),
+                        native_origins,
                     });
                 }
                 crate::message::types::MessageBlock::User(_) => {}

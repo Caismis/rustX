@@ -12,13 +12,16 @@ pub struct HistoricalToolAssociation {
     pub result_message: u32,
     pub source: CanonicalCallSource,
     pub wire_id: Option<ProviderWireCorrelationId>,
-    pub native_origins: Vec<[u8; 32]>,
+    /// One shared set for the complete assistant; stored separately from each fact.
+    #[serde(skip)]
+    pub native_origins: Arc<Vec<[u8; 32]>>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AssociationRoot {
     pub id: u64,
     pub digest: [u8; 32],
     pub count: u32,
+    pub private_bytes: u64,
 }
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StoredAssociation {
@@ -31,6 +34,7 @@ pub(crate) struct AssociationNode {
     pub parent: Option<Arc<Self>>,
     pub value: HistoricalToolAssociation,
     pub count: u32,
+    pub first_origin_set: bool,
     pub stored: Mutex<Option<StoredAssociation>>,
 }
 // A retained old cut may own the last reference to a long suffix. Release it
@@ -55,7 +59,8 @@ struct NativeIds {
 pub struct ToolAssociationHistory {
     pub(crate) head: Option<Arc<AssociationNode>>,
     values: imbl::Vector<Arc<AssociationNode>>,
-    native: imbl::HashMap<[u8; 32], NativeIds>,
+    native: imbl::HashMap<[u8; 32], Arc<NativeIds>>,
+    origins: imbl::HashMap<u32, Arc<Vec<[u8; 32]>>>,
     empty_id: bool,
     pub(super) encoded_bytes_upper: usize,
 }
@@ -94,7 +99,16 @@ impl ToolAssociationHistory {
     /// # Panics
     /// Panics if the association count exceeds `u32::MAX`. Native selections
     /// admit at most 8192 occurrences.
-    pub fn push_back(&mut self, value: HistoricalToolAssociation) {
+    pub fn push_back(&mut self, mut value: HistoricalToolAssociation) {
+        let first_origin_set = !self.origins.contains_key(&value.call_message);
+        if let Some(origins) = self.origins.get(&value.call_message) {
+            if Arc::ptr_eq(origins, &value.native_origins) || origins == &value.native_origins {
+                value.native_origins = Arc::clone(origins);
+            }
+        } else {
+            self.origins
+                .insert(value.call_message, Arc::clone(&value.native_origins));
+        }
         // Wire labels contain at most 64 ASCII bytes. Reserve ten decimal
         // digits for either shifted coordinate and bind the request ID later.
         let maximum = super::ActualRequestToolAssociation {
@@ -120,21 +134,39 @@ impl ToolAssociationHistory {
         );
         let id = value.wire_id.as_ref().map_or("", |id| id.0.as_str());
         self.empty_id |= id.is_empty();
-        for origin in &value.native_origins {
-            let key = *origin;
-            let mut native = self.native.get(&key).cloned().unwrap_or_default();
-            native.invalid |= !valid_native_id(id) || native.ids.contains(id);
-            native.ids.insert(id.to_owned());
-            self.native.insert(key, native);
+        // Origins with the same prior membership share the updated ID summary.
+        // A large origin set must not allocate one copy of every wire ID per origin.
+        let mut updated = std::collections::HashMap::new();
+        for origin in value.native_origins.iter() {
+            let previous = self.native.get(origin);
+            let key = previous.map_or(std::ptr::null(), Arc::as_ptr);
+            let native = updated.entry(key).or_insert_with(|| {
+                let mut native = previous.map_or_else(NativeIds::default, |ids| (**ids).clone());
+                native.invalid |= !valid_native_id(id) || native.ids.contains(id);
+                native.ids.insert(id.to_owned());
+                // Keep the previous Arc alive while its address is a map key.
+                (previous.cloned(), Arc::new(native))
+            });
+            self.native.insert(*origin, Arc::clone(&native.1));
         }
         let node = Arc::new(AssociationNode {
             parent: self.head.clone(),
             value,
+            first_origin_set,
             count: u32::try_from(self.len() + 1).expect("bounded Tool history"),
             stored: Mutex::new(None),
         });
         self.values.push_back(node.clone());
         self.head = Some(node);
+    }
+    #[cfg(test)]
+    pub(crate) fn native_summary_entries(&self) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        self.native
+            .values()
+            .filter(|ids| seen.insert(Arc::as_ptr(ids)))
+            .map(|ids| ids.ids.len())
+            .sum()
     }
     pub(crate) fn validate_wire_policy(&self, policy: &WirePolicy) -> Result<(), String> {
         if policy.stored_boundary.is_some() {
@@ -175,12 +207,15 @@ fn valid_native_id(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
 }
-pub(crate) fn native_origins(message: &crate::model::ModelInputMessage) -> Vec<[u8; 32]> {
-    let crate::model::projected::ModelMessageView::Assistant(content) = message.view() else {
-        return Vec::new();
+pub(crate) fn native_origins(
+    message: &crate::model::projected::ModelMessageView<'_>,
+) -> Arc<Vec<[u8; 32]>> {
+    let crate::model::projected::ModelMessageView::Assistant(content) = message else {
+        return Arc::default();
     };
     let mut origins = Vec::new();
-    for block in content {
+    let mut seen = std::collections::HashSet::new();
+    for block in *content {
         if let crate::message::types::AssistantContentBlock::Reasoning(reasoning) = block
             && matches!(
                 reasoning.provider_state,
@@ -191,12 +226,12 @@ pub(crate) fn native_origins(message: &crate::model::ModelInputMessage) -> Vec<[
                 )
             )
             && let Some(origin) = &reasoning.origin
-            && !origins.contains(&origin_key(origin))
+            && seen.insert(origin_key(origin))
         {
             origins.push(origin_key(origin));
         }
     }
-    origins
+    Arc::new(origins)
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct WirePolicy {

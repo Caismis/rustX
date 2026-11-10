@@ -334,14 +334,20 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
             &["request_id", "snapshot_json"],
         ),
         (
+            "tool_association_origin_sets",
+            &["id", "digest", "origins_json"],
+        ),
+        (
             "tool_association_nodes",
             &[
                 "id",
                 "parent_id",
                 "parent_digest",
+                "parent_private_bytes",
                 "digest",
                 "count",
                 "association_json",
+                "private_bytes",
             ],
         ),
         (
@@ -569,6 +575,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
         ("request_snapshots", "request_id"),
         ("request_snapshot_payloads", "request_id"),
         ("tool_association_nodes", "digest"),
+        ("tool_association_origin_sets", "digest"),
         ("request_configurations", "digest"),
         ("projection_checkpoints", "checkpoint_id"),
         ("compaction_operations", "operation_id"),

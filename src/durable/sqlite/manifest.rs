@@ -457,6 +457,7 @@ impl MutationColumns {
             (
                 "native_input_nodes"
                 | "tool_association_nodes"
+                | "tool_association_origin_sets"
                 | "projection_head"
                 | "projection_checkpoints",
                 PreUpdateCase::Insert(_),
@@ -468,6 +469,7 @@ impl MutationColumns {
             | (
                 "native_input_nodes"
                 | "tool_association_nodes"
+                | "tool_association_origin_sets"
                 | "projection_head"
                 | "projection_checkpoints",
                 _,
