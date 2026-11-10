@@ -13,15 +13,18 @@ export function ResourceGroup({ label, count, view, empty, children }: {
   </section>;
 }
 
-export function ResourceCard({ name, label, icon, description, diagnostic, onOpen, availability, actions, menu }: {
-  name: string; label?: string; icon: ReactNode; description: string; diagnostic?: string;
+export function ResourceCard({ name, subtitle, label, icon, description, diagnostic, onOpen, availability, actions, menu }: {
+  name: string; subtitle?: string; label?: string; icon: ReactNode; description: string; diagnostic?: string;
   onOpen: () => void; availability?: ReactNode; actions?: ReactNode; menu?: ReactNode;
 }) {
   return <li aria-label={name} className={clsx(catalog.card, css.resourceCard, diagnostic && catalog.invalidCard)}>
     <div className={clsx(catalog.cardHead, css.cardHeading)}>
       <button type="button" className={catalog.cardOpen} aria-label={label ?? name} onClick={onOpen}>
         <span className={catalog.fileTile}>{icon}</span>
-        <span className={catalog.cardName}><span className={catalog.cardTitle}>{name}</span></span>
+        <span className={catalog.cardName}>
+          <span className={catalog.cardTitle}>{name}</span>
+          {subtitle && <span className={catalog.cardId}>{subtitle}</span>}
+        </span>
       </button>
       {availability && <div className={catalog.enable}>{availability}</div>}
       {menu}

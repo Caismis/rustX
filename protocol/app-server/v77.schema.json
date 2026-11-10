@@ -10218,6 +10218,16 @@
         },
         "disable_model_invocation": {
           "type": "boolean"
+        },
+        "display": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillDisplay"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
@@ -10313,6 +10323,119 @@
       "required": [
         "source",
         "location"
+      ]
+    },
+    "SkillDisplay": {
+      "type": "object",
+      "properties": {
+        "authored": {
+          "$ref": "#/$defs/SkillDisplayWrite"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillDisplayIcon"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "description": "An exact write fence when this package has an editable sidecar.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "authored"
+      ]
+    },
+    "SkillDisplayWrite": {
+      "type": "object",
+      "properties": {
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "short_description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon_small": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon_large": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SkillDisplayIcon": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "media_type": {
+              "$ref": "#/$defs/SkillIconMediaType"
+            },
+            "data_base64": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "asset"
+            }
+          },
+          "required": [
+            "kind",
+            "media_type",
+            "data_base64"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "iconify"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ]
+        }
+      ]
+    },
+    "SkillIconMediaType": {
+      "type": "string",
+      "enum": [
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/svg+xml"
       ]
     },
     "SkillDiagnostic": {
@@ -38363,6 +38486,28 @@
           "required": [
             "kind",
             "name"
+          ]
+        },
+        {
+          "description": "Edit the named Skill's presentation sidecar in its owning source.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "authored": {
+              "$ref": "#/$defs/SkillDisplayWrite"
+            },
+            "kind": {
+              "type": "string",
+              "const": "skill_display"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name",
+            "authored"
           ]
         },
         {

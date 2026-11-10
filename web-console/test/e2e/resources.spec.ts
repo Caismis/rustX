@@ -26,6 +26,81 @@ async function checkCatalogView(scope: Locator, item: Locator) {
   expect(await scope.locator(':scope > div').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
 }
 
+test('skill cards render and edit package display information from the workspace', async ({page}) => {
+  const f = await startDogfood();
+  try {
+    const global = join(f.directory, 'home/rustx/.agents/skills/pdf-guide');
+    const local = join(f.workspaceA, '.agents/skills/review-guide');
+    const instructions = (name: string) => `---\nname: ${name}\ndescription: Full runtime description.\n---\nOriginal instructions.\n`;
+    for (const [directory, name] of [[global, 'pdf-guide'], [local, 'review-guide']]) {
+      mkdirSync(directory, {recursive: true});
+      writeFileSync(join(directory, 'SKILL.md'), instructions(name));
+    }
+    mkdirSync(join(global, 'agents'));
+    mkdirSync(join(global, 'assets'));
+    writeFileSync(join(global, 'assets/pdf.svg'), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="red"/></svg>');
+    const globalMetadata = join(global, 'agents/openai.yaml');
+    const localMetadata = join(local, 'agents/openai.yaml');
+    writeFileSync(globalMetadata, [
+      'interface:', '  display_name: PDF Toolkit', '  short_description: Extract PDF content',
+      '  icon_small: ./assets/pdf.svg', '  icon: lucide:file-text', '  brand_color: "#FF0000"',
+      'policy:', '  allow_implicit_invocation: false', '',
+    ].join('\n'));
+
+    await page.setViewportSize({width: 390, height: 844});
+    await routeWorkspaceHost(page, f);
+    await page.goto('/');
+    await connectRemote(page, f.endpoint, f.token);
+    const skills = await openResourceModule(page, 'skills', 'Workspace A');
+    await skills.getByRole('searchbox').fill('Extract PDF');
+    const pdf = skills.getByRole('listitem', {name: 'PDF Toolkit', exact: true});
+    await expect(pdf).toContainText('Extract PDF content');
+    await expect(pdf).toContainText('pdf-guide');
+    await expect(pdf.locator('img')).toHaveAttribute('src', /^data:image\/svg\+xml;base64,/);
+    await expect.poll(() => pdf.locator('img').evaluate(img => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+    await skills.getByRole('searchbox').clear();
+    const edit = async (name: string) => {
+      await skills.getByRole('button', {name: `Actions for ${name}`, exact: true}).click();
+      await page.getByRole('menuitem', {name: 'Edit display information', exact: true}).click();
+      return page.getByRole('dialog', {name: 'Edit display information', exact: true});
+    };
+    const globalEditor = await edit('PDF Toolkit');
+    await expect(globalEditor.getByLabel('Small icon path')).toHaveValue('./assets/pdf.svg');
+    await globalEditor.getByLabel('Short description').fill('Review PDF pages');
+    await globalEditor.getByRole('button', {name: 'Save', exact: true}).click();
+    await expect(pdf).toContainText('Review PDF pages');
+    expect(readFileSync(globalMetadata, 'utf8')).toContain('brand_color:');
+    expect(readFileSync(globalMetadata, 'utf8')).toContain('allow_implicit_invocation: false');
+    expect(existsSync(localMetadata)).toBe(false);
+
+    const staleEditor = await edit('PDF Toolkit');
+    const externalEdit = readFileSync(globalMetadata, 'utf8').replace('Review PDF pages', 'Inspect a PDF');
+    writeFileSync(globalMetadata, externalEdit);
+    await staleEditor.getByLabel('Short description').fill('Stale description');
+    await staleEditor.getByRole('button', {name: 'Save', exact: true}).click();
+    await expect(staleEditor.getByRole('alert')).toBeVisible();
+    expect(readFileSync(globalMetadata, 'utf8')).toBe(externalEdit);
+    await staleEditor.getByRole('button', {name: 'Cancel', exact: true}).click();
+    await expect(pdf).toContainText('Inspect a PDF');
+
+    const workspaceEditor = await edit('review-guide');
+    await workspaceEditor.getByLabel('Display name').fill('Review Toolkit');
+    await workspaceEditor.getByLabel('Short description').fill('Review workspace changes');
+    await workspaceEditor.getByRole('button', {name: 'Choose icon', exact: true}).click();
+    await workspaceEditor.getByRole('searchbox').fill('book-open');
+    await workspaceEditor.getByRole('option', {name: 'book-open', exact: true}).click();
+    await captureEvidence(workspaceEditor, 'skill-display-editor-mobile');
+    await workspaceEditor.getByRole('button', {name: 'Save', exact: true}).click();
+    const review = skills.getByRole('listitem', {name: 'Review Toolkit', exact: true});
+    await expect(review).toContainText('Review workspace changes');
+    await expect(review.locator('svg.iconify')).toBeVisible();
+    expect(readFileSync(localMetadata, 'utf8')).toContain('icon: lucide:book-open');
+    expect(readFileSync(join(local, 'SKILL.md'), 'utf8')).toBe(instructions('review-guide'));
+    await review.getByRole('button', {name: 'Review Toolkit', exact: true}).click();
+    await expect(page.getByRole('dialog', {name: 'Review Toolkit', exact: true})).toContainText('Original instructions.');
+  } finally { await f.stop(false); }
+});
+
 for(const width of [1440,390]) test(`independent resources have exact global and workspace toggles, and read-only skills at ${width}px`,async({page})=>{
  const f=await startDogfood();
  const wire=await wireProbe(page);

@@ -366,6 +366,11 @@ pub enum SourceMutation<D = Box<crate::workflow_file::WorkflowFileDocument>> {
         name: crate::runtime::subagent::SubagentName,
         authored: Option<super::super::config::NamedAgentProfileDocument>,
     },
+    /// Edit the named Skill's presentation sidecar in its owning source.
+    SkillDisplay {
+        name: String,
+        authored: super::super::skill_management::SkillDisplayWrite,
+    },
     /// Copy or move a resource between User and the addressed Workspace.
     /// The expected revision belongs to the source resource document.
     ResourceTransfer {
@@ -1383,6 +1388,9 @@ impl UserConfigManager {
             SourceMutation::Workflow { id, .. } => {
                 super::super::workflow_authoring::file_path(self, target, id)
             }
+            SourceMutation::SkillDisplay { name, authored } => {
+                return self.write_skill_display(target, name, expected, authored.clone());
+            }
             SourceMutation::ResourceTransfer {
                 from,
                 operation,
@@ -1512,7 +1520,9 @@ impl UserConfigManager {
                         scope,
                     )?
                 }
-                SourceMutation::ResourceTransfer { .. } => unreachable!(),
+                SourceMutation::ResourceTransfer { .. } | SourceMutation::SkillDisplay { .. } => {
+                    unreachable!()
+                }
             };
             committed_revision = revision(candidate.as_deref());
             self.publish_locked(
@@ -1574,7 +1584,7 @@ impl UserConfigManager {
             reason = "the owner carries the test I/O fault hooks"
         )
     )]
-    pub(super) fn publish_locked(
+    pub(in crate::local_runtime) fn publish_locked(
         &self,
         source: &SourceDirectory,
         name: &std::ffi::OsStr,

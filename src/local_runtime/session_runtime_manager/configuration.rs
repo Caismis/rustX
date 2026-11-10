@@ -791,6 +791,7 @@ impl SessionRuntimeManager {
             use crate::runtime::resources::SourceScope;
             target.validate().map_err(SourceSettingsError::Source)?;
             let mut application = owner.applications.lock();
+            let display_only = matches!(&mutation, SourceMutation::SkillDisplay { .. });
             let transfer = match &mutation {
                 SourceMutation::ResourceTransfer {
                     from, operation, ..
@@ -817,11 +818,12 @@ impl SessionRuntimeManager {
             let result = owner
                 .configuration
                 .write_source_settings(&target, &expected, mutation);
-            if result.is_ok()
-                || matches!(
-                    &result,
-                    Err(super::super::configuration::settings::SettingsError::Committed)
-                )
+            if !display_only
+                && (result.is_ok()
+                    || matches!(
+                        &result,
+                        Err(super::super::configuration::settings::SettingsError::Committed)
+                    ))
             {
                 if let Some((from, operation)) = transfer {
                     if from == SourceScope::User || operation == TransferOperation::Move {

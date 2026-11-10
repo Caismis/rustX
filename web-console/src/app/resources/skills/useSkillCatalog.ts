@@ -2,9 +2,8 @@ import {useEffect,useState} from 'react';
 import type {SkillDescriptor,SourceScope,SourceSettings} from '../../../../../protocol/app-server/v77';
 import type {AppServerClient} from '../../../client/app-server';
 
-/** Native discovery, including descriptions, is independently revisioned and
- * paginated. Neither the browser nor a Session scans or authors skill files. */
-export function useSkillCatalog(client:AppServerClient|undefined,source:SourceSettings,enabled:boolean,scope:SourceScope=source.target.kind) {
+/** Native discovery and display information share a paginated catalog revision. */
+export function useSkillCatalog(client:AppServerClient|undefined,source:SourceSettings,enabled:boolean,scope:SourceScope=source.target.kind,refresh=0) {
  const [result,setResult]=useState<{source:SourceSettings;scope:SourceScope;skills:SkillDescriptor[];error?:string}>();
  useEffect(()=>{
   if(!enabled||!client)return;
@@ -25,6 +24,6 @@ export function useSkillCatalog(client:AppServerClient|undefined,source:SourceSe
    if(current())setResult({source,scope,skills});
   })().catch(error=>{if(current())setResult({source,scope,skills:[],error:String(error)});});
   return()=>{alive=false;};
- },[client,source,enabled,scope]);
+ },[client,source,enabled,scope,refresh]);
  return result?.source===source&&result.scope===scope?result:undefined;
 }

@@ -28,8 +28,32 @@ Invalid rustX dependency declarations are ignored with a warning.
 and effective binding. It has no resource file list or materialization root.
 `SkillSnapshot` publishes immutable catalog metadata, bindings, provenance and
 diagnostics. `all`, `exact` and `none` remain visibility choices, never filesystem
-ACLs. Bodies and resource files are read or executed only by normal Tools, at the
-actual host paths and under their existing authorization rules.
+ACLs. During agent execution, normal Tools read or execute bodies and resource
+files at their host paths under the existing authorization rules.
+
+## Skill display information
+
+Add an optional `agents/openai.yaml` inside a skill directory to customize its
+card in the Web UI.
+
+```yaml
+interface:
+  display_name: PDF Toolkit
+  short_description: Extract and review PDF content
+  icon_small: ./assets/pdf.svg
+  icon: lucide:file-text
+```
+
+Images use paths relative to the skill directory under `assets/`. The card
+tries `icon_small`, then `icon_large`, then the RustX `icon` field with a
+bundled Iconify Lucide icon. Images can be SVG, PNG, JPEG, or WebP up to 32 KiB.
+When display fields are missing, the card uses the skill's name and description
+from `SKILL.md` and the default icon.
+
+For skills installed in the global or workspace skill directory, open the card
+menu and choose **Edit display information**. Saving updates
+`agents/openai.yaml` and preserves its other fields. The skill's identifier,
+instructions, and runtime description come from `SKILL.md`.
 
 ## Version and configuration semantics
 

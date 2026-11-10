@@ -7,6 +7,10 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+mod display;
+pub use display::SkillDisplayWrite;
+use display::{SkillDisplay, read_display};
+
 const SKILL_PAGE_DATA_BYTES: usize = 131_072;
 const SKILL_DESCRIPTION_PREVIEW_BYTES: usize = 4096;
 
@@ -17,6 +21,8 @@ pub struct SkillDescriptor {
     pub provenance: SkillProvenance,
     pub metadata_revision: String,
     pub disable_model_invocation: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<SkillDisplay>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -39,6 +45,7 @@ pub struct SkillContent {
 fn descriptor(
     package: &crate::skills::SkillPackage,
     provenance: &SkillProvenance,
+    collection: &Path,
 ) -> Result<Option<SkillDescriptor>, SettingsError> {
     let mut skill = SkillDescriptor {
         catalog: SkillCatalogEntry {
@@ -49,6 +56,7 @@ fn descriptor(
         provenance: provenance.clone(),
         disable_model_invocation: package.disable_model_invocation(),
         metadata_revision: digest(&package.definition()).map_err(|_| SettingsError::Io)?,
+        display: read_display(package, collection),
     };
     // Leave room for the surrounding array so every projected descriptor can
     // be paged on its own. Only the WebUI preview is shortened.
@@ -65,8 +73,25 @@ fn descriptor(
         }
     }
     skill.provenance.shadowed.clear();
+    if crate::bounded_file::json_fits(&skill, limit) {
+        return Ok(Some(skill));
+    }
+    skill.display = None;
     Ok(crate::bounded_file::json_fits(&skill, limit).then_some(skill))
 }
+fn skill_collection(
+    configuration: &super::configuration::UserConfigManager,
+    target: &SourceTarget,
+    source: crate::skills::SkillSource,
+) -> std::path::PathBuf {
+    configuration
+        .resource_root(match source {
+            crate::skills::SkillSource::User => &SourceTarget::User,
+            crate::skills::SkillSource::Workspace => target,
+        })
+        .join(crate::skills::SKILLS_ROOT)
+}
+
 impl SessionRuntimeManager {
     pub(crate) async fn skill_page(
         &self,
@@ -97,7 +122,8 @@ impl SessionRuntimeManager {
                     .iter()
                     .find(|entry| entry.name == package.name())
                     .ok_or(SettingsError::Invalid)?;
-                match descriptor(package, provenance)? {
+                let collection = skill_collection(&configuration, &target, package.source());
+                match descriptor(package, provenance, &collection)? {
                     Some(descriptor) => descriptors.push(descriptor),
                     None => all_diagnostics.push(SkillDiagnostic::PackageWarning {
                         source: provenance.source,
@@ -184,7 +210,9 @@ impl SessionRuntimeManager {
                 .iter()
                 .find(|provenance| provenance.name == name)
                 .ok_or(SettingsError::Invalid)?;
-            let skill = descriptor(package, provenance)?.ok_or(SettingsError::Invalid)?;
+            let collection = skill_collection(&configuration, &target, package.source());
+            let skill =
+                descriptor(package, provenance, &collection)?.ok_or(SettingsError::Invalid)?;
             let (data_base64, next_offset, revision) = match kind {
                 SkillContentKind::Instructions => {
                     let path = package.instruction_source();

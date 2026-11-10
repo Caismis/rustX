@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/react-dom';
 import clsx from 'clsx';
-import { Icon, addCollection, type IconifyJSON } from '@iconify/react/offline';
+import { Icon } from '@iconify/react/offline';
+import { BundledIcon, hasBundledIcon, useBundledIcons } from '../../../presentation/primitives/BundledIcon';
 import { useTranslation } from '../../../locale/react';
 import { ICON_CATEGORIES, type IconCategory } from './iconCategories';
 import { IconWorkflow } from './icons';
@@ -10,42 +11,17 @@ import css from './WorkflowIcon.module.css';
 /** The icon a Workflow shows when its display names none. */
 export const DEFAULT_WORKFLOW_ICON = 'lucide:workflow';
 
-// The Offline build never asks the Iconify API: only bundled sets render.
-let lucide: Promise<IconifyJSON> | undefined;
-function loadIcons() {
-  return lucide ??= import('@iconify-json/lucide/icons.json').then(module => {
-    const set = module.default as IconifyJSON;
-    addCollection(set);
-    return set;
-  });
-}
-
-function useIconSet() {
-  const [set, setSet] = useState<IconifyJSON>();
-  useEffect(() => {
-    let live = true;
-    void loadIcons().then(value => { if (live) setSet(value); });
-    return () => { live = false; };
-  }, []);
-  return set;
-}
-
-function known(set: IconifyJSON | undefined, icon: string) {
-  const [prefix, name] = icon.split(':');
-  return !!set && prefix === set.prefix && !!name && (name in set.icons || name in (set.aliases ?? {}));
-}
-
 /** A Workflow's chosen icon; the Workflow glyph until a bundled set has it. */
 export function WorkflowIcon({ icon, size = 18, className }: { icon?: string | null; size?: number; className?: string }) {
-  const set = useIconSet();
-  return known(set, icon ?? DEFAULT_WORKFLOW_ICON)
-    ? <Icon icon={icon ?? DEFAULT_WORKFLOW_ICON} width={size} height={size} className={className} aria-hidden="true" />
-    : <IconWorkflow size={size} className={className} />;
+  return <BundledIcon name={icon ?? DEFAULT_WORKFLOW_ICON} size={size} className={className}
+    fallback={<IconWorkflow size={size} className={className} />} />;
 }
 
 /** The chosen icon as a tile; clicking it floats a searchable grid over the
  * bundled set beside it. Choosing, Escape or a press outside closes it. */
-export function IconPicker({ value, onChange, disabled, className }: { value: string; onChange: (icon: string) => void; disabled?: boolean; className?: string }) {
+export function IconPicker({ value, onChange, disabled, className, preview }: {
+  value: string; onChange: (icon: string) => void; disabled?: boolean; className?: string; preview?: ReactNode;
+}) {
   const tx = useTranslation();
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -68,7 +44,7 @@ export function IconPicker({ value, onChange, disabled, className }: { value: st
     onKeyDown={event => { if (open && event.key === 'Escape') { event.preventDefault(); setOpen(false); } }}>
     <button ref={refs.setReference} type="button" className={clsx(css.tile, className)} aria-haspopup="listbox" aria-expanded={open}
       aria-label={tx('workflows:icon.choose')} title={tx('workflows:icon.choose')} disabled={disabled} onClick={() => setOpen(value => !value)}>
-      <WorkflowIcon icon={value} size={22} />
+      {preview ?? <WorkflowIcon icon={value} size={22} />}
     </button>
     {open && <div ref={refs.setFloating} style={floatingStyles} className={css.panel}>
       <IconGrid value={value} onChange={icon => { onChange(icon); setOpen(false); }} />
@@ -78,7 +54,7 @@ export function IconPicker({ value, onChange, disabled, className }: { value: st
 
 function IconGrid({ value, onChange }: { value: string; onChange: (icon: string) => void }) {
   const tx = useTranslation();
-  const set = useIconSet();
+  const set = useBundledIcons();
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<IconCategory | 'all'>('common');
   const search = query.trim().toLowerCase().replace(/\s+/g, '-');
@@ -90,7 +66,7 @@ function IconGrid({ value, onChange }: { value: string; onChange: (icon: string)
     if (search) return all.filter(name => name.includes(search));
     if (category === 'all') return all;
     const current = category === 'common' && value.startsWith(`${set.prefix}:`) ? [value.slice(set.prefix.length + 1)] : [];
-    return [...new Set([...current, ...ICON_CATEGORIES[category]])].filter(name => known(set, `${set.prefix}:${name}`));
+    return [...new Set([...current, ...ICON_CATEGORIES[category]])].filter(name => hasBundledIcon(set, `${set.prefix}:${name}`));
   }, [set, search, category, value]);
   const chips: (IconCategory | 'all')[] = ['all', ...Object.keys(ICON_CATEGORIES) as IconCategory[]];
   return <>

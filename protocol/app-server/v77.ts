@@ -2217,6 +2217,11 @@ export type SourceMutation =
       kind: 'agent';
     }
   | {
+      name: string;
+      authored: SkillDisplayWrite;
+      kind: 'skill_display';
+    }
+  | {
       from: SourceScope;
       operation: TransferOperation;
       resource: ResourceTransfer;
@@ -3097,6 +3102,25 @@ export type MethodResult =
       projection: BoundedSessionSettings;
       type: 'settings';
     };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillDisplayIcon".
+ */
+export type SkillDisplayIcon =
+  | {
+      media_type: SkillIconMediaType;
+      data_base64: string;
+      kind: 'asset';
+    }
+  | {
+      name: string;
+      kind: 'iconify';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillIconMediaType".
+ */
+export type SkillIconMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/svg+xml';
 /**
  * One typed generation-scoped Skill discovery fact.
  *
@@ -10341,6 +10365,17 @@ export interface GoalExtensionDocument1 {
   enabled?: boolean;
 }
 /**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillDisplayWrite".
+ */
+export interface SkillDisplayWrite {
+  display_name?: string | null;
+  short_description?: string | null;
+  icon_small?: string | null;
+  icon_large?: string | null;
+  icon?: string | null;
+}
+/**
  * How people see the Workflow in the library and editor. Never part of the
  * program: models only read the definition's own `description`.
  *
@@ -10404,6 +10439,7 @@ export interface SkillDescriptor {
   provenance: SkillProvenance;
   metadata_revision: string;
   disable_model_invocation: boolean;
+  display?: SkillDisplay | null;
 }
 /**
  * One model-visible Skill catalog entry: standard metadata plus the host
@@ -10471,6 +10507,18 @@ export interface ShadowedSkill {
    * The shadowed package's `SKILL.md` location.
    */
   location: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillDisplay".
+ */
+export interface SkillDisplay {
+  authored: SkillDisplayWrite;
+  icon?: SkillDisplayIcon | null;
+  /**
+   * An exact write fence when this package has an editable sidecar.
+   */
+  revision?: string | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema

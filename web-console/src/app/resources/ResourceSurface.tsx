@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
-import type { SourceScope, SourceSettings } from '../../../../protocol/app-server/v77';
+import type { SkillDescriptor, SkillDisplayWrite, SourceScope, SourceSettings } from '../../../../protocol/app-server/v77';
 import { bindResourceTransfer } from '../../workspaces/resource-transfer';
 import type { AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
+import { sameEndpoint } from '../../workspaces/endpoint';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
 import { useTranslation } from '../../locale/react';
 import { CatalogSearch, CatalogViewSwitch, type CatalogView } from '../../presentation/catalog/CatalogControls';
@@ -162,6 +163,32 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
     actor.send({ type: 'REFRESH' });
     if (showingWorkspace && module !== 'skills') globalActor.send({ type: 'REFRESH' });
   };
+  const bindSkillDisplayWrite = (skill: SkillDescriptor) => {
+    const expected_revision = skill.display?.revision;
+    if (!expected_revision || !editable) return;
+    const { endpoint, authorityRevision } = client.getSnapshot();
+    const hostAuthority = authority.capture();
+    return async (authored: SkillDisplayWrite) => {
+      const current = () => {
+        const snapshot = client.getSnapshot();
+        return snapshot.endpoint === endpoint && snapshot.authorityRevision === authorityRevision && snapshot.connection === 'connected';
+      };
+      const unavailable = () => new Error(tx('resources:scope.unavailable'));
+      if (!current()) throw unavailable();
+      const mutation = { kind: 'skill_display' as const, name: skill.catalog.name, authored };
+      if (skill.provenance.source === 'user') {
+        await client.request({ method: 'configuration/sourceWrite', params: { target: { kind: 'user' }, expected_revision, mutation } },
+          'sources_written', undefined, current);
+        return;
+      }
+      if (!workspaceId || !endpoint || !directory || !hostAuthority?.current()
+        || !sameEndpoint(hostAuthority.scope.endpoint, endpoint) || !host?.configureWorkspace) throw unavailable();
+      const result = await host.configureWorkspace(workspaceId, endpoint, {
+        kind: 'write', expected_directory: directory, expected_revision, mutation,
+      });
+      if (result.kind !== 'write') throw unavailable();
+    };
+  };
   const resourceNames = (shown: SourceSettings | undefined, owner: SourceScope) => module === 'subagents'
     ? shown?.agents.filter(agent => agent.scope === owner).map(agent => agent.name) ?? []
     : Object.keys((owner === 'user' ? shown?.user_mcp : shown?.workspace_mcp)?.authored ?? {});
@@ -267,7 +294,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
             {!source ? <p className={catalogCss.state} role="status">{tx('resources:loading')}</p> : <SettingsActorContext value={actor}><SourceContext value={source}>
               <fieldset className={css.editor} disabled={!editable} key={lifetime}>
                 {module === 'skills' ? <ResourceBrowser client={client} source={source} scope={scope} revision={revision}
-                  query={query} view={view} focus={resourceFocus} onFocus={setResourceFocus} /> : renderResources(source, scope)}
+                  query={query} view={view} focus={resourceFocus} onFocus={setResourceFocus} bindDisplayWrite={bindSkillDisplayWrite} /> : renderResources(source, scope)}
               </fieldset>
             </SourceContext></SettingsActorContext>}
           </>}
