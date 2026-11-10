@@ -30,16 +30,11 @@ const AUXILIARY_TABLES: [&str; 4] = [
     "auxiliary_audit_facts",
 ];
 
-const MANDATORY_AUXILIARY_INDEXES: [&str; 13] = [
+const MANDATORY_AUXILIARY_INDEXES: [&str; 8] = [
     "auxiliary_requests_open_idx",
-    "auxiliary_requests_request_idx",
     "auxiliary_requests_terminal_idx",
     "auxiliary_audit_offset_idx",
     "auxiliary_audit_call_idx",
-    "auxiliary_audit_request_idx",
-    "auxiliary_audit_sequence_idx",
-    "auxiliary_calls_started_idx",
-    "auxiliary_calls_settled_idx",
     "request_owners_source_idx",
     "events_auxiliary_call_id_kind_idx",
     "events_auxiliary_fact_type_idx",
@@ -288,7 +283,7 @@ fn table_rows(store: &SqliteConversationStore) -> [u64; 4] {
     AUXILIARY_TABLES.map(|table| query_u64(&connection, &format!("SELECT count(*) FROM {table}")))
 }
 
-fn mandatory_index_rows(store: &SqliteConversationStore) -> [u64; 13] {
+fn mandatory_index_rows(store: &SqliteConversationStore) -> [u64; 8] {
     let connection = store.lock().unwrap();
     MANDATORY_AUXILIARY_INDEXES.map(|index| {
         let (table, sql): (String, String) = connection
@@ -306,17 +301,12 @@ fn mandatory_index_rows(store: &SqliteConversationStore) -> [u64; 13] {
     })
 }
 
-fn expected_index_rows(calls: u64, facts: u64) -> [u64; 13] {
+fn expected_index_rows(calls: u64, facts: u64) -> [u64; 8] {
     [
         0,         // Every measured request is closed.
-        calls,     // auxiliary_requests_request_idx
         calls,     // auxiliary_requests_terminal_idx
         facts,     // auxiliary_audit_offset_idx
         facts,     // auxiliary_audit_call_idx
-        calls * 2, // auxiliary_audit_request_idx: start and settlement
-        facts,     // auxiliary_audit_sequence_idx
-        calls,     // auxiliary_calls_started_idx
-        calls,     // auxiliary_calls_settled_idx
         calls,     // request_owners_source_idx
         calls * 2, // Call start and settlement carry the top-level call ID.
         facts,     // events_auxiliary_fact_type_idx
@@ -342,7 +332,7 @@ fn aux_01_representative_storage_growth_of_completed_one_request_calls() {
     let baseline_tables = table_rows(&store);
     let baseline_indexes = mandatory_index_rows(&store);
     assert_eq!(baseline_tables, [0, 0, 0, 0]);
-    assert_eq!(baseline_indexes, [0; 13]);
+    assert_eq!(baseline_indexes, [0; 8]);
 
     for ordinal in 0..MEASURED_CALLS {
         commit_completed_one_request_call(&store, ordinal).unwrap();

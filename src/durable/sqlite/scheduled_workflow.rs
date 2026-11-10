@@ -710,7 +710,7 @@ impl ScheduledWorkflowStore for SqliteConversationStore {
             }
             _ => {}
         }
-        let pending_interactions:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM events r WHERE r.event_id GLOB ?1 AND NOT EXISTS(SELECT 1 FROM events s WHERE s.event_id=replace(r.event_id,'interaction-requested-event:','interaction-settled-event:')))",[format!("interaction-requested-event:scheduled:{id}:*")],|r|r.get(0)).map_err(sql)?;
+        let pending_interactions:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM events r INDEXED BY events_alias_idx WHERE r.event_id != r.conversation_id || '-event-' || r.sequence AND r.event_id GLOB ?1 AND NOT EXISTS(SELECT 1 FROM events s INDEXED BY events_alias_idx WHERE s.event_id != s.conversation_id || '-event-' || s.sequence AND s.event_id=replace(r.event_id,'interaction-requested-event:','interaction-settled-event:')))",[format!("interaction-requested-event:scheduled:{id}:*")],|r|r.get(0)).map_err(sql)?;
         if pending_interactions {
             return Ok(ScheduledWorkflowSettlement::AwaitingNativeProof);
         }
@@ -863,7 +863,7 @@ impl SqliteConversationStore {
         use crate::durable::ConversationInteractionAudit;
         let requests = {
             let c = self.lock()?;
-            let mut query=c.prepare("SELECT r.event_json FROM events r WHERE r.event_id GLOB ?1 AND NOT EXISTS(SELECT 1 FROM events s WHERE s.event_id=replace(r.event_id,'interaction-requested-event:','interaction-settled-event:')) ORDER BY r.sequence LIMIT 100").map_err(sql)?;
+            let mut query=c.prepare("SELECT r.event_json FROM events r INDEXED BY events_alias_idx WHERE r.event_id != r.conversation_id || '-event-' || r.sequence AND r.event_id GLOB ?1 AND NOT EXISTS(SELECT 1 FROM events s INDEXED BY events_alias_idx WHERE s.event_id != s.conversation_id || '-event-' || s.sequence AND s.event_id=replace(r.event_id,'interaction-requested-event:','interaction-settled-event:')) ORDER BY r.sequence LIMIT 100").map_err(sql)?;
             query
                 .query_map(
                     [format!("interaction-requested-event:scheduled:{id}:*")],

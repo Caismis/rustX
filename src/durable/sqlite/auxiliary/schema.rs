@@ -66,8 +66,6 @@ CREATE TABLE IF NOT EXISTS auxiliary_requests (
 
 CREATE UNIQUE INDEX IF NOT EXISTS auxiliary_requests_open_idx
     ON auxiliary_requests(call_id) WHERE terminal_sequence IS NULL;
-CREATE INDEX IF NOT EXISTS auxiliary_requests_request_idx
-    ON auxiliary_requests(request_id,started_sequence);
 CREATE INDEX IF NOT EXISTS auxiliary_requests_terminal_idx
     ON auxiliary_requests(call_id,terminal_sequence);
 
@@ -113,16 +111,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS auxiliary_audit_offset_idx
     ON auxiliary_audit_facts(audit_offset);
 CREATE INDEX IF NOT EXISTS auxiliary_audit_call_idx
     ON auxiliary_audit_facts(call_id,sequence);
-CREATE INDEX IF NOT EXISTS auxiliary_audit_request_idx
-    ON auxiliary_audit_facts(request_id,sequence)
-    WHERE request_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS auxiliary_audit_sequence_idx
-    ON auxiliary_audit_facts(sequence,audit_offset);
-CREATE INDEX IF NOT EXISTS auxiliary_calls_started_idx
-    ON auxiliary_calls(started_sequence);
-CREATE INDEX IF NOT EXISTS auxiliary_calls_settled_idx
-    ON auxiliary_calls(settled_sequence)
-    WHERE settled_sequence IS NOT NULL;
 CREATE INDEX IF NOT EXISTS request_owners_source_idx
     ON request_owners(owner_kind,call_id,auxiliary_ordinal)
     WHERE owner_kind='auxiliary';
@@ -200,14 +188,6 @@ pub(super) const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
     },
     AuxiliaryIndexShape {
         table: "auxiliary_requests",
-        name: "auxiliary_requests_request_idx",
-        unique: false,
-        partial: false,
-        columns: &[Some("request_id"), Some("started_sequence")],
-        definition: "CREATE INDEX auxiliary_requests_request_idx ON auxiliary_requests(request_id,started_sequence)",
-    },
-    AuxiliaryIndexShape {
-        table: "auxiliary_requests",
         name: "auxiliary_requests_terminal_idx",
         unique: false,
         partial: false,
@@ -229,38 +209,6 @@ pub(super) const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
         partial: false,
         columns: &[Some("call_id"), Some("sequence")],
         definition: "CREATE INDEX auxiliary_audit_call_idx ON auxiliary_audit_facts(call_id,sequence)",
-    },
-    AuxiliaryIndexShape {
-        table: "auxiliary_audit_facts",
-        name: "auxiliary_audit_request_idx",
-        unique: false,
-        partial: true,
-        columns: &[Some("request_id"), Some("sequence")],
-        definition: "CREATE INDEX auxiliary_audit_request_idx ON auxiliary_audit_facts(request_id,sequence) WHERE request_id IS NOT NULL",
-    },
-    AuxiliaryIndexShape {
-        table: "auxiliary_audit_facts",
-        name: "auxiliary_audit_sequence_idx",
-        unique: false,
-        partial: false,
-        columns: &[Some("sequence"), Some("audit_offset")],
-        definition: "CREATE INDEX auxiliary_audit_sequence_idx ON auxiliary_audit_facts(sequence,audit_offset)",
-    },
-    AuxiliaryIndexShape {
-        table: "auxiliary_calls",
-        name: "auxiliary_calls_started_idx",
-        unique: false,
-        partial: false,
-        columns: &[Some("started_sequence")],
-        definition: "CREATE INDEX auxiliary_calls_started_idx ON auxiliary_calls(started_sequence)",
-    },
-    AuxiliaryIndexShape {
-        table: "auxiliary_calls",
-        name: "auxiliary_calls_settled_idx",
-        unique: false,
-        partial: true,
-        columns: &[Some("settled_sequence")],
-        definition: "CREATE INDEX auxiliary_calls_settled_idx ON auxiliary_calls(settled_sequence) WHERE settled_sequence IS NOT NULL",
     },
     AuxiliaryIndexShape {
         table: "request_owners",

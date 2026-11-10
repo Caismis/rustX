@@ -42,7 +42,7 @@ pub(super) fn members_prepared(
     previous: Option<&Captured>,
 ) -> Result<crate::durable::observation::AttemptMemberCounts, ConversationStoreError> {
     let missing: bool = connection.query_row_cached(
-        "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_idx WHERE attempt_id=?1 AND sequence<=?2 AND observation_members_required=1 AND observation_members IS NULL)",
+        concat!("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND sequence<=?2 AND observation_members_required=1 AND observation_members IS NULL)"),
         params![attempt.as_str(), through], |row| row.get(0),
     ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if missing {
@@ -101,7 +101,7 @@ fn process_event(
         previous
     } else {
         let started: Option<(u64, String)> = connection.query_row_cached(
-            "SELECT sequence,event_timestamp FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",
+            concat!("SELECT sequence,event_timestamp FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1"),
             params![attempt.as_str(), event.sequence], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         crate::durable::observation::MemberProcessHeader {

@@ -1007,7 +1007,7 @@ fn historical_opening_prompt_lookup_ignores_unrelated_future_turns() {
         }
         timeout(&store, "selected");
         let selected_start: i64 = store.lock().unwrap().query_row(
-            "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id='selected' AND json_extract(event_json,'$.event.type')='attempt_started'", [], |r| r.get(0)).unwrap();
+            "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key='selected' AND json_extract(event_json,'$.event.type')='attempt_started'", [], |r| r.get(0)).unwrap();
         let expected = if matches!(mode, "human" | "agent" | "idle") {
             "Opening"
         } else {
@@ -1175,7 +1175,7 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
     let id = ConversationId::generate();
     {
         let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
-        assert_eq!(crate::durable::sqlite::SQLITE_SCHEMA_VERSION, 108);
+        assert_eq!(crate::durable::sqlite::SQLITE_SCHEMA_VERSION, 109);
         store.lock().unwrap().execute_batch("ALTER TABLE bootstrap_identity DROP COLUMN inherited_transcript_through; UPDATE rustx_store SET schema_version=56 WHERE id=1").unwrap();
     }
     assert!(matches!(

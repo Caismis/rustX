@@ -95,7 +95,7 @@ pub(super) fn prepare(
     let start = if pending.is_some() && matches!(event.event, RuntimeEvent::AttemptStarted { .. }) {
         Some(event.sequence)
     } else {
-        connection.query_row_cached("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![attempt.as_str(),event.sequence],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
+        connection.query_row_cached(concat!("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1"),params![attempt.as_str(),event.sequence],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
     };
     let Some(start) = start else {
         prepared.header = Some(b"null".to_vec());
@@ -260,12 +260,16 @@ fn adoption_prompt(
 
 // Each owner contributes only its earliest positive prompt. Comparing two
 // scalar sequence winners avoids sorting every adopted prompt in the attempt.
-pub(super) const TURN_PROMPT_SQL: &str = "SELECT observation_turn_prompt FROM events WHERE sequence=(SELECT min(sequence) FROM (
-    SELECT (SELECT sequence FROM events INDEXED BY events_observation_turn_prompt_idx WHERE observation_turn_prompt_positive=1 AND attempt_id=?1 AND sequence<=?2 ORDER BY sequence LIMIT 1) AS sequence
+pub(super) const TURN_PROMPT_SQL: &str = concat!("SELECT observation_turn_prompt FROM events WHERE sequence=(SELECT min(sequence) FROM (
+    SELECT (SELECT sequence FROM events INDEXED BY events_observation_turn_prompt_idx WHERE observation_turn_prompt_positive=1 AND attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND sequence<=?2 ORDER BY sequence LIMIT 1) AS sequence
     UNION ALL
-    SELECT (SELECT sequence FROM events INDEXED BY events_observation_turn_prompt_idx WHERE observation_turn_prompt_positive=1 AND attempt_id IS NULL AND sequence>?3 AND sequence<?4 ORDER BY sequence LIMIT 1)))";
+    SELECT (SELECT sequence FROM events INDEXED BY events_observation_turn_prompt_idx WHERE observation_turn_prompt_positive=1 AND attempt_key IS NULL AND sequence>?3 AND sequence<?4 ORDER BY sequence LIMIT 1)))");
 
-pub(super) const TURN_PROMPT_HOLES_SQL: &str = "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_prompt_holes_idx WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL AND attempt_id=?2 AND sequence<=?1) OR EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_prompt_holes_idx WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL AND attempt_id IS NULL AND sequence>?3 AND sequence<?4 AND sequence<=?1)";
+pub(super) const TURN_PROMPT_HOLES_SQL: &str = concat!(
+    "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_prompt_holes_idx WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL AND attempt_key = ",
+    crate::durable::sqlite::event_owner_key::attempt_parameter!("?2"),
+    " AND sequence<=?1) OR EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_prompt_holes_idx WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL AND attempt_key IS NULL AND sequence>?3 AND sequence<?4 AND sequence<=?1)"
+);
 
 fn prompt(
     connection: &Connection,
@@ -596,7 +600,7 @@ pub(super) fn by_identity(
     cut: &crate::durable::reading::ConversationReadCut,
     id: &crate::durable::reading::ConversationTurnId,
 ) -> Result<ObservedTurn, ConversationStoreError> {
-    let local:Option<u64>=connection.query_row("SELECT observation_turn_ordinal FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND conversation_id=?2 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?3 ORDER BY sequence LIMIT 1",params![id.attempt_id.as_str(),id.conversation_id.as_str(),cut.journal],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
+    let local:Option<u64>=connection.query_row(concat!("SELECT observation_turn_ordinal FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND conversation_id=?2 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?3 ORDER BY sequence LIMIT 1"),params![id.attempt_id.as_str(),id.conversation_id.as_str(),cut.journal],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
     let ordinal = if let Some(ordinal) = local {
         ordinal
     } else {
