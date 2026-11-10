@@ -117,7 +117,6 @@ impl LocalRuntimeResourceLoader {
                     profile: config.agent.clone(),
                     admitted_agents: subagents.names().into_iter().cloned().collect(),
                     admitted_workflows: workflows.entries().keys().cloned().collect(),
-                    project_files: capture.root_agent_project_files.clone(),
                     delegated_skills: delegated_skill_selections(config, &subagents, &workflows),
                 },
                 skill_discovery,
@@ -176,13 +175,7 @@ impl LocalRuntimeResourceLoader {
         let configuration = adopted
             .configuration()
             .ok_or("missing adopted configuration")?;
-        let profile = adopted
-            .root_profile()
-            .ok_or("missing adopted root profile")?;
-        candidate.set_context_profile(
-            &configuration.config.agent,
-            &profile.project_instructions.files,
-        );
+        candidate.set_context_profile(&configuration.config.agent);
         let mut workflows = adopted.workflows().clone();
         validate_workflow_tool_name_collisions(&candidate, &workflows)
             .map_err(|error| error.message)?;
@@ -375,12 +368,7 @@ mod tests {
             let document = super::super::super::agent_resources::parse(text).unwrap();
             AgentCatalog::new([NamedAgentDefinition::new(
                 SubagentName::parse("reviewer").unwrap(),
-                crate::runtime::agent_profile::AgentProfile::from_document(
-                    &document,
-                    crate::runtime::agent_profile::AgentProfileKind::Named,
-                    Vec::new(),
-                )
-                .unwrap(),
+                document.lower().unwrap(),
                 "reviewer.toml".into(),
             )
             .unwrap()])
@@ -433,13 +421,8 @@ mod tests {
                     execution_deadline: None,
                     tools: vec![AgentToolSelection::All { source_id: source }],
                     skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                    project_instructions:
-                        crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                            inherit: false,
-                            files: Vec::new(),
-                        },
+                    inherit_project_instructions: false,
                     extensions: crate::extensions::NativeAgentExtensions::none(),
-                    agents: std::collections::BTreeSet::default(),
                     workflows: std::collections::BTreeSet::default(),
                 },
                 PathBuf::from("instructions.md"),

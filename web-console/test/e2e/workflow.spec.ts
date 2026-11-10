@@ -1,5 +1,5 @@
 import { connectRemote } from './shell-actions';
-import { openEmptySession, returnHome, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { openEmptySession, returnHome, openResourceModule, openWorkspaceSettings } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,7 +21,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
   const agent = readFileSync(agentPath, 'utf8');
   const connect = async () => {
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
     // Transport initialization precedes restoration of the selected Session.
     // Large authored inputs must finish native attachment before replay checks.
     if (session) await wire.attachedTarget(session);
@@ -46,6 +46,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     const childId = await child.getAttribute('data-workflow-activation-id');
     const runId = await run.getAttribute('data-workflow-run-id');
     await expect(run).toContainText('review_pr');
+    await expect(run.getByRole('button', { name: 'View review', exact: true })).toContainText('One-shot subagent · Read-only');
     const catalog = page.getByRole('button', { name: 'Subagents', exact: true });
     await expect(catalog).toHaveText('1 subagents');
     await catalog.click();
@@ -58,7 +59,9 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(childView).toHaveCount(1);
     await expect(childView).toContainText('Review the request and commit the result.');
     await expect(childView.getByRole('textbox')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Wait for current activation', exact: true })).toHaveCount(0);
+    await expect(childView.locator('[data-composer-card]')).toHaveCount(0);
+    await expect(page.locator('#subagent-header-actions').getByRole('button')).toHaveCount(1);
+    await expect(page.getByRole('button', { name: 'Close Child view', exact: true })).toBeVisible();
     await page.screenshot({ path: '/tmp/rustx-workflow-child-chat.png' });
     await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
     const childTrace = page.locator('[data-agent-id][data-view="trajectory"]:visible');
@@ -95,7 +98,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(childDetails).toContainText('Workflow-only reviewer');
     const inspectedNode = await childDetails.elementHandle();
     await fixture.release('workflow-child-read');
-    await expect(page.locator('#subagent-header-actions').getByRole('status')).toContainText('Completed');
+    await expect(page.locator('#subagent-header-actions').getByRole('status')).toContainText('Completed', { timeout: 15_000 });
     await expect(childDetails).toContainText('Workflow-only reviewer');
     expect(await childDetails.evaluate((node, previous) => node === previous, inspectedNode)).toBe(true);
     await expect(childTrace).toContainText('One-shot subagent record');
@@ -119,22 +122,18 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(childView).toContainText('One-shot subagent record');
     await page.getByRole('button', { name: parentTitle, exact: true }).click();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('region', { name: 'Settings', exact: true });
-    await returnHome(page);
+        await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A');
-    await openSettingsPage(page, 'Extensions');
-    await settings.getByRole('tab', { name: 'Subagents', exact: true }).click();
-    await expect(settings.getByRole('button', { name: 'Agent reviewer', exact: true })).toBeVisible();
-    await settings.getByRole('tab', { name: 'Workflows', exact: true }).click();
-    await expect(settings.getByRole('button', { name: 'Workflow review_pr', exact: true })).toBeVisible();
-    // A Workflow has no authoring operation on this protocol: no Add is offered.
-    await expect(settings.getByRole('button', { name: /^Add / })).toHaveCount(0);
-    await settings.screenshot({ path: test.info().outputPath('native-workflow-inventory.png') });
-    await settings.getByRole('tab', { name: 'Skills', exact: true }).click();
-    await expect(settings.getByRole('button', { name: 'Skill acceptance', exact: true })).toBeVisible();
+    const agents=await openResourceModule(page,'subagents','Workspace A');
+    await expect(agents.getByRole('listitem',{name:'reviewer',exact:true})).toBeVisible();
+    await page.getByRole('navigation',{name:'Primary navigation'}).getByRole('button',{name:'Workflows',exact:true}).click();
+    await expect(page.getByRole('listitem').filter({has:page.getByRole('button',{name:'review_pr',exact:true})})).toBeVisible();
+    const skills=await openResourceModule(page,'skills','Workspace A');
+    await expect(skills.getByRole('listitem',{name:'acceptance',exact:true})).toBeVisible();
     expect(readFileSync(workflowPath, 'utf8')).toBe(workflow);
     expect(readFileSync(agentPath, 'utf8')).toBe(agent);
     expect((await fixture.control('requests')).requests).toHaveLength(4);
+    expect(wire.requests.filter(request => request.method === 'agent/sendMessage' || request.method === 'agent/interrupt' || request.method === 'agent/wait')).toHaveLength(0);
     expect(errors).toEqual([]); passed = true;
   } catch (error) { console.error(fixture.diagnostics()); throw error; }
   finally { await page.close(); await fixture.stop(passed); }

@@ -230,6 +230,7 @@ fn start_request_with_window(
         vec![],
         crate::runtime::RuntimeResourceRevision::new(1),
         ModelInvocationConfig {
+            replay_binding: Some("test-binding".into()),
             model: "historical-model".into(),
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 100,
@@ -1001,6 +1002,7 @@ fn process_content(store: &dyn ConversationStore, attempt: &str) {
                 id: id.clone(),
                 content: vec![
                     AssistantContentBlock::Reasoning(ReasoningBlock {
+                        origin: None,
                         text: Some("thinking".into()),
                         provider_state: None,
                     }),

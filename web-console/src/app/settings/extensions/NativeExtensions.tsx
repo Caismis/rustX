@@ -1,13 +1,12 @@
 import { useTranslation } from '../../../locale/react';
 import type {
   AgentStatusExtensionDocument, GoalExtensionDocument, SourceScope, SourceSettings, TodoExtensionDocument,
-} from '../../../../../protocol/app-server/v76';
+} from '../../../../../protocol/app-server/v78';
 import { UnitForm } from '../forms/bridge';
 import { TextField } from '../forms/controls';
 import { Advanced, Choice, Toggle } from '../primitives/aria';
 import { sourceView } from '../projection';
-import { ConfigUnavailable } from './ExtensionDetail';
-import css from '../../../presentation/settings/SettingsContent.module.css';
+import { ConfigUnavailable } from '../forms/ConfigUnavailable';
 
 /** The native extensions: Todo, Goal and Agent Status.
  *
@@ -28,8 +27,6 @@ export function NativeExtensions({ source, scope, revision }: { source: SourceSe
   const plugins = sourceView(source, scope)?.authored?.agent?.plugins;
   return <section aria-label={tx('settings:native-extensions.native-extensions')}>
     <h4>{tx('settings:native-extensions.native-extensions')}</h4>
-    <p>{tx('settings:native-extensions.closed-native-extensions-configured-as-part-of-this-source-they')}</p>
-    <p className={css.hint}>{tx('settings:native-extensions.current-todo-and-goal-contents-belong-to-the-conversation-that-o')}</p>
 
     <UnitForm<TodoExtensionDocument> title={tx('settings:native-extensions.todo-extension')} authored={plugins?.todo ?? undefined} blank={{}} revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'todo', authored } })}>

@@ -1,6 +1,12 @@
 import { expect, type Locator, type Page } from '@playwright/test';
-import type { AttachmentTarget } from '../../../protocol/app-server/v76';
+import type { AttachmentTarget } from '../../../protocol/app-server/v78';
 import type { wireProbe } from './wire-probe';
+
+/** A dirty editor's save has settled when its button is idle and disabled. */
+export function settledSave(scope: Page | Locator, title: string) {
+  return scope.getByRole('button', { name: `Save ${title}`, exact: true })
+    .and(scope.locator('button[aria-busy="false"]:disabled'));
+}
 export async function closeSessionView(page: Page, id: string) {
   await page.getByRole('button', { name: 'View options', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Close view', exact: true }).hover();
@@ -77,6 +83,7 @@ export async function selectedSettingsPage(page: Page): Promise<string> {
  * menu on a narrow one. Either way the selection is the navigation owner's,
  * and the menu hands focus back to its trigger. */
 export async function openSettingsPage(page: Page, name: string) {
+  if (!await page.getByRole('region',{name:'Settings',exact:true}).isVisible()) await page.getByRole('button',{name:'Settings',exact:true}).click();
   const menu = settingsSectionMenu(page);
   if (await menu.isVisible()) {
     await menu.click();
@@ -117,7 +124,7 @@ export async function connectRemote(page: Page, endpoint: string, token: string)
   let sameAddress = currentAddress === endpoint;
   try { sameAddress ||= new URL(currentAddress).href === new URL(endpoint).href; } catch { /* An unconfigured field needs the authored endpoint. */ }
   if (!sameAddress) await address.fill(endpoint);
-  const secret = page.getByLabel('Transport token');
+  const secret = page.getByLabel('Access token');
   if (await secret.inputValue() !== token) await secret.fill(token);
   await page.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(page.locator('.connection-status')).toHaveText('Connected');
@@ -198,4 +205,27 @@ export async function expandModelAuthoring(page: Page) {
     const toggle = page.getByRole('button', { name, exact: true, expanded: false });
     if (await toggle.isVisible()) await toggle.click();
   }
+}
+
+/** Enter a resource module and select the exact native source scope. */
+export async function openResourceModule(page:Page,module:'mcp'|'subagents'|'skills',scope?:'Global'|string) {
+ const title={mcp:'MCP servers',subagents:'Subagents',skills:'Skills'}[module];
+ await page.getByRole('navigation',{name:'Primary navigation'}).getByRole('button',{name:module==='subagents'?'Manage subagents':title,exact:true}).click();
+ const surface=page.getByRole('region',{name:title,exact:true});
+ await expect(surface).toBeVisible();
+ if(scope==='Global')await surface.getByRole('tab',{name:'Global',exact:true}).click();
+ else if(scope){
+  await surface.getByRole('tab',{name:'Workspace',exact:true}).click();
+  await surface.getByRole('button',{name:'Choose Workspace',exact:true}).click();
+  await page.getByRole('menuitem',{name:scope,exact:true}).click();
+ }
+ // Large admitted source files use the test's native-operation deadline.
+ await page.locator(`[data-resource-module="${module}"][data-lifecycle="ready"]`).waitFor({state:'visible'});
+ return surface;
+}
+export async function newSubagent(surface: Locator, name: string) {
+  await surface.getByRole('button', { name: 'New subagent', exact: true }).click();
+  const form = surface.getByRole('form', { name: 'New subagent', exact: true });
+  await form.getByLabel('Name', { exact: true }).fill(name);
+  return form;
 }

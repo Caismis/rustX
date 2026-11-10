@@ -1,10 +1,9 @@
 import {traceAttemptKey,traceStepKey,traceOccurrenceKey,sameTraceStep} from '../../../../protocol/app-server/trace-identity';
 import {canonicalLocatorKey} from '../../../../protocol/app-server/content-identity';
 import { traceStateLabel } from '../../bindings/status-labels';
-import { configurationSummary } from '../../bindings/configuration-change';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v76';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v78';
 import type { WorkflowNodes, WorkflowTraceNode } from './workflow';
 
 /** The Harness detail tab identities. Labels follow the locale; ids never do. */
@@ -126,7 +125,6 @@ export interface TrajectoryProjection {
 
 function cellsOf(tx: Translate, record: TraceRecord): InspectableDisplayItem[] {
   if (record.kind === 'attempt' || record.kind === 'step') return [];
-  if (record.kind === 'configuration' && record.configuration) return [{ ...origin(record, 'record', recordLabel(tx, record), configurationSummary(tx, record.configuration), 'overview', record.id), type: 'RecordRow' }];
   if (record.kind !== 'request' || !record.request) return [{ ...origin(record, 'record', recordLabel(tx, record), record.preview?.text ?? '', 'overview', record.id), type: 'RecordRow' }];
   const request = record.request;
   const cells: InspectableDisplayItem[] = [];
@@ -148,10 +146,12 @@ export function projectTrajectory(tx: Translate, records: readonly TraceRecord[]
   const turns = new Map<string, TrajectoryTurnModel>();
   const groups = new Map<string, TrajectoryGroupModel>();
   for (const record of records) {
-    // Harness shows Agent interactions as Tool calls and delivered Context.
-    // Native activation and interaction lifecycle audits remain in Trace, not
-    // as duplicate rows, spans or empty Turns when their Tool is on another page.
-    if (record.kind === 'interaction' || record.kind === 'subagent' || record.kind === 'workflow' && record.originating_tool_call_id != null) continue;
+    // Harness shows background work and Agent interactions through Tool calls
+    // and delivered Context. Lifecycle audits stay out of rows, spans and Turns
+    // even when the Tool or notice is on another page.
+    if (record.kind === 'background' || record.kind === 'interaction' || record.kind === 'subagent' || record.kind === 'workflow' && record.originating_tool_call_id != null) continue;
+    // Harness shows model-visible changes from the request's prompt and tools.
+    if (record.kind === 'configuration') continue;
     const attempt = traceAttemptKey(record.location), step = traceStepKey(record.location);
     if (attempt == null) {
       sections.push({ kind: 'outside', record, cells: cellsOf(tx, record) });
@@ -208,7 +208,7 @@ export function trajectoryItems(tx: Translate, projection: TrajectoryProjection,
 
 /** Never correlate incomplete scope, or ambiguous proposals. Session/Conversation
  * isolation is supplied by the native Trace cache, not reconstructed from IDs. */
-function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v76').RuntimeClientToolOccurrence|null}):string|undefined {
+function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v78').RuntimeClientToolOccurrence|null}):string|undefined {
  const owner=traceAttemptKey(record.location),step=traceStepKey(record.location);
  if(owner==null||step==null||!call.occurrence)return;
  return displayKey(owner,step,traceOccurrenceKey(call.occurrence));

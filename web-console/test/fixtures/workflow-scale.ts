@@ -1,6 +1,6 @@
 /** The native 256-node aggregate bound, with real Start nodes and a Loop
  * whose branch tree ends in Exit Loop nodes. */
-import type { WorkflowBlock, WorkflowFileDocument } from '../../../protocol/app-server/v76';
+import type { WorkflowBlock, WorkflowFileDocument } from '../../../protocol/app-server/v78';
 const empty = { type: 'object', properties: {}, additionalProperties: false };
 const returned = { type: 'return' as const, outputs: [] };
 function branchTree(): WorkflowBlock {

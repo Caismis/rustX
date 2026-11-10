@@ -138,6 +138,7 @@ mod tests {
         );
         for block in [
             AssistantContentBlock::Reasoning(ReasoningBlock {
+                origin: None,
                 text: Some("private reasoning".into()),
                 provider_state: None,
             }),

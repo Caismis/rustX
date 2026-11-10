@@ -342,7 +342,12 @@ pub(crate) fn translate_request<'a>(
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
     let mut messages = translate_messages(request, tools.continuation_boundary)?;
-    crate::model::adapter::correlation::encode_fields(|field| {
+    let labels = crate::model::adapter::correlation::transmitted_labels(
+        request,
+        tools.continuation_boundary,
+    )
+    .map_err(|error| invalid_request(&error))?;
+    crate::model::adapter::correlation::encode_fields(&labels, |field| {
         for message in &mut messages {
             #[cfg(feature = "issue-387-profile")]
             crate::model::adapter::profile::wire_item();
@@ -423,11 +428,14 @@ fn translate_messages(
                     assistant,
                     continuation,
                     continuation_boundary == Some(position),
+                    request.invocation.replay_origin().as_ref(),
                 )?;
-                messages.push(WireRequestMessage {
-                    role: "assistant",
-                    content,
-                });
+                if !content.is_empty() {
+                    messages.push(WireRequestMessage {
+                        role: "assistant",
+                        content,
+                    });
+                }
             }
             ModelMessageView::Tool(tool_call_id, result) => {
                 pending_tool_results.push(WireBlock::Native(translate_tool_result(
@@ -508,6 +516,7 @@ fn translate_assistant_content<'a>(
     assistant: &'a [crate::message::types::AssistantContentBlock],
     continuation: Option<&AnthropicContinuation>,
     is_continuation_output: bool,
+    origin: Option<&crate::model::replay::ReplayOrigin>,
 ) -> Result<Vec<WireBlock<'a>>, ModelError> {
     let mut content = Vec::new();
     let mut reasoning_seen = false;
@@ -523,9 +532,22 @@ fn translate_assistant_content<'a>(
                 }));
             }
             AssistantContentBlock::Reasoning(reasoning) => {
-                reasoning_seen = true;
                 let is_boundary =
                     is_continuation_output && Some(position) == last_reasoning_position;
+                if !reasoning.belongs_to(origin) {
+                    if let Some(text) = reasoning
+                        .text
+                        .as_deref()
+                        .filter(|text| !text.trim().is_empty())
+                    {
+                        content.push(WireBlock::Text(WireTextBlock {
+                            r#type: "text",
+                            text: Cow::Borrowed(text),
+                        }));
+                    }
+                    continue;
+                }
+                reasoning_seen = true;
                 let state = match &reasoning.provider_state {
                     Some(ProviderContinuationState::Anthropic(state)) => {
                         if is_boundary
@@ -539,13 +561,7 @@ fn translate_assistant_content<'a>(
                         }
                         state
                     }
-                    Some(ProviderContinuationState::OpenAiResponses(_)) => {
-                        return Err(unsupported(
-                            "foreign OpenAI Responses continuation state cannot be translated \
-                             into Anthropic thinking",
-                        ));
-                    }
-                    None => {
+                    _ => {
                         return Err(unsupported(
                             "Anthropic thinking lacks its complete original native replay unit",
                         ));
@@ -562,11 +578,11 @@ fn translate_assistant_content<'a>(
                     "input": call.arguments,
                 })));
             }
-            AssistantContentBlock::Refusal(_) => {
-                return Err(unsupported(
-                    "Anthropic cannot represent a previous refusal block; refusing to flatten \
-                     refusal into text",
-                ));
+            AssistantContentBlock::Refusal(refusal) => {
+                content.push(WireBlock::Text(WireTextBlock {
+                    r#type: "text",
+                    text: Cow::Borrowed(&refusal.text),
+                }));
             }
             AssistantContentBlock::Image(_) => {
                 return Err(unsupported(

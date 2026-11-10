@@ -69,7 +69,7 @@ impl UserConfigManager {
         query: WorkflowModelChoicesQuery,
         expected_revision: Option<&str>,
     ) -> Result<WorkflowModelChoices, SettingsError> {
-        let (source, revision) = self.capture_authored_settings(target)?;
+        let (source, revision) = self.capture_authored_settings(target, None)?;
         if let Some(expected) = expected_revision
             && expected != revision
         {

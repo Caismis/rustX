@@ -1,7 +1,7 @@
 import { useTranslation } from '../locale/react';
 import { useSelector } from '@xstate/react';
 import { useState, type ReactNode } from 'react';
-import type { SourceTarget } from '../../../protocol/app-server/v76';
+import type { SourceTarget } from '../../../protocol/app-server/v78';
 import type { AppServerClient } from '../client/app-server';
 import type { SessionView, ConnectionState } from '../client/contracts';
 import { Button } from '../presentation/primitives/Button';

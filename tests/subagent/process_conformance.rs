@@ -34,13 +34,13 @@ const LIVENESS: std::time::Duration = std::time::Duration::from_secs(27);
 fn models_json(base_url: &str) -> String {
     format!(
         r#"[providers.fixture]
+protocol = "openai_chat_completions"
 base_url = "{base_url}"
 api_key = "$RUSTX_SUBAGENT_TEST_KEY"
 
 [models."fixture/subagent-model"]
 provider = "fixture"
 id = "subagent-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
@@ -441,8 +441,7 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
         })
         .expect("the child request body");
     assert!(
-        first_child_request.contains("Workspace Skill root")
-            && first_child_request.contains("workspace/.agents/skills")
+        first_child_request.contains("workspace/.agents/skills/conformance/SKILL.md")
             && first_child_request.contains("<name>conformance</name>"),
         "the named child request uses the captured roots and progressive disclosure metadata: {first_child_request}"
     );

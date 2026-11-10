@@ -130,7 +130,7 @@ pub(crate) async fn cached_python_catalog_disconnect_scenario() {
         std::fs::write(package.join("requirements.txt"), "").unwrap();
         std::fs::write(package.join("server.py"), "from fastmcp import FastMCP\nmcp = FastMCP('demo')\n@mcp.tool\ndef hello() -> str:\n    return 'hello'\nif __name__ == '__main__':\n    mcp.run()\n").unwrap();
         let target = crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: fixture.workspaces[0].clone() };
-        let catalog = fixture.manager.workflow_tool_catalog(target.clone(), Some("python:demo".into()), None).await.unwrap();
+        let catalog = fixture.manager.workflow_tool_catalog(target.clone(), Some("python:demo".into()), None, None).await.unwrap();
         assert!(!catalog.sources[0].tools.is_empty(), "warm the real prepared environment: {catalog:?}");
         let packages = fixture.manager.configuration.sources.runtime_root.join("environments/python-tools/packages");
         let states: Vec<_> = std::fs::read_dir(packages).unwrap().map(|entry| entry.unwrap().path()).filter(|path| path.is_dir()).collect();
@@ -142,7 +142,7 @@ pub(crate) async fn cached_python_catalog_disconnect_scenario() {
         super::protocol::initialize(&connection).await;
         let (mut input, reader) = tokio::io::duplex(65_536);
         let serving = tokio::spawn(stdio::serve(connection.clone(), reader, tokio::io::sink(), CancellationToken::new()));
-        let request = Request { jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(713), call: Method::WorkflowToolCatalog { target, source: Some("python:demo".into()), cursor: None } };
+        let request = Request { jsonrpc: JsonRpcVersion::V2, id: RequestId::Integer(713), call: Method::WorkflowToolCatalog { target, source: Some("python:demo".into()), cursor: None, expected_scope: None } };
         input.write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes()).await.unwrap();
         entered.await.unwrap();
         let mut operations = fixture.host.request_operations();
@@ -162,6 +162,70 @@ pub(crate) async fn cached_python_catalog_disconnect_scenario() {
         assert!(draining.await.is_empty());
         fixture.close().await;
     })).await;
+}
+
+#[tokio::test]
+async fn workflow_tool_catalog_rejects_replaced_source_owner_before_connecting() {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    use crate::runtime::resources::SourceScope;
+    use crate::scripted_suites::common::{FixtureReply, FixtureServer};
+
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 0).await;
+        let peer = FixtureServer::start(|_, _| {
+            FixtureReply::body(400, "Bad Request", "text/plain", "fixture")
+        })
+        .await;
+        let target = SourceTarget::Workspace {
+            directory: fixture.workspaces[0].clone(),
+        };
+        let write_server = |target: &SourceTarget| {
+            let root = fixture.manager.configuration.resource_root(target);
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(
+                root.join("mcp.toml"),
+                format!("[mcp_servers.shared]\nurl = {:?}\n", peer.url("/mcp")),
+            )
+            .unwrap();
+        };
+        write_server(&SourceTarget::User);
+        let connection = AppServerConnection::new(fixture.host.clone());
+        super::protocol::initialize(&connection).await;
+        let method = |source, expected_scope| Method::WorkflowToolCatalog {
+            target: target.clone(),
+            source,
+            expected_scope,
+            cursor: None,
+        };
+        let MethodResult::WorkflowToolCatalog { catalog } =
+            super::protocol::call(&connection, 901, method(None, None)).await
+        else {
+            panic!("catalog");
+        };
+        assert_eq!(catalog.sources[0].scope, SourceScope::User);
+
+        write_server(&target);
+        let response = connection
+            .handle_request(Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(902),
+                call: method(Some("shared".into()), Some(SourceScope::User)),
+            })
+            .await;
+        assert!(matches!(response, Response::Failure(failure)
+            if failure.error.data == Some(ErrorData::InvalidParams)));
+        assert_eq!(peer.attempt_count(), 0);
+
+        let MethodResult::WorkflowToolCatalog { catalog } =
+            super::protocol::call(&connection, 903, method(Some("shared".into()), None)).await
+        else {
+            panic!("catalog");
+        };
+        assert_eq!(catalog.sources[0].scope, SourceScope::Workspace);
+        assert!(peer.attempt_count() > 0);
+        fixture.close().await;
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -550,7 +614,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         request.headers_mut().insert(
             "sec-websocket-protocol",
             format!(
-                "rustx.app-server.v76, {}",
+                "rustx.app-server.v78, {}",
                 driver::credential_offer(driver::TOKEN)
             )
             .parse()
@@ -963,7 +1027,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         request.headers_mut().insert(
             "sec-websocket-protocol",
             format!(
-                "rustx.app-server.v76, {}",
+                "rustx.app-server.v78, {}",
                 driver::credential_offer(driver::TOKEN)
             )
             .parse()
@@ -3401,6 +3465,7 @@ async fn t11_t15_effective_configuration_ranges_survive_model_commit_on_real_web
                 &client,
                 100,
                 Method::ModelSet {
+                    recover_unavailable_auxiliary: None,
                     target: target.clone(),
                     config: Box::new(config),
                 }

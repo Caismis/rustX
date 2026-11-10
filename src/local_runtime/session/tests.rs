@@ -209,6 +209,7 @@ fn todo_status_start_snapshot(
         Vec::new(),
         crate::runtime::RuntimeResourceRevision::new(1),
         ModelInvocationConfig {
+            replay_binding: Some("test-binding".into()),
             model: "provider/model".to_owned(),
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 128,

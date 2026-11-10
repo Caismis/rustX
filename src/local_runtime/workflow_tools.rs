@@ -179,13 +179,19 @@ impl SessionRuntimeManager {
     /// listed. A slow source (a package preparing its environment) then
     /// delays only itself.
     /// # Errors
-    /// Rejects a redirected target or a source outside it.
+    /// Rejects a redirected target or a source outside it. If the caller
+    /// observed a specific source owner, its scope must still match the
+    /// captured binding before anything connects.
     pub(crate) async fn workflow_tool_catalog(
         &self,
         target: SourceTarget,
         source: Option<String>,
         cursor: Option<WorkflowToolCatalogCursor>,
+        expected_scope: Option<SourceScope>,
     ) -> Result<WorkflowToolCatalog, SettingsError> {
+        if expected_scope.is_some() && source.is_none() {
+            return Err(SettingsError::Invalid);
+        }
         let owner = self.configuration.clone();
         let (plans, workspace, runtime_root) =
             tokio::task::spawn_blocking(move || capture(&owner, &target))
@@ -217,6 +223,7 @@ impl SessionRuntimeManager {
         let plan = plans
             .into_iter()
             .find(|plan| plan.source_id == source)
+            .filter(|plan| expected_scope.is_none_or(|scope| plan.scope == scope))
             .ok_or(SettingsError::Invalid)?;
         let _permit = LISTINGS.acquire().await.map_err(|_| SettingsError::Io)?;
         let mut listed = list(

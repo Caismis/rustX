@@ -2,7 +2,7 @@
 
 ## App Server environment services (#533)
 
-The v75 App Server routes independent argv/PTY execution to the existing native Bash supervision kernel, filesystem operations to instance-granted descriptor-relative native roots, and management to the existing source/catalog/Skills/MCP owners. Connection-owned processes and watches are separate from server-owned Agent work. No Agent Attempt, canonical journal, configuration database or second supervisor is introduced. See [the environment and management contract](app-server/environment-services.md) and [whole-plan delivery evidence](issue-533/README.md).
+The v77 App Server routes independent argv/PTY execution to the existing native Bash supervision kernel, filesystem operations to instance-granted descriptor-relative native roots, and management to the existing source/catalog/Skills/MCP owners. Connection-owned processes and watches are separate from server-owned Agent work. No Agent Attempt, canonical journal, configuration database or second supervisor is introduced. See [the environment and management contract](app-server/environment-services.md) and [whole-plan delivery evidence](issue-533/README.md).
 
 The current Web conversation/composer lifecycle and subscription boundaries are
 specified in [WEB-16 resident conversation ownership](issue-406/conversation-surface.md).
@@ -2460,11 +2460,10 @@ Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
 [configuration application](configuration.md#save-and-automatic-application).
 
-The two Skill roots are `~/rustx/.agents/skills` and
-`<workspace>/.agents/skills`. Whole-package shadowing occurs before validation.
-Selection is prompt visibility (`"all"`, exact names, or `[]`), not filesystem
-access control. Guidance prints absolute root paths and selected names and
-descriptions, never every absolute package path. Bodies remain progressively read.
+Skills use the ordered rustX collections described in
+[Skill discovery](skill-discovery.md). The first valid name wins. The prompt
+advertises selected names, descriptions, and instruction paths. Instructions
+are read through an available file-reading tool when a task matches.
 
 MCP and Python discovery is inert. Root-selected demand prepares at composition;
 child demand prepares at child admission. Workflow demand is owned by Workflow
@@ -3322,7 +3321,7 @@ M3 Agent Loop
 #### Provider, Model and selection ownership
 
 Provider and Model are independently named atomic domains in `rustx.toml`.
-A Model names its Provider and declares protocol, limits, capabilities,
+A Provider declares its shared protocol. A Model names its Provider and declares limits, capabilities,
 compatibility and opaque native request defaults. Identity spelling infers none
 of those semantics. A Workspace replacement discards the entire lower object,
 including credentials. Root model selection is another atomic semantic unit.
@@ -3841,8 +3840,13 @@ adapter-local terminal buffering exists for Anthropic text or thinking.
   items including opaque encrypted reasoning). Anthropic thinking signatures
   and `redacted_thinking.data` are preserved as rustX-owned opaque JSON on
   the reasoning block and replayed verbatim; canonical reasoning text alone
-  is never sufficient to reconstruct a provider reasoning item (OpenAI
-  Responses fails with `Unsupported` instead of fabricating one).
+  is never sufficient to reconstruct a provider reasoning item. For Responses
+  history without a native replay unit (such as a prior Chat Completions turn
+  or a stored response summary), readable reasoning is ordinary assistant
+  `output_text`, following pi's cross-model conversion. Opaque foreign state
+  and inactive stored-response pointers are omitted from the wire. Complete
+  native stateless output is still validated and replayed verbatim; malformed
+  or edited native replay units remain `Unsupported`.
 - Usage is normalized without inventing counts: Anthropic effective input is
   `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`
   from the latest cumulative snapshot (never summed over time), reported
@@ -4771,14 +4775,18 @@ unknown outcome rather than pretending otherwise.
 ### Layer 5: Agent resources
 
 `.agents` defines Skills, named Agents, Workflows, Managed Python packages and
-MCP servers at exactly User and Workspace roots. Each same-name Workspace
-identity replaces one whole User resource before validation. Invalid winners
-stay invalid; they cannot expose lower definitions through fallback.
+MCP servers at exactly User and Workspace roots. For resources other than
+Skills, each same-name Workspace identity replaces one whole User resource
+before validation. Invalid winners stay invalid; they cannot expose lower
+definitions through fallback. Skills select the first valid definition in
+Workspace-then-User discovery order and deduplicate instruction-file aliases;
+their file and directory symlinks may resolve outside either collection.
 
 [CFG3 configuration](configuration.md) specifies paths, selection, bounded
 ordered diagnostics, native authoring, semantic overlay and demand. Resource
-existence is independent of Root authority. Skill prompts expose metadata and
-absolute roots for progressive disclosure. Python and MCP lifecycle owners
+existence is independent of Root authority. Skill prompts expose names,
+descriptions and concrete absolute instruction locations for progressive
+disclosure. Python and MCP lifecycle owners
 materialize only admitted finite demand.
 
 
@@ -7347,6 +7355,13 @@ includes connection generation, exact Session/attachment target, Agent and child
 Conversation, activation, state and observation revision. Both the transport's
 existing pre-send admission proof and response publication verify this identity.
 
+A visible Workflow-child sidebar registers an independent observation lease
+with this same meter inventory after validating its finite native header. It
+does not open or select a main-chat child view, and the child stays one-shot and
+read-only. Hiding or unmounting the sidebar releases the lease; attachment or
+scope replacement invalidates it. This uses the existing meter concurrency and
+retirement accounting, including for late replies.
+
 At most two current-scope reads run. A round-robin cursor serves all valid
 inventory demands; selected unread demand can take at most every other admission,
 so selection and a busy Agent cannot starve independent Agents. Presentation-only
@@ -7575,11 +7590,10 @@ and pending authority. No deletion or successful cleanup follows failed proof.
 
 ## Local resource byte policies (Issue #527)
 
-Skill discovery enumerates direct candidates and reads only `SKILL.md`
-frontmatter for standard metadata/dependency validation. The prefix is bounded
-to 1 MiB with cancellable 4 KiB read-ahead and two matching anchored prefix reads.
-Bodies and supporting assets have no discovery size ceiling because they are
-not discovery inputs. The definition digest hashes normalized frontmatter under
+Skill discovery recursively scans the Workspace and User collections, following
+directory and instruction file symlinks. It reads only instruction frontmatter
+with cancellable 4 KiB read-ahead and two matching anchored prefix reads. Bodies
+and supporting assets are read on demand. The definition digest hashes normalized frontmatter under
 `rustx-skill-definition-v1`; source/location bindings are compared separately.
 Native Read remains the progressive-disclosure path for current runtime bytes.
 Revision/rescan reuse definition discovery, while children inherit frozen

@@ -1,3 +1,4 @@
+import {openResourceModule} from './shell-actions';
 import { expandModelAuthoring } from './shell-actions';
 import { openEmptySession } from './shell-actions';
 import { connectionAction, connectRemote, openSettingsPage, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
@@ -13,11 +14,12 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.getByLabel('Message', { exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    const mcp=page.getByRole('region',{name:'MCP servers',exact:true});
     const model = page.getByRole('dialog', { name: 'Model fixture/console-model', exact: true });
     expect(await selectedSettingsPage(page)).toBe('General');
     const writes = () => wire.requests.filter(request => request.method === 'configuration/sourceWrite');
@@ -29,7 +31,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       // asking connectionAction to inspect a tab behind that modal.
       await openSettingsPage(page, 'Advanced');
       await connectionAction(page, 'Reconnect');
-      await expect(page.getByLabel('Transport token')).toBeHidden();
+      await expect(page.getByLabel('Access token')).toBeHidden();
       await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
     };
     const openModel = async (mode: 'open' | 'restore') => {
@@ -46,32 +48,33 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
         return;
       }
       await expandModelAuthoring(page);
-      if (await settings.getByRole('button', { name: '← Models', exact: true }).isVisible()) await settings.getByRole('button', { name: '← Models', exact: true }).click();
-      await settings.getByRole('button', { name: /^All Models/ }).click();
-      await settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name: 'fixture/console-model', exact: true }).click();
+      await settings.getByRole('row', { name: 'fixture/console-model', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
       await expect(model.getByRole('heading', { name: 'Edit Model', exact: true })).toBeVisible();
     };
     const openMcp = async () => {
       if (await model.isVisible()) await model.getByRole('button', { name: 'Close', exact: true }).click();
-      await openSettingsPage(page, 'MCP servers');
-      await expect(settings.locator('[data-mcp-page]')).toBeVisible();
-      const back = settings.getByRole('button', { name: '← MCP servers', exact: true });
-      const create = settings.getByRole('button', { name: '＋ New', exact: true });
+      // A retained editor hides the scope tabs. Return to the catalog before
+      // selecting its scope, preserving the editor's transaction on the way.
+      await openResourceModule(page,'mcp');
+      await expect(mcp.locator('[data-mcp-page]')).toBeVisible();
+      const back = mcp.getByRole('button', { name: '← MCP servers', exact: true });
+      const create = mcp.getByRole('button', { name: '＋ New MCP server', exact: true });
       // Reconnecting can restore the retained editor after the tabpanel mounts.
       // Wait for its actual surface before deciding whether to return to the list.
       await expect(back.or(create).first()).toBeVisible();
       if (await back.isVisible()) { await back.click(); await expect(back).toHaveCount(0); }
+      await mcp.getByRole('tab', { name: 'Global', exact: true }).click();
       await expect(create).toBeVisible();
     };
     await openModel('open');
     await model.getByLabel('Context window').fill('250000');
     appendFileSync(fixture.settings, '\n# external revision before save\n');
     await model.getByRole('button', { name: 'Save Model fixture/console-model', exact: true }).click();
-    await expect(model.getByRole('alert')).toContainText('was not saved: the source changed');
+    await expect(page.locator('[data-toast][data-foreground]').filter({ hasText: 'was not saved because it changed elsewhere' })).toBeVisible();
     await expect(model.getByLabel('Context window')).toHaveValue('250000');
     expect(readFileSync(fixture.settings, 'utf8')).not.toContain('250000');
     expect(writes()).toHaveLength(1);
-    await model.getByRole('button', { name: 'Use reviewed revision', exact: true }).click();
+    await model.getByRole('button', { name: 'Use latest setting', exact: true }).click();
     wire.loseNext('configuration/sourceWrite');
     await model.getByRole('button', { name: 'Save Model fixture/console-model', exact: true }).click();
     await expect.poll(wire.lost).toBe(1);
@@ -82,17 +85,17 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     await expect(model.getByLabel('Context window')).toHaveValue('250000');
     expect(writes()).toHaveLength(2);
     await openMcp();
-    await settings.getByRole('button', { name: '＋ New', exact: true }).click();
-    await settings.getByLabel('Name', { exact: true }).fill('loss-fixture');
-    await settings.getByLabel('Command', { exact: true }).fill('inert-fixture');
+    await mcp.getByRole('button', { name: '＋ New MCP server', exact: true }).click();
+    await mcp.getByLabel('Name', { exact: true }).fill('loss-fixture');
+    await mcp.getByLabel('Command', { exact: true }).fill('inert-fixture');
     wire.loseNext('configuration/sourceWrite');
-    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    await mcp.getByRole('button', { name: 'Save', exact: true }).click();
     await expect.poll(wire.lost).toBe(2);
     expect(readFileSync(join(fixture.directory, 'home/rustx/.agents/mcp.toml'), 'utf8')).toContain('inert-fixture');
     await reconnect();
     await openMcp();
-    await settings.getByRole('button', { name: 'MCP loss-fixture', exact: true }).click();
-    await expect(settings.getByLabel('Command', { exact: true })).toHaveValue('inert-fixture');
+    await mcp.getByRole('button', { name: 'MCP loss-fixture', exact: true }).click();
+    await expect(mcp.getByLabel('Command', { exact: true })).toHaveValue('inert-fixture');
     expect(writes()).toHaveLength(3);
     wire.loseNext('configuration/reconcile');
     await openSettingsPage(page, 'Advanced');
@@ -103,15 +106,15 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
     expect(writes()).toHaveLength(3);
     // A User draft remains User-owned across Session focus changes.
     await openMcp();
-    await settings.getByRole('button', { name: 'MCP loss-fixture', exact: true }).click();
-    await settings.getByLabel('Command', { exact: true }).fill('unsaved-draft');
+    await mcp.getByRole('button', { name: 'MCP loss-fixture', exact: true }).click();
+    await mcp.getByLabel('Command', { exact: true }).fill('unsaved-draft');
     await openEmptySession(page, fixture, 'Workspace B');
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    expect(await selectedSettingsPage(page)).toBe('MCP servers');
+    expect(await selectedSettingsPage(page)).toBe('Advanced');
     await openMcp();
-    await settings.getByRole('button', { name: 'MCP loss-fixture', exact: true }).click();
-    await expect(settings.getByLabel('Command', { exact: true })).toHaveValue('unsaved-draft');
+    await mcp.getByRole('button', { name: 'MCP loss-fixture', exact: true }).click();
+    await expect(mcp.getByLabel('Command', { exact: true })).toHaveValue('unsaved-draft');
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toMatch(/250000|loss-fixture|unsaved-draft/);
   } finally { await page.close(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
 });

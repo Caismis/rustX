@@ -254,7 +254,7 @@ impl ConfigurationApplications {
                 return;
             }
             if let Some(old) = &adopted
-                && capture.preserves_adopted_models(old)
+                && capture.preserves_adopted_models(old, |_| false)
                 && (capture.same_session_model(old) || capture.selection_unavailable().is_some())
             {
                 let others_unchanged = capture.same_capabilities(old)
@@ -413,7 +413,7 @@ impl ConfigurationApplications {
             let prepared_capture = capture.clone();
             let mut preparation = Box::pin(runtime.prepare_configuration(
                 |capability| resource_loader.prepare(capability, prepared_capture, &cancellation),
-                capture.config.initial_model().clone(),
+                capture.session_model().clone(),
             ));
             let prepared =
                 tokio::time::timeout(std::time::Duration::from_mins(2), &mut preparation).await;

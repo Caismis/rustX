@@ -600,6 +600,7 @@ mod tests {
                     text: "text".repeat(32_768),
                 }),
                 AssistantContentBlock::Reasoning(ReasoningBlock {
+                    origin: None,
                     text: Some("reasoning".repeat(16_384)),
                     provider_state: None,
                 }),

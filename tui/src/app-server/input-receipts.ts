@@ -1,4 +1,4 @@
-import type {InboundAcceptance} from '../../../protocol/app-server/v76.ts';
+import type {InboundAcceptance} from '../../../protocol/app-server/v78.ts';
 
 /** Local operation evidence, owned across transport replacements. Nothing here
  * can admit or replay input. The server alone proves durable acceptance. */

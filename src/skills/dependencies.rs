@@ -178,25 +178,6 @@ impl core::fmt::Display for Ecosystem {
     }
 }
 
-/// Parses the rustX dependency declaration keys of one Skill's metadata.
-///
-/// # Errors
-///
-/// Returns [`DependencyError`] for a malformed or unsupported declaration.
-pub fn parse_dependency_map(
-    metadata: &BTreeMap<String, String>,
-) -> Result<DependencyManifest, DependencyError> {
-    let python = match metadata.get(PYTHON_DEPENDENCIES_METADATA_KEY) {
-        Some(value) => parse_python_dependencies(value)?,
-        None => BTreeMap::new(),
-    };
-    let node = match metadata.get(NODE_DEPENDENCIES_METADATA_KEY) {
-        Some(value) => parse_node_dependencies(value)?,
-        None => BTreeMap::new(),
-    };
-    Ok(DependencyManifest { python, node })
-}
-
 /// Parses one `rustx.python-dependencies` metadata value.
 ///
 /// # Errors
@@ -576,13 +557,7 @@ mod tests {
             "https://example.com/pkg.tgz",
             "file:../pkg",
             "workspace:*",
-            "1.0.0-beta.1",
         ] {
-            // 1.0.0-beta.1 is a valid prerelease exact version.
-            if bad_node == "1.0.0-beta.1" {
-                assert!(parse_node_dependencies(&format!(r#"{{"pkg":"{bad_node}"}}"#)).is_ok());
-                continue;
-            }
             let json = format!(r#"{{"pkg":"{bad_node}"}}"#);
             let result = parse_node_dependencies(&json);
             assert!(
@@ -590,6 +565,8 @@ mod tests {
                 "node {bad_node:?} must be rejected, got {result:?}"
             );
         }
+        assert!(parse_python_dependencies(r#"{"pkg":"1.0rc1"}"#).is_ok());
+        assert!(parse_node_dependencies(r#"{"pkg":"1.0.0-beta.1"}"#).is_ok());
     }
 
     /// Duplicate compatible declarations coalesce; incompatible ones
@@ -635,9 +612,7 @@ mod tests {
             ),
         )
         .expect("write");
-        let workspace = crate::tools::workspace::Workspace::new(dir.path()).expect("workspace");
         let mut discovered = crate::skills::package::SkillDiscovery::with_config(
-            &workspace,
             crate::skills::package::SkillDiscoveryConfig::workspace_root(
                 dir.path().join(".agents/skills"),
             ),

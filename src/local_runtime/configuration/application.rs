@@ -358,7 +358,8 @@ impl ApplicationState {
             input
                 .model
                 .clone()
-                .unwrap_or_else(|| capture.config.initial_model().clone()),
+                .or_else(|| capture.config.agent.model.clone())
+                .ok_or(NO_CONVERSATION_MODEL)?,
         );
         Self::validate_selection(&capture, credentials, persisted)?;
         capture.admit(|| credentials.clone())
@@ -374,11 +375,28 @@ impl ApplicationState {
         credentials: &crate::credentials::CredentialSnapshot,
     ) -> Result<std::borrow::Cow<'_, super::ProspectiveSessionConfig>, String> {
         if let Some(capture) = self.available.get(key) {
+            // A first usable model can bootstrap creation after an empty
+            // catalog. Preserve the Workspace's last published resources.
+            if capture.config.agent.model.is_none()
+                && let Some(desired) = self
+                    .desired_sources
+                    .get(key)
+                    .and_then(|input| input.as_ref().ok())
+                    .and_then(|input| input.context.as_ref().ok())
+                && desired.config.agent.model.is_some()
+                && let Some(candidate) =
+                    Self::creation_catalog_candidate(capture, desired, credentials, false)
+            {
+                return Ok(std::borrow::Cow::Owned(candidate));
+            }
             return Ok(std::borrow::Cow::Borrowed(capture));
         }
         let capture = configuration
-            .resolve_session(&super::SessionConfigInput::new(key.to_path_buf()))
-            .map_err(|error| error.to_string())?;
+            .capture_application(
+                &super::SessionConfigInput::new(key.to_path_buf()),
+                Some(credentials),
+            )?
+            .context?;
         Self::validate_default(&capture, credentials)?;
         capture.validate_resource_authority()?;
         Ok(std::borrow::Cow::Owned(capture))
@@ -401,6 +419,12 @@ impl ApplicationState {
     > {
         let key = super::capture::canonical_directory(cwd)?;
         let capture = self.creation_capture(configuration, &key, credentials)?;
+        let default = capture
+            .config
+            .agent
+            .model
+            .clone()
+            .ok_or(NO_CONVERSATION_MODEL)?;
         let catalog = capture
             .models
             .resolve(credentials)
@@ -409,7 +433,7 @@ impl ApplicationState {
             crate::model::invocation::ModelBindingRegistry::new(catalog)
                 .map_err(|error| error.to_string())?
                 .catalog_view(),
-            capture.config.initial_model().clone(),
+            default,
         ))
     }
 
@@ -468,7 +492,7 @@ impl ApplicationState {
     ) -> Result<(), String> {
         capture
             .config
-            .validate()
+            .validate_resources()
             .map_err(|error| error.to_string())?;
         for name in &capture.admitted_agent_dependencies() {
             if capture.subagents.get(name).is_none() {
@@ -500,6 +524,9 @@ impl ApplicationState {
         capture: &super::ProspectiveSessionConfig,
         credentials: &crate::credentials::CredentialSnapshot,
     ) -> Result<(), String> {
+        if capture.config.agent.model.is_none() {
+            return Ok(());
+        }
         let mut default = capture.clone();
         default.input.model = None;
         Self::validate_selection(&default, credentials, false)
@@ -710,6 +737,55 @@ impl ApplicationState {
         if let Ok(input) = input {
             self.desired_process = Some(input.process.clone());
         }
+    }
+
+    /// A typed model-catalog edit reaches new Sessions at the source commit,
+    /// even when no Session worker exists. Other units keep their previous
+    /// creation authority. Existing Sessions still apply the ordinary capture.
+    pub(crate) fn publish_creation_catalog(
+        &mut self,
+        workspace: Option<&std::path::Path>,
+        credentials: &crate::credentials::CredentialSnapshot,
+        removing: bool,
+    ) {
+        for (directory, available) in &mut self.available {
+            if workspace.is_some_and(|workspace| workspace != directory) {
+                continue;
+            }
+            let Some(desired) = self
+                .desired_sources
+                .get(directory)
+                .and_then(|input| input.as_ref().ok())
+                .and_then(|input| input.context.as_ref().ok())
+            else {
+                continue;
+            };
+            if let Some(candidate) =
+                Self::creation_catalog_candidate(available, desired, credentials, removing)
+            {
+                *available = candidate;
+            }
+        }
+    }
+
+    fn creation_catalog_candidate(
+        available: &super::ProspectiveSessionConfig,
+        desired: &super::ProspectiveSessionConfig,
+        credentials: &crate::credentials::CredentialSnapshot,
+        removing: bool,
+    ) -> Option<super::ProspectiveSessionConfig> {
+        if desired.same_catalog(available)
+            || !desired.preserves_adopted_models(available, |model| {
+                available.models.model(model).is_err()
+                    || (removing && desired.models.model(model).is_err())
+            })
+        {
+            return None;
+        }
+        let candidate = available.clone().with_creation_catalog(desired);
+        Self::validate_default(&candidate, credentials).ok()?;
+        candidate.validate_resource_authority().ok()?;
+        Some(candidate)
     }
 
     /// Every directory with retained source authority, whether it published a
@@ -963,6 +1039,8 @@ impl ApplicationState {
         true
     }
 }
+
+const NO_CONVERSATION_MODEL: &str = "No model is available. Add or enable a model in Settings.";
 
 #[cfg(test)]
 mod tests {

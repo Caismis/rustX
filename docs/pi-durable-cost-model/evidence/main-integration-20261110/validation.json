@@ -1,0 +1,231 @@
+{
+  "schema": 1,
+  "recorded_utc": "2026-11-10T03:34:38.409449+00:00",
+  "scope": "Main integration correctness; not performance",
+  "parents": {
+    "pr": "4c68834dc9311dc0515310f2a0f9c07a2078675a",
+    "main": "d80b34fb9d5586a12cdd7f51ac50ee2c17a073b0",
+    "latest_fetched_main": "d80b34fb9d5586a12cdd7f51ac50ee2c17a073b0",
+    "base": "8bf2f5cc1c68d6d05e26f752f2a8743f89853230"
+  },
+  "validated_source": {
+    "index_before_evidence": "5cbbcdc155b42d30a45f83a06d5d8444d1154d1b",
+    "rust_tree": "7e4b4834d0a9a9b35657d27e8485c6affbce55e7",
+    "subtrees": {
+      "src": "7e4b4834d0a9a9b35657d27e8485c6affbce55e7",
+      "tests": "80225feb76efe92595ce3a79c7f29bef79076565",
+      "examples": "582e62d4177bcdb08564082863b985135adc5bec",
+      "protocol/app-server": "59b37addf91f27475509d6e6199c23c4cfb2572b",
+      "tui": "759b6634214bcc0a9dece9409b5c26e9fb2007d4",
+      "web-console": "ad37130bc2f70623731e6233ad588dfc33746271"
+    },
+    "file_sha256": {
+      "Cargo.toml": "8f83a63d4d6bd142ad16ee5cc92723c36b7338c7908fab5ce74340afed11af9c",
+      "Cargo.lock": "2ac4b150d083e07d1e91f164233601ab351a593ed62c65db76ceedfc6118a944",
+      "protocol/app-server/package.json": "069f332d7f07d9fd4f78f28e84a77293849dfddf6ddb687090ee6e0237faa45e",
+      "protocol/app-server/v78.schema.json": "4fcadc59ebcef409dfcf4e06c7f4c18d5181b2fefe7d4f74fecf6cb3f86c3093",
+      "protocol/app-server/v78.ts": "e0f7438275e6a0a8e263ed88d039b93d0012e9637486b80ee8a8f4bf74260a64",
+      "protocol/app-server/fixtures.json": "b6c6549d3ef537eaa887452526daacf627210b4b5da874cf9ba495bebb4e2065",
+      "protocol/app-server/fixtures.ts": "12a708facb92de9dcf4764c998461eea412f85cc0d486e3afbbf533f95d57e77",
+      "web-console/package.json": "645ff379d0c579f355b99a0477e0d466aa5ab6b1e3dc82f3894120f4feeadc26",
+      "web-console/pnpm-lock.yaml": "bdb5005b8f70be195be806a72e6d1e59c13b2e8410a19e9bba5e58997a3314e0",
+      "tui/package.json": "983e5968aebaa4d9a17173dd9dd82cda292b6150644fb26a270639130281dbd6",
+      "tui/pnpm-lock.yaml": "1bf9543f6ad05e49a7aca4a450fe24d5700627d8de99f0e534adb5a87762a56f"
+    }
+  },
+  "toolchain": {
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+    "node": "v24.22.0",
+    "pnpm_root_launcher": "11.28.5",
+    "pnpm_packages": {
+      "protocol/app-server": "11.13.1",
+      "tui": "11.13.1",
+      "web-console": "11.13.1"
+    }
+  },
+  "rust_alltarget_results": [
+    {
+      "target": "unittests src/lib.rs",
+      "passed": 5836,
+      "failed": 0,
+      "ignored": 22
+    },
+    {
+      "target": "unittests src/bin/bash_supervisor.rs",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "unittests src/bin/interactive_supervisor.rs",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "unittests src/main.rs",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "unittests src/bin/workflow_renderer.rs",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "tests/cfg3_catalog.rs",
+      "passed": 30,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "tests/cfg3_managed_output.rs",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "tests/conformance/main.rs",
+      "passed": 46,
+      "failed": 0,
+      "ignored": 3
+    },
+    {
+      "target": "tests/contracts/main.rs",
+      "passed": 31,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "tests/durable/main.rs",
+      "passed": 151,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "tests/process/main.rs",
+      "passed": 68,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "tests/provider/main.rs",
+      "passed": 194,
+      "failed": 0,
+      "ignored": 6
+    },
+    {
+      "target": "tests/subagent/main.rs",
+      "passed": 45,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "tests/tools/main.rs",
+      "passed": 134,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "target": "unittests examples/check_test_lanes.rs",
+      "passed": 24,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "target": "unittests examples/document_artifact_fixture.rs",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "unittests examples/generate_app_server_protocol.rs",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "unittests examples/generate_schemas.rs",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "unittests examples/model_smoke.rs",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "unittests examples/session_create_benchmark.rs",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "unittests examples/session_list_benchmark.rs",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "target": "unittests examples/skill_discovery_benchmark.rs",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "totals": {
+    "rust_alltargets_passed": 6564,
+    "rust_alltargets_ignored": 33,
+    "rust_doc_compile_fail_examples_passed": 9,
+    "rust_passed_including_doctests": 6573,
+    "web_passed": 4299,
+    "web_skipped": 4,
+    "tui_passed": 1352,
+    "tui_skipped": 1,
+    "python_runtime_passed": 48,
+    "python_ci_passed": 64
+  },
+  "successful_checks": [
+    "fmt-all-check",
+    "clippy-all-targets-all-features-Dwarnings",
+    "fresh-all-feature-bins",
+    "rust-all-target-tests-in-two-segments",
+    "rust-doc-tests",
+    "protocol-default-feature-generation-no-diff",
+    "protocol-types",
+    "web-types",
+    "tui-types",
+    "web-vitest",
+    "tui-tests",
+    "web-native-addons-and-production-build",
+    "provenance-349-records-notices-icons",
+    "i18n",
+    "runtime-python-tests",
+    "ci-python-tests",
+    "git-diff-check",
+    "no-unmerged-index-entries",
+    "contracts-after-closeout-report-31-pass-not-counted-twice"
+  ],
+  "failures_preserved": [
+    "Initial three Clippy attempts: merged lifetime/new fields, Arc fixture conversions, lint",
+    "Initial web typecheck: missing TRACE_REFRESH_SIZE import",
+    "Initial Rust contracts: obsolete Runtime Client v84 prose; corrected to v85; reran all remaining targets"
+  ],
+  "limits": [
+    "No new performance claims",
+    "No Pi/pi-rust/DeepSeek run",
+    "No browser E2E/screenshot run",
+    "No macOS test",
+    "Remote CI not awaited; assess actual pushed merge HEAD",
+    "Ignored/skipped remain ignored/skipped"
+  ],
+  "bookkeeping_notes": [
+    "Correct arithmetic sum is 6564 all-target Rust tests, plus 9 doctests. Initial progress message incorrectly said 6664; corrected in subsequent update.",
+    "Do not compare dev-debug2 executable hashes to the test-profile binaries; both build artifact streams are retained."
+  ]
+}

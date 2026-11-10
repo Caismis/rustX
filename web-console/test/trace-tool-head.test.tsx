@@ -1,7 +1,7 @@
 import {traceRefreshed} from './fixture';
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,TraceRecord,TraceToolDefinitionSelection,TraceInspectionHead} from '../../protocol/app-server/v76';
+import type {CheckpointPage,CheckpointReadCut,TraceRecord,TraceToolDefinitionSelection,TraceInspectionHead} from '../../protocol/app-server/v78';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {ArtifactContext} from '../src/app/components/Artifact';
 import {PreviewContext} from '../src/app/components/ArtifactPreview';

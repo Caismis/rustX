@@ -1,3 +1,68 @@
+## Provider brand icons (2026-11-08)
+
+Provider list, detail and searchable icon picker use the exact pinned
+`@lobehub/icons-static-svg` 1.102.0 package from LobeHub lobe-icons
+(`989535d6c13da2dec5a2937fe2789d4af4fdd8e0`, MIT). The upstream license is
+retained under licenses and in the production notices. The generated catalog
+selects 357 standalone brand symbols, preferring their color variants; wordmarks
+and alternate marks are excluded. SVG assets are bundled locally, with no CDN
+or Iconify API requests. Monochrome marks use the current theme's text color.
+The default Package glyph comes from the pinned Lucide/Iconify set (ISC).
+
+As in ZCode's ProviderLogo, an explicit provider field selects an asset; provider
+identity and protocol do not infer a logo. The optional native `icon` slug is
+carried through source read/write, redaction and TOML serialization, and omitted
+at the inference catalog boundary. App Server v77 is the mandatory contract;
+no old protocol path is retained. The picker uses existing Base UI modal and
+React Aria grid/search controls. Browser plugin is unavailable in this session;
+validation uses the repository's pinned Playwright/Chromium runner.
+
+## Settings information density (2026-11-08)
+
+Compared ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e` SettingsPage,
+ProviderCardSections, SettingsFormActions and SkillsSection presentation. Removed
+per-form configuration metadata, raw projections, process internals and duplicate
+resource inspection facts. Common fields remain visible; credential source is
+under Connection options. Errors, conflicts, deletion confirmations and repair
+receipts retain their native lifecycle with shorter product wording. No ZCode
+implementation was copied. Coordination tests inspect the existing authority
+actor directly instead of exposing hashes and projections as product UI.
+
+Pinned Chromium references were recaptured for desktop, narrow, light, dark and
+Chinese settings. Two independent strict runs reproduced one RGB-level variant
+at the same single pixel on the narrow light Model input corner. Both raw PNG
+variants are frozen with the comparator; only that measured 1×1 site and delta
+are admitted. Larger deltas, adjacent pixels and other references remain strict.
+
+## Provider-first model authoring (2026-11-08)
+
+Reviewed ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e` provider split
+layout, credential draft handling and Model dialog commit/cancel behavior.
+The existing rustX controls now use a wider provider detail, an explicit empty
+Model list, and one Model creation dialog. Its pending name and complete value
+stay in the Settings transaction actor until the explicit native write; the
+dialog closes only after the committed source is observed. As in ZCode, API
+format is authored on the Provider; every Model inherits it during native
+resolution. Model-level protocol authoring is removed. No ZCode runtime or implementation is
+imported, and no unsupported smart-configuration toggle is presented.
+
+Model-dialog inputs use full CSS-pixel borders. Typed forms submit through TanStack validation. Credential-mode changes replace
+the discriminated credential rather than retaining another mode's fields.
+Native source inspection treats a missing default Model as valid work in
+progress; Session creation still enforces readiness. Relevant visual references
+are recaptured in pinned Chromium. The earlier CAS screenshot/noise evidence is
+frozen with the comparator tests; the new live reference has no tolerance.
+
+## Primary navigation selection (2026-11-08)
+
+Selected primary navigation buttons use the existing active background token
+and rounded shape, without the inset leading marker. Hover and keyboard-focus
+styles remain separate. Affected shell references are recaptured in the pinned
+browser. Earlier deletion-dialog and narrow Model-dialog references and their
+measured raster noise move to the frozen comparator fixtures; the new live
+references are strict.
+No upstream code, assets, dependencies or native behavior change.
+
 ## Combined-shell reference verification (2026-11-07)
 
 The UI-experience branch incorporates main's dual-sidebar shell. Nineteen
@@ -5573,3 +5638,63 @@ Explicit Model-dialog Cancel discards the whole unsaved Model unit through its
 existing transaction actor, including Profile membership and reasoning order.
 Close and navigation retain that draft for later editing; no transaction state
 or native configuration action is added.
+
+## Session model control scope (2026-11-08)
+
+Model catalog/configuration reads now follow the full existing attachment scope,
+including Session and Conversation identities, rather than just a runtime-local
+attachment counter and revisions. This prevents A → B → A navigation from
+clearing a deferred model label without issuing its authoritative reread. A
+component regression reproduces identical local counters and binding revisions;
+real-process browser coverage switches two native Sessions repeatedly without
+opening the picker or sending a model mutation.
+
+The narrow dark Model context input reproduced the light theme's previously
+measured one-level corner variance at (34,237). Independent stable captures
+reproduce both complete PNG variants with every other RGBA byte identical. The
+original dark reference is retained; both raw variants and their hashes are
+frozen with the comparator. Only that one dark-reference pixel now admits the
+measured delta of 1. Regression tests reject adjacent pixels, larger changes and
+other references; no global screenshot threshold changed.
+
+## Independent resource modules (2026-11-08)
+
+Reference inspected: ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e`,
+`packages/ui/src/settings/{SubagentsSection,McpSettingsSection,SkillsSection}.tsx`
+and the app shell's resource navigation. The local implementation adopts separate
+resource destinations, explicit Global / Workspace scope, searchable installed
+resources, per-resource availability and compact MCP authoring. No ZCode source
+code or dependency is copied into this change.
+
+Subagents, MCP servers and Skills now have independent primary routes. Their
+source reads, drafts, exact revisions and writes reuse the existing native
+configuration actors; scope changes never copy configuration between owners.
+Workspace MCP and Agent definitions inherit read-only until explicitly overridden.
+Removing such an override restores Global configuration. Availability controls
+author the native scope's root selections, independently of definition saves.
+Unlike ZCode's current user-only subagent enablement, rustX supports Workspace
+selection through its existing native delegation allowlist.
+
+Skills use native revision-fenced, paginated discovery and chunked instruction
+reads. They have a read-only Markdown viewer and no file editor, Save or Delete.
+Settings no longer duplicates these resource inventories or their root selection
+controls. Runtime extensions and native Tool policies remain in Settings. Existing
+Harness-derived MCP and catalog materials are moved into `src/app/resources`;
+the inventory retains their upstream attribution and records their new paths.
+
+Validation uses the repository's pinned Chromium container (the Browser plugin
+is unavailable), real native global/workspace files and existing component and
+transaction regressions. Native browser cases cover desktop and narrow layouts,
+paginated skills, separate scopes, explicit MCP override/removal, read-only Skill
+instructions and preserving the Home draft without allocating a hidden Session.
+
+The large Skill catalog regression also exposed a bounded-source read racing
+native application settlement. The shared source reader now restarts a whole
+expired read cut, within three attempts, in both the Web client and Product Host.
+It publishes no partial projection and never resubmits a write. Exhaustion,
+authority replacement and other native failures remain explicit failures.
+
+Current UI references are refreshed for the added primary navigation. The former
+Workflow reference is frozen byte-for-byte in the comparator fixtures so its
+historical CI observations remain independently verifiable. Existing comparison
+policies, regions and deltas are unchanged.

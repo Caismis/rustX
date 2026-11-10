@@ -606,7 +606,10 @@ impl LocalConversationCore {
                 .validate_resource_authority()
                 .map_err(|detail| LocalRuntimeError::Capability { detail })?;
             let project_context_files = paths.project_context_files.clone();
-            SessionModelState::new(registry.clone(), runtime_config.initial_model().clone())?; // A persisted selection the catalog no longer admits composes an
+            if let Some(default) = &runtime_config.agent.model {
+                SessionModelState::new(registry.clone(), default.clone())?;
+            }
+            // A persisted selection the catalog no longer admits composes an
             // unavailable Session: it loads, advertises this catalog and admits
             // nothing until a valid selection is committed.
             let model = SessionModelState::restore(
@@ -614,8 +617,13 @@ impl LocalConversationCore {
                 session_state
                     .model
                     .clone()
-                    .unwrap_or_else(|| runtime_config.initial_model().clone()),
-            )?; // Initial Root Plugin selection comes from the resolved CFG3 profile.
+                    .or_else(|| runtime_config.agent.model.clone())
+                    .ok_or_else(|| LocalRuntimeError::Capability {
+                        detail: "Session has no configured model".into(),
+                    })?,
+            )?;
+
+            // Initial Root Plugin selection comes from the resolved CFG3 profile.
             // Later configuration adoption publishes a new profile; admitted work
             // retains its generation. Conversation Todo/Goal state owners remain
             // stable independently of whether a generation exposes their Tools.
@@ -749,7 +757,7 @@ impl LocalConversationCore {
             crate::tools::host::register(&mut base_registry, host_tools, &dependencies.host_tools)
                 .map_err(|detail| LocalRuntimeError::Capability { detail })?;
 
-            // Launch resolution froze the fixed User and Workspace Skill roots.
+            // Launch resolution froze the ordered Skill collections.
             // Package discovery reserves Workspace shadows before validation;
             // Agent profiles independently select prompt visibility.
             let skill_discovery = SkillDiscoveryConfig {
@@ -779,7 +787,6 @@ impl LocalConversationCore {
                         profile: runtime_config.agent.clone(),
                         admitted_agents: subagent_catalog.names().into_iter().cloned().collect(),
                         admitted_workflows: workflows.entries().keys().cloned().collect(),
-                        project_files: paths.root_agent_project_files.clone(),
                         delegated_skills: delegated_skill_selections(
                             &runtime_config,
                             &subagent_catalog,

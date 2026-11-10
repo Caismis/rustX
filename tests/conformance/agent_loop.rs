@@ -158,7 +158,6 @@ impl ObservedEvents {
 struct Setup {
     /// The model the session selects.
     model: String,
-    instructions: Option<String>,
     images: bool,
     /// The declared context window of every catalog model.
     context_window: u64,
@@ -170,19 +169,20 @@ struct Setup {
     summary_model: Option<String>,
     /// Explicit Skill resources for this isolated provider fixture.
     skill_paths: Vec<PathBuf>,
+    responses_stateless: bool,
 }
 
 impl Setup {
     fn new(model: &str) -> Self {
         Self {
             model: model.to_owned(),
-            instructions: None,
             images: false,
             context_window: 128_000,
             reserve_tokens: 1_024,
             keep_recent_tokens: 8_192,
             summary_model: None,
             skill_paths: Vec::new(),
+            responses_stateless: false,
         }
     }
 }
@@ -484,6 +484,7 @@ impl Driver {
         rpc(
             &self.connection,
             Method::ModelSet {
+                recover_unavailable_auxiliary: None,
                 target: self.target.clone(),
                 config: Box::new(config),
             },
@@ -817,18 +818,33 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
         model["provider"] = "emulator".into();
         models.insert(format!("emulator/{id}"), model);
     }
-    for (provider, id, protocol) in [
-        ("emulator", RESPONSES_MODEL, "openai_responses"),
-        ("emulator-anthropic", ANTHROPIC_MODEL, "anthropic_messages"),
+    for (reference_provider, provider, id, protocol) in [
+        (
+            "emulator",
+            "emulator-responses",
+            RESPONSES_MODEL,
+            "openai_responses",
+        ),
+        (
+            "emulator-anthropic",
+            "emulator-anthropic",
+            ANTHROPIC_MODEL,
+            "anthropic_messages",
+        ),
     ] {
         models.insert(
-            format!("{provider}/{id}"),
+            format!("{reference_provider}/{id}"),
             serde_json::json!({
-                "provider": provider, "id": id, "protocol": protocol,
+                "provider": provider, "id": id,
                 "context_window": window, "max_output_tokens": 1024,
                 "capabilities": if setup.images && protocol == "anthropic_messages" { serde_json::json!({"input_modalities": ["text", "image"], "output_modalities": ["text"]}) } else { text_capabilities() },
             }),
         );
+    }
+    if setup.responses_stateless {
+        models
+            .get_mut(&format!("emulator/{RESPONSES_MODEL}"))
+            .unwrap()["compat"] = serde_json::json!({"responses_storage":"stateless"});
     }
     if setup.images {
         for (id, protocol) in [
@@ -836,7 +852,7 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
             ("responses-image", "openai_responses"),
         ] {
             models.insert(format!("emulator/{id}"), serde_json::json!({
-                "provider":"emulator", "id":id, "protocol":protocol,
+                "provider": if protocol == "openai_responses" { "emulator-responses" } else { "emulator" }, "id":id,
                 "compat": if protocol == "openai_chat_completions" { serde_json::json!({"chat_reasoning_replay":"omit"}) } else { serde_json::json!({}) },
                 "context_window":window, "max_output_tokens":1024,
                 "capabilities":{"input_modalities":["text","image"],"output_modalities":["text"]}
@@ -845,8 +861,9 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
     }
     toml::to_string_pretty(&serde_json::json!({
         "providers": {
-            "emulator": { "base_url": emulator.openai_base_url(), "api_key": format!("${CREDENTIAL_VARIABLE}") },
-            "emulator-anthropic": { "base_url": emulator.base_url(), "api_key": format!("${CREDENTIAL_VARIABLE}") },
+            "emulator": { "protocol": "openai_chat_completions", "base_url": emulator.openai_base_url(), "api_key": format!("${CREDENTIAL_VARIABLE}") },
+            "emulator-responses": { "protocol": "openai_responses", "base_url": emulator.openai_base_url(), "api_key": format!("${CREDENTIAL_VARIABLE}") },
+            "emulator-anthropic": { "protocol": "anthropic_messages", "base_url": emulator.base_url(), "api_key": format!("${CREDENTIAL_VARIABLE}") },
         },
         "models": models,
     })).unwrap()
@@ -855,7 +872,6 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
 fn chat_model(id: &str, window: u64) -> serde_json::Value {
     serde_json::json!({
         "id": id,
-        "protocol": "openai_chat_completions",
         "context_window": window,
         "max_output_tokens": 1024,
         "capabilities": text_capabilities(),
@@ -875,7 +891,7 @@ fn session_json(setup: &Setup) -> String {
     if let Some(summary) = &setup.summary_model {
         model["summary_model"] = serde_json::json!({"mode": "explicit", "model": summary});
     }
-    let mut document = serde_json::json!({
+    let document = serde_json::json!({
         "agent_id": "agent-issue47",
         "agent": {"model": model, "skills": "all", "tools": {"builtin": if setup.images { vec!["read", "write", "edit", "glob", "grep", "bash", "read_image"] } else { vec!["read", "write", "edit", "glob", "grep", "bash"] }}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
         "context": {
@@ -883,9 +899,6 @@ fn session_json(setup: &Setup) -> String {
             "keep_recent_tokens": setup.keep_recent_tokens,
         },
     });
-    if let Some(instructions) = &setup.instructions {
-        document["agent"]["instructions"] = serde_json::json!(instructions);
-    }
     toml::to_string_pretty(&document).unwrap()
 }
 
@@ -897,6 +910,204 @@ fn body_text(request: &serde_json::Value) -> String {
 // ---------------------------------------------------------------------------
 // Scenario A — a normal streamed turn, on every supported protocol
 // ---------------------------------------------------------------------------
+
+/// Changing protocols affects request serialization, never accepted history.
+/// Exercise the reported Responses -> Chat Completions -> Responses sequence
+/// through `ModelSet`, durable admission, preflight, tools and real HTTP/SSE.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn responses_chat_responses_switch_preserves_history_and_tool_results() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join(NOTE_PATH), NOTE_MARKER).unwrap();
+    let Some(emulator) =
+        ProviderEmulator::start_with_workspace("responses_chat_responses_switch", Some(&workspace))
+            .await
+    else {
+        return;
+    };
+    let responses = format!("emulator/{RESPONSES_MODEL}");
+    let driver = Driver::start_in(root, &emulator, &Setup::new(&responses)).await;
+
+    for (model, prompt) in [
+        (responses.as_str(), TURN_ONE),
+        ("emulator/chat-model", TURN_TWO),
+        (responses.as_str(), TURN_THREE),
+    ] {
+        let previous_history = driver.canonical_history();
+        driver
+            .model_set(SessionModelConfig::of(ModelRef::parse(model).unwrap()))
+            .await
+            .expect("select protocol for the next attempt");
+        driver.submit(prompt);
+        let (_, outcome) = driver.settle().await;
+        assert!(
+            matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+            "{model}: {outcome:?}"
+        );
+        assert!(
+            driver.canonical_history().starts_with(&previous_history),
+            "switching does not rewrite accepted reasoning or tool identities"
+        );
+    }
+
+    let requests = emulator.requests().await;
+    assert_eq!(
+        requests.len(),
+        4,
+        "three user turns and one real tool continuation"
+    );
+    let input = requests[3]["body"]["input"].as_array().unwrap();
+    let mut text = Vec::new();
+    for item in input {
+        if item["type"] == "message" && item["role"] == "assistant" {
+            for part in item["content"].as_array().unwrap() {
+                assert_eq!(part["type"], "output_text");
+                text.push(part["text"].as_str().unwrap());
+            }
+        }
+    }
+    assert_eq!(
+        text,
+        [
+            "Responses plan",
+            "Responses answer",
+            "Chat tool plan",
+            "Chat final plan",
+            "Chat answer"
+        ]
+    );
+    assert!(
+        !input.iter().any(|item| item["type"] == "reasoning"),
+        "readable thoughts do not become fabricated native reasoning items"
+    );
+    assert_eq!(
+        input
+            .iter()
+            .filter(|item| item["type"] == "function_call" && item["call_id"] == "call-switch-read")
+            .count(),
+        1
+    );
+    assert_eq!(
+        input
+            .iter()
+            .filter(|item| item["type"] == "function_call_output"
+                && item["call_id"] == "call-switch-read")
+            .count(),
+        1
+    );
+    assert_eq!(
+        driver.committed_assistant_text(),
+        "Responses answerChat answerBack on Responses"
+    );
+    emulator.finish().await;
+}
+
+/// Every directed protocol switch goes through real admission and tool execution.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_protocol_switch_keeps_native_owners_history_and_tools() {
+    use rustx::message::types::AssistantContentBlock;
+    use rustx::model::ModelProtocol;
+    for stateless in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join(NOTE_PATH), NOTE_MARKER).unwrap();
+        let Some(emulator) = ProviderEmulator::start_with_workspace(
+            if stateless {
+                "all_protocol_switches_stateless"
+            } else {
+                "all_protocol_switches"
+            },
+            Some(&workspace),
+        )
+        .await
+        else {
+            return;
+        };
+        let models = [
+            ("emulator/responses-model", ModelProtocol::OpenAiResponses),
+            ("emulator/chat-model", ModelProtocol::OpenAiChatCompletions),
+            (
+                "emulator-anthropic/anthropic-model",
+                ModelProtocol::AnthropicMessages,
+            ),
+            ("emulator/responses-model", ModelProtocol::OpenAiResponses),
+            (
+                "emulator-anthropic/anthropic-model",
+                ModelProtocol::AnthropicMessages,
+            ),
+            ("emulator/chat-model", ModelProtocol::OpenAiChatCompletions),
+            ("emulator/responses-model", ModelProtocol::OpenAiResponses),
+        ];
+        let mut setup = Setup::new(models[0].0);
+        setup.responses_stateless = stateless;
+        let driver = Driver::start_in(root, &emulator, &setup).await;
+        for (index, (model, protocol)) in models.into_iter().enumerate() {
+            let before = driver.canonical_history();
+            driver
+                .model_set(SessionModelConfig::of(ModelRef::parse(model).unwrap()))
+                .await
+                .unwrap();
+            driver.submit(&format!("switch prompt {index}"));
+            let (_, outcome) = driver.settle().await;
+            assert!(
+                matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+                "{model}: {outcome:?}"
+            );
+            let after = driver.canonical_history();
+            assert!(after.starts_with(&before));
+            let owned = after[before.len()..]
+                .iter()
+                .filter_map(|message| match message {
+                    MessageBlock::Assistant(a) => Some(a),
+                    _ => None,
+                })
+                .flat_map(|a| &a.content)
+                .filter_map(|block| match block {
+                    AssistantContentBlock::Reasoning(r) => r.origin.as_ref(),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!owned.is_empty());
+            assert!(
+                owned
+                    .iter()
+                    .all(|origin| origin.protocol == protocol && origin.model == model_id(model))
+            );
+        }
+        let requests = emulator.requests().await;
+        assert_eq!(requests.len(), 14);
+        let history = driver.request_history();
+        let snapshots = history.page(None, 32).unwrap().snapshots;
+        assert_eq!(snapshots.len(), 14);
+        for pair in snapshots.as_chunks::<2>().0 {
+            assert!(
+                pair[0].continuation.is_none(),
+                "a changed Session model starts from full history"
+            );
+            let first = history.reconstruct(&pair[0].identity).unwrap();
+            let next = history.reconstruct(&pair[1].identity).unwrap();
+            assert_eq!(
+                first.invocation.replay_origin(),
+                next.invocation.replay_origin()
+            );
+            assert_eq!(
+                pair[1].continuation.is_some(),
+                first.protocol() != ModelProtocol::OpenAiChatCompletions
+            );
+        }
+        assert_eq!(
+            driver
+                .canonical_history()
+                .iter()
+                .filter(|m| matches!(m, MessageBlock::Tool(_)))
+                .count(),
+            7
+        );
+        emulator.finish().await;
+    }
+}
 
 /// One fixed user input produces exactly one provider request, one canonical
 /// agent commit, and exactly one successful terminal settlement — over each
@@ -1035,10 +1246,10 @@ async fn a_normal_streamed_turn_settles_once_on_every_protocol() {
     }
 }
 
-/// Built-in guidance, Agent instructions, global, workspace and explicit files cross
+/// Built-in guidance and global and workspace AGENTS.md cross
 /// every provider boundary in the same order and survive frozen reconstruction.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn default_system_prompt_layers_agent_and_project_instructions_on_every_protocol() {
+async fn default_system_prompt_layers_project_instructions_on_every_protocol() {
     for (scenario, model) in [
         (
             "openai_chat_streamed_turn",
@@ -1069,19 +1280,8 @@ async fn default_system_prompt_layers_agent_and_project_instructions_on_every_pr
         .unwrap();
         let project = "Project guidance: preserve the public API.";
         std::fs::write(workspace.join("AGENTS.md"), format!("\u{feff}{project}")).unwrap();
-        let explicit = "Explicit guidance: prefer focused changes.";
-        std::fs::write(workspace.join("extra.md"), format!("\u{feff}{explicit}")).unwrap();
-        std::fs::write(
-            workspace.join("rustx.toml"),
-            "[agent.agents_md]\nfiles = ['extra.md']\n",
-        )
-        .unwrap();
-        let instructions = "Agent guidance: explain the evidence for changes.";
-        let setup = Setup {
-            instructions: Some(instructions.to_owned()),
-            ..Setup::new(&model)
-        };
-        let driver = Driver::start_in(root, &emulator, &setup).await;
+        std::fs::write(workspace.join("extra.md"), "Supplemental guidance").unwrap();
+        let driver = Driver::start_in(root, &emulator, &Setup::new(&model)).await;
         driver.submit(TURN_ONE);
         let (_, outcome) = driver.settle().await;
         assert!(matches!(outcome, RuntimeClientOutcome::Completed { .. }));
@@ -1095,24 +1295,20 @@ async fn default_system_prompt_layers_agent_and_project_instructions_on_every_pr
             workspace.canonicalize().unwrap().display()
         )));
         assert!(prompt.ends_with(&format!(
-            "\n\n{instructions}\n\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\n{global}\n</project_instructions>\n\n<project_instructions path=\"{}\">\n{project}\n</project_instructions>\n\n<project_instructions path=\"{}\">\n{explicit}\n</project_instructions>",
+            "\n\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\n{global}\n</project_instructions>\n\n<project_instructions path=\"{}\">\n{project}\n</project_instructions>",
             global_directory.canonicalize().unwrap().join("AGENTS.md").display(),
-            workspace.canonicalize().unwrap().join("AGENTS.md").display(),
-            workspace.canonicalize().unwrap().join("extra.md").display()
+            workspace.canonicalize().unwrap().join("AGENTS.md").display()
         )));
         let snapshots = driver.request_history().page(None, 32).unwrap().snapshots;
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].effective_system_prompt, prompt);
         std::fs::write(global_directory.join("AGENTS.md"), "Later global edit").unwrap();
         std::fs::write(workspace.join("AGENTS.md"), "Later workspace edit").unwrap();
-        std::fs::write(workspace.join("extra.md"), "Later explicit edit").unwrap();
         let reconstructed = driver.reconstruct_request(&snapshots[0].identity).unwrap();
         assert_eq!(reconstructed.effective_system_prompt, prompt);
         assert!(driver.canonical_history().iter().all(|message| {
             let json = serde_json::to_string(message).unwrap();
-            ![instructions, global, project, explicit]
-                .iter()
-                .any(|text| json.contains(text))
+            ![global, project].iter().any(|text| json.contains(text))
         }));
         emulator.finish().await;
     }
@@ -1261,16 +1457,8 @@ async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
         "the catalog publishes the package's host SKILL.md path: {published}"
     );
     assert!(
-        first.contains(
-            std::path::Path::new(&published)
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .to_str()
-                .unwrap()
-        ) && !first.contains(&published),
-        "the provider receives the absolute Skill root and package name, without path enumeration"
+        first.contains(&published),
+        "the provider receives the absolute path of the Skill instruction file"
     );
     assert!(
         !first.contains(SKILL_BODY_MARKER),
@@ -2655,35 +2843,42 @@ async fn retired_native_coverage_does_not_anchor_overflow_compaction_or_frozen_r
 }
 
 #[tokio::test]
-async fn invalidated_stored_reasoning_fails_compatibility_before_any_new_request_start() {
-    let Some((driver, emulator)) =
-        image_coverage_driver("image_coverage_missing_replay", "emulator/responses-image").await
+async fn invalidated_stored_reasoning_replays_readable_history_without_stale_coverage() {
+    let Some((driver, emulator)) = image_coverage_driver(
+        "image_coverage_stored_reasoning",
+        "emulator/responses-image",
+    )
+    .await
     else {
         return;
     };
     driver.submit("Read sixteen images, then one more.");
     let outcome = driver.settle().await.1;
-    let RuntimeClientOutcome::Failed { error, .. } = outcome else {
-        panic!("missing native replay must fail")
-    };
     assert!(
-        format!("{error:?}").contains("native model input compatibility"),
-        "{error:?}"
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
     );
+    let requests = emulator.requests().await;
+    assert_eq!(requests.len(), 3);
+    let body = &requests[2]["body"];
     assert_eq!(
-        emulator.requests().await.len(),
-        2,
-        "failed preflight dispatches no third request"
+        body.get("previous_response_id"),
+        None,
+        "changed coverage retires the stored pointer"
     );
+    let input = body["input"].as_array().unwrap();
+    assert!(!input.iter().any(|item| item["type"] == "reasoning"));
+    assert!(input.iter().any(|item| item["role"] == "assistant"
+        && item["status"] == "completed"
+        && item["content"][0]
+            == serde_json::json!({"type":"output_text", "text":"stored response reasoning", "annotations": []})));
+    let snapshots = driver.request_history().page(None, 32).unwrap().snapshots;
+    assert_eq!(snapshots.len(), 3);
+    assert!(snapshots[1].continuation.is_some());
+    assert!(snapshots[2].continuation.is_none());
     assert_eq!(
-        driver
-            .request_history()
-            .page(None, 32)
-            .unwrap()
-            .snapshots
-            .len(),
-        2,
-        "failed preflight commits no third request start"
+        driver.committed_assistant_text(),
+        "stored reasoning history continued"
     );
     let canonical = driver.canonical_history();
     assert_eq!(
@@ -2698,8 +2893,8 @@ async fn invalidated_stored_reasoning_fails_compatibility_before_any_new_request
             .iter()
             .filter(|m| matches!(m, MessageBlock::Assistant(_)))
             .count(),
-        2,
-        "compatibility failure invents no Assistant output"
+        3,
+        "the fresh request commits one final Assistant output"
     );
     emulator.finish().await;
 }

@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/react-dom';
-import type { RuntimeClientAgent } from '../../../../protocol/app-server/v76';
+import type { RuntimeClientAgent } from '../../../../protocol/app-server/v78';
 import type { WorkflowChild } from '../../bindings/workflow-children';
 import { useTranslation } from '../../locale/react';
 import { StateDot } from '../../presentation/primitives/StateDot';
@@ -126,6 +126,12 @@ function WorkflowChildRow({ child, selected, close }: { child: WorkflowChild; se
             {child.instance.visit != null && child.instance.visit > 1 && ` · ${child.instance.visit}`}
           </span>
         </span>
+        {!selected && scope.openWorkflowAside && <Tooltip label={tx('common:subagents.open-aside', { name: child.title })} side="bottom" delayMs={500}>
+          <button type="button" className={css.sidebarButton} aria-label={tx('common:subagents.open-aside', { name: child.title })} disabled={pending}
+            onKeyDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); scope.openWorkflowAside?.(child); close(); }}>
+            <span aria-hidden="true"><IconChevronRightOutline14/></span>
+          </button>
+        </Tooltip>}
       </div>
     </div>
     {error && <p role="alert" className={css.notice}>{tx('common:subagents.workflow-open-failed')}</p>}

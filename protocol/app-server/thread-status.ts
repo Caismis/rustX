@@ -1,4 +1,4 @@
-import type {ThreadStatusEntry} from './v76.ts';
+import type {ThreadStatusEntry} from './v78.ts';
 
 /** Authority is established by the owning connection. Within that authority,
  * one native publication revision orders both snapshots and notifications. */

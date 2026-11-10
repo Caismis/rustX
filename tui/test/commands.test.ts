@@ -60,7 +60,7 @@ function deferred<T>(): {
 
 it("T19 bounded binary content remains exact bytes with an explicit Base64 view", async () => {
   const h = await harness();
-  const ref: import("../../protocol/app-server/v76.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v78.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"binary-source"}, block_index: 0 },
     representation: "binary_bytes", version: 1, content_revision: 1, readable_end: 3,
@@ -978,6 +978,7 @@ describe("CommandDispatcher", () => {
       if (profile === null) delete expected.profile;
       else expected.profile = profile;
       assert.deepEqual(paramsOf(set, "session/setModel").config, expected);
+      assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, true);
       h.transport.respond(set.id, domainReceipt('model',[{ ...current, configured: expected }]));
       assert.equal((await command).kind, "transient");
       assert.equal(h.transport.log.count("session/setModel"), 1);
@@ -998,6 +999,7 @@ describe("CommandDispatcher", () => {
     h.transport.respond(read.id, domainReceipt('model',[current]));
     const set = await nextRequest(h, "session/setModel");
     assert.deepEqual(paramsOf(set, "session/setModel").config, current.configured);
+    assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, true);
     let acknowledged = false;
     void choosing.then(() => { acknowledged = true; });
     await Promise.resolve();
