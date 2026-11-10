@@ -1264,7 +1264,7 @@ fn parse_usage(usage: &serde_json::Value) -> Option<ModelUsage> {
 #[derive(Serialize)]
 pub(crate) struct WireRequest<'a> {
     model: &'a str,
-    input: Vec<WireInput<'a>>,
+    input: WireInputs<'a>,
     stream: bool,
     store: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1274,8 +1274,8 @@ pub(crate) struct WireRequest<'a> {
     #[serde(skip_serializing_if = "str::is_empty")]
     instructions: &'a str,
     max_output_tokens: u32,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<WireTool<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<std::sync::Arc<serde_json::value::RawValue>>,
     #[serde(flatten)]
     params: Cow<'a, crate::model::invocation::RequestParams>,
 }
@@ -1367,7 +1367,325 @@ impl<'a> WireInput<'a> {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct ResponsesPrefix {
+    prefix: crate::model::adapter::cache::Prefix,
+    epoch: u64,
+    first: usize,
+    origin: Option<crate::model::replay::ReplayOrigin>,
+    images: crate::model::images::ResolvedImages,
+    pieces: imbl::OrdMap<usize, std::sync::Arc<Vec<std::sync::Arc<serde_json::value::RawValue>>>>,
+    native_ids: imbl::HashSet<String>,
+    generated: imbl::HashMap<String, usize>,
+    ids: imbl::HashMap<usize, String>,
+    count: usize,
+    bytes: usize,
+}
+
+enum WireInputs<'a> {
+    Cached {
+        pieces:
+            imbl::OrdMap<usize, std::sync::Arc<Vec<std::sync::Arc<serde_json::value::RawValue>>>>,
+        count: usize,
+        bytes: usize,
+        _lifetime: std::marker::PhantomData<&'a ()>,
+    },
+    #[cfg(test)]
+    Uncached(Vec<WireInput<'a>>),
+}
+impl Serialize for WireInputs<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        match self {
+            Self::Cached { pieces, count, .. } => {
+                let mut array = serializer.serialize_seq(Some(*count))?;
+                for piece in pieces.values() {
+                    for item in piece.iter() {
+                        array.serialize_element(item.as_ref())?;
+                    }
+                }
+                array.end()
+            }
+            #[cfg(test)]
+            Self::Uncached(items) => items.serialize(serializer),
+        }
+    }
+}
+impl WireRequest<'_> {
+    pub(crate) fn capacity_hint(&self) -> usize {
+        match &self.input {
+            WireInputs::Cached { bytes, count, .. } => bytes
+                .saturating_add(*count)
+                .saturating_add(self.instructions.len())
+                .saturating_add(self.tools.as_ref().map_or(0, |raw| raw.get().len()))
+                .saturating_add(1024),
+            #[cfg(test)]
+            WireInputs::Uncached(_) => 128,
+        }
+    }
+}
+impl ResponsesPrefix {
+    fn record_native(&mut self, input: &[WireInput<'_>], dirty: &mut imbl::OrdSet<usize>) {
+        for item in input {
+            if let WireInput::Native(native) = item
+                && let Some(id) = native.item["id"].as_str()
+                && !self.native_ids.contains(id)
+            {
+                self.native_ids.insert(id.to_owned());
+                if let Some(&shadowed) = self.generated.get(id) {
+                    dirty.insert(shadowed);
+                }
+            }
+        }
+    }
+    fn assign_id(&mut self, index: usize, input: &mut [WireInput<'_>]) {
+        let Some(WireInput::Message {
+            role: "assistant",
+            id,
+            ..
+        }) = input.first_mut()
+        else {
+            return;
+        };
+        if let Some(previous) = self.ids.remove(&index) {
+            self.generated.remove(&previous);
+        }
+        let base = format!("msg_rustx_{index}");
+        let mut label = base.clone();
+        for suffix in 1.. {
+            if !self.native_ids.contains(&label) {
+                break;
+            }
+            label = format!("{base}_{suffix}");
+        }
+        self.generated.insert(label.clone(), index);
+        self.ids.insert(index, label.clone());
+        *id = Some(label);
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn translate_request<'a>(
+    request: &'a ModelRequest,
+    tools: &ValidatedTools,
+    storage_mode: ResponsesStorageMode,
+) -> Result<WireRequest<'a>, ModelError> {
+    translate_request_with_limit(request, tools, storage_mode, None)
+}
+
+pub(crate) fn translate_request_with_limit<'a>(
+    request: &'a ModelRequest,
+    tools: &ValidatedTools,
+    storage_mode: ResponsesStorageMode,
+    limit: Option<usize>,
+) -> Result<WireRequest<'a>, ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _profile =
+        crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
+    let (first, previous_response_id) =
+        continuation_input(request, tools.continuation_boundary, storage_mode)?;
+    let (prefix, translated) = stage_inputs(request, tools, first)?;
+    let params = crate::model::adapter::structured::request_params(request)?;
+    let catalog = tools.encoded_tools(
+        ModelProtocol::OpenAiResponses,
+        limit,
+        &request.tools,
+        || translate_tools(&request.tools),
+    )?;
+    let input_limit = limit
+        .map(|limit| {
+            limit
+                .checked_sub(catalog.as_ref().map_or(0, |raw| raw.get().len()))
+                .ok_or_else(crate::model::adapter::validation::wire_budget_error)
+        })
+        .transpose()?;
+    let input = finish_inputs(request, tools, prefix, translated, input_limit)?;
+    Ok(WireRequest {
+        model: request.model(),
+        input,
+        stream: true,
+        store: storage_mode == ResponsesStorageMode::Stored,
+        include: (storage_mode == ResponsesStorageMode::Stateless)
+            .then_some(["reasoning.encrypted_content"]),
+        previous_response_id,
+        instructions: &request.effective_system_prompt,
+        max_output_tokens: request.max_output_tokens(),
+        tools: catalog,
+        params,
+    })
+}
+
+fn stage_inputs<'a>(
+    request: &'a ModelRequest,
+    tools: &ValidatedTools,
+    first: usize,
+) -> Result<
+    (
+        ResponsesPrefix,
+        std::collections::BTreeMap<usize, Vec<WireInput<'a>>>,
+    ),
+    ModelError,
+> {
+    let plan = &tools.correlation;
+    let origin = request.invocation.replay_origin();
+    let mut prefix = request
+        .messages
+        .preparation()
+        .lock()
+        .expect("input preparation cache")
+        .responses
+        .take()
+        .filter(|prefix| {
+            prefix.epoch == plan.epoch
+                && prefix.first == first
+                && prefix.origin == origin
+                && prefix.images == request.images
+                && prefix.prefix.matches(&request.messages)
+        })
+        .unwrap_or_else(|| ResponsesPrefix {
+            epoch: plan.epoch,
+            first,
+            origin: origin.clone(),
+            images: request.images.clone(),
+            ..ResponsesPrefix::default()
+        });
+    let mut dirty: imbl::OrdSet<usize> = plan
+        .dirty
+        .iter()
+        .copied()
+        .filter(|index| *index >= first && *index < request.messages.len())
+        .collect();
+    for index in prefix.prefix.len().max(first)..request.messages.len() {
+        dirty.insert(index);
+    }
+    let mut translated = std::collections::BTreeMap::new();
+    for &index in &dirty.clone() {
+        let input = translate_message(request, index, origin.as_ref())?;
+        prefix.record_native(&input, &mut dirty);
+        translated.insert(index, input);
+    }
+    for &index in &dirty {
+        if let std::collections::btree_map::Entry::Vacant(entry) = translated.entry(index) {
+            entry.insert(translate_message(request, index, origin.as_ref())?);
+        }
+    }
+    plan.validate_wire().map_err(invalid_request)?;
+    for (&index, input) in &mut translated {
+        prefix.assign_id(index, input);
+        plan.encode_message_fields(index, &request.messages[index], |field| {
+            for item in &mut *input {
+                match item {
+                    WireInput::Result { call_id, .. } => field(false, call_id),
+                    WireInput::Call { call_id, .. }
+                    | WireInput::Native(NativeInput {
+                        call_id: Some(call_id),
+                        ..
+                    }) => field(true, call_id),
+                    _ => {}
+                }
+            }
+        })
+        .map_err(invalid_request)?;
+    }
+    Ok((prefix, translated))
+}
+
+fn finish_inputs<'a>(
+    request: &ModelRequest,
+    tools: &ValidatedTools,
+    mut prefix: ResponsesPrefix,
+    translated: std::collections::BTreeMap<usize, Vec<WireInput<'a>>>,
+    limit: Option<usize>,
+) -> Result<WireInputs<'a>, ModelError> {
+    for index in translated.keys() {
+        if let Some(previous) = prefix.pieces.remove(index) {
+            prefix.count -= previous.len();
+            prefix.bytes -= previous.iter().map(|raw| raw.get().len()).sum::<usize>();
+        }
+    }
+    if limit.is_some_and(|limit| prefix.bytes > limit) {
+        return Err(crate::model::adapter::validation::wire_budget_error());
+    }
+    for (index, input) in translated {
+        let mut raw = Vec::with_capacity(input.len());
+        for item in input {
+            let item = crate::model::adapter::cache::encode_raw(
+                &item,
+                limit.map(|limit| limit - prefix.bytes),
+            )?;
+            prefix.bytes += item.get().len();
+            prefix.count += 1;
+            raw.push(item);
+        }
+        #[cfg(test)]
+        crate::model::adapter::cache::work(|work| {
+            work.encoded_items += 1;
+            work.encoded_bytes += raw.iter().map(|raw| raw.get().len()).sum::<usize>();
+        });
+        prefix.pieces.insert(index, std::sync::Arc::new(raw));
+    }
+    prefix.prefix = crate::model::adapter::cache::Prefix::capture(&request.messages);
+    let input = WireInputs::Cached {
+        pieces: prefix.pieces.clone(),
+        count: prefix.count,
+        bytes: prefix.bytes,
+        _lifetime: std::marker::PhantomData,
+    };
+    let mut cache = request
+        .messages
+        .preparation()
+        .lock()
+        .expect("input preparation cache");
+    if let Some(current) = cache.correlation.as_mut().filter(|current| {
+        current.epoch == tools.correlation.epoch && current.matches(&request.messages)
+    }) {
+        current.dirty.clear();
+        cache.responses = Some(prefix);
+    }
+    Ok(input)
+}
+
+fn translate_message<'a>(
+    request: &'a ModelRequest,
+    index: usize,
+    origin: Option<&crate::model::replay::ReplayOrigin>,
+) -> Result<Vec<WireInput<'a>>, ModelError> {
+    let block = &request.messages[index];
+    let mut input = Vec::new();
+    match block.view() {
+        ModelMessageView::User(user) => {
+            input.push(translate_user_input(user, &request.images)?);
+        }
+        ModelMessageView::Assistant(assistant) => {
+            translate_assistant_inputs(assistant, origin, &mut input)?;
+        }
+        ModelMessageView::Tool(call, result) => {
+            input.push(translate_tool_result(call, result, &request.images)?);
+        }
+        ModelMessageView::RequestOnly(carryover) => {
+            let (role, kind) = if carryover.is_assistant() {
+                ("assistant", "output_text")
+            } else {
+                ("user", "input_text")
+            };
+            input.push(WireInput::message(
+                role,
+                vec![if carryover.is_assistant() {
+                    replayed_output_text(Cow::Owned(carryover.render()))
+                } else {
+                    WirePart::Text {
+                        r#type: kind,
+                        text: Cow::Owned(carryover.render()),
+                    }
+                }],
+            ));
+        }
+    }
+    Ok(input)
+}
+
+#[cfg(test)]
+pub(crate) fn uncached_request<'a>(
     request: &'a ModelRequest,
     tools: &ValidatedTools,
     storage_mode: ResponsesStorageMode,
@@ -1424,12 +1742,7 @@ pub(crate) fn translate_request<'a>(
         }
     }
     assign_replayed_message_ids(&mut input, replayed);
-    let labels = crate::model::adapter::correlation::transmitted_labels(
-        request,
-        tools.continuation_boundary,
-    )
-    .map_err(|error| invalid_request(&error))?;
-    crate::model::adapter::correlation::encode_fields(&labels, |field| {
+    crate::model::adapter::correlation::encode_fields(tools.correlation.transmitted(), |field| {
         for item in &mut input {
             #[cfg(feature = "issue-387-profile")]
             crate::model::adapter::profile::wire_item();
@@ -1448,7 +1761,7 @@ pub(crate) fn translate_request<'a>(
     let params = crate::model::adapter::structured::request_params(request)?;
     Ok(WireRequest {
         model: request.model(),
-        input,
+        input: WireInputs::Uncached(input),
         stream: true,
         store: storage_mode == ResponsesStorageMode::Stored,
         include: (storage_mode == ResponsesStorageMode::Stateless)
@@ -1456,7 +1769,9 @@ pub(crate) fn translate_request<'a>(
         previous_response_id,
         instructions: &request.effective_system_prompt,
         max_output_tokens: request.max_output_tokens(),
-        tools: translate_tools(&request.tools),
+        tools: tools.encoded_tools(ModelProtocol::OpenAiResponses, None, &request.tools, || {
+            translate_tools(&request.tools)
+        })?,
         params,
     })
 }
@@ -1469,6 +1784,7 @@ fn replayed_output_text(text: Cow<'_, str>) -> WirePart<'_> {
     }
 }
 
+#[cfg(test)]
 fn assign_replayed_message_ids(input: &mut [WireInput<'_>], replayed: Vec<(usize, usize)>) {
     if replayed.is_empty() {
         return;
@@ -2123,5 +2439,31 @@ mod tests {
                 .expect("text output")
                 .contains("input schema validation failed: query is required")
         );
+    }
+}
+
+#[cfg(test)]
+mod prefix_publication_tests {
+    use super::*;
+    use crate::model::adapter::cache::tests::{append, oracle, prepared, request};
+
+    #[test]
+    fn late_old_preparation_cannot_replace_current_prefix() {
+        let mut current = request();
+        current.invocation.protocol = crate::model::ModelProtocol::OpenAiResponses;
+        append(&mut current, 0, true, true);
+        let old = current.clone();
+        assert_eq!(prepared(&old), oracle(&old));
+        let tools =
+            crate::model::adapter::validation::validate_request(&old, old.protocol()).unwrap();
+        // Pause the old request after it has taken its immutable cached prefix.
+        let (prefix, translated) = stage_inputs(&old, &tools, 0).unwrap();
+        append(&mut current, 1, true, true);
+        let expected = oracle(&current);
+        assert_eq!(prepared(&current), expected);
+        // Complete the old preparation after the new one has published its
+        // prefix and consumed the old call/result's relabeling work.
+        finish_inputs(&old, &tools, prefix, translated, None).unwrap();
+        assert_eq!(prepared(&current), expected);
     }
 }

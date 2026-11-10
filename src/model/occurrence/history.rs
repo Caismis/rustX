@@ -3,7 +3,7 @@ use super::{CanonicalCallSource, ProviderWireCorrelationId};
 use crate::model::{ModelProtocol, replay::ReplayOrigin};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoricalToolAssociation {
@@ -55,13 +55,29 @@ struct NativeIds {
     ids: imbl::HashSet<String>,
     invalid: bool,
 }
+#[derive(Debug, Clone)]
+struct NativeMembership {
+    origins: Arc<Vec<[u8; 32]>>,
+    occurrences: usize,
+}
+// Only the active replay origin consumes this summary. Keep one cursor into
+// the immutable history instead of updating every possible origin per call.
+#[derive(Debug, Clone, Default)]
+struct NativeValidation {
+    origin: Option<[u8; 32]>,
+    count: usize,
+    head: Weak<AssociationNode>,
+    ids: NativeIds,
+    membership: imbl::HashMap<u32, NativeMembership>,
+}
 #[derive(Debug, Clone, Default)]
 pub struct ToolAssociationHistory {
     pub(crate) head: Option<Arc<AssociationNode>>,
     values: imbl::Vector<Arc<AssociationNode>>,
-    native: imbl::HashMap<[u8; 32], Arc<NativeIds>>,
+    native: Arc<Mutex<NativeValidation>>,
     origins: imbl::HashMap<u32, Arc<Vec<[u8; 32]>>>,
     empty_id: bool,
+    has_native_origins: bool,
     pub(super) encoded_bytes_upper: usize,
 }
 impl PartialEq for ToolAssociationHistory {
@@ -132,23 +148,9 @@ impl ToolAssociationHistory {
                 .len()
                 .saturating_add(64),
         );
+        self.has_native_origins |= !value.native_origins.is_empty();
         let id = value.wire_id.as_ref().map_or("", |id| id.0.as_str());
         self.empty_id |= id.is_empty();
-        // Origins with the same prior membership share the updated ID summary.
-        // A large origin set must not allocate one copy of every wire ID per origin.
-        let mut updated = std::collections::HashMap::new();
-        for origin in value.native_origins.iter() {
-            let previous = self.native.get(origin);
-            let key = previous.map_or(std::ptr::null(), Arc::as_ptr);
-            let native = updated.entry(key).or_insert_with(|| {
-                let mut native = previous.map_or_else(NativeIds::default, |ids| (**ids).clone());
-                native.invalid |= !valid_native_id(id) || native.ids.contains(id);
-                native.ids.insert(id.to_owned());
-                // Keep the previous Arc alive while its address is a map key.
-                (previous.cloned(), Arc::new(native))
-            });
-            self.native.insert(*origin, Arc::clone(&native.1));
-        }
         let node = Arc::new(AssociationNode {
             parent: self.head.clone(),
             value,
@@ -161,12 +163,12 @@ impl ToolAssociationHistory {
     }
     #[cfg(test)]
     pub(crate) fn native_summary_entries(&self) -> usize {
-        let mut seen = std::collections::HashSet::new();
         self.native
-            .values()
-            .filter(|ids| seen.insert(Arc::as_ptr(ids)))
-            .map(|ids| ids.ids.len())
-            .sum()
+            .lock()
+            .expect("native replay summary")
+            .ids
+            .ids
+            .len()
     }
     pub(crate) fn validate_wire_policy(&self, policy: &WirePolicy) -> Result<(), String> {
         if policy.stored_boundary.is_some() {
@@ -175,13 +177,75 @@ impl ToolAssociationHistory {
         if self.empty_id {
             return Err("empty provider wire correlation ID".into());
         }
-        if policy.protocol == ModelProtocol::OpenAiResponses
+        if self.has_native_origins
+            && policy.protocol == ModelProtocol::OpenAiResponses
             && let Some(origin) = &policy.origin
-            && self
-                .native
-                .get(&origin_key(origin))
-                .is_some_and(|ids| ids.invalid)
         {
+            self.validate_native(origin)?;
+        }
+        Ok(())
+    }
+    fn validate_native(&self, origin: &ReplayOrigin) -> Result<(), String> {
+        let origin = origin_key(origin);
+        let mut cache = self.native.lock().expect("native replay summary");
+        let matches = cache.count <= self.len()
+            && (cache.count == 0
+                || cache.head.upgrade().is_some_and(|head| {
+                    self.values
+                        .get(cache.count - 1)
+                        .is_some_and(|node| Arc::ptr_eq(node, &head))
+                }));
+        if cache.origin != Some(origin) || !matches {
+            *cache = NativeValidation {
+                origin: Some(origin),
+                ..NativeValidation::default()
+            };
+        }
+        for index in cache.count..self.len() {
+            let value = &self.values[index].value;
+            #[cfg(test)]
+            NATIVE_WORK.with(|work| {
+                let (origins, calls) = work.get();
+                work.set((origins, calls + 1));
+            });
+            let occurrences = if let Some(membership) = cache
+                .membership
+                .get(&value.call_message)
+                .filter(|membership| Arc::ptr_eq(&membership.origins, &value.native_origins))
+            {
+                membership.occurrences
+            } else {
+                let occurrences = value
+                    .native_origins
+                    .iter()
+                    .filter(|candidate| {
+                        #[cfg(test)]
+                        NATIVE_WORK.with(|work| {
+                            let (origins, calls) = work.get();
+                            work.set((origins + 1, calls));
+                        });
+                        *candidate == &origin
+                    })
+                    .count();
+                cache.membership.insert(
+                    value.call_message,
+                    NativeMembership {
+                        origins: value.native_origins.clone(),
+                        occurrences,
+                    },
+                );
+                occurrences
+            };
+            if occurrences > 0 {
+                let id = value.wire_id.as_ref().map_or("", |id| id.0.as_str());
+                cache.ids.invalid |=
+                    occurrences > 1 || !valid_native_id(id) || cache.ids.ids.contains(id);
+                cache.ids.ids.insert(id.to_owned());
+            }
+        }
+        cache.count = self.len();
+        cache.head = self.head.as_ref().map_or_else(Weak::new, Arc::downgrade);
+        if cache.ids.invalid {
             return Err("native output has conflicting or invalid wire correlation IDs".into());
         }
         Ok(())
@@ -226,9 +290,11 @@ pub(crate) fn native_origins(
                 )
             )
             && let Some(origin) = &reasoning.origin
-            && seen.insert(origin_key(origin))
         {
-            origins.push(origin_key(origin));
+            let key = origin_key(origin);
+            if seen.insert(key) {
+                origins.push(key);
+            }
         }
     }
     Arc::new(origins)
@@ -297,3 +363,8 @@ impl AssociationCoordinates {
 
 #[cfg(test)]
 thread_local! {pub(crate) static HISTORICAL_VISITS:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};}
+
+#[cfg(test)]
+thread_local! { static NATIVE_WORK: std::cell::Cell<(usize,usize)> = const {std::cell::Cell::new((0,0))}; }
+#[cfg(test)]
+mod tests;
