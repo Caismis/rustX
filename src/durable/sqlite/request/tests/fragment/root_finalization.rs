@@ -161,7 +161,7 @@ fn reused_request_source_rejects_invalid_existing_rows_without_rebuilding_them()
             let connection = store.lock().unwrap();
             let root: u64 = connection
                 .query_row(
-                    "SELECT input_root FROM request_snapshots WHERE request_id=?1",
+                    "SELECT input_root FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                     [first.request_id.as_str()],
                     |row| row.get(0),
                 )
@@ -242,7 +242,7 @@ fn missing_request_source_row_is_captured_for_the_next_request() {
     {
         let connection = store.lock().unwrap();
         assert_eq!(connection.execute(
-            "DELETE FROM request_source_nodes WHERE native_id=(SELECT input_root FROM request_snapshots WHERE request_id=?1)",
+            "DELETE FROM request_source_nodes WHERE native_id=(SELECT input_root FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1))",
             [first.request_id.as_str()],
         ).unwrap(), 1);
     }

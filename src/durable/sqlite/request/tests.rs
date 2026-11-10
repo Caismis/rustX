@@ -48,6 +48,7 @@ mod snapshot_validation;
 mod span;
 mod span_integrity;
 mod start_validation;
+mod storage_cost;
 mod structured_format;
 
 #[test]
@@ -1826,7 +1827,7 @@ fn corrupt_frozen_request_revision_metadata_fails_closed() {
         let connection = request_store.conn.lock().unwrap();
         let json: String = connection
             .query_row(
-                "SELECT snapshot_json FROM request_snapshot_payloads WHERE request_id=?1",
+                "SELECT snapshot_json FROM request_snapshot_payloads WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                 [snapshot.request_id.as_str()],
                 |row| row.get(0),
             )
@@ -1835,7 +1836,7 @@ fn corrupt_frozen_request_revision_metadata_fails_closed() {
         value["canonical_frontier"] = serde_json::json!(999_u64);
         connection
             .execute(
-                "UPDATE request_snapshot_payloads SET snapshot_json=?1 WHERE request_id=?2",
+                "UPDATE request_snapshot_payloads SET snapshot_json=?1 WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?2)",
                 params![value.to_string(), snapshot.request_id.as_str()],
             )
             .unwrap();
@@ -1927,7 +1928,7 @@ fn incomplete_historical_snapshot_does_not_block_independently_complete_current_
         connection.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
         connection
             .execute(
-                "DELETE FROM request_snapshots WHERE request_id=?1",
+                "DELETE FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                 [first.request_id.as_str()],
             )
             .unwrap();

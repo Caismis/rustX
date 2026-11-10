@@ -820,7 +820,7 @@ pub(in crate::durable::sqlite) fn prepare_event(
     if let E::ModelRequestStarted { request_id, .. } = &event.event {
         let retained: bool = connection
             .query_row_cached(
-                "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE request_id=?1)",
+                "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1))",
                 [request_id.as_str()],
                 |row| row.get(0),
             )
@@ -949,7 +949,7 @@ pub(in crate::durable::sqlite) fn prepare_request_core(
     };
     let step = step_start(connection, event, pending)?;
     if pending {
-        connection.execute_cached("UPDATE request_snapshots SET observation_step_anchor=?2,observation_retry_number=?3 WHERE request_id=?1",params![snapshot.request_id.as_str(),step,snapshot.identity.retry_number]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        connection.execute_cached("UPDATE request_snapshots SET observation_step_anchor=?2,observation_retry_number=?3 WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",params![snapshot.request_id.as_str(),step,snapshot.identity.retry_number]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     } else {
         connection.execute_cached("UPDATE request_snapshots SET observation_step_anchor=?2,observation_retry_number=?3 WHERE started_sequence=?1",params![event.sequence,step,snapshot.identity.retry_number]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     }

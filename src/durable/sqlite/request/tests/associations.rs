@@ -49,7 +49,7 @@ fn tool_association_metadata_and_rows_stay_bounded_at_8_64_512_turns() {
         assert!(bytes < 1024, "per-turn association payload {bytes}");
         if matches!(turn, 8 | 64 | 512) {
             let connection = store.lock().unwrap();
-            let (size,count,origins):(usize,usize,usize)=connection.query_row("SELECT octet_length(snapshot_json),(SELECT count(*) FROM tool_association_nodes),(SELECT count(*) FROM tool_association_origin_sets) FROM request_snapshot_payloads WHERE request_id=?1",[snapshot.request_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+            let (size,count,origins):(usize,usize,usize)=connection.query_row("SELECT octet_length(snapshot_json),(SELECT count(*) FROM tool_association_nodes),(SELECT count(*) FROM tool_association_origin_sets) FROM request_snapshot_payloads WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",[snapshot.request_id.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
             assert_eq!(origins, turn as usize);
             assert_eq!(count, turn as usize);
             assert!(size < 2500, "metadata expanded to {size} at {turn}");
@@ -144,7 +144,10 @@ fn tool_association_rollback_trigger_corruption_and_retry_publish_no_stale_seats
         .append_canonical_batch(&selected_tool_batch("second"))
         .unwrap();
     let (second, request) = selected_snapshot(&store, 2);
-    for timing in ["INSERT", "UPDATE OF started_sequence"] {
+    for target in [
+        "INSERT ON request_snapshots",
+        "INSERT ON events WHEN json_extract(NEW.event_json,'$.event.type')='model_request_started'",
+    ] {
         for action in [
             "SELECT RAISE(ABORT,'after immutable association insert');",
             "UPDATE tool_association_nodes SET association_json=json_set(association_json,'$.call_block',99) WHERE id=1;",
@@ -153,7 +156,13 @@ fn tool_association_rollback_trigger_corruption_and_retry_publish_no_stale_seats
             "UPDATE tool_association_origin_sets SET origins_json=replace(origins_json,'\"call_message\":0','\"call_message\":9') WHERE id=1;",
             "DELETE FROM tool_association_origin_sets WHERE id=2;",
         ] {
-            store.lock().unwrap().execute_batch(&format!("CREATE TEMP TRIGGER corrupt_association AFTER {timing} ON request_snapshots BEGIN {action} END;")).unwrap();
+            store
+                .lock()
+                .unwrap()
+                .execute_batch(&format!(
+                    "CREATE TEMP TRIGGER corrupt_association AFTER {target} BEGIN {action} END;"
+                ))
+                .unwrap();
             assert!(
                 store
                     .commit_model_turn_start(&[], &second, Utc::now())
@@ -686,7 +695,7 @@ fn large_assistant_origin_set_is_shared_across_reload_retry_continuation_and_arc
         let connection = store.lock().unwrap();
         let json: String = connection
             .query_row(
-                "SELECT snapshot_json FROM request_snapshot_payloads WHERE request_id=?1",
+                "SELECT snapshot_json FROM request_snapshot_payloads WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                 [snapshot.request_id.as_str()],
                 |r| r.get(0),
             )

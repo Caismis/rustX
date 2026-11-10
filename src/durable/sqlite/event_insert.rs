@@ -530,7 +530,17 @@ fn finish(
         ..
     } = &event.event
     {
-        let updated = transaction.execute_cached("UPDATE request_snapshots SET completed_sequence=?1 WHERE request_id=?2 AND completed_sequence IS NULL", params![event.sequence,request_id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,format!("record provider outcome: {error}")))?;
+        let updated = transaction
+            .execute_cached(
+                super::request::COMPLETE_REQUEST_SQL,
+                params![event.sequence, request_id.as_str()],
+            )
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("record provider outcome: {error}"),
+                )
+            })?;
         if updated != 1 {
             return Err(ConversationStoreError::TerminalViolation(format!(
                 "request {request_id} already has a durable provider outcome"

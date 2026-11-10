@@ -115,7 +115,20 @@ pub(in crate::durable::sqlite) fn index_event_tx(
         RuntimeEvent::ModelRequestStarted {
             owner, request_id, ..
         } => {
-            insert_owner_tx(transaction, request_id, owner, event.sequence)?;
+            if matches!(owner, ModelRequestOwner::Agent { .. }) {
+                let indexed = owner_row_tx(transaction, request_id)?
+                    .ok_or_else(|| storage("primary request has no staged owner"))?;
+                if indexed.owner != *owner
+                    || indexed.start_sequence != event.sequence
+                    || indexed.terminal_sequence.is_some()
+                {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "primary request start differs from its staged owner".into(),
+                    ));
+                }
+            } else {
+                insert_owner_tx(transaction, request_id, owner, event.sequence)?;
+            }
             if let ModelRequestOwner::Auxiliary { call_id, .. } = owner {
                 super::title::consume(transaction, call_id)?;
             }
@@ -205,7 +218,7 @@ pub(in crate::durable::sqlite) fn index_event_tx(
     Ok(())
 }
 
-pub(super) fn insert_owner_tx(
+pub(in crate::durable::sqlite) fn insert_owner_tx(
     transaction: &Transaction<'_>,
     request_id: &RequestId,
     owner: &ModelRequestOwner,

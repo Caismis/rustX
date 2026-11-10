@@ -370,7 +370,7 @@ fn retry_capture_ignores_optional_display_holes_and_other_attempt_steering() {
         .lock()
         .unwrap()
         .query_row(
-            "SELECT retry_message_id FROM request_snapshots WHERE request_id=?1",
+            "SELECT retry_message_id FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
             [snapshot.request_id.as_str()],
             |row| row.get(0),
         )

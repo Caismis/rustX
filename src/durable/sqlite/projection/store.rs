@@ -206,7 +206,7 @@ impl ProjectionStore for SqliteConversationStore {
         limits.validate()?;
         self.read_transaction(|transaction| {
             let sql = format!(
-                "SELECT {} FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(request_id) WHERE request_id=?1 AND started_sequence<=?2",
+                "SELECT {} FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(started_sequence) WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1) AND started_sequence<=?2",
                 native_request::MATERIALIZED_BYTES_SQL
             );
             let bytes: Option<u64> = transaction

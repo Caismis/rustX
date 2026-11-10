@@ -857,10 +857,9 @@ pub(super) fn deny_trace_original_columns(
             (
                 "events",
                 "event_json" | "attempt_id" | "turn_id" | "event_id"
-            ) | (
-                "request_snapshots",
-                "request_id" | "snapshot_json" | "previous_request_id"
-            ) | ("request_snapshot_payloads", "request_id" | "snapshot_json")
+            ) | ("request_snapshots", "previous_started_sequence")
+                | ("request_snapshot_payloads", "snapshot_json")
+                | ("request_owners", "request_id")
                 | ("message_ledger", "message_id" | "message_json")
         ) =>
         {

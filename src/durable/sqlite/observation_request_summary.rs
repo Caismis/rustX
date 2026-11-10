@@ -135,7 +135,7 @@ pub(super) fn index(
         .ok_or_else(|| storage("native request reading header exceeds bound"))?;
     connection
         .execute_cached(
-            "UPDATE request_snapshots SET observation_summary=?1 WHERE request_id=?2",
+            "UPDATE request_snapshots SET observation_summary=?1 WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?2)",
             params![bytes, snapshot.request_id.as_str()],
         )
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
@@ -148,7 +148,7 @@ pub(super) fn read(
     through: u64,
 ) -> Result<RequestReadSummary, ConversationStoreError> {
     let bytes: Option<Option<Vec<u8>>> = connection.query_row(
-        "SELECT observation_summary FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",
+        "SELECT observation_summary FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1) AND started_sequence<=?2",
         params![request.as_str(),through], |row| row.get(0),
     ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let bytes = bytes
@@ -173,7 +173,7 @@ pub(super) fn occupancy(
     if summary.context_window_tokens == 0 {
         return Ok(None);
     }
-    let sequence: u64 = connection.query_row_cached("SELECT started_sequence FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let sequence: u64 = connection.query_row_cached("SELECT started_sequence FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1) AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let system_tokens = crate::context::tokens::bytes_to_tokens(summary.prompt_json_bytes);
     let tool_tokens = crate::context::tokens::bytes_to_tokens(summary.tools_json_bytes);
     let deferred = summary.model.is_none();
