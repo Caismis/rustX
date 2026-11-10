@@ -329,7 +329,7 @@ fn human_activity_max(
             Ok((row.get(0)?, row.get(1)?))
         })
         .optional()
-        .map_err(|e| storage(e.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let current = (time.timestamp(), time.timestamp_subsec_nanos());
     Ok(previous.unwrap_or(current).max(current))
 }

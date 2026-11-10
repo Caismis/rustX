@@ -490,7 +490,9 @@ fn bounded_work_auxiliary_turn_sql_is_flat_across_retained_calls() {
         for (sql, work) in statements {
             let first = &baseline[sql];
             assert_eq!(work.steps, first.steps, "history {history}: {sql}");
+            assert_eq!(work.calls, first.calls, "history {history}: {sql}");
             assert_eq!(work.sorts, 0, "history {history}: {sql}");
+            assert_eq!(work.automatic, 0, "history {history}: {sql}");
             assert_eq!(work.scans, first.scans, "history {history}: {sql}");
         }
     }
