@@ -1,0 +1,7 @@
+{
+  "candidate": "bb132f76595f34409fa4b1d3bc1095ee22f71e53",
+  "rust_tree": "e193107b32cf0faafe6b418c1c4c28964aaf8256",
+  "tested_working_patch_matches_commit_exactly": true,
+  "patch_sha256": "85e1b0dd7888d951ec33d61ed646e39fd58d68afca416135cbdf91bfa7fa1dce",
+  "scope": "The unchanged source tested before commit is exactly the production commit. No claim that every remote CI gate passed."
+}

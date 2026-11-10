@@ -1,0 +1,8 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/compare-three-revisions.py"
+  ],
+  "exit": 0,
+  "compiler_overlap_samples": 0
+}
