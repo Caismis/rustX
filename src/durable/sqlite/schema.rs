@@ -630,11 +630,9 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 request_encoded_bytes INTEGER NOT NULL CHECK(request_encoded_bytes>=2),
                 model_hash BLOB NOT NULL CHECK(length(model_hash)=32),
                 encoded_bytes INTEGER NOT NULL CHECK(encoded_bytes>=0),
-                attempt_id TEXT NOT NULL,
-                PRIMARY KEY(attempt_id,ordinal),
-                UNIQUE(attempt_id,model_hash)
+                PRIMARY KEY(owner_anchor,ordinal),
+                UNIQUE(owner_anchor,model_hash)
             ) WITHOUT ROWID;
-            CREATE INDEX IF NOT EXISTS observation_models_owner_idx ON observation_models(owner_anchor,ordinal);
             CREATE TABLE IF NOT EXISTS pending_inbound (
                 sequence INTEGER PRIMARY KEY,
                 observation_header BLOB CHECK(observation_header IS NULL OR length(observation_header)<=16384),
@@ -814,30 +812,28 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                       (count>1 AND parent_id<id AND parent_private_bytes BETWEEN 1 AND private_bytes-1 AND typeof(parent_digest)='blob' AND length(parent_digest)=32))
             );
             CREATE TABLE IF NOT EXISTS request_snapshot_payloads (
-                request_id TEXT PRIMARY KEY,snapshot_json TEXT NOT NULL
-            ) WITHOUT ROWID;
+                started_sequence INTEGER PRIMARY KEY,snapshot_json TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS request_snapshots (
                 observation_step_anchor INTEGER, observation_retry_number INTEGER, observation_context_total INTEGER, observation_accepted_ledger INTEGER,
                 observation_summary BLOB CHECK(observation_summary IS NULL OR length(observation_summary)<=16384),
                 retry_ledger_position INTEGER,
                 observation_terminal_sequence INTEGER,
                 observation_terminal_header BLOB CHECK(observation_terminal_header IS NULL OR length(observation_terminal_header)<=16384),
-                observation_source_id TEXT UNIQUE CHECK(observation_source_id IS NULL OR (length(observation_source_id)<=20 AND CAST(observation_source_id AS INTEGER)=started_sequence)),
+                observation_source_id TEXT CHECK(observation_source_id IS NULL OR (length(observation_source_id)<=20 AND CAST(observation_source_id AS INTEGER)=started_sequence)),
                 canonical_frontier INTEGER NOT NULL,
                 input_root INTEGER REFERENCES native_input_nodes(id),
                 input_root_digest BLOB,
                 input_count INTEGER NOT NULL CHECK(input_count BETWEEN 0 AND 8192),
-                started_sequence INTEGER,
+                started_sequence INTEGER PRIMARY KEY,
                 completed_sequence INTEGER,
                 manifest_digest TEXT NOT NULL CHECK(typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64),
-                previous_request_id TEXT,
-                request_id TEXT PRIMARY KEY,
+                previous_started_sequence INTEGER,
                 retry_message_id TEXT,
                 CHECK((input_root IS NULL AND input_root_digest IS NULL AND input_count=0) OR
                     (input_root IS NOT NULL AND typeof(input_root_digest)='blob' AND length(input_root_digest)=32 AND input_count>0))
             );
             CREATE UNIQUE INDEX IF NOT EXISTS request_trace_retry_idx ON request_snapshots(observation_step_anchor,observation_retry_number) WHERE observation_step_anchor IS NOT NULL;
-            CREATE UNIQUE INDEX IF NOT EXISTS request_snapshots_started_idx ON request_snapshots(started_sequence) WHERE started_sequence IS NOT NULL;
             CREATE TABLE IF NOT EXISTS state_observation_sources (
                 domain TEXT NOT NULL,source_id TEXT NOT NULL,ledger_position INTEGER,journal_sequence INTEGER,
                 todo_header BLOB CHECK(todo_header IS NULL OR length(todo_header)<=16384),
@@ -992,8 +988,9 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
             CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_holes_idx ON events(attempt_id) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL;
             CREATE INDEX IF NOT EXISTS events_execution_owner_idx ON events(observation_execution_owner) WHERE observation_execution IS NOT NULL;
             CREATE TABLE IF NOT EXISTS lifecycle_state (
-                lifecycle_key TEXT PRIMARY KEY,
-                terminal_event_id TEXT
+                id INTEGER PRIMARY KEY,
+                lifecycle_key TEXT NOT NULL UNIQUE,
+                terminal_sequence INTEGER
             );
             CREATE INDEX IF NOT EXISTS message_ledger_append_position_idx ON message_ledger(position,first_append_revision) WHERE first_append_revision IS NOT NULL;
             CREATE INDEX IF NOT EXISTS message_ledger_transcript_position_idx ON message_ledger(position) WHERE native_transcript IS NOT NULL;
@@ -1002,7 +999,6 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
             CREATE INDEX IF NOT EXISTS message_ledger_human_activity_idx ON message_ledger(position) WHERE human_activity_at IS NOT NULL;
             CREATE INDEX IF NOT EXISTS message_ledger_boundary_holes_idx ON message_ledger(first_append_revision) WHERE ordinary_user=1 AND boundary_indexed=0 AND first_append_revision IS NOT NULL;
 
-            CREATE INDEX IF NOT EXISTS request_snapshots_canonical_frontier_idx ON request_snapshots(canonical_frontier);
             CREATE INDEX IF NOT EXISTS publication_frames_unindexed_idx ON publication_frames(stream_id,sequence) WHERE observation_indexed=0;
             CREATE INDEX IF NOT EXISTS publication_streams_owner_idx ON publication_streams(attempt_id,turn_id,stream_id);
             CREATE INDEX IF NOT EXISTS publication_streams_open_idx ON publication_streams(stream_id) WHERE settlement IS NULL;

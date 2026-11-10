@@ -224,7 +224,7 @@ pub(super) fn read(
             let candidate: Option<(u64, Option<Vec<u8>>, bool)> = connection.query_row_cached(
                 "SELECT e.sequence,e.observation_occupancy,
                     EXISTS(SELECT 1 FROM request_owners o JOIN request_snapshots s
-                        ON s.request_id=o.request_id AND s.started_sequence=o.start_sequence
+                        ON s.started_sequence=o.start_sequence
                         WHERE o.terminal_sequence=e.sequence AND o.owner_kind='agent'
                           AND o.terminal_kind=?3 AND o.attempt_id=e.attempt_id AND o.turn_id=e.turn_id
                           AND o.request_id='request:' || octet_length(o.attempt_id) || ':' || o.attempt_id || ':' || octet_length(o.turn_id) || ':' || o.turn_id || ':' || o.retry_number)

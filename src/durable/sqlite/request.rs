@@ -58,8 +58,10 @@ use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+pub(super) const COMPLETE_REQUEST_SQL: &str = "UPDATE request_snapshots SET completed_sequence=?1 WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?2) AND completed_sequence IS NULL";
+
 // started_sequence is unique, so no secondary sort key is needed.
-pub(super) const SNAPSHOT_HEADERS_SQL: &str = "SELECT request_id,started_sequence FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence IS NOT NULL AND started_sequence>?1 ORDER BY started_sequence LIMIT ?2";
+pub(super) const SNAPSHOT_HEADERS_SQL: &str = "SELECT o.request_id,s.started_sequence FROM request_snapshots s LEFT JOIN request_owners o ON o.start_sequence=s.started_sequence WHERE s.started_sequence>?1 ORDER BY s.started_sequence LIMIT ?2";
 
 impl RequestStore for SqliteConversationStore {
     fn load_request_owner(
@@ -116,7 +118,7 @@ impl RequestStore for SqliteConversationStore {
         let admission_epoch = self.conn.manifest.capture(&transaction)?;
         let existing: Option<(Option<String>, Option<i64>, String)> = transaction
             .query_row_cached(
-                "SELECT CASE WHEN octet_length(snapshot_json)<=67109466 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(request_id) WHERE request_id = ?1",
+                "SELECT CASE WHEN octet_length(snapshot_json)<=67109466 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(started_sequence) WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                 [snapshot.request_id.as_str()],
                 |row| Ok((row.get(0)?, row.get(1)?, read_manifest_digest(row, 2)?)),
             )
@@ -155,6 +157,11 @@ impl RequestStore for SqliteConversationStore {
             return Ok(verified);
         }
         if has_request_journal_fact_tx(&transaction, &snapshot.request_id)? {
+            if let Some(started) =
+                snapshot::find_request_start_event(&transaction, &snapshot.request_id)?
+            {
+                validate_primary_request_owner_event(&transaction, &started)?;
+            }
             return Err(ConversationStoreError::InvalidReference(format!(
                 "request {} has Journal evidence without its request snapshot",
                 snapshot.request_id
@@ -461,7 +468,7 @@ pub(super) fn validate_fresh_input_binding(
 ) -> Result<(), ConversationStoreError> {
     let matches = connection
         .query_row_cached(
-            "SELECT snapshot_json FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(request_id) WHERE request_id=?1",
+            "SELECT snapshot_json FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(started_sequence) WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
             [snapshot.request_id.as_str()],
             |row| Ok(row.get_ref(0)?.as_str()? == json),
         )
@@ -508,7 +515,7 @@ pub(super) fn index_request_read_layouts(
     let _ = optional_display_layout(transaction, || {
         transaction
             .execute_cached(
-                "UPDATE request_snapshots SET observation_source_id=?2 WHERE request_id=?1",
+                "UPDATE request_snapshots SET observation_source_id=?2 WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                 params![snapshot.request_id.as_str(), event.sequence.to_string()],
             )
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
@@ -626,7 +633,7 @@ pub(super) fn reconstruct_request_start_reference(
     };
     let json: Option<String> = transaction
         .query_row_cached(
-            "SELECT snapshot_json FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(request_id) WHERE request_id=?1",
+            "SELECT snapshot_json FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(started_sequence) WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
             [request_id.as_str()],
             |row| row.get(0),
         )
@@ -658,7 +665,7 @@ pub(super) fn reconstruct_request_start_reference(
     let root = read_stored_snapshot_root(transaction, request_id)?;
     let digest: String = transaction
         .query_row(
-            "SELECT CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(request_id) WHERE request_id=?1",
+            "SELECT CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(started_sequence) WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
             [request_id.as_str()],
             |row| read_manifest_digest(row, 0),
         )
@@ -819,13 +826,28 @@ impl SqliteConversationStore {
         let (json, configuration) =
             native_request::persist(transaction, snapshot, &associations.binding)?;
         let manifest_digest = stored_snapshot_digest(&json, selection.root);
+        // No Journal facts are inserted between this frontier and the start.
+        // Bind the one public alias before validating the frozen input; its
+        // deferred FK must resolve to the exact start at this transaction's commit.
+        let start_sequence = seq_to_i64(through)?
+            .checked_add(1)
+            .ok_or_else(|| storage("event sequence exhausted"))?;
+        let start_sequence = sequence_from_i64(start_sequence)?;
+        auxiliary::insert_owner_tx(
+            transaction,
+            &snapshot.request_id,
+            &ModelRequestOwner::Agent {
+                identity: snapshot.identity.clone(),
+            },
+            start_sequence,
+        )?;
         transaction
             .execute_cached(
-                "INSERT INTO request_snapshot_payloads(request_id,snapshot_json) VALUES(?1,?2)",
-                params![snapshot.request_id.as_str(), json],
+                "INSERT INTO request_snapshot_payloads(started_sequence,snapshot_json) VALUES(?1,?2)",
+                params![seq_to_i64(start_sequence)?, json],
             )
             .map_err(|error| super::sqlite_error(&error, error.to_string()))?;
-        transaction.execute_cached("INSERT INTO request_snapshots(request_id,canonical_frontier,manifest_digest,started_sequence,retry_message_id,retry_ledger_position,previous_request_id,input_root,input_root_digest,input_count) VALUES(?1,?2,?3,NULL,?4,(SELECT position FROM message_ledger WHERE message_id=?4),(SELECT request_id FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence IS NOT NULL ORDER BY started_sequence DESC LIMIT 1),?5,?6,?7)",params![snapshot.request_id.as_str(),seq_to_i64(snapshot.canonical_frontier.0)?,manifest_digest,retry_message_id.as_ref().map(MessageId::as_str),selection.root.map(|r|r.id),selection.root.as_ref().map(|r|r.digest.as_slice()),selection.root.map_or(0,|r|r.count)]).map_err(|error|super::sqlite_error(&error,error.to_string()))?;
+        transaction.execute_cached("INSERT INTO request_snapshots(started_sequence,canonical_frontier,manifest_digest,retry_message_id,retry_ledger_position,previous_started_sequence,input_root,input_root_digest,input_count) VALUES(?1,?2,?3,?4,(SELECT position FROM message_ledger WHERE message_id=?4),(SELECT started_sequence FROM request_snapshots ORDER BY started_sequence DESC LIMIT 1),?5,?6,?7)",params![seq_to_i64(start_sequence)?,seq_to_i64(snapshot.canonical_frontier.0)?,manifest_digest,retry_message_id.as_ref().map(MessageId::as_str),selection.root.map(|r|r.id),selection.root.as_ref().map(|r|r.digest.as_slice()),selection.root.map_or(0,|r|r.count)]).map_err(|error|super::sqlite_error(&error,error.to_string()))?;
         #[cfg(test)]
         if self.consume_request_start_fault(RequestStartFaultOperation::AfterSnapshotInsert) {
             return Err(storage(
@@ -927,20 +949,11 @@ impl SqliteConversationStore {
         if self.consume_request_start_fault(RequestStartFaultOperation::AfterCompletionInsert) {
             return Err(storage("fault injected: after request-start event insert"));
         }
-        transaction
-            .execute_cached(
-                "UPDATE request_snapshots SET started_sequence=?1 WHERE request_id=?2",
-                params![
-                    seq_to_i64(persisted.event.sequence)?,
-                    snapshot.request_id.as_str()
-                ],
-            )
-            .map_err(|error| {
-                crate::durable::sqlite::sqlite_error(
-                    &error,
-                    format!("bind request start sequence: {error}"),
-                )
-            })?;
+        if persisted.event.sequence != start_sequence {
+            return Err(ConversationStoreError::InvalidReference(
+                "request start sequence changed during admission".into(),
+            ));
+        }
         let source_input = input.as_ref().map_or_else(
             || snapshot.input.messages(),
             |r| {

@@ -597,7 +597,6 @@ pub(super) fn request_audit_at_tx(
 
 pub(in crate::durable::sqlite) const AUXILIARY_AUDIT_FRONTIER_SQL: &str =
     "SELECT sequence,audit_offset FROM auxiliary_audit_facts
-     INDEXED BY auxiliary_audit_sequence_idx
      WHERE sequence<=?1 ORDER BY sequence DESC LIMIT 1";
 
 pub(in crate::durable::sqlite) const AUXILIARY_CALL_REQUESTS_SQL: &str =

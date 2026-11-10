@@ -157,8 +157,8 @@ impl SqliteConversationStore {
         if matches!(authority, Authority::Requests) {
             let connection = self.lock().map_err(error)?;
             let selected: Option<(i64, Option<String>)> = connection.query_row(
-                "SELECT rowid,CASE WHEN octet_length(request_id)<=67108864 THEN request_id END FROM request_snapshots
-                 WHERE rowid>?1 AND rowid<=?2 ORDER BY rowid LIMIT 1",
+                "SELECT s.started_sequence,CASE WHEN octet_length(o.request_id)<=67108864 THEN o.request_id END FROM request_snapshots s LEFT JOIN request_owners o ON o.start_sequence=s.started_sequence
+                 WHERE s.started_sequence>?1 AND s.started_sequence<=?2 ORDER BY s.started_sequence LIMIT 1",
                 params![after, through], |row| Ok((row.get(0)?, row.get(1)?)),
             ).optional().map_err(error)?;
             return selected

@@ -284,14 +284,16 @@ fn t08_t14_t19_trace_request_lifecycle_is_independent_of_optional_summary_holes(
         ("observation_summary", &first.request_id),
         ("observation_context_total", &second.request_id),
     ] {
-        let sql = format!("SELECT {column} FROM request_snapshots WHERE request_id=?1");
+        let sql = format!(
+            "SELECT {column} FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)"
+        );
         let original: rusqlite::types::Value = connection
             .query_row(&sql, [request_id.as_str()], |row| row.get(0))
             .unwrap();
         assert_eq!(
             connection
                 .execute(
-                    &format!("UPDATE request_snapshots SET {column}=NULL WHERE request_id=?1"),
+                    &format!("UPDATE request_snapshots SET {column}=NULL WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)"),
                     [request_id.as_str()]
                 )
                 .unwrap(),
@@ -305,7 +307,7 @@ fn t08_t14_t19_trace_request_lifecycle_is_independent_of_optional_summary_holes(
         assert_eq!(
             connection
                 .execute(
-                    &format!("UPDATE request_snapshots SET {column}=?1 WHERE request_id=?2"),
+                    &format!("UPDATE request_snapshots SET {column}=?1 WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?2)"),
                     rusqlite::params![original, request_id.as_str()]
                 )
                 .unwrap(),

@@ -46,7 +46,7 @@ impl ObservationStore for SqliteConversationStore {
     {
         self.read_at_cut(cut, |transaction| {
             observation_request::validate_start(transaction, source_sequence, cut.read.journal)?;
-            let position:Option<u64>=transaction.query_row("SELECT observation_accepted_ledger FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
+            let position:Option<u64>=transaction.query_row("SELECT observation_accepted_ledger FROM request_snapshots WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
             Ok(position
                 .filter(|position| *position <= cut.ledger_through)
                 .map(|position| {
@@ -222,8 +222,22 @@ impl ObservationStore for SqliteConversationStore {
         through: u64,
     ) -> Result<Option<RequestId>, ConversationStoreError> {
         let connection = self.lock()?;
-        let previous:Option<String>=connection.query_row("SELECT previous_request_id FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.ok_or_else(||ConversationStoreError::InvalidReference("request outside native read cut".into()))?;
-        Ok(previous.map(RequestId::new))
+        let (previous, alias): (Option<u64>, Option<String>) = connection.query_row(
+            "SELECT s.previous_started_sequence,o.request_id FROM request_snapshots s
+             LEFT JOIN request_owners o ON o.start_sequence=s.previous_started_sequence
+             WHERE s.started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)
+               AND s.started_sequence<=?2",
+            params![request.as_str(),through],
+            |row| Ok((row.get(0)?,row.get(1)?)),
+        ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
+            .ok_or_else(||ConversationStoreError::InvalidReference("request outside native read cut".into()))?;
+        match (previous, alias) {
+            (None, None) => Ok(None),
+            (Some(_), Some(alias)) => Ok(Some(RequestId::new(alias))),
+            _ => Err(ConversationStoreError::InvalidReference(
+                "previous request owner is unavailable".into(),
+            )),
+        }
     }
     fn request_outcome_header(
         &self,
@@ -262,8 +276,17 @@ impl ObservationStore for SqliteConversationStore {
         through: u64,
     ) -> Result<Option<RequestId>, ConversationStoreError> {
         let connection = self.lock()?;
-        let request:Option<String>=connection.query_row("SELECT request_id FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1 AND started_sequence<=?2",params![sequence,through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
-        Ok(request.map(RequestId::new))
+        let request:Option<Option<String>>=connection.query_row(
+            "SELECT o.request_id FROM request_snapshots s LEFT JOIN request_owners o ON o.start_sequence=s.started_sequence WHERE s.started_sequence=?1 AND s.started_sequence<=?2",
+            params![sequence,through],|row|row.get(0),
+        ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        request
+            .map(|alias| {
+                alias.map(RequestId::new).ok_or_else(|| {
+                    ConversationStoreError::InvalidReference("request owner is unavailable".into())
+                })
+            })
+            .transpose()
     }
     fn request_summary_header(
         &self,
@@ -668,7 +691,13 @@ impl ObservationStore for SqliteConversationStore {
     {
         let connection = self.lock()?;
         observation_request::validate_start(&connection, source_sequence, through)?;
-        let position:Option<u64>=connection.query_row("SELECT retry_ledger_position FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        let position: Option<u64> = connection
+            .query_row(
+                "SELECT retry_ledger_position FROM request_snapshots WHERE started_sequence=?1",
+                [source_sequence],
+                |row| row.get(0),
+            )
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(position.map(|position| {
             crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
         }))
@@ -680,7 +709,13 @@ impl ObservationStore for SqliteConversationStore {
     ) -> Result<Option<MessageId>, ConversationStoreError> {
         let connection = self.lock()?;
         observation_request::validate_start(&connection, source_sequence, through)?;
-        let position:Option<u64>=connection.query_row("SELECT retry_ledger_position FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        let position: Option<u64> = connection
+            .query_row(
+                "SELECT retry_ledger_position FROM request_snapshots WHERE started_sequence=?1",
+                [source_sequence],
+                |row| row.get(0),
+            )
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let Some(position) = position else {
             return Ok(None);
         };
@@ -697,7 +732,7 @@ impl ObservationStore for SqliteConversationStore {
         let connection = self.lock()?;
         let position: Option<u64> = connection
             .query_row(
-                "SELECT retry_ledger_position FROM request_snapshots WHERE request_id=?1",
+                "SELECT retry_ledger_position FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                 [request_id.as_str()],
                 |row| row.get(0),
             )
@@ -713,7 +748,7 @@ impl ObservationStore for SqliteConversationStore {
         let connection = self.lock()?;
         let id: Option<String> = connection
             .query_row(
-                "SELECT CASE WHEN length(CAST(retry_message_id AS BLOB))<=256 THEN retry_message_id ELSE NULL END FROM request_snapshots WHERE request_id=?1",
+                "SELECT CASE WHEN length(CAST(retry_message_id AS BLOB))<=256 THEN retry_message_id ELSE NULL END FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                 [request_id.as_str()],
                 |row| row.get(0),
             )

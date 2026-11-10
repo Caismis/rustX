@@ -696,9 +696,9 @@ pub(in crate::durable::sqlite) fn persist_event_tx_with_requests(
     for (key, terminal) in lifecycle_keys(&event) {
         #[cfg(test)]
         append_facts::lifecycle_probe();
-        let existing: Option<Option<String>> = transaction
+        let existing: Option<Option<u64>> = transaction
             .query_row_cached(
-                "SELECT terminal_event_id FROM lifecycle_state WHERE lifecycle_key=?1",
+                "SELECT terminal_sequence FROM lifecycle_state WHERE lifecycle_key=?1",
                 [&key],
                 |row| row.get(0),
             )
@@ -721,8 +721,8 @@ pub(in crate::durable::sqlite) fn persist_event_tx_with_requests(
         if terminal {
             transaction
                 .execute_cached(
-                    "INSERT INTO lifecycle_state(lifecycle_key,terminal_event_id) VALUES(?1,?2) ON CONFLICT(lifecycle_key) DO UPDATE SET terminal_event_id=excluded.terminal_event_id",
-                    params![key, event.event_id.as_str()],
+                    "INSERT INTO lifecycle_state(lifecycle_key,terminal_sequence) VALUES(?1,?2) ON CONFLICT(lifecycle_key) DO UPDATE SET terminal_sequence=excluded.terminal_sequence",
+                    params![key, event.sequence],
                 )
                 .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("record terminal lifecycle: {error}")))?;
             lifecycle_written = true;
@@ -748,7 +748,7 @@ pub(in crate::durable::sqlite) fn persist_event_tx_with_requests(
             if !exists {
                 transaction
                     .execute_cached(
-                        "INSERT INTO lifecycle_state(lifecycle_key,terminal_event_id) VALUES(?1,NULL)",
+                        "INSERT INTO lifecycle_state(lifecycle_key,terminal_sequence) VALUES(?1,NULL)",
                         [&key],
                     )
                     .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("record lifecycle: {error}")))?;
@@ -971,10 +971,15 @@ fn persist_event_isolated(
     {
         let updated = transaction
             .execute_cached(
-                "UPDATE request_snapshots SET completed_sequence=?1 WHERE request_id=?2 AND completed_sequence IS NULL",
+                super::request::COMPLETE_REQUEST_SQL,
                 params![sequence, request_id.as_str()],
             )
-            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("record provider outcome: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("record provider outcome: {error}"),
+                )
+            })?;
         if updated != 1 {
             return Err(ConversationStoreError::TerminalViolation(format!(
                 "request {request_id} already has a durable provider outcome"

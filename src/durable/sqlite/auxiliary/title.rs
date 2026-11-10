@@ -12,7 +12,7 @@ pub(super) fn validate_start(
 ) -> Result<(), ConversationStoreError> {
     let bound: Option<String> = transaction
         .query_row(
-            "SELECT message_id FROM auxiliary_title_calls WHERE call_id=?1",
+            "SELECT l.message_id FROM auxiliary_title_calls t JOIN message_ledger l ON l.position=t.ledger_position WHERE t.call_sequence=(SELECT started_sequence FROM auxiliary_calls WHERE call_id=?1)",
             [call_id.as_str()],
             |row| row.get(0),
         )
@@ -20,7 +20,7 @@ pub(super) fn validate_start(
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let source: Option<(String, bool)> = transaction
         .query_row(
-            "SELECT message_id,consumed FROM auxiliary_title_sources WHERE call_id=?1",
+            "SELECT l.message_id,t.consumed FROM auxiliary_title_sources t JOIN message_ledger l ON l.position=t.ledger_position WHERE t.call_sequence=(SELECT started_sequence FROM auxiliary_calls WHERE call_id=?1)",
             [call_id.as_str()],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -47,7 +47,7 @@ pub(super) fn consume(
 ) -> Result<(), ConversationStoreError> {
     transaction
         .execute(
-            "UPDATE auxiliary_title_sources SET consumed=1 WHERE call_id=?1",
+            "UPDATE auxiliary_title_sources SET consumed=1 WHERE call_sequence=(SELECT started_sequence FROM auxiliary_calls WHERE call_id=?1)",
             [call_id.as_str()],
         )
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
@@ -60,7 +60,7 @@ pub(super) fn release_zero_request(
     if !call_has_requests_query(transaction, call_id)? {
         transaction
             .execute(
-                "UPDATE auxiliary_title_sources SET call_id=NULL WHERE call_id=?1 AND consumed=0",
+                "UPDATE auxiliary_title_sources SET call_sequence=NULL WHERE call_sequence=(SELECT started_sequence FROM auxiliary_calls WHERE call_id=?1) AND consumed=0",
                 [call_id.as_str()],
             )
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
@@ -93,11 +93,18 @@ pub(super) fn associate(
             "Title source is unavailable or differs from its native first Human",
         ));
     }
-    transaction.execute("INSERT INTO auxiliary_title_sources(message_id,call_id,consumed) VALUES(?1,?2,0) ON CONFLICT(message_id) DO UPDATE SET call_id=excluded.call_id WHERE auxiliary_title_sources.call_id IS NULL AND auxiliary_title_sources.consumed=0",params![source.message_id.as_str(),start.call_id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let call_sequence: u64 = transaction
+        .query_row(
+            "SELECT started_sequence FROM auxiliary_calls WHERE call_id=?1",
+            [start.call_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    transaction.execute("INSERT INTO auxiliary_title_sources(ledger_position,call_sequence,consumed) VALUES(?1,?2,0) ON CONFLICT(ledger_position) DO UPDATE SET call_sequence=excluded.call_sequence WHERE auxiliary_title_sources.call_sequence IS NULL AND auxiliary_title_sources.consumed=0",params![source.position,call_sequence]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     transaction
         .execute(
-            "INSERT INTO auxiliary_title_calls(call_id,message_id) VALUES(?1,?2)",
-            params![start.call_id.as_str(), source.message_id.as_str()],
+            "INSERT INTO auxiliary_title_calls(call_sequence,ledger_position) VALUES(?1,?2)",
+            params![call_sequence, source.position],
         )
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(())
@@ -109,8 +116,8 @@ pub(super) fn confirm_association(
 ) -> Result<(), ConversationStoreError> {
     let exists: bool = connection
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM auxiliary_title_calls WHERE call_id=?1 AND message_id=?2)",
-            params![call_id.as_str(), source.message_id.as_str()],
+            "SELECT EXISTS(SELECT 1 FROM auxiliary_title_calls t JOIN message_ledger l ON l.position=t.ledger_position WHERE t.call_sequence=(SELECT started_sequence FROM auxiliary_calls WHERE call_id=?1) AND t.ledger_position=?2 AND l.message_id=?3)",
+            params![call_id.as_str(), source.position, source.message_id.as_str()],
             |row| row.get(0),
         )
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
@@ -134,10 +141,11 @@ impl SqliteConversationStore {
         }
         let mut connection = self.lock().map_err(AuxiliaryWriteFailure::known)?;
         commit::run_auxiliary_write(&mut connection, |transaction| {
-            let call:Option<String>=transaction.query_row("SELECT call_id FROM auxiliary_title_sources WHERE message_id=?1 AND consumed=0 AND call_id IS NOT NULL",[source.message_id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+            let call:Option<Option<String>>=transaction.query_row("SELECT c.call_id FROM auxiliary_title_sources s LEFT JOIN auxiliary_calls c ON c.started_sequence=s.call_sequence WHERE s.ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1) AND s.consumed=0 AND s.call_sequence IS NOT NULL",[source.message_id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             let Some(call) = call else {
                 return Ok(());
             };
+            let call = call.ok_or_else(|| storage("Title source Call is unavailable"))?;
             let call_id =
                 AuxiliaryCallId::parse(call).map_err(ConversationStoreError::InvalidReference)?;
             if call_has_requests_query(transaction, &call_id)?

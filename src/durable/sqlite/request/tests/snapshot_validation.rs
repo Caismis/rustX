@@ -146,7 +146,7 @@ fn t14_t19_t20_provider_outcomes_decode_the_same_transaction_snapshot_once() {
     let transaction = connection.transaction().unwrap();
     let bytes: usize = transaction
         .query_row(
-            "SELECT octet_length(snapshot_json) FROM request_snapshot_payloads WHERE request_id=?1",
+            "SELECT octet_length(snapshot_json) FROM request_snapshot_payloads WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
             [snapshot.request_id.as_str()],
             |row| row.get(0),
         )
@@ -182,7 +182,7 @@ fn t14_t19_snapshot_reuse_preserves_original_provider_validation_errors_and_prec
         "foreign attempt",
         "foreign turn",
         "duplicate outcome",
-        "UPDATE request_snapshots SET started_sequence=NULL",
+        "UPDATE request_snapshot_payloads SET started_sequence=started_sequence+1",
         "UPDATE events SET event_json=json_set(event_json,'$.sequence',sequence+1)",
         "UPDATE events SET event_json=json_set(event_json,'$.event.type','attempt_started')",
         "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json,event_timestamp) SELECT sequence+100,event_id||'-duplicate',schema_version,conversation_id,attempt_id,turn_id,json_set(event_json,'$.sequence',sequence+100,'$.event_id',event_id||'-duplicate'),event_timestamp FROM events WHERE sequence=1",
@@ -242,7 +242,7 @@ fn t14_t19_t20_publication_p_u_c_and_audit_each_reuse_one_validated_snapshot() {
             .lock()
             .unwrap()
             .query_row(
-                "SELECT octet_length(snapshot_json) FROM request_snapshot_payloads WHERE request_id=?1",
+                "SELECT octet_length(snapshot_json) FROM request_snapshot_payloads WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                 [snapshot.request_id.as_str()],
                 |row| row.get(0),
             )
@@ -425,7 +425,7 @@ fn normalized_request_metadata_budget_rejects_before_returning_any_owned_json() 
     let connection = store.lock().unwrap();
     let stored_bytes: usize = connection
         .query_row(
-            "SELECT octet_length(snapshot_json) FROM request_snapshot_payloads WHERE request_id=?1",
+            "SELECT octet_length(snapshot_json) FROM request_snapshot_payloads WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
             [snapshot.request_id.as_str()],
             |row| row.get(0),
         )
@@ -487,7 +487,7 @@ fn normalized_request_digest_guards_every_reader_before_materializing_malformed_
         let transaction = connection.transaction().unwrap();
         let json: String = transaction
             .query_row(
-                "SELECT snapshot_json FROM request_snapshot_payloads WHERE request_id=?1",
+                "SELECT snapshot_json FROM request_snapshot_payloads WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                 [snapshot.request_id.as_str()],
                 |row| row.get(0),
             )
@@ -516,7 +516,7 @@ fn normalized_request_digest_guards_every_reader_before_materializing_malformed_
                 .unwrap();
             connection
                 .execute(
-                    "UPDATE request_snapshots SET manifest_digest=?2 WHERE request_id=?1",
+                    "UPDATE request_snapshots SET manifest_digest=?2 WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                     params![snapshot.request_id.as_str(), invalid],
                 )
                 .unwrap();
@@ -544,7 +544,7 @@ fn normalized_request_digest_guards_every_reader_before_materializing_malformed_
         .lock()
         .unwrap()
         .execute(
-            "UPDATE request_snapshots SET manifest_digest=?2 WHERE request_id=?1",
+            "UPDATE request_snapshots SET manifest_digest=?2 WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
             params![snapshot.request_id.as_str(), digest],
         )
         .unwrap();

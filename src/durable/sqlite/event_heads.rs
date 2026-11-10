@@ -29,7 +29,8 @@ pub(super) const TRACE_TOTAL: &str = "SELECT EXISTS(
             AND sequence<=?1 ORDER BY sequence DESC LIMIT 1)
     )))";
 
-pub(super) const EXECUTION: &str = "SELECT observation_execution FROM events WHERE sequence=(
+pub(super) const EXECUTION: &str =
+    "SELECT observation_execution,observation_execution_owner FROM events WHERE sequence=(
     SELECT max(sequence) FROM (
         SELECT (SELECT sequence FROM events INDEXED BY events_attempt_heads_idx
             WHERE observation_attempt_heads>0 AND attempt_id=?1 AND observation_attempt_heads=1
