@@ -1326,7 +1326,7 @@ fn rowid_frontier_work_does_not_grow_with_auxiliary_history() {
     for history in [8, 64, 512, 4096] {
         for sequence in previous + 1..=history {
             transaction.execute(
-                "INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json) VALUES(?1,?2,1,'conversation','time','{}')",
+                "INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json) VALUES(?1,?2,1,(SELECT conversation_id FROM rustx_store WHERE id=1),'time','{}')",
                 params![sequence, format!("aux-event-{sequence}")],
             ).unwrap();
             transaction

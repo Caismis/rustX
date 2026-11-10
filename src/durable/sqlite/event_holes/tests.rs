@@ -44,7 +44,7 @@ const CASES: &[(&str, &str, &str, &str)] = &[
 
 fn insert(connection: &Connection, sequence: u64, aggregate: u8, owner: u8) {
     connection.execute_cached(
-        "INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_trace_fact_required,observation_trace_required,observation_statistics_required,observation_execution_required,observation_turn_required,observation_members_required,observation_trace_fact,observation_trace_total,observation_statistics,observation_execution,observation_turn_header,observation_members) VALUES(?1,?2,?3,'conversation','time','{}',1,1,1,1,1,1,CASE WHEN (?4&1)=0 THEN x'00' END,CASE WHEN (?4&2)=0 THEN 0 END,CASE WHEN (?4&4)=0 THEN x'00' END,CASE WHEN (?5&1)=0 THEN x'00' END,CASE WHEN (?5&2)=0 THEN x'00' END,CASE WHEN (?5&4)=0 THEN x'00' END)",
+        "INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_trace_fact_required,observation_trace_required,observation_statistics_required,observation_execution_required,observation_turn_required,observation_members_required,observation_trace_fact,observation_trace_total,observation_statistics,observation_execution,observation_turn_header,observation_members) VALUES(?1,?2,?3,(SELECT conversation_id FROM rustx_store WHERE id=1),'time','{}',1,1,1,1,1,1,CASE WHEN (?4&1)=0 THEN x'00' END,CASE WHEN (?4&2)=0 THEN 0 END,CASE WHEN (?4&4)=0 THEN x'00' END,CASE WHEN (?5&1)=0 THEN x'00' END,CASE WHEN (?5&2)=0 THEN x'00' END,CASE WHEN (?5&4)=0 THEN x'00' END)",
         params![sequence, format!("event-{sequence}"), EVENT_SCHEMA_VERSION, aggregate, owner],
     ).unwrap();
 }

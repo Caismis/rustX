@@ -664,7 +664,7 @@ mod compact_tests {
             .unwrap();
         assert_eq!(read(&connection, 0).unwrap(), state.statistics);
         let full = record::test_record(1, &bytes);
-        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_statistics) VALUES(1,'wide-statistics',1,'test','time','{}',?1)", [&full]).unwrap();
+        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_statistics) VALUES(1,'wide-statistics',1,(SELECT conversation_id FROM rustx_store WHERE id=1),'time','{}',?1)", [&full]).unwrap();
         let retained: Vec<u8> = connection
             .query_row(
                 "SELECT observation_statistics FROM events WHERE sequence=1",

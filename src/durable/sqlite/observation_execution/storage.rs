@@ -413,7 +413,7 @@ mod tests {
         )
         .unwrap();
         let connection = store.lock().unwrap();
-        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_execution) VALUES(1,'wide-execution',1,'test','time','{}',?1)", [&bytes]).unwrap();
+        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_execution) VALUES(1,'wide-execution',1,(SELECT conversation_id FROM rustx_store WHERE id=1),'time','{}',?1)", [&bytes]).unwrap();
         let retained: Vec<u8> = connection
             .query_row(
                 "SELECT observation_execution FROM events WHERE sequence=1",
