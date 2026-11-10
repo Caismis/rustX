@@ -11,6 +11,34 @@ export interface DesktopSystem {
   macOSDesktop?(): boolean;
   executable(path: string): string | undefined;
   launch(spec: DesktopProcess): Promise<DesktopLaunch>;
+  pickFolder?(spec: DesktopProcess, signal: AbortSignal, cancelCode?: number): Promise<string | null>;
+}
+/** Wait for the physical chooser to exit. Its only successful output is one path. */
+function pickDesktopFolder(spec: DesktopProcess, signal: AbortSignal, cancelCode?: number): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    signal.throwIfAborted();
+    const child = spawn(spec.command, spec.args, {
+      cwd: spec.cwd, env: spec.env, shell: false, stdio: ['ignore', 'pipe', 'ignore'], signal, killSignal: 'SIGKILL',
+    });
+    const output: Buffer[] = [];
+    let bytes = 0, failed = false;
+    child.stdout?.on('data', (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > 16 * 1024) { failed = true; child.kill('SIGKILL'); }
+      else output.push(chunk);
+    });
+    child.once('error', () => { failed = true; });
+    child.once('close', code => {
+      if (signal.aborted) { reject(signal.reason); return; }
+      if (!failed && code === cancelCode && bytes === 0) { resolve(null); return; }
+      if (failed || code !== 0) { reject(new Error('The system folder chooser could not complete')); return; }
+      // Strip the chooser's output terminator without trimming the folder name.
+      try {
+        const path = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.concat(output));
+        resolve((path.endsWith('\n') ? path.slice(0, -1) : path) || null);
+      } catch { reject(new Error('The selected folder path is not valid UTF-8')); }
+    });
+  });
 }
 /** Observe early launcher failure for one second; never kill a handed-off app.
  * A running launcher at the bound is only a spawn acknowledgement, not GUI proof. */
@@ -54,8 +82,17 @@ export function macOSDesktop(
 const nativeSystem: DesktopSystem = {
   platform: process.platform, env: process.env, macOSDesktop,
   executable(path) { try { accessSync(path, constants.X_OK); return statSync(path).isFile() ? realpathSync(path) : undefined; } catch { return; } },
-  launch: launchDesktop,
+  launch: launchDesktop, pickFolder: pickDesktopFolder,
 };
+const pathDirectories = (env: NodeJS.ProcessEnv) =>
+  (env.PATH ?? '').split(delimiter).filter(path => isAbsolute(path) && path.length <= 4096).slice(0, 32);
+const CHOOSE_FOLDER = [
+  'try',
+  'return POSIX path of (choose folder with prompt "Add Workspace")',
+  'on error number -128',
+  'return ""',
+  'end try',
+].join('\n');
 interface Resolved { application: DesktopApplication; command: string; required?: string; args: (cwd: string) => string[] }
 export class DesktopAdapter {
   private resolved?: Resolved[];
@@ -87,7 +124,7 @@ export class DesktopAdapter {
       for (const candidate of candidates) { const command = executable(candidate); if (command) { entries.push({ application: { id, label }, command, args, required }); break; } }
     };
     // Ignore relative and excessively long PATH entries. No recursive filesystem scans.
-    const paths = (env.PATH ?? '').split(delimiter).filter(p => isAbsolute(p) && p.length <= 4096).slice(0, 32);
+    const paths = pathDirectories(env);
     if (platform === 'darwin') {
       add('files', 'Finder', ['/usr/bin/open'], cwd => ['--', cwd]);
       const terminal = executable('/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal');
@@ -99,6 +136,20 @@ export class DesktopAdapter {
       add('code', 'Visual Studio Code', paths.map(p => join(p, 'code')), cwd => ['--new-window', '--', cwd]);
     }
     return entries;
+  }
+  prepareFolderPicker(): ((signal: AbortSignal) => Promise<string | null>) | undefined {
+    const { platform, env, executable, pickFolder } = this.system;
+    if (!pickFolder || this.unavailable()) return;
+    const mac = platform === 'darwin';
+    const paths = mac ? ['/usr/bin/osascript'] : pathDirectories(env).map(path => join(path, 'zenity'));
+    const command = paths.map(executable).find(path => path !== undefined);
+    if (!command) return;
+    const args = mac ? ['-e', CHOOSE_FOLDER] : ['--file-selection', '--directory', '--title=Add Workspace'];
+    return signal => {
+      if (executable(command) !== command) throw new Error('The system folder chooser is unavailable');
+      return pickFolder({ command, args, cwd: env.HOME && isAbsolute(env.HOME) ? env.HOME : '/', env: desktopEnvironment(env) },
+        signal, mac ? undefined : 1);
+    };
   }
   /** Pathname launch only: admission is the caller's responsibility; the external
    * application owns eventual path resolution and file-object identity. */

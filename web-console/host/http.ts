@@ -124,6 +124,27 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
           break;
         }
         case 'list': value = await host.listWorkspaces(); break;
+        case 'pick-workspace': {
+          if (!host.pickWorkspace || Object.keys(body).some(key => key !== 'scope')) throw new Error('Invalid system folder chooser request');
+          const abort = new AbortController();
+          const closed = () => { if (!response.writableFinished) abort.abort(); };
+          response.on('close', closed);
+          if (response.destroyed) abort.abort();
+          try { value = await host.pickWorkspace(scope(), abort.signal); }
+          finally { response.off('close', closed); }
+          break;
+        }
+        case 'browse-workspace':
+          if (!host.browseWorkspace || Object.keys(body).some(key => !['scope', 'location', 'path'].includes(key))) throw new Error('Invalid directory browser request');
+          value = await host.browseWorkspace(scope(), string('location'), string('path')); break;
+        case 'register-workspace-folder': {
+          const selection = body.selection;
+          if (!host.registerWorkspaceFolder || Object.keys(body).some(key => !['scope', 'location', 'selection'].includes(key))
+            || !selection || typeof selection !== 'object' || Array.isArray(selection)
+            || Object.keys(selection).some(key => !['path', 'revision'].includes(key))
+            || typeof selection.path !== 'string' || typeof selection.revision !== 'string') throw new Error('Invalid workspace folder selection');
+          value = await host.registerWorkspaceFolder(scope(), string('location'), selection); break;
+        }
         case 'adopt': value = await host.adoptWorkspace(scope(), string('location')); break;
         case 'rename': value = await host.renameWorkspace(scope(), string('id'), string('displayName')); break;
         case 'reorder': value = await host.reorderWorkspace(scope(), string('id'), body.before === undefined ? undefined : string('before')); break;

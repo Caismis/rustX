@@ -108,9 +108,18 @@ Select Remote explicitly and enter its endpoint and transport token there. Faile
 local startup never chooses Remote; failed Remote never chooses Local. Remote
 attachment grants no Product Host filesystem authority. See [connection security](web-console/CONNECTION.md).
 
-The Product Host retains all Workspace navigation/authorization decisions. Only
-explicit exact roots are authorized; descendants are not implicitly admitted.
-Native configuration resolution remains separate from Host navigation authorization.
+The Product Host owns Workspace navigation and authorization. **Add Workspace**
+opens the Host's system folder chooser on Linux with Zenity or on macOS in an
+Aqua desktop session. When a desktop chooser is unavailable, the Web UI lets
+you browse the configured roots on the Host and explicitly add a subfolder.
+The Composer's **Add Workspace** entry uses the same picker.
+
+The dev launcher enables both pickers. An independently managed Product Host
+can opt in with `nativePicker: true` for the system chooser or `browsePicker: true`
+with `picker: true` for the in-browser directory list. Both require a shared
+Host and App Server filesystem and a configured native transport. Browsing
+only lists folders under the configured roots. Adding a folder authorizes its
+exact location, and native configuration resolution remains separate.
 Dev Host registrations, names, order and the manually selected Workspace persist
 in `$XDG_STATE_HOME/rustx/web/<profile>/workspaces.json` (defaulting to
 `~/.local/state`). The profile hashes the canonical Workspace root set and opaque
@@ -118,7 +127,8 @@ forwarded native arguments; location handles hash canonical root paths. Restarti
 with the same launch profile preserves registration identity even when native/Web
 ports or CLI root order change. The browser remembers an accepted selection
 immediately, while the Host persists it independently of the browser origin and
-before any message is sent. This metadata grants no new native authority.
+before any message is sent. Folder registrations also retain the selected
+directory's filesystem identity across Host restarts.
 
 ## Ownership and shutdown
 

@@ -2,8 +2,9 @@ import { createServer } from 'node:http';
 import type { Page, Request } from '@playwright/test';
 import { LocalWorkspaceHost, type LocalHostConfig } from '../../host/workspaces.ts';
 import { workspaceHandler } from '../../host/http.ts';
-export async function startWorkspaceHost(config: LocalHostConfig) {
-  const host = new LocalWorkspaceHost(config);
+import type { DesktopAdapter } from '../../host/desktop.ts';
+export async function startWorkspaceHost(config: LocalHostConfig, desktop?: DesktopAdapter) {
+  const host = new LocalWorkspaceHost(config, desktop);
   const handler = workspaceHandler(host);
   const server = createServer((request, response) => {
     // This fixture is the reverse-proxy hop for the streaming route below.

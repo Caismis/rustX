@@ -28,8 +28,8 @@ export class WorkspaceAuthority {
       || new Set(catalog.workspaces.map(row => row.id)).size !== catalog.workspaces.length
       || catalog.workspaces.some(row => typeof row.id !== 'string' || typeof row.displayName !== 'string')
       || (catalog.preferredWorkspace !== undefined && (typeof catalog.preferredWorkspace !== 'string' || !catalog.workspaces.some(row => row.id === catalog.preferredWorkspace)))
-      || !catalog.picker || !['configured', 'unavailable'].includes(catalog.picker.kind)
-      || (catalog.picker.kind === 'configured' && !Array.isArray(catalog.picker.locations))) throw new Error('Invalid Workspace catalog');
+      || !catalog.picker || !['native', 'configured', 'browser', 'unavailable'].includes(catalog.picker.kind)
+      || ((catalog.picker.kind === 'configured' || catalog.picker.kind === 'browser') && !Array.isArray(catalog.picker.locations))) throw new Error('Invalid Workspace catalog');
     const replaced = !sameAuthority(this.catalog, catalog);
     if (replaced && epoch !== this.epoch) throw new WorkspaceHostError('Obsolete Workspace authority observation', 'authority_replaced');
     this.catalog = catalog;

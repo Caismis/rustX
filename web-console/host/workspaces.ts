@@ -4,14 +4,14 @@ import { analysisMatches } from '../../protocol/app-server/workflow-analysis.ts'
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
 import { OfficeDocuments } from './documents/operation.ts';
 import { observeTerminalOwnership } from './terminal-ownership.ts';
-import { WorkspaceTerminals, workspaceFile, withWorkspacePath } from './workbench.ts';
+import { WorkspaceTerminals, workspaceDescriptors, workspaceFile, withWorkspacePath } from './workbench.ts';
 import { OfficeSettlementError } from './documents/office-cgroup.ts';
 import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, fstatSync, existsSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
-import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread, WorkflowHostOperation, WorkflowHostResult, WorkflowReread } from '../src/workspaces/host.ts';
+import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog, WorkspaceFolderSelection, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread, WorkflowHostOperation, WorkflowHostResult, WorkflowReread } from '../src/workspaces/host.ts';
 import { AppServerClient, AppServerRequestError } from '../../tui/src/app-server/client.ts';
 import { WebSocketTransport } from '../../tui/src/app-server/websocket-transport.ts';
 import { DesktopAdapter } from './desktop.ts';
@@ -38,10 +38,18 @@ export interface LocalHostConfig {
   endpoint: string;
   roots: { id: string; cwd: string; displayName: string }[];
   picker: boolean;
+  /** Operator enables explicit folder selection on a shared local desktop. */
+  nativePicker?: boolean;
+  /** Permit listing and explicitly registering descendants of configured roots. */
+  browsePicker?: boolean;
   /** Operator-owned file outside the browser and rustX runtime root. */
   metadataFile: string;
 }
-type Registration = { id: string; location: string; displayName: string; selected?: true };
+type PickedFolder = { path: string; device: string; inode: string; root?: string };
+type Registration = { id: string; location: string; displayName: string; selected?: true; folder?: PickedFolder };
+const folderRevision = (folder: PickedFolder) => `${folder.device}:${folder.inode}`;
+const directoryIdentity = (path: string, stat: { dev: bigint; ino: bigint }): PickedFolder =>
+  ({ path, device: String(stat.dev), inode: String(stat.ino) });
 export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private readonly terminals: WorkspaceTerminals;
   private terminalObserver?: Promise<() => Promise<void>>;
@@ -65,6 +73,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private readonly desktop: DesktopAdapter;
   private readonly readSession: typeof readDesktopSession;
   private readonly observeTerminals: typeof observeTerminalOwnership;
+  private folderPick?: { abort: AbortController; selection: Promise<string | null> };
   constructor(config: LocalHostConfig, desktop = new DesktopAdapter(), readSession = readDesktopSession, observeTerminals = observeTerminalOwnership) {
     this.observeTerminals = observeTerminals;
     this.terminals = new WorkspaceTerminals(config.terminalSupervisor);
@@ -78,7 +87,14 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (new Set(this.roots.map(root => root.id)).size !== this.roots.length || new Set(this.roots.map(root => root.cwd)).size !== this.roots.length) throw new Error('Duplicate Host location');
     this.registrations = existsSync(config.metadataFile) ? JSON.parse(readFileSync(config.metadataFile, 'utf8')) as Registration[]
       : this.roots.map(root => ({ id: randomUUID(), location: root.id, displayName: root.displayName }));
-    if (!Array.isArray(this.registrations) || this.registrations.some(row => !row || typeof row.id !== 'string' || typeof row.displayName !== 'string' || !this.roots.some(root => root.id === row.location) || (row.selected !== undefined && row.selected !== true))
+    if (!Array.isArray(this.registrations) || this.registrations.some(row => !row || typeof row.id !== 'string' || typeof row.location !== 'string' || typeof row.displayName !== 'string'
+      || (row.folder === undefined ? !this.roots.some(root => root.id === row.location)
+        : !row.folder || typeof row.folder.path !== 'string' || !isAbsolute(row.folder.path)
+          || ![row.folder.device, row.folder.inode].every(value => typeof value === 'string' && /^\d+$/.test(value))
+          || (row.folder.root !== undefined && !this.roots.some(root => root.id === row.folder!.root
+            && this.descendsFrom(root.cwd, row.folder!.path)))
+          || this.roots.some(root => root.id === row.location))
+      || (row.selected !== undefined && row.selected !== true))
       || this.registrations.filter(row => row.selected).length > 1) throw new Error('Invalid Host registrations');
     this.commit(this.registrations);
   }
@@ -99,8 +115,16 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   }
   private cwd(location: string) {
     const root = this.roots.find(root => root.id === location);
-    if (!root || realpathSync(root.cwd) !== root.cwd || !statSync(root.cwd).isDirectory()) throw new Error('Authorized location is unavailable');
-    return root.cwd;
+    const folder = this.registrations.find(row => row.location === location)?.folder;
+    const path = root?.cwd ?? folder?.path;
+    if (!path || realpathSync(path) !== path) throw new Error('Authorized location is unavailable');
+    const stat = statSync(path, { bigint: true });
+    if (!stat.isDirectory() || folder && (String(stat.dev) !== folder.device || String(stat.ino) !== folder.inode)) throw new Error('Authorized location is unavailable');
+    return path;
+  }
+  private descendsFrom(root: string, path: string) {
+    const subpath = relative(root, path);
+    return !!subpath && subpath !== '..' && !subpath.startsWith('../') && !isAbsolute(subpath);
   }
   private route(endpoint: string) {
     if (!sameEndpoint(endpoint, this.config.endpoint)) throw new Error('Workspace Host belongs to a different rustX process');
@@ -108,9 +132,9 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   async listWorkspaces(): Promise<WorkspaceCatalog> {
     const preferredWorkspace = this.registrations.find(row => row.selected)?.id;
     return { authorityId: this.authorityId, endpoint: this.config.endpoint,
-      workspaces: this.registrations.map(({ id, location, displayName }) => ({ id, location, displayName, displayPath: this.roots.find(root => root.id === location)!.cwd })),
+      workspaces: this.registrations.map(({ id, location, displayName, folder }) => ({ id, location, displayName, displayPath: folder?.path ?? this.roots.find(root => root.id === location)!.cwd })),
       ...(preferredWorkspace ? { preferredWorkspace } : {}),
-      picker: this.config.picker ? { kind: 'configured', locations: this.roots.map(root => ({ id: root.id, displayName: root.displayName })) }
+      picker: this.folderPicker() ? { kind: 'native' } : this.config.picker ? { kind: this.canBrowse() ? 'browser' : 'configured', locations: this.roots.map(root => ({ id: root.id, displayName: root.displayName })) }
         : { kind: 'unavailable', reason: 'This Host has no directory picker. Ask its operator to configure authorized roots.' } };
   }
   private mutationScope(scope: WorkspaceAuthorityScope) {
@@ -120,9 +144,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   }
   close(): Promise<void> {
     this.closed = true;
+    this.folderPick?.abort.abort();
     for (const read of [...this.fileReads, ...this.documentReads, ...this.fileObservations]) read.abort();
     return this.closing ??= (async () => {
-      const result = await Promise.allSettled([this.documents.dispose(), this.terminals.close(), this.terminalObserver?.then(close => close()), this.fileOwnership?.then(close => close()), ...this.fileObservationTasks]);
+      const result = await Promise.allSettled([this.documents.dispose(), this.terminals.close(), this.terminalObserver?.then(close => close()), this.fileOwnership?.then(close => close()), this.folderPick?.selection.catch(() => {}), ...this.fileObservationTasks]);
       const failures = result.flatMap(item => item.status === 'rejected' ? [item.reason] : []);
       if (this.terminalFailure) failures.push(this.terminalFailure);
       if (failures.length) throw new AggregateError(failures, 'Host terminal settlement failed');
@@ -416,9 +441,81 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   async adoptWorkspace(scope: WorkspaceAuthorityScope, location: string) {
     this.mutationScope(scope);
     if (!this.config.picker) throw new Error('Directory picker unavailable');
+    const root = this.roots.find(root => root.id === location);
+    if (!root) throw new Error('Authorized location is unavailable');
     this.cwd(location);
-    if (this.registrations.some(row => row.location === location)) return;
-    this.commit([...this.registrations, { id: randomUUID(), location, displayName: this.roots.find(root => root.id === location)!.displayName }]);
+    this.register(location, root.displayName);
+  }
+  private folderPicker() {
+    if (this.config.nativePicker && this.config.nativeFilesystem === 'shared' && this.config.transportToken)
+      return this.desktop.prepareFolderPicker();
+  }
+  async pickWorkspace(scope: WorkspaceAuthorityScope, signal?: AbortSignal): Promise<string | null> {
+    this.mutationScope(scope);
+    if (this.folderPick) throw new Error('A system folder chooser is already open');
+    const pick = this.folderPicker();
+    if (!pick) throw new Error('The system folder chooser is unavailable');
+    const abort = new AbortController();
+    const lifetime = AbortSignal.any([abort.signal, AbortSignal.timeout(5 * 60_000), ...(signal ? [signal] : [])]);
+    lifetime.throwIfAborted();
+    const selection = pick(lifetime);
+    this.folderPick = { abort, selection };
+    try {
+      const selected = await selection;
+      lifetime.throwIfAborted();
+      this.mutationScope(scope);
+      if (selected === null) return null;
+      if (!isAbsolute(selected)) throw new Error('The system chooser did not return an absolute folder');
+      const path = realpathSync(selected);
+      const stat = statSync(path, { bigint: true });
+      if (!stat.isDirectory()) throw new Error('The selected location is not a directory');
+      return this.registerFolder(directoryIdentity(path, stat));
+    } finally { this.folderPick = undefined; }
+  }
+  private canBrowse() {
+    return this.config.picker && this.config.browsePicker && this.config.nativeFilesystem === 'shared' && !!this.config.transportToken;
+  }
+  private withPickerFolder<T>(scope: WorkspaceAuthorityScope, location: string, path: string, action: (fd: number, folder: PickedFolder) => T) {
+    this.mutationScope(scope);
+    if (!this.canBrowse()) throw new Error('Host directory browsing is unavailable');
+    const root = this.roots.find(root => root.id === location);
+    if (!root) throw new Error('Unknown directory browser root');
+    if (typeof path !== 'string' || path !== '' && path.split('/').some(part => !part)) throw new Error('Invalid directory browser path');
+    return withWorkspacePath(this.cwd(root.id), path, true, fd => {
+      const directory = join(root.cwd, path);
+      return action(fd, { ...directoryIdentity(directory, fstatSync(fd, { bigint: true })), root: root.id });
+    });
+  }
+  async browseWorkspace(scope: WorkspaceAuthorityScope, location: string, path: string) {
+    return this.withPickerFolder(scope, location, path, (fd, folder) => {
+      const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+      const folders = workspaceDescriptors.entries(fd).filter(entry => entry.directory && !entry.link)
+        .map(entry => decoder.decode(entry.name)).sort((a, b) => a.localeCompare(b));
+      return { displayPath: folder.path, folders, revision: folderRevision(folder) };
+    });
+  }
+  async registerWorkspaceFolder(scope: WorkspaceAuthorityScope, location: string, selection: WorkspaceFolderSelection) {
+    return this.withPickerFolder(scope, location, selection.path, (_fd, folder) => {
+      if (selection.revision !== folderRevision(folder) || realpathSync(folder.path) !== folder.path
+        || folderRevision(directoryIdentity(folder.path, statSync(folder.path, { bigint: true }))) !== folderRevision(folder)) {
+        throw new Error('The folder changed. Browse to it again before adding it.');
+      }
+      return this.registerFolder(folder);
+    });
+  }
+  private registerFolder(folder: PickedFolder) {
+    const root = this.roots.find(root => root.cwd === folder.path);
+    if (root) return this.register(root.id, root.displayName);
+    const existing = this.registrations.find(row => row.folder?.path === folder.path);
+    if (existing) { this.cwd(existing.location); return existing.id; }
+    return this.register(randomUUID(), basename(folder.path) || folder.path, folder);
+  }
+  private register(location: string, displayName: string, folder?: PickedFolder) {
+    const existing = this.registrations.find(row => row.location === location);
+    if (existing) return existing.id;
+    const row = { id: randomUUID(), location, displayName, folder };
+    this.commit([...this.registrations, row]);
+    return row.id;
   }
   async renameWorkspace(scope: WorkspaceAuthorityScope, id: string, displayName: string) {
     this.mutationScope(scope);
@@ -637,11 +734,14 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private classifyLocation(cwd: string): SessionLocation {
     try {
       const canonical = isAbsolute(cwd) ? realpathSync(cwd) : undefined;
-      if (this.roots.some(root => root.cwd === cwd && canonical !== root.cwd)) return { authorized: false, reason: 'denied' };
+      if (canonical !== cwd && (this.roots.some(root => root.cwd === cwd) || this.registrations.some(row => row.folder?.path === cwd))) return { authorized: false, reason: 'denied' };
       const root = this.roots.find(root => root.cwd === canonical);
-      if (!root) return { authorized: false, reason: 'denied' };
-      this.cwd(root.id);
-      const workspaceId = this.registrations.find(row => row.location === root.id)?.id;
+      const registration = root ? this.registrations.find(row => row.location === root.id)
+        : this.registrations.find(row => row.folder && row.folder.path === canonical);
+      const location = root?.id ?? registration?.location;
+      if (!location) return { authorized: false, reason: 'denied' };
+      this.cwd(location);
+      const workspaceId = registration?.id;
       return { authorized: true, ...(workspaceId ? { workspaceId } : {}) };
     } catch { return { authorized: false, reason: 'unavailable' }; }
   }

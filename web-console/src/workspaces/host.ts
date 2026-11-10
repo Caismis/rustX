@@ -66,10 +66,12 @@ export interface WorkspaceAuthorityScope {
   /** With authorityId, the authority scope; compared only by normalized identity. */
   readonly endpoint: string;
 }
+export interface WorkspaceFolderSelection { path: string; revision: string }
+export interface WorkspaceFolderListing { displayPath: string; folders: string[]; revision: string }
 export interface WorkspaceCatalog extends WorkspaceAuthorityScope {
   workspaces: ProductHostWorkspace[];
   preferredWorkspace?: string;
-  picker: { kind: 'configured'; locations: { id: string; displayName: string }[] } | { kind: 'unavailable'; reason: string };
+  picker: { kind: 'native' } | { kind: 'configured' | 'browser'; locations: { id: string; displayName: string }[] } | { kind: 'unavailable'; reason: string };
 }
 export interface WorkspaceSelectionIntent { client: string; sequence: number }
 export type SessionLocation = { authorized: false; reason: 'denied' | 'unavailable' } | { authorized: true; workspaceId?: string };
@@ -145,6 +147,10 @@ export interface ProductHostWorkspaces {
    * and before dispatching anything. */
   workflowWorkspace?(scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult>;
   listWorkspaces(signal?: AbortSignal): Promise<WorkspaceCatalog>;
+  /** The Host obtains the path from its desktop chooser. Null means canceled. */
+  pickWorkspace?(scope: WorkspaceAuthorityScope, signal?: AbortSignal): Promise<string | null>;
+  browseWorkspace?(scope: WorkspaceAuthorityScope, location: string, path: string, signal?: AbortSignal): Promise<WorkspaceFolderListing>;
+  registerWorkspaceFolder?(scope: WorkspaceAuthorityScope, location: string, selection: WorkspaceFolderSelection): Promise<string>;
   /** Each metadata write must validate this expected scope at execution, before changing registrations. */
   adoptWorkspace(scope: WorkspaceAuthorityScope, location: string): Promise<void>;
   renameWorkspace(scope: WorkspaceAuthorityScope, id: string, displayName: string): Promise<void>;
