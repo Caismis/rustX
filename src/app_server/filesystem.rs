@@ -153,14 +153,7 @@ impl Watches {
                     }
                     #[cfg(test)]
                     let publication_completed = before_publication(&authorized);
-                    let (changed_paths, resync_required) = match event {
-                        Ok(event) => {
-                            let rescan = event.need_rescan() || event.paths.len() > 16 || event.paths.iter().any(|path|path.to_str().is_none() || !path.starts_with(&authorized));
-                            (event.paths.into_iter().filter(|path| path.to_str().is_some() && path.starts_with(&authorized)).take(16).collect(), rescan)
-                        },
-                        Err(_) => (Vec::new(), true),
-                    };
-                    publish_change(&publication, &stopped, &output, Changed { watch_id: identity.clone(), changed_paths, resync_required, retired: false });
+                    publish_change(&publication, &stopped, &output, event_hint(identity.clone(), &authorized, event.expect("native event")));
                     #[cfg(test)]
                     if let Some(completed) = publication_completed { let _ = completed.send(()); }
                     #[cfg(test)]
@@ -194,6 +187,27 @@ impl Watches {
                 Ok(())
             }).map_err(super::connection::environment_error)
         }).await.map_err(|_| domain(ErrorData::OutcomeUnknown))?
+    }
+}
+
+fn event_hint(watch_id: String, source: &std::path::Path, event: notify::Event) -> Changed {
+    let resync_required = event.need_rescan()
+        || event.paths.len() > 16
+        || event
+            .paths
+            .iter()
+            .any(|path| path.to_str().is_none() || !path.starts_with(source));
+    let changed_paths = event
+        .paths
+        .into_iter()
+        .filter(|path| path.to_str().is_some() && path.starts_with(source))
+        .take(16)
+        .collect();
+    Changed {
+        watch_id,
+        changed_paths,
+        resync_required,
+        retired: false,
     }
 }
 
@@ -378,12 +392,12 @@ fn native_change(
     source: &std::path::Path,
     event: &notify::Event,
 ) -> Option<tokio::sync::oneshot::Sender<()>> {
-    let mut changes = NATIVE_CHANGES.lock().unwrap();
-    let (changed, _) = changes.get(source)?;
-    if !event.paths.contains(changed) {
+    let mut observers = NATIVE_CHANGES.lock().unwrap();
+    let (expected_path, _) = observers.get(source)?;
+    if !event.paths.contains(expected_path) {
         return None;
     }
-    changes.remove(source).map(|(_, published)| published)
+    observers.remove(source).map(|(_, published)| published)
 }
 
 #[cfg(test)]
