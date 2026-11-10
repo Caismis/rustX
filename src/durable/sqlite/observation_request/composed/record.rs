@@ -65,7 +65,7 @@ pub(super) fn variants<'de, D: de::Deserializer<'de>>(decoder: D) -> Result<Vec<
 }
 pub(super) fn templates<'de, D: de::Deserializer<'de>>(
     decoder: D,
-) -> Result<Vec<super::index::Hash>, D::Error> {
+) -> Result<Vec<super::index::BlobRef>, D::Error> {
     sequence::<_, _, 80>(decoder)
 }
 pub(super) fn sequence<'de, D, T, const MAXIMUM: usize>(decoder: D) -> Result<Vec<T>, D::Error>

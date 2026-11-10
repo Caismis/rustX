@@ -2,6 +2,7 @@ use super::*;
 
 fn template(length: u64) -> Template {
     let reference = index::Reference {
+        id: 1,
         hash: [0; 32],
         last: "fixture".into(),
         depth: 0,
@@ -27,17 +28,18 @@ fn connection() -> Connection {
     let connection = Connection::open_in_memory().unwrap();
     connection
         .execute_batch(
-            "CREATE TABLE request_source_pages(hash BLOB PRIMARY KEY, bytes BLOB NOT NULL)",
+            "CREATE TABLE request_source_pages(id INTEGER PRIMARY KEY,hash BLOB NOT NULL, bytes BLOB NOT NULL)",
         )
         .unwrap();
+    index::install_cache(&connection).unwrap();
     connection
 }
 
 #[test]
 fn captured_templates_reuse_decode_only_after_current_byte_comparison() {
     let connection = connection();
-    // Include an identical pre-existing row: INSERT OR IGNORE is not evidence
-    // of ownership, but exact current bytes prove reuse equally for both cases.
+    // An identical pre-existing page has its own numeric location. Each
+    // captured location must authenticate its own current bytes before reuse.
     store_template(&connection, &template(47)).unwrap();
     let captured = store_templates(
         &connection,
@@ -66,7 +68,7 @@ fn captured_templates_reuse_decode_only_after_current_byte_comparison() {
 }
 
 #[test]
-fn captured_templates_reject_insert_trigger_and_ignored_corrupt_rows() {
+fn captured_templates_and_bounded_memo_reject_current_corrupt_bytes() {
     for trigger in [false, true] {
         let connection = connection();
         if trigger {
@@ -76,17 +78,25 @@ fn captured_templates_reject_insert_trigger_and_ignored_corrupt_rows() {
             connection
                 .execute(
                     "UPDATE request_source_pages SET bytes=x'7b' WHERE hash=?1",
-                    [digest.as_slice()],
+                    [digest.hash.as_slice()],
                 )
                 .unwrap();
+            assert!(load_template(&connection, digest).is_err());
         }
-        let captured =
-            store_templates(&connection, vec![template(47)], vec![0; weights::CLASSES]).unwrap();
+        let captured = store_templates(&connection, vec![template(47)], vec![0; weights::CLASSES]);
+        if !trigger {
+            assert!(
+                captured.is_err(),
+                "memo hits must reject current corrupt bytes"
+            );
+            continue;
+        }
+        let captured = captured.unwrap();
         let digest = captured.leaf.templates[0];
         super::super::take_work();
-        let failure =
-            load_template_reusing(&connection, digest, captured.templates.into_iter().next())
-                .unwrap_err();
+        let loaded =
+            load_template_reusing(&connection, digest, captured.templates.into_iter().next());
+        let failure = loaded.unwrap_err();
         assert!(failure.to_string().contains("digest differs"));
         assert_eq!(super::super::take_work().template_reuses, 0);
         assert!(

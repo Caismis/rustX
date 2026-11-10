@@ -3,6 +3,7 @@ use crate::durable::sqlite::observation_request::composed::{Fragment, Template, 
 
 fn template(length: u64, provenance_bytes: u64) -> Template {
     let reference = index::Reference {
+        id: 1,
         hash: [0; 32],
         last: "fixture".into(),
         depth: 0,
@@ -32,9 +33,10 @@ fn fixture(templates: &[Template]) -> (Connection, Leaf) {
     let connection = Connection::open_in_memory().unwrap();
     connection
         .execute_batch(
-            "CREATE TABLE request_source_pages(hash BLOB PRIMARY KEY, bytes BLOB NOT NULL)",
+            "CREATE TABLE request_source_pages(id INTEGER PRIMARY KEY,hash BLOB NOT NULL, bytes BLOB NOT NULL)",
         )
         .unwrap();
+    index::install_cache(&connection).unwrap();
     let hashes = templates
         .iter()
         .map(|t| fragments::store_template(&connection, t).unwrap())

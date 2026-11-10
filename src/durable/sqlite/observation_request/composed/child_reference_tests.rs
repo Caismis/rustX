@@ -21,7 +21,14 @@ fn fixture() -> Fixture {
     }
 }
 fn entries(connection: &Connection, root: &index::Reference) -> Vec<(String, Vec<u8>)> {
-    let raw = index::load_blob(connection, root.hash).unwrap();
+    let raw = index::load_blob(
+        connection,
+        index::BlobRef {
+            id: root.id,
+            hash: root.hash,
+        },
+    )
+    .unwrap();
     let page = index::inspect_page(&raw);
     match page["type"].as_str().unwrap() {
         "leaf" => page["entries"]

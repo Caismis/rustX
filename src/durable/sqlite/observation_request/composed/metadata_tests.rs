@@ -219,7 +219,16 @@ fn connection() -> Connection {
     connection
 }
 fn entries(connection: &Connection, root: &index::Reference) -> Vec<(String, Vec<u8>)> {
-    let page = index::inspect_page(&index::load_blob(connection, root.hash).unwrap());
+    let page = index::inspect_page(
+        &index::load_blob(
+            connection,
+            index::BlobRef {
+                id: root.id,
+                hash: root.hash,
+            },
+        )
+        .unwrap(),
+    );
     if let Some(values) = page.get("entries").and_then(serde_json::Value::as_array) {
         return values
             .iter()

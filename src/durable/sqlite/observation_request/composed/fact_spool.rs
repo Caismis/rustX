@@ -123,9 +123,10 @@ mod tests {
         let connection = Connection::open_in_memory().unwrap();
         connection
             .execute_batch(
-                "CREATE TABLE request_source_pages(hash BLOB PRIMARY KEY,bytes BLOB NOT NULL)",
+                "CREATE TABLE request_source_pages(id INTEGER PRIMARY KEY,hash BLOB NOT NULL,bytes BLOB NOT NULL)",
             )
             .unwrap();
+        index::install_cache(&connection).unwrap();
         super::super::super::install_workspace(&connection).unwrap();
         connection
     }
