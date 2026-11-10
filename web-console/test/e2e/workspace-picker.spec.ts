@@ -55,16 +55,22 @@ for (const mode of ['native', 'browser'] as const) test(`Add Workspace registers
       await expect(add).toBeEnabled();
       await expect(sidebar.getByRole('button', {name: 'Select Workspace Added project'})).toHaveCount(0);
     }
+    const draft = page.getByRole('textbox', {name: 'Message'});
+    await draft.fill('Draft before adding a workspace');
     await add.click();
     if (mode === 'browser') await addFromBrowser('Added project');
     else await expect(dialog).toHaveCount(0);
-    await expect(sidebar.getByRole('button', {name: 'Select Workspace Added project'})).toBeVisible();
+    const addedWorkspace = sidebar.getByRole('button', {name: 'Select Workspace Added project'});
+    const chooser = page.getByRole('button', {name: 'Choose Workspace', exact: true});
+    await addedWorkspace.click();
+    await expect(chooser).toContainText('Added project');
+    await expect(draft).toHaveValue('Draft before adding a workspace');
+    await expect(page.getByRole('button', {name: 'Send', exact: true})).toBeEnabled();
     const added = (await service.host.listWorkspaces()).workspaces.find(row => row.displayName === 'Added project')!;
     expect(await service.host.resolveWorkspace(added.id, fixture.endpoint)).toEqual({cwd: path});
     expect(readFileSync(metadataFile, 'utf8')).toContain(path);
 
     if (mode === 'browser') await page.setViewportSize({width: 390, height: 844});
-    const chooser = page.getByRole('button', {name: 'Choose Workspace', exact: true});
     await chooser.click();
     await page.getByRole('menuitem', {name: '+ Add Workspace', exact: true}).click();
     if (mode === 'browser') await addFromBrowser('Composer project');

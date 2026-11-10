@@ -9,7 +9,7 @@ import type { AppServerClient } from '../../client/app-server';
 import type { SessionView } from '../../client/contracts';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog, type WorkspaceFolderSelection } from '../../workspaces/host';
 import { WorkspaceFolderDialog } from '../../workspaces/WorkspaceFolderDialog';
-import type { WorkspaceAuthority, WorkspaceAuthorityObservation } from '../../workspaces/authority';
+import type { WorkspaceAuthority } from '../../workspaces/authority';
 import type { WorkspaceAssociations, WorkspaceMutation } from '../../workspaces/associations';
 import { sameEndpoint } from '../../workspaces/endpoint';
 import { Menu } from '../../presentation/primitives/Menu';
@@ -37,7 +37,7 @@ export function ConversationComposer({ visible = true, client, host, authority, 
   const [localDraft] = useState(() => new ComposerDraft());
   const editor = draftOwner ?? localDraft;
   const [intent, setIntent] = useState<SessionModelConfig>();
-  const [catalog, setCatalog] = useState<WorkspaceCatalog | undefined>(() => authority.getCatalog());
+  const catalog = useSyncExternalStore(authority.subscribeCatalog, authority.getCatalog);
   const [error, setError] = useNotice(), [menu, setMenu] = useState(false), [add, setAdd] = useState<{
     mutation: WorkspaceMutation; picker: Extract<WorkspaceCatalog['picker'], { locations: unknown }>;
   }>(), [adopting, setAdopting] = useState(false);
@@ -58,11 +58,10 @@ export function ConversationComposer({ visible = true, client, host, authority, 
   // The Workspace catalog belongs to the Product Host authority of this
   // endpoint, never to an App Server connection generation: a transport flap
   // re-lists nothing. `current` only fences committing an answer.
-  const catalogObserved = useEffectEvent((value: WorkspaceAuthorityObservation) => { if (current() && value.current()) setCatalog(value.catalog); });
   const catalogFailed = useEffectEvent((e: unknown) => { if (current()) setError(String(e)); });
   useEffect(() => {
     let alive = true;
-    void authority.observe().then(value => { if (alive) catalogObserved(value); }, e => { if (alive) catalogFailed(e); });
+    void authority.observe().catch(e => { if (alive) catalogFailed(e); });
     return () => { alive = false; };
   }, [authority, transport.endpoint, transport.authorityRevision]);
   const bound = sameEndpoint(catalog?.endpoint, transport.endpoint);
@@ -81,7 +80,7 @@ export function ConversationComposer({ visible = true, client, host, authority, 
       if (!mutation.commit() || !current()) return;
       const next = await authority.observe();
       if (!current() || !mutation.current() || !next.current()) return;
-      setCatalog(next.catalog); setAdd(undefined);
+      setAdd(undefined);
       const adopted = next.catalog.workspaces.find(w => id ? w.id === id : w.location === location);
       if (adopted) pick(adopted.id);
     } catch (e) { if (current()) setError(String(e)); }

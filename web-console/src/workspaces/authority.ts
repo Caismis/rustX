@@ -14,16 +14,23 @@ const sameAuthority = (left: WorkspaceCatalog | undefined, right: WorkspaceCatal
  * fence. A read started before it may confirm the accepted scope, never replace it. */
 export class WorkspaceAuthority {
   private epoch = 0;
+  private catalogRequest = 0;
+  private acceptedCatalogRequest = 0;
   private catalog?: WorkspaceCatalog;
   private listeners = new Set<() => void>();
+  private catalogListeners = new Set<() => void>();
   constructor(private readonly host: ProductHostWorkspaces) {}
   getCatalog = () => this.catalog;
   getRevision = () => this.epoch;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
+  subscribeCatalog = (listener: () => void) => { this.catalogListeners.add(listener); return () => { this.catalogListeners.delete(listener); }; };
   private replaced() { ++this.epoch; this.listeners.forEach(listener => listener()); }
+  private publishCatalog() { this.catalogListeners.forEach(listener => listener()); }
   async observe(signal?: AbortSignal): Promise<WorkspaceAuthorityObservation> {
     const epoch = this.epoch;
+    const request = ++this.catalogRequest;
     const catalog = await this.host.listWorkspaces(signal);
+    signal?.throwIfAborted();
     if (!catalog || typeof catalog.authorityId !== 'string' || !catalog.authorityId || typeof catalog.endpoint !== 'string' || !URL.canParse(catalog.endpoint) || !Array.isArray(catalog.workspaces)
       || new Set(catalog.workspaces.map(row => row.id)).size !== catalog.workspaces.length
       || catalog.workspaces.some(row => typeof row.id !== 'string' || typeof row.displayName !== 'string')
@@ -32,8 +39,13 @@ export class WorkspaceAuthority {
       || ((catalog.picker.kind === 'configured' || catalog.picker.kind === 'browser') && !Array.isArray(catalog.picker.locations))) throw new Error('Invalid Workspace catalog');
     const replaced = !sameAuthority(this.catalog, catalog);
     if (replaced && epoch !== this.epoch) throw new WorkspaceHostError('Obsolete Workspace authority observation', 'authority_replaced');
-    this.catalog = catalog;
-    if (replaced) this.replaced();
+    // A late confirmation can still serve its caller without rolling back the shared catalog.
+    if (replaced || request > this.acceptedCatalogRequest) {
+      this.acceptedCatalogRequest = request;
+      this.catalog = catalog;
+      if (replaced) this.replaced();
+      this.publishCatalog();
+    }
     const captured = this.epoch;
     return { scope: { authorityId: catalog.authorityId, endpoint: catalog.endpoint }, catalog, current: () => captured === this.epoch };
   }
@@ -49,6 +61,7 @@ export class WorkspaceAuthority {
     } catch (cause) {
       if (observation.current() && cause instanceof WorkspaceHostError && cause.kind === 'authority_replaced') {
         this.catalog = undefined; this.replaced();
+        this.publishCatalog();
       }
       throw cause;
     }
