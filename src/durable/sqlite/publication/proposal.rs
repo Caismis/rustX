@@ -2,7 +2,7 @@
 
 use crate::durable::ConversationStoreError;
 use crate::durable::sqlite::canonical::ledger::{load_head, load_message_tx};
-use crate::durable::sqlite::storage;
+use crate::durable::sqlite::{sqlite_error, storage};
 use crate::message::types::{AssistantContentBlock, ContentBlockIndex, MessageBlock};
 use crate::publication::{
     PublicationAuditBlock, PublicationFrame, PublicationPayload, PublicationSettlement,
@@ -415,7 +415,7 @@ pub(in crate::durable::sqlite) fn record_tool_proposal_dependency(
     let any_proposal: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM publication_proposals p INDEXED BY publication_proposals_call_idx CROSS JOIN publication_streams s ON s.stream_id=p.stream_id WHERE p.call_id=?1)",
         [call_id.as_str()], |row| row.get(0),
-    ).map_err(|error| storage(format!("tool proposal presence: {error}")))?;
+    ).map_err(|error| sqlite_error(&error, format!("tool proposal presence: {error}")))?;
     let mut values = vec![Value::Text(call_id.to_string())];
     let streams = "publication_streams s INDEXED BY publication_streams_owner_idx CROSS JOIN publication_proposals p ON p.stream_id=s.stream_id";
     let messages = "publication_streams s INDEXED BY publication_streams_message_settlement_idx CROSS JOIN publication_proposals p ON p.stream_id=s.stream_id";
@@ -451,7 +451,7 @@ pub(in crate::durable::sqlite) fn record_tool_proposal_dependency(
     );
     let mut statement = transaction
         .prepare_cached(&sql)
-        .map_err(|error| storage(format!("tool proposal probe: {error}")))?;
+        .map_err(|error| sqlite_error(&error, format!("tool proposal probe: {error}")))?;
     let rows = statement
         .query_map(rusqlite::params_from_iter(values), |row| {
             Ok((
@@ -468,7 +468,7 @@ pub(in crate::durable::sqlite) fn record_tool_proposal_dependency(
             crate::durable::sqlite::sqlite_error(&error, format!("tool proposal rows: {error}"))
         })?;
     let mut candidates = rows
-        .map(|row| row.map_err(|error| storage(format!("tool proposal row: {error}"))))
+        .map(|row| row.map_err(|error| sqlite_error(&error, format!("tool proposal row: {error}"))))
         .collect::<Result<Vec<_>, _>>()?;
     drop(statement);
     candidates.sort_unstable_by(|left, right| left.0.cmp(&right.0));

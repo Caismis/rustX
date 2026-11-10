@@ -1684,8 +1684,10 @@ fn bounded_work_staged_publication_and_final_settlement_sql() {
         let baseline = &samples[0].1;
         assert!(baseline.len() > 100);
         for (history, statements) in &samples {
+            assert_eq!(statements.len(), baseline.len(), "tools {tools}, history {history}");
             for (sql, work) in statements {
                 let first = &baseline[sql];
+                assert_eq!(work.calls, first.calls, "tools {tools}, history {history}: {sql}");
                 assert!(work.steps <= first.steps + 16, "tools {tools}, history {history}, VM {} -> {}: {sql}", first.steps, work.steps);
                 assert!(work.scans <= first.scans + 2, "tools {tools}, history {history}: {sql}");
                 assert_eq!(work.sorts, 0, "tools {tools}, history {history}: {sql}");

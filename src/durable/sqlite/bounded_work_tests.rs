@@ -63,6 +63,53 @@ pub(super) fn history(size: usize) -> SqliteConversationStore {
     store
 }
 
+fn select_fixed_seed(store: &SqliteConversationStore) {
+    use crate::context::checkpoint::{CheckpointCandidate, CheckpointItem, CheckpointMessage};
+    use crate::durable::projection::ProjectionCommitInput;
+    use crate::model::projected::CanonicalMessageRef;
+    use crate::runtime::cancellation::CancellationSignal;
+    use crate::runtime::identity::{CheckpointId, CompactionOperationId};
+    use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
+
+    let operation_id = CompactionOperationId::new("fixed-selection");
+    let cut = store.compaction_resource_cut().unwrap();
+    let candidate = CheckpointCandidate {
+        checkpoint_id: CheckpointId::new("fixed-selection"),
+        expected_head: None,
+        base_frontier: cut.ledger,
+        read_cut: cut,
+        items: vec![CheckpointItem {
+            message: CheckpointMessage::Original(CanonicalMessageRef::of(
+                store.conversation_id(),
+                &user_message("seed", "seed"),
+            )),
+            call_sources: vec![],
+            result_call: None,
+        }],
+        summary_metadata: None,
+        summary_generation: None,
+    };
+    store
+        .commit_projection(ProjectionCommitInput {
+            grant: CancellationSignal::new()
+                .authorize_compaction_commit(operation_id.clone())
+                .unwrap(),
+            operation_id,
+            candidate,
+            owner: store.projection_owner(None).unwrap(),
+            tokens_before: TokenMeasurement {
+                input_tokens: 100,
+                source: TokenMeasurementSource::Estimated,
+            },
+            estimated_tokens_after: 10,
+            occupancy: None,
+            turn_id: None,
+            timestamp: Utc::now(),
+        })
+        .unwrap();
+    assert_eq!(store.projected_history().unwrap().messages.len(), 1);
+}
+
 #[test]
 fn bounded_work_message_windows_are_flat_at_old_and_current_cuts() {
     let mut samples = [vec![], vec![], vec![]];
@@ -89,12 +136,27 @@ fn bounded_work_message_windows_are_flat_at_old_and_current_cuts() {
 
 #[test]
 fn bounded_work_actual_warm_request_and_tool_turn_sql() {
+    assert_warm_request_and_tool_turn_sql(false);
+}
+
+#[test]
+fn bounded_work_actual_warm_turn_sql_calls_are_flat_with_fixed_selected_input() {
+    assert_warm_request_and_tool_turn_sql(true);
+}
+
+fn assert_warm_request_and_tool_turn_sql(fixed_selection: bool) {
     use super::observation::tests::inspection::{
         inspection_assistant, inspection_request_snapshot, inspection_result,
     };
     let mut samples = Vec::new();
     for size in HISTORY_SIZES.map(|size| size * 2) {
         let store = history(size);
+        if fixed_selection {
+            // Grow retained H while holding selected C fixed. The original
+            // growing-C case also checks each statement's bounded access path,
+            // but its persistent input-tree traversal legitimately adds calls.
+            select_fixed_seed(&store);
+        }
         let mut request = inspection_request_snapshot(&store, 0, "fixed definition");
         freeze_native_input(&store, &mut request);
         query_work::capture(&store.lock().unwrap());
@@ -141,6 +203,9 @@ fn bounded_work_actual_warm_request_and_tool_turn_sql() {
                 .unwrap_or_else(|| panic!("new statement at {size}: {sql}"));
             assert_eq!(work.sorts, 0, "sort at {size}: {sql}");
             assert_eq!(work.automatic, 0, "automatic index at {size}: {sql}");
+            if fixed_selection {
+                assert_eq!(work.calls, baseline.calls, "SQL calls at {size}: {sql}");
+            }
             assert!(
                 work.steps <= baseline.steps + 16,
                 "history {size}, VM {} -> {}: {sql}",
@@ -614,9 +679,11 @@ fn bounded_work_publication_queries_prune_reused_wire_ids_by_owner() {
     }
     let baseline = &samples[0].1;
     for (history, statements) in &samples {
+        assert_eq!(statements.len(), baseline.len(), "history {history}");
         for (sql, work) in statements {
             let first = &baseline[sql];
             assert_eq!(work.steps, first.steps, "history {history}: {sql}");
+            assert_eq!(work.calls, first.calls, "history {history}: {sql}");
             assert_eq!(work.sorts, 0, "history {history}: {sql}");
             assert_eq!(work.automatic, 0, "automatic index at {history}: {sql}");
             assert_eq!(work.scans, first.scans, "history {history}: {sql}");
@@ -863,4 +930,98 @@ fn bounded_work_turn_prompt_and_holes_seek_exact_owner_and_old_cut() {
     }
     query_work::assert_flat(&winners, 100, 1, 512);
     query_work::assert_flat(&holes, 100, 1, 8);
+}
+
+#[test]
+fn bounded_work_new_reads_preserve_typed_cancellation_and_rollback() {
+    use super::publication::proposal::record_tool_proposal_dependency;
+    use crate::runtime::identity::{ToolCallId, TurnId};
+    use rusqlite::trace::{TraceEvent, TraceEventCodes};
+    use std::cell::Cell;
+
+    thread_local! {
+        static TARGET: Cell<Option<&'static str>> = const { Cell::new(None) };
+        static INTERRUPT: Cell<bool> = const { Cell::new(false) };
+    }
+    fn arm_interrupt(event: TraceEvent<'_>) {
+        if let TraceEvent::Stmt(statement, _) = event {
+            TARGET.with(|target| {
+                if target
+                    .get()
+                    .is_some_and(|text| statement.sql().contains(text))
+                {
+                    target.set(None);
+                    INTERRUPT.with(|pending| pending.set(true));
+                }
+            });
+        }
+    }
+
+    let store = store();
+    store.initialize(&[user_message("seed", "seed")]).unwrap();
+    let mut connection = store.lock().unwrap();
+    connection.execute_batch("INSERT INTO publication_streams(stream_id,attempt_id,turn_id,request_id,message_id,next_frame_sequence,settlement) VALUES('chosen','chosen','1','request','message',1,'canonical'); INSERT INTO publication_proposals(stream_id,call_id,block_index,tool_id,tool_name,state,executed,settlement) VALUES('chosen','call',0,'tool','tool','completed',0,'canonical');").unwrap();
+    for target in [
+        "SELECT EXISTS(SELECT 1 FROM publication_proposals",
+        "SELECT p.stream_id,s.attempt_id",
+        canonical::HUMAN_ACTIVITY_SQL,
+    ] {
+        let transaction = connection.transaction().unwrap();
+        transaction
+            .execute("UPDATE publication_proposals SET executed=1", [])
+            .unwrap();
+        TARGET.with(|value| value.set(Some(target)));
+        transaction.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(arm_interrupt));
+        transaction
+            .progress_handler(1, Some(|| INTERRUPT.with(|pending| pending.replace(false))))
+            .unwrap();
+        let result = if target == canonical::HUMAN_ACTIVITY_SQL {
+            canonical::ledger::append_seeded_ledger_message(
+                &transaction,
+                &user_message("cancelled", "cancelled"),
+            )
+        } else {
+            record_tool_proposal_dependency(
+                &transaction,
+                &ToolCallId::new("call"),
+                Some(&AttemptId::new("chosen")),
+                Some(&TurnId::new("1")),
+                None,
+                "test",
+                false,
+                None,
+            )
+        };
+        transaction.trace_v2(TraceEventCodes::empty(), None);
+        transaction
+            .progress_handler(0, None::<fn() -> bool>)
+            .unwrap();
+        assert!(
+            TARGET.with(|value| value.get().is_none()),
+            "missed {target}"
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            ConversationStoreError::OperationCancelled,
+            "{target}"
+        );
+        transaction.rollback().unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT executed FROM publication_proposals WHERE stream_id='chosen'",
+                    [],
+                    |row| row.get::<_, u64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM message_ledger", [], |row| row
+                    .get::<_, u64>(0))
+                .unwrap(),
+            1
+        );
+    }
 }
