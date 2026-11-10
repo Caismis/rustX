@@ -62,18 +62,18 @@ impl PublicationHeader {
             }
         }
         self.header.transcript_cursor = connection.query_row_cached(
-            "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",
+            "SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1",
             [message.id().as_str()], |row| row.get::<_, u64>(0),
         ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.map(crate::durable::TranscriptCursor::new);
         let bytes = message_header_bytes(&mut self.header)?;
         let actual: Option<Vec<u8>> = connection.query_row_cached(
-            "SELECT header_json FROM observation_headers WHERE reference_kind='message' AND reference_id=?1 AND ledger_position=?2",
+            "SELECT header_json FROM transcript_entries WHERE reference_kind='message' AND reference_id=?1 AND ledger_position=?2",
             params![message.id().as_str(),position], |row|row.get(0),
         ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if actual.as_deref() != Some(bytes.as_slice()) {
             // This also repairs a failed/over-budget T patch. Use the same
             // upsert as the original final capture, with its exact typed budget.
-            connection.execute_cached("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,header_json,transcript_position) VALUES('message',?1,?2,?3,(SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),seq_to_i64(position)?,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+            connection.execute_cached("INSERT INTO transcript_entries(position,reference_kind,reference_id,ledger_position,header_json) VALUES(COALESCE((SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1),(SELECT position FROM transcript_entries WHERE reference_kind='message' AND reference_id=?1),-2*?2,(SELECT -2*sequence-1 FROM pending_inbound WHERE message_id=?1)),'message',?1,?2,?3) ON CONFLICT(position) DO UPDATE SET reference_kind=excluded.reference_kind,reference_id=excluded.reference_id,ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),seq_to_i64(position)?,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         }
         #[cfg(test)]
         PUBLICATION_CAPTURE_WORK.with(|work| {

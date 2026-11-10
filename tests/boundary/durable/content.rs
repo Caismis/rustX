@@ -92,7 +92,7 @@ fn t08_t20_content_range_reads_touch_at_most_two_finite_sqlite_rows() {
         );
     }
     let raw = rusqlite::Connection::open(&path).unwrap();
-    let plan:String=raw.query_row("EXPLAIN QUERY PLAN SELECT segment,bytes FROM content_segments WHERE source_kind='canonical' AND source_id='large-message' AND block_index=0 AND representation='utf8_text' AND segment>=1 AND segment<=2 ORDER BY segment LIMIT 2",[],|r|r.get(3)).unwrap();
+    let plan:String=raw.query_row("EXPLAIN QUERY PLAN SELECT segment,bytes FROM content_segments WHERE source_kind='canonical' AND source_id=(SELECT -id FROM content_source_ids WHERE alias='large-message') AND block_index=0 AND representation='utf8_text' AND segment>=1 AND segment<=2 ORDER BY segment LIMIT 2",[],|r|r.get(3)).unwrap();
     assert!(
         plan.contains("SEARCH content_segments USING PRIMARY KEY"),
         "{plan}"
@@ -257,12 +257,12 @@ fn t15_t20_message_and_transcript_headers_advance_without_source_body_reads() {
     assert!(
         connection
             .execute(
-                "UPDATE observation_headers SET header_json=zeroblob(16385)",
+                "UPDATE transcript_entries SET header_json=zeroblob(16385)",
                 []
             )
             .is_err()
     );
-    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT h.header_json FROM message_ledger m CROSS JOIN observation_headers h WHERE m.position>41 AND m.position<=73 AND h.reference_kind='message' AND h.reference_id=m.message_id ORDER BY m.position LIMIT 32", [], |row| row.get(3)).unwrap();
+    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT h.header_json FROM message_ledger m CROSS JOIN transcript_entries h WHERE m.position>41 AND m.position<=73 AND h.reference_kind='message' AND h.reference_id=m.message_id ORDER BY m.position LIMIT 32", [], |row| row.get(3)).unwrap();
     assert!(
         plan.contains("SEARCH m USING COVERING INDEX message_ledger_identity_position_idx"),
         "{plan}"
@@ -1855,7 +1855,7 @@ fn t08_t15_t20_surface_boundary_pages_read_native_headers_without_surface_or_mes
         .execute("UPDATE message_ledger SET message_json='invalid JSON'", [])
         .unwrap();
     connection
-        .execute("UPDATE surface_ops SET op_json='invalid JSON'", [])
+        .execute("UPDATE surface_ops SET ledger_position=1", [])
         .unwrap();
     drop(connection);
     let store = SqliteConversationStore::open(conversation, &path).unwrap();
@@ -2106,7 +2106,7 @@ fn t10_t14_t19_derived_canonical_and_pending_headers_do_not_refuse_native_commit
     let store = SqliteConversationStore::open(conversation, &path).unwrap();
     store.initialize(&[]).unwrap();
     let connection = rusqlite::Connection::open(&path).unwrap();
-    connection.execute_batch("CREATE TRIGGER reject_observation_header BEFORE INSERT ON observation_headers BEGIN SELECT RAISE(ABORT,'derived header unavailable'); END;").unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_observation_header BEFORE UPDATE OF header_json ON transcript_entries BEGIN SELECT RAISE(ABORT,'derived header unavailable'); END;").unwrap();
     let timestamp = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
     let message = MessageBlock::User(UserMessageBlock {
         id: MessageId::new("original-native-c"),
@@ -2625,7 +2625,7 @@ fn t12_t14_t19_source_cut_provenance_rejects_old_journal_with_new_canonical_fron
     let connection = rusqlite::Connection::open(path).unwrap();
     connection
         .execute(
-            "DELETE FROM observation_headers WHERE ledger_position=3",
+            "UPDATE transcript_entries SET header_json=NULL,reference_kind=NULL,reference_id=NULL,ledger_position=NULL WHERE ledger_position=3",
             [],
         )
         .unwrap();
@@ -2697,7 +2697,7 @@ fn t08_t15_t20_missing_middle_descriptor_never_skips_native_history() {
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection
         .execute(
-            "DELETE FROM observation_headers WHERE ledger_position=2",
+            "UPDATE transcript_entries SET header_json=NULL,reference_kind=NULL,reference_id=NULL,ledger_position=NULL WHERE ledger_position=2",
             [],
         )
         .unwrap();
@@ -2712,7 +2712,7 @@ fn t08_t15_t20_missing_middle_descriptor_never_skips_native_history() {
     }
     let counts: (u64, u64) = connection
         .query_row(
-            "SELECT (SELECT COUNT(*) FROM message_ledger),(SELECT COUNT(*) FROM transcript_order)",
+            "SELECT (SELECT COUNT(*) FROM message_ledger),(SELECT COUNT(*) FROM transcript_entries)",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -2724,7 +2724,7 @@ fn t08_t15_t20_missing_middle_descriptor_never_skips_native_history() {
     );
     assert_eq!(store.observation_read_cut().unwrap(), cut);
     let plan: String = connection.query_row(
-        "EXPLAIN QUERY PLAN SELECT t.position,h.header_json FROM transcript_order t LEFT JOIN observation_headers h ON h.transcript_position=t.position WHERE t.position<4 ORDER BY t.position DESC LIMIT 33",
+        "EXPLAIN QUERY PLAN SELECT t.position,t.header_json FROM transcript_entries t WHERE t.position>0 AND t.position<4 ORDER BY t.position DESC LIMIT 33",
         [], |row| row.get(3),
     ).unwrap();
     assert!(plan.contains("INTEGER PRIMARY KEY"), "{plan}");

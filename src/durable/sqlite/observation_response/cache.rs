@@ -109,10 +109,10 @@ impl Owner {
                 ],
             ),
             (
-                "observation_headers",
+                "transcript_entries",
                 vec![
                     ("ledger_position", Domain::Ledger),
-                    ("transcript_position", Domain::Transcript),
+                    ("position", Domain::Transcript),
                 ],
             ),
             (
@@ -126,7 +126,6 @@ impl Owner {
                 "request_snapshots",
                 vec![("started_sequence", Domain::Journal)],
             ),
-            ("transcript_order", vec![("position", Domain::Transcript)]),
         ] {
             // xinfo preserves SQLite's logical column ordinals across virtual columns.
             let mut statement = connection
@@ -222,7 +221,8 @@ impl Owner {
             // descriptor across any content-frontier rewrite. Ordinary reads
             // do not consult them, so this broad rule only applies when needed.
             table.starts_with("inherited_")
-                || (table == "content_frontiers" && self.identity_fields.load(Ordering::Relaxed))
+                || (matches!(table, "content_frontiers" | "content_source_ids")
+                    && self.identity_fields.load(Ordering::Relaxed))
         };
         if invalidates {
             self.invalidate();

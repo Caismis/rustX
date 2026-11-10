@@ -589,7 +589,7 @@ fn prepared_transcript_header_constraint_failure_preserves_native_history_and_ol
             )
         };
         let next = store.observation_read_cut().unwrap().read.journal + 1;
-        store.lock().unwrap().execute_batch(&format!("ALTER TABLE observation_headers ADD COLUMN reject_current_header INTEGER CHECK(journal_position!={next});")).unwrap();
+        store.lock().unwrap().execute_batch(&format!("ALTER TABLE transcript_entries ADD COLUMN reject_current_header INTEGER CHECK(journal_position!={next});")).unwrap();
         let writes = count_event_writes(&store);
         event_insert::take_work();
         let (persisted, cursor) = if interaction {
@@ -636,7 +636,7 @@ fn prepared_transcript_header_constraint_failure_preserves_native_history_and_ol
         store
             .lock()
             .unwrap()
-            .execute_batch("ALTER TABLE observation_headers DROP COLUMN reject_current_header;")
+            .execute_batch("ALTER TABLE transcript_entries DROP COLUMN reject_current_header;")
             .unwrap();
         let healthy = if let Some(event) = followup {
             store.append_interaction_audit(event).unwrap().0

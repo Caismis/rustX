@@ -1097,7 +1097,7 @@ fn inherited_provenance_bootstrap_failures_roll_back_every_native_authority() {
         for table in [
             "message_ledger",
             "surface_ops",
-            "transcript_order",
+            "transcript_entries",
             "bootstrap_identity",
             "inherited_turn_provenance",
             "inherited_response_provenance",
@@ -1499,7 +1499,7 @@ pub(super) fn materialized_member_process(
     id: &str,
 ) -> Result<Option<crate::observation::turn::TurnProcessView>, ConversationStoreError> {
     let transcript: u64 = store.lock().unwrap().query_row(
-        "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",
+        "SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1",
         [id], |row| row.get(0),
     ).unwrap();
     let cut = store.observation_read_cut()?;
@@ -1970,7 +1970,7 @@ fn inherited_terminal_only_transcript_seats_resolve_finite_native_owners_without
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     store.initialize_lineage(&seed).unwrap();
     let transcript: u64 = store.lock().unwrap().query_row(
-        "SELECT position FROM transcript_order WHERE reference_kind='inherited_turn' AND reference_id='8'",
+        "SELECT position FROM transcript_entries WHERE native_reference_kind='inherited_turn' AND native_reference_id='8'",
         [], |row| row.get(0),
     ).unwrap();
     let cut = store.observation_read_cut().unwrap();
@@ -2019,7 +2019,7 @@ fn inherited_terminal_only_transcript_seats_resolve_finite_native_owners_without
         .lock()
         .unwrap()
         .execute(
-            "UPDATE transcript_order SET reference_id='0' WHERE position=?1",
+            "UPDATE transcript_entries SET native_reference_id='0' WHERE position=?1",
             [transcript],
         )
         .unwrap();
@@ -2033,7 +2033,7 @@ fn inherited_terminal_only_transcript_seats_resolve_finite_native_owners_without
         .lock()
         .unwrap()
         .execute(
-            "UPDATE transcript_order SET reference_id='8' WHERE position=?1",
+            "UPDATE transcript_entries SET native_reference_id='8' WHERE position=?1",
             [transcript],
         )
         .unwrap();
@@ -2140,7 +2140,7 @@ fn turn_directory_mixed_terminal_and_local_turns_reuse_exact_validated_navigatio
     let frontier = store.presentation_frontier().unwrap();
     store.conversation_turns(0, 64).unwrap();
     assert_eq!(store.presentation_frontier().unwrap(), frontier);
-    store.lock().unwrap().execute("DELETE FROM transcript_order WHERE reference_kind='inherited_turn' AND reference_id='8'",[]).unwrap();
+    store.lock().unwrap().execute("DELETE FROM transcript_entries WHERE native_reference_kind='inherited_turn' AND native_reference_id='8'",[]).unwrap();
     assert!(store.conversation_turns(8, 1).is_err());
     assert!(store.load_inherited_turns().is_err());
 }

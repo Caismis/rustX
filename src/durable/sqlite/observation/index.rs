@@ -239,7 +239,7 @@ fn index_message_capture(
             (tool.result.status==crate::tools::types::ToolExecutionStatus::Success).then(||crate::durable::sqlite::observation_delivery::head(connection,position,0,8)).transpose()?
         }else{None},
         tool_calls: Vec::new(),
-        transcript_cursor: connection.query_row_cached("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[message.id().as_str()],|row|row.get::<_,u64>(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.map(crate::durable::TranscriptCursor::new),
+        transcript_cursor: connection.query_row_cached("SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1",[message.id().as_str()],|row|row.get::<_,u64>(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.map(crate::durable::TranscriptCursor::new),
         identity: (message.id().as_str().len() <= 256).then(|| message.id().clone()),
         locator: position.map(|position| {
             crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
@@ -303,7 +303,7 @@ fn index_message_capture(
     } else {
         (message_header_bytes(&mut header)?, None)
     };
-    connection.execute_cached("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,header_json,transcript_position) VALUES('message',?1,?2,?3,(SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),position.map(seq_to_i64).transpose()?,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    connection.execute_cached("INSERT INTO transcript_entries(position,reference_kind,reference_id,ledger_position,header_json) VALUES(COALESCE((SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1),(SELECT position FROM transcript_entries WHERE reference_kind='message' AND reference_id=?1),-2*?2,(SELECT -2*sequence-1 FROM pending_inbound WHERE message_id=?1)),'message',?1,?2,?3) ON CONFLICT(position) DO UPDATE SET reference_kind=excluded.reference_kind,reference_id=excluded.reference_id,ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),position.map(seq_to_i64).transpose()?,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     index_tool_result(connection, message, position)?;
     Ok(prepared)
 }
@@ -327,7 +327,7 @@ pub(in crate::durable::sqlite) fn index_tool_result(
             .ok_or_else(|| storage("native Tool result summary exceeds header budget"))?;
         connection
             .execute(
-                "UPDATE observation_headers SET tool_result_json=?2 WHERE ledger_position=?1",
+                "UPDATE transcript_entries SET tool_result_json=?2 WHERE ledger_position=?1",
                 params![position, bytes],
             )
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
@@ -558,7 +558,7 @@ fn store_transcript_bytes(
     journal: u64,
     bytes: &[u8],
 ) -> Result<(), ConversationStoreError> {
-    connection.execute("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,journal_position,header_json,transcript_position) VALUES(?1,?2,NULL,?3,?4,(SELECT position FROM transcript_order WHERE reference_kind=?1 AND reference_id=?2)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET journal_position=excluded.journal_position,header_json=excluded.header_json",params![kind,id,journal,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    connection.execute("UPDATE transcript_entries SET reference_kind=?1,reference_id=?2,journal_position=?3,header_json=?4 WHERE native_reference_kind=?1 AND native_reference_id=?2",params![kind,id,journal,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
 
@@ -817,7 +817,7 @@ pub(in crate::durable::sqlite) fn index_pending_header(
     id: &crate::runtime::identity::MessageId,
     transcript: Option<u64>,
 ) -> Result<(), ConversationStoreError> {
-    let bytes:Vec<u8>=connection.query_row_cached("SELECT header_json FROM observation_headers WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row_cached("SELECT header_json FROM transcript_entries WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("pending source header exceeds bound"));
     }

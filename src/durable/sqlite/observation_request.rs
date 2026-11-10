@@ -22,6 +22,7 @@ struct SourceWriter<'a> {
     connection: &'a Connection,
     id: &'a str,
     kind: &'static str,
+    source_id: i64,
     buffer: Vec<u8>,
     first: Vec<u8>,
     written: u64,
@@ -34,7 +35,7 @@ impl SourceWriter<'_> {
             if self.segment == 0 {
                 self.first = std::mem::take(&mut self.buffer);
             } else {
-                self.connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES(?1,?2,0,'j',?3,?4)",params![self.kind,self.id,self.segment,self.buffer]).map_err(|error| { self.failure = Some(sqlite_error(&error,error.to_string())); std::io::Error::other("native observation source write failed") })?;
+                self.connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES(?1,?2,0,'j',?3,?4)",params![self.kind,self.source_id,self.segment,self.buffer]).map_err(|error| { self.failure = Some(sqlite_error(&error,error.to_string())); std::io::Error::other("native observation source write failed") })?;
             }
             self.written = self
                 .written
@@ -123,6 +124,7 @@ pub(super) fn index_state_source(
         connection,
         id,
         kind,
+        source_id: super::content::keys::write(connection, kind, id)?,
         buffer: Vec::with_capacity(SEGMENT),
         first: Vec::new(),
         written: 0,
@@ -147,7 +149,7 @@ pub(super) fn index_state_source(
     connection
         .execute(
             "INSERT INTO content_frontiers VALUES(?1,?2,0,'j',1,?3,?4)",
-            params![kind, id, writer.written, writer.first],
+            params![kind, writer.source_id, writer.written, writer.first],
         )
         .map_err(|error| sqlite_error(&error, error.to_string()))?;
     Ok(())
@@ -1353,6 +1355,12 @@ mod source_buffer_tests {
             connection: &connection,
             failure: None,
             id: "fragmented-source",
+            source_id: crate::durable::sqlite::content::keys::write(
+                &connection,
+                "state",
+                "fragmented-source",
+            )
+            .unwrap(),
             kind: "state",
             buffer: Vec::with_capacity(SEGMENT),
             first: Vec::new(),

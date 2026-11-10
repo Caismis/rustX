@@ -721,7 +721,7 @@ fn t08_t14_t15_t19_trace_arguments_preserve_original_raw_spelling_and_missing_fr
         .unwrap()
         .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
         .unwrap();
-    store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='r'", []).unwrap();
+    store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id=5 AND block_index=0 AND representation='r'", []).unwrap();
     assert!(matches!(
         store.observation_trace_tool_proposal(&cut, &trace_raw_occurrence()),
         Err(ConversationStoreError::Storage(_))
@@ -751,7 +751,7 @@ fn t10_t14_t19_trace_raw_refresh_fault_keeps_native_commit_and_never_falls_back(
     );
     // Original retained bytes prove that absent layout is a source fault,
     // including when the cached pre-raw proposal still names canonical JSON.
-    store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='r'", []).unwrap();
+    store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id=5 AND block_index=0 AND representation='r'", []).unwrap();
     assert!(matches!(
         store.observation_trace_tool_proposal(&cut, &trace_raw_occurrence()),
         Err(ConversationStoreError::Storage(_))
@@ -760,7 +760,7 @@ fn t10_t14_t19_trace_raw_refresh_fault_keeps_native_commit_and_never_falls_back(
         .lock()
         .unwrap()
         .execute(
-            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical','ledger:1',0,'r',1,?1)",
+            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical',5,0,'r',1,?1)",
             [u64::try_from(raw.len()).unwrap()],
         )
         .unwrap();
@@ -836,8 +836,8 @@ fn t08_t10_t14_t19_published_trace_raw_fields_bind_after_original_retention() {
     );
     // Removing the entire original representation cannot turn the retained
     // Raw source selector back into a reserialized canonical fallback.
-    store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND representation='r'", []).unwrap();
-    store.lock().unwrap().execute("DELETE FROM content_segments WHERE source_kind='canonical' AND source_id='ledger:1' AND representation='r'", []).unwrap();
+    store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id=5 AND representation='r'", []).unwrap();
+    store.lock().unwrap().execute("DELETE FROM content_segments WHERE source_kind='canonical' AND source_id=5 AND representation='r'", []).unwrap();
     assert!(matches!(
         store.observation_trace_tool_proposal(&cut, &trace_raw_occurrence()),
         Err(ConversationStoreError::Storage(_))
@@ -1698,7 +1698,7 @@ fn trace_unchanged_bindings_do_not_rewrite_summaries_or_proposals() {
     assert!(observation_trace::settle_fields(&connection, &committed).is_err());
     connection.execute("UPDATE canonical_tool_calls SET observation_trace_proposal=?1 WHERE observation_ledger=1", [&before.1]).unwrap();
     observation_trace::settle_fields(&connection, &committed).unwrap();
-    connection.execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='r'", []).unwrap();
+    connection.execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id=5 AND block_index=0 AND representation='r'", []).unwrap();
     assert!(observation_trace::settle_fields(&connection, &committed).is_err());
     drop(connection);
     assert_eq!(store.load_canonical().unwrap(), vec![message]);

@@ -227,7 +227,7 @@ fn committed_result(
 ) -> Result<crate::durable::observation::NativeToolResultHeader, ConversationStoreError> {
     let bytes: Option<Vec<u8>> = connection
         .query_row(
-            "SELECT tool_result_json FROM observation_headers WHERE ledger_position=?1",
+            "SELECT tool_result_json FROM transcript_entries WHERE ledger_position=?1",
             [ledger],
             |row| row.get(0),
         )

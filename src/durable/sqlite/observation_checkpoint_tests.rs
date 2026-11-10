@@ -98,7 +98,7 @@ fn checkpoint_head_preserves_cut_bound_and_source_error_order() {
         );
     }
     for damage in [
-        "UPDATE observation_headers SET header_json=x'7b'",
+        "UPDATE transcript_entries SET header_json=x'7b'",
         "UPDATE events SET observation_members=NULL WHERE observation_members_required=1",
         "UPDATE bootstrap_identity SET occupancy_observation=x'7b' WHERE id=1",
         "UPDATE events SET observation_trace_required=1,observation_trace_total=NULL",
@@ -219,7 +219,7 @@ fn transaction_cut_proof_rejects_writes_and_savepoint_rollback_without_reusing_f
         if rollback {
             transaction.execute_batch("SAVEPOINT after_read_proof").unwrap();
         }
-        assert!(transaction.execute("UPDATE observation_headers SET header_json=header_json", []).unwrap() > 0);
+        assert!(transaction.execute("UPDATE transcript_entries SET header_json=header_json", []).unwrap() > 0);
         if rollback {
             transaction.execute_batch("ROLLBACK TO after_read_proof; RELEASE after_read_proof").unwrap();
         }
@@ -235,7 +235,7 @@ fn transaction_cut_proof_rejects_writes_and_savepoint_rollback_without_reusing_f
 #[test]
 fn checkpoint_shared_cut_preserves_order_when_multiple_native_domains_are_corrupt() {
     for damage in [
-        "UPDATE observation_headers SET header_json=x'7b'; UPDATE events SET observation_statistics=x'7b' WHERE observation_statistics IS NOT NULL",
+        "UPDATE transcript_entries SET header_json=x'7b'; UPDATE events SET observation_statistics=x'7b' WHERE observation_statistics IS NOT NULL",
         "UPDATE events SET observation_members=NULL WHERE observation_members_required=1; UPDATE events SET observation_statistics=x'7b' WHERE observation_statistics IS NOT NULL",
         "UPDATE events SET observation_statistics=x'7b' WHERE observation_statistics IS NOT NULL; UPDATE bootstrap_identity SET occupancy_observation=x'7b' WHERE id=1",
         "UPDATE bootstrap_identity SET occupancy_observation=x'7b' WHERE id=1; UPDATE events SET observation_trace_required=1,observation_trace_total=NULL",
@@ -278,17 +278,17 @@ fn checkpoint_complete_rows_reuse_only_verified_body_and_response_owners() {
     // row merely because its response facts/cursor are unchanged.
     {
         let connection = store.lock().unwrap();
-        let bytes: Vec<u8> = connection.query_row("SELECT header_json FROM observation_headers WHERE ledger_position=1", [], |row| row.get(0)).unwrap();
+        let bytes: Vec<u8> = connection.query_row("SELECT header_json FROM transcript_entries WHERE ledger_position=1", [], |row| row.get(0)).unwrap();
         let mut header: crate::durable::observation::MessageHeader = serde_json::from_slice(&bytes).unwrap();
         header.display = Some(user_message("prepared-native-user", "coherently changed user body"));
-        connection.execute("UPDATE observation_headers SET header_json=?1 WHERE ledger_position=1", [serde_json::to_vec(&header).unwrap()]).unwrap();
+        connection.execute("UPDATE transcript_entries SET header_json=?1 WHERE ledger_position=1", [serde_json::to_vec(&header).unwrap()]).unwrap();
     }
     let changed = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap();
     assert!(!original.transcript_rows[0].same_owner(&changed.transcript_rows[0]));
     assert_ne!(original.transcript_rows[0].value(), changed.transcript_rows[0].value());
     assert_eq!(changed, checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap());
     assert_eq!(original.transcript_rows[0].value(), *original.transcript.entries[0], "an old owner still discloses its original body");
-    store.lock().unwrap().execute("UPDATE observation_headers SET header_json=x'7b' WHERE ledger_position=1", []).unwrap();
+    store.lock().unwrap().execute("UPDATE transcript_entries SET header_json=x'7b' WHERE ledger_position=1", []).unwrap();
     let expected = checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap_err();
     let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap_err();
     assert_eq!(actual.to_string(), expected.to_string());
@@ -440,7 +440,7 @@ fn checkpoint_descriptor_reuse_keeps_running_decoration_and_exact_current_bytes(
         .lock()
         .unwrap()
         .execute(
-            "UPDATE observation_headers SET header_json=x'7b' WHERE ledger_position=1",
+            "UPDATE transcript_entries SET header_json=x'7b' WHERE ledger_position=1",
             [],
         )
         .unwrap();

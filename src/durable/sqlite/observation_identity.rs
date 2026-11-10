@@ -40,7 +40,7 @@ pub(super) fn inherited(
 ) -> Result<AttemptIdentitySource, ConversationStoreError> {
     let encoded_bytes: u64 = connection.query_row(
         "SELECT readable_end FROM content_frontiers WHERE source_kind='inherited_attempt_identity' AND source_id=?1 AND block_index=0 AND representation='j' AND revision=1",
-        [key(kind,ordinal)], |row| row.get(0),
+        [super::content::keys::read(connection,"inherited_attempt_identity",&key(kind,ordinal))?], |row| row.get(0),
     ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,"original inherited owner field unavailable"))?;
     Ok(AttemptIdentitySource::Inherited {
         kind,
