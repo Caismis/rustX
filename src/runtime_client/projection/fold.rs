@@ -231,7 +231,7 @@ impl RuntimeClientProjection {
                         metadata_ref: settled_witness.and_then(|(_, reference)| reference),
                         tool_call_id: crate::observation::tool::inline_call_id(&tool.tool_call_id),
                         tool_id: crate::observation::tool::inline_tool_id(&tool.tool_id),
-                        result: tool.result.as_ref().clone(),
+                        result: Box::new(tool.result.as_ref().clone()),
                     });
                 }
                 if matches!(block, MessageBlock::Assistant(_))
@@ -456,7 +456,7 @@ impl RuntimeClientProjection {
                 vec![RuntimeClientEvent::AgentStatusComposed {
                     attempt_id: view.attempt_id.clone(),
                     turn: view.turn,
-                    status: view,
+                    status: Box::new(view),
                     evicted_status_message_id,
                     evicted_status_locator,
                 }]
@@ -1157,7 +1157,7 @@ impl RuntimeClientProjection {
             attempt_id: attempt_id.clone(),
             message_id,
             block_index,
-            call: super::super::snapshot::RuntimeClientToolCall {
+            call: Box::new(super::super::snapshot::RuntimeClientToolCall {
                 id: crate::observation::tool::inline_call_id(&call.id),
                 tool_id: crate::observation::tool::inline_tool_id(&call.tool_id),
                 name: inline_label(&call.name),
@@ -1166,7 +1166,7 @@ impl RuntimeClientProjection {
                         !value.is_null() || canonical_length.is_none_or(|length| length == 4)
                     }),
                 metadata_ref,
-            },
+            }),
         }]
     }
 

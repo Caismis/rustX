@@ -2120,7 +2120,10 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
     // The snapshot carries the same composed observation, in the same
     // bounded window a subscriber folded.
     let (snapshot, _) = snapshot_of(&mut *driver, 4).await;
-    assert_eq!(snapshot.statuses.as_slice(), std::slice::from_ref(status));
+    assert_eq!(
+        snapshot.statuses.as_slice(),
+        std::slice::from_ref(status.as_ref())
+    );
     assert!(snapshot.messages.iter().any(|message| {
         matches!(
             message,

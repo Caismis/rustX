@@ -52,6 +52,8 @@ use crate::tools::types::{ToolExecutionResult, ToolProgress};
 ///
 /// The stable `type` discriminator is the protocol contract; unknown
 /// fields are rejected.
+// Large infrequent payloads are boxed so every scalar replay fact does not
+// reserve their inline storage. Ownership and the serialized fields stay exact.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
@@ -201,7 +203,7 @@ pub enum RuntimeClientEvent {
     /// A context compaction operation began.
     ContextCompactionStarted {
         /// Authoritative context state at this lifecycle boundary.
-        context: RuntimeClientContextView,
+        context: Box<RuntimeClientContextView>,
         /// The owning attempt for automatic compaction; absent for manual
         /// idle maintenance.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -210,7 +212,7 @@ pub enum RuntimeClientEvent {
     /// A context compaction operation failed before a semantic commit.
     ContextCompactionFailed {
         /// Authoritative context state at this lifecycle boundary.
-        context: RuntimeClientContextView,
+        context: Box<RuntimeClientContextView>,
         /// The owning attempt for automatic compaction; absent for manual
         /// idle maintenance.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -230,7 +232,7 @@ pub enum RuntimeClientEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         attempt_id: Option<AttemptId>,
         /// The context diagnostics after this committed compaction.
-        context: RuntimeClientContextView,
+        context: Box<RuntimeClientContextView>,
     },
 
     /// Assembly of a canonical Assistant message began.
@@ -270,7 +272,7 @@ pub enum RuntimeClientEvent {
         /// The tool-call content block that completed.
         block_index: ContentBlockIndex,
         /// The fully assembled tool call.
-        call: super::snapshot::RuntimeClientToolCall,
+        call: Box<super::snapshot::RuntimeClientToolCall>,
         arguments_ref: Option<crate::observation::content::ContentRef>,
     },
 
@@ -368,7 +370,7 @@ pub enum RuntimeClientEvent {
         /// The canonical tool identity.
         tool_id: Option<ToolId>,
         /// The normalized execution result.
-        result: ToolExecutionResult,
+        result: Box<ToolExecutionResult>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         result_source: Option<crate::observation::tool::JournalFieldRef>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -425,7 +427,7 @@ pub enum RuntimeClientEvent {
         turn: u32,
         /// The structured status view (sections plus the canonical derived
         /// rendering).
-        status: AgentStatusView,
+        status: Box<AgentStatusView>,
         /// The composition this admission pushed out of the bounded window,
         /// when the window was already full.
         ///

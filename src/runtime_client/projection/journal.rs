@@ -284,7 +284,7 @@ impl RuntimeClientProjection {
             metadata_ref,
             tool_call_id,
             tool_id,
-            result,
+            result: Box::new(result),
             result_source,
             result_metadata_ref,
         }]
@@ -507,7 +507,7 @@ impl RuntimeClientProjection {
                     metadata_ref: self.tool_display_metadata(),
                     tool_call_id: crate::observation::tool::inline_call_id(tool_call_id),
                     tool_id: crate::observation::tool::inline_tool_id(tool_id),
-                    result: result.as_ref().clone(),
+                    result: Box::new(result.as_ref().clone()),
                 }]
             }
             RuntimeEvent::ToolExecutionFailed {
@@ -541,7 +541,7 @@ impl RuntimeClientProjection {
                     metadata_ref: self.tool_display_metadata(),
                     tool_call_id: crate::observation::tool::inline_call_id(tool_call_id),
                     tool_id: crate::observation::tool::inline_tool_id(tool_id),
-                    result,
+                    result: Box::new(result),
                 }]
             }
             RuntimeEvent::CompactionStarted { .. }
@@ -637,7 +637,7 @@ impl RuntimeClientProjection {
                 self.snapshot.context.compaction_error = None;
                 self.snapshot.context.compaction_in_progress = true;
                 vec![RuntimeClientEvent::ContextCompactionStarted {
-                    context: self.snapshot.context.owned(),
+                    context: Box::new(self.snapshot.context.owned()),
                     attempt_id: attempt_id.cloned(),
                 }]
             }
@@ -645,7 +645,7 @@ impl RuntimeClientProjection {
                 self.snapshot.context.compaction_error = Some(error.clone());
                 self.snapshot.context.compaction_in_progress = false;
                 vec![RuntimeClientEvent::ContextCompactionFailed {
-                    context: self.snapshot.context.owned(),
+                    context: Box::new(self.snapshot.context.owned()),
                     attempt_id: attempt_id.cloned(),
                     error: error.clone(),
                 }]
@@ -710,7 +710,7 @@ impl RuntimeClientProjection {
         self.snapshot.context.latest_compaction = Some(compaction.clone());
         vec![RuntimeClientEvent::ContextCompacted {
             attempt_id: attempt_id.cloned(),
-            context: self.snapshot.context.owned(),
+            context: Box::new(self.snapshot.context.owned()),
         }]
     }
 

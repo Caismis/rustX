@@ -343,7 +343,37 @@ impl Census {
                     kind.capacity() + inline_delta.as_ref().map_or(0, String::capacity),
                 );
             }
-            RuntimeClientEvent::AgentStatusComposed { status, .. } => self.status(status),
+            RuntimeClientEvent::AgentStatusComposed { status, .. } => {
+                self.owner(
+                    "status_event_boxes",
+                    std::ptr::from_ref(status.as_ref()) as usize,
+                    size_of_val(status.as_ref()),
+                );
+                self.status(status);
+            }
+            RuntimeClientEvent::ToolExecutionSettled { result, .. } => {
+                self.owner(
+                    "tool_result_boxes",
+                    std::ptr::from_ref(result.as_ref()) as usize,
+                    size_of_val(result.as_ref()),
+                );
+            }
+            RuntimeClientEvent::ToolCallAssembled { call, .. } => {
+                self.owner(
+                    "tool_call_boxes",
+                    std::ptr::from_ref(call.as_ref()) as usize,
+                    size_of_val(call.as_ref()),
+                );
+            }
+            RuntimeClientEvent::ContextCompactionStarted { context, .. }
+            | RuntimeClientEvent::ContextCompactionFailed { context, .. }
+            | RuntimeClientEvent::ContextCompacted { context, .. } => {
+                self.owner(
+                    "context_event_boxes",
+                    std::ptr::from_ref(context.as_ref()) as usize,
+                    size_of_val(context.as_ref()),
+                );
+            }
             _ => self.count("other_event_values", 1),
         }
     }
@@ -369,6 +399,7 @@ impl RuntimeClientProjection {
             .map(|value| value.known_requested_bytes)
             .sum::<usize>()
             .into();
+        output["event_inline_bytes"] = size_of::<RuntimeClientEvent>().into();
         output["scope"] = "Replay-reachable unique Arc/Vec/Box owners, metadata paths and shallow rows, including status row vectors, section vectors and rendered strings. Excludes nested status-section bodies, persistent-map nodes, other nested row/tool/model payloads, IDs, prepared caches, working/current seeds, allocator rounding and SQLite. Inline status rows are charged only through their containing vector or event. Domain serde bytes are logical repetition, not heap bytes.".into();
         output
     }
@@ -466,5 +497,23 @@ mod tests {
             1
         );
         assert_eq!(census.counts["status_references"], 3);
+    }
+
+    #[test]
+    fn event_payload_boxes_are_included_and_shared_visits_do_not_duplicate_them() {
+        let event = RuntimeClientEvent::ContextCompactionStarted {
+            context: Box::default(),
+            attempt_id: None,
+        };
+        let mut census = Census::default();
+        census.event(&event);
+        census.event(&event);
+        let allocation = &census.allocations["context_event_boxes"];
+        assert_eq!(allocation.owners, 1);
+        assert_eq!(
+            allocation.known_requested_bytes,
+            size_of::<crate::runtime_client::snapshot::RuntimeClientContextView>()
+        );
+        assert_eq!(census.counts["variant_ContextCompactionStarted"], 2);
     }
 }

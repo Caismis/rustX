@@ -1105,7 +1105,7 @@ async fn agent_status_shares_one_composition() {
     );
     assert_eq!(
         snapshot.statuses.as_slice(),
-        std::slice::from_ref(status_view),
+        std::slice::from_ref(status_view.as_ref()),
         "the snapshot window and the live event describe one composition"
     );
 }
