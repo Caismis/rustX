@@ -110,6 +110,15 @@ for (const locale of ['en', 'zh']) test(`Session clock opens a native task in th
   await page.clock.install({ time: new Date('2026-10-27T08:00:00Z') });
   await page.goto(origin + '/test/fixtures/scheduler.html?locale=' + locale);
   await page.getByRole('button', { name: zh ? '打开 Session A' : 'Open Session A', exact: true }).click();
+  // The authorized Workspace supplies Policy and the native default model.
+  // Await both reads before capturing the picker or its Workbench destination.
+  const permission = page.getByRole('button', { name: zh ? '工作区权限' : 'Workspace permissions', exact: true });
+  await expect(permission).toHaveText(zh ? '策略' : 'Policy');
+  await expect(permission).toBeEnabled();
+  const model = page.locator('[data-model-select]');
+  await expect(model).toHaveText('fixture/native');
+  await expect(model).toBeEnabled();
+  await expect(model).toHaveAttribute('aria-busy', 'false');
   await page.getByRole('button', { name: zh ? '2 个自动化任务' : '2 automation tasks', exact: true }).click();
   const picker = page.getByRole('dialog', { name: zh ? '自动化任务' : 'Automation tasks', exact: true });
   await expect(picker).toContainText(zh ? '检查仓库最新变更' : 'Review repository changes');
