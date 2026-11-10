@@ -1637,9 +1637,7 @@ mod source_read_tests;
 
 mod publication_header;
 
-pub(super) use index::{
-    PublicationHeader, index_message, index_publication_message, message_header_bytes,
-};
+pub(super) use index::{PublicationHeader, message_header_bytes};
 pub(super) use store::response_identity_fields;
 
 #[cfg(test)]

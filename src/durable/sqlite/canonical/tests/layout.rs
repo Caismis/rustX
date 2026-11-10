@@ -1,7 +1,7 @@
 //! Physical co-location must preserve native and observation authority separately.
 use crate::durable::sqlite::test_support::*;
 use crate::durable::sqlite::{observation, query_work};
-use crate::durable::{CanonicalStore, ConversationStore, ObservationStore};
+use crate::durable::{CanonicalStore, ConversationStore, InboxStore, ObservationStore};
 use rusqlite::params;
 
 #[test]
@@ -76,7 +76,14 @@ fn transcript_carrier_header_reads_and_append_sql_are_bounded_by_delta() {
     for history in [8, 64, 512, 2048] {
         let store = store();
         let messages = (0..history)
-            .map(|i| user_message(&format!("m-{i:06}"), "body"))
+            .map(|i| {
+                let id = format!("m-{i:06}");
+                if i % 2 == 0 {
+                    request_context_message(&id, "body")
+                } else {
+                    user_message(&id, "body")
+                }
+            })
             .collect::<Vec<_>>();
         store.initialize(&messages).unwrap();
         let connection = store.lock().unwrap();
@@ -92,6 +99,9 @@ fn transcript_carrier_header_reads_and_append_sql_are_bounded_by_delta() {
         drop(connection);
         store
             .append_canonical(&user_message("next", "body"))
+            .unwrap();
+        store
+            .append_canonical(&request_context_message("next-hidden", "body"))
             .unwrap();
         let work = query_work::finish(&store.lock().unwrap());
         let selected = work
@@ -178,4 +188,78 @@ fn context_carriers_never_publish_a_negative_transcript_cursor() {
         store.load_transcript_page(None, 8).unwrap().entries.len(),
         1
     );
+}
+
+#[test]
+fn hidden_context_carriers_do_not_encode_inbound_sequences_in_rowids() {
+    for sequence in [1_i64 << 62, i64::MAX] {
+        let store = store();
+        store.initialize(&[]).unwrap();
+        store
+            .append_canonical(&request_context_message("canonical-before", "context"))
+            .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE rustx_store SET next_inbound_sequence=?1 WHERE id=1",
+                [sequence - 1],
+            )
+            .unwrap();
+        let mut pending = draft("pending context");
+        pending.kind = crate::message::types::InboundKind::Context(
+            crate::message::types::ContextKind::RuntimeToolObservation,
+        );
+        pending.source = crate::message::types::UserSource::Runtime;
+        let accepted = store.accept_inbound(pending).unwrap();
+        assert_eq!(accepted.sequence.get(), u64::try_from(sequence).unwrap());
+        assert!(accepted.transcript_cursor.is_none());
+        let receipt = accepted
+            .pending_observation
+            .as_ref()
+            .expect("large valid inbound sequences must retain observation evidence");
+        assert_eq!(
+            receipt.selected.as_ref().unwrap().sequence,
+            u64::try_from(sequence).unwrap()
+        );
+        let carrier: i64 = store
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT position FROM transcript_entries WHERE reference_id=?1",
+                [accepted.message_id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(carrier < 0);
+        store.adopt_pending_batch(accepted.sequence, None).unwrap();
+        store
+            .append_canonical(&request_context_message("canonical-after", "context"))
+            .unwrap();
+        let connection = store.lock().unwrap();
+        let adopted: (i64, bool) = connection
+            .query_row(
+                "SELECT position,ledger_position=2 FROM transcript_entries WHERE reference_id=?1",
+                [accepted.message_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(adopted, (carrier, true));
+        let count: u64 = connection
+            .query_row(
+                "SELECT count(*) FROM transcript_entries WHERE position<0 AND header_json IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 3);
+        drop(connection);
+        assert!(
+            store
+                .load_transcript_page(None, 8)
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+    }
 }
