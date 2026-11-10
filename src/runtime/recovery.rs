@@ -487,15 +487,23 @@ impl RecoveryEvidence {
     /// read coherently. Recovery then fails closed.
     pub fn reconstruct(store: &dyn ConversationStore) -> Result<Self, RecoveryError> {
         let conversation_id = store.conversation_id().clone();
+        let head = store.load_head()?;
         let unsettled = store.unsettled_canonical_tool_calls(8192)?;
         let mut active = Vec::new();
-        let missing = unsettled
+        let mut missing = unsettled
             .iter()
             .map(|(occurrence, _)| occurrence.assistant_message_id.clone())
-            .collect::<std::collections::BTreeSet<_>>()
+            .collect::<std::collections::BTreeSet<_>>();
+        // Preserve the original Surface order, then the retired occurrence
+        // order. The head also validates the native frontier before recovery
+        // can plan any writes; only unresolved Assistant bodies are loaded.
+        let mut ordered = head
+            .active_message_ids
             .into_iter()
+            .filter(|id| missing.remove(id))
             .collect::<Vec<_>>();
-        for ids in missing.chunks(64) {
+        ordered.extend(missing);
+        for ids in ordered.chunks(64) {
             // Native keyed reads preserve the canonical record's own size
             // contract. Recovery must not impose compaction's 1 MiB policy on
             // an oversized Assistant whose physical Tool call needs repair.

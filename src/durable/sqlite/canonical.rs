@@ -66,29 +66,65 @@ impl CanonicalStore for SqliteConversationStore {
         Option<crate::durable::store::canonical::CanonicalToolResultOwner>,
         ConversationStoreError,
     > {
-        type Row = (String, Option<String>, String, Option<u64>);
-        let (assistant, owner, stored_call, sequence): Row = {
+        type Row = (
+            String,
+            Option<String>,
+            String,
+            Option<u64>,
+            u32,
+            String,
+            bool,
+        );
+        let (assistant, owner, sequence) = {
             let connection = self.lock()?;
-            connection
-                .query_row_cached(
-                    "SELECT assistant_message_id,attempt_id,call_id,commit_sequence
-                 FROM canonical_tool_calls WHERE result_message_id=?1",
-                    [message.as_str()],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-                )
-                .optional()
-                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
-                .ok_or_else(|| {
-                    ConversationStoreError::InvalidReference(
-                        "missing native ToolResult ownership".into(),
+            // The occurrence index is derived from the primary ToolResult.
+            // Use the existing native decoder to retain its JSON, numeric and
+            // duplicate-field rules before trusting this row's Journal owner.
+            let (assistant, owner, stored_call, sequence, block, tool, valid_position): Row =
+                connection
+                    .query_row_cached(
+                        "SELECT t.assistant_message_id,t.attempt_id,t.call_id,t.commit_sequence,
+                    t.block_index,t.tool_id,coalesce(m.position=t.result_ledger_position,0)
+                 FROM canonical_tool_calls t
+                 JOIN message_ledger m ON m.message_id=t.result_message_id
+                 WHERE t.result_message_id=?1",
+                        [message.as_str()],
+                        |row| {
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                                row.get(4)?,
+                                row.get(5)?,
+                                row.get(6)?,
+                            ))
+                        },
                     )
-                })?
+                    .optional()
+                    .map_err(|error| {
+                        crate::durable::sqlite::sqlite_error(&error, error.to_string())
+                    })?
+                    .ok_or_else(|| {
+                        ConversationStoreError::InvalidReference(
+                            "missing native ToolResult ownership".into(),
+                        )
+                    })?;
+            let body = load_message(&connection, message)?;
+            if stored_call != call.as_str()
+                || !valid_position
+                || !matches!(body, MessageBlock::Tool(result)
+                    if result.occurrence.assistant_message_id.as_str() == assistant.as_str()
+                        && result.occurrence.block_index.get() == block
+                        && result.tool_call_id.as_str() == stored_call.as_str()
+                        && result.tool_id.as_str() == tool.as_str())
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "native ToolResult correlation or owner differs".into(),
+                ));
+            }
+            (assistant, owner, sequence)
         };
-        if stored_call != call.as_str() {
-            return Err(ConversationStoreError::InvalidReference(
-                "native ToolResult correlation or owner differs".into(),
-            ));
-        }
         let Some(sequence) = sequence else {
             if owner.is_some() {
                 return Err(ConversationStoreError::InvalidReference(

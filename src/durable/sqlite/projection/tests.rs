@@ -3513,6 +3513,19 @@ fn ordinary_recovery_reads_no_completed_canonical_bodies_at_8_64_512_4096() {
 }
 
 #[test]
+fn recovery_rejects_an_inconsistent_canonical_head_without_pending_tools() {
+    let store = store();
+    store.initialize(&[message(1)]).unwrap();
+    store
+        .lock()
+        .unwrap()
+        .execute("UPDATE surface_head SET revision=0 WHERE id=1", [])
+        .unwrap();
+    assert!(store.load_head().is_err());
+    assert!(crate::runtime::recovery::RecoveryEvidence::reconstruct(&store).is_err());
+}
+
+#[test]
 #[allow(clippy::too_many_lines)] // One native ownership/cut/corruption and independent-domain oracle.
 fn recovery_result_ownership_uses_exact_primary_evidence_at_the_fact_cut() {
     use crate::message::types::{
@@ -3627,8 +3640,89 @@ fn recovery_result_ownership_uses_exact_primary_evidence_at_the_fact_cut() {
     super::super::compaction_resources::take_body_decodes();
     let evidence = crate::runtime::recovery::RecoveryEvidence::reconstruct(&store).unwrap();
     assert!(evidence.tool_repair_messages().is_empty());
-    assert_eq!(super::super::canonical::ledger::take_body_loads(), 0);
+    assert_eq!(
+        super::super::canonical::ledger::take_body_loads(),
+        1,
+        "the exact recovery result is authenticated by the native decoder"
+    );
     assert_eq!(super::super::compaction_resources::take_body_decodes(), 0);
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE canonical_tool_calls SET block_index=1 WHERE result_message_id=?1",
+            [result.id().as_str()],
+        )
+        .unwrap();
+    assert!(
+        store
+            .recovery_tool_result_owner(result.id(), &call.id, repaired.sequence)
+            .is_err(),
+        "a valid Assistant commit cannot authenticate a forged physical occurrence"
+    );
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE canonical_tool_calls SET block_index=0 WHERE result_message_id=?1",
+            [result.id().as_str()],
+        )
+        .unwrap();
+    let original: String = store
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT message_json FROM message_ledger WHERE message_id=?1",
+            [result.id().as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let duplicate = format!(
+        "{{\"id\":{},{}",
+        serde_json::to_string(result.id()).unwrap(),
+        original.strip_prefix('{').unwrap()
+    );
+    let mut unknown: serde_json::Value = serde_json::from_str(&original).unwrap();
+    unknown["occurrence"]["unknown"] = serde_json::json!(true);
+    for (damaged, reason) in [
+        (duplicate, "duplicate field"),
+        (serde_json::to_string(&unknown).unwrap(), "unknown field"),
+        (
+            original.replacen("\"block_index\":0", "\"block_index\":-0", 1),
+            "floating point",
+        ),
+        (
+            original.replacen("\"role\":", "role:", 1),
+            "key must be a string",
+        ),
+    ] {
+        store
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE message_ledger SET message_json=?1 WHERE message_id=?2",
+                params![damaged, result.id().as_str()],
+            )
+            .unwrap();
+        let error = store
+            .load_messages(std::slice::from_ref(result.id()))
+            .unwrap_err();
+        assert!(error.to_string().contains(reason), "{error}");
+        assert!(
+            store
+                .recovery_tool_result_owner(result.id(), &call.id, repaired.sequence)
+                .is_err(),
+            "JSON scalar extraction cannot authenticate ambiguous primary ownership"
+        );
+    }
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE message_ledger SET message_json=?1 WHERE message_id=?2",
+            params![original, result.id().as_str()],
+        )
+        .unwrap();
     store
         .lock()
         .unwrap()
