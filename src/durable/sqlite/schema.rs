@@ -828,21 +828,29 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
             ) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS state_observation_ledger_idx ON state_observation_sources(domain,ledger_position,source_id);
             CREATE INDEX IF NOT EXISTS state_observation_journal_idx ON state_observation_sources(domain,journal_sequence,source_id);
+            CREATE TABLE IF NOT EXISTS request_trace_catalog_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool_count INTEGER NOT NULL CHECK(tool_count>=0),
+                complete INTEGER NOT NULL CHECK(complete IN (0,1)),
+                configuration_digest TEXT NOT NULL UNIQUE CHECK(typeof(configuration_digest)='text' AND octet_length(configuration_digest)=64)
+            );
             CREATE TABLE IF NOT EXISTS request_trace_catalogs (
                 source_sequence INTEGER PRIMARY KEY REFERENCES events(sequence),
+                catalog_id INTEGER NOT NULL,
                 tool_count INTEGER NOT NULL CHECK(tool_count>=0),
+                catalog_witness BLOB NOT NULL CHECK(length(catalog_witness)=32),
                 provisional_message_id TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS request_trace_catalog_identity_idx ON request_trace_catalogs(provisional_message_id,source_sequence);
             CREATE TABLE IF NOT EXISTS request_trace_definitions (
-                source_sequence INTEGER NOT NULL REFERENCES request_trace_catalogs(source_sequence) ON DELETE CASCADE,
+                catalog_id INTEGER NOT NULL REFERENCES request_trace_catalog_versions(id) ON DELETE CASCADE,
                 ordinal INTEGER NOT NULL CHECK(ordinal>=0),
                 tool_identity_digest BLOB NOT NULL CHECK(length(tool_identity_digest)=32),
                 tool_id TEXT NOT NULL,
-                PRIMARY KEY(source_sequence,ordinal)
+                PRIMARY KEY(catalog_id,ordinal)
             ) WITHOUT ROWID;
-            CREATE INDEX IF NOT EXISTS request_trace_definition_digest_idx ON request_trace_definitions(source_sequence,tool_identity_digest,ordinal);
-            CREATE INDEX IF NOT EXISTS request_trace_definition_identity_idx ON request_trace_definitions(source_sequence,tool_id,ordinal);
+            CREATE INDEX IF NOT EXISTS request_trace_definition_digest_idx ON request_trace_definitions(catalog_id,tool_identity_digest,ordinal);
+            CREATE INDEX IF NOT EXISTS request_trace_definition_identity_idx ON request_trace_definitions(catalog_id,tool_id,ordinal);
             CREATE TABLE IF NOT EXISTS trace_adoption_members (
                 source_sequence INTEGER NOT NULL REFERENCES events(sequence) ON DELETE CASCADE,
                 ordinal INTEGER NOT NULL CHECK(ordinal>=0),
@@ -988,6 +996,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
     manifest::create_schema(connection)?;
     observation_request::composed::create_schema(connection)?;
     observation_request::state_preview::create_schema(connection)?;
+    super::observation_trace::create_catalog_schema(connection)?;
     auxiliary::create_schema(connection)?;
     super::schedule::create_schema(connection)?;
     super::scheduled_workflow::create_schema(connection)?;

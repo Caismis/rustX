@@ -349,6 +349,7 @@ fn count_conversation_store_open() {
 /// Version 99 scopes the Agent request index to Agent-owned facts.
 /// Version 100 combines the scoped native indexes and observation layout with shared-control inbox semantics.
 /// Version 107 stores timestamp prefix maxima and pins bounded ledger/owner seeks.
+/// It also shares immutable Trace catalog versions with witnessed request bindings.
 pub const SQLITE_SCHEMA_VERSION: i64 = 107;
 
 /// One operation in a deterministic admission fault script.
