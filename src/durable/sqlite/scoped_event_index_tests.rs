@@ -4,6 +4,181 @@ use crate::durable::presentation::{FactQuery, FactScope};
 use crate::durable::sqlite::schema::shape::verify_schema_shape;
 use crate::durable::sqlite::schema::{PRESENTATION_INDEXES, presentation_statements};
 use crate::events::EVENT_SCHEMA_VERSION;
+use crate::runtime::identity::TurnId;
+
+#[test]
+fn numeric_owner_keys_keep_bounded_scopes_and_reduce_index_bytes() {
+    use rusqlite::StatementStatus;
+
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    let mut connection = store.lock().unwrap();
+    connection.execute_batch("CREATE INDEX text_owner_reference ON events(attempt_id,turn_id,json_extract(event_json,'$.event.type')) WHERE attempt_id IS NOT NULL AND turn_id IS NOT NULL").unwrap();
+    let transaction = connection.transaction().unwrap();
+    let mut previous = 0;
+    for history in [8, 64, 512, 4096] {
+        for ordinal in previous..history {
+            let attempt = AttemptId::for_conversation(store.conversation_id(), ordinal);
+            for turn in 0..2 {
+                let sequence = ordinal * 2 + turn + 1;
+                let json = serde_json::json!({"sequence":sequence,"event":{"type":"turn_started"}});
+                transaction.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,attempt_id,turn_id,event_json) VALUES(?1,?2,?3,?4,'time',?5,?6,?7)",params![sequence,format!("{}-event-{sequence}", store.conversation_id()),EVENT_SCHEMA_VERSION,store.conversation_id.as_str(),attempt.as_str(),turn.to_string(),json.to_string()]).unwrap();
+            }
+        }
+        for ascending in [false, true] {
+            let query = FactQuery {
+                scope: FactScope::Step(
+                    AttemptId::for_conversation(store.conversation_id(), history - 1),
+                    TurnId::new("0"),
+                ),
+                kinds: vec!["turn_started"],
+                before: None,
+                after: 0,
+                ascending,
+                through: history * 2,
+                limit: 1,
+            };
+            let (sql, values) = presentation_statements(&query).unwrap().remove(0);
+            let mut statement = transaction.prepare(&sql).unwrap();
+            let actual: String = statement
+                .query_row(rusqlite::params_from_iter(values), |row| row.get(0))
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&actual).unwrap()["sequence"],
+                history * 2 - 1
+            );
+            assert_eq!(statement.get_status(StatementStatus::FullscanStep), 0);
+            assert_eq!(statement.get_status(StatementStatus::Sort), 0);
+            assert!(
+                statement.get_status(StatementStatus::VmStep) < 128,
+                "H={history}"
+            );
+        }
+        let types: (String, String) = transaction
+            .query_row(
+                "SELECT typeof(attempt_key),typeof(turn_key) FROM events WHERE sequence=?1",
+                [history * 2],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(types, ("integer".into(), "integer".into()));
+        let payload = |index: &str| -> u64 {
+            transaction
+                .query_row(
+                    "SELECT sum(payload) FROM dbstat WHERE name=?1",
+                    [index],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert!(payload("events_step_kind_idx") * 2 < payload("text_owner_reference"));
+        println!(
+            "H={history}: step key payload {} -> {} bytes",
+            payload("text_owner_reference"),
+            payload("events_step_kind_idx")
+        );
+        previous = history;
+    }
+    transaction.rollback().unwrap();
+}
+
+#[test]
+fn numeric_owner_keys_preserve_alias_types_and_follow_scalar_mutations() {
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    let connection = store.lock().unwrap();
+    let owners = [
+        format!("{}-attempt-1", store.conversation_id),
+        format!("{}-attempt-0001", store.conversation_id),
+        format!("{}-attempt-+1", store.conversation_id),
+        format!("{}-attempt-9223372036854775808", store.conversation_id),
+        "other🙂-attempt-1".to_owned(),
+        format!("{}-attempt-1\0extra", store.conversation_id),
+        "1".to_owned(),
+    ];
+    let turns = [
+        "1",
+        "01",
+        "+1",
+        "9223372036854775808",
+        "other",
+        "1\0extra",
+        "-0",
+    ];
+    for (index, (attempt, turn)) in owners.iter().zip(turns).enumerate() {
+        let sequence = index + 1;
+        let json = serde_json::json!({"sequence":sequence,"event":{"type":"turn_started"}});
+        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,attempt_id,turn_id,event_json) VALUES(?1,?2,1,?3,'time',?4,?5,?6)", params![sequence,format!("alias-{sequence}"),store.conversation_id.as_str(),attempt,turn,json.to_string()]).unwrap();
+        let query = FactQuery {
+            scope: FactScope::Step(AttemptId::new(attempt.as_str()), TurnId::new(turn)),
+            kinds: vec!["turn_started"],
+            before: None,
+            after: 0,
+            ascending: true,
+            through: 100,
+            limit: 2,
+        };
+        let (sql, values) = presentation_statements(&query).unwrap().remove(0);
+        let rows = connection
+            .prepare(&sql)
+            .unwrap()
+            .query_map(rusqlite::params_from_iter(values), |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(rows, [json.to_string()]);
+    }
+    let distinct: (usize, usize) = connection
+        .query_row(
+            "SELECT count(DISTINCT attempt_key),count(DISTINCT turn_key) FROM events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(distinct, (owners.len(), turns.len()));
+    for attempt in owners {
+        let query = FactQuery {
+            scope: FactScope::Attempt(AttemptId::new(attempt)),
+            kinds: vec!["turn_started"],
+            before: None,
+            after: 0,
+            ascending: true,
+            through: 100,
+            limit: 16,
+        };
+        let (sql, values) = presentation_statements(&query).unwrap().remove(0);
+        let rows = connection
+            .prepare(&sql)
+            .unwrap()
+            .query_map(rusqlite::params_from_iter(values), |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+    connection.execute_batch("SAVEPOINT owner_mutation; UPDATE events SET attempt_id='external',turn_id='02' WHERE sequence=1;").unwrap();
+    let keys: (String, String) = connection
+        .query_row(
+            "SELECT attempt_key,turn_key FROM events WHERE sequence=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(keys, ("external".into(), "02".into()));
+    connection
+        .execute_batch("ROLLBACK TO owner_mutation; RELEASE owner_mutation")
+        .unwrap();
+    let keys: (u64, u64) = connection
+        .query_row(
+            "SELECT attempt_key,turn_key FROM events WHERE sequence=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(keys, (1, 1));
+}
 
 #[test]
 fn partial_tool_scope_keeps_null_owners_order_and_historical_cut() {

@@ -375,7 +375,7 @@ fn bounded_work_projection_owner_seeks_past_a_long_unrelated_tail() {
             ))
             .unwrap();
         let connection = store.lock().unwrap();
-        connection.execute("WITH RECURSIVE n(x) AS (VALUES(2) UNION ALL SELECT x+1 FROM n WHERE x<=?1) INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json) SELECT x,'unrelated-'||x,1,'conversation','time','{\"event\":{\"type\":\"unrelated\"}}' FROM n", [size]).unwrap();
+        connection.execute("WITH RECURSIVE n(x) AS (VALUES(2) UNION ALL SELECT x+1 FROM n WHERE x<=?1) INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json) SELECT x,'unrelated-'||x,1,(SELECT conversation_id FROM rustx_store WHERE id=1),'time','{\"event\":{\"type\":\"unrelated\"}}' FROM n", [size]).unwrap();
         found.push((
             size,
             query_work::measure(
@@ -853,7 +853,7 @@ fn bounded_work_workflow_tool_parent_seeks_kind_without_a_turn_prefix_gap() {
     for size in HISTORY_SIZES {
         let store = store();
         let connection = store.lock().unwrap();
-        connection.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<=?1) INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,attempt_id,turn_id,event_json) SELECT x,'tool-parent-'||x,1,'conversation','time','attempt',CAST(x AS TEXT),json_object('event',json_object('type','tool_execution_failed','tool_call_id','reused')) FROM n", [size]).unwrap();
+        connection.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<=?1) INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,attempt_id,turn_id,event_json) SELECT x,'tool-parent-'||x,1,(SELECT conversation_id FROM rustx_store WHERE id=1),'time','attempt',CAST(x AS TEXT),json_object('event',json_object('type','tool_execution_failed','tool_call_id','reused')) FROM n", [size]).unwrap();
         let empty = query_work::measure(
             &connection,
             workflow_trace::TOOL_START_SQL,
@@ -871,7 +871,9 @@ fn bounded_work_workflow_tool_parent_seeks_kind_without_a_turn_prefix_gap() {
         assert_eq!(ambiguous.sorts, 0);
         assert!(ambiguous.steps < 60);
     }
-    query_work::assert_flat(&samples, 30, 0, 0);
+    // Owner normalization adds a fixed metadata seek; exact step equality
+    // across the hundredfold history range remains mandatory.
+    query_work::assert_flat(&samples, 40, 0, 0);
 }
 
 #[test]
@@ -881,7 +883,7 @@ fn bounded_work_turn_prompt_and_holes_seek_exact_owner_and_old_cut() {
     for size in HISTORY_SIZES {
         let store = store();
         let connection = store.lock().unwrap();
-        connection.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<?1) INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,attempt_id,event_json,observation_kind,observation_turn_prompt,observation_turn_prompt_positive) SELECT x,'prompt-'||x,1,'conversation','time','chosen','{}','inbound_turn_adopted',CAST('chosen' AS BLOB),1 FROM n", [size]).unwrap();
+        connection.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<?1) INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,attempt_id,event_json,observation_kind,observation_turn_prompt,observation_turn_prompt_positive) SELECT x,'prompt-'||x,1,(SELECT conversation_id FROM rustx_store WHERE id=1),'time','chosen','{}','inbound_turn_adopted',CAST('chosen' AS BLOB),1 FROM n", [size]).unwrap();
         let winner = query_work::measure(
             &connection,
             observation_turn::TURN_PROMPT_SQL,
@@ -918,7 +920,7 @@ fn bounded_work_turn_prompt_and_holes_seek_exact_owner_and_old_cut() {
         connection
             .execute("UPDATE events SET attempt_id='other' WHERE sequence=1", [])
             .unwrap();
-        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_kind) VALUES(?1,'global-gap',1,'conversation','time','{}','inbound_turn_adopted')", [size+1]).unwrap();
+        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_kind) VALUES(?1,'global-gap',1,(SELECT conversation_id FROM rustx_store WHERE id=1),'time','{}','inbound_turn_adopted')", [size+1]).unwrap();
         assert!(
             connection
                 .query_row(observation_turn::TURN_PROMPT_HOLES_SQL, values, |row| row

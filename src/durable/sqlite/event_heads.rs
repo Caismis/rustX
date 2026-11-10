@@ -1,7 +1,7 @@
 //! Two shared B-trees for four optional event heads. A lookup seeks the last
 //! sequence in each of the two exact masks containing its bit, then selects the
 //! newer of those two rows. It never scans unrelated headers or sorts history.
-use super::{Connection, ConversationStoreError, OptionalExtension};
+use super::{Connection, ConversationStoreError, OptionalExtension, params};
 
 pub(super) const STATISTICS: &str = "SELECT sequence,
     CASE WHEN typeof(observation_statistics)='blob' AND length(observation_statistics)<=98340 THEN observation_statistics ELSE 0 END
@@ -29,37 +29,68 @@ pub(super) const TRACE_TOTAL: &str = "SELECT EXISTS(
             AND sequence<=?1 ORDER BY sequence DESC LIMIT 1)
     )))";
 
-pub(super) const EXECUTION: &str =
+pub(super) const EXECUTION: &str = concat!(
     "SELECT observation_execution,observation_execution_owner FROM events WHERE sequence=(
     SELECT max(sequence) FROM (
         SELECT (SELECT sequence FROM events INDEXED BY events_attempt_heads_idx
-            WHERE observation_attempt_heads>0 AND attempt_id=?1 AND observation_attempt_heads=1
+            WHERE observation_attempt_heads>0 AND attempt_key = ",
+    crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"),
+    " AND observation_attempt_heads=1
             AND sequence<=?2 ORDER BY sequence DESC LIMIT 1) AS sequence
         UNION ALL
         SELECT (SELECT sequence FROM events INDEXED BY events_attempt_heads_idx
-            WHERE observation_attempt_heads>0 AND attempt_id=?1 AND observation_attempt_heads=3
+            WHERE observation_attempt_heads>0 AND attempt_key = ",
+    crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"),
+    " AND observation_attempt_heads=3
             AND sequence<=?2 ORDER BY sequence DESC LIMIT 1)
-    ))";
+    ))"
+);
 
-pub(super) const MEMBERS: &str = "SELECT observation_members FROM events WHERE sequence=(
+pub(super) const MEMBERS: &str = concat!(
+    "SELECT observation_members FROM events WHERE sequence=(
     SELECT max(sequence) FROM (
         SELECT (SELECT sequence FROM events INDEXED BY events_attempt_heads_idx
-            WHERE observation_attempt_heads>0 AND attempt_id=?1 AND observation_attempt_heads=2
+            WHERE observation_attempt_heads>0 AND attempt_key = ",
+    crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"),
+    " AND observation_attempt_heads=2
             AND sequence<=?2 ORDER BY sequence DESC LIMIT 1) AS sequence
         UNION ALL
         SELECT (SELECT sequence FROM events INDEXED BY events_attempt_heads_idx
-            WHERE observation_attempt_heads>0 AND attempt_id=?1 AND observation_attempt_heads=3
+            WHERE observation_attempt_heads>0 AND attempt_key = ",
+    crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"),
+    " AND observation_attempt_heads=3
             AND sequence<=?2 ORDER BY sequence DESC LIMIT 1)
-    ))";
+    ))"
+);
 
-const COLUMNS: &[(&str, &str)] = &[
+const COLUMNS: &[(&str, &str, &str)] = &[
     (
         "observation_aggregate_heads",
+        "INTEGER",
         "observation_aggregate_heads INTEGER GENERATED ALWAYS AS ((observation_trace_total IS NOT NULL)+2*(observation_statistics IS NOT NULL)) VIRTUAL",
     ),
     (
         "observation_attempt_heads",
+        "INTEGER",
         "observation_attempt_heads INTEGER GENERATED ALWAYS AS ((observation_execution IS NOT NULL)+2*(observation_members IS NOT NULL)) VIRTUAL",
+    ),
+    (
+        "attempt_key",
+        "",
+        concat!(
+            "attempt_key GENERATED ALWAYS AS (",
+            crate::durable::sqlite::event_owner_key::attempt!("attempt_id", "conversation_id"),
+            ") VIRTUAL"
+        ),
+    ),
+    (
+        "turn_key",
+        "",
+        concat!(
+            "turn_key GENERATED ALWAYS AS (",
+            crate::durable::sqlite::event_owner_key::turn!("turn_id"),
+            ") VIRTUAL"
+        ),
     ),
 ];
 const INDEXES: &[(&str, &str)] = &[
@@ -69,7 +100,7 @@ const INDEXES: &[(&str, &str)] = &[
     ),
     (
         "events_attempt_heads_idx",
-        "CREATE INDEX events_attempt_heads_idx ON events(attempt_id,observation_attempt_heads) WHERE observation_attempt_heads>0",
+        "CREATE INDEX events_attempt_heads_idx ON events(attempt_key,observation_attempt_heads) WHERE observation_attempt_heads>0",
     ),
 ];
 
@@ -89,13 +120,29 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             |row| row.get(0),
         )
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
-    for &(name, definition) in COLUMNS {
-        let virtual_integer: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_xinfo('events') WHERE name=?1 AND type='INTEGER' AND hidden=2)", [name], |row| row.get(0)).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
-        if !virtual_integer || !events.contains(definition) {
+    for &(name, kind, definition) in COLUMNS {
+        let virtual_column: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_xinfo('events') WHERE name=?1 AND type=?2 AND hidden=2)", params![name,kind], |row| row.get(0)).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        if !virtual_column || !events.contains(definition) {
             return Err(ConversationStoreError::IncompatibleSchema(format!(
                 "invalid derived event head column {name}"
             )));
         }
+    }
+    // A column-level COLLATE suffix can preserve the expression above while
+    // changing text alias equality. Inspect the collation SQLite actually uses.
+    let binary_owners: bool = connection
+        .query_row(
+            "SELECT count(*)=2 AND count(CASE WHEN coll='BINARY' THEN 1 END)=2
+             FROM pragma_index_xinfo('events_step_kind_idx')
+             WHERE name IN ('attempt_key','turn_key')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| super::sqlite_error(&error, error.to_string()))?;
+    if !binary_owners {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "event owner keys must use BINARY collation".into(),
+        ));
     }
     for &(name, definition) in INDEXES {
         let actual: Option<String> = connection

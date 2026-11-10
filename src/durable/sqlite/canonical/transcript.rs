@@ -338,24 +338,16 @@ pub(in crate::durable::sqlite) fn load_transcript_event(
     reference_kind: &str,
     reference_id: &str,
 ) -> Result<TranscriptItem, ConversationStoreError> {
-    let json: String = connection
-        .query_row(
-            "SELECT event_json FROM events WHERE event_id=?1",
-            [reference_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| {
-            crate::durable::sqlite::sqlite_error(
-                &error,
-                format!("transcript event lookup: {error}"),
-            )
-        })?
-        .ok_or_else(|| {
-            ConversationStoreError::InvalidReference(format!(
-                "transcript event reference {reference_id} has no durable event"
-            ))
-        })?;
+    let json = crate::durable::sqlite::journal::find_event_json_by_id(
+        connection,
+        reference_id,
+        "transcript event lookup",
+    )?
+    .ok_or_else(|| {
+        ConversationStoreError::InvalidReference(format!(
+            "transcript event reference {reference_id} has no durable event"
+        ))
+    })?;
     let event: RuntimeEventEnvelope = decode(&json, "transcript event")?;
     if event.event_id.as_str() != reference_id {
         return Err(ConversationStoreError::InvalidReference(format!(

@@ -1007,7 +1007,7 @@ fn historical_opening_prompt_lookup_ignores_unrelated_future_turns() {
         }
         timeout(&store, "selected");
         let selected_start: i64 = store.lock().unwrap().query_row(
-            "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id='selected' AND json_extract(event_json,'$.event.type')='attempt_started'", [], |r| r.get(0)).unwrap();
+            "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key='selected' AND json_extract(event_json,'$.event.type')='attempt_started'", [], |r| r.get(0)).unwrap();
         let expected = if matches!(mode, "human" | "agent" | "idle") {
             "Opening"
         } else {

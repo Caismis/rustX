@@ -36,7 +36,11 @@ fn attempt_start(
     }
     find(
         connection,
-        "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",
+        concat!(
+            "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ",
+            crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"),
+            " AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1"
+        ),
         params![attempt.as_str(), event.sequence],
     )
 }
@@ -53,7 +57,13 @@ fn step_start(
     }
     find(
         connection,
-        "SELECT sequence FROM events INDEXED BY events_step_kind_idx WHERE attempt_id=?1 AND turn_id=?2 AND json_extract(event_json,'$.event.type')='turn_started' AND sequence<=?3 ORDER BY sequence DESC LIMIT 1",
+        concat!(
+            "SELECT sequence FROM events INDEXED BY events_step_kind_idx WHERE attempt_key = ",
+            crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"),
+            " AND turn_key = (",
+            crate::durable::sqlite::event_owner_key::turn!("?2"),
+            ") AND json_extract(event_json,'$.event.type')='turn_started' AND sequence<=?3 ORDER BY sequence DESC LIMIT 1"
+        ),
         params![attempt.as_str(), step.as_str(), event.sequence],
     )
 }
@@ -71,7 +81,11 @@ fn location_attempt_source(
     // that an AttemptStarted fact occurred. Keep the earliest real selector.
     let request = find(
         connection,
-        "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<=?2 ORDER BY sequence LIMIT 1",
+        concat!(
+            "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ",
+            crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"),
+            " AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<=?2 ORDER BY sequence LIMIT 1"
+        ),
         params![attempt.as_str(), event.sequence],
     )?;
     let request = request.or_else(|| {
@@ -90,7 +104,13 @@ fn location_step_source(
     let started = step_start(connection, event, pending)?;
     let request = find(
         connection,
-        "SELECT sequence FROM events INDEXED BY events_step_kind_idx WHERE attempt_id=?1 AND turn_id=?2 AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<=?3 ORDER BY sequence LIMIT 1",
+        concat!(
+            "SELECT sequence FROM events INDEXED BY events_step_kind_idx WHERE attempt_key = ",
+            crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"),
+            " AND turn_key = (",
+            crate::durable::sqlite::event_owner_key::turn!("?2"),
+            ") AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<=?3 ORDER BY sequence LIMIT 1"
+        ),
         params![attempt.as_str(), step.as_str(), event.sequence],
     )?;
     let request = request.or_else(|| {
@@ -257,7 +277,7 @@ fn terminal_owner(
             if let Some(occurrence)=&event.tool_occurrence{
                 find(connection,"SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND sequence<?3 ORDER BY sequence DESC LIMIT 1",params![occurrence.ledger_position,occurrence.block_index.get(),before])
             }else{
-                find(connection,"SELECT sequence FROM events INDEXED BY events_tool_call_scope_kind_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_id IS ?2 AND turn_id IS ?3 AND json_extract(event_json,'$.event.type')='tool_execution_started' AND json_extract(event_json,'$.event.tool_id')=?4 AND sequence<?5 ORDER BY sequence DESC LIMIT 1",params![tool_call_id.as_str(),event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),event.turn_id.as_ref().map(crate::runtime::identity::TurnId::as_str),tool_id.as_str(),before])
+                find(connection,concat!("SELECT sequence FROM events INDEXED BY events_tool_call_scope_kind_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_key IS ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?2"), " AND turn_key IS (", crate::durable::sqlite::event_owner_key::turn!("?3"), ") AND json_extract(event_json,'$.event.type')='tool_execution_started' AND json_extract(event_json,'$.event.tool_id')=?4 AND sequence<?5 ORDER BY sequence DESC LIMIT 1"),params![tool_call_id.as_str(),event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),event.turn_id.as_ref().map(crate::runtime::identity::TurnId::as_str),tool_id.as_str(),before])
             }
         },
         E::ToolMessageCommitted{..}=>{
@@ -992,7 +1012,11 @@ fn bootstrap(
                 .ok_or_else(|| storage("original Turn has no Attempt"))?;
             let previous = find(
                 connection,
-                "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='turn_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",
+                concat!(
+                    "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ",
+                    crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"),
+                    " AND json_extract(event_json,'$.event.type')='turn_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1"
+                ),
                 params![attempt.as_str(), event.sequence],
             )?;
             let number = if let Some(previous) = previous {
@@ -1219,7 +1243,13 @@ fn capture_accepted_relation(
     if let (Some(attempt), Some(step)) = (&event.attempt_id, &event.turn_id) {
         let start = find(
             connection,
-            "SELECT sequence FROM events INDEXED BY events_step_kind_idx WHERE attempt_id=?1 AND turn_id=?2 AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<?3 ORDER BY sequence DESC LIMIT 1",
+            concat!(
+                "SELECT sequence FROM events INDEXED BY events_step_kind_idx WHERE attempt_key = ",
+                crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"),
+                " AND turn_key = (",
+                crate::durable::sqlite::event_owner_key::turn!("?2"),
+                ") AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<?3 ORDER BY sequence DESC LIMIT 1"
+            ),
             params![attempt.as_str(), step.as_str(), event.sequence],
         )?;
         if let Some(start) = start {

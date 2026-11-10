@@ -1078,7 +1078,8 @@ impl CanonicalStore for SqliteConversationStore {
                (t.position<=?1 OR t.reference_id IN (SELECT value FROM json_each(?3))))
              OR (t.reference_kind='inherited_turn' AND t.position<=?1)
              OR (t.reference_kind IN ('interaction_event','configuration_event','attempt_terminal') AND EXISTS
-               (SELECT 1 FROM events e WHERE e.event_id=t.reference_id AND e.sequence<=?4))
+               (SELECT 1 FROM events e WHERE e.sequence=(SELECT CAST(substr(t.reference_id,length(conversation_id)+8) AS INTEGER) FROM rustx_store WHERE id=1) AND e.event_id=t.reference_id AND e.sequence<=?4
+                UNION ALL SELECT 1 FROM events e INDEXED BY events_alias_idx WHERE e.event_id=t.reference_id AND e.event_id != e.conversation_id || '-event-' || e.sequence AND e.sequence<=?4))
              ORDER BY t.position DESC LIMIT ?5",
             )
             .map_err(|e| storage(e.to_string()))?;

@@ -437,7 +437,7 @@ impl NativeFacts {
                 ..
             } => {
                 facts.completed_response = connection
-                    .prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='assistant_message_committed' AND sequence<?2)")
+                    .prepare_cached(concat!("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND json_extract(event_json,'$.event.type')='assistant_message_committed' AND sequence<?2)"))
                     .and_then(|mut statement| statement.query_row(params![attempt.as_str(),event.sequence],|row|row.get(0)))
                     .map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             }
@@ -475,7 +475,7 @@ fn tool_settlement(
         "tool_execution_completed",
         "tool_execution_failed",
     ] {
-        let fact:Option<(u64,String)>=connection.prepare_cached("SELECT sequence,event_timestamp FROM events INDEXED BY events_observation_tool_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_id=?2 AND json_extract(event_json,'$.event.type')=?3 AND sequence<?4 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![tool_call_id.as_str(),attempt.as_str(),kind,event.sequence],|row|Ok((row.get(0)?,row.get(1)?)))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        let fact:Option<(u64,String)>=connection.prepare_cached(concat!("SELECT sequence,event_timestamp FROM events INDEXED BY events_observation_tool_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?2"), " AND json_extract(event_json,'$.event.type')=?3 AND sequence<?4 ORDER BY sequence DESC LIMIT 1")).and_then(|mut statement| statement.query_row(params![tool_call_id.as_str(),attempt.as_str(),kind,event.sequence],|row|Ok((row.get(0)?,row.get(1)?)))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if let Some((sequence, timestamp)) = fact
             && predecessor
                 .as_ref()
@@ -664,7 +664,7 @@ mod compact_tests {
             .unwrap();
         assert_eq!(read(&connection, 0).unwrap(), state.statistics);
         let full = record::test_record(1, &bytes);
-        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_statistics) VALUES(1,'wide-statistics',1,'test','time','{}',?1)", [&full]).unwrap();
+        connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,observation_statistics) VALUES(1,'wide-statistics',1,(SELECT conversation_id FROM rustx_store WHERE id=1),'time','{}',?1)", [&full]).unwrap();
         let retained: Vec<u8> = connection
             .query_row(
                 "SELECT observation_statistics FROM events WHERE sequence=1",
