@@ -1391,7 +1391,7 @@ fn chat_stream_error(error: &serde_json::Value) -> ModelError {
 #[derive(Serialize)]
 pub(crate) struct WireRequest<'a> {
     model: &'a str,
-    messages: Vec<WireMessage<'a>>,
+    messages: WireMessages<'a>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
@@ -1399,8 +1399,8 @@ pub(crate) struct WireRequest<'a> {
     max_completion_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<WireStreamOptions>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<WireTool<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<std::sync::Arc<serde_json::value::RawValue>>,
     #[serde(flatten)]
     params: Cow<'a, crate::model::invocation::RequestParams>,
 }
@@ -1480,22 +1480,342 @@ struct WireCallFunction<'a> {
     arguments: String,
 }
 
-pub(crate) fn translate_request(request: &ModelRequest) -> Result<WireRequest<'_>, ModelError> {
+#[derive(Default)]
+pub(crate) struct ChatPrefix {
+    prefix: crate::model::adapter::cache::Prefix,
+    replay: ChatReasoningReplay,
+    origin: Option<crate::model::replay::ReplayOrigin>,
+    images: crate::model::images::ResolvedImages,
+    epoch: u64,
+    pieces: imbl::Vector<Option<std::sync::Arc<serde_json::value::RawValue>>>,
+    count: usize,
+    bytes: usize,
+}
+
+enum WireMessages<'a> {
+    Cached {
+        system: &'a str,
+        pieces: imbl::Vector<Option<std::sync::Arc<serde_json::value::RawValue>>>,
+        count: usize,
+        bytes: usize,
+    },
+    #[cfg(test)]
+    Uncached(Vec<WireMessage<'a>>),
+}
+impl Serialize for WireMessages<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        match self {
+            Self::Cached {
+                system,
+                pieces,
+                count,
+                ..
+            } => {
+                let mut array =
+                    serializer.serialize_seq(Some(count + usize::from(!system.is_empty())))?;
+                if !system.is_empty() {
+                    array.serialize_element(&WireMessage::System { content: system })?;
+                }
+                for piece in pieces.iter().flatten() {
+                    array.serialize_element(piece.as_ref())?;
+                }
+                array.end()
+            }
+            #[cfg(test)]
+            Self::Uncached(messages) => messages.serialize(serializer),
+        }
+    }
+}
+impl WireRequest<'_> {
+    pub(crate) fn capacity_hint(&self) -> usize {
+        match &self.messages {
+            WireMessages::Cached {
+                system,
+                bytes,
+                count,
+                ..
+            } => bytes
+                .saturating_add(*count)
+                .saturating_add(system.len())
+                .saturating_add(1024)
+                .saturating_add(self.tools.as_ref().map_or(0, |tools| tools.get().len())),
+            #[cfg(test)]
+            WireMessages::Uncached(_) => 128,
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn translate_request<'a>(
+    request: &'a ModelRequest,
+    tools: &ValidatedTools,
+) -> Result<WireRequest<'a>, ModelError> {
+    translate_request_with_limit(request, tools, None)
+}
+
+pub(crate) fn translate_request_with_limit<'a>(
+    request: &'a ModelRequest,
+    tools: &ValidatedTools,
+    limit: Option<usize>,
+) -> Result<WireRequest<'a>, ModelError> {
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
-    let mut messages = translate_messages(request)?;
-    let labels = crate::model::adapter::correlation::transmitted_labels(
+    let staged = stage_messages(request, &tools.correlation)?;
+    let params = crate::model::adapter::structured::request_params(request)?;
+    let catalog = tools.encoded_tools(
+        ModelProtocol::OpenAiChatCompletions,
+        limit,
+        &request.tools,
+        || translate_tools(&request.tools),
+    )?;
+    let input_limit = limit
+        .map(|limit| {
+            limit
+                .checked_sub(catalog.as_ref().map_or(0, |raw| raw.get().len()))
+                .ok_or_else(crate::model::adapter::validation::wire_budget_error)
+        })
+        .transpose()?;
+    let messages = finish_messages(request, &tools.correlation, staged, input_limit)?;
+    Ok(wire_request(request, messages, catalog, params))
+}
+
+struct StagedMessages<'a> {
+    prefix: ChatPrefix,
+    translated: Vec<(usize, Option<WireMessage<'a>>)>,
+}
+
+fn stage_messages<'a>(
+    request: &'a ModelRequest,
+    plan: &crate::model::adapter::correlation::Plan,
+) -> Result<StagedMessages<'a>, ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _profile = crate::model::adapter::profile::phase(
+        crate::model::adapter::profile::Phase::TranslateMessages,
+    );
+    let replay = request
+        .invocation
+        .compat
+        .chat_reasoning_replay
+        .unwrap_or_default();
+    let origin = request.invocation.replay_origin();
+    let mut prefix = request
+        .messages
+        .preparation()
+        .lock()
+        .expect("input preparation cache")
+        .chat
+        .take()
+        .filter(|prefix| {
+            prefix.epoch == plan.epoch
+                && prefix.replay == replay
+                && prefix.origin == origin
+                && prefix.images == request.images
+                && prefix.prefix.matches(&request.messages)
+        })
+        .unwrap_or_else(|| ChatPrefix {
+            replay,
+            origin: origin.clone(),
+            images: request.images.clone(),
+            epoch: plan.epoch,
+            ..ChatPrefix::default()
+        });
+    let mut dirty = plan.dirty.clone();
+    for index in prefix.prefix.len()..request.messages.len() {
+        prefix.pieces.push_back(None);
+        dirty.insert(index);
+    }
+    let mut translated = Vec::with_capacity(dirty.len());
+    for index in dirty {
+        if index < request.messages.len() {
+            translated.push((
+                index,
+                translate_message(
+                    &request.messages[index],
+                    &request.images,
+                    replay,
+                    origin.as_ref(),
+                )?,
+            ));
+        }
+    }
+    let count = prefix.count
+        - translated
+            .iter()
+            .filter(|(index, _)| prefix.pieces[*index].is_some())
+            .count()
+        + translated
+            .iter()
+            .filter(|(_, message)| message.is_some())
+            .count();
+    if count == 0 && request.effective_system_prompt.is_empty() {
+        return Err(invalid_request(
+            "a Chat Completions request requires at least one message",
+        ));
+    }
+    plan.validate_wire().map_err(invalid_request)?;
+    for (index, message) in &mut translated {
+        if let Some(message) = message {
+            plan.encode_message_fields(*index, &request.messages[*index], |field| match message {
+                WireMessage::Assistant { tool_calls, .. } => {
+                    for call in tool_calls {
+                        field(true, &mut call.id);
+                    }
+                }
+                WireMessage::Tool { tool_call_id, .. } => field(false, tool_call_id),
+                _ => {}
+            })
+            .map_err(invalid_request)?;
+        }
+    }
+    Ok(StagedMessages { prefix, translated })
+}
+
+fn finish_messages<'a>(
+    request: &'a ModelRequest,
+    plan: &crate::model::adapter::correlation::Plan,
+    staged: StagedMessages<'a>,
+    limit: Option<usize>,
+) -> Result<WireMessages<'a>, ModelError> {
+    let StagedMessages {
+        mut prefix,
+        translated,
+    } = staged;
+    for (index, _) in &translated {
+        if let Some(previous) = prefix.pieces[*index].take() {
+            prefix.bytes -= previous.get().len();
+            prefix.count -= 1;
+        }
+    }
+    if limit.is_some_and(|limit| prefix.bytes > limit) {
+        return Err(crate::model::adapter::validation::wire_budget_error());
+    }
+    for (index, message) in translated {
+        let raw = message
+            .as_ref()
+            .map(|message| {
+                crate::model::adapter::cache::encode_raw(
+                    message,
+                    limit.map(|limit| limit - prefix.bytes),
+                )
+            })
+            .transpose()?;
+        #[cfg(test)]
+        crate::model::adapter::cache::work(|work| {
+            work.encoded_items += 1;
+            work.encoded_bytes += raw.as_ref().map_or(0, |raw| raw.get().len());
+        });
+        if let Some(raw) = &raw {
+            prefix.bytes += raw.get().len();
+            prefix.count += 1;
+        }
+        prefix.pieces.set(index, raw);
+    }
+    prefix.prefix = crate::model::adapter::cache::Prefix::capture(&request.messages);
+    let messages = WireMessages::Cached {
+        system: &request.effective_system_prompt,
+        pieces: prefix.pieces.clone(),
+        count: prefix.count,
+        bytes: prefix.bytes,
+    };
+    let mut cache = request
+        .messages
+        .preparation()
+        .lock()
+        .expect("input preparation cache");
+    if cache
+        .correlation
+        .as_ref()
+        .is_some_and(|current| current.epoch == plan.epoch)
+    {
+        cache.chat = Some(prefix);
+    }
+    if let Some(current) = cache
+        .correlation
+        .as_mut()
+        .filter(|current| current.epoch == plan.epoch && current.matches(&request.messages))
+    {
+        current.dirty.clear();
+    }
+    Ok(messages)
+}
+
+fn wire_request<'a>(
+    request: &'a ModelRequest,
+    messages: WireMessages<'a>,
+    catalog: Option<std::sync::Arc<serde_json::value::RawValue>>,
+    params: Cow<'a, crate::model::invocation::RequestParams>,
+) -> WireRequest<'a> {
+    let max = Some(request.max_output_tokens());
+    let (max_tokens, max_completion_tokens) = match request.invocation.compat.chat_max_tokens_field
+    {
+        ChatMaxTokensField::MaxTokens => (max, None),
+        ChatMaxTokensField::MaxCompletionTokens => (None, max),
+    };
+    WireRequest {
+        model: request.model(),
+        messages,
+        stream: true,
+        max_tokens,
+        max_completion_tokens,
+        stream_options: (request.invocation.compat.chat_stream_usage == ChatStreamUsage::Supported)
+            .then_some(WireStreamOptions {
+                include_usage: true,
+            }),
+        tools: catalog,
+        params,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn uncached_request(request: &ModelRequest) -> Result<WireRequest<'_>, ModelError> {
+    let tools = crate::model::adapter::validation::validate_request(
         request,
-        request
-            .continuation_boundary()
-            .map_err(|error| invalid_request(&error))?,
-    )
-    .map_err(|error| invalid_request(&error))?;
+        ModelProtocol::OpenAiChatCompletions,
+    )?;
+    let mut messages = Vec::new();
+    if !request.effective_system_prompt.is_empty() {
+        messages.push(WireMessage::System {
+            content: &request.effective_system_prompt,
+        });
+    }
+    let origin = request.invocation.replay_origin();
+    for block in &request.messages {
+        if let Some(message) = translate_message(
+            block,
+            &request.images,
+            request
+                .invocation
+                .compat
+                .chat_reasoning_replay
+                .unwrap_or_default(),
+            origin.as_ref(),
+        )? {
+            messages.push(message);
+        }
+    }
+    let raw = request
+        .messages
+        .iter()
+        .flat_map(|message| match message.view() {
+            ModelMessageView::Assistant(content) => content
+                .iter()
+                .filter_map(|block| {
+                    if let AssistantContentBlock::ToolCall(call) = block {
+                        Some(call.id.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let labels =
+        crate::model::adapter::correlation::wire_labels(&raw, ModelProtocol::OpenAiChatCompletions);
     crate::model::adapter::correlation::encode_fields(&labels, |field| {
         for message in &mut messages {
-            #[cfg(feature = "issue-387-profile")]
-            crate::model::adapter::profile::wire_item();
             match message {
                 WireMessage::Assistant { tool_calls, .. } => {
                     for call in tool_calls {
@@ -1508,93 +1828,75 @@ pub(crate) fn translate_request(request: &ModelRequest) -> Result<WireRequest<'_
         }
     })
     .map_err(invalid_request)?;
-    #[cfg(feature = "issue-387-profile")]
-    let _params =
-        crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
-    let params = crate::model::adapter::structured::request_params(request)?;
-    let max = Some(request.max_output_tokens());
-    let (max_tokens, max_completion_tokens) = match request.invocation.compat.chat_max_tokens_field
-    {
-        ChatMaxTokensField::MaxTokens => (max, None),
-        ChatMaxTokensField::MaxCompletionTokens => (None, max),
-    };
-    Ok(WireRequest {
-        model: request.model(),
-        messages,
-        stream: true,
-        max_tokens,
-        max_completion_tokens,
-        stream_options: (request.invocation.compat.chat_stream_usage == ChatStreamUsage::Supported)
-            .then_some(WireStreamOptions {
-                include_usage: true,
-            }),
-        tools: translate_tools(&request.tools),
-        params,
-    })
+    Ok(wire_request(
+        request,
+        WireMessages::Uncached(messages),
+        tools.encoded_tools(
+            ModelProtocol::OpenAiChatCompletions,
+            None,
+            &request.tools,
+            || translate_tools(&request.tools),
+        )?,
+        crate::model::adapter::structured::request_params(request)?,
+    ))
 }
 
-fn translate_messages(request: &ModelRequest) -> Result<Vec<WireMessage<'_>>, ModelError> {
-    #[cfg(feature = "issue-387-profile")]
-    let translation = crate::model::adapter::profile::phase(
-        crate::model::adapter::profile::Phase::TranslateMessages,
-    );
-    let mut messages = Vec::with_capacity(request.messages.len() + 1);
-    if !request.effective_system_prompt.is_empty() {
-        messages.push(WireMessage::System {
-            content: &request.effective_system_prompt,
-        });
-    }
-    #[cfg(feature = "issue-387-profile")]
-    let blocks = request.messages.iter().enumerate().map(|(index, block)| {
-        crate::model::adapter::profile::item(index);
-        block
-    });
-    #[cfg(not(feature = "issue-387-profile"))]
-    let blocks = &request.messages;
-    for block in blocks {
-        messages.push(match block.view() {
-            ModelMessageView::User(user) => {
-                let mut content = Vec::with_capacity(user.len());
-                for block in user {
-                    #[cfg(feature = "issue-387-profile")]
-                    crate::model::adapter::profile::block();
-                    match block {
-                        crate::message::types::UserContentBlock::Text(text) =>
-                            content.push(WirePart::Text { text: Cow::Borrowed(&text.text) }),
-                        crate::message::types::UserContentBlock::Image(image) =>
-                            content.push(chat_image_part(image, &request.images)?),
-                        _ => return Err(unsupported("OpenAI Chat Completions cannot represent canonical file references")),
+fn translate_message<'a>(
+    block: &'a crate::model::ModelInputMessage,
+    images: &crate::model::images::ResolvedImages,
+    replay: ChatReasoningReplay,
+    origin: Option<&crate::model::replay::ReplayOrigin>,
+) -> Result<Option<WireMessage<'a>>, ModelError> {
+    let translated = match block.view() {
+        ModelMessageView::User(user) => {
+            let mut content = Vec::with_capacity(user.len());
+            for block in user {
+                #[cfg(feature = "issue-387-profile")]
+                crate::model::adapter::profile::block();
+                match block {
+                    crate::message::types::UserContentBlock::Text(text) => {
+                        content.push(WirePart::Text {
+                            text: Cow::Borrowed(&text.text),
+                        });
+                    }
+                    crate::message::types::UserContentBlock::Image(image) => {
+                        content.push(chat_image_part(image, images)?);
+                    }
+                    _ => {
+                        return Err(unsupported(
+                            "OpenAI Chat Completions cannot represent canonical file references",
+                        ));
                     }
                 }
-                WireMessage::User { content }
             }
-            ModelMessageView::Assistant(assistant) => {
-                let translated = translate_assistant_message(assistant, request.invocation.compat.chat_reasoning_replay.unwrap_or_default(), request.invocation.replay_origin().as_ref())?;
-                if matches!(&translated, WireMessage::Assistant { content: AssistantContent::Parts(parts), tool_calls, reasoning: None, reasoning_content: None } if parts.is_empty() && tool_calls.is_empty()) { continue; }
-                translated
-            },
-            ModelMessageView::Tool(tool_call_id, result) =>
-                translate_tool_message(tool_call_id, result, &request.images)?,
-            ModelMessageView::RequestOnly(carryover) if carryover.is_assistant() =>
-                WireMessage::Assistant {
-                    content: AssistantContent::Text(carryover.render()),
-                    tool_calls: Vec::new(),
-                    reasoning: None,
-                    reasoning_content: None,
-                },
-            ModelMessageView::RequestOnly(carryover) => WireMessage::User {
-                content: vec![WirePart::Text { text: Cow::Owned(carryover.render()) }],
-            },
-        });
-    }
-    #[cfg(feature = "issue-387-profile")]
-    drop(translation);
-    if messages.is_empty() {
-        return Err(invalid_request(
-            "a Chat Completions request requires at least one message",
-        ));
-    }
-    Ok(messages)
+            WireMessage::User { content }
+        }
+        ModelMessageView::Assistant(assistant) => {
+            let translated = translate_assistant_message(assistant, replay, origin)?;
+            if matches!(&translated, WireMessage::Assistant { content: AssistantContent::Parts(parts), tool_calls, reasoning: None, reasoning_content: None } if parts.is_empty() && tool_calls.is_empty())
+            {
+                return Ok(None);
+            }
+            translated
+        }
+        ModelMessageView::Tool(tool_call_id, result) => {
+            translate_tool_message(tool_call_id, result, images)?
+        }
+        ModelMessageView::RequestOnly(carryover) if carryover.is_assistant() => {
+            WireMessage::Assistant {
+                content: AssistantContent::Text(carryover.render()),
+                tool_calls: Vec::new(),
+                reasoning: None,
+                reasoning_content: None,
+            }
+        }
+        ModelMessageView::RequestOnly(carryover) => WireMessage::User {
+            content: vec![WirePart::Text {
+                text: Cow::Owned(carryover.render()),
+            }],
+        },
+    };
+    Ok(Some(translated))
 }
 
 fn translate_tool_message<'a>(

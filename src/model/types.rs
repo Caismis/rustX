@@ -91,7 +91,7 @@ impl ModelRequest {
         let Some((boundary, source)) = self.accepted_output_boundary()? else {
             return Ok(None);
         };
-        if semantic_messages_fingerprint(&self.messages.range(0..boundary))
+        if super::adapter::cache::prefix_fingerprint(&self.messages, boundary)
             != source.covered_input_fingerprint
         {
             return Err("continuation does not cover the compiled historical input".into());
@@ -105,7 +105,7 @@ impl ModelRequest {
         let Some((boundary, source)) = self.accepted_output_boundary()? else {
             return Ok(false);
         };
-        if semantic_messages_fingerprint(&self.messages.range(0..boundary))
+        if super::adapter::cache::prefix_fingerprint(&self.messages, boundary)
             == source.covered_input_fingerprint
         {
             return Ok(false);
@@ -135,7 +135,11 @@ impl ModelRequest {
             return Err("continuation state differs from the actual accepted native output".into());
         }
         let mut boundary = None;
-        for (index, message) in self.messages.iter().enumerate() {
+        for index in super::adapter::cache::continuation_candidates(
+            &self.messages,
+            &source.assistant.message_id,
+        ) {
+            let message = &self.messages[index];
             let scoped = match message {
                 ModelInputMessage::Canonical(message) => source.assistant.matches(message),
                 ModelInputMessage::Derived(message) => message.sources.contains(&source.assistant),
