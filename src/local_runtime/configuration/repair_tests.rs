@@ -222,7 +222,7 @@ fn the_issue_example_converges_to_its_documented_result() {
     assert_eq!(
         plan.changes,
         vec![
-            ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 11 },
+            ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 12 },
             removed("agent.plugins.todo"),
             removed("native_tools"),
             unknown_tool(1),
@@ -425,7 +425,7 @@ fn explicit_schema_versions_are_normalized_and_omission_is_preserved() {
         let text = format!("schema_version = {from} # authored\n");
         assert_eq!(
             changes(&text),
-            vec![ConfigRepairChange::UpdatedSchemaVersion { from, to: 11 }]
+            vec![ConfigRepairChange::UpdatedSchemaVersion { from, to: 12 }]
         );
         assert_eq!(candidate(&text), "schema_version = 12 # authored\n");
     }
@@ -3250,7 +3250,7 @@ fn a_repair_growing_past_the_bound_is_unresolved_without_a_backup() {
     assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
     assert_eq!(
         receipt.changes,
-        [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 11 }]
+        [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 12 }]
     );
     assert!(!receipt.backup_available);
     assert!(receipt.after_revision.is_none());

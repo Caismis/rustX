@@ -2012,7 +2012,7 @@ the authored unit in that scope. Clients never write whole config documents.
 
 Initialization requires exactly v78 and WebSocket requires `rustx.app-server.v78`.
 v76 and all earlier versions are rejected without fallback. Rust DTOs generate
-`v77.ts`, `v77.schema.json`, and the serialized fixtures; only the current version is kept.
+`v78.ts`, `v78.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
 or ordinary-residency case: external allocation exclusion is `resource_conflict`.
@@ -2042,7 +2042,7 @@ recovery uses existing idempotent cleanup/finalization and idempotent fence rele
 A client-side unknown outcome requires authoritative observation, not cleanup
 recovery or mutation replay. Only server-confirmed committed outcomes grant the
 explicit recovery action. These recovery semantics remain in App Server v78;
-native Runtime Client is v84.
+native Runtime Client is v85.
 
 ## Rich historical Trace inspection (#364)
 
@@ -2136,7 +2136,7 @@ must belong to that exact child's store. `agent/turns { target, agent_id, offset
 limit }` returns `conversation_turns { page }`, counting every native Attempt
 across activations while retaining at most 64 directory rows. Both survive
 terminal child exit and parent restart, neither starts a child. The former
-`before`-only child transcript request is removed; all clients upgrade to v77.
+`before`-only child transcript request is removed; all clients upgrade to v78.
 
 `target` is the **parent** AttachmentTarget (Session,
 Conversation, runtime incarnation, attachment). App Server validates that route;
@@ -2248,7 +2248,7 @@ catalog membership as well as the named summary; `false` invalidates only the
 summary. Every membership visibility commit publishes invalidation independently
 of attachment or deletion cleanup. The sequence coalescer preserves an unobserved membership change even
 when a newer preview change arrives for that Session. Catalog reads must not gate
-attach or first admission. v77 is mandatory; no earlier-version decoder or compatibility path
+attach or first admission. v78 is mandatory; no earlier-version decoder or compatibility path
 is retained. See [ownership and evidence](issue-419/ownership.md).
 
 
@@ -2285,11 +2285,11 @@ row only for the exact canonical occurrence.
 App Server v29 combined the v28 Harness semantic ledger with required
 `CapabilityView.configured_tools` and image/Bash Tool presentation. The required
 field changes the complete mandatory vocabulary, so v28 is rejected. Rust DTOs
-remain the sole schema authority; only the v77 generated pair is retained.
+remain the sole schema authority; only the v78 generated pair is retained.
 
 ### Native process identity for reconnecting presentation
 
-The current mandatory v77 `initialized` result includes `authority_id`, an opaque
+The current mandatory v78 `initialized` result includes `authority_id`, an opaque
 UUID allocated once by `AppServerHost`. Cloned hosts/connections share it; a new
 native process owner has a new identity even when it listens at the same endpoint.
 It is observation identity, never authorization or persistent Session membership.
@@ -2300,7 +2300,7 @@ this field; there is no reader for the previous result shape.
 ## Conversation reading windows
 
 The v50 revision replaced the v29 root transcript request/result. App Server v78 is
-mandatory; all consumers negotiate v77 and only its generated schema/TypeScript pair is retained.
+mandatory; all consumers negotiate v78 and only its generated schema/TypeScript pair is retained.
 Root `session/transcript` uses `ConversationWindowAt` (`latest`, `older`, `newer`, `turn`) and
 returns `transcript_window` with one contiguous finite page. `session/turns`
 supplies the ordered, paged native Attempt outline, stamped with the
@@ -2423,7 +2423,7 @@ it. An accepted response is never retracted. See
 [file delivery](file-delivery.md#delivery-access-for-app-server-clients) for
 the synchronization.
 
-The internal Runtime Client vocabulary is v84. Only App Server v78 clients
+The internal Runtime Client vocabulary is v85. Only App Server v78 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
 decoder. The current storage/control formats are Event envelope 1, SQLite 85, Session
 catalog 18 and subagent IPC v37. The child specification freezes MCP Resource source
@@ -2436,7 +2436,7 @@ child Conversation and the parent attachment's native delivery authority.
 `context/compact.params.request_id` is a `ManualCompactionRequestId`: 1–64 ASCII
 letters, digits, underscores or hyphens. UUID strings are accepted. The same native
 type validates JSON deserialization before runtime dispatch and describes the
-v77 schema's length/pattern constraints. Invalid IDs return invalid params without
+v78 schema's length/pattern constraints. Invalid IDs return invalid params without
 admission, lifecycle publication or provider execution. This ID correlates native
 read evidence only; it does not authorize execution or provide exactly-once replay.
 An exact correlated native release frees Web's gesture guard independently of the
@@ -2791,7 +2791,7 @@ so metadata and other Threads stay readable; the retained identity accepts later
 recovery notifications. Strong Thread reads return observation-unavailable errors
 until Native facts can be captured. Status has camelCase tags `notLoaded`, `idle`, `systemError`, or
 `active` with `activeFlags: []`, `waitingOnApproval`, `waitingOnUserInput`, or both
-in that order. Generated v77 DTOs and schema are authoritative.
+in that order. Generated v78 DTOs and schema are authoritative.
 
 Initialized clients receive instance-level `thread/status/changed` without a
 transcript subscription. The payload is `{ threadId, status, revision,
