@@ -2,7 +2,7 @@
 
 use crate::durable::ConversationStoreError;
 use crate::durable::sqlite::canonical::ledger::{load_head, load_message_tx};
-use crate::durable::sqlite::storage;
+use crate::durable::sqlite::{sqlite_error, storage};
 use crate::message::types::{AssistantContentBlock, ContentBlockIndex, MessageBlock};
 use crate::publication::{
     PublicationAuditBlock, PublicationFrame, PublicationPayload, PublicationSettlement,
@@ -11,6 +11,7 @@ use crate::runtime::identity::{
     AttemptId, MessageId, PublicationStreamId, ToolCallId, ToolId, TurnId,
 };
 use rusqlite::OptionalExtension;
+use rusqlite::types::Value;
 use rusqlite::{Transaction, params};
 use std::collections::BTreeSet;
 
@@ -409,19 +410,50 @@ pub(in crate::durable::sqlite) fn record_tool_proposal_dependency(
         } else {
             None
         };
-    let mut statement = transaction
-        .prepare(
-            "SELECT p.stream_id,s.attempt_id,s.turn_id,s.message_id,p.tool_id,p.settlement,p.state
-             FROM publication_proposals p
-             JOIN publication_streams s ON s.stream_id=p.stream_id
-             WHERE p.call_id=?1
-             ORDER BY p.stream_id",
+    // Keep the global absence/mismatched-generation distinction, but never
+    // materialize proposals belonging to unrelated historical generations.
+    let any_proposal: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM publication_proposals p INDEXED BY publication_proposals_call_idx CROSS JOIN publication_streams s ON s.stream_id=p.stream_id WHERE p.call_id=?1)",
+        [call_id.as_str()], |row| row.get(0),
+    ).map_err(|error| sqlite_error(&error, format!("tool proposal presence: {error}")))?;
+    let mut values = vec![Value::Text(call_id.to_string())];
+    let streams = "publication_streams s INDEXED BY publication_streams_owner_idx CROSS JOIN publication_proposals p ON p.stream_id=s.stream_id";
+    let messages = "publication_streams s INDEXED BY publication_streams_message_settlement_idx CROSS JOIN publication_proposals p ON p.stream_id=s.stream_id";
+    let (from, predicate) = if let Some(owner) = canonical_owner {
+        values.push(Value::Text(owner.to_string()));
+        (messages, "s.message_id=?2")
+    } else if let Some(attempt) = attempt_id {
+        values.push(Value::Text(attempt.to_string()));
+        if let Some(turn) = turn_id {
+            values.push(Value::Text(turn.to_string()));
+            (streams, "s.attempt_id=?2 AND s.turn_id=?3")
+        } else {
+            (streams, "s.attempt_id=?2")
+        }
+    } else if let Some(active) = &detached_active_messages {
+        values.push(Value::Text(
+            serde_json::to_string(active).map_err(|error| storage(error.to_string()))?,
+        ));
+        (
+            "json_each(?2) a CROSS JOIN publication_streams s INDEXED BY publication_streams_message_settlement_idx ON s.message_id=a.value CROSS JOIN publication_proposals p ON p.stream_id=s.stream_id",
+            "1",
         )
-        .map_err(|error| {
-            crate::durable::sqlite::sqlite_error(&error, format!("tool proposal probe: {error}"))
-        })?;
+    } else {
+        // A turn without an attempt is not a generation identity. Retain its
+        // ambiguity checks; ordinary native callers always supply both.
+        (
+            "publication_proposals p INDEXED BY publication_proposals_call_idx CROSS JOIN publication_streams s ON s.stream_id=p.stream_id",
+            "1",
+        )
+    };
+    let sql = format!(
+        "SELECT p.stream_id,s.attempt_id,s.turn_id,s.message_id,p.tool_id,p.settlement,p.state FROM {from} WHERE p.call_id=?1 AND {predicate}"
+    );
+    let mut statement = transaction
+        .prepare_cached(&sql)
+        .map_err(|error| sqlite_error(&error, format!("tool proposal probe: {error}")))?;
     let rows = statement
-        .query_map([call_id.as_str()], |row| {
+        .query_map(rusqlite::params_from_iter(values), |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -435,11 +467,12 @@ pub(in crate::durable::sqlite) fn record_tool_proposal_dependency(
         .map_err(|error| {
             crate::durable::sqlite::sqlite_error(&error, format!("tool proposal rows: {error}"))
         })?;
-    let candidates = rows
-        .map(|row| row.map_err(|error| storage(format!("tool proposal row: {error}"))))
+    let mut candidates = rows
+        .map(|row| row.map_err(|error| sqlite_error(&error, format!("tool proposal row: {error}"))))
         .collect::<Result<Vec<_>, _>>()?;
     drop(statement);
-    if candidates.is_empty() {
+    candidates.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    if !any_proposal {
         // A direct canonical Assistant commit predates the publication plane
         // in a few durable recovery prefixes. It is a valid owner only when
         // the active Surface still contains that exact ToolCall. An arbitrary
@@ -613,11 +646,10 @@ pub(in crate::durable::sqlite) fn canonical_generation_owner(
     let mut statement = transaction
         .prepare(
             "SELECT s.message_id
-             FROM publication_proposals p
-             JOIN publication_streams s ON s.stream_id=p.stream_id
-             WHERE p.call_id=?1 AND p.settlement=?2
-               AND s.attempt_id=?3 AND s.turn_id=?4
-             ORDER BY s.message_id",
+             FROM publication_streams s INDEXED BY publication_streams_owner_idx
+             CROSS JOIN publication_proposals p ON p.stream_id=s.stream_id
+             WHERE s.attempt_id=?3 AND s.turn_id=?4
+               AND p.call_id=?1 AND p.settlement=?2 LIMIT 2",
         )
         .map_err(|error| {
             crate::durable::sqlite::sqlite_error(

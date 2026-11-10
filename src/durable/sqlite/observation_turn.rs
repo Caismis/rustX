@@ -258,6 +258,15 @@ fn adoption_prompt(
     Ok(selected)
 }
 
+// Each owner contributes only its earliest positive prompt. Comparing two
+// scalar sequence winners avoids sorting every adopted prompt in the attempt.
+pub(super) const TURN_PROMPT_SQL: &str = "SELECT observation_turn_prompt FROM events WHERE sequence=(SELECT min(sequence) FROM (
+    SELECT (SELECT sequence FROM events INDEXED BY events_observation_turn_prompt_idx WHERE observation_turn_prompt_positive=1 AND attempt_id=?1 AND sequence<=?2 ORDER BY sequence LIMIT 1) AS sequence
+    UNION ALL
+    SELECT (SELECT sequence FROM events INDEXED BY events_observation_turn_prompt_idx WHERE observation_turn_prompt_positive=1 AND attempt_id IS NULL AND sequence>?3 AND sequence<?4 ORDER BY sequence LIMIT 1)))";
+
+pub(super) const TURN_PROMPT_HOLES_SQL: &str = "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_prompt_holes_idx WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL AND attempt_id=?2 AND sequence<=?1) OR EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_prompt_holes_idx WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL AND attempt_id IS NULL AND sequence>?3 AND sequence<?4 AND sequence<=?1)";
+
 fn prompt(
     connection: &Connection,
     attempt: &AttemptId,
@@ -280,11 +289,24 @@ fn prompt(
             |row| row.get(0),
         )
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
-    let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_turn_prompt_holes_idx WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL AND sequence<=?1 AND ((attempt_id=?2) OR (attempt_id IS NULL AND sequence>?3 AND sequence<?4)))",params![through,attempt.as_str(),previous,start],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let missing: bool = connection
+        .query_row_cached(
+            TURN_PROMPT_HOLES_SQL,
+            params![through, attempt.as_str(), previous, start],
+            |row| row.get(0),
+        )
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if missing {
         return Err(storage("turn input display source unavailable"));
     }
-    let selected:Option<Vec<u8>>=connection.query_row_cached("SELECT preview FROM (SELECT sequence,observation_turn_prompt AS preview FROM events INDEXED BY events_observation_turn_prompt_idx WHERE observation_turn_prompt_positive=1 AND attempt_id=?1 AND sequence<=?2 UNION ALL SELECT sequence,observation_turn_prompt FROM events INDEXED BY events_observation_turn_prompt_idx WHERE observation_turn_prompt_positive=1 AND attempt_id IS NULL AND sequence>?3 AND sequence<?4) ORDER BY sequence LIMIT 1",params![attempt.as_str(),through,previous,start],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let selected: Option<Vec<u8>> = connection
+        .query_row_cached(
+            TURN_PROMPT_SQL,
+            params![attempt.as_str(), through, previous, start],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     selected
         .map(String::from_utf8)
         .transpose()

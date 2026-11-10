@@ -177,6 +177,11 @@ pub(super) fn enrich_message_header(
         .map_err(|error| storage(format!("{error:?}")))
 }
 
+// Both the access path and the physical window are part of the read contract.
+// Filtering by kind must never make SQLite scan/sort that kind's entire history,
+// or walk beyond the requested ledger window when a descriptor is missing.
+pub(super) const MESSAGE_HEADERS_SQL: &str = "SELECT h.header_json FROM observation_headers h INDEXED BY observation_headers_ledger_idx WHERE h.ledger_position>?1 AND h.ledger_position<=?2 AND h.reference_kind='message' ORDER BY h.ledger_position";
+
 pub(super) fn messages(
     connection: &Connection,
     conversation: &ConversationId,
@@ -194,12 +199,14 @@ pub(super) fn messages(
             "message header offset beyond native frontier".into(),
         ));
     }
-    let mut statement=connection.prepare_cached("SELECT h.header_json FROM observation_headers h WHERE h.ledger_position>?1 AND h.ledger_position<=?2 AND h.reference_kind='message' ORDER BY h.ledger_position LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let through = offset + (total - offset).min(limit as u64);
+    let mut statement = connection
+        .prepare_cached(MESSAGE_HEADERS_SQL)
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let rows = statement
-        .query_map(
-            params![seq_to_i64(offset)?, seq_to_i64(total)?, limit],
-            |row| row.get::<_, Vec<u8>>(0),
-        )
+        .query_map(params![seq_to_i64(offset)?, seq_to_i64(through)?], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut headers = Vec::new();
     for row in rows {

@@ -248,8 +248,8 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "position",
                 "native_transcript",
                 "human_activity_at",
-                "human_activity_seconds",
-                "human_activity_nanos",
+                "human_activity_max_seconds",
+                "human_activity_max_nanos",
                 "opening_preview",
                 "ordinary_user",
                 "ordinary_human",
@@ -796,6 +796,11 @@ pub(in crate::durable::sqlite) fn verify_witness_field_order(
 #[allow(clippy::too_many_lines)] // One closed required-index contract and its verifier.
 fn verify_required_index_sql(connection: &Connection) -> Result<(), ConversationStoreError> {
     let mut expected = [
+        ("publication_streams_open_idx", ("CREATE INDEX publication_streams_open_idx ON publication_streams(stream_id) WHERE settlement IS NULL".to_owned(), false)),
+        ("publication_proposals_call_idx", ("CREATE INDEX publication_proposals_call_idx ON publication_proposals(call_id)".to_owned(), false)),
+        ("message_ledger_human_activity_idx", ("CREATE INDEX message_ledger_human_activity_idx ON message_ledger(position) WHERE human_activity_at IS NOT NULL".to_owned(), false)),
+        ("message_ledger_transcript_position_idx", ("CREATE INDEX message_ledger_transcript_position_idx ON message_ledger(position) WHERE native_transcript IS NOT NULL".to_owned(), false)),
+        ("publication_streams_owner_idx", ("CREATE INDEX publication_streams_owner_idx ON publication_streams(attempt_id,turn_id,stream_id)".to_owned(), false)),
         ("projection_ledger_idx", ("CREATE INDEX projection_ledger_idx ON projection_activations(ledger_frontier,activation)".to_owned(), false)),
         ("projection_checkpoint_idx", ("CREATE UNIQUE INDEX projection_checkpoint_idx ON projection_activations(checkpoint_id)".to_owned(), false)),
         ("events_observation_tool_idx", ("CREATE INDEX events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type')) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL".to_owned(), true)),
@@ -808,7 +813,7 @@ fn verify_required_index_sql(connection: &Connection) -> Result<(), Conversation
         ("events_observation_turn_ordinal_idx", ("CREATE UNIQUE INDEX events_observation_turn_ordinal_idx ON events(observation_turn_ordinal) WHERE observation_turn_ordinal IS NOT NULL".to_owned(), true)),
         ("events_observation_turn_anchor_idx", ("CREATE INDEX events_observation_turn_anchor_idx ON events(observation_turn_anchor) WHERE observation_turn_header IS NOT NULL".to_owned(), true)),
         ("events_observation_turn_prompt_idx", ("CREATE INDEX events_observation_turn_prompt_idx ON events(attempt_id) WHERE observation_turn_prompt_positive=1".to_owned(), true)),
-        ("events_observation_turn_prompt_holes_idx", ("CREATE INDEX events_observation_turn_prompt_holes_idx ON events(sequence) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL".to_owned(), true)),
+        ("events_observation_turn_prompt_holes_idx", ("CREATE INDEX events_observation_turn_prompt_holes_idx ON events(attempt_id) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL".to_owned(), true)),
         ("observation_block_ledger_kind_idx", ("CREATE INDEX observation_block_ledger_kind_idx ON observation_block_headers(ledger_position,json_extract(header_json,'$.kind'),block_index)".to_owned(), false)),
         ("events_observation_transcript_idx", ("CREATE UNIQUE INDEX events_observation_transcript_idx ON events(observation_transcript) WHERE observation_transcript IS NOT NULL".to_owned(), true)),
         ("inherited_membership_turn_idx", ("CREATE INDEX inherited_membership_turn_idx ON inherited_message_membership(turn_ordinal,assistant_message_id)".to_owned(), false)),

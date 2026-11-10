@@ -21,6 +21,20 @@ pub(in crate::durable::sqlite) fn inspection_request(
     retry: u32,
     description: &str,
 ) -> (RequestSnapshot, u64) {
+    let request = inspection_request_snapshot(store, retry, description);
+    let start = store
+        .commit_model_turn_start(&[], &request, Utc::now())
+        .unwrap()
+        .started
+        .sequence;
+    (request, start)
+}
+
+pub(in crate::durable::sqlite) fn inspection_request_snapshot(
+    store: &SqliteConversationStore,
+    retry: u32,
+    description: &str,
+) -> RequestSnapshot {
     let mut request = progress_request_snapshot(
         "inspection-original-owner",
         "1",
@@ -49,12 +63,7 @@ pub(in crate::durable::sqlite) fn inspection_request(
         },
     ];
     freeze_test_input(store, &mut request, &[]);
-    let start = store
-        .commit_model_turn_start(&[], &request, Utc::now())
-        .unwrap()
-        .started
-        .sequence;
-    (request, start)
+    request
 }
 pub(in crate::durable::sqlite) fn inspection_assistant(
     store: &SqliteConversationStore,

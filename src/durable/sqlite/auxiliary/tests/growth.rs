@@ -461,3 +461,39 @@ fn aux_01_representative_storage_growth_of_completed_one_request_calls() {
         persisted_bytes_delta.saturating_sub(journal_bytes_added)
     );
 }
+
+#[test]
+fn bounded_work_auxiliary_turn_sql_is_flat_across_retained_calls() {
+    use crate::durable::sqlite::query_work::{self, HISTORY_SIZES};
+    let mut samples = Vec::new();
+    for size in HISTORY_SIZES {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        store.initialize(&[]).unwrap();
+        for ordinal in 1..=size {
+            commit_completed_one_request_call(&store, ordinal as u64).unwrap();
+        }
+        query_work::capture(&store.lock().unwrap());
+        commit_completed_one_request_call(&store, size as u64 + 1).unwrap();
+        let cut = store.auxiliary_audit_cut().unwrap();
+        let call = AuxiliaryCallId::parse(measurement_id("aux_", size as u64 + 1)).unwrap();
+        assert!(store.load_auxiliary_call(&call, cut).unwrap().is_some());
+        let page = store
+            .read_auxiliary_audit(cut, Some(size as u64 * FACTS_PER_CALL), 4)
+            .unwrap();
+        assert_eq!(page.records.len(), 4);
+        samples.push((size, query_work::finish(&store.lock().unwrap())));
+    }
+    let baseline = &samples[0].1;
+    assert!(baseline.len() > 50);
+    for (history, statements) in &samples {
+        assert_eq!(statements.len(), baseline.len());
+        for (sql, work) in statements {
+            let first = &baseline[sql];
+            assert_eq!(work.steps, first.steps, "history {history}: {sql}");
+            assert_eq!(work.calls, first.calls, "history {history}: {sql}");
+            assert_eq!(work.sorts, 0, "history {history}: {sql}");
+            assert_eq!(work.automatic, 0, "history {history}: {sql}");
+            assert_eq!(work.scans, first.scans, "history {history}: {sql}");
+        }
+    }
+}
