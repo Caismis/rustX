@@ -3514,7 +3514,7 @@ fn t08_t15_t20_request_detail_ranges_are_frozen_allowlisted_and_physically_bound
     let connection = rusqlite::Connection::open(&durable.path).unwrap();
     connection
         .execute(
-            "UPDATE request_snapshots SET snapshot_json='invalid JSON'",
+            "UPDATE request_snapshot_payloads SET snapshot_json='invalid JSON'",
             [],
         )
         .unwrap();
@@ -3650,7 +3650,7 @@ fn t08_t15_request_field_pages_advance_past_large_keys_without_losing_source_byt
     let connection = rusqlite::Connection::open(&durable.path).unwrap();
     connection
         .execute(
-            "UPDATE request_snapshots SET snapshot_json='invalid JSON'",
+            "UPDATE request_snapshot_payloads SET snapshot_json='invalid JSON'",
             [],
         )
         .unwrap();

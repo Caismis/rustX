@@ -846,7 +846,98 @@ mod tests {
                             }
                         }
                         snapshot.freeze_input(&scope, &request).unwrap();
-                        snapshot.tool_associations = associations;
+                        snapshot.tool_associations = associations.clone();
+                        // Oracle: retain the old full-array mapping/relabeling semantics
+                        // across every Original/Derived, native replay and duplicate-ID case.
+                        let history = crate::durable::projection::HistoricalModelInput {
+                            tool_associations: snapshot
+                                .tool_associations
+                                .iter()
+                                .map(|a| {
+                                    let message =
+                                        &request.messages[a.call.message.item_index as usize];
+                                    let crate::model::projected::ModelMessageView::Assistant(
+                                        content,
+                                    ) = message.view()
+                                    else {
+                                        unreachable!()
+                                    };
+                                    let AssistantContentBlock::ToolCall(call) =
+                                        &content[a.call.block.0 as usize]
+                                    else {
+                                        unreachable!()
+                                    };
+                                    crate::model::occurrence::HistoricalToolAssociation {
+                                        call_message: a.call.message.item_index,
+                                        call_block: a.call.block.0,
+                                        result_message: a.result.item_index,
+                                        source: a.source.clone(),
+                                        wire_id: Some(
+                                            crate::model::occurrence::ProviderWireCorrelationId(
+                                                call.id.to_string(),
+                                            ),
+                                        ),
+                                        native_origins: crate::model::occurrence::native_origins(
+                                            &message.view(),
+                                        ),
+                                    }
+                                })
+                                .collect(),
+                            cut: snapshot.history_cut.clone(),
+                            messages: request.messages.clone(),
+                            input_manifest: snapshot.input.clone(),
+                            items: imbl::Vector::new(),
+                            materialized_bytes: 0,
+                        };
+                        for insertion in [None, Some(0), Some(request.messages.len())] {
+                            let mut actual = request.clone();
+                            if let Some(at) = insertion {
+                                actual.messages.insert(at,crate::model::ModelInputMessage::RequestOnly(crate::model::input::RequestOnlyModelContext::AuxiliaryQuestion{text:"request-only oracle".into()}));
+                            }
+                            for retry in 0..3 {
+                                if retry == 2 {
+                                    actual.invocation.replay_binding =
+                                        Some("different-replay-origin".into());
+                                }
+                                let id = RequestId::new(format!("oracle-request-{retry}"));
+                                let frozen = crate::model::occurrence::freeze_associations(
+                                    &history, &id, &actual, insertion,
+                                );
+                                let labels =
+                                    crate::model::adapter::correlation::request_labels(&actual);
+                                let Ok(labels) = labels else {
+                                    assert!(frozen.is_err());
+                                    continue;
+                                };
+                                let frozen = frozen.unwrap();
+                                let mut expected = associations.to_vec();
+                                for a in &mut expected {
+                                    a.call.message.request_id = id.clone();
+                                    a.result.request_id = id.clone();
+                                    if insertion
+                                        .is_some_and(|at| a.call.message.item_index as usize >= at)
+                                    {
+                                        a.call.message.item_index += 1;
+                                    }
+                                    if insertion
+                                        .is_some_and(|at| a.result.item_index as usize >= at)
+                                    {
+                                        a.result.item_index += 1;
+                                    }
+                                    a.wire_id = labels
+                                        .get(&(a.call.message.item_index, a.call.block.0))
+                                        .cloned()
+                                        .map(crate::model::occurrence::ProviderWireCorrelationId);
+                                }
+                                let encoded = serde_json::to_vec(&frozen).unwrap();
+                                assert!(frozen.encoded_len_upper_bound().unwrap() >= encoded.len());
+                                assert_eq!(encoded, serde_json::to_vec(&expected).unwrap());
+                                assert_eq!(
+                                    *frozen, expected,
+                                    "protocol={protocol:?} mode={mode} derived={derived_call}/{derived_result} insertion={insertion:?} retry={retry}"
+                                );
+                            }
+                        }
                         let translate = |input: &ModelRequest| {
                             let tools = crate::model::adapter::validation::validate_request(
                                 input, protocol,

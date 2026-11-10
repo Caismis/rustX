@@ -11,6 +11,7 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize, ser::SerializeStruct};
 use sha2::Digest;
 
+const ASSOCIATION_FIELD_BYTES: usize = b"\"association_binding\":,".len();
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 const REFERENCE_BYTES: usize = b"\"configuration_digest\":\"\",".len() + 64;
 const EMPTY_CONFIGURATION_BYTES: usize =
@@ -18,9 +19,9 @@ const EMPTY_CONFIGURATION_BYTES: usize =
 
 // ?3 supplies NORMALIZATION_OVERHEAD. Oversized/invalid metadata never enters
 // JSON extraction, and SQLite checks the reconstructed size before Rust owns it.
-// A normalized record may add the 90-byte digest reference even for empty config.
+// Native metadata also carries a bounded numeric association-root binding.
 pub(super) const NORMALIZATION_OVERHEAD: usize = REFERENCE_BYTES + EMPTY_CONFIGURATION_BYTES;
-pub(super) const MATERIALIZED_BYTES_SQL: &str = "CASE WHEN octet_length(snapshot_json)>67108954 THEN 67108865 WHEN json_valid(snapshot_json) THEN octet_length(snapshot_json)+coalesce((SELECT octet_length(configuration_json) FROM request_configurations WHERE digest=json_extract(snapshot_json,'$.configuration_digest')),0)-?3 ELSE octet_length(snapshot_json) END";
+pub(super) const MATERIALIZED_BYTES_SQL: &str = "CASE WHEN octet_length(snapshot_json)>67109466 THEN 67108865 WHEN json_valid(snapshot_json) THEN octet_length(snapshot_json)+coalesce((SELECT octet_length(configuration_json) FROM request_configurations WHERE digest=json_extract(snapshot_json,'$.configuration_digest')),0)-?3-octet_length(json_extract(snapshot_json,'$.association_binding'))-23 ELSE octet_length(snapshot_json) END";
 
 #[derive(Serialize)]
 struct ConfigurationRef<'a> {
@@ -38,6 +39,7 @@ struct Configuration {
 #[derive(Deserialize)]
 struct Metadata {
     configuration_digest: String,
+    association_binding: super::associations::Binding,
     #[serde(flatten)]
     snapshot: RequestSnapshot,
 }
@@ -45,6 +47,7 @@ struct Metadata {
 struct MetadataRef<'a> {
     snapshot: &'a RequestSnapshot,
     configuration_digest: &'a str,
+    association_binding: &'a super::associations::Binding,
 }
 impl Serialize for MetadataRef<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -78,7 +81,7 @@ impl Serialize for MetadataRef<'_> {
             unresolved_output_carryover_anchor: _,
             contributions: _,
         } = s;
-        let fields = 23
+        let fields = 24
             + usize::from(s.continuation.is_some())
             + usize::from(s.unresolved_output_carryover_source.is_some())
             + usize::from(s.unresolved_output_carryover.is_some())
@@ -90,7 +93,8 @@ impl Serialize for MetadataRef<'_> {
                 state.serialize_field(stringify!($field), &s.$field)?
             };
         }
-        field!(tool_associations);
+        state.serialize_field("tool_associations", &[] as &[u8])?;
+        state.serialize_field("association_binding", self.association_binding)?;
         field!(history_cut);
         state.serialize_field("input", &[] as &[u8])?;
         field!(images);
@@ -172,9 +176,15 @@ fn invalid(detail: &str) -> ConversationStoreError {
 fn materialized_bytes(
     metadata: usize,
     configuration: usize,
+    binding: &super::associations::Binding,
 ) -> Result<usize, ConversationStoreError> {
+    let binding_bytes = serde_json::to_vec(binding)
+        .map_err(|e| storage(e.to_string()))?
+        .len()
+        + ASSOCIATION_FIELD_BYTES;
     metadata
-        .checked_sub(REFERENCE_BYTES)
+        .checked_sub(binding_bytes)
+        .and_then(|n| n.checked_sub(REFERENCE_BYTES))
         .and_then(|n| n.checked_add(configuration))
         .and_then(|n| n.checked_sub(EMPTY_CONFIGURATION_BYTES))
         .ok_or_else(|| invalid("frozen request configuration byte geometry"))
@@ -242,6 +252,7 @@ pub(super) struct Validation<'transaction, 'connection> {
 struct ValidatedRequest {
     metadata: String,
     configuration: FreshConfiguration,
+    association_binding: super::associations::Binding,
     snapshot: Arc<RequestSnapshot>,
 }
 impl<'transaction, 'connection> Validation<'transaction, 'connection> {
@@ -264,18 +275,21 @@ impl<'transaction, 'connection> Validation<'transaction, 'connection> {
             && request.metadata == json
             && request.configuration.matches(self.transaction)? == Some(true)
         {
+            super::associations::validate_binding(self.transaction, &request.association_binding)?;
             return Ok(Arc::clone(&request.snapshot));
         }
         // A changed cell gets the original bounded, digest-authenticated typed
         // read. In particular, a coherently rehashed invalid JSON/type cannot
         // inherit validation from the prior request or configuration digest.
         self.request = None;
-        let (mut snapshot, configuration, _) = read(self.transaction, json, MAX_BYTES)?;
+        let (mut snapshot, configuration, association_binding, _) =
+            read(self.transaction, json, MAX_BYTES)?;
         decode_configuration(&mut snapshot, &configuration.json)?;
         let snapshot = Arc::new(snapshot);
         self.request = Some(ValidatedRequest {
             metadata: json.to_owned(),
             configuration,
+            association_binding,
             snapshot: Arc::clone(&snapshot),
         });
         Ok(snapshot)
@@ -288,17 +302,32 @@ impl<'transaction, 'connection> Validation<'transaction, 'connection> {
 pub(super) fn persist(
     connection: &Connection,
     snapshot: &RequestSnapshot,
+    association_binding: &super::associations::Binding,
 ) -> Result<(String, FreshConfiguration), ConversationStoreError> {
     let configuration = FreshConfiguration::capture(snapshot)?;
     let json = encode(
         &MetadataRef {
             snapshot,
             configuration_digest: &configuration.digest,
+            association_binding,
         },
-        MAX_BYTES + REFERENCE_BYTES,
+        MAX_BYTES + REFERENCE_BYTES + 512,
     )?;
-    if materialized_bytes(json.len(), configuration.json.len())? > MAX_BYTES {
+    let bytes = materialized_bytes(json.len(), configuration.json.len(), association_binding)?;
+    if bytes > MAX_BYTES {
         return Err(invalid("frozen request exceeds storage byte budget"));
+    }
+    let association_limit = MAX_BYTES - bytes + 2;
+    if snapshot
+        .tool_associations
+        .encoded_len_upper_bound()
+        .is_none_or(|upper| upper > association_limit)
+    {
+        crate::context::resources::bounded_encoded_len(
+            &snapshot.tool_associations,
+            association_limit,
+        )
+        .map_err(|_| invalid("frozen request exceeds storage byte budget"))?;
     }
     match configuration.matches(connection)? {
         Some(true) => {}
@@ -323,9 +352,18 @@ fn read(
     connection: &Connection,
     json: &str,
     max_bytes: usize,
-) -> Result<(RequestSnapshot, FreshConfiguration, usize), ConversationStoreError> {
+) -> Result<
+    (
+        RequestSnapshot,
+        FreshConfiguration,
+        super::associations::Binding,
+        usize,
+    ),
+    ConversationStoreError,
+> {
     let Metadata {
         configuration_digest,
+        association_binding,
         snapshot,
     } = super::decode(json, "native request metadata")?;
     if configuration_digest.len() != 64
@@ -336,14 +374,21 @@ fn read(
         || !snapshot.system_sections.is_empty()
         || !snapshot.tool_definitions.is_empty()
         || !snapshot.input.is_empty()
+        || !snapshot.tool_associations.is_empty()
     {
         return Err(invalid(
             "normalized frozen request configuration has an invalid shape",
         ));
     }
+    super::associations::validate_binding(connection, &association_binding)?;
     let configuration_limit = max_bytes
         .min(MAX_BYTES)
         .checked_add(NORMALIZATION_OVERHEAD)
+        .and_then(|n| {
+            n.checked_add(
+                serde_json::to_vec(&association_binding).ok()?.len() + ASSOCIATION_FIELD_BYTES,
+            )
+        })
         .and_then(|n| n.checked_sub(json.len()))
         .unwrap_or(0);
     let (configuration, length): (Option<String>, usize) = connection.prepare_cached(
@@ -352,7 +397,7 @@ fn read(
         .query_row(rusqlite::params![configuration_digest, configuration_limit], |row| Ok((row.get(0)?, row.get(1)?)))
         .optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
         .ok_or_else(|| invalid("frozen request configuration is unavailable"))?;
-    let bytes = materialized_bytes(json.len(), length)?;
+    let bytes = materialized_bytes(json.len(), length, &association_binding)?;
     if bytes > MAX_BYTES {
         return Err(invalid("frozen request record exceeds the byte budget"));
     }
@@ -377,6 +422,7 @@ fn read(
             digest: configuration_digest,
             json: configuration,
         },
+        association_binding,
         bytes,
     ))
 }
@@ -386,8 +432,31 @@ pub(super) fn full(
     json: &str,
     max_bytes: usize,
 ) -> Result<(RequestSnapshot, usize), ConversationStoreError> {
-    let (mut snapshot, configuration, bytes) = read(connection, json, max_bytes)?;
+    let (mut snapshot, configuration, association_binding, bytes) =
+        read(connection, json, max_bytes)?;
     decode_configuration(&mut snapshot, &configuration.json)?;
+    // A raw ID can be larger than its normalized wire label. Native fact
+    // decoding has its own hard bound; the public logical budget below charges
+    // the exact request-bound array, preserving the original byte geometry.
+    let history = super::associations::load(connection, &association_binding, MAX_BYTES)?;
+    let coordinates = association_binding.coordinates(&snapshot);
+    snapshot.tool_associations = crate::model::occurrence::FrozenToolAssociations::from_history(
+        history,
+        snapshot.request_id.clone(),
+        coordinates,
+    );
+    // Flat reconstruction keeps the same public byte budget, including IDs
+    // bound only at read time. Never charge just the compact root descriptor.
+    let association_bytes =
+        crate::context::resources::bounded_encoded_len(&snapshot.tool_associations, max_bytes)?;
+    let bytes = bytes
+        .checked_add(association_bytes.saturating_sub(2))
+        .ok_or_else(|| invalid("frozen request byte overflow"))?;
+    if bytes > max_bytes {
+        return Err(crate::context::resources::bound(
+            "historical frozen request exceeds materialization bound",
+        ));
+    }
     Ok((snapshot, bytes))
 }
 

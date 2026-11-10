@@ -4519,7 +4519,7 @@ fn unavailable_predecessor_and_durable_read_failure_are_distinct() {
     let connection = rusqlite::Connection::open(&path).unwrap();
     let (original, summary): (String, Vec<u8>) = connection
         .query_row(
-            "SELECT snapshot_json,observation_summary FROM request_snapshots WHERE request_id=?1",
+            "SELECT snapshot_json,observation_summary FROM request_snapshots JOIN request_snapshot_payloads USING(request_id) WHERE request_id=?1",
             [first.request_id.as_str()],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -4528,10 +4528,11 @@ fn unavailable_predecessor_and_durable_read_failure_are_distinct() {
     serde_json::from_slice::<serde_json::Value>(&summary).unwrap();
     connection
         .execute(
-            "UPDATE request_snapshots SET snapshot_json='{',observation_summary=CAST('{' AS BLOB) WHERE request_id=?1",
+            "UPDATE request_snapshot_payloads SET snapshot_json='{' WHERE request_id=?1",
             [first.request_id.as_str()],
         )
         .unwrap();
+    connection.execute("UPDATE request_snapshots SET observation_summary=CAST('{' AS BLOB) WHERE request_id=?1",[first.request_id.as_str()]).unwrap();
     assert!(
         projection.page(None, 1).is_err(),
         "corrupt consumed finite source evidence is an error"
@@ -4553,8 +4554,14 @@ fn unavailable_predecessor_and_durable_read_failure_are_distinct() {
     assert_eq!(super::summary::probe::tool_count(), 0);
     connection
         .execute(
-            "UPDATE request_snapshots SET snapshot_json=?1,observation_summary=?2 WHERE request_id=?3",
-            rusqlite::params![original, summary, first.request_id.as_str()],
+            "UPDATE request_snapshot_payloads SET snapshot_json=?1 WHERE request_id=?2",
+            rusqlite::params![original, first.request_id.as_str()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE request_snapshots SET observation_summary=?1 WHERE request_id=?2",
+            rusqlite::params![summary, first.request_id.as_str()],
         )
         .unwrap();
     remove_retained_request_authority(&connection, &first.request_id);
