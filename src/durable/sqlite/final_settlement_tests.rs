@@ -1229,7 +1229,7 @@ fn final_model_settlement_configuration_trigger_rejects_even_coherent_corruption
         let original_cells: (String, String, String, String) = {
             let connection = fixture.store.lock().unwrap();
             let (configuration_digest, configuration, metadata, manifest): (String, String, String, String) = connection.query_row(
-                "SELECT c.digest,c.configuration_json,r.snapshot_json,r.manifest_digest FROM request_snapshots r JOIN request_configurations c ON c.digest=json_extract(r.snapshot_json,'$.configuration_digest') WHERE r.request_id=?1",
+                "SELECT c.digest,c.configuration_json,p.snapshot_json,r.manifest_digest FROM request_snapshots r JOIN request_snapshot_payloads p USING(request_id) JOIN request_configurations c ON c.digest=json_extract(p.snapshot_json,'$.configuration_digest') WHERE r.request_id=?1",
                 [fixture.start.request_id.as_str()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
             ).unwrap();
             let invalid =
@@ -1251,7 +1251,8 @@ fn final_model_settlement_configuration_trigger_rejects_even_coherent_corruption
                 "CREATE TABLE invalid_configuration_trigger(digest TEXT,payload TEXT,metadata TEXT,manifest TEXT);
                  CREATE TRIGGER invalidate_final_configuration AFTER INSERT ON events WHEN json_extract(NEW.event_json,'$.event.type')='model_request_completed' BEGIN
                    UPDATE request_configurations SET digest=(SELECT digest FROM invalid_configuration_trigger),configuration_json=(SELECT payload FROM invalid_configuration_trigger);
-                   UPDATE request_snapshots SET snapshot_json=(SELECT metadata FROM invalid_configuration_trigger),manifest_digest=(SELECT manifest FROM invalid_configuration_trigger);
+                   UPDATE request_snapshot_payloads SET snapshot_json=(SELECT metadata FROM invalid_configuration_trigger);
+                   UPDATE request_snapshots SET manifest_digest=(SELECT manifest FROM invalid_configuration_trigger);
                  END;",
             ).unwrap();
             connection
@@ -1275,7 +1276,7 @@ fn final_model_settlement_configuration_trigger_rejects_even_coherent_corruption
         {
             let connection = fixture.store.lock().unwrap();
             let current: (String, String, String, String) = connection.query_row(
-                "SELECT c.digest,c.configuration_json,r.snapshot_json,r.manifest_digest FROM request_snapshots r JOIN request_configurations c ON c.digest=json_extract(r.snapshot_json,'$.configuration_digest') WHERE r.request_id=?1",
+                "SELECT c.digest,c.configuration_json,p.snapshot_json,r.manifest_digest FROM request_snapshots r JOIN request_snapshot_payloads p USING(request_id) JOIN request_configurations c ON c.digest=json_extract(p.snapshot_json,'$.configuration_digest') WHERE r.request_id=?1",
                 [fixture.start.request_id.as_str()], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
             ).unwrap();
             assert_eq!(current, original_cells);
@@ -1653,4 +1654,13 @@ fn publication_header_keeps_shared_failure_repair_and_custom_trigger_order() {
             assert_eq!(connection.query_row("SELECT count(*) FROM content_frontiers WHERE source_kind IN ('canonical','cb','cm')",[],|row|row.get::<_,u64>(0)).unwrap(),0);
         }
     }
+}
+
+#[test]
+fn model_completion_never_updates_the_immutable_request_payload() {
+    let fixture=FinalFixture::new();
+    fixture.store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER forbid_completed_payload_update BEFORE UPDATE ON request_snapshot_payloads BEGIN SELECT RAISE(ABORT,'immutable request payload updated'); END;").unwrap();
+    fixture.settle(None).unwrap();
+    let completed:Option<u64>=fixture.store.lock().unwrap().query_row("SELECT completed_sequence FROM request_snapshots WHERE request_id=?1",[fixture.start.request_id.as_str()],|row|row.get(0)).unwrap();
+    assert!(completed.is_some());
 }

@@ -275,7 +275,7 @@ pub(super) fn deny_request_span_headers(
     use rusqlite::hooks::{AuthAction, Authorization};
     match context.action {
         AuthAction::Read {
-            table_name: "request_snapshots",
+            table_name: "request_snapshot_payloads",
             column_name: "snapshot_json",
         } => Authorization::Deny,
         _ => Authorization::Allow,
@@ -319,7 +319,7 @@ fn t08_t15_t19_original_span_raw_ranges_preserve_original_bytes_without_material
     assert!(
         connection
             .query_row(
-                "SELECT snapshot_json FROM request_snapshots LIMIT 1",
+                "SELECT snapshot_json FROM request_snapshot_payloads LIMIT 1",
                 [],
                 |row| row.get::<_, String>(0)
             )

@@ -146,7 +146,7 @@ fn t14_t19_t20_provider_outcomes_decode_the_same_transaction_snapshot_once() {
     let transaction = connection.transaction().unwrap();
     let bytes: usize = transaction
         .query_row(
-            "SELECT octet_length(snapshot_json) FROM request_snapshots WHERE request_id=?1",
+            "SELECT octet_length(snapshot_json) FROM request_snapshot_payloads WHERE request_id=?1",
             [snapshot.request_id.as_str()],
             |row| row.get(0),
         )
@@ -189,7 +189,7 @@ fn t14_t19_snapshot_reuse_preserves_original_provider_validation_errors_and_prec
         "UPDATE events SET event_json=json_set(event_json,'$.conversation_id','foreign')",
         "UPDATE events SET event_json=json_set(event_json,'$.turn_id','foreign')",
         "UPDATE request_snapshots SET canonical_frontier=canonical_frontier+1",
-        "UPDATE request_snapshots SET snapshot_json=json_set(snapshot_json,'$.effective_system_prompt','tampered')",
+        "UPDATE request_snapshot_payloads SET snapshot_json=json_set(snapshot_json,'$.effective_system_prompt','tampered')",
     ] {
         let (store, _, mut event) = snapshot_fixture();
         if corruption == "duplicate outcome" {
@@ -242,7 +242,7 @@ fn t14_t19_t20_publication_p_u_c_and_audit_each_reuse_one_validated_snapshot() {
             .lock()
             .unwrap()
             .query_row(
-                "SELECT octet_length(snapshot_json) FROM request_snapshots WHERE request_id=?1",
+                "SELECT octet_length(snapshot_json) FROM request_snapshot_payloads WHERE request_id=?1",
                 [snapshot.request_id.as_str()],
                 |row| row.get(0),
             )
@@ -425,7 +425,7 @@ fn normalized_request_metadata_budget_rejects_before_returning_any_owned_json() 
     let connection = store.lock().unwrap();
     let stored_bytes: usize = connection
         .query_row(
-            "SELECT octet_length(snapshot_json) FROM request_snapshots WHERE request_id=?1",
+            "SELECT octet_length(snapshot_json) FROM request_snapshot_payloads WHERE request_id=?1",
             [snapshot.request_id.as_str()],
             |row| row.get(0),
         )
@@ -487,7 +487,7 @@ fn normalized_request_digest_guards_every_reader_before_materializing_malformed_
         let transaction = connection.transaction().unwrap();
         let json: String = transaction
             .query_row(
-                "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+                "SELECT snapshot_json FROM request_snapshot_payloads WHERE request_id=?1",
                 [snapshot.request_id.as_str()],
                 |row| row.get(0),
             )

@@ -78,7 +78,7 @@ pub(crate) fn request_labels(
     request_labels_at(request, request.continuation_boundary()?)
 }
 
-pub(super) fn request_labels_at(
+pub(crate) fn request_labels_at(
     request: &crate::model::ModelRequest,
     boundary: Option<usize>,
 ) -> Result<std::collections::BTreeMap<(u32, u32), String>, String> {
@@ -97,12 +97,12 @@ pub(super) fn request_labels_at(
     };
     let origin = request.invocation.replay_origin();
     let mut calls = Vec::new();
-    for message in request
-        .messages
-        .tool_indices()
-        .into_iter()
-        .filter(|index| *index >= start)
-    {
+    let indices = if stored {
+        (start..request.messages.len()).collect()
+    } else {
+        request.messages.tool_indices()
+    };
+    for message in indices {
         #[cfg(feature = "issue-387-profile")]
         crate::model::adapter::profile::item(message);
         if let ModelMessageView::Assistant(content) = request.messages[message].view() {
@@ -169,7 +169,7 @@ fn is_stored(request: &crate::model::ModelRequest) -> bool {
         )
 }
 
-fn wire_labels(raw: &[String], protocol: ModelProtocol) -> Vec<String> {
+pub(crate) fn wire_labels(raw: &[String], protocol: ModelProtocol) -> Vec<String> {
     use sha2::{Digest, Sha256};
     let mut labels = crate::model::occurrence::wire_labels(raw);
     let limit = if protocol == ModelProtocol::OpenAiChatCompletions {

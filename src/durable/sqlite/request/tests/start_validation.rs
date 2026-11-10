@@ -55,7 +55,7 @@ fn t14_t19_t20_fresh_request_start_reconstructs_original_input_once_and_replays_
         .lock()
         .unwrap()
         .query_row(
-            "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+            "SELECT snapshot_json FROM request_snapshot_payloads WHERE request_id=?1",
             [snapshot.request_id.as_str()],
             |row| row.get(0),
         )
@@ -93,7 +93,7 @@ fn t14_t19_t20_fresh_request_start_reconstructs_original_input_once_and_replays_
 #[test]
 fn t14_t19_fresh_start_rejects_snapshot_and_original_changes_after_selection_atomically() {
     for action in [
-        "UPDATE request_snapshots SET snapshot_json=json_set(snapshot_json,'$.effective_system_prompt','changed original R') WHERE request_id=NEW.request_id;",
+        "UPDATE request_snapshot_payloads SET snapshot_json=json_set(snapshot_json,'$.effective_system_prompt','changed original R') WHERE request_id=NEW.request_id;",
         "UPDATE message_ledger SET message_json=json_set(message_json,'$.content[0].text','changed original C') WHERE position=1;",
     ] {
         let (store, snapshot, messages) = fresh_start_fixture();
@@ -170,7 +170,7 @@ fn t14_t19_validated_fresh_start_cannot_cross_transaction_or_request_identity() 
     let transaction = first.transaction().unwrap();
     let admitted: String = transaction
         .query_row(
-            "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+            "SELECT snapshot_json FROM request_snapshot_payloads WHERE request_id=?1",
             [snapshot.request_id.as_str()],
             |row| row.get(0),
         )

@@ -80,6 +80,7 @@ impl RequestStore for SqliteConversationStore {
     ) -> Result<Option<MessageId>, ConversationStoreError> {
         reading::attempt_prompt(&*self.lock()?, attempt, through)
     }
+    #[allow(clippy::too_many_lines)] // One atomic admission, rollback and publication of both immutable bindings.
     fn commit_model_turn_start(
         &self,
         context: &[MessageBlock],
@@ -112,7 +113,7 @@ impl RequestStore for SqliteConversationStore {
         let admission_epoch = self.conn.manifest.capture(&transaction)?;
         let existing: Option<(Option<String>, Option<i64>, String)> = transaction
             .query_row_cached(
-                "SELECT CASE WHEN octet_length(snapshot_json)<=67108954 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots WHERE request_id = ?1",
+                "SELECT CASE WHEN octet_length(snapshot_json)<=67109466 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(request_id) WHERE request_id = ?1",
                 [snapshot.request_id.as_str()],
                 |row| Ok((row.get(0)?, row.get(1)?, read_manifest_digest(row, 2)?)),
             )
@@ -175,12 +176,19 @@ impl RequestStore for SqliteConversationStore {
         // anywhere below rolls all of it back, so request-scoped context
         // can never become canonical without its request starting.
         let selection = manifest::persist(&transaction, &snapshot.input, &self.conn.manifest)?;
+        let associations = super::associations::persist(
+            &transaction,
+            &snapshot.tool_associations,
+            &snapshot.request_id,
+            &self.conn.manifest,
+        )?;
         let mut persisted = self.insert_fresh_start_tx(
             &transaction,
             context,
             snapshot,
             timestamp,
             &selection,
+            &associations,
             admission_epoch,
         )?;
         process_death::reach("before:commit_model_turn_start");
@@ -189,6 +197,7 @@ impl RequestStore for SqliteConversationStore {
         })?;
         process_death::reach("after:commit_model_turn_start");
         selection.commit(&self.conn.manifest);
+        associations.commit(&self.conn.manifest);
         persisted.verified_snapshot = Some(Box::new(snapshot.clone()));
         Ok(persisted)
     }
@@ -458,7 +467,7 @@ pub(super) fn validate_fresh_input_binding(
 ) -> Result<(), ConversationStoreError> {
     let matches = connection
         .query_row_cached(
-            "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+            "SELECT snapshot_json FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(request_id) WHERE request_id=?1",
             [snapshot.request_id.as_str()],
             |row| Ok(row.get_ref(0)?.as_str()? == json),
         )
@@ -623,7 +632,7 @@ pub(super) fn reconstruct_request_start_reference(
     };
     let json: Option<String> = transaction
         .query_row_cached(
-            "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+            "SELECT snapshot_json FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(request_id) WHERE request_id=?1",
             [request_id.as_str()],
             |row| row.get(0),
         )
@@ -655,7 +664,7 @@ pub(super) fn reconstruct_request_start_reference(
     let root = read_stored_snapshot_root(transaction, request_id)?;
     let digest: String = transaction
         .query_row(
-            "SELECT CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots WHERE request_id=?1",
+            "SELECT CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(request_id) WHERE request_id=?1",
             [request_id.as_str()],
             |row| read_manifest_digest(row, 0),
         )
@@ -761,7 +770,7 @@ impl SqliteConversationStore {
     /// request-scoped canonical context, the frozen snapshot, the
     /// `ModelRequestStarted` event, and the sequence binding (Issue #12,
     /// M9b).
-    #[allow(clippy::too_many_lines)] // One atomic start transition, contribution settlement and native reference validation.
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // Atomic start transition with independently authenticated immutable bindings.
     pub(super) fn insert_fresh_start_tx(
         &self,
         transaction: &rusqlite::Transaction<'_>,
@@ -769,6 +778,7 @@ impl SqliteConversationStore {
         snapshot: &RequestSnapshot,
         timestamp: DateTime<Utc>,
         selection: &manifest::Selection,
+        associations: &super::associations::Selection,
         admission_epoch: u64,
     ) -> Result<crate::durable::ModelTurnStartCommit, ConversationStoreError> {
         #[cfg(test)]
@@ -812,9 +822,16 @@ impl SqliteConversationStore {
         let through = journal_prefix(transaction)?;
         let retry_message_id =
             reading::attempt_prompt(transaction, &snapshot.identity.attempt_id, through)?;
-        let (json, configuration) = native_request::persist(transaction, snapshot)?;
+        let (json, configuration) =
+            native_request::persist(transaction, snapshot, &associations.binding)?;
         let manifest_digest = stored_snapshot_digest(&json, selection.root);
-        transaction . execute_cached ( "INSERT INTO request_snapshots(request_id,canonical_frontier,snapshot_json,manifest_digest,started_sequence,retry_message_id,retry_ledger_position,previous_request_id,input_root,input_root_digest,input_count) VALUES(?1,?2,?3,?4,NULL,?5,(SELECT position FROM message_ledger WHERE message_id=?5),(SELECT request_id FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence IS NOT NULL ORDER BY started_sequence DESC LIMIT 1),?6,?7,?8)" , params ! [ snapshot . request_id . as_str ( ) , seq_to_i64 ( snapshot . canonical_frontier . 0 ) ? , json , manifest_digest , retry_message_id . as_ref ( ) . map ( MessageId :: as_str ) , selection . root . map ( | r | r . id ) , selection . root . as_ref ( ) . map ( | r | r . digest . as_slice ( ) ) , selection . root . map_or ( 0 , | r | r . count ) , ] , ) . map_err ( | error | crate::durable::sqlite::sqlite_error(&error, format ! ( "insert request snapshot: {error}" ) ) ) ? ;
+        transaction
+            .execute_cached(
+                "INSERT INTO request_snapshot_payloads(request_id,snapshot_json) VALUES(?1,?2)",
+                params![snapshot.request_id.as_str(), json],
+            )
+            .map_err(|error| super::sqlite_error(&error, error.to_string()))?;
+        transaction.execute_cached("INSERT INTO request_snapshots(request_id,canonical_frontier,manifest_digest,started_sequence,retry_message_id,retry_ledger_position,previous_request_id,input_root,input_root_digest,input_count) VALUES(?1,?2,?3,NULL,?4,(SELECT position FROM message_ledger WHERE message_id=?4),(SELECT request_id FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence IS NOT NULL ORDER BY started_sequence DESC LIMIT 1),?5,?6,?7)",params![snapshot.request_id.as_str(),seq_to_i64(snapshot.canonical_frontier.0)?,manifest_digest,retry_message_id.as_ref().map(MessageId::as_str),selection.root.map(|r|r.id),selection.root.as_ref().map(|r|r.digest.as_slice()),selection.root.map_or(0,|r|r.count)]).map_err(|error|super::sqlite_error(&error,error.to_string()))?;
         #[cfg(test)]
         if self.consume_request_start_fault(RequestStartFaultOperation::AfterSnapshotInsert) {
             return Err(storage(
@@ -847,6 +864,7 @@ impl SqliteConversationStore {
         } // Validate the original stored R and its immutable C dependencies once,
         // after insertion (including any native SQLite trigger effects).
         validate_fresh_input_binding(transaction, snapshot, &json, &configuration, selection.root)?;
+        associations.authenticate(transaction, &self.conn.manifest)?;
         let input = if warm && self.conn.manifest.epoch.load(Ordering::Acquire) == admission_epoch {
             None
         } else {
@@ -976,6 +994,7 @@ impl SqliteConversationStore {
             contribution_emissions,
         )?;
         validate_fresh_input_binding(transaction, snapshot, &json, &configuration, selection.root)?;
+        associations.authenticate(transaction, &self.conn.manifest)?;
         if self.conn.manifest.epoch.load(Ordering::Acquire) != validated_epoch {
             reconstruct_request_start_reference(transaction, &result.started, Some(&json))?;
         }

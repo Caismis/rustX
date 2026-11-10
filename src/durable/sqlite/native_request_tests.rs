@@ -39,7 +39,7 @@ fn stored_configuration_metadata(
         .lock()
         .unwrap()
         .query_row(
-            "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+            "SELECT snapshot_json FROM request_snapshot_payloads WHERE request_id=?1",
             [snapshot.request_id.as_str()],
             |row| row.get(0),
         )
@@ -322,12 +322,8 @@ fn shared_native_configuration_coherently_rehashed_invalid_types_still_fail_nati
                     params![digest, payload],
                 )
                 .unwrap();
-            connection
-                .execute(
-                    "UPDATE request_snapshots SET snapshot_json=?1,manifest_digest=?2",
-                    params![metadata, manifest],
-                )
-                .unwrap();
+            connection.execute("UPDATE request_snapshot_payloads SET snapshot_json=?1",[metadata]).unwrap();
+            connection.execute("UPDATE request_snapshots SET manifest_digest=?1",[manifest]).unwrap();
             let transaction = connection.transaction().unwrap();
             assert!(
                 require_started_request_tx(
@@ -355,7 +351,7 @@ fn replace_configuration_tx(
     payload: &str,
 ) {
     let mut metadata: serde_json::Value = transaction.query_row(
-        "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+        "SELECT snapshot_json FROM request_snapshot_payloads WHERE request_id=?1",
         [snapshot.request_id.as_str()], |row| row.get::<_, String>(0),
     ).map(|json| serde_json::from_str(&json).unwrap()).unwrap();
     let old = metadata["configuration_digest"].as_str().unwrap().to_owned();
@@ -371,10 +367,8 @@ fn replace_configuration_tx(
         "UPDATE request_configurations SET digest=?1,configuration_json=?2 WHERE digest=?3",
         params![digest,payload,old],
     ).unwrap();
-    transaction.execute(
-        "UPDATE request_snapshots SET snapshot_json=?1,manifest_digest=?2 WHERE request_id=?3",
-        params![metadata,manifest,snapshot.request_id.as_str()],
-    ).unwrap();
+    transaction.execute("UPDATE request_snapshot_payloads SET snapshot_json=?1 WHERE request_id=?2",params![metadata,snapshot.request_id.as_str()]).unwrap();
+    transaction.execute("UPDATE request_snapshots SET manifest_digest=?1 WHERE request_id=?2",params![manifest,snapshot.request_id.as_str()]).unwrap();
 }
 
 #[test]
@@ -496,12 +490,12 @@ fn native_request_fresh_configuration_checks_exact_bytes_without_payload_materia
     native_request::CONFIGURATION_DECODES.with(|work| work.set(0));
     native_request::CONFIGURATION_READ_WORK.with(|work| work.set((0, 0)));
     for _ in 0..2 {
-        let (_, configuration) = native_request::persist(&transaction, &snapshot).unwrap();
+        let (_, configuration) = native_request::persist(&transaction, &snapshot, &super::associations::Binding::default()).unwrap();
         configuration.authenticate(&transaction).unwrap();
     }
     assert_eq!(native_request::CONFIGURATION_DECODES.with(std::cell::Cell::get), 0);
     assert_eq!(native_request::CONFIGURATION_READ_WORK.with(std::cell::Cell::get), (0, 0));
-    let (_, configuration) = native_request::persist(&transaction, &snapshot).unwrap();
+    let (_, configuration) = native_request::persist(&transaction, &snapshot, &super::associations::Binding::default()).unwrap();
     transaction.execute("UPDATE request_configurations SET configuration_json=' '||configuration_json", []).unwrap();
     assert!(configuration.authenticate(&transaction).is_err());
 }
