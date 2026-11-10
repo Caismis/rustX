@@ -1,0 +1,11 @@
+{
+  "head": "86bf61a3050dbf85818386d7242d141c59785439",
+  "decision": "Continue completed memory products without rerunning them; pair 0 is retained but excluded because its candidate overlapped rustc. Add one replacement pair for four clean pairs. This decision precedes those additional measurements. Compiler guard expanded to Clippy/cargo/linkers.",
+  "helpers": {
+    "run-memory-resume.py": "94699bc2eb6004986274b2e0a6c8dd196ba9d8b4d05e8d760f410c06e745f0ae",
+    "audit-memory-complete.py": "d6a6e0d4cf0fab1b0d2c5b19b73cf459ce2aa268de3e35d64d92e13cfd285f9d",
+    "run-native-controlled.py": "b6c1aa44a3bf04ee7d42c9b61071d120a987609deaa94ee111b4889e5ef5f227",
+    "audit-native.py": "4ca1c4c1b3ce1fba7d45058736f1b608ff40299a9b44d2dadae4ca57a3bbeced",
+    "run-deep-controlled.py": "7bdace0d61da0562a67a5aac18f80021d5581a2611e4516a38f5d045ab928da3"
+  }
+}

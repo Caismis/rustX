@@ -1,0 +1,17 @@
+{
+  "scope": "Raw 1000-Hz diagnostic signal-profile sample counts, not exclusive wall/CPU timers. No summation of overlapping stacks.",
+  "rows": [
+    {
+      "side": "before",
+      "denominator_samples": 361,
+      "stack_records": 318,
+      "requested_interval_us": 1000
+    },
+    {
+      "side": "after",
+      "denominator_samples": 332,
+      "stack_records": 294,
+      "requested_interval_us": 1000
+    }
+  ]
+}

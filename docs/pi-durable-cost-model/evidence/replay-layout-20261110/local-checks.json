@@ -1,0 +1,168 @@
+{
+  "head": "80f32ca4fe5872c2c206d2915487578ebee347c1",
+  "patch_sha256": "425b15793ec04a3106db45330e3e2554b9fdbdc54b8feebd772c25261b498819",
+  "prior_clippy_json_sha256": "748c7668c76e4118c73bbe828c7d5f279a5b45bcb197532a8fd8cdc0082572d5",
+  "commands": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "whitespace",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "debug-bins",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--all-features",
+        "--bins",
+        "--example",
+        "generate_app_server_protocol",
+        "--message-format=json"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "protocol",
+      "command": [
+        "cargo",
+        "run",
+        "--locked",
+        "--all-features",
+        "--example",
+        "generate_app_server_protocol"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "protocol-unchanged",
+      "command": [
+        "git",
+        "diff",
+        "--exit-code",
+        "--",
+        "protocol/app-server"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "unit-build",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--all-features",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "replay_event_layout_does_not_inline_large_optional_read_heads",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "replay_event_layout_does_not_inline_large_optional_read_heads",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "retention_profile-tests",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "retention_profile::tests",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "runtime_client-",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "runtime_client::",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "observation-",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "observation::",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "durable-sqlite-",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "durable::sqlite::",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "agent-execution-",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "agent::execution::",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "app_server-schema-",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "app_server::schema::",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "app_server-wire-",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "app_server::wire::",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    }
+  ],
+  "unit_binary": {
+    "path": "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+    "sha256": "f6f9dc83c43f332a7f5376b7f2eb155141fe6c45d946b8c2349c8835619ec3ae"
+  },
+  "verified_unchanged_patch": true
+}

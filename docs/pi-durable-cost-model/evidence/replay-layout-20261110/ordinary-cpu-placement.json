@@ -1,0 +1,159 @@
+{
+  "scope": "Main thread last-CPU endpoints only. Worker placement/frequency not captured. This cannot attribute the runtime CPU regression.",
+  "rows": [
+    {
+      "rep": 0,
+      "case": "short-small",
+      "side": "before",
+      "main_thread_last_cpu_counts": {
+        "4": 6,
+        "6": 12,
+        "10": 8,
+        "8": 6
+      }
+    },
+    {
+      "rep": 0,
+      "case": "short-small",
+      "side": "after",
+      "main_thread_last_cpu_counts": {
+        "11": 32
+      }
+    },
+    {
+      "rep": 0,
+      "case": "short-large",
+      "side": "before",
+      "main_thread_last_cpu_counts": {
+        "23": 10,
+        "21": 22
+      }
+    },
+    {
+      "rep": 0,
+      "case": "short-large",
+      "side": "after",
+      "main_thread_last_cpu_counts": {
+        "31": 21,
+        "28": 11
+      }
+    },
+    {
+      "rep": 1,
+      "case": "short-small",
+      "side": "before",
+      "main_thread_last_cpu_counts": {
+        "24": 9,
+        "27": 8,
+        "29": 7,
+        "30": 1,
+        "4": 3,
+        "6": 3,
+        "26": 1
+      }
+    },
+    {
+      "rep": 1,
+      "case": "short-small",
+      "side": "after",
+      "main_thread_last_cpu_counts": {
+        "17": 2,
+        "18": 8,
+        "25": 9,
+        "27": 13
+      }
+    },
+    {
+      "rep": 1,
+      "case": "short-large",
+      "side": "before",
+      "main_thread_last_cpu_counts": {
+        "30": 21,
+        "29": 11
+      }
+    },
+    {
+      "rep": 1,
+      "case": "short-large",
+      "side": "after",
+      "main_thread_last_cpu_counts": {
+        "7": 18,
+        "29": 13,
+        "30": 1
+      }
+    },
+    {
+      "rep": 2,
+      "case": "short-small",
+      "side": "before",
+      "main_thread_last_cpu_counts": {
+        "31": 18,
+        "28": 14
+      }
+    },
+    {
+      "rep": 2,
+      "case": "short-small",
+      "side": "after",
+      "main_thread_last_cpu_counts": {
+        "0": 32
+      }
+    },
+    {
+      "rep": 2,
+      "case": "short-large",
+      "side": "before",
+      "main_thread_last_cpu_counts": {
+        "16": 6,
+        "17": 9,
+        "18": 7,
+        "19": 10
+      }
+    },
+    {
+      "rep": 2,
+      "case": "short-large",
+      "side": "after",
+      "main_thread_last_cpu_counts": {
+        "27": 32
+      }
+    },
+    {
+      "rep": 3,
+      "case": "short-small",
+      "side": "before",
+      "main_thread_last_cpu_counts": {
+        "27": 14,
+        "31": 15,
+        "28": 3
+      }
+    },
+    {
+      "rep": 3,
+      "case": "short-small",
+      "side": "after",
+      "main_thread_last_cpu_counts": {
+        "31": 23,
+        "28": 9
+      }
+    },
+    {
+      "rep": 3,
+      "case": "short-large",
+      "side": "before",
+      "main_thread_last_cpu_counts": {
+        "8": 15,
+        "12": 17
+      }
+    },
+    {
+      "rep": 3,
+      "case": "short-large",
+      "side": "after",
+      "main_thread_last_cpu_counts": {
+        "26": 6,
+        "24": 26
+      }
+    }
+  ]
+}

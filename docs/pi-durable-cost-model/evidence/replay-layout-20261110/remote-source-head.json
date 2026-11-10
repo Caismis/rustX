@@ -1,0 +1,19 @@
+{
+  "baseRefName": "main",
+  "headRefName": "codex/pi-durable-cost-model",
+  "headRefOid": "86bf61a3050dbf85818386d7242d141c59785439",
+  "isDraft": true,
+  "mergeable": "CONFLICTING",
+  "number": 485,
+  "state": "OPEN",
+  "statusCheckRollup": [
+    {
+      "conclusion": "SUCCESS",
+      "name": "notify",
+      "status": "COMPLETED",
+      "workflowName": "Lark notifications",
+      "detailsUrl": "https://github.com/Caismis/rustX/actions/runs/42737830688/job/129571303716"
+    }
+  ],
+  "collection": "Read-only gh pr view after GitHub connector transport closed. No CI wait. This snapshot does not establish required correctness checks."
+}
