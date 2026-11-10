@@ -163,6 +163,92 @@ fn changed_shared_head_index_definitions_are_rejected() {
 }
 
 #[test]
+fn owner_key_collations_cannot_merge_distinct_producer_identities() {
+    for &(column, _, definition) in COLUMNS {
+        if !matches!(column, "attempt_key" | "turn_key") {
+            continue;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("collation.sqlite");
+        let id = ConversationId::generate();
+        let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+        {
+            let connection = store.lock().unwrap();
+            connection
+                .execute_batch("PRAGMA writable_schema=ON")
+                .unwrap();
+            assert_eq!(
+                connection.execute(
+                    "UPDATE sqlite_schema SET sql=replace(sql,?1,?2) WHERE type='table' AND name='events'",
+                    params![definition, format!("{definition} COLLATE NOCASE")],
+                ).unwrap(),
+                1
+            );
+            connection
+                .execute_batch("PRAGMA writable_schema=OFF")
+                .unwrap();
+        }
+        drop(store);
+        let connection = Connection::open(&path).unwrap();
+        let sql: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE name='events'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        // Every previous substring/type check still matches this schema.
+        for &(name, kind, definition) in COLUMNS {
+            assert!(sql.contains(definition));
+            let actual: (String, u8) = connection
+                .query_row(
+                    "SELECT type,hidden FROM pragma_table_xinfo('events') WHERE name=?1",
+                    [name],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(actual, (kind.to_owned(), 2));
+        }
+        let collation: String = connection
+            .query_row(
+                "SELECT coll FROM pragma_index_xinfo('events_step_kind_idx') WHERE name=?1",
+                [column],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(collation, "NOCASE");
+        insert(&connection, 1, 0, Some("case"));
+        insert(&connection, 2, 0, Some("CASE"));
+        connection
+            .execute_batch("UPDATE events SET turn_id=attempt_id")
+            .unwrap();
+        let scalar = if column == "attempt_key" {
+            "attempt_id"
+        } else {
+            "turn_id"
+        };
+        for (field, expected) in [(scalar, 1), (column, 2)] {
+            let count: u64 = connection
+                .query_row(
+                    &format!("SELECT count(*) FROM events WHERE {field}='case'"),
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, expected);
+        }
+        assert!(
+            matches!(verify_schema(&connection), Err(ConversationStoreError::IncompatibleSchema(message)) if message == "event owner keys must use BINARY collation")
+        );
+        drop(connection);
+        assert!(matches!(
+            SqliteConversationStore::open_existing(id, &path),
+            Err(ConversationStoreError::IncompatibleSchema(_))
+        ));
+    }
+}
+
+#[test]
 fn event_indexes_store_sequence_once_and_keep_covering_range_order() {
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     let connection = store.lock().unwrap();

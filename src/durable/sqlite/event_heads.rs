@@ -128,6 +128,22 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             )));
         }
     }
+    // A column-level COLLATE suffix can preserve the expression above while
+    // changing text alias equality. Inspect the collation SQLite actually uses.
+    let binary_owners: bool = connection
+        .query_row(
+            "SELECT count(*)=2 AND count(CASE WHEN coll='BINARY' THEN 1 END)=2
+             FROM pragma_index_xinfo('events_step_kind_idx')
+             WHERE name IN ('attempt_key','turn_key')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| super::sqlite_error(&error, error.to_string()))?;
+    if !binary_owners {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "event owner keys must use BINARY collation".into(),
+        ));
+    }
     for &(name, definition) in INDEXES {
         let actual: Option<String> = connection
             .query_row(
