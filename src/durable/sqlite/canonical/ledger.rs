@@ -650,6 +650,13 @@ pub(in crate::durable::sqlite) fn message_exists(
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("message identity probe: {error}")))
 }
 
+#[cfg(test)]
+thread_local! { static BODY_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(in crate::durable::sqlite) fn take_body_loads() -> usize {
+    BODY_LOADS.with(|count| count.replace(0))
+}
+
 /// Both lookups use existing unique Ledger identity and Journal sequence keys.
 pub(in crate::durable::sqlite) fn load_message(
     connection: &Connection,
@@ -668,6 +675,8 @@ pub(in crate::durable::sqlite) fn load_message(
         .ok_or_else(|| {
             ConversationStoreError::InvalidReference(format!("message {message_id} is unavailable"))
         })?;
+    #[cfg(test)]
+    BODY_LOADS.with(|count| count.set(count.get() + 1));
     let message: MessageBlock = decode(&json, "Ledger message")?;
     if crate::conversation::message_id_of(&message) != *message_id {
         return Err(ConversationStoreError::InvalidReference(format!(

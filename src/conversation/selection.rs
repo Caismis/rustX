@@ -12,7 +12,7 @@ use crate::runtime::identity::MessageId;
 /// A persistent ordered selection of immutable canonical bodies.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CanonicalSelection {
-    records: imbl::Vector<Arc<MessageBlock>>,
+    records: imbl::Vector<Arc<crate::model::ModelInputMessage>>,
     positions: imbl::HashMap<MessageId, (usize, usize)>,
     non_status: usize,
     latest_status: [Option<(MessageId, DateTime<Utc>)>; 3],
@@ -30,8 +30,13 @@ impl CanonicalSelection {
         self.records.is_empty()
     }
     /// Iterate borrowed immutable canonical bodies without hydration or copying.
+    /// # Panics
+    /// Panics if the private canonical-body invariant is violated.
+    #[must_use]
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &MessageBlock> + ExactSizeIterator {
-        self.records.iter().map(Arc::as_ref)
+        self.records
+            .iter()
+            .map(|value| value.as_canonical().expect("canonical selection body"))
     }
     /// Explicitly materialize ordered identities at an external read boundary.
     #[must_use]
@@ -45,8 +50,15 @@ impl CanonicalSelection {
     }
     /// Resolve a body from this selection, never from a different historical cut.
     #[must_use]
+    ///
+    /// # Panics
+    /// Panics if the private canonical-body invariant is violated.
     pub fn get(&self, id: &MessageId) -> Option<&MessageBlock> {
-        self.position(id).map(|p| self.records[p].as_ref())
+        self.position(id).map(|p| {
+            self.records[p]
+                .as_canonical()
+                .expect("canonical selection body")
+        })
     }
     /// Most recent typed status generation for a module.
     #[must_use]
@@ -61,13 +73,14 @@ impl CanonicalSelection {
     pub fn non_status_since(&self, id: &MessageId) -> Option<usize> {
         self.positions.get(id).map(|p| self.non_status - p.1)
     }
-    pub(crate) fn append(&mut self, message: Arc<MessageBlock>) {
-        let id = message.id().clone();
+    pub(crate) fn append(&mut self, message: Arc<crate::model::ModelInputMessage>) {
+        let body = message.as_canonical().expect("canonical selection body");
+        let id = body.id().clone();
         assert!(
             !self.positions.contains_key(&id),
             "duplicate canonical selection identity"
         );
-        if let Some(metadata) = message.agent_status_metadata() {
+        if let Some(metadata) = body.agent_status_metadata() {
             for module in metadata.modules() {
                 self.latest_status[module_index(*module)] =
                     Some((id.clone(), metadata.generated_at()));
@@ -108,7 +121,7 @@ impl<'de> Deserialize<'de> for CanonicalSelection {
                     "duplicate canonical selection identity",
                 ));
             }
-            selection.append(Arc::new(message));
+            selection.append(Arc::new(message.into()));
         }
         Ok(selection)
     }
@@ -150,7 +163,7 @@ mod tests {
                 state.ledger().get(&first).unwrap()
             ));
             let mut appended = before.messages.clone();
-            appended.append(Arc::new(user("next-independent-snapshot")));
+            appended.append(Arc::new(user("next-independent-snapshot").into()));
             assert_eq!(before.messages.len(), count);
             assert_eq!(appended.len(), count + 1);
             assert!(std::ptr::eq(

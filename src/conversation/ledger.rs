@@ -86,7 +86,8 @@ impl LedgerAccess {
 /// are paged from that authority rather than retained here after restart.
 #[derive(Debug, Default)]
 pub struct MessageLedger {
-    records: Vec<Arc<MessageBlock>>,
+    records: Vec<Arc<crate::model::ModelInputMessage>>,
+    bodies: Arc<super::bodies::CanonicalBodies>,
     index: HashMap<MessageId, usize>,
     access: Arc<LedgerAccess>,
 }
@@ -104,6 +105,19 @@ impl MessageLedger {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn bind_bodies(&mut self, bodies: Arc<super::bodies::CanonicalBodies>) {
+        if Arc::ptr_eq(&self.bodies, &bodies) {
+            return;
+        }
+        // Durable bootstrap already leases actual allocations. Register only
+        // the finite new tail for standalone seeds; never walk a hot prefix at
+        // the per-attempt binding boundary.
+        for record in self.records.iter().rev().take(64) {
+            bodies.admit(Arc::clone(record));
+        }
+        self.bodies = bodies;
     }
 
     /// The shared read instrumentation handle.
@@ -147,10 +161,21 @@ impl MessageLedger {
     /// identities against the current state, the ordinary [`MessageLedger::append`]
     /// failure can no longer occur.
     pub(crate) fn append_after_validation(&mut self, message: MessageBlock) -> MessageId {
-        let id = message_id_of(&message);
+        self.append_shared_after_validation(self.bodies.share(message))
+    }
+
+    pub(crate) fn append_shared_after_validation(
+        &mut self,
+        message: Arc<crate::model::ModelInputMessage>,
+    ) -> MessageId {
+        let id = message
+            .as_canonical()
+            .expect("canonical Ledger body")
+            .id()
+            .clone();
         debug_assert!(!self.index.contains_key(&id));
         self.index.insert(id.clone(), self.records.len());
-        self.records.push(Arc::new(message));
+        self.records.push(message);
         id
     }
 
@@ -159,15 +184,20 @@ impl MessageLedger {
     /// This is the only read path normal projection and compaction use, and
     /// it is counted as a keyed read.
     #[must_use]
+    ///
+    /// # Panics
+    /// Panics if the private canonical-body invariant is violated.
     pub fn get(&self, message_id: &MessageId) -> Option<&MessageBlock> {
         self.access.keyed_reads.fetch_add(1, Ordering::Relaxed);
-        self.index
-            .get(message_id)
-            .map(|position| self.records[*position].as_ref())
+        self.index.get(message_id).map(|position| {
+            self.records[*position]
+                .as_canonical()
+                .expect("canonical Ledger body")
+        })
     }
 
     /// Share the immutable Ledger allocation with the canonical Surface.
-    pub(crate) fn shared(&self, id: &MessageId) -> Option<Arc<MessageBlock>> {
+    pub(crate) fn shared(&self, id: &MessageId) -> Option<Arc<crate::model::ModelInputMessage>> {
         self.access.keyed_reads.fetch_add(1, Ordering::Relaxed);
         self.index
             .get(id)
@@ -191,11 +221,19 @@ impl MessageLedger {
     /// it, and it is counted as one full enumeration. The Context Engine's
     /// normal projection and compaction never call it.
     #[must_use]
+    ///
+    /// # Panics
+    /// Panics if the private canonical-body invariant is violated.
     pub fn audit_records(&self) -> Vec<MessageBlock> {
         self.access.enumerations.fetch_add(1, Ordering::Relaxed);
         self.records
             .iter()
-            .map(|message| message.as_ref().clone())
+            .map(|message| {
+                message
+                    .as_canonical()
+                    .expect("canonical Ledger body")
+                    .clone()
+            })
             .collect()
     }
 }

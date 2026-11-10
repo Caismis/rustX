@@ -339,6 +339,7 @@ pub(super) fn load_bounded(
 
 static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
 pub(super) struct Owner {
+    pub bodies: Arc<crate::conversation::bodies::CanonicalBodies>,
     pub id: u64,
     pub epoch: AtomicU64,
     pub frontier: AtomicU64,
@@ -482,6 +483,7 @@ impl MutationColumns {
 impl Owner {
     fn new() -> Arc<Self> {
         Arc::new(Self {
+            bodies: Arc::default(),
             id: NEXT_OWNER.fetch_add(1, Ordering::Relaxed),
             epoch: AtomicU64::new(0),
             frontier: AtomicU64::new(0),

@@ -93,7 +93,7 @@
 //!     O(nonterminal attempt summaries)      (<= 1 by the admission invariant)
 //!   + O(canonical tool repairs outstanding) (only while a ToolResult is missing)
 //!   + O(unpublished background executions)  (bounded by background policy)
-//!   + O(active Surface attribution)         (bounded by the active working set)
+//!   + O(unresolved Assistant attribution)   (plus one leased recovery owner)
 //! ```
 //!
 //! The tool plane is split across two owners on purpose. [`AttemptEvidence`]
@@ -390,8 +390,8 @@ pub struct SubagentEvidence {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecoveryEvidence {
     conversation_id: ConversationId,
-    /// The current Surface head's active canonical messages, in model-visible
-    /// order.
+    /// Only canonical Assistants with unresolved physical Tool calls.
+    /// Retired and completed canonical bodies remain in their native store.
     active: Vec<MessageBlock>,
     unsettled_canonical_calls:
         std::collections::BTreeSet<crate::message::types::ToolCallOccurrenceRef>,
@@ -417,15 +417,11 @@ pub struct RecoveryEvidence {
     /// historical external execution, so releasing this detail never regresses
     /// the attempt to "never externally started".
     tool_repairs: BTreeMap<(AttemptId, ToolCallId), ToolRepairEvidence>,
-    /// The owning attempt of every **active** Assistant message, resolved
-    /// from the `AssistantMessageCommitted` envelope.
-    ///
-    /// Bounded by the active Surface. This is what lets the tool repair
-    /// attribute an active call to the exact attempt that issued it — a
-    /// historical attempt's same-named call can never be mistaken for the
-    /// current one.
+    /// Native attribution for unresolved Assistants. A historical recovery
+    /// result temporarily leases its exact primary owner while that fact folds.
+    /// Same-named calls of different attempts never share attribution.
     assistant_attempts: BTreeMap<MessageId, AttemptId>,
-    /// The active message identities, for the bounded attribution above.
+    /// The unresolved Assistant identities, for the bounded attribution above.
     active_ids: std::collections::BTreeSet<MessageId>,
     /// Background executions durably owned and not durably published.
     unsettled_background: Vec<BackgroundEvidence>,
@@ -492,26 +488,26 @@ impl RecoveryEvidence {
     pub fn reconstruct(store: &dyn ConversationStore) -> Result<Self, RecoveryError> {
         let conversation_id = store.conversation_id().clone();
         let head = store.load_head()?;
-        let mut active = store.load_messages(&head.active_message_ids)?;
         let unsettled = store.unsettled_canonical_tool_calls(8192)?;
-        let mut present = active
+        let mut active = Vec::new();
+        let mut missing = unsettled
             .iter()
-            .map(|m| m.id().clone())
+            .map(|(occurrence, _)| occurrence.assistant_message_id.clone())
             .collect::<std::collections::BTreeSet<_>>();
-        let missing = unsettled
-            .iter()
-            .filter_map(|(o, _)| {
-                present
-                    .insert(o.assistant_message_id.clone())
-                    .then_some(o.assistant_message_id.clone())
-            })
+        // Preserve the original Surface order, then the retired occurrence
+        // order. The head also validates the native frontier before recovery
+        // can plan any writes; only unresolved Assistant bodies are loaded.
+        let mut ordered = head
+            .active_message_ids
+            .into_iter()
+            .filter(|id| missing.remove(id))
             .collect::<Vec<_>>();
-        let mut resources = crate::context::resources::CompactionResources::capture(
-            store,
-            crate::context::resources::ResourceLimits::default(),
-        )?;
-        for ids in missing.chunks(64) {
-            active.extend(resources.originals(ids)?.rows.into_iter().map(|(_, m)| m));
+        ordered.extend(missing);
+        for ids in ordered.chunks(64) {
+            // Native keyed reads preserve the canonical record's own size
+            // contract. Recovery must not impose compaction's 1 MiB policy on
+            // an oversized Assistant whose physical Tool call needs repair.
+            active.extend(store.load_messages(ids)?);
         }
         let pending = store.load_pending()?;
         let mut evidence = Self {
@@ -549,7 +545,33 @@ impl RecoveryEvidence {
                 break;
             }
             for envelope in &page.events {
+                // A previous recovery may have committed an unknown ToolResult
+                // before its attempt terminal. Its Assistant is already settled
+                // now, but that exact primary ownership still proves an
+                // irreversible external outcome during this fold.
+                let transient_owner = match (&envelope.attempt_id, &envelope.event) {
+                    (
+                        None,
+                        RuntimeEvent::ToolMessageCommitted {
+                            message_id,
+                            tool_call_id,
+                        },
+                    ) => store
+                        .recovery_tool_result_owner(message_id, tool_call_id, envelope.sequence)?
+                        .filter(|owner| !evidence.active_ids.contains(&owner.assistant_message_id)),
+                    _ => None,
+                };
+                if let Some(owner) = &transient_owner {
+                    evidence
+                        .assistant_attempts
+                        .insert(owner.assistant_message_id.clone(), owner.attempt_id.clone());
+                }
                 evidence.fold(envelope, &mut background, &mut subagents);
+                if let Some(owner) = transient_owner {
+                    evidence
+                        .assistant_attempts
+                        .remove(&owner.assistant_message_id);
+                }
             }
             cursor = page.next_sequence;
             if cursor.is_none() {
@@ -1058,9 +1080,9 @@ impl RecoveryEvidence {
         self.tool_repairs.get(&(attempt.clone(), call_id.clone()))
     }
 
-    /// The active model-visible messages of the current durable Surface head.
+    /// Canonical Assistants whose physical Tool calls still need repair.
     #[must_use]
-    pub fn active_messages(&self) -> &[MessageBlock] {
+    pub fn tool_repair_messages(&self) -> &[MessageBlock] {
         &self.active
     }
 

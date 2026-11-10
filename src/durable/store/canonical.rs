@@ -758,6 +758,19 @@ pub struct TranscriptSnapshotCut {
 /// transcript spine reference Ledger facts and never copy their bodies.
 #[allow(clippy::missing_errors_doc)]
 pub trait CanonicalStore: Send + Sync + 'static {
+    /// Resolve the exact canonical result's committing Assistant/Attempt from
+    /// primary canonical and Journal evidence, validating the native result.
+    fn recovery_tool_result_owner(
+        &self,
+        message: &MessageId,
+        call: &crate::runtime::identity::ToolCallId,
+        through: u64,
+    ) -> Result<Option<CanonicalToolResultOwner>, ConversationStoreError>;
+
+    /// Native canonical allocation registry. Independent observation domains
+    /// never read or populate it.
+    fn canonical_bodies(&self) -> std::sync::Arc<crate::conversation::bodies::CanonicalBodies>;
+
     /// Reads one indexed native Human boundary including timestamp-less messages.
     /// Text is bounded to 4096 bytes at canonical commit, independent of preview.
     fn first_human_source(&self) -> Result<Option<FirstHumanSource>, ConversationStoreError>;
@@ -1042,4 +1055,13 @@ pub trait CanonicalStore: Send + Sync + 'static {
         &self,
         cut: &TranscriptSnapshotCut,
     ) -> Result<TranscriptPage, ConversationStoreError>;
+}
+
+/// Primary ownership of one exact canonical tool result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanonicalToolResultOwner {
+    /// The immutable canonical Assistant identity.
+    pub assistant_message_id: MessageId,
+    /// The exact primary Attempt that committed that Assistant.
+    pub attempt_id: crate::runtime::identity::AttemptId,
 }

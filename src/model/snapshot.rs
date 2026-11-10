@@ -886,7 +886,7 @@ mod tests {
                             cut: snapshot.history_cut.clone(),
                             messages: request.messages.clone(),
                             input_manifest: snapshot.input.clone(),
-                            items: imbl::Vector::new(),
+                            checkpoint_fingerprint: None,
                             materialized_bytes: 0,
                         };
                         for insertion in [None, Some(0), Some(request.messages.len())] {
