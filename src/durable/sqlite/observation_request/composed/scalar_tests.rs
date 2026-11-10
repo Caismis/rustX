@@ -44,6 +44,7 @@ fn snapshot(turn: u32, retry: u32, wide: bool) -> RequestSnapshot {
         Vec::new(),
         crate::runtime::RuntimeResourceRevision::new(1),
         ModelInvocationConfig {
+            replay_binding: None,
             model: "frozen-model".into(),
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: u32::MAX,

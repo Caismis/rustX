@@ -1,4 +1,4 @@
-import type {CheckpointPage, CheckpointPageItem, RoutedInteraction, RuntimeClientInteractionHeader} from './v76.ts';
+import type {CheckpointPage, CheckpointPageItem, RoutedInteraction, RuntimeClientInteractionHeader} from './v78.ts';
 import {domainItems, type DomainReader} from './domain-observation.ts';
 
 /** A deferred display header is actionable identity, never a fabricated body. */

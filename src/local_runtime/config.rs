@@ -28,7 +28,7 @@ use crate::tools::native::NativeToolPolicies;
 use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy};
 
 /// The only current runtime configuration schema version this runtime accepts.
-pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 10;
+pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 11;
 
 /// Resolved policies and Root profile within one published configuration.
 ///
@@ -53,7 +53,7 @@ pub struct CurrentRuntimeConfig {
     /// Frozen in the published generation, never deliberate Session intent.
     #[serde(default)]
     pub approval_mode: ApprovalMode,
-    /// The root Agent uses the same profile document as canonical named Agents.
+    /// The root Agent profile, including its named Agent allowlist.
     #[serde(default)]
     pub agent: AgentProfileDocument,
     /// Complete context policy resolved from User < Workspace; atomic replacement.
@@ -121,92 +121,114 @@ pub const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 4;
 /// The hard upper bound of the generation-owned subagent capacity.
 pub const MAX_MAX_CONCURRENT_SUBAGENTS: usize = 64;
 
-/// Strict Agent Profile authoring shared by root and named Agents.
-///
-/// Complete selected intent resolves against admitted resources. Execution
-/// scope controls child lifecycle applicability. Dynamic child
-/// invocations may replace only Tools, Skills and Extensions within their
-/// frozen delegation ceiling; the other dimensions remain authored defaults.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-#[derive(schemars::JsonSchema, Default)]
-pub struct AgentProfileDocument {
-    #[serde(default)]
-    pub agents: Vec<SubagentName>,
-    #[serde(default)]
-    pub workflows: Vec<WorkflowId>,
-    /// The bounded model-facing routing description. Empty defaults stay omitted
-    /// in native source projections and complete-resource serialization.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-    /// Explicit primary Agent instructions authored as TOML data.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub instructions: String,
-    /// The explicit model this agent runs on. Omit to inherit the invoking
-    /// attempt's frozen effective model configuration.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(
-        deserialize_with = "super::authoring::deserialize_profile_model",
-        serialize_with = "super::authoring::serialize_profile_model"
-    )]
-    #[schemars(with = "Option<super::authoring::ModelLayer>")]
-    pub model: Option<SessionModelConfig>,
-    /// The optional maximum wall-clock duration of the complete child
-    /// lifecycle, in milliseconds. The model cannot override or extend it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
-    /// The exact source-qualified capability selection.
-    #[serde(default)]
-    pub tools: ToolSelectionDocument,
-    /// Skill descriptions advertised in the prompt: "all", exact names, or [].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skills: Option<crate::runtime::agent_profile::AgentSkillSelection>,
-    /// The project-instruction policy of this agent.
-    #[serde(default)]
-    pub agents_md: AgentProjectInstructionsDocument,
-    /// Closed native Extension composition. Omission selects none. Root
-    /// product defaults are an explicit lower-priority authoring layer,
-    /// independent of this complete document's semantics.
-    #[serde(default)]
-    #[serde(rename = "plugins")]
-    pub extensions: NativeAgentExtensionsDocument,
+// Root and named Agent profiles share spelling and lowering for common fields.
+macro_rules! agent_profile_document {
+    ($(#[$doc:meta])* $name:ident, $default_skills:expr, { $($fields:tt)* }) => {
+        $(#[$doc])*
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+        #[serde(deny_unknown_fields)]
+        pub struct $name {
+            $($fields)*
+            #[serde(default)]
+            pub workflows: Vec<WorkflowId>,
+            /// The bounded model-facing routing description. Empty defaults stay omitted
+            /// in native source projections and complete-resource serialization.
+            #[serde(default, skip_serializing_if = "String::is_empty")]
+            pub description: String,
+            /// Explicit primary Agent instructions authored as TOML data.
+            #[serde(default, skip_serializing_if = "String::is_empty")]
+            pub instructions: String,
+            /// The explicit model this agent runs on. Omit to inherit the invoking
+            /// attempt's frozen effective model configuration.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            #[serde(
+                deserialize_with = "super::authoring::deserialize_profile_model",
+                serialize_with = "super::authoring::serialize_profile_model"
+            )]
+            #[schemars(with = "Option<super::authoring::ModelLayer>")]
+            pub model: Option<SessionModelConfig>,
+            /// The optional maximum wall-clock duration of the complete child
+            /// lifecycle, in milliseconds. The model cannot override or extend it.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            pub timeout_ms: Option<u64>,
+            /// The exact source-qualified capability selection.
+            #[serde(default)]
+            pub tools: ToolSelectionDocument,
+            /// Skill descriptions advertised in the prompt: "all", exact names, or [].
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            pub skills: Option<crate::runtime::agent_profile::AgentSkillSelection>,
+            /// The project-instruction policy of this agent.
+            #[serde(default)]
+            pub agents_md: AgentProjectInstructionsDocument,
+            /// Closed native Extension composition. Omission selects none. Root
+            /// product defaults are an explicit lower-priority authoring layer,
+            /// independent of this complete document's semantics.
+            #[serde(default)]
+            #[serde(rename = "plugins")]
+            pub extensions: NativeAgentExtensionsDocument,
+        }
+
+        impl $name {
+            pub(crate) fn lower(&self) -> Result<crate::runtime::agent_profile::AgentProfile, String> {
+                use crate::runtime::subagent::catalog::{
+                    MAX_SUBAGENT_DESCRIPTION_BYTES, MAX_SUBAGENT_INSTRUCTIONS_BYTES,
+                };
+                self.tools.validate_spelling()?;
+                if self.description.len() > MAX_SUBAGENT_DESCRIPTION_BYTES
+                    || self.instructions.len() > MAX_SUBAGENT_INSTRUCTIONS_BYTES
+                {
+                    return Err("Agent description or instructions exceeds its native bound".into());
+                }
+                Ok(crate::runtime::agent_profile::AgentProfile {
+                    description: self.description.clone(),
+                    instructions: self.instructions.clone(),
+                    model: self.model.clone(),
+                    execution_deadline: self.execution_deadline()?,
+                    tools: self.tools.selectors(),
+                    skills: self.skills.clone().unwrap_or_else($default_skills),
+                    extensions: self.extensions.resolve(),
+                    workflows: self.workflows.iter().cloned().collect(),
+                    inherit_project_instructions: self.agents_md.inherit,
+                })
+            }
+
+            /// Converts the TOML millisecond field into the validated runtime type.
+            ///
+            /// # Errors
+            /// Returns the explicit zero/maximum validation detail.
+            pub fn execution_deadline(&self) -> Result<Option<SubagentExecutionDeadline>, String> {
+                self.timeout_ms
+                    .map(SubagentExecutionDeadline::from_millis)
+                    .transpose()
+                    .map_err(|error| error.to_string())
+            }
+        }
+    };
 }
 
-impl AgentProfileDocument {
-    /// Converts the TOML millisecond field into the validated runtime type.
-    ///
-    /// # Errors
-    ///
-    /// Returns the explicit zero/maximum validation detail. Malformed authoring
-    /// values are rejected by serde before this boundary is reached.
-    pub fn execution_deadline(&self) -> Result<Option<SubagentExecutionDeadline>, String> {
-        self.timeout_ms
-            .map(SubagentExecutionDeadline::from_millis)
-            .transpose()
-            .map_err(|error| error.to_string())
+agent_profile_document!(
+    /// Root Agent profile. Only the root can delegate to named Agents.
+    AgentProfileDocument, || crate::runtime::agent_profile::AgentSkillSelection::All, {
+        #[serde(default)]
+        pub agents: Vec<SubagentName>,
     }
-}
+);
 
-/// Project-instruction selection from admitted workspace resources.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-#[derive(schemars::JsonSchema)]
+agent_profile_document!(
+    /// A complete named Agent resource profile.
+    NamedAgentProfileDocument, crate::runtime::agent_profile::AgentSkillSelection::default, {}
+);
+
+/// Whether to include the automatically discovered AGENTS.md guidance chain.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields, default)]
 pub struct AgentProjectInstructionsDocument {
-    /// Whether the invoking generation's normal project instruction chain is
-    /// prepended to the explicit files.
     pub inherit: bool,
-    /// Explicit agent-owned project instruction files, in deterministic
-    /// configured order. Relative paths resolve against the owning
-    /// configuration document's directory at launch resolution.
-    pub files: Vec<PathBuf>,
 }
 
 impl Default for AgentProjectInstructionsDocument {
     fn default() -> Self {
-        Self {
-            inherit: true,
-            files: Vec::new(),
-        }
+        Self { inherit: true }
     }
 }
 
@@ -427,14 +449,19 @@ impl CurrentRuntimeConfig {
     ///
     /// Returns the first validation failure.
     pub fn validate(&self) -> Result<(), CurrentRuntimeConfigError> {
-        self.validate_authored().map_err(|failure| failure.error)?;
-        // Composition facts: a root model and the `.agents` MCP servers that
-        // policy overlays name.
+        self.validate_resources()?;
         if self.agent.model.is_none() {
             return Err(CurrentRuntimeConfigError::Invalid {
                 detail: "agent.model.model is required for root".into(),
             });
         }
+        Ok(())
+    }
+
+    /// Validate the runtime's resource configuration even if its catalog
+    /// has no model for a new Session yet.
+    pub(crate) fn validate_resources(&self) -> Result<(), CurrentRuntimeConfigError> {
+        self.validate_authored().map_err(|failure| failure.error)?;
         // Duplicate MCP identity is structurally impossible: `mcpServers` is
         // a keyed map. Normalization is the remaining semantic gate, and it
         // runs here so a malformed entry fails at parse time rather than at
@@ -490,12 +517,9 @@ impl CurrentRuntimeConfig {
             })?;
         self.tool_environment()
             .map_err(at("environment", "invalid Tool environment entry"))?;
-        crate::runtime::agent_profile::AgentProfile::from_document(
-            &self.agent,
-            crate::runtime::agent_profile::AgentProfileKind::Root,
-            Vec::new(),
-        )
-        .map_err(|detail| at("agent", "invalid root Agent profile")(invalid(detail)))?;
+        self.agent
+            .lower()
+            .map_err(|detail| at("agent", "invalid root Agent profile")(invalid(detail)))?;
         if self.agent.timeout_ms.is_some() {
             return Err(at(
                 "agent.timeout_ms",
@@ -1400,7 +1424,7 @@ model_timeout_policy = { "response_start_timeout_ms" = 7, "stream_idle_timeout_m
         );
     }
 
-    fn worker_config(timeout: &str) -> Result<super::AgentProfileDocument, String> {
+    fn worker_config(timeout: &str) -> Result<super::NamedAgentProfileDocument, String> {
         crate::local_runtime::agent_resources::parse(&format!(
             "description = \"worker\"\ninstructions = \"Worker\"\ntimeout_ms = {timeout}\n"
         ))
@@ -1885,29 +1909,18 @@ mod profile_authoring_tests {
     use super::tests::MINIMAL;
     use super::*;
     #[test]
-    fn cfg273_root_and_named_share_the_complete_profile_document() {
-        // Root and named Agents share complete profile dimensions.
-        let named = r"description = 'review'
-instructions = 'Review carefully'
-agents = ['helper']
-workflows = ['check']
-[tools]
-builtin = ['read']
-[plugins]
-[model]
-model = 'provider/model'
-";
+    fn root_and_named_share_profile_fields_but_only_root_delegates() {
+        let common = "description = 'review'\nskills = []\nworkflows = ['check']\n[tools]\nbuiltin = ['read']\n[model]\nmodel = 'provider/model'\n";
         let root = format!(
-            "[agent]\n{}",
-            named
+            "[agent]\nagents = ['helper']\n{}",
+            common
                 .replace("[tools]", "[agent.tools]")
-                .replace("[plugins]", "[agent.plugins]")
                 .replace("[model]", "[agent.model]")
         );
         let root = CurrentRuntimeConfig::from_toml_slice(root.as_bytes()).unwrap();
-        let named = crate::local_runtime::agent_resources::parse(named).unwrap();
-        assert_eq!(root.agent, named);
-        assert_eq!(named.extensions.resolve(), NativeAgentExtensions::none());
+        let named = crate::local_runtime::agent_resources::parse(common).unwrap();
+        assert_eq!(root.agent.lower().unwrap(), named.lower().unwrap());
+        assert_eq!(root.agent.agents[0].as_str(), "helper");
     }
     #[test]
     fn cfg332_root_and_named_skill_visibility_share_all_exact_none_semantics() {
@@ -1933,15 +1946,16 @@ model = 'provider/model'
             assert_eq!(root.agent.skills, Some(expected.clone()));
             assert_eq!(named.skills, Some(expected));
         }
+        let named = crate::local_runtime::agent_resources::parse(
+            "description = 'r'\nskills = ['UPPERCASE and spaces']",
+        )
+        .unwrap();
+        assert_eq!(named.skills.unwrap().names(), &["UPPERCASE and spaces"]);
         let omitted = CurrentRuntimeConfig::from_toml_slice(MINIMAL.as_bytes()).unwrap();
         assert_eq!(omitted.agent.skills, None);
         let named = crate::local_runtime::agent_resources::parse("description = 'r'").unwrap();
         assert_eq!(named.skills, None);
-        for authored in [
-            "disabled_skills = []",
-            "skills = ['NOT VALID']",
-            "skills = 'none'",
-        ] {
+        for authored in ["disabled_skills = []", "skills = 'none'"] {
             assert!(
                 CurrentRuntimeConfig::from_toml_slice(
                     MINIMAL

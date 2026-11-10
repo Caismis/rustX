@@ -109,13 +109,13 @@ async fn goal84_root_only_scope_is_enforced_for_definition_and_invocation_overri
 }
 
 const MODELS: &str = r#"[providers.local]
+protocol = "openai_chat_completions"
 base_url = "http://127.0.0.1:9/v1"
 api_key = "$RUSTX_ISSUE258_KEY"
 
 [models."local/model-a"]
 provider = "local"
 id = "model-a"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
@@ -238,7 +238,7 @@ impl Lab {
             .collect::<Vec<_>>();
         let root_agents = serde_json::Value::Array(names);
         crate::launch_fixture::write_roles(&self.workspace(), &mut subagents);
-        let document = serde_json::json!({"schema_version": 10, "agent_id": "agent-issue258", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "agents": root_agents, "workflows": []}});
+        let document = serde_json::json!({"schema_version": 11, "agent_id": "agent-issue258", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "agents": root_agents, "workflows": []}});
         std::fs::write(
             self.root().join("rustx.toml"),
             format!(
@@ -535,7 +535,10 @@ async fn cfg3_child_skill_and_plugin_selection_is_independent_of_root_visibility
     lab.write_config(&reviewer_roles(), &[]);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
-    assert!(resources.capability().model_skill_entries().is_empty());
+    assert!(
+        resources.skill_catalog().is_none(),
+        "the root has no file-reading tool"
+    );
     assert_eq!(
         skill_names(&delegate(&resources, "reviewer", None).unwrap()),
         ["review-guidance"]

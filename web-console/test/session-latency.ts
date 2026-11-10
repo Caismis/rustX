@@ -9,6 +9,10 @@ export interface RequestTiming {
   resultType?: string;
   sessionId?: string;
   nodeId?: string;
+  /** Page-local WebSocket identity; a reconnect starts a new authority. */
+  connection?: number;
+  threadId?: string;
+  resultThreadId?: string;
   /** Opaque JSON encoding of the exact native attachment identity tuple. */
   target?: string;
 }
@@ -46,4 +50,16 @@ export function supersededTraceReads(rpc: readonly RequestTiming[]): RequestTimi
   return rpc.filter(row => row.method === 'session/trace' && row.traceBefore === null
     && row.error === 'read_cut_expired' && !!row.target && completed(row)
     && repaired.some(later => later.target === row.target && row.end <= later.start));
+}
+
+/** Strong status reads can fail while native status capture is busy. Require
+ * a new successful strong read of that exact Thread on the same connection;
+ * unrelated reads, earlier/overlapping reads and reconnects prove no recovery. */
+export function recoveredThreadStatusReads(rpc: readonly RequestTiming[]): RequestTiming[] {
+  const recovered = rpc.filter((row): row is CompletedTiming => completed(row)
+    && row.method === 'thread/read' && row.error === undefined && row.resultType === 'thread'
+    && !!row.threadId && row.resultThreadId === row.threadId);
+  return rpc.filter(row => completed(row) && row.method === 'thread/read' && row.error === 'observation_unavailable'
+    && row.connection !== undefined && Number.isSafeInteger(row.connection) && row.connection > 0 && !!row.threadId
+    && recovered.some(read => read.connection === row.connection && read.threadId === row.threadId && read.start >= row.end));
 }

@@ -4965,13 +4965,13 @@ mod tests {
 
     #[cfg(unix)]
     const WORKFLOW_TEST_MODELS: &str = r#"[providers.local]
+protocol = "openai_chat_completions"
 base_url = "http://127.0.0.1:9/v1"
 api_key = "test-only-secret"
 
 [models."local/model"]
 provider = "local"
 id = "model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
@@ -5084,13 +5084,8 @@ chat_reasoning_replay = "omit"
                 execution_deadline: None,
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                project_instructions:
-                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                        inherit: false,
-                        files: Vec::new(),
-                    },
+                inherit_project_instructions: false,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-                agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
             plane.dir.path().join("reviewer.md"),

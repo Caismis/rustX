@@ -1,7 +1,8 @@
+import { SettingsNotice } from '../SettingsFeedback';
 import { useEffect, useRef } from 'react';
 import { useTranslation } from '../../../locale/react';
 import type { Translate } from '../../../locale/translation';
-import type { ConfigRepairChange, ConfigRepairReceipt } from '../../../../../protocol/app-server/v76';
+import type { ConfigRepairChange, ConfigRepairReceipt } from '../../../../../protocol/app-server/v78';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 
 /** One redacted native repair change, worded. Never an authored key, identity
@@ -55,14 +56,14 @@ export function AutoRepairSection({ receipt, malformed, focused, inspection, pre
   useEffect(() => {
     if (focused && inspection && receiptId && reportable) report.current?.(receiptId);
   }, [focused, inspection, receiptId, reportable]);
+  if (!receipt && !malformed && !focused) return null;
   return <section ref={section} id="settings-auto-repair" aria-label={tx('settings:auto-repair.title')} data-focused={focused || undefined}>
     <h4>{tx('settings:auto-repair.title')}</h4>
-    <p className={css.hint}>{tx('settings:auto-repair.intro')}</p>
     {!receipt ? <p role="status">{tx('settings:auto-repair.none')}</p> : <>
       {receipt.status === 'repaired'
         ? <p role="status">{tx('settings:auto-repair.repaired', { count: repairCount(tx, receipt.changed_count) })}</p>
-        : <p role="alert" className={css.error}>{receipt.status === 'unresolved' ? tx('settings:auto-repair.unresolved') : tx('settings:auto-repair.commit-uncertain')}</p>}
-      {receipt.diagnostic && <p className={css.error}>{receipt.diagnostic}</p>}
+        : <p>{tx(receipt.status === 'unresolved' ? 'settings:auto-repair.unresolved' : 'settings:auto-repair.commit-uncertain')}</p>}
+      <SettingsNotice text={receipt.diagnostic ?? undefined}/>
       {receipt.changes.length > 0 && <>
         <h5>{receipt.status === 'unresolved' ? tx('settings:auto-repair.not-applied') : tx('settings:auto-repair.changes')}</h5>
         <ul aria-label={receipt.status === 'unresolved' ? tx('settings:auto-repair.not-applied') : tx('settings:auto-repair.changes')}>
@@ -71,11 +72,7 @@ export function AutoRepairSection({ receipt, malformed, focused, inspection, pre
         {receipt.truncated && <p className={css.hint}>{tx('settings:auto-repair.truncated', { shown: receipt.changes.length, total: receipt.changed_count })}</p>}
       </>}
       <p>{receipt.backup_available ? tx('settings:auto-repair.backup-kept') : tx('settings:auto-repair.backup-none')}</p>
-      <p className={css.hint}>{receipt.after_revision
-        ? tx('settings:auto-repair.revisions', { before: receipt.before_revision, after: receipt.after_revision })
-        : tx('settings:auto-repair.revision', { before: receipt.before_revision })}</p>
       {receipt.status !== 'repaired' && malformed && <p>{tx('settings:auto-repair.manual-repair')}</p>}
     </>}
-    <p className={css.hint}>{tx('settings:auto-repair.not-application')}</p>
   </section>;
 }

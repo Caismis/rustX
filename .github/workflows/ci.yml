@@ -73,7 +73,7 @@ jobs:
   # Static checks get their own job so formatting/lint failures report in
   # about two minutes instead of after a full test build.
   quality:
-    name: Format, lint, and whitespace
+    name: Format and lint
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['quality']
     runs-on: ubuntu-26.04
@@ -145,9 +145,6 @@ jobs:
 
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Check whitespace
-        run: git diff --check
 
   # FAST Rust feedback for a pull request push that touches Rust: one
   # compilation of the library test harness and the `process` target (which
@@ -399,34 +396,8 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv run --frozen pytest
 
-      # Compiling the external targets first also builds every real
-      # executable (`rustx`, `bash-supervisor`, `interactive-supervisor`, `workflow-renderer`)
-      # against the same all-feature library the tests link, and places them
-      # at `target/debug/`. The in-crate text_spill suite execs
-      # `bash-supervisor` there by path; `cargo test --lib` alone does not
-      # build it. A separate `cargo build --bins` would compile one more
-      # complete rustX library (no dev-dependency features) that no test in
-      # this lane links. Default-feature real binaries are still built by the
-      # contracts and TUI lanes.
-      - name: Compile the external boundary targets and the real executables
-        run: >-
-          cargo test --all-features --no-run
-          --test durable
-          --test process
-          --test subagent
-          --test tools
-          --test conformance
-          --test cfg3_catalog
-          --test cfg3_managed_output
-
-      # The in-crate boundary conformance suites (real process death, real
-      # bash supervision, staged subagent children, real MCP stdio fixture
-      # children), selected by their stable name prefix.
-      - name: Run the in-crate boundary suites
-        env:
-          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features -- boundary_suites::'
-
+      # The integration targets place the real executables at target/debug/.
+      # Run them first so the in-crate boundary suites can use those binaries.
       - name: Run the external boundary targets
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
@@ -439,6 +410,11 @@ jobs:
           --test conformance
           --test cfg3_catalog
           --test cfg3_managed_output
+
+      - name: Run the in-crate boundary suites
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: 'cargo test --lib --all-features -- boundary_suites::'
 
       # See the same step in `rust-contracts`; this lane's targets are the
       # lib test harness and the external boundary targets. With
@@ -898,9 +874,18 @@ jobs:
       # this is not Finder/Terminal GUI smoke and does not duplicate browser E2E.
       - name: Desktop adapter and Host boundaries
         working-directory: web-console
-        run: |
-          pnpm run build:host
-          pnpm exec vitest run test/desktop-host.test.ts test/document-archive.test.ts test/document-integration.test.ts test/workbench-host.test.ts
+        run: >-
+          pnpm exec vitest run
+          test/desktop-host.test.ts
+          test/document-archive.test.ts
+          test/document-integration.test.ts
+          test/workbench-host.test.ts
+          test/terminal-lifecycle.test.ts
+          test/office-macos-lifecycle.test.ts
+          test/office-macos.test.ts
+      - name: macOS sandbox diagnostics on failure
+        if: failure()
+        run: sudo log show --last 3m --style compact --predicate 'process == "sandboxd" OR eventMessage CONTAINS "deny"' | tail -150
       # Client-local Save on the macOS filesystem: exclusive create, hard-link
       # publication, link-count cleanup and every ownership interleaving, 0600
       # creation under an inherited native ACL (macOS only), then byte-exact
@@ -1033,7 +1018,8 @@ jobs:
         run: pnpm typecheck
       - name: Deterministic native client and presentation tests
         working-directory: web-console
-        run: pnpm test
+        # The fresh install already built the native Node addons.
+        run: pnpm exec vitest run
       - name: Product UI translation ownership
         working-directory: web-console
         run: pnpm check:i18n

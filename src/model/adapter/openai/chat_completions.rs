@@ -1484,64 +1484,15 @@ pub(crate) fn translate_request(request: &ModelRequest) -> Result<WireRequest<'_
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
-    #[cfg(feature = "issue-387-profile")]
-    let translation = crate::model::adapter::profile::phase(
-        crate::model::adapter::profile::Phase::TranslateMessages,
-    );
-    let mut messages = Vec::with_capacity(request.messages.len() + 1);
-    if !request.effective_system_prompt.is_empty() {
-        messages.push(WireMessage::System {
-            content: &request.effective_system_prompt,
-        });
-    }
-    #[cfg(feature = "issue-387-profile")]
-    let blocks = request.messages.iter().enumerate().map(|(index, block)| {
-        crate::model::adapter::profile::item(index);
-        block
-    });
-    #[cfg(not(feature = "issue-387-profile"))]
-    let blocks = &request.messages;
-    for block in blocks {
-        messages.push(match block.view() {
-            ModelMessageView::User(user) => {
-                let mut content = Vec::with_capacity(user.len());
-                for block in user {
-                    #[cfg(feature = "issue-387-profile")]
-                    crate::model::adapter::profile::block();
-                    match block {
-                        crate::message::types::UserContentBlock::Text(text) =>
-                            content.push(WirePart::Text { text: Cow::Borrowed(&text.text) }),
-                        crate::message::types::UserContentBlock::Image(image) =>
-                            content.push(chat_image_part(image, &request.images)?),
-                        _ => return Err(unsupported("OpenAI Chat Completions cannot represent canonical file references")),
-                    }
-                }
-                WireMessage::User { content }
-            }
-            ModelMessageView::Assistant(assistant) =>
-                translate_assistant_message(assistant, request.invocation.compat.chat_reasoning_replay.unwrap_or_default())?,
-            ModelMessageView::Tool(tool_call_id, result) =>
-                translate_tool_message(tool_call_id, result, &request.images)?,
-            ModelMessageView::RequestOnly(carryover) if carryover.is_assistant() =>
-                WireMessage::Assistant {
-                    content: AssistantContent::Text(carryover.render()),
-                    tool_calls: Vec::new(),
-                    reasoning: None,
-                    reasoning_content: None,
-                },
-            ModelMessageView::RequestOnly(carryover) => WireMessage::User {
-                content: vec![WirePart::Text { text: Cow::Owned(carryover.render()) }],
-            },
-        });
-    }
-    #[cfg(feature = "issue-387-profile")]
-    drop(translation);
-    if messages.is_empty() {
-        return Err(invalid_request(
-            "a Chat Completions request requires at least one message",
-        ));
-    }
-    crate::model::adapter::correlation::encode_fields(|field| {
+    let mut messages = translate_messages(request)?;
+    let labels = crate::model::adapter::correlation::transmitted_labels(
+        request,
+        request
+            .continuation_boundary()
+            .map_err(|error| invalid_request(&error))?,
+    )
+    .map_err(|error| invalid_request(&error))?;
+    crate::model::adapter::correlation::encode_fields(&labels, |field| {
         for message in &mut messages {
             #[cfg(feature = "issue-387-profile")]
             crate::model::adapter::profile::wire_item();
@@ -1582,6 +1533,70 @@ pub(crate) fn translate_request(request: &ModelRequest) -> Result<WireRequest<'_
     })
 }
 
+fn translate_messages(request: &ModelRequest) -> Result<Vec<WireMessage<'_>>, ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let translation = crate::model::adapter::profile::phase(
+        crate::model::adapter::profile::Phase::TranslateMessages,
+    );
+    let mut messages = Vec::with_capacity(request.messages.len() + 1);
+    if !request.effective_system_prompt.is_empty() {
+        messages.push(WireMessage::System {
+            content: &request.effective_system_prompt,
+        });
+    }
+    #[cfg(feature = "issue-387-profile")]
+    let blocks = request.messages.iter().enumerate().map(|(index, block)| {
+        crate::model::adapter::profile::item(index);
+        block
+    });
+    #[cfg(not(feature = "issue-387-profile"))]
+    let blocks = &request.messages;
+    for block in blocks {
+        messages.push(match block.view() {
+            ModelMessageView::User(user) => {
+                let mut content = Vec::with_capacity(user.len());
+                for block in user {
+                    #[cfg(feature = "issue-387-profile")]
+                    crate::model::adapter::profile::block();
+                    match block {
+                        crate::message::types::UserContentBlock::Text(text) =>
+                            content.push(WirePart::Text { text: Cow::Borrowed(&text.text) }),
+                        crate::message::types::UserContentBlock::Image(image) =>
+                            content.push(chat_image_part(image, &request.images)?),
+                        _ => return Err(unsupported("OpenAI Chat Completions cannot represent canonical file references")),
+                    }
+                }
+                WireMessage::User { content }
+            }
+            ModelMessageView::Assistant(assistant) => {
+                let translated = translate_assistant_message(assistant, request.invocation.compat.chat_reasoning_replay.unwrap_or_default(), request.invocation.replay_origin().as_ref())?;
+                if matches!(&translated, WireMessage::Assistant { content: AssistantContent::Parts(parts), tool_calls, reasoning: None, reasoning_content: None } if parts.is_empty() && tool_calls.is_empty()) { continue; }
+                translated
+            },
+            ModelMessageView::Tool(tool_call_id, result) =>
+                translate_tool_message(tool_call_id, result, &request.images)?,
+            ModelMessageView::RequestOnly(carryover) if carryover.is_assistant() =>
+                WireMessage::Assistant {
+                    content: AssistantContent::Text(carryover.render()),
+                    tool_calls: Vec::new(),
+                    reasoning: None,
+                    reasoning_content: None,
+                },
+            ModelMessageView::RequestOnly(carryover) => WireMessage::User {
+                content: vec![WirePart::Text { text: Cow::Owned(carryover.render()) }],
+            },
+        });
+    }
+    #[cfg(feature = "issue-387-profile")]
+    drop(translation);
+    if messages.is_empty() {
+        return Err(invalid_request(
+            "a Chat Completions request requires at least one message",
+        ));
+    }
+    Ok(messages)
+}
+
 fn translate_tool_message<'a>(
     tool_call_id: &ToolCallId,
     result: &crate::tools::types::ToolExecutionResult,
@@ -1620,10 +1635,11 @@ fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<Wi
         .collect()
 }
 
-fn translate_assistant_message(
-    assistant: &[AssistantContentBlock],
+fn translate_assistant_message<'a>(
+    assistant: &'a [AssistantContentBlock],
     replay: ChatReasoningReplay,
-) -> Result<WireMessage<'_>, ModelError> {
+    origin: Option<&crate::model::replay::ReplayOrigin>,
+) -> Result<WireMessage<'a>, ModelError> {
     let mut parts = Vec::new();
     let mut tool_calls = Vec::new();
     let mut reasoning: Option<Cow<'_, str>> = None;
@@ -1650,6 +1666,15 @@ fn translate_assistant_message(
                 },
             }),
             AssistantContentBlock::Reasoning(block) => {
+                if !block.belongs_to(origin) {
+                    if let Some(text) = block.text.as_deref().filter(|text| !text.trim().is_empty())
+                    {
+                        parts.push(WirePart::Text {
+                            text: Cow::Borrowed(text),
+                        });
+                    }
+                    continue;
+                }
                 if replay != ChatReasoningReplay::Omit
                     && let Some(text) = block.text.as_deref().filter(|text| !text.is_empty())
                 {

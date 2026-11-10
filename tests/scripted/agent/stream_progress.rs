@@ -706,7 +706,9 @@ async fn large_write_progress_crosses_idle_timeout_without_retry_or_duplicate_ex
         }
     });
     let publication = common::RecordingPublicationObserver::default();
-    let audit = tokio::time::timeout(Duration::from_secs(2), async {
+    // The manual clock above verifies the provider deadline. This wall-clock
+    // watchdog only detects a hung write or controller under test-suite load.
+    let audit = tokio::time::timeout(Duration::from_secs(15), async {
         execution.observe(&publication);
         common::durable_agent_result_with_publication(
             execution.run().await,

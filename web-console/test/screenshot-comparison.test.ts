@@ -77,6 +77,22 @@ const cells = (region: NoiseRegion): [number, number][] => {
   return found;
 };
 
+it.each(['light', 'dark'])('the narrow %s Model input corner admits its two measured raster variants and rejects adjacent or larger changes', theme => {
+  const name = `settings-model-advanced-${theme}-390-baseline-linux.png`;
+  const expected = fixture(name);
+  const actual = fixture(`settings-model-advanced-${theme}-390-noise-linux.png`);
+  const entry = frozenManifest.find(item => item.reference === name)!;
+  expect(entry.regions).toEqual([{ label: 'Context input corner coverage', x: 34, y: 237, width: 1, height: 1, maxChangedPixels: 1, maxChannelDelta: 1 }]);
+  expect(compare(actual, name, expected, []).ok).toBe(false);
+  const accepted = compare(actual, name, expected, comparatorPolicy);
+  expect(accepted.ok).toBe(true); expect(accepted.totalChanged).toBe(1);
+  expect(compare(actual, `model-basic-${theme}-390-linux.png`, expected, comparatorPolicy).ok).toBe(false);
+  const adjacent = copy(actual); nudge(adjacent, 35, 237, 1);
+  expect(compare(adjacent, name, expected, comparatorPolicy).ok).toBe(false);
+  const excessive = copy(expected); nudge(excessive, 34, 237, 2);
+  expect(compare(excessive, name, expected, comparatorPolicy).ok).toBe(false);
+});
+
 it.each([
   ['live', noisePolicy, reference],
   ['frozen comparator', comparatorPolicy, fixture],
@@ -136,31 +152,27 @@ it('A: an exact baseline passes with and without a noise policy', () => {
 
 it('the captured deletion-dialog raster difference admits only its 63 measured one-level sites', () => {
   const name = 'settings-delete-confirm-light-linux.png';
-  const entry = manifest.find(row => row.reference === name)!;
-  const expected = reference(name), actual = fixture(entry.capture!);
+  const entry = frozenManifest.find(row => row.reference === name)!;
+  const expected = fixture(name), actual = fixture(entry.capture!);
   const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
-  const directory = snapshotDirectories.find(path => {
-    try { return hash(readFileSync(new URL(name, path))) === entry.referenceSha256; }
-    catch { return false; }
-  });
-  expect(directory).toBeDefined();
+  expect(hash(readFileSync(new URL(name, frozen)))).toBe(entry.referenceSha256);
   expect(hash(readFileSync(new URL(entry.capture!, frozen)))).toBe(entry.captureSha256);
   expect(entry.regions).toHaveLength(63);
   for (const region of entry.regions) expect(region).toMatchObject({ width: 1, height: 1, maxChangedPixels: 1, maxChannelDelta: 1 });
-  const accepted = compare(actual, name, expected, noisePolicy);
+  const accepted = compare(actual, name, expected, comparatorPolicy);
   expect(accepted.ok).toBe(true);
   expect(accepted.totalChanged).toBe(63);
   expect(compare(actual, name, expected, []).ok).toBe(false);
-  expect(compare(actual, 'another-reference.png', expected, noisePolicy).ok).toBe(false);
+  expect(compare(actual, 'another-reference.png', expected, comparatorPolicy).ok).toBe(false);
   const measured = entry.pixels as MeasuredNoisePixel[];
   const [x, y] = measured[0]!;
   const excessive = copy(expected); nudge(excessive, x, y, 2);
-  expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  expect(compare(excessive, name, expected, comparatorPolicy).ok).toBe(false);
   const observed = new Set(measured.map(([px, py]) => `${px},${py}`));
   const neighbor = [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]].find(([px, py]) => !observed.has(`${px},${py}`))!;
   for (const [px, py] of [neighbor, [670, 584], [0, 0]]) {
     const changed = copy(expected); nudge(changed, px!, py!, 1);
-    const rejected = compare(changed, name, expected, noisePolicy);
+    const rejected = compare(changed, name, expected, comparatorPolicy);
     expect(rejected.ok).toBe(false);
     expect(rejected.changedOutsideRegions).toBe(1);
   }
@@ -168,28 +180,28 @@ it('the captured deletion-dialog raster difference admits only its 63 measured o
 
 it('the real CAS capture adds only its two independently bounded panel-edge observations', () => {
   const name = 'settings-conflict-light-linux.png';
-  const entry = manifest.find(row => row.reference === name)!;
+  const entry = frozenManifest.find(row => row.reference === name)!;
   const captures = entry.captures as unknown as readonly { pixels: MeasuredNoisePixel[] }[];
   expect(captures.map(capture => capture.pixels.length)).toEqual([10, 2]);
-  const actual = fixture(entry.capture!), expected = reference(name);
+  const actual = fixture(entry.capture!), expected = fixture(name);
   const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
-  expect(hash(readFileSync(new URL(`./e2e/settings-presentation.spec.ts-snapshots/${name}`, import.meta.url)))).toBe(entry.referenceSha256);
+  expect(hash(readFileSync(new URL(name, frozen)))).toBe(entry.referenceSha256);
   expect(hash(readFileSync(new URL(entry.capture!, frozen)))).toBe(entry.captureSha256);
   expect(entry.regions).toHaveLength(12);
-  const accepted = compare(actual, name, expected, noisePolicy);
+  const accepted = compare(actual, name, expected, comparatorPolicy);
   expect(accepted.ok).toBe(true); expect(accepted.totalChanged).toBe(2);
   expect(compare(actual, name, expected, []).ok).toBe(false);
-  expect(compare(actual, 'another-reference.png', expected, noisePolicy).ok).toBe(false);
+  expect(compare(actual, 'another-reference.png', expected, comparatorPolicy).ok).toBe(false);
   for (const [x, y, before, after] of captures[1]!.pixels) {
     const maximum = Math.max(...before.map((value, index) => Math.abs(value - after[index]!)));
     const region = entry.regions.find(region => region.x === x && region.y === y)!;
     expect(region).toMatchObject({ width: 1, height: 1, maxChangedPixels: 1, maxChannelDelta: maximum });
     const excessive = copy(expected); nudge(excessive, x, y, maximum + 1);
-    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+    expect(compare(excessive, name, expected, comparatorPolicy).ok).toBe(false);
   }
   for (const [x, y] of [[1005, 410], [480, 560]]) {
     const outside = copy(expected); nudge(outside, x!, y!, 1);
-    const rejected = compare(outside, name, expected, noisePolicy);
+    const rejected = compare(outside, name, expected, comparatorPolicy);
     expect(rejected.ok).toBe(false); expect(rejected.changedOutsideRegions).toBe(1);
   }
 });
@@ -207,11 +219,11 @@ it('the full-width workflow editor does not inherit the retired Start-icon allow
 });
 
 it('the real workflow CI capture retains exactly its 608 raw curve observations', () => {
-  const name = workflowReference, expected = reference(name);
+  const name = workflowReference, expected = fixture('workflow-editor-baseline-linux.png');
   const file = 'workflow-editor-noise-42313212047-linux.png';
   const actual = fixture(file);
   const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
-  expect(hash(readFileSync(new URL(`./e2e/workflow-editor.spec.ts-snapshots/${name}`, import.meta.url))))
+  expect(hash(readFileSync(new URL('workflow-editor-baseline-linux.png', frozen))))
     .toBe('0289fc15fbcc7b77de5af83c1f647bb98f713c8e0c946f81ddb7c8b2f7bc84e4');
   expect(hash(readFileSync(new URL(file, frozen))))
     .toBe('3b70711ff4cea0938cd7d6264fb055b393d9ad67b6bdb7ee641653f971c51bba');
@@ -309,7 +321,7 @@ it('Workflow curve coverage admits exactly the observed union within each measur
 
 it('the fourth Workflow raw PNG binds all 746 observations to the unchanged reference', () => {
   const name = 'workflow-editor-linux.png', file = 'workflow-editor-noise-42371118714-linux.png';
-  const bytes = readFileSync(new URL(file, frozen)), actual = decodePng(bytes), expected = reference(name);
+  const bytes = readFileSync(new URL(file, frozen)), actual = decodePng(bytes), expected = fixture('workflow-editor-baseline-linux.png');
   const capture = workflowCaptures.find(capture => capture.run === 42371118714)!;
   expect(createHash('sha256').update(bytes).digest('hex')).toBe(capture.pngSha256);
   const verdict = compare(actual, name, expected, noisePolicy);
@@ -336,8 +348,8 @@ it.each(workflowCaptures)('Workflow run $run replays its complete raw capture un
 });
 
 it('Settings conflict disclosure glyph edges admit only their ten measured blue-channel fringes', () => {
-  const name = 'settings-conflict-light-linux.png', expected = reference(name);
-  const entry = noisePolicy.find(row => row.reference === name)!;
+  const name = 'settings-conflict-light-linux.png', expected = fixture(name);
+  const entry = comparatorPolicy.find(row => row.reference === name)!;
   const captures = (entry as unknown as { captures: readonly { pixels: MeasuredNoisePixel[] }[] }).captures;
   const measured = captures[0]!.pixels;
   const regions = entry.regions.filter(region => region.x === 243);
@@ -350,34 +362,34 @@ it('Settings conflict disclosure glyph edges admit only their ten measured blue-
     expect(after).toEqual([255, 255, 255, 255]);
     paint(observed, x, y, after);
   }
-  expect(compare(observed, name, expected, noisePolicy).ok).toBe(true);
+  expect(compare(observed, name, expected, comparatorPolicy).ok).toBe(true);
   expect(compare(observed, name, expected, []).ok).toBe(false);
-  expect(compare(observed, workflowReference, expected, noisePolicy).ok).toBe(false);
+  expect(compare(observed, workflowReference, expected, comparatorPolicy).ok).toBe(false);
   const excessive = copy(expected); nudge(excessive, 243, 841, 5);
-  expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  expect(compare(excessive, name, expected, comparatorPolicy).ok).toBe(false);
   for (const [x, y] of [[242, 841], [244, 841], [243, 840], [243, 846], [243, 895], [243, 901]]) {
     const neighbor = copy(expected); nudge(neighbor, x, y, 1);
-    const result = compare(neighbor, name, expected, noisePolicy);
+    const result = compare(neighbor, name, expected, comparatorPolicy);
     expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
   }
 });
 
 it.each(['light', 'dark'])('the %s narrow model input corners admit only their four measured pixels within individual deltas', theme => {
-  const name = `model-advanced-${theme}-390-linux.png`, expected = reference(name);
-  const entry = noisePolicy.find(row => row.reference === name)!;
+  const name = `model-advanced-${theme}-390-linux.png`, expected = fixture(name);
+  const entry = comparatorPolicy.find(row => row.reference === name)!;
   expect(entry.regions.map(region => [region.x, region.y, region.width, region.height, region.maxChangedPixels, region.maxChannelDelta]))
     .toEqual([[34, 348, 1, 1, 1, 1], [35, 348, 1, 1, 1, 3], [34, 349, 1, 1, 1, 1], [34, 447, 1, 1, 1, 1]]);
   const actual = copy(expected);
   for (const [x, y, , after] of entry.pixels as MeasuredNoisePixel[]) paint(actual, x, y, after);
-  expect(compare(actual, name, expected, noisePolicy).ok).toBe(true);
-  expect(compare(actual, `model-basic-${theme}-390-linux.png`, expected, noisePolicy).ok).toBe(false);
+  expect(compare(actual, name, expected, comparatorPolicy).ok).toBe(true);
+  expect(compare(actual, `model-basic-${theme}-390-linux.png`, expected, comparatorPolicy).ok).toBe(false);
   for (const region of entry.regions) {
     const excessive = copy(expected); nudge(excessive, region.x, region.y, region.maxChannelDelta + 1);
-    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+    expect(compare(excessive, name, expected, comparatorPolicy).ok).toBe(false);
   }
   for (const [x, y] of [[33, 348], [36, 348], [34, 347], [34, 446], [34, 448], [0, 0]]) {
     const outside = copy(actual); nudge(outside, x, y, 1);
-    const result = compare(outside, name, expected, noisePolicy);
+    const result = compare(outside, name, expected, comparatorPolicy);
     expect(result.ok).toBe(false); expect(result.changedOutsideRegions).toBe(1);
   }
 });

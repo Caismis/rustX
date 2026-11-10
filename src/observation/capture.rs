@@ -401,8 +401,8 @@ impl Capture {
         conversation: &crate::runtime::identity::ConversationId,
         path: &[String],
     ) -> crate::message::types::MessageBlock {
-        use crate::message::types::{AssistantContentBlock, MessageBlock};
-        use crate::observation::content::ContentRepresentation as Rep;
+        use super::content::ContentRepresentation as Rep;
+        use crate::message::types::{AssistantContentBlock, MessageBlock, ReasoningBlock};
         let id = &assistant.id;
 
         MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {
@@ -431,24 +431,16 @@ impl Capture {
                         }
                         AssistantContentBlock::Reasoning(reasoning) => {
                             field.push("text".into());
-                            AssistantContentBlock::Reasoning(
-                                crate::message::types::ReasoningBlock {
-                                    text: reasoning.text.as_ref().map(|text| {
-                                        self.text(
-                                            text,
-                                            conversation,
-                                            id,
-                                            index,
-                                            field,
-                                            Rep::Utf8Text,
-                                        )
-                                    }),
-                                    provider_state: reasoning
-                                        .provider_state
-                                        .as_ref()
-                                        .and_then(|state| bounded_clone(state, 1024)),
-                                },
-                            )
+                            AssistantContentBlock::Reasoning(ReasoningBlock {
+                                origin: None,
+                                text: reasoning.text.as_ref().map(|text| {
+                                    self.text(text, conversation, id, index, field, Rep::Utf8Text)
+                                }),
+                                provider_state: reasoning
+                                    .provider_state
+                                    .as_ref()
+                                    .and_then(|state| bounded_clone(state, 1024)),
+                            })
                         }
                         AssistantContentBlock::Refusal(refusal) => {
                             field.push("text".into());

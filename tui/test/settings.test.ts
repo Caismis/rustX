@@ -69,42 +69,6 @@ it("CFG275 redacted native causes match the TypeScript wire unions", () => {
       "source": "workspace",
       "package": "/workspace/.agents/skills/review",
       "cause": {
-        "cause": "invalid_name",
-        "directory": "/workspace/.agents/skills/review"
-      }
-    },
-    {
-      "kind": "package_invalid",
-      "source": "workspace",
-      "package": "/workspace/.agents/skills/review",
-      "cause": {
-        "cause": "name_directory_mismatch",
-        "directory": "/workspace/.agents/skills/review"
-      }
-    },
-    {
-      "kind": "package_invalid",
-      "source": "workspace",
-      "package": "/workspace/.agents/skills/review",
-      "cause": {
-        "cause": "missing_skill_markdown",
-        "directory": "/workspace/.agents/skills/review"
-      }
-    },
-    {
-      "kind": "package_invalid",
-      "source": "workspace",
-      "package": "/workspace/.agents/skills/review",
-      "cause": {
-        "cause": "skill_markdown_not_regular_file",
-        "directory": "/workspace/.agents/skills/review"
-      }
-    },
-    {
-      "kind": "package_invalid",
-      "source": "workspace",
-      "package": "/workspace/.agents/skills/review",
-      "cause": {
         "cause": "malformed_frontmatter",
         "directory": "/workspace/.agents/skills/review"
       }
@@ -123,54 +87,14 @@ it("CFG275 redacted native causes match the TypeScript wire unions", () => {
       "source": "workspace",
       "package": "/workspace/.agents/skills/review",
       "cause": {
-        "cause": "invalid_compatibility",
-        "directory": "/workspace/.agents/skills/review"
-      }
-    },
-    {
-      "kind": "package_invalid",
-      "source": "workspace",
-      "package": "/workspace/.agents/skills/review",
-      "cause": {
-        "cause": "malformed_metadata",
-        "directory": "/workspace/.agents/skills/review"
-      }
-    },
-    {
-      "kind": "package_invalid",
-      "source": "workspace",
-      "package": "/workspace/.agents/skills/review",
-      "cause": {
-        "cause": "invalid_dependency_declaration",
-        "directory": "/workspace/.agents/skills/review"
-      }
-    },
-    {
-      "kind": "package_invalid",
-      "source": "workspace",
-      "package": "/workspace/.agents/skills/review",
-      "cause": {
-        "cause": "unsupported_symlink",
-        "path": "/workspace/.agents/skills/review"
-      }
-    },
-    {
-      "kind": "package_invalid",
-      "source": "workspace",
-      "package": "/workspace/.agents/skills/review",
-      "cause": {
         "cause": "unrepresentable_root",
         "path": "/workspace/.agents/skills/review"
       }
     },
     {
-      "kind": "package_invalid",
+      "kind": "package_warning",
       "source": "workspace",
-      "package": "/workspace/.agents/skills/review",
-      "cause": {
-        "cause": "io",
-        "path": "/workspace/.agents/skills/review"
-      }
+      "package": "/workspace/.agents/skills/review/SKILL.md"
     }
   ]
 };

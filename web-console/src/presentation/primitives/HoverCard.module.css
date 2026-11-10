@@ -23,6 +23,17 @@
   box-shadow: var(--dsw-shadow-lv3);
 }
 
+.preview {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  box-shadow: var(--dsw-elevation-panel);
+}
+
 .copyable {
   cursor: pointer;
 }

@@ -1294,6 +1294,10 @@ enum WireInput<'a> {
     Message {
         r#type: &'static str,
         role: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<&'static str>,
         content: Vec<WirePart<'a>>,
     },
     Call {
@@ -1330,6 +1334,11 @@ enum WireOutput<'a> {
 #[derive(Serialize)]
 #[serde(untagged)]
 enum WirePart<'a> {
+    OutputText {
+        r#type: &'static str,
+        text: Cow<'a, str>,
+        annotations: [(); 0],
+    },
     Text {
         r#type: &'static str,
         text: Cow<'a, str>,
@@ -1351,15 +1360,9 @@ impl<'a> WireInput<'a> {
         Self::Message {
             r#type: "message",
             role,
+            id: None,
+            status: (role == "assistant").then_some("completed"),
             content,
-        }
-    }
-
-    fn call_id(&self) -> Option<&str> {
-        match self {
-            Self::Call { call_id, .. } => call_id.as_str(),
-            Self::Native(input) => input.call_id.as_ref().and_then(serde_json::Value::as_str),
-            _ => None,
         }
     }
 }
@@ -1373,25 +1376,20 @@ pub(crate) fn translate_request<'a>(
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
     let mut input = Vec::new();
-    let (first, previous_response_id) = continuation_input(
-        request,
-        tools.continuation_boundary,
-        storage_mode,
-        &mut input,
-    )?;
-    let blocks = request.messages.iter().skip(first);
-    #[cfg(feature = "issue-387-profile")]
-    let blocks = (first..).zip(blocks).map(|(index, block)| {
+    let (first, previous_response_id) =
+        continuation_input(request, tools.continuation_boundary, storage_mode)?;
+    let origin = request.invocation.replay_origin();
+    let mut replayed = Vec::new();
+    for (index, block) in request.messages.iter().enumerate().skip(first) {
+        #[cfg(feature = "issue-387-profile")]
         crate::model::adapter::profile::item(index);
-        block
-    });
-    for block in blocks {
+        let before = input.len();
         match block.view() {
             ModelMessageView::User(user) => {
                 input.push(translate_user_input(user, &request.images)?);
             }
             ModelMessageView::Assistant(assistant) => {
-                translate_assistant_inputs(assistant, &mut input)?;
+                translate_assistant_inputs(assistant, origin.as_ref(), &mut input)?;
             }
             ModelMessageView::Tool(call, result) => {
                 input.push(translate_tool_result(call, result, &request.images)?);
@@ -1404,29 +1402,34 @@ pub(crate) fn translate_request<'a>(
                 };
                 input.push(WireInput::message(
                     role,
-                    vec![WirePart::Text {
-                        r#type: kind,
-                        text: Cow::Owned(carryover.render()),
+                    vec![if carryover.is_assistant() {
+                        replayed_output_text(Cow::Owned(carryover.render()))
+                    } else {
+                        WirePart::Text {
+                            r#type: kind,
+                            text: Cow::Owned(carryover.render()),
+                        }
                     }],
                 ));
             }
         }
+        if matches!(
+            input.get(before),
+            Some(WireInput::Message {
+                role: "assistant",
+                ..
+            })
+        ) {
+            replayed.push((before, index));
+        }
     }
-    let wire_calls = input
-        .iter()
-        .filter_map(WireInput::call_id)
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if !native_correlations_preserved(
-        &request.messages,
-        request.continuation.is_some(),
-        &wire_calls,
-    ) {
-        return Err(invalid_request(
-            "repeated correlation IDs would edit a complete encrypted native output unit",
-        ));
-    }
-    crate::model::adapter::correlation::encode_fields(|field| {
+    assign_replayed_message_ids(&mut input, replayed);
+    let labels = crate::model::adapter::correlation::transmitted_labels(
+        request,
+        tools.continuation_boundary,
+    )
+    .map_err(|error| invalid_request(&error))?;
+    crate::model::adapter::correlation::encode_fields(&labels, |field| {
         for item in &mut input {
             #[cfg(feature = "issue-387-profile")]
             crate::model::adapter::profile::wire_item();
@@ -1458,6 +1461,40 @@ pub(crate) fn translate_request<'a>(
     })
 }
 
+fn replayed_output_text(text: Cow<'_, str>) -> WirePart<'_> {
+    WirePart::OutputText {
+        r#type: "output_text",
+        text,
+        annotations: [],
+    }
+}
+
+fn assign_replayed_message_ids(input: &mut [WireInput<'_>], replayed: Vec<(usize, usize)>) {
+    if replayed.is_empty() {
+        return;
+    }
+    let mut occupied = input
+        .iter()
+        .filter_map(|item| match item {
+            WireInput::Native(native) => native.item["id"].as_str().map(str::to_owned),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    for (position, coordinate) in replayed {
+        let base = format!("msg_rustx_{coordinate}");
+        let mut id = base.clone();
+        for suffix in 1.. {
+            if occupied.insert(id.clone()) {
+                break;
+            }
+            id = format!("{base}_{suffix}");
+        }
+        if let WireInput::Message { id: target, .. } = &mut input[position] {
+            *target = Some(id);
+        }
+    }
+}
+
 fn translate_user_input<'a>(
     user: &'a [crate::message::types::UserContentBlock],
     images: &crate::model::images::ResolvedImages,
@@ -1484,37 +1521,39 @@ fn translate_user_input<'a>(
     Ok(WireInput::message("user", content))
 }
 
-fn continuation_input<'a>(
-    request: &'a ModelRequest,
+fn continuation_input(
+    request: &ModelRequest,
     boundary: Option<usize>,
     storage_mode: ResponsesStorageMode,
-    input: &mut Vec<WireInput<'a>>,
-) -> Result<(usize, Option<&'a str>), ModelError> {
+) -> Result<(usize, Option<&str>), ModelError> {
     let Some(ProviderContinuationState::OpenAiResponses(state)) = &request.continuation else {
         return Ok((0, None));
     };
-    let mut previous_response_id = None;
     let boundary = boundary
         .ok_or_else(|| invalid_request("Responses continuation lacks accepted-output boundary"))?;
-    match (storage_mode, state) {
+    let previous_response_id = match (storage_mode, state) {
         (
             ResponsesStorageMode::Stored,
             OpenAiResponsesContinuation::Stored {
                 previous_response_id: id,
             },
-        ) => previous_response_id = Some(id.as_str()),
+        ) => Some(id.as_str()),
         (ResponsesStorageMode::Stateless, OpenAiResponsesContinuation::Stateless { items }) => {
             let ModelMessageView::Assistant(assistant) = request.messages[boundary].view() else {
                 return Err(invalid_request(
                     "native continuation boundary is not Assistant output",
                 ));
             };
-            if retained_stateless_output(assistant)? != Some(items.as_slice()) {
+            if retained_stateless_output(assistant, request.invocation.replay_origin().as_ref())?
+                != Some(items.as_slice())
+            {
                 return Err(invalid_request(
                     "stateless continuation lacks its complete accepted output unit",
                 ));
             }
-            input.extend(items.iter().map(WireInput::native));
+            // Stateless native output is not the earlier input history. Replay
+            // the full context, substituting each exact owned output once.
+            return Ok((0, None));
         }
         (ResponsesStorageMode::Stored, _) => {
             return Err(invalid_request(
@@ -1526,7 +1565,7 @@ fn continuation_input<'a>(
                 "configured Responses storage mode is Stateless but the continuation variant is Stored",
             ));
         }
-    }
+    };
     Ok((boundary + 1, previous_response_id))
 }
 
@@ -1578,9 +1617,10 @@ fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<Wi
 
 fn translate_assistant_inputs<'a>(
     assistant: &'a [AssistantContentBlock],
+    origin: Option<&crate::model::replay::ReplayOrigin>,
     input: &mut Vec<WireInput<'a>>,
 ) -> Result<(), ModelError> {
-    if let Some(items) = retained_stateless_output(assistant)? {
+    if let Some(items) = retained_stateless_output(assistant, origin)? {
         input.extend(items.iter().map(WireInput::native));
         return Ok(());
     }
@@ -1588,24 +1628,22 @@ fn translate_assistant_inputs<'a>(
     let mut calls = Vec::new();
     for block in assistant {
         match block {
-            AssistantContentBlock::Text(text) => content.push(WirePart::Text {
-                r#type: "input_text",
-                text: Cow::Borrowed(&text.text),
-            }),
+            AssistantContentBlock::Text(text) => {
+                content.push(replayed_output_text(Cow::Borrowed(&text.text)));
+            }
             AssistantContentBlock::Refusal(refusal) => content.push(WirePart::Refusal {
                 r#type: "refusal",
                 refusal: &refusal.text,
             }),
-            AssistantContentBlock::Reasoning(reasoning) => match &reasoning.provider_state {
-                Some(ProviderContinuationState::OpenAiResponses(
-                    OpenAiResponsesContinuation::Stored { .. },
-                )) if reasoning.text.as_deref().is_none_or(str::is_empty) => {}
-                _ => {
-                    return Err(unsupported(
-                        "canonical reasoning text alone is not sufficient to reconstruct an OpenAI Responses reasoning item; preserved provider-native reasoning state is required for replay",
-                    ));
+            AssistantContentBlock::Reasoning(reasoning) => {
+                if let Some(text) = reasoning
+                    .text
+                    .as_deref()
+                    .filter(|text| !text.trim().is_empty())
+                {
+                    content.push(replayed_output_text(Cow::Borrowed(text)));
                 }
-            },
+            }
             AssistantContentBlock::ToolCall(call) => calls.push(WireInput::Call {
                 r#type: "function_call",
                 call_id: call.id.as_str().into(),
@@ -1630,16 +1668,19 @@ fn translate_assistant_inputs<'a>(
     Ok(())
 }
 
-fn retained_stateless_output(
-    assistant: &[AssistantContentBlock],
-) -> Result<Option<&[serde_json::Value]>, ModelError> {
+fn retained_stateless_output<'a>(
+    assistant: &'a [AssistantContentBlock],
+    origin: Option<&crate::model::replay::ReplayOrigin>,
+) -> Result<Option<&'a [serde_json::Value]>, ModelError> {
     let mut units = assistant.iter().filter_map(|block| match block {
-        AssistantContentBlock::Reasoning(reasoning) => match &reasoning.provider_state {
-            Some(ProviderContinuationState::OpenAiResponses(
-                OpenAiResponsesContinuation::Stateless { items },
-            )) => Some(items),
-            _ => None,
-        },
+        AssistantContentBlock::Reasoning(reasoning) if reasoning.belongs_to(origin) => {
+            match &reasoning.provider_state {
+                Some(ProviderContinuationState::OpenAiResponses(
+                    OpenAiResponsesContinuation::Stateless { items },
+                )) => Some(items),
+                _ => None,
+            }
+        }
         _ => None,
     });
     let Some(items) = units.next() else {
@@ -1874,94 +1915,8 @@ fn unsupported(message: impl Into<String>) -> ModelError {
     }
 }
 
-/// Native encrypted output units cannot inherit newly invented call labels.
-/// Generic older batches may be relabeled, while native units stay exact.
-fn native_correlations_preserved<'a>(
-    messages: impl IntoIterator<Item = &'a crate::model::ModelInputMessage>,
-    continuation: bool,
-    wire_calls: &[String],
-) -> bool {
-    let labels = crate::model::occurrence::wire_labels(wire_calls);
-    if labels == wire_calls {
-        return true;
-    }
-    // A continuation replays one accepted native output unit, not arbitrary
-    // repeated historical occurrences. Duplicate IDs in that unit are invalid.
-    if continuation {
-        return false;
-    }
-    let mut ordinal = 0;
-    #[cfg(feature = "issue-387-profile")]
-    let _profile = crate::model::adapter::profile::phase(
-        crate::model::adapter::profile::Phase::NativeCorrelation,
-    );
-    #[cfg(feature = "issue-387-profile")]
-    let messages = messages.into_iter().enumerate().map(|(index, message)| {
-        crate::model::adapter::profile::item(index);
-        message
-    });
-    for message in messages {
-        if let ModelMessageView::Assistant(content) = message.view() {
-            let native=content.iter().any(|block|matches!(block,AssistantContentBlock::Reasoning(reasoning) if matches!(reasoning.provider_state,Some(crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {..})))));
-            for block in content {
-                #[cfg(feature = "issue-387-profile")]
-                crate::model::adapter::profile::block();
-                if matches!(block, AssistantContentBlock::ToolCall(_)) {
-                    if native && labels.get(ordinal) != wire_calls.get(ordinal) {
-                        return false;
-                    }
-                    ordinal += 1;
-                }
-            }
-        }
-    }
-    true
-}
-
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn native_output_unit_never_receives_invented_wire_correlation_ids() {
-        use super::native_correlations_preserved;
-        use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, ReasoningBlock};
-        use crate::model::ModelInputMessage;
-        use crate::runtime::continuation::OpenAiResponsesContinuation;
-        let call = crate::tools::types::ToolCall {
-            id: crate::runtime::identity::ToolCallId::new("repeat"),
-            tool_id: crate::runtime::identity::ToolId::new("tool"),
-            name: "tool".into(),
-            arguments: serde_json::json!({}),
-        };
-        let native = ModelInputMessage::Canonical(crate::message::types::MessageBlock::Assistant(AssistantMessageBlock {
-            id:crate::runtime::identity::MessageId::new("native"),content:vec![AssistantContentBlock::Reasoning(ReasoningBlock {text:None,provider_state:Some(crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless { items:vec![serde_json::json!({"type":"reasoning","id":"rs-native","encrypted_content":"opaque-native"}),serde_json::json!({"type":"function_call","id":"fc-native","call_id":"repeat","name":"tool","arguments":"{}"})].into() }))}),AssistantContentBlock::ToolCall(call.clone())],
-        }));
-        let generic = ModelInputMessage::Canonical(crate::message::types::MessageBlock::Assistant(
-            AssistantMessageBlock {
-                id: crate::runtime::identity::MessageId::new("generic"),
-                content: vec![AssistantContentBlock::ToolCall(call)],
-            },
-        ));
-        let ids = vec!["repeat".to_owned(), "repeat".to_owned()];
-        assert!(!native_correlations_preserved(
-            &[native.clone(), generic.clone()],
-            false,
-            &ids
-        ));
-        assert!(
-            native_correlations_preserved(&[generic, native.clone()], false, &ids),
-            "only an older generic batch is renamed; the native unit remains exact"
-        );
-        assert!(!native_correlations_preserved(
-            &[native.clone(), native],
-            false,
-            &ids
-        ));
-        assert!(
-            !native_correlations_preserved(&[], true, &ids),
-            "a continuation cannot arbitrarily replay repeated native occurrences"
-        );
-    }
-
     use super::{translate_tool_result, translate_tools};
     use crate::message::content::TextBlock;
     use crate::message::types::ToolMessageBlock;

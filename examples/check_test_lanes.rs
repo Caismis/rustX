@@ -1667,16 +1667,15 @@ fn flow_runs() {
     type Probes = BTreeMap<String, Result<BTreeSet<String>, String>>;
 
     /// Fixture child entry point of
-    /// [`real_cargo_discovery_is_independent_of_inherited_color`]. Without
-    /// [`FIXTURE_ENV`] it returns at once and proves nothing. Re-executed with
-    /// it, it runs the production [`CargoDiscovery`] over the fixture under
+    /// [`real_cargo_discovery_is_independent_of_inherited_color`]. It runs
+    /// the production [`CargoDiscovery`] over the fixture under
     /// the environment its parent chose, and writes what it discovered to
     /// `probes.json` there. It never launches itself.
     #[test]
+    #[ignore = "fixture subprocess, invoked by its parent test"]
     fn real_cargo_discovery_child() {
-        let Some(root) = std::env::var_os(FIXTURE_ENV) else {
-            return;
-        };
+        let root =
+            std::env::var_os(FIXTURE_ENV).expect("fixture parent must provide its environment");
         let root = std::path::PathBuf::from(root);
         let discovery = CargoDiscovery {
             cargo: cargo_program(),
@@ -1796,7 +1795,7 @@ fn flow_runs() {
         for color in ["always", "never"] {
             let mut child = Command::new(std::env::current_exe().unwrap());
             child
-                .args(["tests::real_cargo_discovery_child", "--exact"])
+                .args(["tests::real_cargo_discovery_child", "--exact", "--ignored"])
                 .env(FIXTURE_ENV, root)
                 .env("CARGO_TERM_COLOR", color);
             isolated(&mut child);

@@ -1,7 +1,7 @@
 import { translator } from '../src/locale/translation';
 // @vitest-environment node
 import { expect, it } from 'vitest';
-import type { Model, Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v76';
+import type { Model, Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v78';
 import {
   applicationOwners, applicationScope, authoredUnit, catalogEntries, catalogIdentities, changeBehavior, changeBehaviorLabel, configAuthoring, documentAuthoring,
   effectiveStateLabel, inheritedResources, observedResult, observedResultLabel, openOwnerLabel, provenanceLabel,
@@ -152,7 +152,6 @@ it('S1-14 whole-unit semantic units use their exact whole-unit native paths', ()
     [{ kind: 'config', mutation: { unit: 'workflow_enabled', id: 'nightly', enabled: true } }, 'agent.workflows'],
     [{ kind: 'config', mutation: { unit: 'agent_identity', authored: null } }, 'agent_id'],
     [{ kind: 'config', mutation: { unit: 'description', authored: null } }, 'agent.description'],
-    [{ kind: 'config', mutation: { unit: 'instructions', authored: null } }, 'agent.instructions'],
     [{ kind: 'config', mutation: { unit: 'project_guidance', authored: null } }, 'agent.agents_md'],
     [{ kind: 'config', mutation: { unit: 'approval', authored: null } }, 'approval_mode'],
     [{ kind: 'config', mutation: { unit: 'context', authored: null } }, 'context'],
@@ -236,14 +235,14 @@ it('S1-07 connecting, loading, ready, stale and failed are distinct lifecycle st
 });
 
 it('S1-14 a revision selector names the settling native document without any authored payload', () => {
-  const literal: SourceMutation = { kind: 'config', mutation: { unit: 'provider', id: 'secret', authored: { base_url: 'https://native.invalid', credential: { kind: 'literal', value: 'SECRET_SENTINEL' } } } };
+  const literal: SourceMutation = { kind: 'config', mutation: { unit: 'provider', id: 'secret', authored: { protocol: 'openai_responses', base_url: 'https://native.invalid', credential: { kind: 'literal', value: 'SECRET_SENTINEL' } } } };
   const mcp: SourceMutation = { kind: 'mcp', id: 'search', authored: { definition: { type: 'stdio', command: 'search', env: { TOKEN: 'SECRET_SENTINEL' } } } };
   const agent: SourceMutation = { kind: 'agent', name: 'reviewer', authored: { instructions: 'Inspect' } };
   const repair: SourceMutation = { kind: 'repair_config', document: '[agent]\n' };
-  // Only the family, and for a named resource its identity, is retained.
-  expect(revisionSelector(literal)).toEqual({ kind: 'config' });
+  // Only the document and the unit's address are retained.
+  expect(revisionSelector(literal)).toEqual({ kind: 'config', unit: 'provider', entry: 'secret' });
   expect(revisionSelector(repair)).toEqual({ kind: 'config' });
-  expect(revisionSelector(mcp)).toEqual({ kind: 'mcp' });
+  expect(revisionSelector(mcp)).toEqual({ kind: 'mcp', entry: 'search' });
   expect(revisionSelector(agent)).toEqual({ kind: 'agent', name: 'reviewer' });
   for (const mutation of [literal, mcp, agent]) expect(JSON.stringify(revisionSelector(mutation))).not.toContain('SECRET_SENTINEL');
   // Each selector resolves the exact revision of its own native document, in
@@ -264,15 +263,15 @@ it('S1-14 a revision selector names the settling native document without any aut
 });
 
 it('S1-15 a catalog enumerates native effective identities with this scope\'s authoring kept separate', () => {
-  const source = resolvedSource({ providers: { transport: { base_url: 'https://user.invalid', credential: { type: 'literal' } }, local: { base_url: 'https://workspace.invalid', credential: { type: 'environment', variable: 'W' } } } },
+  const source = resolvedSource({ providers: { transport: { protocol: 'openai_responses', base_url: 'https://user.invalid', credential: { type: 'literal' } }, local: { protocol: 'openai_responses', base_url: 'https://workspace.invalid', credential: { type: 'environment', variable: 'W' } } } },
     { 'providers.transport': user, 'providers.local': workspace });
-  source.workspace!.authored = { providers: { local: { base_url: 'https://workspace.invalid', credential: { type: 'environment', variable: 'W' } } } };
+  source.workspace!.authored = { providers: { local: { protocol: 'openai_responses', base_url: 'https://workspace.invalid', credential: { type: 'environment', variable: 'W' } } } };
   const entries = catalogEntries(source, 'workspace', 'providers');
   expect(entries.map(entry => entry.id)).toEqual(['transport', 'local']);
   // The inherited identity is present with the native effective value and the
   // native origin, while this scope authors nothing for it.
   expect(entries[0].authored).toBeUndefined();
-  expect(entries[0].effective).toEqual({ base_url: 'https://user.invalid', credential: { type: 'literal' } });
+  expect(entries[0].effective).toEqual({ protocol: 'openai_responses', base_url: 'https://user.invalid', credential: { type: 'literal' } });
   expect(provenanceLabel(translator('en'), entries[0].origin)).toBe('Inherited from User');
   expect(entries[1].authored).toBeTruthy();
   expect(provenanceLabel(translator('en'), entries[1].origin)).toBe('Workspace override');
@@ -320,7 +319,7 @@ it('S1-15 a Workspace reaches native effective identities of a named container, 
 
 // ── Identity discovery survives effective-resolution failure ────────────────
 
-const workspaceModel: Model = { provider: 'transport', id: 'wire-w', protocol: 'openai_responses', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], json_schema_output: false } };
+const workspaceModel: Model = { provider: 'transport', id: 'wire-w', context_window: '128000', max_output_tokens: 8192, capabilities: { input_modalities: ['text'], output_modalities: ['text'], json_schema_output: false } };
 const userModel: Model = { ...workspaceModel, id: 'wire-u' };
 
 it('ID-01 a Workspace keeps its own authored identities when a malformed User document makes resolution unavailable', () => {

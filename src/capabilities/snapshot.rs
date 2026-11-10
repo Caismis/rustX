@@ -255,9 +255,25 @@ impl CapabilitySnapshot {
     /// Effective System Prompt; it is not canonical conversation history.
     #[must_use]
     pub fn skill_catalog(&self) -> Option<String> {
+        use crate::skills::SkillReadTool;
+        use crate::tools::types::ToolOrigin;
         let entries = self.model_skill_entries();
-        (!entries.is_empty())
-            .then(|| crate::skills::render_skill_catalog(entries, self.skills.roots()))
+        if entries.is_empty() {
+            return None;
+        }
+        let has = |name| {
+            self.tool_registry
+                .definition_refs()
+                .any(|tool| tool.origin == ToolOrigin::Builtin && tool.name == name)
+        };
+        let reader = if has("read") {
+            SkillReadTool::Read
+        } else if has("bash") {
+            SkillReadTool::Bash
+        } else {
+            return None;
+        };
+        Some(crate::skills::render_skill_catalog(entries, reader))
     }
 
     /// Exact profile-selected Skill metadata, independent of Tool selection.

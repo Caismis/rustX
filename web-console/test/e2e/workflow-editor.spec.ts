@@ -303,11 +303,13 @@ test('conflicts keep edits, invalid files stay preserved, and leaving asks first
     await expect(leave).toBeVisible();
     await leave.getByRole('button', { name: 'Keep editing', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'parallel_review', exact: true })).toBeVisible();
-    // Settings is another external exit, guarded by the same editor owner.
-    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Settings', exact: true }).click();
-    await expect(leave).toBeVisible();
-    await leave.getByRole('button', { name: 'Keep editing', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'parallel_review', exact: true })).toBeVisible();
+    // All independent modules use the same guarded Workflow departure.
+    for(const destination of ['Settings','Manage subagents','MCP servers','Skills']){
+      await page.getByRole('navigation',{name:'Primary navigation'}).getByRole('button',{name:destination,exact:true}).click();
+      await expect(leave).toBeVisible();
+      await leave.getByRole('button',{name:'Keep editing',exact:true}).click();
+      await expect(page.getByRole('heading',{name:'parallel_review',exact:true})).toBeVisible();
+    }
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Home', exact: true }).click();
     await leave.getByRole('button', { name: 'Discard and leave', exact: true }).click();
     await expect(page.getByLabel('Message', { exact: true })).toBeVisible();

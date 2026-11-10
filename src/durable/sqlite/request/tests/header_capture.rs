@@ -276,6 +276,7 @@ pub(super) fn inline_originals(unicode: &str, large: &str) -> Vec<MessageBlock> 
                     text: "original answer".into(),
                 }),
                 AssistantContentBlock::Reasoning(crate::message::types::ReasoningBlock {
+                    origin: None,
                     text: Some("original reasoning".into()),
                     provider_state: None,
                 }),

@@ -7,7 +7,7 @@ on:
   issues:
     types: [assigned]
   workflow_run:
-    workflows: [CI, Workspace Host platform conformance, PR review signal]
+    workflows: [CI, PR review signal]
     types: [completed]
 
 permissions:

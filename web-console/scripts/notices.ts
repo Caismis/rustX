@@ -14,6 +14,7 @@ const packages = new Map<string, string>();
  * is pinned to one exact version and one declared license, so an upgrade or a
  * license change fails closed instead of inheriting this record. */
 const declaredOnly: Record<string, { license: string | undefined; notice: string }> = {
+  '@lobehub/icons-static-svg 1.102.0': { license: 'MIT', notice: readFileSync(join(root, 'licenses/lobehub-icons-static-svg-1.102.0.txt'), 'utf8') },
   '@uiw/react-codemirror 4.25.12': { license: 'MIT', notice: readFileSync(join(root, 'licenses/react-codemirror-4.25.12.txt'), 'utf8') },
   '@uiw/codemirror-extensions-basic-setup 4.25.12': { license: 'MIT', notice: readFileSync(join(root, 'licenses/react-codemirror-4.25.12.txt'), 'utf8') },
   '@fortune-sheet/core 1.0.4': { license: 'MIT', notice: readFileSync(join(root, 'licenses/fortune-sheet-1.0.4.txt'), 'utf8') },

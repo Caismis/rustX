@@ -13,9 +13,8 @@
 //! ```text
 //! SourceRootMissing      an automatic root simply does not exist (benign)
 //! SourceRootInvalid      an automatic root exists but cannot be scanned
-//! SourceBudgetExceeded   one source offered more candidates than its budget
 //! PackageInvalid         one candidate failed Agent Skills validation
-//! PackageEscapesSource   one candidate resolved outside its own source
+//! PackageWarning         one candidate loaded with a validation warning
 //! DuplicateIdentity      one scope defines the same identity twice
 //! Shadowed               a higher-precedence source won the same identity
 //! ```
@@ -28,7 +27,7 @@
 use crate::skills::package::SkillPackageError;
 use crate::skills::source::SkillSource;
 
-/// Whether one diagnostic reports an ordinary fact or an exclusion.
+/// Whether one diagnostic reports an ordinary fact or a warning.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
@@ -36,7 +35,7 @@ use crate::skills::source::SkillSource;
 pub enum SkillDiagnosticSeverity {
     /// Nothing was excluded; the generation simply records what it observed.
     Fact,
-    /// A candidate was excluded from the effective catalog.
+    /// A candidate or source had a problem during discovery.
     Warning,
 }
 
@@ -58,9 +57,7 @@ pub enum SkillDiagnostic {
         root: String,
     },
     /// A fixed User or Workspace source root exists but cannot be used as a
-    /// Skill collection directory. It contributes no packages. An unreadable
-    /// Workspace collection also withholds lower User candidates because their
-    /// shadow status cannot be established.
+    /// Skill collection directory. It contributes no packages.
     SourceRootInvalid {
         /// The source whose root is unusable.
         source: SkillSource,
@@ -69,20 +66,6 @@ pub enum SkillDiagnostic {
         /// The structural reason, preserved verbatim.
         #[serde(skip)]
         detail: String,
-    },
-    /// One fixed User or Workspace collection exceeded its candidate budget.
-    /// Enumeration is bounded before package validation. The collection contributes
-    /// nothing; an over-budget Workspace collection also withholds lower candidates
-    /// whose shadow status cannot be established.
-    SourceBudgetExceeded {
-        /// The source whose cumulative budget was exhausted.
-        source: SkillSource,
-        /// The fixed collection root, represented in canonical order.
-        roots: Vec<String>,
-        /// The source's total candidate count.
-        candidates: usize,
-        /// The source's cumulative candidate budget.
-        limit: usize,
     },
     /// One candidate package failed Agent Skills validation and is excluded.
     /// Unrelated valid packages in the same source still publish.
@@ -94,20 +77,18 @@ pub enum SkillDiagnostic {
         /// The preserved typed validation cause.
         cause: SkillPackageError,
     },
-    /// One candidate canonicalized outside the source root that offered it.
-    /// Sources are bounded authorities, so the candidate is excluded rather
-    /// than silently admitted under the wrong authority.
-    PackageEscapesSource {
-        /// The source that offered the candidate.
+    /// A usable package with a naming, description, or dependency warning.
+    PackageWarning {
+        /// The source the package was found under.
         source: SkillSource,
-        /// The candidate package directory as offered.
+        /// The instruction file as offered.
         package: String,
-        /// The canonical source root the candidate left.
-        root: String,
+        /// The validation warning.
+        #[serde(skip)]
+        detail: String,
     },
     /// Two or more distinct packages in the **same** scope resolve to one
-    /// logical Skill identity. Every conflicting definition is excluded;
-    /// discovery never picks a winner by enumeration order.
+    /// logical Skill identity. The first path wins in discovery precedence.
     DuplicateIdentity {
         /// The scope that defines the identity more than once.
         source: SkillSource,
@@ -137,22 +118,23 @@ impl SkillDiagnostic {
     pub(crate) fn redacted(&self) -> Self {
         let mut fact = self.clone();
         match &mut fact {
-            Self::SourceRootInvalid { detail, .. } => detail.clear(),
+            Self::SourceRootInvalid { detail, .. } | Self::PackageWarning { detail, .. } => {
+                detail.clear();
+            }
             Self::PackageInvalid { cause, .. } => *cause = cause.redacted(),
             _ => {}
         }
         fact
     }
 
-    /// Whether this diagnostic excluded a candidate from the catalog.
+    /// Whether this diagnostic represents a discovery warning.
     #[must_use]
     pub const fn severity(&self) -> SkillDiagnosticSeverity {
         match self {
             Self::SourceRootMissing { .. } | Self::Shadowed { .. } => SkillDiagnosticSeverity::Fact,
             Self::SourceRootInvalid { .. }
-            | Self::SourceBudgetExceeded { .. }
             | Self::PackageInvalid { .. }
-            | Self::PackageEscapesSource { .. }
+            | Self::PackageWarning { .. }
             | Self::DuplicateIdentity { .. } => SkillDiagnosticSeverity::Warning,
         }
     }
@@ -163,9 +145,8 @@ impl SkillDiagnostic {
         match self {
             Self::SourceRootMissing { source, .. }
             | Self::SourceRootInvalid { source, .. }
-            | Self::SourceBudgetExceeded { source, .. }
             | Self::PackageInvalid { source, .. }
-            | Self::PackageEscapesSource { source, .. }
+            | Self::PackageWarning { source, .. }
             | Self::DuplicateIdentity { source, .. } => Some(*source),
             Self::Shadowed { .. } => None,
         }
@@ -187,17 +168,6 @@ impl core::fmt::Display for SkillDiagnostic {
                 formatter,
                 "the {source} Skill source root {root:?} cannot be scanned: {detail}"
             ),
-            Self::SourceBudgetExceeded {
-                source,
-                roots,
-                candidates,
-                limit,
-            } => write!(
-                formatter,
-                "the {source} Skill source offers {candidates} candidate packages across {}, \
-                 exceeding its cumulative {limit}-package budget; the source is excluded",
-                roots.join(", ")
-            ),
             Self::PackageInvalid {
                 source,
                 package,
@@ -206,14 +176,13 @@ impl core::fmt::Display for SkillDiagnostic {
                 formatter,
                 "the {source} Skill package {package:?} is excluded: {cause}"
             ),
-            Self::PackageEscapesSource {
+            Self::PackageWarning {
                 source,
                 package,
-                root,
+                detail,
             } => write!(
                 formatter,
-                "the {source} Skill package {package:?} resolves outside its source root \
-                 {root:?} and is excluded"
+                "the {source} Skill package {package:?}: {detail}"
             ),
             Self::DuplicateIdentity {
                 source,
@@ -221,8 +190,7 @@ impl core::fmt::Display for SkillDiagnostic {
                 packages,
             } => write!(
                 formatter,
-                "the {source} Skill scope defines {name:?} more than once ({}); every \
-                 conflicting definition is excluded",
+                "the {source} Skill scope defines {name:?} more than once ({}); the first path wins",
                 packages.join(", ")
             ),
             Self::Shadowed {

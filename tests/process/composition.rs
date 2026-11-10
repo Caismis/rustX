@@ -19,13 +19,13 @@ use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClien
 /// A catalog whose credential comes from the environment, exercising the
 /// startup credential-resolution path.
 const MODELS_TOML: &str = r#"[providers.local]
+protocol = "openai_chat_completions"
 base_url = "https://local.fixture.invalid/v1"
 api_key = "$RUSTX_TEST_MODEL_KEY"
 
 [models."local/composed-model"]
 provider = "local"
 id = "composed-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 request_params = '{"temperature":0.3}'

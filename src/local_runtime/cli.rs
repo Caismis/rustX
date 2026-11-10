@@ -78,7 +78,7 @@ enum PublicCommand {
     Doctor(DoctorArgs),
     /// Publish minimal user configuration without overwriting existing files
     #[command(
-        after_help = "Native template policy: custom uses a complete --model-document. Other templates require model-id, context-window and max-output declarations. Tool calls are supported by default. Optional compatibility TOML overrides protocol defaults. Credential-env names an environment variable, never a literal secret. Publication creates ~/rustx/rustx.toml and ~/rustx/.agents without overwriting existing files."
+        after_help = "Native template policy: custom uses --protocol for its Provider and a complete --model-document. Other templates require model-id, context-window and max-output declarations. Tool calls are supported by default. Optional compatibility TOML overrides protocol defaults. Credential-env names an environment variable, never a literal secret. Publication creates ~/rustx/rustx.toml and ~/rustx/.agents without overwriting existing files."
     )]
     Init(InitArgs),
     /// Serve the App Server protocol on an explicitly selected transport
@@ -184,6 +184,9 @@ enum TemplateArg {
 struct InitArgs {
     #[arg(long, value_enum)]
     template: TemplateArg,
+    /// Explicit provider API protocol for the custom template
+    #[arg(long, value_parser = model_protocol)]
+    protocol: Option<crate::model::ModelProtocol>,
     #[arg(long, value_parser = NonEmptyStringValueParser::new())]
     provider: String,
     #[arg(long, value_parser = NonEmptyStringValueParser::new())]
@@ -205,6 +208,13 @@ struct InitArgs {
     #[arg(long)]
     json: bool,
 }
+fn model_protocol(value: &str) -> Result<crate::model::ModelProtocol, String> {
+    serde_json::from_value(serde_json::Value::String(value.to_owned())).map_err(|_| {
+        "protocol must be openai_chat_completions, openai_responses, or anthropic_messages"
+            .to_owned()
+    })
+}
+
 impl InitArgs {
     fn into_request(self) -> InitializationRequest {
         InitializationRequest {
@@ -214,6 +224,7 @@ impl InitArgs {
                 TemplateArg::Anthropic => Template::Anthropic,
                 TemplateArg::Custom => Template::Custom,
             },
+            protocol: self.protocol,
             provider: self.provider,
             endpoint: self.endpoint,
             credential_env: self.credential_env,

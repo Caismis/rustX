@@ -1,11 +1,12 @@
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { SubagentHeader, SubagentScope } from '../src/app/agent/Subagents';
+import { SubagentAside, SubagentHeader, SubagentScope } from '../src/app/agent/Subagents';
 import { WorkflowRunPanel } from '../src/app/agent/WorkflowRunPanel';
 import { useSubagents } from '../src/app/agent/subagent-context';
 import { workflowChildren, workflowKey } from '../src/bindings/workflow-children';
 import { checkpoint, Server } from './fixture';
 import { installWorkflowChildStatus, workflowCatalogSnapshot, workflowChildHeader } from './workflow-catalog-data';
+import { agentMetrics } from './agent-statistics-fixture';
 
 const servers: Server[] = [];
 afterEach(() => { cleanup(); servers.splice(0).forEach(server => server.client.disconnect()); });
@@ -21,6 +22,52 @@ function Controls() {
     <button onClick={() => void scope.openWorkflow?.('workflow-agent-0', 'workflow-activation-0', 'explore')}>Open workflow node</button></>;
 }
 const surface = (server: Server, sessionId = 'A') => <SubagentScope client={server.client} sessionId={sessionId}><SubagentHeader title="Parent"/><Controls/></SubagentScope>;
+
+const asideId = 'workflow-child:' + JSON.stringify(['workflow-agent-0', 'workflow-activation-0']);
+function SidebarState() {
+  const scope = useSubagents()!;
+  return <output data-testid="aside-state">{scope.selected?.agent_id ?? 'parent'}:{scope.opened.length}:{scope.agents.length}:{Object.keys(scope.metrics).length}</output>;
+}
+const sidebar = (server: Server, visible = true, sessionId = 'A') => <SubagentScope client={server.client} sessionId={sessionId}>
+  <SidebarState/><SubagentAside id={asideId} visible={visible}/>
+</SubagentScope>;
+
+it('direct workflow sidebar inspection loads meters without opening or selecting a main-chat child', async () => {
+  const server = await setup();
+  server.handlers.set('agent/statistics', () => ({ type: 'agent_statistics', metrics: agentMetrics }));
+  const ui = render(sidebar(server));
+  expect(await ui.findByRole('button', { name: /12K tok/ })).toBeTruthy();
+  expect(ui.getByText('10%')).toBeTruthy();
+  expect(ui.getByTestId('aside-state').textContent).toBe('parent:0:0:1');
+  expect(ui.container.querySelector('[data-composer-card]')).toBeNull();
+  expect(ui.queryByRole('textbox')).toBeNull();
+  expect(server.requests.filter(row => row.request.method === 'agent/statistics')).toHaveLength(1);
+  ui.rerender(sidebar(server, false));
+  expect(ui.getByTestId('aside-state').textContent).toBe('parent:0:0:0');
+  expect(server.client.agentMeters.getSnapshot().scope!.inventory()).toHaveLength(0);
+  ui.rerender(sidebar(server));
+  await waitFor(() => expect(server.requests.filter(row => row.request.method === 'agent/statistics')).toHaveLength(2));
+  expect(await ui.findByRole('button', { name: /12K tok/ })).toBeTruthy();
+  ui.unmount();
+  expect(server.client.agentMeters.getSnapshot().scope).toBeUndefined();
+});
+
+it('releases sidebar observation on hide and rejects late statistics after scope replacement', async () => {
+  const server = await setup(); await server.attached('B');
+  server.held.add('agent/statistics');
+  server.handlers.set('agent/statistics', () => ({ type: 'agent_statistics', metrics: agentMetrics }));
+  const ui = render(sidebar(server));
+  const pending = await server.waitFor('agent/statistics', 1);
+  const previous = server.client.agentMeters.getSnapshot().scope!;
+  ui.rerender(sidebar(server, false));
+  expect(previous.inventory()).toHaveLength(0);
+  ui.rerender(sidebar(server, false, 'B'));
+  expect(server.client.agentMeters.getSnapshot().scope).not.toBe(previous);
+  await act(async () => server.reply(pending));
+  expect(server.client.agentMeters.getSnapshot().readings.size).toBe(0);
+  expect(ui.getByTestId('aside-state').textContent).toBe('parent:0:0:0');
+  expect(server.requests.filter(row => row.request.method === 'agent/statistics')).toHaveLength(1);
+});
 
 it('lists three settled workflow children before inspection; opening, closing and remounting never change membership', async () => {
   const server = await setup(), ui = render(surface(server));

@@ -115,11 +115,13 @@ those Tools. A negotiated, authorized Resources source automatically composes
 per Agent, including when the source publishes no Tools. Resource contents enter
 context only through an explicit Tool call.
 
-Skill roots are `~/rustx/.agents/skills` and `<workspace>/.agents/skills`, with
-whole-package Workspace shadowing. Root and named Agents each select `skills` as
-`"all"`, an exact name array, or `[]`. This controls prompt visibility, not filesystem
-authorization. The model receives absolute collection roots and reads package
-contents progressively. There is no configurable source-selection layer.
+Skills are discovered in `<workspace>/.agents/skills` and
+`~/rustx/.agents/skills`. Discovery is recursive, follows file and directory
+symlinks, stops at a package's `SKILL.md`, and uses the first valid definition
+for a name. The root Agent advertises eligible
+Skills by default. Use `agent.skills` to select `"all"`, exact names, or `[]`.
+The model receives names, descriptions and absolute instruction paths, then
+reads matching instructions on demand through Read or Bash.
 The [CFG3 reference](docs/configuration.md) defines the complete ownership model.
 
 For those native file tools, relative paths resolve from the execution cwd and

@@ -53,12 +53,12 @@ counted as such:
   rewrites a committed corpus; the `generate_schemas` and
   `generate_app_server_protocol` examples regenerate checked-in artifacts
   (the latter is the App Server protocol lane's drift check).
-- **Fixture child entry point** — a `#[test]` that a parent test
+- **Fixture child entry point** — an ignored `#[test]` that a parent test
   re-executes as its child process (for example `child_process_entry`,
   `staged_rollback_wire_child`, `deletion_process_child`, and the lane
-  checker's `real_cargo_discovery_child`). Without its mode variable it
-  returns at once, so its ordinary "pass" proves nothing; the parent test is
-  the coverage.
+  checker's `real_cargo_discovery_child`). The parent selects the entry with
+  `--exact --ignored` and supplies its fixture environment. Only the parent
+  counts as correctness coverage.
 - **Lexical source convention** — a test that checks the spelling of
   production source text. Rust cannot restrict imports between modules of
   one crate, so these name a dependency-direction or vocabulary convention
@@ -438,7 +438,7 @@ summarizes them and the lane check below verifies them against Cargo:
 | `durable`, `process`, `subagent`, `tools`, `conformance`, `cfg3_catalog`, `cfg3_managed_output` | boundary conformance | rust-boundaries | core and full (required) |
 | `test-support/fake-provider` pytest | emulator's own tests | rust-boundaries | no |
 
-- **quality** (ubuntu) — fmt, clippy, whitespace.
+- **quality** (ubuntu) — fmt and Clippy.
 - **rust-contracts** (ubuntu) — `cargo build --bins`, then
   `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::`
   and `cargo test --test contracts --test provider --all-features`.
@@ -452,11 +452,10 @@ summarizes them and the lane check below verifies them against Cargo:
   examples stay selected so Cargo's own target discovery picks up a future
   test; the lane check allows their harnesses to be empty.
 - **rust-boundaries** (ubuntu) — the emulator's pytest suite, then
-  `cargo test --all-features --no-run` over the seven external boundary
-  targets, then `cargo test --lib --all-features -- boundary_suites::`, then
   `cargo test --all-features --test durable --test process --test subagent
   --test tools --test conformance --test cfg3_catalog --test
-  cfg3_managed_output`. Compiling an integration target also builds every
+  cfg3_managed_output`, then `cargo test --lib --all-features -- boundary_suites::`.
+  Running the integration targets first also builds every
   real executable against the library the tests link and places it at
   `target/debug/`, where the text_spill suite execs `bash-supervisor`; a
   separate `cargo build --bins` would compile another complete library
@@ -501,6 +500,10 @@ summarizes them and the lane check below verifies them against Cargo:
   TypeScript through `cargo run --example generate_app_server_protocol` and
   fails on drift; `pnpm typecheck` checks the fixtures and reference
   intersections.
+- **desktop-macos** — the native macOS Workspace Host, PTY and Office
+  boundaries, plus Desktop adapter and TUI Save coverage. FAST selects it
+  for Web, TUI and the native supervisor changes. Linux Host tests run
+  in `web-client`.
 - **Browser and Web client** — five jobs. `browser-prepare` builds once from
   the checked-out source: `cargo build --bins --example
   document_artifact_fixture` and the only production Web build (`pnpm
@@ -523,7 +526,7 @@ summarizes them and the lane check below verifies them against Cargo:
   given. Runner speed varies, so several runs balance better than one.
   Weights only steer balance: coverage is verified independently of them. Node native addons are not shared: `pnpm install`
   rebuilds them from the lockfile in every job. `web-client` (launcher
-  `typecheck`/`test`, Web `typecheck`, Vitest `pnpm test` with the
+  `typecheck`/`test`, Web `typecheck`, `pnpm exec vitest run` with the
   `*.measurement.tsx` counters excluded, `check:i18n`, `check:provenance`)
   and the two `browser-shard` jobs install those inputs only after
   `browser-artifact.ts install` verifies the identity against their own
@@ -846,14 +849,13 @@ cargo build --bins   # unit tests exec target/debug/{bash,interactive}-superviso
 cargo test --lib --bins --examples --all-features -- --skip boundary_suites::
 cargo test --test contracts --test provider --all-features
 
-# Boundary lanes (CI: rust-boundaries); uv is mandatory. Compiling the
+# Boundary lane (CI: rust-boundaries); uv is mandatory. Running the
 # external targets first also places the real executables at target/debug/,
 # where the text_spill suite execs bash-supervisor:
 BOUNDARY_TARGETS='--test durable --test process --test subagent --test tools
   --test conformance --test cfg3_catalog --test cfg3_managed_output'
-cargo test --all-features --no-run $BOUNDARY_TARGETS
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- boundary_suites::
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features $BOUNDARY_TARGETS
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- boundary_suites::
 
 # macOS core (CI: rust-platform-core): the seven external boundary targets
 # above. macOS full (CI: rust-platform-boundaries) adds, after the same

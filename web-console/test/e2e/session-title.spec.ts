@@ -19,12 +19,12 @@ for (const width of [1440, 390]) test(`native automatic Title, explicit invocati
   try {
     writeFileSync(join(primary.workspaceA, 'rustx.toml'), `
 [providers.titles]
+protocol = "openai_chat_completions"
 base_url = "${auxiliary.providerUrl}/v1"
 api_key = "$RUSTX_CONSOLE_FIXTURE_KEY"
 [models."titles/short"]
 provider = "titles"
 id = "title-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 256
 capabilities = { input_modalities = ["text"], output_modalities = ["text"] }

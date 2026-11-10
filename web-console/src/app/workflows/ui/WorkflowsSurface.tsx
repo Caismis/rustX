@@ -1,6 +1,7 @@
 import { lazy, Suspense, useSyncExternalStore } from 'react';
 import { useSelector } from '@xstate/react';
 import { useTranslation } from '../../../locale/react';
+import catalogCss from '../../../presentation/catalog/Catalog.module.css';
 import { Button } from '../../../presentation/primitives/Button';
 import { Modal } from '../../../presentation/primitives/Modal';
 import type { WorkspaceAuthority } from '../../../workspaces/authority';
@@ -20,9 +21,9 @@ export function WorkflowsSurface({ surface, authority }: { surface: WorkflowSurf
   const catalog = useSyncExternalStore(authority.subscribe, authority.getCatalog);
   const target = editor?.getSnapshot().context.target;
   const scopeLabel = target?.scope.kind === 'workspace' ? catalog?.workspaces.find(row => row.id === (target.scope as { workspaceId: string }).workspaceId)?.displayName ?? '' : tx('workflows:scope.global');
-  return <div className={css.surface} data-workflows-level={editor ? 'editor' : 'library'}>
+  return <div className={catalogCss.surface} data-workflows-level={editor ? 'editor' : 'library'}>
     {editor
-      ? <Suspense fallback={<p className={css.state} role="status">{tx('workflows:editor.loading')}</p>}>
+      ? <Suspense fallback={<p className={catalogCss.state} role="status">{tx('workflows:editor.loading')}</p>}>
         <WorkflowEditor key={editor.id + (target ? JSON.stringify(target) : '')} surface={surface} editor={editor} scopeLabel={scopeLabel} />
       </Suspense>
       : <WorkflowLibrary surface={surface} authority={authority} />}

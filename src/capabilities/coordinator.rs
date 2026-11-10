@@ -442,26 +442,17 @@ pub struct PreparedCapabilityCandidate {
 }
 
 impl PreparedCapabilityCandidate {
-    /// Rebinds the candidate's root context profile to `agent`'s instructions
-    /// and project-instruction policy and its resolved root project files.
+    /// Rebinds the candidate's root context profile to its AGENTS.md policy.
     pub(crate) fn set_context_profile(
         &mut self,
         agent: &crate::local_runtime::config::AgentProfileDocument,
-        root_agent_project_files: &[crate::runtime::resources::ProjectContextFile],
     ) {
         if let Some(profile) = &mut self.resolved_profile {
             let profile = Arc::make_mut(profile);
-            profile.instructions.clone_from(&agent.instructions);
-            profile.project_instructions.inherit = agent.agents_md.inherit;
-            profile.project_instructions.files = root_agent_project_files.to_vec();
+            profile.inherit_project_instructions = agent.agents_md.inherit;
         }
         let activation = &mut self.resource_inputs.agent_activation;
-        activation
-            .profile
-            .instructions
-            .clone_from(&agent.instructions);
         activation.profile.agents_md.clone_from(&agent.agents_md);
-        activation.project_files = root_agent_project_files.to_vec();
     }
     /// An admission-local view; the caller retains this candidate until the
     /// child has frozen its materialization or the Workflow has settled.
@@ -1236,11 +1227,10 @@ impl CapabilityCoordinator {
         let discovered = if let Some(discovered) = discovered {
             discovered
         } else {
-            let workspace = self.inner.workspace.clone();
             let config = inputs.skill_discovery.clone();
             let signal = cancellation.cloned().unwrap_or_default();
             let discovered = tokio::task::spawn_blocking(move || {
-                SkillDiscovery::with_config(&workspace, config)
+                SkillDiscovery::with_config(config)
                     .with_cancellation(signal)
                     .discover()
             })
@@ -2280,19 +2270,8 @@ impl CapabilityCoordinator {
                 inputs
                     .agent_activation
                     .profile
-                    .instructions
-                    .clone_from(&agent.instructions);
-                inputs
-                    .agent_activation
-                    .profile
                     .agents_md
                     .clone_from(&agent.agents_md);
-                if let Some(profile) = context.resolved_profile() {
-                    inputs
-                        .agent_activation
-                        .project_files
-                        .clone_from(&profile.project_instructions.files);
-                }
                 state.snapshot = Arc::new(
                     state
                         .snapshot
@@ -3323,6 +3302,16 @@ body
     #[tokio::test]
     async fn unselected_skills_do_not_merge_conflicts_or_prepare_environments() {
         let (dir, coordinator) = coordinator();
+        coordinator
+            .inner
+            .resource_inputs
+            .lock()
+            .unwrap()
+            .agent_activation
+            .profile
+            .skills = Some(crate::runtime::agent_profile::AgentSkillSelection::Exact(
+            Vec::new(),
+        ));
         let collection = dir.path().join("workspace/.agents/skills");
         for (name, version) in [("pdf", "1.0"), ("unused", "2.0")] {
             std::fs::create_dir_all(collection.join(name)).unwrap();

@@ -1859,6 +1859,7 @@ fn incomplete_historical_snapshot_does_not_block_independently_complete_current_
         id: MessageId::new("old-native"),
         content: vec![AssistantContentBlock::Reasoning(
             crate::message::types::ReasoningBlock {
+                origin: None,
                 text: None,
                 provider_state: Some(
                     crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(

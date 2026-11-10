@@ -324,14 +324,7 @@ async fn live_schema_recovery_preserves_whole_attempt_and_commits_authored_inten
             format!("[mcp_servers.late]\nurl = {:?}\n", replacement.endpoint),
         )
         .unwrap();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("unadopted instructions".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "unadopted instructions".into()).await;
         let pending = settled(&fixture, 0).await;
         assert!(
             pending
@@ -383,13 +376,7 @@ async fn live_schema_recovery_preserves_whole_attempt_and_commits_authored_inten
         assert_eq!(runtime.model_view().configured, selected);
         assert_ne!(runtime.runtime_resources().revision(), frozen.revision());
         assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
+            guidance(runtime.runtime_resources().project_context_files()),
             "unadopted instructions"
         );
         assert!(
@@ -592,14 +579,7 @@ async fn failed_explicit_runtime_refresh_retains_last_good_without_automatic_ret
                 .any(|diagnostic| diagnostic.field == "runtime.catalog")
         );
         assert!(fixture.provider.request_bodies().is_empty());
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("new authored instructions".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "new authored instructions".into()).await;
         applied(&fixture, 0).await;
         let adopted = runtime.runtime_resources();
         assert_eq!(
@@ -650,13 +630,7 @@ async fn failed_explicit_runtime_refresh_retains_last_good_without_automatic_ret
                 .any(|diagnostic| diagnostic.field == "runtime.catalog")
         );
         assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
+            guidance(runtime.runtime_resources().project_context_files()),
             "new authored instructions"
         );
         assert!(fixture.provider.request_bodies().is_empty());
@@ -1720,14 +1694,7 @@ async fn superseded_refresh_completion_cannot_publish_into_authored_source_bindi
                 format!("[mcp_servers.late]\nurl = {:?}\n", replacement.endpoint),
             )
             .unwrap();
-            write(
-                &fixture,
-                0,
-                ConfigMutation::Instructions {
-                    authored: Some("adopted replacement instructions".into()),
-                },
-            )
-            .await;
+            write_guidance(&fixture, "adopted replacement instructions".into()).await;
             applied(&fixture, 0).await;
             let adopted = runtime.configuration_cut();
             assert!(
@@ -1800,14 +1767,7 @@ async fn pending_success_publishes_without_erasing_newer_explicit_refresh_failur
         assert_eq!(catalog_failure(&runtime).as_ref(), Some(&failure));
         assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 3);
         assert_eq!(fixture.provider.request_bodies().len(), 1);
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("context after retained success".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "context after retained success".into()).await;
         applied(&fixture, 0).await;
         assert_eq!(catalog_failure(&runtime).as_ref(), Some(&failure));
         mcp.control.fail.store(false, Ordering::SeqCst);

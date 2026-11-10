@@ -15,7 +15,6 @@ pub struct AgentActivation {
     pub profile: crate::local_runtime::config::AgentProfileDocument,
     pub admitted_agents: BTreeSet<crate::runtime::subagent::SubagentName>,
     pub admitted_workflows: BTreeSet<crate::runtime::workflow::WorkflowId>,
-    pub project_files: Vec<crate::runtime::resources::ProjectContextFile>,
     /// Skill selections of admitted Named Agents/Workflow nodes for capture
     /// comparison. Each Agent prepares its own selected dependency environment.
     pub delegated_skills: Vec<crate::runtime::agent_profile::AgentSkillSelection>,
@@ -27,7 +26,6 @@ impl Default for AgentActivation {
             profile: crate::local_runtime::config::builtin_root_profile(),
             admitted_agents: BTreeSet::new(),
             admitted_workflows: BTreeSet::new(),
-            project_files: Vec::new(),
             delegated_skills: Vec::new(),
         }
     }
@@ -72,7 +70,7 @@ impl AgentActivation {
                 .profile
                 .skills
                 .as_ref()
-                .is_some_and(|selection| match selection {
+                .is_none_or(|selection| match selection {
                     crate::runtime::agent_profile::AgentSkillSelection::All => true,
                     crate::runtime::agent_profile::AgentSkillSelection::Exact(names) => {
                         names.iter().any(|name| name == package.name())
@@ -382,26 +380,20 @@ fn resolve_profile(
     skills: &crate::skills::SkillSnapshot,
     availability: &super::CapabilityAvailability,
 ) -> Result<crate::runtime::agent_profile::ResolvedAgentProfile, String> {
-    use crate::runtime::agent_profile::{
-        AgentProfile, AgentProfileAuthority, AgentScope, resolve_agent_profile,
-    };
+    use crate::runtime::agent_profile::{AgentProfileAuthority, AgentScope, resolve_agent_profile};
     policy.validate()?;
-    let profile = AgentProfile::from_document(
-        &policy.profile,
-        crate::runtime::agent_profile::AgentProfileKind::Root,
-        policy.project_files.clone(),
-    )?;
+    let profile = policy.profile.lower()?;
     Ok(resolve_agent_profile(
         &profile,
         &AgentProfileAuthority {
             tools: available,
             availability,
             skills,
-            agents: &policy.admitted_agents,
             workflows: &policy.admitted_workflows,
             scope: AgentScope::Root,
         },
-    ))
+    )
+    .with_root_agents(&policy.profile.agents, &policy.admitted_agents))
 }
 fn selected_definitions<'a>(
     available: &[&'a ToolDefinition],

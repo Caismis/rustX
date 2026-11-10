@@ -1,7 +1,8 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Rewritten from ui-attachment/MessageImage.tsx and FileCard.tsx; see PROVENANCE.md. */
-import { useState, type ReactNode } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 import { Modal } from '../primitives/Modal';
+import { ImageLightbox } from '../primitives/ImageLightbox';
 import { IconBrowseOutline16, IconCloseOutline16, IconDownloadOutline16, IconRefreshOutline16 } from '../primitives/icons';
 import { StateDot } from '../primitives/StateDot';
 import css from './AttachmentCard.module.css';
@@ -31,4 +32,23 @@ export function AttachmentCard({ name, image, url, error, loading, onLoad, onOpe
     {onRemove && <button type="button" className={css.action} aria-label={tx('artifacts:attachment-card.remove-value', { p0: name })} onClick={onRemove}><IconCloseOutline16/></button>}
     {open && url && !error && <Modal closeLabel={tx('artifacts:attachment-card.close-dialog')} open title={name} onClose={() => setOpen(false)}><img className={css.original} src={url} alt={name} onError={onDecodeError} /></Modal>}
   </div>;
+}
+
+/** Inline gallery image. Its owner supplies the authorized, occurrence-scoped URL. */
+export function InlineImage({ name, url, compact, error, retry, onDecodeError }: {
+  name: string; url?: string; compact: boolean; error?: string; retry?: () => void; onDecodeError: () => void;
+}) {
+  const tx = useTranslation();
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+  const label = url ? tx('artifacts:attachment-card.open-image-value', { p0: name })
+    : error ? `${tx('artifacts:attachment-card.retry')} ${name}` : tx('common:activity.loading');
+  return <>
+    <button type="button" className={css.inlineImage} data-compact={compact || undefined}
+      aria-label={label} title={error || name} aria-busy={!url && !error || undefined}
+      disabled={!url && (!error || !retry)} onClick={url ? () => setOpen(true) : retry}>
+      {url ? <img src={url} alt={name} onError={onDecodeError}/> : error ? <IconRefreshOutline16/> : <StateDot state="ongoing"/>}
+    </button>
+    {open && url && <ImageLightbox src={url} alt={name} labels={{ dialog: name, close: tx('artifacts:attachment-card.close-dialog') }} onClose={close}/>}
+  </>;
 }

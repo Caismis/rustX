@@ -5,16 +5,29 @@ import { boundedSettings } from "./fixture";
 import { cfg3Source, cfg3Effective, cfg3Application } from './cfg3-data';
 import { snapshot } from './fixture';
 import { vi } from 'vitest';
-import type { AttachmentTarget, EffectiveConfiguration, MethodResult, Request1, SourceSettings } from '../../protocol/app-server/v76';
+import type { AttachmentTarget, EffectiveConfiguration, MethodResult, Request1, SourceSettings } from '../../protocol/app-server/v78';
 import { AppServerClient } from '../src/client/app-server';
 import type { ClientView } from '../src/client/contracts';
 export const cfg3Session = 'ses_00000000-0000-7000-8000-000000000001';
 export const cfg3Target: AttachmentTarget = { session_id: cfg3Session, conversation_id: 'conv_00000000-0000-7000-8000-000000000001', runtime_incarnation: '1', attachment_id: 'attachment-1' };
-export function cfg3Client(handler?: (operation: Request1, source: SourceSettings, effective: EffectiveConfiguration) => Promise<MethodResult | void>) { const source = cfg3Source(), effective = cfg3Effective(), client = new AppServerClient(); let state: ClientView = { connection: 'connected', generation: 1, sessions: [], uncertain: [], interactionOperations: {}, views: { [cfg3Session]: { id: cfg3Session, attachmentIntent: 'wanted', attachment: 'attached', nodeId: 'node-fixture', attachmentNodeId: 'node-fixture', attachmentObservation: { generation: 1, nodeId: 'node-fixture', target: cfg3Target, intentRevision: 0 }, target: cfg3Target, snapshot: snapshot() } } }; vi.spyOn(client, 'getSnapshot').mockImplementation(() => state);
+export function cfg3Client(handler?: (operation: Request1, source: SourceSettings, effective: EffectiveConfiguration) => Promise<MethodResult | void>) { const source = cfg3Source(), effective = cfg3Effective(), client = new AppServerClient(); let state: ClientView = { connection: 'connected', endpoint:'ws://fixture.invalid/', generation: 1, sessions: [], uncertain: [], interactionOperations: {}, views: { [cfg3Session]: { id: cfg3Session, attachmentIntent: 'wanted', attachment: 'attached', nodeId: 'node-fixture', attachmentNodeId: 'node-fixture', attachmentObservation: { generation: 1, nodeId: 'node-fixture', target: cfg3Target, intentRevision: 0 }, target: cfg3Target, snapshot: snapshot() } } }; vi.spyOn(client, 'getSnapshot').mockImplementation(() => state);
     // Like the real client, a published snapshot change notifies every subscriber synchronously.
     const listeners = new Set<() => void>(), subscribe = client.subscribe; vi.spyOn(client, 'subscribe').mockImplementation(listener => { listeners.add(listener); const release = subscribe(listener); return () => { listeners.delete(listener); release(); }; });
     const publish = (patch: Partial<ClientView>) => { state = { ...state, ...patch }; for (const listener of listeners) listener(); }; const request = vi.spyOn(client, 'request').mockImplementation(async (operation) => { const overridden = await handler?.(operation, source, effective); if (overridden)
-    return overridden as never; if (operation.method === 'mcp/probe') return {type:'mcp_probe',result:{id:operation.params.id,revision:operation.params.expected_revision,outcome:'reachable'}} as never; if (operation.method === 'session/configuration')
+    return overridden as never;
+    if (operation.method === 'skills/list') {
+        const definitions = source.prospective_resources?.definitions ?? [];
+        const data = definitions.filter(row => row.family === 'skill' && row.valid).map(row => ({
+            catalog: {name: row.name, description: 'Skill ' + row.name, location: row.location.path},
+            provenance: {name: row.name, source: row.location.scope, location: row.location.path, shadowed: []},
+            metadata_revision: 'skill-1',
+            disable_model_invocation: false,
+        }));
+        return {type: 'skills', page: {data, revision: 'skills-1', diagnostics: [], diagnostics_truncated: false, next_offset: null}} as never;
+    }
+    if(operation.method==='skills/read')return {type:'skill_content',content:{skill:{catalog:{name:operation.params.name,description:'Skill '+operation.params.name,location:'/skills/'+operation.params.name+'/SKILL.md'},provenance:{name:operation.params.name,source:'user',location:'/skills/'+operation.params.name+'/SKILL.md',shadowed:[]},metadata_revision:'skill-1',disable_model_invocation:false},revision:'skill-1',kind:operation.params.kind,data_base64:Buffer.from('Instructions for '+operation.params.name).toString('base64'),next_offset:null}} as never;
+    if (operation.method === 'model/probe') return { type: 'model_probe', outcome: 'connected' } as never;
+    if (operation.method === 'mcp/probe') return {type:'mcp_probe',result:{id:operation.params.id,revision:operation.params.expected_revision,outcome:'reachable'}} as never; if (operation.method === 'session/configuration')
     return { type: 'session_configuration', projection:(applicationReceipt((source.application ?? null))) } as never; if (operation.method === 'session/effectiveConfiguration')
     return { type: 'effective_configuration', projection: {revision:'fixture',inline:structuredClone(effective),fields:[],collections:[]} } as never; if (operation.method === 'configuration/reconcile')
     return {type:'configuration_receipt',scope:(source.application ?? cfg3Application())?.scope??'configuration',version:(source.application ?? cfg3Application())?.version??'0'} as never; if (operation.method === 'configuration/sourceWrite') {
@@ -30,9 +43,13 @@ export function cfg3Host(subject: ReturnType<typeof cfg3Client>): import('../src
     const { projection } = await subject.client.request({method:'configuration/sourcesRead',params:{target}},'source_settings');
     return materializeSource(projection, async (reference, offset) => (await subject.client.request({method:'configuration/sourceValueRead',params:{target,reference,offset,max_bytes:65536}},'source_value_chunk')).chunk, () => true);
   };
-  return { listWorkspaces: async () => ({authorityId:'fixture-host',endpoint:'',workspaces:['A','B'].map(id=>({id,displayName:id,location:id,displayPath:'/workspace/'+id})),picker:{kind:'unavailable',reason:'fixture'}}),
+  return { listWorkspaces: async () => ({authorityId:'fixture-host',endpoint:'ws://fixture.invalid/',workspaces:['A','B'].map(id=>({id,displayName:id,location:id,displayPath:'/workspace/'+id})),picker:{kind:'unavailable',reason:'fixture'}}),
     configureWorkspace: async (id,_endpoint,operation) => {
       const target={kind:'workspace' as const,directory:'/workspace/'+id};
+      if (operation.kind === 'model_probe') {
+        const { outcome } = await subject.client.request({ method: 'model/probe', params: { target, model: operation.model, source: operation.source } }, 'model_probe');
+        return { kind: 'model_probe', outcome };
+      }
       if (operation.kind==='mcp_probe') { const {result}=await subject.client.request({method:'mcp/probe',params:{target,id:operation.id,expected_revision:operation.expected_revision}},'mcp_probe'); return {kind:'mcp_probe',result}; }
       if (operation.kind==='write') {
         const receipt = await subject.client.request({method:'configuration/sourceWrite',params:{target,expected_revision:operation.expected_revision,mutation:operation.mutation}},'sources_written');

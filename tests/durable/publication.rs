@@ -107,6 +107,7 @@ impl Durable {
 
 fn invocation() -> ModelInvocationConfig {
     ModelInvocationConfig {
+        replay_binding: Some("test-binding".into()),
         model: "model-x".to_owned(),
         protocol: ModelProtocol::OpenAiChatCompletions,
         max_output_tokens: 128,

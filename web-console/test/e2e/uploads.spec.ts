@@ -21,7 +21,7 @@ test('Session uploads compose with model Tool IO, fork, source deletion and relo
   const id = () => selectedSessionId(page);
   const connect = async () => {
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
   };
   const submit = async (phase: string) => {
     await page.getByRole('button', { name: 'Send', exact: true }).click();

@@ -334,10 +334,10 @@ fn deletion_cleanup_failure_and_final_publication_faults_remain_retryable() {
 }
 
 #[test]
+#[ignore = "fixture subprocess, invoked by its parent test"]
 fn deletion_process_child() {
-    let Some(root) = std::env::var_os("RUSTX_255_ROOT") else {
-        return;
-    };
+    let root =
+        std::env::var_os("RUSTX_255_ROOT").expect("fixture parent must provide its environment");
     let controller = Arc::new(ProductController::acquire(Path::new(&root)).unwrap());
     let mut catalog = reopen_catalog(controller.root());
     catalog.retain_lifecycle(controller);
@@ -362,6 +362,7 @@ fn deletion_process_death_after_commit_and_mid_cleanup_converges_without_discove
             .args([
                 "--exact",
                 "local_runtime::session::tests::deletion_tests::lifecycle::deletion_process_child",
+                "--ignored",
                 "--nocapture",
                 "--format=terse",
             ])

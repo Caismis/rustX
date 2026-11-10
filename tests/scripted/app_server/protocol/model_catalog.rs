@@ -51,6 +51,7 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
                 &connection,
                 102,
                 Method::ModelSet {
+                    recover_unavailable_auxiliary: None,
                     target: target.clone(),
                     config: Box::new(pinned("balanced")),
                 }
@@ -197,6 +198,7 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
             &connection,
             108,
             Method::ModelSet {
+                recover_unavailable_auxiliary: None,
                 target: target.clone(),
                 config: Box::new(pinned("deep")),
             },
@@ -308,6 +310,7 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
             ..SessionModelConfig::of(ModelRef::parse("local/a").unwrap())
         };
         let set = |profile: &str| Method::ModelSet {
+            recover_unavailable_auxiliary: None,
             target: target.clone(),
             config: Box::new(pinned(profile)),
         };
@@ -520,6 +523,7 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
         let target = attach(&connection, &f, 0).await;
         let model = |id: &str| SessionModelConfig::of(ModelRef::parse(id).unwrap());
         let set = |id: &str| Method::ModelSet {
+            recover_unavailable_auxiliary: None,
             target: target.clone(),
             config: Box::new(model(id)),
         };

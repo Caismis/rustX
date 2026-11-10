@@ -35,11 +35,11 @@ function Popover(props: React.ComponentProps<typeof AriaPopover>) {
 
 /** A closed enum. Native remains the authority on which values are legal; this
  * control only presents the ones the call site offers. */
-export function Choice<T extends string>({ label, value, onChange, options, disabled = false, description }: {
-  label: string; value: T; onChange: (value: T) => void;
-  options: readonly (readonly [T, string])[]; disabled?: boolean; description?: ReactNode;
+export function Choice<T extends string>({ label, value, onChange, options, disabled = false, disabledKeys, description, placeholder }: {
+  label: string; value: T | null; onChange: (value: T) => void;
+  options: readonly (readonly [T, string])[]; disabled?: boolean; disabledKeys?: readonly T[]; description?: ReactNode; placeholder?: string;
 }) {
-  return <Select className={css.select} selectedKey={value} isDisabled={disabled} onSelectionChange={key => onChange(key as T)}>
+  return <Select className={css.select} selectedKey={value} placeholder={placeholder} isDisabled={disabled} disabledKeys={disabledKeys} onSelectionChange={key => { if (key !== null) onChange(key as T); }}>
     <Label>{label}</Label>
     <AriaButton className={css.selectTrigger}><SelectValue /><span aria-hidden="true">▾</span></AriaButton>
     {description && <Text slot="description" className={contentCss.hint}>{description}</Text>}
@@ -153,7 +153,7 @@ export function Toggle({ label, checked, onChange, disabled = false }: {
  * The workflow names the stable outcome surface; this interaction chooses
  * dismissed versus confirmed. DialogSurface owns the close-focus lifecycle.
  */
-export function ConfirmAction({ label, triggerText, title, description, confirm, onConfirm, tone, settle, disabled = false }: {
+export function ConfirmAction({ label, triggerText, title, description, confirm, onConfirm, tone, settle, disabled = false, renderTrigger }: {
   label: string; triggerText?: string; title: string; description: ReactNode; confirm: string;
   onConfirm: () => void; tone: 'destructive' | 'restore';
   /** The enabled element of the caller's workflow that takes focus after a
@@ -161,6 +161,7 @@ export function ConfirmAction({ label, triggerText, title, description, confirm,
    * removes. */
   settle: RefObject<HTMLElement | null>;
   disabled?: boolean;
+  renderTrigger?: (open: () => void, ref: RefObject<HTMLButtonElement | null>) => ReactNode;
 }) {
   const tx = useTranslation();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -168,12 +169,13 @@ export function ConfirmAction({ label, triggerText, title, description, confirm,
   const [open, setOpen] = useState(false);
   const closing = useRef<'dismissed' | 'confirmed'>('dismissed');
   const destructive = tone === 'destructive';
+  const show = () => { closing.current = 'dismissed'; setOpen(true); };
   return <span className={css.removal} data-tone={tone}>
-    <AriaButton ref={trigger} isDisabled={disabled} aria-label={label}
+    {renderTrigger ? renderTrigger(show, trigger) : <AriaButton ref={trigger} isDisabled={disabled} aria-label={label}
       className={clsx(buttonCss.button, buttonCss.ghost, buttonCss.md, destructive && css.dangerTrigger)}
-      onPress={() => { closing.current = 'dismissed'; setOpen(true); }}>
+      onPress={show}>
       {destructive && <span className={buttonCss.icon}><IconTrashOutline16 /></span>}{triggerText ?? label}
-    </AriaButton>
+    </AriaButton>}
     <DialogSurface open={open} onClose={() => setOpen(false)} title={title}
       role={destructive ? 'alertdialog' : 'dialog'} overlayClassName={css.confirmOverlay}
       panelClassName={css.confirmModal} className={css.confirmDialog} initialFocus={cancel}

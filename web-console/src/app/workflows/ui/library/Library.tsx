@@ -2,8 +2,10 @@ import { presentationWarning } from '../../document/diagnostics';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
-import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/v76';
+import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/v78';
 import { useTranslation } from '../../../../locale/react';
+import { CatalogSearch, CatalogViewSwitch } from '../../../../presentation/catalog/CatalogControls';
+import css from '../../../../presentation/catalog/Catalog.module.css';
 import { Button } from '../../../../presentation/primitives/Button';
 import { Menu } from '../../../../presentation/primitives/Menu';
 import { Switch } from '../../../../presentation/primitives/Switch';
@@ -12,11 +14,10 @@ import type { WorkspaceAuthority } from '../../../../workspaces/authority';
 import type { LibraryOperation } from '../../machines/library';
 import type { WorkflowSurfaceActor } from '../../machines/surface';
 import { USER_SCOPE, type WorkflowScope } from '../../port';
-import { IconFile, IconFolder, IconGrid, IconList } from '../icons';
+import { IconFile, IconFolder } from '../icons';
 import { WorkflowIcon } from '../WorkflowIcon';
 import { FailureText } from '../notices';
 import { LibraryDialog } from './dialogs';
-import css from '../Workflows.module.css';
 
 const VIEW = 'rustx-workflows-library-view';
 function readView(): 'cards' | 'list' {
@@ -135,11 +136,11 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
     </li>)}
   </ul>;
   else body = <table className={css.table}>
-    <thead><tr><th>{tx('workflows:library.column-file')}</th><th>{tx('workflows:library.column-description')}</th><th>{tx('workflows:library.column-location')}</th><th>{tx('workflows:library.column-modified')}</th><th>{tx('workflows:library.column-enabled')}</th><th aria-label={tx('workflows:library.actions', { p0: '' })} /></tr></thead>
+    <thead><tr><th>{tx('workflows:library.column-file')}</th><th>{tx('workflows:library.column-description')}</th><th className={css.optionalColumn}>{tx('workflows:library.column-location')}</th><th>{tx('workflows:library.column-modified')}</th><th>{tx('workflows:library.column-enabled')}</th><th aria-label={tx('workflows:library.actions', { p0: '' })} /></tr></thead>
     <tbody>{files.map(file => <tr key={file.file_name}>
       <td><button type="button" className={css.rowOpen} onClick={() => open(file)} disabled={!settled || !file.id || !file.revision}><WorkflowIcon icon={unreadable(file) ? undefined : file.display?.icon} size={15} />{file.display?.title ?? file.id ?? file.file_name}</button></td>
       <td><FileFacts file={file} compact /></td>
-      <td><code>{file.relative_path}</code></td><td>{modified(file.modified_ms)}</td><td>{toggle(file)}</td>
+      <td className={css.optionalColumn}><code>{file.relative_path}</code></td><td>{modified(file.modified_ms)}</td><td>{toggle(file)}</td>
       <td><CardMenu label={tx('workflows:library.actions', { p0: file.file_name })} items={actions(file)} onSelect={action => act(file, action)} /></td>
     </tr>)}</tbody>
   </table>;
@@ -163,11 +164,8 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
       </div>}
       {!showingWorkspace && context}
       <div className={css.controlsRight}>
-        <label className={css.search}><IconSearchOutline16 /><input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder={tx('workflows:library.search')} aria-label={tx('workflows:library.search')} /></label>
-        <div className={css.viewSwitch} role="group" aria-label={tx('workflows:library.view')}>
-          <button type="button" aria-pressed={view === 'cards'} aria-label={tx('workflows:library.view-cards')} className={clsx(view === 'cards' && css.viewActive)} onClick={() => chooseView('cards')}><IconGrid size={15} /></button>
-          <button type="button" aria-pressed={view === 'list'} aria-label={tx('workflows:library.view-list')} className={clsx(view === 'list' && css.viewActive)} onClick={() => chooseView('list')}><IconList size={15} /></button>
-        </div>
+        <CatalogSearch label={tx('workflows:library.search')} value={query} onChange={setQuery} />
+        <CatalogViewSwitch view={view} onChange={chooseView} />
       </div>
     </div>
     {showingWorkspace && context}

@@ -2,7 +2,7 @@ import { message } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import type { ReactNode } from 'react';
 import { useSelector } from '@xstate/react';
-import type { ApprovalMode, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v76';
+import type { ApprovalMode, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v78';
 import type { AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import { PermissionSelect } from '../../presentation/agent/PermissionSelect';
@@ -15,9 +15,9 @@ import { catalogAdmits } from '../../bindings/model-catalog';
 import { approvalMutation, workspaceApprovalBlock } from './approval';
 
 /** Shared bounded configuration actor, independent of the Settings page tree. */
-export function WorkspaceControls({ client, host, workspaceId, children }: { client: AppServerClient; host: ProductHostWorkspaces; workspaceId?: string; children: (source: SourceSettings | undefined, approval: WorkspaceApproval) => ReactNode }) {
+export function WorkspaceControls({ client, host, workspaceId, visible, presentationKey, children }: { visible: boolean; presentationKey: string; client: AppServerClient; host: ProductHostWorkspaces; workspaceId?: string; children: (source: SourceSettings | undefined, approval: WorkspaceApproval) => ReactNode }) {
   const tx = useTranslation();
-  const { actor } = useSettingsTarget(client, workspaceId ? workspaceSettingsTarget(workspaceId) : userSettingsTarget, host, !!workspaceId);
+  const { actor } = useSettingsTarget(client, workspaceId ? workspaceSettingsTarget(workspaceId) : userSettingsTarget, host, visible && !!workspaceId, presentationKey);
   const source = useSelector(actor, s => s.context.observation);
   const error = useSelector(actor, s => s.context.readError);
   return <SettingsActorContext value={actor}><SourceContext value={source}>{<ApprovalScope source={source}>{children}</ApprovalScope>}{error && <span role="alert">{error}<Button size="sm" onClick={() => actor.send({ type: 'REFRESH' })}>{tx('workspace:workspace-controls.reread-workspace')}</Button></span>}</SourceContext></SettingsActorContext>;

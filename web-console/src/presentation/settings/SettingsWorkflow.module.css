@@ -96,6 +96,7 @@
 }
 .disclosureButton[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; border-radius: 6px; }
 .disclosureMarker { flex: none; color: var(--dsw-alias-label-tertiary); font-size: 11px; }
+.disclosureButton[aria-expanded=true] .disclosureMarker { transform: rotate(90deg); }
 .disclosurePanel { padding: 0 0 8px; min-width: 0; }
 /* A collapsed panel is `hidden="until-found"`: laid out but empty, so it keeps
    no padding either. */

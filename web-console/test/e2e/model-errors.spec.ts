@@ -56,7 +56,7 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
       await settings.getByRole('button', { name: copy('Connection', '连接'), exact: true }).click();
       await page.getByLabel(copy('Connection mode', '连接模式')).selectOption('remote');
       await page.getByLabel(copy('WebSocket endpoint', 'WebSocket 地址')).fill(fixture.endpoint);
-      await page.getByLabel(copy('Transport token', '传输令牌')).fill(fixture.token);
+      await page.getByLabel(copy('Access token', '访问令牌')).fill(fixture.token);
       await settings.getByRole('button', { name: copy('Connect', '连接'), exact: true }).click();
       await expect(page.locator('.connection-status')).toHaveText(copy('Connected', '已连接'));
       await page.getByRole('button', { name: copy('Home', '主页'), exact: true }).click();

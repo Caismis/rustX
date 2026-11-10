@@ -93,7 +93,7 @@ def build_message(event_name, event, api=github_get):
             pr, "PR changes requested", f"Reviewer: {review['user']['login']}", review["html_url"]
         )
 
-    if run["name"] not in {"CI", "Workspace Host platform conformance"}:
+    if run["name"] != "CI":
         return None
     if run["conclusion"] not in {"failure", "timed_out"}:
         return None

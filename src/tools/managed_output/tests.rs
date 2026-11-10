@@ -287,10 +287,10 @@ fn a_symlinked_system_temp_root_is_canonicalized_legitimately() {
 }
 
 #[test]
+#[ignore = "fixture subprocess, invoked by its parent test"]
 fn cold_restart_child() {
-    let Some(root) = std::env::var_os("RUSTX_520_COLD_ROOT") else {
-        return;
-    };
+    let root = std::env::var_os("RUSTX_520_COLD_ROOT")
+        .expect("fixture parent must provide its environment");
     let root = Path::new(&root);
     let output = store(root);
     if let Some(old) = std::env::var_os("RUSTX_520_COLD_OLD") {
@@ -314,6 +314,7 @@ fn genuine_cold_restart_keeps_the_original_locator() {
             .args([
                 "--exact",
                 "tools::managed_output::tests::cold_restart_child",
+                "--ignored",
                 "--nocapture",
             ])
             .env("RUSTX_520_COLD_ROOT", root.path());

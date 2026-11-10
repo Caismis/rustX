@@ -113,7 +113,7 @@ pub(crate) fn read_resource(
 }
 
 /// The entries of a resource root (`.agents`) that configuration reads.
-pub(crate) const SOURCE_ENTRIES: [&str; 5] = ["agents", "mcp.toml", "skills", "tools", "workflows"];
+pub(crate) const SOURCE_ENTRIES: [&str; 4] = ["agents", "mcp.toml", "tools", "workflows"];
 
 /// The names, directly under a resource root, that configuration reads: the
 /// source entries and the guidance files. Anything else there — Session
@@ -121,7 +121,7 @@ pub(crate) const SOURCE_ENTRIES: [&str; 5] = ["agents", "mcp.toml", "skills", "t
 fn source_entry_names() -> impl Iterator<Item = &'static str> {
     SOURCE_ENTRIES
         .into_iter()
-        .chain(crate::runtime::resources::PROJECT_CONTEXT_FILENAMES)
+        .chain([crate::runtime::resources::PROJECT_CONTEXT_FILENAME])
 }
 
 /// Revision of authored resource bytes, including malformed and shadowed entries.
@@ -148,16 +148,12 @@ fn revision_walk(
     bytes_left: &mut u64,
     depth: usize,
     cancellation: &crate::runtime::CancellationSignal,
-    scope: crate::runtime::resources::SourceScope,
 ) -> Result<(), String> {
     crate::package_io::check_cancelled(cancellation).map_err(|e| e.to_string())?;
     if *remaining == 0 || depth > 68 {
         return Err("resource traversal incomplete".into());
     }
     *remaining -= 1;
-    if depth == 1 && path.file_name().is_some_and(|name| name == "skills") {
-        return evidence::include_skills(hash, path, scope, cancellation);
-    }
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -187,7 +183,6 @@ fn revision_walk(
                     bytes_left,
                     1,
                     cancellation,
-                    scope,
                 )?;
             }
             return Ok(());
@@ -213,7 +208,6 @@ fn revision_walk(
                 bytes_left,
                 depth + 1,
                 cancellation,
-                scope,
             )?;
         }
     } else if metadata.is_file() {
@@ -260,7 +254,6 @@ pub(crate) fn revision_with_cancellation(
         &mut (64 * 1024 * 1024),
         0,
         cancellation,
-        scope,
     ) {
         Ok(()) => format!("sha256:{:x}", hash.finalize()),
         // An incomplete inspection is explicitly not evidence of equality.
@@ -304,7 +297,11 @@ mod tests {
             b"---\nname: guide\ndescription: B\n---\n",
         )
         .unwrap();
-        assert_ne!(revision(&root), guided, "a source entry is configuration");
+        assert_eq!(
+            revision(&root),
+            guided,
+            "Skill discovery owns its own revision"
+        );
     }
 
     #[test]
@@ -315,7 +312,12 @@ mod tests {
         std::fs::create_dir_all(package.join("assets/deep")).unwrap();
         let header = "---\nname: guide\ndescription: Guide\n---\n";
         std::fs::write(package.join("SKILL.md"), header).unwrap();
-        let before = revision(&root);
+        let revision = || {
+            crate::skills::SkillDiscovery::user_root(root.join("skills"))
+                .discover()
+                .revision()
+        };
+        let before = revision();
         std::fs::File::create(package.join("assets/deep/huge.bin"))
             .unwrap()
             .set_len(10 * 1024 * 1024 * 1024)
@@ -327,7 +329,7 @@ mod tests {
         markdown.set_len(4 * 1024 * 1024 * 1024).unwrap();
         crate::package_io::OPENED_FILES.with(|v| v.borrow_mut().clear());
         crate::package_io::DIRECTORY_LISTS.with(|v| v.set(0));
-        assert_eq!(revision(&root), before);
+        assert_eq!(revision(), before);
         crate::package_io::OPENED_FILES
             .with(|v| assert_eq!(*v.borrow(), [Path::new("SKILL.md"), Path::new("SKILL.md")]));
         crate::package_io::DIRECTORY_LISTS.with(|v| assert_eq!(v.get(), 0));
@@ -337,12 +339,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            revision(&root),
+            revision(),
             before,
             "YAML presentation and body changes are inert"
         );
         std::fs::write(package.join("SKILL.md"), header.replace("Guide", "Changed")).unwrap();
-        assert!(!same_capture(&before, &revision(&root)));
+        assert!(!same_capture(&before, &revision()));
     }
 
     /// On a case-sensitive volume the loaders never open `Skills`, so its
@@ -588,14 +590,19 @@ mod case_insensitive_tests {
             definition.as_bytes(),
             "the loaders' fixed path resolves to `Skills`"
         );
-        let initial = revision(&root);
+        let revision = || {
+            crate::skills::SkillDiscovery::user_root(root.join("skills"))
+                .discover()
+                .revision()
+        };
+        let initial = revision();
         std::fs::write(&path, format!("{definition}changed live body")).unwrap();
-        assert_eq!(revision(&root), initial, "body edits remain inert");
+        assert_eq!(revision(), initial, "body edits remain inert");
         std::fs::write(
             &path,
             definition.replace("description: A", "description: B"),
         )
         .unwrap();
-        assert_ne!(revision(&root), initial);
+        assert_ne!(revision(), initial);
     }
 }

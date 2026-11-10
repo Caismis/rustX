@@ -50,7 +50,7 @@ it('uses the committed body without replacing lifecycle, and keeps unknown paylo
   expect(ui.container.textContent).toContain('Original payload');
   expect(ui.container.querySelector('[data-tool-details]')).toBeNull();
 });
-it.each(['read', 'write', 'edit', 'glob', 'grep'])('%s failures use diagnostic output instead of a content/result card', name => {
+it.each(['read', 'read_image', 'write', 'edit', 'glob', 'grep'])('%s failures use diagnostic output instead of a content/result card', name => {
   const tool = nativeToolCases.find(tool => tool.name === name)!;
   const ui = render(<Tool tool={{ ...tool, state: { type: 'settled', arguments: tool.state.arguments, result: { status: { type: 'failed', error: 'Native access refused' }, duration_ms: '0' } } }}/>);
   fireEvent.click(ui.getByRole('button', { expanded: false }));

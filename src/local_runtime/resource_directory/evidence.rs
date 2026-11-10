@@ -34,45 +34,6 @@ fn include_diagnostics(
     )
 }
 
-pub(super) fn include_skills(
-    hash: &mut Sha256,
-    root: &Path,
-    scope: crate::runtime::resources::SourceScope,
-    signal: &CancellationSignal,
-) -> Result<(), String> {
-    let discovery = match scope {
-        crate::runtime::resources::SourceScope::User => {
-            crate::skills::SkillDiscovery::user_root(root.to_path_buf())
-        }
-        crate::runtime::resources::SourceScope::Workspace => {
-            let workspace = crate::tools::workspace::Workspace::new(
-                root.ancestors()
-                    .nth(2)
-                    .ok_or("Skill collection has no Workspace")?,
-            )
-            .map_err(|error| error.to_string())?;
-            crate::skills::SkillDiscovery::with_config(
-                &workspace,
-                crate::skills::SkillDiscoveryConfig::workspace_root(root),
-            )
-        }
-    };
-    let skills = discovery.with_cancellation(signal.clone()).discover();
-    include(hash, &(&skills.roots, &skills.provenance, &skills.invalid))?;
-    include(
-        hash,
-        &skills
-            .diagnostics
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-    )?;
-    for package in &skills.packages {
-        include(hash, &(package.id(), package.version_id()))?;
-    }
-    crate::package_io::check_cancelled(signal).map_err(|e| e.to_string())
-}
-
 pub(super) fn capture(
     root: &Path,
     scope: crate::runtime::resources::SourceScope,
@@ -81,7 +42,6 @@ pub(super) fn capture(
     crate::package_io::check_cancelled(signal).map_err(|error| error.to_string())?;
     let mut hash = Sha256::new();
     hash.update(b"rustx-accepted-resource-domain-v1\n");
-    include_skills(&mut hash, &root.join("skills"), scope, signal)?;
     let python = super::super::managed_python_resources::discover_controlled(None, root, signal)
         .map_err(|error| error.to_string())?;
     include(&mut hash, &python.locations)?;
@@ -114,16 +74,6 @@ pub(super) fn capture(
             .map(|(id, error)| (id, error.to_string()))
             .collect::<Vec<_>>(),
     )?;
-    for definition in catalog.definitions() {
-        for file in &definition.profile().project_instructions.files {
-            include_source(
-                &mut hash,
-                workspace.unwrap_or(&agent_root),
-                &file.path,
-                crate::bounded_file::MAX_RESOURCE_BYTES,
-            )?;
-        }
-    }
     include_source(
         &mut hash,
         root,

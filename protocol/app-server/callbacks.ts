@@ -2,7 +2,7 @@
  * A handler is explicitly installed by full native identity. Ordinary clients
  * ignore Host Tools they do not implement; they never reply tool-not-found.
  */
-import type { AppServerRequestId, HostToolCall, HostToolResponse, InteractionRef, InteractionResponse, ServerRequest } from './v76.ts';
+import type { AppServerRequestId, HostToolCall, HostToolResponse, InteractionRef, InteractionResponse, ServerRequest } from './v78.ts';
 
 type Call = ServerRequest;
 export type HostToolHandler = (call: HostToolCall, signal: AbortSignal) => Promise<HostToolResponse>;

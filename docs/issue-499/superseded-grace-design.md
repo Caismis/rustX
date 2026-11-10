@@ -61,7 +61,7 @@ An explicit configuration rescan/reconcile or headless adoption can also recover
 invalidated or Unavailable MCP catalog without editing configuration. It uses
 normal full preparation and adoption; startup notifications never retry failed
 discovery. Managed Python admission remains strict. App Server
-v56 and Runtime Client v76 expose the new closed state vocabulary; WebUI and TUI
+v56 and Runtime Client v77 expose the new closed state vocabulary; WebUI and TUI
 show connecting/cached status without claiming that a source is ready.
 
 ## Reference pattern and scope

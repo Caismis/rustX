@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v76 envelope and method vocabulary.
+//! Rust authority for the App Server v78 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 76;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 78;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -417,6 +417,9 @@ pub enum Method {
     ModelSet {
         target: AttachmentTarget,
         config: Box<crate::model::session::SessionModelConfig>,
+        /// A primary-model picker can recover unchanged auxiliary model references that were removed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recover_unavailable_auxiliary: Option<bool>,
     },
     /// Choose catalog defaults by finite native ordinals, even when names are deferred.
     #[serde(rename = "session/selectModel")]
@@ -961,6 +964,13 @@ pub enum Method {
     SourcesRead {
         target: crate::local_runtime::configuration::settings::SourceTarget,
     },
+    /// Test a saved Model without creating a Session.
+    #[serde(rename = "model/probe")]
+    ModelProbe {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        model: crate::model::catalog::ModelRef,
+        source: crate::local_runtime::model_probe::ModelProbeSource,
+    },
     /// Finite configuration connectivity check; never an Agent connection.
     #[serde(rename = "mcp/probe")]
     McpProbe {
@@ -1061,6 +1071,8 @@ pub enum Method {
         source: Option<String>,
         #[serde(default)]
         cursor: Option<crate::local_runtime::workflow_tools::WorkflowToolCatalogCursor>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_scope: Option<crate::runtime::resources::SourceScope>,
     },
     /// Offline structural check, optional explanation, and dependency
     /// admission in an explicit Workspace context of one candidate document.
@@ -1248,6 +1260,7 @@ impl Method {
             | Self::DeliveryCancel { .. }
             | Self::SessionUploadPrepare { .. }
             | Self::SessionSwitchNode { .. }
+            | Self::ModelProbe { .. }
             | Self::ModelSet { .. }
             | Self::ModelSelect { .. }
             | Self::CompactContext { .. }
@@ -1795,6 +1808,9 @@ pub enum MethodResult {
     },
     EffectiveConfiguration {
         projection: Box<crate::local_runtime::configuration::effective_observation::BoundedEffectiveConfiguration>,
+    },
+    ModelProbe {
+        outcome: crate::local_runtime::model_probe::ModelProbeOutcome,
     },
     McpProbe {
         result: crate::local_runtime::mcp_probe::McpProbeResult,

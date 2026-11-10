@@ -506,7 +506,7 @@ mod tests {
     fn command(root: &Path, mode: &str) -> Command {
         let mut command = Command::new(std::env::current_exe().unwrap());
         command
-            .args(["--exact", CHILD, "--nocapture"])
+            .args(["--exact", CHILD, "--ignored", "--nocapture"])
             .env(
                 "RUSTX_OUTPUT_RETIREMENT_TEST_ROOT",
                 root.canonicalize().unwrap(),
@@ -637,10 +637,10 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "fixture subprocess, invoked by its parent test"]
     fn cleanup_process() {
-        let Some(root) = std::env::var_os("RUSTX_OUTPUT_RETIREMENT_TEST_ROOT") else {
-            return;
-        };
+        let root = std::env::var_os("RUSTX_OUTPUT_RETIREMENT_TEST_ROOT")
+            .expect("fixture parent must provide its environment");
         let root = PathBuf::from(root);
         let mode = std::env::var("RUSTX_OUTPUT_RETIREMENT_TEST_MODE").unwrap();
         let result = cleanup(

@@ -432,7 +432,7 @@ id_type! {
     /// Identifies a skill bound to the runtime.
     ///
     /// M6 makes the standard Agent Skills `name` the logical skill identity:
-    /// a `SkillId` is the validated standard skill name, not an externally
+    /// a `SkillId` is the discovered skill name, not an externally
     /// assigned opaque string.
     SkillId
 }

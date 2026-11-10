@@ -395,15 +395,15 @@ mod tests {
         drop(body);
 
         std::fs::write(skill.join("assets/checklist.md"), "procedure\n").expect("asset");
-        let discovered = SkillDiscovery::with_config(
-            &workspace,
-            SkillDiscoveryConfig::workspace_root(skill_root),
-        )
-        .discover();
+        let discovered =
+            SkillDiscovery::with_config(SkillDiscoveryConfig::workspace_root(skill_root))
+                .discover();
         let snapshot = SkillSnapshot::from_discovery(discovered);
         let location = snapshot.catalog_entries()[0].location.clone();
-        let frozen_catalog =
-            crate::skills::render_skill_catalog(snapshot.catalog_entries(), snapshot.roots());
+        let frozen_catalog = crate::skills::render_skill_catalog(
+            snapshot.catalog_entries(),
+            crate::skills::SkillReadTool::Read,
+        );
         assert_eq!(
             Path::new(&location),
             // Canonical, so this holds on platforms whose temporary root is
@@ -494,7 +494,10 @@ mod tests {
             "the earlier ToolResult value is not rewritten"
         );
         assert_eq!(
-            crate::skills::render_skill_catalog(snapshot.catalog_entries(), snapshot.roots()),
+            crate::skills::render_skill_catalog(
+                snapshot.catalog_entries(),
+                crate::skills::SkillReadTool::Read
+            ),
             frozen_catalog,
             "editing a known body cannot mutate the frozen catalog"
         );
@@ -539,30 +542,41 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn skill_resource_links_are_left_to_normal_tools() {
-        let directory = tempfile::tempdir().expect("temporary root");
-        let workspace = Workspace::new(directory.path()).expect("workspace");
-        let skill_root = directory.path().join(".agents/skills");
-        let skill = skill_root.join("escape-guide");
-        std::fs::create_dir_all(&skill).expect("Skill root");
-        std::fs::write(
-            skill.join("SKILL.md"),
-            "---\nname: escape-guide\ndescription: Escape guidance.\n---\nbody\n",
-        )
-        .expect("SKILL.md");
-        let outside = directory.path().join("outside.txt");
-        std::fs::write(&outside, "outside\n").expect("outside resource");
-        std::os::unix::fs::symlink(&outside, skill.join("references.md"))
-            .expect("resource symlink");
+    #[tokio::test]
+    async fn native_read_follows_skill_instruction_and_resource_links() {
+        let reader = TestRead::new();
+        let skill_root = reader.workspace.root().join(".agents/skills");
+        let skill = skill_root.join("linked-guide");
+        std::fs::create_dir_all(&skill).unwrap();
 
-        let outcome = SkillDiscovery::with_config(
-            &workspace,
-            SkillDiscoveryConfig::workspace_root(skill_root),
+        let external = tempfile::tempdir().unwrap();
+        let instructions = external.path().join("guide.md");
+        let reference = external.path().join("reference.md");
+        std::fs::write(
+            &instructions,
+            "---\nname: linked-guide\ndescription: Guide\n---\nRead references.md\n",
         )
-        .discover();
-        assert_eq!(outcome.packages.len(), 1);
+        .unwrap();
+        std::fs::write(&reference, "Linked resource.\n").unwrap();
+        std::os::unix::fs::symlink(instructions, skill.join("SKILL.md")).unwrap();
+        std::os::unix::fs::symlink(reference, skill.join("references.md")).unwrap();
+
+        let outcome = SkillDiscovery::with_config(SkillDiscoveryConfig::workspace_root(skill_root))
+            .discover();
         assert!(outcome.diagnostics.is_empty());
+        let location = outcome.packages[0].location();
+        let result = reader
+            .read("read-linked-skill", serde_json::json!({ "path": location }))
+            .await;
+        assert!(text_of(&result).contains("Read references.md"));
+        let reference = Path::new(location).with_file_name("references.md");
+        let result = reader
+            .read(
+                "read-linked-resource",
+                serde_json::json!({ "path": reference }),
+            )
+            .await;
+        assert!(text_of(&result).contains("Linked resource."));
     }
 
     // -----------------------------------------------------------------------

@@ -159,11 +159,7 @@ fn admitted_catalog(names: &[&str]) -> super::super::super::AgentCatalog {
         .unwrap();
         super::super::super::NamedAgentDefinition::new(
             super::super::super::SubagentName::parse(name).unwrap(),
-            crate::runtime::agent_profile::AgentProfile::from_document(
-                &document,
-                crate::runtime::agent_profile::AgentProfileKind::Named,
-                Vec::new(),
-            )
+            document.lower()
             .unwrap(),
             format!("{name}.toml").into(),
         )

@@ -172,6 +172,40 @@ impl SessionModelConfig {
     pub fn btw_selection(&self) -> Option<ModelSelection> {
         self.btw_model.selection()
     }
+
+    /// An auxiliary model removed from the catalog follows the primary model.
+    /// When a Session is updated, only an unchanged policy can be recovered.
+    pub(crate) fn use_available_auxiliary_models(
+        &mut self,
+        catalog: &crate::model::catalog::ModelCatalog,
+        previous: Option<&Self>,
+    ) {
+        for (auxiliary, carried) in [
+            (
+                &mut self.summary_model,
+                previous.map(|config| &config.summary_model),
+            ),
+            (
+                &mut self.title_model,
+                previous.map(|config| &config.title_model),
+            ),
+            (
+                self.classification_model.as_mut(),
+                previous.map(|config| config.classification_model.as_ref()),
+            ),
+            (
+                self.btw_model.as_mut(),
+                previous.map(|config| config.btw_model.as_ref()),
+            ),
+        ] {
+            if carried.is_none_or(|carried| carried == auxiliary)
+                && let AuxiliaryModelPolicy::Explicit { model, .. } = auxiliary
+                && catalog.model(model).is_err()
+            {
+                *auxiliary = AuxiliaryModelPolicy::Session;
+            }
+        }
+    }
 }
 
 impl AuxiliaryModelPolicy {

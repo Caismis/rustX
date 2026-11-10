@@ -20,14 +20,7 @@ use crate::runtime::identity::{CapabilityRevision, RuntimeResourceRevision};
 use crate::runtime::subagent::catalog::{AgentCatalog, SubagentName};
 use crate::runtime::workflow::WorkflowCatalog;
 
-/// The guidance files one directory may contribute, in precedence order.
-pub(crate) const PROJECT_CONTEXT_FILENAMES: [&str; 5] = [
-    "AGENTS.override.md",
-    "AGENTS.md",
-    "AGENTS.MD",
-    "CLAUDE.md",
-    "CLAUDE.MD",
-];
+pub(crate) const PROJECT_CONTEXT_FILENAME: &str = "AGENTS.md";
 const MAX_RESOURCE_DIAGNOSTIC_BYTES: usize = 4096;
 
 // The authoring scope a resource identity was discovered in. (A plain
@@ -134,7 +127,6 @@ pub struct RuntimeConfiguration {
 pub(crate) struct ContextBinding {
     pub(crate) configuration: RuntimeConfiguration,
     pub(crate) project_context_files: Vec<ProjectContextFile>,
-    pub(crate) root_agent_project_files: Vec<ProjectContextFile>,
     pub(crate) skills: Arc<crate::skills::SkillSnapshot>,
 }
 
@@ -241,12 +233,7 @@ impl RuntimeResourceSnapshot {
         let mut snapshot = self.clone();
         let agent = &binding.configuration.config.agent;
         let mut profile = self.root_profile().ok_or("missing root profile")?.clone();
-        profile.instructions.clone_from(&agent.instructions);
-        profile.project_instructions.inherit = agent.agents_md.inherit;
-        profile
-            .project_instructions
-            .files
-            .clone_from(&binding.root_agent_project_files);
+        profile.inherit_project_instructions = agent.agents_md.inherit;
         snapshot.capability = Arc::new(
             self.capability
                 .as_ref()
@@ -264,15 +251,11 @@ impl RuntimeResourceSnapshot {
             .collect::<Vec<_>>()
             .into();
         snapshot.project_context_files = binding.project_context_files.clone().into();
-        let mut files = if agent.agents_md.inherit {
-            binding.project_context_files.clone()
+        snapshot.project_instructions = if agent.agents_md.inherit {
+            concatenate_project_instructions(&binding.project_context_files).map(Arc::from)
         } else {
-            Vec::new()
+            None
         };
-        files.extend(binding.root_agent_project_files.clone());
-        snapshot.project_instructions = concatenate_project_instructions(&files).map(Arc::from);
-        snapshot.agent_profile =
-            (!agent.instructions.is_empty()).then(|| Arc::from(agent.instructions.as_str()));
         snapshot.configuration = Some(Arc::new(binding.configuration.clone()));
         snapshot.resolve_profiles();
         // Context adoption does not recover an external source. Keep the
@@ -318,27 +301,24 @@ impl RuntimeResourceSnapshot {
     #[cfg(test)]
     pub(crate) fn with_test_root_agents(mut self, agents: BTreeSet<SubagentName>) -> Self {
         use crate::runtime::agent_profile::{
-            AgentProfile, AgentProfileAuthority, AgentScope, resolve_agent_profile,
+            AgentProfileAuthority, AgentScope, resolve_agent_profile,
         };
-        let profile = AgentProfile::from_document(
-            &crate::local_runtime::config::AgentProfileDocument {
-                agents: agents.into_iter().collect(),
-                ..crate::local_runtime::config::builtin_root_profile()
-            },
-            crate::runtime::agent_profile::AgentProfileKind::Root,
-            Vec::new(),
-        )
-        .unwrap();
+        let profile = crate::local_runtime::config::builtin_root_profile()
+            .lower()
+            .unwrap();
         let resolved = resolve_agent_profile(
             &profile,
             &AgentProfileAuthority {
                 tools: self.capability.available_tools(),
                 availability: &self.capability_availability,
                 skills: self.capability.skills(),
-                agents: &self.subagents.names().into_iter().cloned().collect(),
                 workflows: &self.workflows.enabled_ids(),
                 scope: AgentScope::Root,
             },
+        )
+        .with_root_agents(
+            &agents.into_iter().collect::<Vec<_>>(),
+            &self.subagents.names().into_iter().cloned().collect(),
         );
         self.capability = Arc::new(
             self.capability
@@ -366,13 +346,11 @@ impl RuntimeResourceSnapshot {
         use crate::runtime::agent_profile::{
             AgentProfileAuthority, AgentScope, resolve_agent_profile,
         };
-        let agents = self.subagents.names().into_iter().cloned().collect();
         let workflows = self.workflows.enabled_ids();
         let authority = AgentProfileAuthority {
             tools: self.capability.available_tools(),
             availability: &self.capability_availability,
             skills: self.capability.skills(),
-            agents: &agents,
             workflows: &workflows,
             scope: AgentScope::OneShotChild,
         };
@@ -472,19 +450,21 @@ impl RuntimeResourceSnapshot {
         crate::local_runtime::static_effects::observe(
             crate::local_runtime::static_effects::Effect::ResourcePublication,
         );
-        let mut effective_project_files = project_context_files.clone();
         let mut agent_profile = agent_profile;
-        if let Some(profile) = capability.resolved_profile() {
-            if !profile.project_instructions.inherit {
-                effective_project_files.clear();
-            }
-            effective_project_files.extend(profile.project_instructions.files.clone());
-            if agent_profile.is_none() && !profile.instructions.is_empty() {
-                agent_profile = Some(profile.instructions.clone());
-            }
+        if let Some(profile) = capability.resolved_profile()
+            && agent_profile.is_none()
+            && !profile.instructions.is_empty()
+        {
+            agent_profile = Some(profile.instructions.clone());
         }
-        let project_instructions =
-            concatenate_project_instructions(&effective_project_files).map(Arc::<str>::from);
+        let project_instructions = if capability
+            .resolved_profile()
+            .is_none_or(|profile| profile.inherit_project_instructions)
+        {
+            concatenate_project_instructions(&project_context_files).map(Arc::<str>::from)
+        } else {
+            None
+        };
         let skill_catalog = capability.skill_catalog().map(Arc::<str>::from);
         let skill_sources = capability
             .skills()
@@ -832,13 +812,11 @@ impl PreparedRuntimeResources {
         let capability_availability = capability.availability().clone();
         // Finalize all generation facts before capability commit. Publication
         // moves these values unchanged; no resolver runs after the commit.
-        let names = subagents.names().into_iter().cloned().collect();
         let enabled = workflows.enabled_ids();
         let authority = crate::runtime::agent_profile::AgentProfileAuthority {
             tools: capability.available_tools(),
             availability: &capability_availability,
             skills: capability.skills(),
-            agents: &names,
             workflows: &enabled,
             scope: crate::runtime::agent_profile::AgentScope::OneShotChild,
         };
@@ -956,8 +934,7 @@ impl core::fmt::Display for RuntimeResourceLoadError {
 impl std::error::Error for RuntimeResourceLoadError {}
 
 /// Loads global instructions followed by instructions at the workspace boundary.
-/// Each directory contributes at most one file using first-match precedence:
-/// `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`.
+/// Each directory contributes its AGENTS.md if present.
 /// The global directory is the fixed User resource root, independent of `--config`.
 /// Unrelated ancestor instructions are outside this workspace's authority.
 ///
@@ -1042,41 +1019,39 @@ pub(crate) fn validate_project_resource_path(
 fn load_context_file_from_directory(
     directory: &Path,
 ) -> Result<Option<ProjectContextFile>, RuntimeResourceLoadError> {
-    for filename in PROJECT_CONTEXT_FILENAMES {
-        let path = directory.join(filename);
-        let metadata = match std::fs::metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(RuntimeResourceLoadError::new(format!(
-                    "cannot inspect project context file {}: {error}",
-                    path.display()
-                )));
-            }
-        };
-        if !metadata.is_file() {
-            continue;
+    let path = directory.join(PROJECT_CONTEXT_FILENAME);
+    let metadata = match std::fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            crate::bounded_file::record_read(&path);
+            return Err(RuntimeResourceLoadError::new(format!(
+                "cannot inspect project context file {}: {error}",
+                path.display()
+            )));
         }
-        validate_project_resource_path(directory, &path)
-            .map_err(|error| error.at(&path, "projectInstructions"))?;
-        let bytes = crate::bounded_file::read_bounded(&path).map_err(|error| {
-            RuntimeResourceLoadError::new(format!(
-                "cannot read project context file {}: {error}",
-                path.display()
-            ))
-            .at(&path, "projectInstructions")
-        })?;
-        let content = String::from_utf8(bytes).map_err(|error| {
-            RuntimeResourceLoadError::new(format!(
-                "project context file {} is not UTF-8: {error}",
-                path.display()
-            ))
-            .at(&path, "projectInstructions")
-        })?;
-        let content = strip_instruction_bom(&content).to_owned();
-        return Ok(Some(ProjectContextFile { path, content }));
+    };
+    if !metadata.is_file() {
+        return Ok(None);
     }
-    Ok(None)
+    validate_project_resource_path(directory, &path)
+        .map_err(|error| error.at(&path, "projectInstructions"))?;
+    let bytes = crate::bounded_file::read_bounded(&path).map_err(|error| {
+        RuntimeResourceLoadError::new(format!(
+            "cannot read project context file {}: {error}",
+            path.display()
+        ))
+        .at(&path, "projectInstructions")
+    })?;
+    let content = String::from_utf8(bytes).map_err(|error| {
+        RuntimeResourceLoadError::new(format!(
+            "project context file {} is not UTF-8: {error}",
+            path.display()
+        ))
+        .at(&path, "projectInstructions")
+    })?;
+    let content = strip_instruction_bom(&content).to_owned();
+    Ok(Some(ProjectContextFile { path, content }))
 }
 
 fn concatenate_project_instructions(files: &[ProjectContextFile]) -> Option<String> {
@@ -1117,9 +1092,8 @@ mod tests {
         let child = middle.join("leaf");
         std::fs::create_dir_all(&child).expect("workspace");
         std::fs::write(root.join("AGENTS.md"), "\u{feff}root agents").expect("root AGENTS");
-        std::fs::write(middle.join("AGENTS.MD"), "middle agents").expect("middle AGENTS");
-        std::fs::write(child.join("AGENTS.md"), "shadowed child agents").expect("child AGENTS");
-        std::fs::write(child.join("AGENTS.override.md"), "child override").expect("child override");
+        std::fs::write(middle.join("AGENTS.md"), "middle agents").expect("middle AGENTS");
+        std::fs::write(child.join("AGENTS.md"), "child agents").expect("child AGENTS");
 
         let files = load_project_context_files(&child, &directory.path().join("missing-user"))
             .expect("project context");
@@ -1137,82 +1111,43 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(
                 std::path::PathBuf::from("middle/leaf"),
-                "child override".to_owned(),
+                "child agents".to_owned(),
             ),]
         );
         assert_eq!(
             concatenate_project_instructions(&files),
             Some(format!(
-                "Project-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\nchild override\n</project_instructions>",
+                "Project-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\nchild agents\n</project_instructions>",
                 files[0].path.display()
             ))
         );
     }
 
     #[test]
-    fn project_context_override_beats_agents_and_agents_beats_claude() {
-        let directory = tempfile::tempdir().expect("temporary directory");
+    fn guidance_discovery_only_loads_agents_md() {
+        let directory = tempfile::tempdir().unwrap();
+        let global = directory.path().join("user");
         let workspace = directory.path().join("workspace");
-        let agents_directory = workspace.join("agents");
-        std::fs::create_dir_all(&agents_directory).expect("workspace");
-
-        std::fs::write(workspace.join("AGENTS.override.md"), "override wins").expect("override");
-        std::fs::write(workspace.join("AGENTS.md"), "ordinary is shadowed").expect("AGENTS");
-        std::fs::write(workspace.join("CLAUDE.md"), "claude is shadowed").expect("CLAUDE");
-        std::fs::write(agents_directory.join("AGENTS.md"), "agents beats claude")
-            .expect("nested AGENTS");
-        std::fs::write(
-            agents_directory.join("CLAUDE.md"),
-            "nested claude is shadowed",
-        )
-        .expect("nested CLAUDE");
-
-        let files =
-            load_project_context_files(&agents_directory, &directory.path().join("missing-user"))
-                .expect("project context");
-        let canonical_workspace = std::fs::canonicalize(&workspace).expect("canonical workspace");
-        let selected = files
-            .iter()
-            .filter(|file| file.path.starts_with(&canonical_workspace))
-            .map(|file| file.content.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(selected, vec!["agents beats claude"]);
-    }
-
-    #[test]
-    fn project_context_filename_variants_are_recognized_without_case_only_files() {
-        for (directory_name, filename, content) in [
-            ("agents-lower", "AGENTS.md", "agents lower"),
-            ("agents-upper", "AGENTS.MD", "agents upper"),
-            ("claude-lower", "CLAUDE.md", "claude lower"),
-            ("claude-upper", "CLAUDE.MD", "claude upper"),
-        ] {
-            let directory = tempfile::tempdir().expect("temporary directory");
-            let workspace = directory.path().join(directory_name);
-            std::fs::create_dir_all(&workspace).expect("workspace");
-            std::fs::write(workspace.join(filename), content).expect("context file");
-
-            let files =
-                load_project_context_files(&workspace, &directory.path().join("missing-user"))
-                    .expect("project context");
-            let canonical_workspace =
-                std::fs::canonicalize(&workspace).expect("canonical workspace");
-            let selected = files
-                .iter()
-                .filter(|file| file.path.starts_with(&canonical_workspace))
-                .collect::<Vec<_>>();
-            assert_eq!(selected.len(), 1, "variant {filename} was selected");
-            assert_eq!(selected[0].content, content);
-            let selected_filename = selected[0]
-                .path
-                .file_name()
-                .expect("filename")
-                .to_string_lossy();
-            assert!(
-                selected_filename.eq_ignore_ascii_case(filename),
-                "the selected spelling must be the requested variant modulo filesystem case: selected={selected_filename}, requested={filename}"
-            );
+        for root in [&global, &workspace] {
+            std::fs::create_dir_all(root).unwrap();
+            std::fs::write(root.join("AGENTS.override.md"), "override").unwrap();
+            std::fs::write(root.join("CLAUDE.md"), "other guidance").unwrap();
         }
+        assert!(
+            load_project_context_files(&workspace, &global)
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::write(global.join("AGENTS.md"), "global").unwrap();
+        std::fs::write(workspace.join("AGENTS.md"), "workspace").unwrap();
+        let files = load_project_context_files(&workspace, &global).unwrap();
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| file.content.as_str())
+                .collect::<Vec<_>>(),
+            ["global", "workspace"]
+        );
     }
 
     #[test]
@@ -1220,7 +1155,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let workspace = directory.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        std::fs::write(workspace.join("CLAUDE.MD"), b"\xef\xbb\xbfwith bom").expect("context file");
+        std::fs::write(workspace.join("AGENTS.md"), b"\xef\xbb\xbfwith bom").expect("context file");
 
         let files = load_project_context_files(&workspace, &directory.path().join("missing-user"))
             .expect("project context");
@@ -1230,49 +1165,6 @@ mod tests {
             .find(|file| file.path.starts_with(&canonical_workspace))
             .expect("context file");
         assert_eq!(selected.content, "with bom");
-    }
-
-    #[test]
-    fn global_context_precedes_workspace_and_uses_the_same_filename_priority() {
-        let directory = tempfile::tempdir().unwrap();
-        let global = directory.path().join("user");
-        let workspace = directory.path().join("workspace");
-        for root in [&global, &workspace] {
-            std::fs::create_dir_all(root).unwrap();
-            for filename in super::PROJECT_CONTEXT_FILENAMES {
-                std::fs::write(root.join(filename), format!("\u{feff}{filename}")).unwrap();
-            }
-        }
-        // Removing the winner at each step exercises every priority, in both scopes.
-        // Case-insensitive filesystems cannot host both spellings independently.
-        for filename in ["AGENTS.override.md", "AGENTS.md", "CLAUDE.md"] {
-            let files = load_project_context_files(&workspace, &global).unwrap();
-            assert_eq!(files.len(), 2);
-            assert_eq!(
-                files[0].path.parent(),
-                Some(global.canonicalize().unwrap().as_path())
-            );
-            assert_eq!(
-                files[1].path.parent(),
-                Some(workspace.canonicalize().unwrap().as_path())
-            );
-            assert!(
-                files
-                    .iter()
-                    .all(|file| file.content.eq_ignore_ascii_case(filename))
-            );
-            for root in [&global, &workspace] {
-                std::fs::remove_file(root.join(filename)).unwrap();
-                if filename != "AGENTS.override.md" {
-                    let _ = std::fs::remove_file(root.join(filename.to_uppercase()));
-                }
-            }
-        }
-        assert!(
-            load_project_context_files(&workspace, &global)
-                .unwrap()
-                .is_empty()
-        );
     }
 
     #[test]

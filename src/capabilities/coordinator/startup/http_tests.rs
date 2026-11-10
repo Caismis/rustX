@@ -1,6 +1,6 @@
 //! Submission deadlines exercised through actual MCP negotiation and pagination.
 use super::*;
-use crate::capabilities::{CapabilitySourceState, selection::SourceToolSelection};
+use crate::capabilities::{CapabilitySourceState, ToolSourceId, selection::SourceToolSelection};
 use crate::runtime::identity::McpServerId;
 use crate::skills::{SkillDiscovery, SkillDiscoveryConfig};
 use crate::tools::mcp::{McpServerBinding, McpTransportConfig};
@@ -175,9 +175,7 @@ async fn terminal_deadline(phase: HeldPhase) {
     let worker_deadline = deadline.clone();
     let worker = coordinator.clone();
     let mut preparing = tokio::spawn(async move {
-        let discovery =
-            SkillDiscovery::with_config(&worker.inner.workspace, SkillDiscoveryConfig::default())
-                .discover();
+        let discovery = SkillDiscovery::with_config(SkillDiscoveryConfig::default()).discover();
         worker
             .prepare_startup_candidate(discovery, worker_deadline, &CancellationSignal::new())
             .await
@@ -314,9 +312,7 @@ async fn loading_owner_cancels_unarmed_paginated_preparation_and_awaits_settleme
     let worker_deadline = deadline.clone();
     let worker = coordinator.clone();
     let preparing = tokio::spawn(async move {
-        let discovery =
-            SkillDiscovery::with_config(&worker.inner.workspace, SkillDiscoveryConfig::default())
-                .discover();
+        let discovery = SkillDiscovery::with_config(SkillDiscoveryConfig::default()).discover();
         worker
             .prepare_startup_candidate(discovery, worker_deadline, &worker_cancellation)
             .await
@@ -382,11 +378,7 @@ async fn completed_live_preparation_needs_no_wait_when_submission_arms_budget() 
         .unwrap()
         .mcp_servers
         .insert(id.clone(), fixture.binding.clone());
-    let discovery = SkillDiscovery::with_config(
-        &coordinator.inner.workspace,
-        SkillDiscoveryConfig::default(),
-    )
-    .discover();
+    let discovery = SkillDiscovery::with_config(SkillDiscoveryConfig::default()).discover();
     let deadline = McpStartupDeadline::default();
     let ready = coordinator
         .prepare_startup_candidate(discovery, deadline.clone(), &CancellationSignal::new())
@@ -450,9 +442,7 @@ async fn submission_deadline_bounds_eight_sources_including_unstarted_queue() {
     let worker_deadline = deadline.clone();
     let worker = coordinator.clone();
     let mut preparing = tokio::spawn(async move {
-        let discovery =
-            SkillDiscovery::with_config(&worker.inner.workspace, SkillDiscoveryConfig::default())
-                .discover();
+        let discovery = SkillDiscovery::with_config(SkillDiscoveryConfig::default()).discover();
         worker
             .prepare_startup_candidate(discovery, worker_deadline, &CancellationSignal::new())
             .await

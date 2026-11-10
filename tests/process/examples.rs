@@ -25,9 +25,7 @@ const REQUIRED_EXAMPLE_FILES: &[&str] = &[
     ".agents/tools/echo/server.py",
     ".agents/tools/echo/requirements.txt",
     ".agents/agents/navigator.toml",
-    ".agents/agents/navigator/AGENTS.md",
     ".agents/agents/reviewer.toml",
-    ".agents/agents/reviewer/AGENTS.md",
     ".agents/workflows/implement_and_review.yaml",
     ".agents/workflows/parallel_review.yaml",
 ];

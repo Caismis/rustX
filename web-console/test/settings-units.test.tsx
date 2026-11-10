@@ -1,14 +1,18 @@
+import {AvailabilityDetail} from '../src/app/resources/shared/AvailabilityDetail';
+import {ResourceAvailability} from '../src/app/resources/shared/ResourceAvailability';
 import { changeJson, readJson, jsonValidity } from './json-editor-helpers';
 import { sourceReceipt } from './fixture';
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { cfg3Client } from './cfg3-fixture';
+import { userSettingsTarget } from '../src/app/settings/projection';
 import { ModelsPage } from '../src/app/settings/models/ModelsPage';
 import { AgentPage } from '../src/app/settings/agent/AgentPage';
 import { ToolsPage } from '../src/app/settings/tools/ToolsPage';
-import { ExtensionDetail } from '../src/app/settings/extensions/ExtensionDetail';
+import { AgentEditor } from '../src/app/resources/subagents/AgentEditor';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v76';
+import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v78';
 import { chooseOption, confirmAction, renderEditor, sameRevision } from './settings-harness';
 import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { act } from '@testing-library/react';
@@ -17,6 +21,7 @@ import { translator } from '../src/locale/translation';
 afterEach(cleanup);
 
 const noop = () => {};
+const modelProbeFixture = { client: cfg3Client().client, target: userSettingsTarget };
 
 /** An editor bound to a real Workspace source projection, so the unit forms see
  * the same authored/effective/provenance facts they see inside Settings. */
@@ -38,7 +43,7 @@ function catalogSource(scope: SourceScope, document: Record<string, unknown>) {
 /** The Models page focused on one Model's detail, which is where a Model's
  * complete typed contract is authored. */
 const modelDetail = (source: SourceSettings, scope: SourceScope, revision: string, id: string) =>
-  <ModelsPage source={source} scope={scope} revision={revision} models={[]} profiles={{}} focus={{ kind: 'model', id }} onFocus={noop} onRefresh={noop} />;
+  <ModelsPage {...modelProbeFixture} source={source} scope={scope} revision={revision} models={[]} profiles={{}} focus={{ kind: 'model', id }} onFocus={noop} onRefresh={noop} />;
 /** The Tools & Permissions page, bound to one authored `rustx.toml`. */
 const toolsPage = (source: SourceSettings, document: RuntimeLayer, scope: SourceScope, revision: string) =>
   <ToolsPage source={source} document={document} scope={scope} revision={revision} />;
@@ -58,7 +63,7 @@ it('configures a complete reasoning draft, preserves invalid JSON, and clears on
   const list = () => screen.getByRole('list', { name: 'Reasoning order (low to high)' });
   const ids = () => [...list().children].map(row => row.getAttribute('data-profile-order'));
   expect(ids()).toEqual(['a-high', 'z-low']);
-  const json = screen.getByLabelText('Profile parameters (JSON)');
+  const json = screen.getByLabelText('API parameters (JSON)');
   changeJson(json, '{"request_params":');
   const up = screen.getByRole('button', { name: 'Move z-low up' });
   fireEvent.click(up);
@@ -66,9 +71,9 @@ it('configures a complete reasoning draft, preserves invalid JSON, and clears on
   expect(document.activeElement).toBe(up);
   expect(readJson(json)).toBe('{"request_params":');
   fireEvent.click(screen.getByRole('button', { name: 'Profile a-high' }));
-  expect(readJson(screen.getByLabelText('Profile parameters (JSON)'))).toBe('{"request_params":');
+  expect(readJson(screen.getByLabelText('API parameters (JSON)'))).toBe('{"request_params":');
   expect(jsonValidity(json).checkValidity()).toBe(false);
-  changeJson(json, JSON.stringify(main.profiles['z-low']));
+  changeJson(json, JSON.stringify(main.profiles['z-low'].request_params));
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(writes).toHaveBeenCalledTimes(1));
   expect(writes.mock.calls[0][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: {
@@ -106,7 +111,7 @@ it('keeps reasoning membership coherent on add, delete, final delete and reset',
   fireEvent.click(screen.getByRole('button', { name: 'Delete profile a' }));
   fireEvent.click(screen.getByRole('button', { name: 'Delete profile b' }));
   expect(screen.queryByRole('list', { name: 'Reasoning order (low to high)' })).toBeNull();
-  expect(screen.getByText('Add Profiles before configuring reasoning order.')).toBeTruthy();
+  expect(screen.getByText('Add a profile to configure reasoning levels.')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(writes).toHaveBeenCalledTimes(2));
   expect(writes.mock.calls[1][0]).toEqual({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: {
@@ -115,33 +120,37 @@ it('keeps reasoning membership coherent on add, delete, final delete and reset',
 });
 
 it('preserves source-authored protocol overrides when editing unrelated Model fields', async () => {
-  const model = { ...cfg3Effective().document.models!.main, protocol: 'openai_chat_completions' as const, capabilities: { ...cfg3Effective().document.models!.main.capabilities }, default_profile: 'deep', reasoning_profile_order: ['quick', 'deep'], profiles: { deep: { max_output_tokens: 2048, request_params: { reasoning: { effort: 'high' }, stop: [null] } }, quick: { request_params: {} } }, compat: { chat_max_tokens_field: 'max_completion_tokens' as const, chat_stream_usage: 'supported' as const, chat_reasoning_replay: 'omit' as const, chat_tool_protocol: 'native' as const } };
+  const model = { ...cfg3Effective().document.models!.main, capabilities: { ...cfg3Effective().document.models!.main.capabilities }, default_profile: 'deep', reasoning_profile_order: ['quick', 'deep'], profiles: { deep: { max_output_tokens: 2048, request_params: { reasoning: { effort: 'high' }, stop: [null] } }, quick: { request_params: {} } }, compat: { chat_max_tokens_field: 'max_completion_tokens' as const, chat_stream_usage: 'supported' as const, chat_reasoning_replay: 'omit' as const, chat_tool_protocol: 'native' as const } };
   const source = catalogSource('workspace', { models: { main: model } });
-  const { writes: write } = await renderEditor(modelDetail(source, 'workspace', 'exact', 'main'), { source, context: source });
+  source.user.authored!.models = { main: model };
+  const { writes: write, rerender } = await renderEditor(modelDetail(source, 'workspace', 'exact', 'main'), { source, context: source });
   // One unrelated field changes; everything else must survive the complete
   // object replacement untouched.
   fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'new-wire' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...model, id: 'new-wire' } } }, 'exact'));
-  await confirmAction('Use global default Model main');
+  rerender(<ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="exact"
+    models={['main']} profiles={{}} onFocus={noop} onRefresh={noop} />);
+  await confirmAction('Use global default Model main', within(screen.getByRole('row', { name: 'main' })));
   await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: null } }, 'exact'));
 });
 
-it('uses protocol defaults without compatibility controls and clears foreign overrides on API change', async () => {
-  const model = { ...cfg3Effective().document.models!.main, protocol: 'openai_chat_completions' as const, compat: { chat_reasoning_replay: 'reasoning' as const } };
+it('never authors a protocol from the Model editor', async () => {
+  const model = { ...cfg3Effective().document.models!.main, compat: { chat_reasoning_replay: 'reasoning' as const } };
   const source = catalogSource('user', { models: { main: model } });
   const { writes } = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), { source, context: source });
   expect(screen.queryByRole('button', { name: /protocol compatibility/i })).toBeNull();
   for (const label of ['Chat reasoning replay', 'Chat output field', 'Chat stream usage', 'Chat tool protocol', 'Responses storage']) {
     expect(screen.queryByLabelText(label)).toBeNull();
   }
-  await chooseOption('API format', 'OpenAI Responses (/v1/responses)');
+  expect(within(screen.getByRole('dialog', { name: 'Model main' })).queryByLabelText('API format')).toBeNull();
+  fireEvent.change(screen.getByLabelText('Model ID'), { target: { value: 'changed-wire' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
-  await waitFor(() => expect(writes).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...model, protocol: 'openai_responses', compat: undefined } } }, 'r1'));
+  await waitFor(() => expect(writes).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: { ...model, id: 'changed-wire' } } }, 'r1'));
 });
 
 it('saves a Chat Model without authoring any protocol overrides', async () => {
-  const model = { ...cfg3Effective().document.models!.main, protocol: 'openai_chat_completions' as const };
+  const model = { ...cfg3Effective().document.models!.main,  };
   delete model.compat;
   const source = catalogSource('user', { models: { main: model } });
   const { writes } = await renderEditor(modelDetail(source, 'user', 'r1', 'main'), { source, context: source });
@@ -161,30 +170,33 @@ it('authors general Model Profiles as complete presets, moving model parameters 
   const precise = within(screen.getByRole('group', { name: 'Profile precise' }));
   // The Model's own parameters seed the first profile; the Model no longer
   // declares any, and the new profile is the default.
-  expect(JSON.parse(readJson(precise.getByLabelText('Profile parameters (JSON)')))).toEqual({ request_params: { temperature: 0.2 } });
-  expect(precise.getByRole('button', { name: 'Format JSON: Profile parameters (JSON)' })).toBeTruthy();
-  expect(precise.queryByLabelText('Default output tokens')).toBeNull();
+  expect(JSON.parse(readJson(precise.getByLabelText('API parameters (JSON)')))).toEqual({ temperature: 0.2 });
+  expect(precise.getByRole('button', { name: 'Format JSON: API parameters (JSON)' })).toBeTruthy();
+  expect(precise.getByLabelText('Profile output limit (optional)')).toHaveProperty('value', '');
   const preciseValue = { max_output_tokens: 1024, request_params: { temperature: 0.1, top_p: 0.5, stop: ['\n', null], metadata: { tier: null } } };
-  changeJson(precise.getByLabelText('Profile parameters (JSON)'), JSON.stringify(preciseValue));
+  changeJson(precise.getByLabelText('API parameters (JSON)'), JSON.stringify(preciseValue.request_params));
+  fireEvent.change(precise.getByLabelText('Profile output limit (optional)'), { target: { value: '1024' } });
   fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
   fireEvent.change(screen.getByLabelText('New profile identity'), { target: { value: 'creative' } });
   fireEvent.keyDown(screen.getByLabelText('New profile identity'), { key: 'Enter' });
   const creative = within(screen.getByRole('group', { name: 'Profile creative' }));
   // A later profile starts empty: profiles never inherit from one another.
-  expect(JSON.parse(readJson(creative.getByLabelText('Profile parameters (JSON)')))).toEqual({ request_params: {} });
+  expect(JSON.parse(readJson(creative.getByLabelText('API parameters (JSON)')))).toEqual({});
   // Switching or adding a chip must not unmount an invalid JSON buffer and
   // silently restore the last valid parameters.
-  changeJson(creative.getByLabelText('Profile parameters (JSON)'), '{"request_params":');
+  changeJson(creative.getByLabelText('API parameters (JSON)'), '{"request_params":');
   fireEvent.click(screen.getByRole('button', { name: 'Profile precise' }));
-  expect(readJson(screen.getByLabelText('Profile parameters (JSON)'))).toBe('{"request_params":');
+  expect(readJson(screen.getByLabelText('API parameters (JSON)'))).toBe('{"request_params":');
   fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
   expect(screen.queryByLabelText('New profile identity')).toBeNull();
   const creativeValue = { request_params: { temperature: 1.3 } };
-  changeJson(creative.getByLabelText('Profile parameters (JSON)'), JSON.stringify(creativeValue));
+  changeJson(creative.getByLabelText('API parameters (JSON)'), JSON.stringify(creativeValue.request_params));
   fireEvent.click(screen.getByRole('button', { name: 'Profile precise' }));
-  expect(JSON.parse(readJson(screen.getByLabelText('Profile parameters (JSON)')))).toEqual(preciseValue);
+  expect(JSON.parse(readJson(screen.getByLabelText('API parameters (JSON)')))).toEqual(preciseValue.request_params);
+  expect(screen.getByLabelText('Profile output limit (optional)')).toHaveProperty('value', '1024');
   fireEvent.click(screen.getByRole('button', { name: 'Profile creative' }));
-  expect(JSON.parse(readJson(screen.getByLabelText('Profile parameters (JSON)')))).toEqual(creativeValue);
+  expect(JSON.parse(readJson(screen.getByLabelText('API parameters (JSON)')))).toEqual(creativeValue.request_params);
+  expect(screen.getByLabelText('Profile output limit (optional)')).toHaveProperty('value', '');
   fireEvent.click(screen.getByRole('button', { name: 'Save Model main' }));
   await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
   const { request_params: _, ...rest } = main;
@@ -199,31 +211,26 @@ it('authors general Model Profiles as complete presets, moving model parameters 
   expect(write.mock.calls[1][0]).toMatchObject({ mutation: { authored: { default_profile: 'creative', profiles: { creative: { request_params: { temperature: 1.3 } } } } } });
 });
 
-it.each(['all', 'none', 'exact'] as const)('writes exact native %s Skill selection', async mode => {
-  const source = workspaceSource();
-  const { writes: write } = await renderEditor(toolsPage(source, {}, 'workspace', 's1'), { source, context: source });
-  const form = within(screen.getByRole('form', { name: 'Skill visibility' }));
-  // An explicitly authored empty selection is a value, not the absence of one,
-  // so it is authored by the explicit Override gesture rather than produced by
-  // re-picking the mode the control already displays.
-  if (mode === 'none') fireEvent.click(form.getByRole('button', { name: 'Override Skill visibility' }));
-  else await chooseOption('Selection', mode === 'all' ? 'All' : 'Exact identities', form);
-  if (mode === 'exact') fireEvent.change(form.getByLabelText('Visible Skills identities 1'), { target: { value: 'review' } });
-  fireEvent.click(form.getByRole('button', { name: 'Save Skill visibility' }));
-  await waitFor(() => expect(write).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'skills', authored: mode === 'all' ? 'all' : mode === 'none' ? [] : ['review'] } }, 's1'));
+it.each(['all', 'none', 'exact'] as const)('changes one Skill from native %s membership without changing the others', async mode => {
+ const source=workspaceSource();
+ source.workspace!.authored={agent:{skills:mode==='all'?'all':mode==='none'?[]:['existing']}};
+ source.prospective_resources={definitions:[{family:'skill',name:'review',valid:true,location:{scope:'workspace',path:'/review'}},{family:'skill',name:'existing',valid:true,location:{scope:'workspace',path:'/existing'}}]} as never;
+ const {writes}=await renderEditor(<ResourceAvailability source={source} scope="workspace" revision="s1" family="skill" name="review" valid={true}/>,{source,context:source});
+ fireEvent.click(screen.getByRole('switch'));
+ await waitFor(()=>expect(writes).toHaveBeenCalledWith({kind:'config',mutation:{unit:'skills',authored:mode==='all'?['existing']:mode==='none'?['review']:['existing','review']}},'s1'));
 });
 
-it('presents the five Agent controls as one automatic group, never as ordinary Tool selections', async () => {
-  // Issue #462 D03: native composes the group from the Agent allowlist alone.
+it('keeps automatically composed Agent controls out of settings', async () => {
+  // Issue #462 D03: native composes the group from the Available subagents alone.
   const controls = ['subagent', 'list_agents', 'send_message', 'wait_agent', 'interrupt_agent'];
   const source = workspaceSource();
   await renderEditor(toolsPage(source, {}, 'workspace', 'c1'), { source, context: source });
-  const whitelist = within(screen.getByRole('group', { name: 'Explicit whitelist' }));
+  const whitelist = within(screen.getByRole('group', { name: 'Available tools' }));
   expect(whitelist.getByRole('checkbox', { name: 'read' })).toBeTruthy();
   for (const name of controls) expect(whitelist.queryByRole('checkbox', { name })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Advanced Tool policies' }));
   for (const name of controls) expect(screen.queryByRole('form', { name: `${name} policy` })).toBeNull();
-  expect(screen.getByRole('note', { name: 'Agent controls' }).textContent).toContain('Admitting at least one named Agent');
+  expect(screen.queryByRole('note', { name: 'Agent controls' })).toBeNull();
   cleanup();
   const composed = workspaceSource();
   composed.prospective_resources = {
@@ -234,13 +241,12 @@ it('presents the five Agent controls as one automatic group, never as ordinary T
     },
   };
   await renderEditor(toolsPage(composed, {}, 'workspace', 'c2'), { source: composed, context: composed });
-  expect(screen.getByRole('note', { name: 'Agent controls' }).textContent)
-    .toBe('Composed automatically from the Agent allowlist: subagent, list_agents, send_message, wait_agent, interrupt_agent. These controls cannot be selected or configured individually.');
+  expect(screen.queryByRole('note', { name: 'Agent controls' })).toBeNull();
 });
 
 it('writes Native and MCP invocation policies independently, and an empty policy only when explicitly authored', async () => {
   const context = workspaceSource();
-  const { writes: write } = await renderEditor(toolsPage(context, {}, 'workspace', 'p1'), { source: context, context });
+  const { writes: write } = await renderEditor(<>{toolsPage(context, {}, 'workspace', 'p1')}<AvailabilityDetail source={context} scope="workspace" revision="p1" family="mcp" name="search"/></>, { source: context, context });
   // Per-Tool invocation policy is progressively disclosed rather than given a
   // page of its own.
   fireEvent.click(screen.getByRole('button', { name: 'Advanced Tool policies' }));
@@ -250,8 +256,6 @@ it('writes Native and MCP invocation policies independently, and an empty policy
   await chooseOption('approval', 'Always', form);
   fireEvent.click(form.getByRole('button', { name: 'Save bash policy' }));
   await waitFor(() => expect(write.mock.calls[0]).toEqual([{ kind: 'config', mutation: { unit: 'native_policy', id: 'bash', authored: { execution: 'model_selectable', concurrency: 'parallel', approval: 'always' } } }, 'p1']));
-  fireEvent.change(screen.getByLabelText('MCP policy identity'), { target: { value: 'search' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Edit MCP policy' }));
   const mcp = within(screen.getByRole('form', { name: 'MCP policy search' }));
   // This Workspace authors no `search` policy; opening its editor authors none
   // either, so there is nothing to save until the user says so.
@@ -262,11 +266,11 @@ it('writes Native and MCP invocation policies independently, and an empty policy
   await waitFor(() => expect(write.mock.calls[1][0]).toEqual({ kind: 'config', mutation: { unit: 'mcp_policy', id: 'search', authored: {} } }));
 });
 
-it('round-trips an independent Agent profile with delegation, guidance and model', async () => {
+it('round-trips an independent Agent profile with guidance and model', async () => {
   const source = cfg3Source();
-  const authored = { description: 'Review', instructions: 'Inspect', agents: ['helper'], workflows: ['audit'], model: { model: 'main', profile: 'deep', max_output_tokens: { mode: 'catalog_default' as const }, summary_model: { mode: 'session' as const }, request_params: { temperature: .5, nested: [null] } }, tools: { builtin: ['read'], sources: { 'python:analysis': 'all' as const, search: [] } }, skills: 'all' as const, agents_md: { inherit: false, files: ['REVIEW.md'] }, timeout_ms: '30000', plugins: { todo: { enabled: true }, goal: { enabled: false }, agent_status: { enabled: true, time: { enabled: false }, background: { enabled: true } } } };
+  const authored = { description: 'Review', instructions: 'Inspect', workflows: ['audit'], model: { model: 'main', profile: 'deep', max_output_tokens: { mode: 'catalog_default' as const }, summary_model: { mode: 'session' as const }, request_params: { temperature: .5, nested: [null] } }, tools: { builtin: ['read'], sources: { 'python:analysis': 'all' as const, search: [] } }, skills: 'all' as const, agents_md: { inherit: false }, timeout_ms: '30000', plugins: { todo: { enabled: true }, goal: { enabled: false }, agent_status: { enabled: true, time: { enabled: false }, background: { enabled: true } } } };
   source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/workspace/.agents/agents/reviewer.toml', revision: 'agent-r1', authored } }];
-  const { writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={['main']} profiles={{}} family="agent" name="reviewer" onFocus={noop} />, { source, context: source });
+  const { writes: write } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={['main']} profiles={{}} name="reviewer" />, { source, context: source });
   // Opening an authored profile authors nothing new, so a no-op Save is
   // unavailable; an edit back to the same text still round-trips every field.
   expect((screen.getByRole('button', { name: 'Save Agent reviewer' }) as HTMLButtonElement).disabled).toBe(true);
@@ -280,73 +284,96 @@ it.each(['search', 'python:analysis'])('keeps all, none and exact Tool selection
   const source = workspaceSource();
   source.target = { kind: 'user' };
   const document: RuntimeLayer = { agent: { tools: { sources: { [id]: [] } } } };
-  const { writes: write } = await renderEditor(toolsPage(source, document, 'user', 'tools-r1'), { source, context: source });
-  const form = within(screen.getByRole('form', { name: `Source ${id}` }));
+  const { writes: write } = await renderEditor(id==='search'?<AvailabilityDetail source={{...source,user:{...source.user,authored:document}}} scope="user" revision="tools-r1" family="mcp" name="search"/>:toolsPage(source, document, 'user', 'tools-r1'), { source, context: source });
+  const form = within(screen.getByRole('form', { name: `Tools: ${id}` }));
   for (const mode of ['all', 'none', 'exact'] as const) {
     await chooseOption('Selection', mode === 'all' ? 'All' : mode === 'none' ? 'None' : 'Exact identities', form);
-    if (mode === 'exact') fireEvent.change(form.getByRole('textbox', { name: `${id} identities 1` }), { target: { value: 'inspect' } });
-    fireEvent.click(form.getByRole('button', { name: `Save Source ${id}` }));
+    if (mode === 'exact') fireEvent.change(form.getByRole('textbox', { name: `${id} names 1` }), { target: { value: 'inspect' } });
+    fireEvent.click(form.getByRole('button', { name: `Save Tools: ${id}` }));
     await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'source_tools', id, authored: mode === 'all' ? 'all' : mode === 'none' ? [] : ['inspect'] } }, 'tools-r1'));
   }
 });
 
-it('replaces default model intent and project guidance as independent native units on their own pages', async () => {
-  // The default model belongs to the Models page and project guidance to the
-  // Agent page: two user tasks, and two independent native semantic units.
-  const source = catalogSource('workspace', { agent: { model: { model: 'main', request_params: { temperature: .4 } } } });
-  const { writes: write, rerender } = await renderEditor(
-    <ModelsPage source={source} scope="workspace" revision="root-r1" models={['main', 'summary']} profiles={{ main: ['deep', 'quick'] }} onFocus={noop} onRefresh={noop} />,
+it('replaces default model intent on the Models page', async () => {
+  const summary_model = { mode: 'explicit' as const, model: 'summary' };
+  const main = cfg3Effective().document.models!.main;
+  const source = catalogSource('workspace', {
+    providers: cfg3Source().user.authored!.providers,
+    models: { main, other: { ...main, id: 'other' }, plain: { ...main, id: 'plain' } },
+    agent: { model: {
+      model: 'main', profile: 'quick', request_params: { temperature: .4 },
+      max_output_tokens: { mode: 'limit', tokens: 4096 }, summary_model,
+    } },
+  });
+  const { writes: write } = await renderEditor(
+    <ModelsPage {...modelProbeFixture} source={source} scope="workspace" revision="root-r1" models={['main', 'other', 'plain']}
+      profiles={{ main: ['deep', 'quick'], other: ['quick', 'high'] }} onFocus={noop} onRefresh={noop} />,
     { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const model = within(screen.getByRole('form', { name: 'Default model' }));
+  for (const label of ['Output limit', 'Request parameter overrides']) {
+    expect(model.queryByLabelText(label, { exact: true })).toBeNull();
+  }
+  for (const label of ['Summary model', 'Title model', 'Classification model', 'BTW model']) {
+    expect(model.queryByRole('button', { name: new RegExp(`${label}$`) })).toBeNull();
+  }
   await chooseOption('Profile', 'deep', model);
-  fireEvent.change(model.getByLabelText('Output limit'), { target: { value: '4096' } });
-  await chooseOption('Summary model', 'summary', model);
   fireEvent.click(model.getByRole('button', { name: 'Save Default model' }));
-  await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model', authored: { model: 'main', request_params: { temperature: .4 }, profile: 'deep', max_output_tokens: { mode: 'limit', tokens: 4096 }, summary_model: { mode: 'explicit', model: 'summary' } } } }, 'root-r1'));
-  // The model default profile is an omission, never a sentinel.
-  await chooseOption('Profile', 'Model default profile', model);
-  fireEvent.change(model.getByLabelText('Output limit'), { target: { value: '' } });
+  await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model',
+    authored: { model: 'main', profile: 'deep', summary_model },
+  } }, 'root-r1'));
+  await chooseOption('Profile', 'quick', model);
+  await chooseOption('Model', 'other', model);
+  expect(model.getByRole('button', { name: /Profile$/ }).textContent).toContain('Model default profile');
+  fireEvent.click(model.getByRole('button', { name: /Profile$/ }));
+  expect(screen.queryByRole('option', { name: 'deep' })).toBeNull();
+  fireEvent.click(screen.getByRole('option', { name: 'high' }));
+  await chooseOption('Model', 'plain', model);
+  expect(model.queryByRole('button', { name: /Profile$/ })).toBeNull();
   fireEvent.click(model.getByRole('button', { name: 'Save Default model' }));
-  await waitFor(() => expect(write.mock.calls.at(-1)?.[0]).toEqual({ kind: 'config', mutation: { unit: 'root_model', authored: { model: 'main', request_params: { temperature: .4 }, max_output_tokens: { mode: 'catalog_default' }, summary_model: { mode: 'explicit', model: 'summary' } } } }));
+  await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model',
+    authored: { model: 'plain', summary_model },
+  } }, 'root-r1'));
 
-  rerender(<AgentPage document={{}} scope="workspace" revision="root-r1" />);
-  const guidance = within(screen.getByRole('form', { name: 'Project guidance' }));
-  fireEvent.click(guidance.getByLabelText('Include project guidance'));
-  fireEvent.click(guidance.getByRole('button', { name: 'Save Project guidance' }));
-  await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'project_guidance', authored: { inherit: false } } }, 'root-r1'));
-  fireEvent.click(guidance.getByRole('button', { name: 'Add Guidance files' }));
-  fireEvent.change(guidance.getByRole('textbox', { name: 'Guidance files 1' }), { target: { value: 'REVIEW.md' } });
-  fireEvent.click(guidance.getByRole('button', { name: 'Save Project guidance' }));
-  await waitFor(() => expect(write.mock.calls.at(-1)?.[0]).toMatchObject({ mutation: { authored: { inherit: false, files: ['REVIEW.md'] } } }));
+  fireEvent.click(model.getByRole('button', { name: 'Auxiliary models' }));
+  await chooseOption('Title model', 'other', model);
+  await chooseOption('Profile (Title)', 'high', model);
+  await chooseOption('Summary model', 'other', model);
+  await chooseOption('Profile (Summary)', 'quick', model);
+  fireEvent.click(model.getByRole('button', { name: 'Save Default model' }));
+  await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'root_model',
+    authored: { model: 'plain', title_model: { mode: 'explicit', model: 'other', profile: 'high' },
+      summary_model: { mode: 'explicit', model: 'other', profile: 'quick' } },
+  } }, 'root-r1'));
 });
 
-it.each(['default', 'named Agent'] as const)('%s preserves and edits the complete explicit Summary Model independently', async owner => {
+it('saves the automatic project guidance switch', async () => {
+  const { writes: write } = await renderEditor(<AgentPage config={{ document: {}, revision: 'root-r1' }} />);
+  const guidance = within(screen.getByRole('form', { name: 'Project guidance' }));
+  const automatic = guidance.getByRole('switch', { name: 'Automatically load project guidance' });
+  expect(automatic.getAttribute('aria-checked')).toBe('true');
+  expect(guidance.queryByRole('button', { name: 'Advanced options' })).toBeNull();
+  fireEvent.click(automatic);
+  fireEvent.click(guidance.getByRole('button', { name: 'Save Project guidance' }));
+  await waitFor(() => expect(write).toHaveBeenLastCalledWith({ kind: 'config', mutation: { unit: 'project_guidance', authored: { inherit: false } } }, 'root-r1'));
+});
+
+it('a named Agent preserves and edits the complete explicit Summary Model independently', async () => {
   const summary = { mode: 'explicit' as const, model: 'summary-a', profile: 'deep', max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
   const model = { model: 'main', profile: 'fast', request_params: { temperature: .7 }, summary_model: summary };
   const models = ['main', 'summary-a', 'summary-b'];
   const profiles = { main: ['fast'], 'summary-a': ['deep'], 'summary-b': ['deep', 'quick'] };
-  let write!: Awaited<ReturnType<typeof renderEditor>>['writes'];
-  if (owner === 'default') {
-    const source = catalogSource('workspace', { agent: { model } });
-    ({ writes: write } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={models} profiles={profiles} onFocus={noop} onRefresh={noop} />, { source, context: source }));
-  } else {
-    const source = cfg3Source();
-    source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
-    ({ writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={models} profiles={profiles} family="agent" name="reviewer" onFocus={noop} />, { source, context: source }));
-  }
-  if (owner === 'default') fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
-  const formName = owner === 'default' ? 'Default model' : 'Agent reviewer';
-  const saveName = owner === 'default' ? 'Save Default model' : 'Save Agent reviewer';
+  const source = cfg3Source();
+  source.target = { kind: 'workspace', directory: '/workspace/A' };
+  source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
+  const { writes: write } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={models} profiles={profiles} name="reviewer" />, { source, context: source });
   const commit = async (expected: ModelLayer) => {
     const before = write.mock.calls.length;
-    const form = screen.getByRole('form', { name: formName }) as HTMLFormElement;
+    const form = screen.getByRole('form', { name: 'Agent reviewer' }) as HTMLFormElement;
     expect(form.checkValidity()).toBe(true);
-    fireEvent.click(within(form).getByRole('button', { name: saveName }));
+    fireEvent.click(within(form).getByRole('button', { name: 'Save Agent reviewer' }));
     await waitFor(() => expect(write).toHaveBeenCalledTimes(before + 1));
-    expect(write.mock.calls.at(-1)).toEqual([owner === 'default'
-      ? { kind: 'config', mutation: { unit: 'root_model', authored: expected } }
-      : { kind: 'agent', name: 'reviewer', authored: { model: expected } }, 'r1']);
+    expect(write.mock.calls.at(-1)).toEqual([{ kind: 'agent', name: 'reviewer', authored: { model: expected } }, 'r1']);
   };
   // Changing identity must not discard any nested authored intent.
   await chooseOption('Summary model', 'summary-b');
@@ -367,32 +394,22 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
   await commit({ ...model, summary_model: { mode: 'explicit', model: 'summary-a' } });
 });
 
-it.each(['default', 'named Agent'] as const)('%s preserves and edits the complete explicit Title Model independently', async owner => {
+it('a named Agent preserves and edits the complete explicit Title Model independently', async () => {
   const title = { mode: 'explicit' as const, model: 'title-a', profile: 'deep', max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
   const model = { model: 'main', profile: 'fast', request_params: { temperature: .7 }, title_model: title };
   const models = ['main', 'title-a', 'title-b'];
   const profiles = { main: ['fast'], 'title-a': ['deep'], 'title-b': ['deep', 'quick'] };
-  let write!: Awaited<ReturnType<typeof renderEditor>>['writes'];
-  if (owner === 'default') {
-    const source = catalogSource('workspace', { agent: { model } });
-    ({ writes: write } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={models} profiles={profiles} onFocus={noop} onRefresh={noop} />, { source, context: source }));
-  } else {
-    const source = cfg3Source();
-    source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
-    ({ writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={models} profiles={profiles} family="agent" name="reviewer" onFocus={noop} />, { source, context: source }));
-  }
-  if (owner === 'default') fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
-  const formName = owner === 'default' ? 'Default model' : 'Agent reviewer';
-  const saveName = owner === 'default' ? 'Save Default model' : 'Save Agent reviewer';
+  const source = cfg3Source();
+  source.target = { kind: 'workspace', directory: '/workspace/A' };
+  source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
+  const { writes: write } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={models} profiles={profiles} name="reviewer" />, { source, context: source });
   const commit = async (expected: ModelLayer) => {
     const before = write.mock.calls.length;
-    const form = screen.getByRole('form', { name: formName }) as HTMLFormElement;
+    const form = screen.getByRole('form', { name: 'Agent reviewer' }) as HTMLFormElement;
     expect(form.checkValidity()).toBe(true);
-    fireEvent.click(within(form).getByRole('button', { name: saveName }));
+    fireEvent.click(within(form).getByRole('button', { name: 'Save Agent reviewer' }));
     await waitFor(() => expect(write).toHaveBeenCalledTimes(before + 1));
-    expect(write.mock.calls.at(-1)).toEqual([owner === 'default'
-      ? { kind: 'config', mutation: { unit: 'root_model', authored: expected } }
-      : { kind: 'agent', name: 'reviewer', authored: { model: expected } }, 'r1']);
+    expect(write.mock.calls.at(-1)).toEqual([{ kind: 'agent', name: 'reviewer', authored: { model: expected } }, 'r1']);
   };
   // Changing identity must not discard any nested authored intent.
   await chooseOption('Title model', 'title-b');
@@ -416,9 +433,9 @@ it.each(['default', 'named Agent'] as const)('%s preserves and edits the complet
 it('the explicit Summary Model variant owns complete labels in each locale without changing native payloads', async () => {
   const summary = { mode: 'explicit' as const, model: 'summary-a', profile: 'deep', max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
   const model = { model: 'main', profile: 'main-profile', max_output_tokens: { mode: 'limit' as const, tokens: 4096 }, request_params: { temperature: .7 }, summary_model: summary };
-  const source = catalogSource('workspace', { agent: { model } });
-  const { writes: write, context } = await renderEditor(<ModelsPage source={source} scope="workspace" revision="r1" models={['main', 'summary-a']} profiles={{ main: ['main-profile'], 'summary-a': ['deep', 'quick'] }} onFocus={noop} onRefresh={noop} />, { source, context: source });
-  fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
+  const source = cfg3Source();
+  source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
+  const { writes: write, context } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={['main', 'summary-a']} profiles={{ main: ['main-profile'], 'summary-a': ['deep', 'quick'] }} name="reviewer" />, { source, context: source });
   const labels = (locale: 'en' | 'zh') => {
     const tx = translator(locale);
     const group = screen.getByRole('group', { name: tx('settings:models-page.explicit-summary-model-settings') });
@@ -450,10 +467,11 @@ it('the explicit Summary Model variant owns complete labels in each locale witho
 
   fireEvent.change(chinese.limit, { target: { value: '1024' } });
   const zh = translator('zh');
-  const form = screen.getByRole('form', { name: zh('settings:models-page.default-model') });
-  fireEvent.click(within(form).getByRole('button', { name: `${zh('settings:bridge.save')} ${zh('settings:models-page.default-model')}` }));
+  const title = zh('settings:extension-detail.agent-value', { p0: 'reviewer' });
+  const form = screen.getByRole('form', { name: title });
+  fireEvent.click(within(form).getByRole('button', { name: `${zh('settings:bridge.save')} ${title}` }));
   await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
-  expect(write.mock.calls[0]).toEqual([{ kind: 'config', mutation: { unit: 'root_model', authored: {
+  expect(write.mock.calls[0]).toEqual([{ kind: 'agent', name: 'reviewer', authored: { model: {
     ...model, summary_model: { ...summary, max_output_tokens: { mode: 'limit', tokens: 1024 } },
   } } }, 'r1']);
 });
@@ -461,7 +479,7 @@ it('the explicit Summary Model variant owns complete labels in each locale witho
 it.each([{}, { description: 'Review' }, { instructions: 'Inspect' }])('saves an Agent with optional profile text omitted: %j', async authored => {
   const source = cfg3Source();
   source.agents = [{ name: 'optional', scope: 'workspace', source: { path: '/agent.toml', revision: 'optional-r1', authored } }];
-  const { writes: write } = await renderEditor(<ExtensionDetail source={source} scope="workspace" revision="r1" models={[]} profiles={{}} family="agent" name="optional" onFocus={noop} />, { source, context: source });
+  const { writes: write } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={[]} profiles={{}} name="optional" />, { source, context: source });
   fireEvent.click(screen.getByLabelText('read'));
   expect((screen.getByRole('form', { name: 'Agent optional' }) as HTMLFormElement).checkValidity()).toBe(true);
   fireEvent.click(screen.getByRole('button', { name: 'Save Agent optional' }));
@@ -495,7 +513,7 @@ it('keeps invalid Model parameters mounted until repaired before creating the fi
   fireEvent.click(screen.getByRole('button', { name: 'Add profile' }));
   fireEvent.change(screen.getByLabelText('New profile identity'), { target: { value: 'precise' } });
   fireEvent.keyDown(screen.getByLabelText('New profile identity'), { key: 'Enter' });
-  expect(JSON.parse(readJson(screen.getByLabelText('Profile parameters (JSON)')))).toEqual({ request_params: { temperature: 0.3 } });
+  expect(JSON.parse(readJson(screen.getByLabelText('API parameters (JSON)')))).toEqual({ temperature: 0.3 });
   fireEvent.click(save());
   const { request_params: _, ...rest } = main;
   await waitFor(() => expect(writes).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'model', id: 'main', authored: {
@@ -629,12 +647,12 @@ it('an unrelated source observation keeps unparsed JSON, and the explicit review
   fireEvent.change(contextWindow(), { target: { value: '64000' } });
   unparsed(input, '{"top_p": ');
   await observe(revision('r3', { main: { ...main, max_output_tokens: main.max_output_tokens - 2 } }));
-  expect(await screen.findByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();
+  expect(await screen.findByRole('button', { name: 'Use latest setting' })).toBeTruthy();
   expect(readJson(input)).toBe('{"top_p": ');
   // …and the explicit review gesture is the owner reset: the editor shows the
   // draft's own request_params, which the draft keeps, fenced on r3.
-  fireEvent.click(screen.getByRole('button', { name: 'Use reviewed revision' }));
-  await waitFor(() => expect(screen.queryByRole('button', { name: 'Use reviewed revision' })).toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: 'Use latest setting' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Use latest setting' })).toBeNull());
   restored(input);
   expect(contextWindow().value).toBe('64000');
   expect(discardButton()).toBeTruthy();

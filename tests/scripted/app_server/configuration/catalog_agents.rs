@@ -182,6 +182,7 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
                 &connection,
                 101,
                 Method::ModelSet {
+                    recover_unavailable_auxiliary: None,
                     target: target.clone(),
                     config: Box::new(model("local/c"))
                 },

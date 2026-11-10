@@ -69,15 +69,13 @@ const READY_MARKER_ENV: &str = "RUSTX_ISSUE145_READY_MARKER";
 
 /// The one child entry point of this module.
 ///
-/// In an ordinary test run there is no entry selection in the environment
-/// and this test does nothing. Re-executed by a parent test, this process
-/// becomes a real subagent child running the production
+/// The parent re-executes this test binary as a real subagent child running
+/// the production
 /// `run_subagent_child` stack.
 #[test]
+#[ignore = "fixture subprocess, invoked by its parent test"]
 fn child_process_entry() {
-    if std::env::var_os(CHILD_ENTRY_ENV).is_none() {
-        return;
-    }
+    std::env::var_os(CHILD_ENTRY_ENV).expect("fixture parent must provide its environment");
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
         .enable_all()
@@ -128,7 +126,7 @@ impl Lab {
                  export {CHILD_ENTRY_ENV}=1\n\
                  export {GATE_ENV}='{}'\n\
                  export {READY_MARKER_ENV}='{}'\n\
-                 exec '{}' '{CHILD_ENTRY_TEST}' --exact --nocapture --test-threads=1\n",
+                 exec '{}' '{CHILD_ENTRY_TEST}' --exact --ignored --nocapture --test-threads=1\n",
                 gate_path.display(),
                 ready_marker.display(),
                 current.display(),

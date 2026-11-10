@@ -97,6 +97,7 @@ impl<'a> IntoIterator for &'a mut FrozenToolAssociations {
 }
 fn association_policy(
     protocol: crate::model::ModelProtocol,
+    replay_origin: Option<&crate::model::replay::ReplayOrigin>,
     continuation: Option<&crate::runtime::continuation::ProviderContinuationState>,
     source: Option<&crate::runtime::continuation::AcceptedOutputContinuationSource>,
 ) -> [u8; 32] {
@@ -116,7 +117,7 @@ fn association_policy(
             }
             PolicyWriter(&mut digest)
         },
-        &(protocol, continuation, source),
+        &(protocol, replay_origin, continuation, source),
     )
     .expect("native wire policy serializes");
     digest.finalize().into()
@@ -133,6 +134,7 @@ impl FrozenToolAssociations {
                 && validation.policy
                     == association_policy(
                         snapshot.invocation.protocol,
+                        snapshot.invocation.replay_origin().as_ref(),
                         snapshot.continuation.as_ref(),
                         snapshot.continuation_source.as_ref(),
                     )
@@ -195,6 +197,7 @@ pub(crate) fn freeze_associations(
             request: request_id.clone(),
             policy: association_policy(
                 request.protocol(),
+                request.invocation.replay_origin().as_ref(),
                 request.continuation.as_ref(),
                 request.continuation_source.as_ref(),
             ),

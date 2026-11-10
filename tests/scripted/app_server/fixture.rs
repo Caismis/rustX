@@ -257,8 +257,9 @@ impl Fixture {
         let mut catalog: toml::Value =
             toml::from_str(std::str::from_utf8(&documents[0]).unwrap()).unwrap();
         if anthropic {
+            catalog["providers"]["local"]["protocol"] =
+                toml::Value::String("anthropic_messages".into());
             let model = &mut catalog["models"]["local/a"];
-            model["protocol"] = toml::Value::String("anthropic_messages".into());
             model.as_table_mut().unwrap().remove("compat");
             model.as_table_mut().unwrap().insert(
                 "request_params".into(),

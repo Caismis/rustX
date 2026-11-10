@@ -44,9 +44,10 @@ class Text:
 
 @dataclass(frozen=True)
 class Reasoning:
-    """Assistant reasoning/thinking content."""
+    """Assistant reasoning/thinking content, optionally replayable without storage."""
 
     text: str
+    encrypted_content: str | None = None
 
 
 @dataclass(frozen=True)

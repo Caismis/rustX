@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v76.js';
+import type {ProtocolMessage} from './v78.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -289,7 +289,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 76,
+      "protocol_version": 78,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -307,7 +307,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 76,
+      "protocol_version": 78,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
@@ -662,6 +662,36 @@ export const fixtures = [
         "cut": null
       },
       "limit": 32
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/setModel",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "config": {
+        "model": "local/replacement",
+        "requestParams": {},
+        "summaryModel": {
+          "mode": "session"
+        },
+        "titleModel": {
+          "mode": "session"
+        },
+        "classificationModel": {
+          "mode": "session"
+        },
+        "btwModel": {
+          "mode": "session"
+        }
+      },
+      "recover_unavailable_auxiliary": true
     }
   },
   {
@@ -1418,7 +1448,8 @@ export const fixtures = [
         "directory": "/workspace/fixture"
       },
       "source": "github",
-      "cursor": null
+      "cursor": null,
+      "expected_scope": "user"
     }
   },
   {
@@ -4459,7 +4490,6 @@ export const fixtures = [
           "authored": {
             "provider": "fixture",
             "id": "wire-model",
-            "protocol": "openai_responses",
             "context_window": "128000",
             "max_output_tokens": 4096,
             "capabilities": {
@@ -4502,7 +4532,6 @@ export const fixtures = [
           "authored": {
             "provider": "fixture",
             "id": "wire-model",
-            "protocol": "openai_responses",
             "context_window": "128000",
             "max_output_tokens": 4096,
             "capabilities": {

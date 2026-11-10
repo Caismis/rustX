@@ -15,3 +15,25 @@
 
 .description { margin: 0; overflow-wrap: anywhere; font-size: 13px; }
 .actions { display: flex; gap: 4px; flex-wrap: wrap; }
+
+.inlineImage {
+  display: grid;
+  place-items: center;
+  width: fit-content;
+  max-width: min(240px, 100%);
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  overflow: hidden;
+  border: .5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-xl);
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+.inlineImage[data-compact] { width: 48px; height: 48px; padding: 2px; }
+.inlineImage[aria-busy] { cursor: default; }
+.inlineImage:has(img) { cursor: zoom-in; }
+.inlineImage img { display: block; max-width: 100%; max-height: 240px; object-fit: contain; }
+.inlineImage[data-compact] img { width: 100%; height: 100%; }
+.inlineImage:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }

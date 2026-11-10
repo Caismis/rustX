@@ -797,6 +797,7 @@ fn adapter_request(request_start: &AuxiliaryRequestStart) -> ModelRequest {
         response_byte_limit: None,
         images: crate::model::images::ResolvedImages::new(),
         invocation: ModelInvocationConfig {
+            replay_binding: Some("test-binding".into()),
             model: request_start.model.clone(),
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 128,

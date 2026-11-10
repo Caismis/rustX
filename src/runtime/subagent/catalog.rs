@@ -46,10 +46,6 @@ pub const MAX_SUBAGENT_DESCRIPTION_BYTES: usize = 512;
 /// The maximum byte length of one agent instruction document.
 pub const MAX_SUBAGENT_INSTRUCTIONS_BYTES: usize = 64 * 1024;
 
-/// The maximum number of explicit project-instruction files one definition
-/// may name.
-pub const MAX_SUBAGENT_PROJECT_FILES: usize = 8;
-
 /// The maximum whole-lifecycle wall-clock execution deadline one named
 /// subagent may hold.
 ///
@@ -185,8 +181,8 @@ pub struct NamedAgentDefinitionDigest(String);
 /// behavior-affecting field bumps this constant, so two framings can never
 /// collide into the same digest.
 ///
-/// v6 (#462) removed the retired workspace policy from the preimage.
-pub const SUBAGENT_DEFINITION_DIGEST_VERSION: &str = "rustx-agent-definition-v6";
+/// v7 removes the retired nested delegation and supplemental guidance fields.
+pub const SUBAGENT_DEFINITION_DIGEST_VERSION: &str = "rustx-agent-definition-v7";
 
 impl NamedAgentDefinitionDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
@@ -336,9 +332,8 @@ impl NamedAgentDefinition {
             execution_deadline,
             tools,
             skills,
-            project_instructions,
+            inherit_project_instructions,
             extensions,
-            agents,
             workflows,
         } = profile;
         // AgentProfileDocument defaults omitted text to empty; bounds still apply.
@@ -352,12 +347,6 @@ impl NamedAgentDefinition {
             return Err(NamedAgentDefinitionError::InstructionsOversized {
                 agent: name,
                 bytes: instructions.len(),
-            });
-        }
-        if project_instructions.files.len() > MAX_SUBAGENT_PROJECT_FILES {
-            return Err(NamedAgentDefinitionError::TooManyProjectFiles {
-                agent: name,
-                count: project_instructions.files.len(),
             });
         }
         let mut tools = tools;
@@ -379,9 +368,8 @@ impl NamedAgentDefinition {
             execution_deadline,
             &tools,
             &skills,
-            &project_instructions,
+            inherit_project_instructions,
             &extensions,
-            &agents,
             &workflows,
         );
         Ok(Self {
@@ -396,9 +384,8 @@ impl NamedAgentDefinition {
                 tools,
                 skills,
                 extensions,
-                agents,
                 workflows,
-                project_instructions,
+                inherit_project_instructions,
             },
         })
     }
@@ -457,12 +444,10 @@ impl NamedAgentDefinition {
         self.profile.skills.names()
     }
 
-    /// The project-instruction inheritance policy and explicit resources.
+    /// Whether this child includes the invoking generation's AGENTS.md chain.
     #[must_use]
-    pub const fn project_instructions(
-        &self,
-    ) -> &crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-        &self.profile.project_instructions
+    pub const fn inherits_project_instructions(&self) -> bool {
+        self.profile.inherit_project_instructions
     }
 
     /// The frozen native Agent Extension composition this role authored.
@@ -498,14 +483,6 @@ pub enum NamedAgentDefinitionError {
         /// The offending byte length.
         bytes: usize,
     },
-    /// The definition names more explicit project instruction files than the
-    /// bound allows.
-    TooManyProjectFiles {
-        /// The offending agent.
-        agent: SubagentName,
-        /// The offending count.
-        count: usize,
-    },
     /// A Skill selector is empty.
     EmptySkillSelector {
         /// The offending agent.
@@ -535,11 +512,6 @@ impl core::fmt::Display for NamedAgentDefinitionError {
                 formatter,
                 "subagent {agent:?} instructions exceed the \
                  {MAX_SUBAGENT_INSTRUCTIONS_BYTES}-byte bound ({bytes} bytes)"
-            ),
-            Self::TooManyProjectFiles { agent, count } => write!(
-                formatter,
-                "subagent {agent:?} names {count} project instruction files; at most \
-                 {MAX_SUBAGENT_PROJECT_FILES} are admitted"
             ),
             Self::EmptySkillSelector { agent } => {
                 write!(formatter, "subagent {agent:?} names an empty Skill")
@@ -727,17 +699,13 @@ fn compute_digest(
     execution_deadline: Option<SubagentExecutionDeadline>,
     tools: &[AgentToolSelection],
     skills: &crate::runtime::agent_profile::AgentSkillSelection,
-    project_instructions: &crate::runtime::agent_profile::AgentProjectInstructionPolicy,
+    inherit_project_instructions: bool,
     extensions: &crate::extensions::NativeAgentExtensions,
-    agents: &BTreeSet<SubagentName>,
     workflows: &BTreeSet<crate::runtime::workflow::WorkflowId>,
 ) -> NamedAgentDefinitionDigest {
     let mut hasher = Sha256::new();
     hasher.update(SUBAGENT_DEFINITION_DIGEST_VERSION.as_bytes());
     hasher.update(b"\n");
-    for agent in agents {
-        field(&mut hasher, "agent", agent.as_str());
-    }
     for workflow in workflows {
         field(&mut hasher, "workflow", workflow.as_str());
     }
@@ -784,29 +752,12 @@ fn compute_digest(
     field(
         &mut hasher,
         "project_instructions_inherit",
-        if project_instructions.inherit {
+        if inherit_project_instructions {
             "true"
         } else {
             "false"
         },
     );
-    count(
-        &mut hasher,
-        "project_instruction_files",
-        project_instructions.files.len(),
-    );
-    for file in &project_instructions.files {
-        // Content, not merely the path: a definition whose explicit
-        // instruction file changed is semantically a different definition,
-        // and an already-committed child must keep the digest it started
-        // with.
-        field(
-            &mut hasher,
-            "project_instruction_path",
-            &file.path.display().to_string(),
-        );
-        field(&mut hasher, "project_instruction_content", &file.content);
-    }
     // The role's native Agent Extension composition is part of its semantic
     // identity: two roles that differ only in Agent Status settings are
     // different definitions and must resolve to different frozen children.
@@ -838,14 +789,6 @@ mod tests {
         SubagentName, SubagentNameError,
     };
     use crate::capabilities::selection::AgentToolSelection;
-    use crate::runtime::resources::ProjectContextFile;
-
-    fn policy() -> crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-        crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-            inherit: true,
-            files: Vec::new(),
-        }
-    }
 
     fn definition(
         name: &str,
@@ -861,9 +804,8 @@ mod tests {
                 execution_deadline: None,
                 tools,
                 skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(skills),
-                project_instructions: policy(),
+                inherit_project_instructions: true,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-                agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
             std::path::PathBuf::from("/w/.agents/agents/explore.toml"),
@@ -885,9 +827,8 @@ mod tests {
                 execution_deadline: None,
                 tools: Vec::new(),
                 skills,
-                project_instructions: policy(),
+                inherit_project_instructions: true,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-                agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
             std::path::PathBuf::from("/w/.agents/agents/reviewer.toml"),
@@ -1067,7 +1008,7 @@ mod tests {
     )]
     fn instruction_and_project_policy_changes_change_the_digest() {
         let inherit = definition("explore", Vec::new(), Vec::new()).expect("definition");
-        let explicit_only = NamedAgentDefinition::new(
+        let without_guidance = NamedAgentDefinition::new(
             SubagentName::parse("explore").expect("name"),
             crate::runtime::agent_profile::AgentProfile {
                 description: "a description".to_owned(),
@@ -1076,61 +1017,8 @@ mod tests {
                 execution_deadline: None,
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                project_instructions:
-                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                        inherit: false,
-                        files: Vec::new(),
-                    },
+                inherit_project_instructions: false,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-                agents: std::collections::BTreeSet::default(),
-                workflows: std::collections::BTreeSet::default(),
-            },
-            std::path::PathBuf::from("/w/.agents/agents/explore.toml"),
-        )
-        .expect("definition");
-        let with_file = NamedAgentDefinition::new(
-            SubagentName::parse("explore").expect("name"),
-            crate::runtime::agent_profile::AgentProfile {
-                description: "a description".to_owned(),
-                instructions: "instructions".to_owned(),
-                model: None,
-                execution_deadline: None,
-                tools: Vec::new(),
-                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                project_instructions:
-                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                        inherit: true,
-                        files: vec![ProjectContextFile {
-                            path: std::path::PathBuf::from("/w/.agents/agents/explore/AGENTS.md"),
-                            content: "explicit".to_owned(),
-                        }],
-                    },
-                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-                agents: std::collections::BTreeSet::default(),
-                workflows: std::collections::BTreeSet::default(),
-            },
-            std::path::PathBuf::from("/w/.agents/agents/explore.toml"),
-        )
-        .expect("definition");
-        let changed_content = NamedAgentDefinition::new(
-            SubagentName::parse("explore").expect("name"),
-            crate::runtime::agent_profile::AgentProfile {
-                description: "a description".to_owned(),
-                instructions: "instructions".to_owned(),
-                model: None,
-                execution_deadline: None,
-                tools: Vec::new(),
-                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                project_instructions:
-                    crate::runtime::agent_profile::AgentProjectInstructionPolicy {
-                        inherit: true,
-                        files: vec![ProjectContextFile {
-                            path: std::path::PathBuf::from("/w/.agents/agents/explore/AGENTS.md"),
-                            content: "explicit, revised".to_owned(),
-                        }],
-                    },
-                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-                agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
             std::path::PathBuf::from("/w/.agents/agents/explore.toml"),
@@ -1145,9 +1033,8 @@ mod tests {
                 execution_deadline: None,
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                project_instructions: policy(),
+                inherit_project_instructions: true,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-                agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
             std::path::PathBuf::from("/w/.agents/agents/explore.toml"),
@@ -1155,14 +1042,12 @@ mod tests {
         .expect("definition");
         let mut digests = vec![
             inherit.digest().clone(),
-            explicit_only.digest().clone(),
-            with_file.digest().clone(),
-            changed_content.digest().clone(),
+            without_guidance.digest().clone(),
             changed_instructions.digest().clone(),
         ];
         digests.sort();
         digests.dedup();
-        assert_eq!(digests.len(), 5);
+        assert_eq!(digests.len(), 3);
     }
 
     #[test]
@@ -1176,9 +1061,8 @@ mod tests {
                 execution_deadline: None,
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                project_instructions: policy(),
+                inherit_project_instructions: true,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-                agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
             std::path::PathBuf::from("/w/a.md"),
@@ -1193,9 +1077,8 @@ mod tests {
                 execution_deadline: None,
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                project_instructions: policy(),
+                inherit_project_instructions: true,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-                agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
             std::path::PathBuf::from("/elsewhere/b.md"),
@@ -1238,9 +1121,8 @@ mod tests {
                 execution_deadline: Some(deadline),
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
-                project_instructions: policy(),
+                inherit_project_instructions: true,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
-                agents: std::collections::BTreeSet::default(),
                 workflows: std::collections::BTreeSet::default(),
             },
             std::path::PathBuf::from("/w/.agents/agents/explore.toml"),

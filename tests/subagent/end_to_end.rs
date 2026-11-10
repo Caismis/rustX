@@ -27,13 +27,13 @@ const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
 fn models_json(base_url: &str) -> String {
     format!(
         r#"[providers.fixture]
+protocol = "openai_chat_completions"
 base_url = "{base_url}"
 api_key = "$RUSTX_SUBAGENT_TEST_KEY"
 
 [models."fixture/subagent-model"]
 provider = "fixture"
 id = "subagent-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 request_params = '{{"temperature":0.11}}'

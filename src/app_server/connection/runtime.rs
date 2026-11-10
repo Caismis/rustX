@@ -152,9 +152,17 @@ pub(super) async fn dispatch_runtime(
         Method::ModelCatalog { target: _ } => {
             read_domain(authority, "model_catalog.models".into()).await
         }
-        Method::ModelSet { target, config } => {
+        Method::ModelSet {
+            target,
+            config,
+            recover_unavailable_auxiliary,
+        } => {
             let (_, settings_revision) = manager
-                .set_model(&target.session_id, *config)
+                .set_model_with_recovery(
+                    &target.session_id,
+                    *config,
+                    recover_unavailable_auxiliary.unwrap_or_default(),
+                )
                 .await
                 .map_err(model_selection_error)?;
             Ok(MethodResult::ModelSet { settings_revision })

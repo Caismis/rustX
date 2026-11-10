@@ -214,7 +214,6 @@ impl FixtureModel {
         let mut document = serde_json::json!({
             "provider": provider,
             "id": model,
-            "protocol": self.protocol,
             "contextWindow": self.context_window,
             "maxOutputTokens": self.max_output_tokens,
             "capabilities": {
@@ -251,10 +250,16 @@ pub fn fixture_catalog_document(models: &[FixtureModel]) -> ModelCatalogDocument
         let (provider, document) = model.parts();
         providers.entry(provider.clone()).or_insert_with(|| {
             serde_json::json!({
+                "protocol": model.protocol,
                 "baseUrl": format!("https://{provider}.fixture.invalid/v1"),
                 "apiKey": format!("fixture-key-{provider}"),
             })
         });
+        assert_eq!(
+            providers[&provider]["protocol"],
+            serde_json::json!(model.protocol),
+            "fixture models of one provider must share its protocol"
+        );
         assert!(
             definitions
                 .insert(model.reference.clone(), document)

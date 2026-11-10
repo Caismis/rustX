@@ -404,6 +404,7 @@ mod tests {
         ];
         let assistant = [
             AssistantContentBlock::Reasoning(ReasoningBlock {
+                origin: None,
                 text: Some("reason".into()),
                 provider_state: Some(ProviderContinuationState::OpenAiResponses(
                     OpenAiResponsesContinuation::Stateless {
@@ -551,6 +552,7 @@ mod continuation_work_tests {
         let output = MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("accepted"),
             content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                origin: None,
                 text: None,
                 provider_state: Some(state.clone()),
             })],

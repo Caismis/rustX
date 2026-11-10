@@ -16,7 +16,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const connect = async () => {
     await connectRemote(page, `${fixture.endpoint}/`, fixture.token);
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
   };
   const message = page.getByRole('textbox', { name: 'Message', exact: true });
   const todo = page.getByRole('region', { name: 'To-dos' });
@@ -249,7 +249,7 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(page.locator('button[data-phase=disconnected]')).toBeVisible();
     await expect(goal.getByRole('button', { name: 'Resume goal' })).toBeDisabled();
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toBeHidden();
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await expect(goal).toContainText('Paused Goal'); await expect(goal).toContainText('1/3 rounds');
     expect(await revision()).toBe(settled);
     await expect(todo.locator('li')).toHaveCount(2);

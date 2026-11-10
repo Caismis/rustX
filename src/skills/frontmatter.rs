@@ -4,8 +4,8 @@ use std::path::Path;
 
 use crate::runtime::CancellationSignal;
 
-/// Only the definition header is bounded; SKILL.md and its body have no size cap.
-pub(crate) const MAX_FRONTMATTER_BYTES: usize = 1024 * 1024;
+/// Bound the metadata read independently of the size of the body.
+pub(crate) const MAX_FRONTMATTER_BYTES: usize = 2 * 1024 * 1024;
 const BUFFER_BYTES: usize = 4096;
 
 #[cfg(test)]
@@ -15,22 +15,22 @@ thread_local! {
     pub(crate) static READ_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-pub(crate) fn read(root: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, String> {
-    let directory = crate::package_io::PackageDirectory::open(root).map_err(|e| e.to_string())?;
+pub(crate) fn read(path: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, String> {
+    let parent = path.parent().ok_or("Skill file has no parent directory")?;
+    let name = path.file_name().ok_or("Skill file has no name")?;
+    let directory = crate::package_io::PackageDirectory::open(parent).map_err(|e| e.to_string())?;
     let prefix = || {
-        let file = directory.file(Path::new(super::package::SKILL_MARKDOWN_FILE))?;
+        let file = directory.file(Path::new(name))?;
         // Bounded read-ahead, independent of the body size. Never validate body UTF-8.
         let mut reader = BufReader::with_capacity(BUFFER_BYTES, file);
         let mut header = Vec::new();
-        let mut line_start = 0;
-        let mut delimiters = 0;
+        let mut first = true;
+        let mut previous_cr = false;
+        let mut remaining = MAX_FRONTMATTER_BYTES;
         loop {
             crate::package_io::check_cancelled(signal)?;
             let bytes = reader.fill_buf()?;
             if bytes.is_empty() {
-                if delimiters == 1 && matches!(&header[line_start..], b"---" | b"---\r") {
-                    return Ok(header);
-                }
                 return Err(std::io::Error::other(
                     "SKILL.md frontmatter is missing its closing delimiter",
                 ));
@@ -43,29 +43,32 @@ pub(crate) fn read(root: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, 
                     hook();
                 }
             });
-            let mut used = 0;
+            let used = bytes.len();
+            let bytes = if first {
+                first = false;
+                let prefix = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+                remaining -= bytes.len() - prefix.len();
+                prefix
+            } else {
+                bytes
+            };
             for &byte in bytes {
-                used += 1;
-                if header.len() == MAX_FRONTMATTER_BYTES {
-                    return Err(std::io::Error::other("SKILL.md frontmatter exceeds 1 MiB"));
+                remaining = remaining
+                    .checked_sub(1)
+                    .ok_or_else(|| std::io::Error::other("SKILL.md frontmatter exceeds 2 MiB"))?;
+                let skip = previous_cr && byte == b'\n';
+                previous_cr = byte == b'\r';
+                if skip {
+                    continue;
                 }
-                header.push(byte);
-                if line_start == 0
-                    && !b"---\n".starts_with(&header)
-                    && !b"---\r\n".starts_with(&header)
-                {
+                header.push(if previous_cr { b'\n' } else { byte });
+                if header.len() <= 3 && !b"---".starts_with(&header) {
                     return Err(std::io::Error::other(
                         "SKILL.md must start with a YAML frontmatter delimiter",
                     ));
                 }
-                if byte == b'\n' {
-                    if matches!(&header[line_start..], b"---\n" | b"---\r\n") {
-                        delimiters += 1;
-                    }
-                    if delimiters == 2 {
-                        return Ok(header);
-                    }
-                    line_start = header.len();
+                if header.len() >= 7 && header.ends_with(b"\n---") {
+                    return Ok(header);
                 }
             }
             reader.consume(used);

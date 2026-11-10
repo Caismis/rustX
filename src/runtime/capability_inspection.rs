@@ -145,18 +145,7 @@ impl AgentInspection {
                 .filter(|entry| profile.skills.contains(&entry.name))
                 .cloned()
                 .collect(),
-            agent_controls: if profile.agents.is_empty() {
-                Vec::new()
-            } else {
-                crate::tools::native::AGENT_CONTROL_TOOL_NAMES
-                    .iter()
-                    .map(|name| ToolInspection {
-                        id: crate::tools::native::agent_control_tool_id(name),
-                        name: (*name).to_owned(),
-                        origin: ToolOrigin::Builtin,
-                    })
-                    .collect()
-            },
+            agent_controls: Self::controls_for(&profile.agents),
             agents: profile.agents.iter().cloned().collect(),
             workflows: profile.workflows.iter().cloned().collect(),
             extensions: vec![
@@ -179,6 +168,26 @@ impl AgentInspection {
                 .map(AgentProfileDiagnostic::redacted)
                 .collect(),
         }
+    }
+
+    pub(crate) fn set_root_agents(&mut self, agents: impl IntoIterator<Item = SubagentName>) {
+        let agents = agents.into_iter().collect();
+        self.agent_controls = Self::controls_for(&agents);
+        self.agents = agents.into_iter().collect();
+    }
+
+    fn controls_for(agents: &std::collections::BTreeSet<SubagentName>) -> Vec<ToolInspection> {
+        if agents.is_empty() {
+            return Vec::new();
+        }
+        crate::tools::native::AGENT_CONTROL_TOOL_NAMES
+            .iter()
+            .map(|name| ToolInspection {
+                id: crate::tools::native::agent_control_tool_id(name),
+                name: (*name).to_owned(),
+                origin: ToolOrigin::Builtin,
+            })
+            .collect()
     }
 }
 
@@ -398,9 +407,7 @@ impl CapabilityInspection {
 mod tests {
     use super::*;
     use crate::capabilities::selection::{SourceResolutionFailure, ToolSelectionError};
-    use crate::runtime::agent_profile::{
-        AgentProfile, AgentProfileAuthority, AgentProfileKind, AgentScope, resolve_agent_profile,
-    };
+    use crate::runtime::agent_profile::{AgentProfileAuthority, AgentScope, resolve_agent_profile};
     use crate::runtime::identity::McpServerId;
 
     #[test]
@@ -445,9 +452,6 @@ mod tests {
                 &mut tainted
             };
             payload["detail"] = "SECRET_PARSER_PAYLOAD".into();
-            if payload["cause"] == "invalid_name" || payload["cause"] == "name_directory_mismatch" {
-                payload["name"] = "SECRET_AUTHORED_VALUE".into();
-            }
             let decoded: SkillDiagnostic = serde_json::from_value(tainted).unwrap();
             assert_eq!(
                 decoded,
@@ -496,11 +500,10 @@ mod tests {
     #[test]
     fn cfg275_online_reason_and_redaction_are_owned_before_inspection() {
         let source = ToolSourceId::Mcp(McpServerId::new("optional"));
-        let document = crate::toml_authoring::parse::<crate::local_runtime::config::AgentProfileDocument>(
+        let document = crate::toml_authoring::parse::<crate::local_runtime::config::NamedAgentProfileDocument>(
             b"description = 'SECRET_DESCRIPTION'\ninstructions = 'SECRET_INSTRUCTIONS'\n[tools.sources]\noptional = ['inspect']\n",
         ).unwrap();
-        let profile =
-            AgentProfile::from_document(&document, AgentProfileKind::Named, Vec::new()).unwrap();
+        let profile = document.lower().unwrap();
         let tools = crate::capabilities::AvailableToolCatalog::metadata([]);
         let skills = SkillSnapshot::new(Vec::new());
         let resolve = |state| {
@@ -512,7 +515,6 @@ mod tests {
                     tools: &tools,
                     availability: &availability,
                     skills: &skills,
-                    agents: &std::collections::BTreeSet::new(),
                     workflows: &std::collections::BTreeSet::new(),
                     scope: AgentScope::OneShotChild,
                 },

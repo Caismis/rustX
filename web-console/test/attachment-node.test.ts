@@ -1,6 +1,6 @@
 import{traceReceipt}from'./fixture';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult } from '../../protocol/app-server/v76';
+import type { MethodResult } from '../../protocol/app-server/v78';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
 import { checkpoint, Server, snapshot } from './fixture';
 import { traceRecord, requestDetail } from './trace-fixture';

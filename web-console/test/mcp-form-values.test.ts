@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { formatArguments, parseArguments, parseReferences } from '../src/app/settings/mcp/form-values';
+import { formatArguments, parseArguments, parseReferences } from '../src/app/resources/mcp/form-values';
 
 it('round trips argv without losing spaces, empty arguments, quotes or literal variables', () => {
   const args = ['-y', 'server', '--directory', '/a directory/with spaces', '', '$TOKEN', '"quoted"', "it's", 'C:\\MCP\\server.py', '*'];

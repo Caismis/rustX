@@ -67,12 +67,24 @@ impl SourceTarget {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProviderView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 100))]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    pub protocol: crate::model::ModelProtocol,
     pub base_url: String,
     pub credential: CredentialSourceView,
 }
 impl From<Provider> for ProviderView {
     fn from(provider: Provider) -> Self {
         Self {
+            display_name: provider.display_name,
+            icon: provider.icon,
+            hidden: provider.hidden,
+            protocol: provider.protocol,
             base_url: provider.base_url,
             credential: provider.api_key.view(),
         }
@@ -106,6 +118,14 @@ pub enum CredentialEdit {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderWrite {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 100))]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    pub protocol: crate::model::ModelProtocol,
     pub base_url: String,
     pub credential: CredentialEdit,
 }
@@ -120,7 +140,7 @@ pub struct SourceView<T> {
 pub struct AgentSourceView {
     pub scope: SourceScope,
     pub name: crate::runtime::subagent::SubagentName,
-    pub source: SourceView<super::super::config::AgentProfileDocument>,
+    pub source: SourceView<super::super::config::NamedAgentProfileDocument>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct McpView {
@@ -173,6 +193,8 @@ pub struct SourceSettings {
     /// for the same source: the higher one is the newer observation.
     pub repair_sequence: u64,
     pub user_resource_root: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_guidance: Option<SourceView<String>>,
     pub workspace_resource_root: Option<PathBuf>,
     pub runtime_root: PathBuf,
     pub user_mcp: SourceView<BTreeMap<crate::runtime::identity::McpServerId, McpView>>,
@@ -238,6 +260,9 @@ pub enum ConfigMutation {
         id: String,
         authored: Option<ProviderWrite>,
     },
+    RestoreProvider {
+        id: String,
+    },
     Model {
         id: String,
         authored: Option<Model>,
@@ -279,9 +304,6 @@ pub enum ConfigMutation {
     Description {
         authored: Option<String>,
     },
-    Instructions {
-        authored: Option<String>,
-    },
     ProjectGuidance {
         authored: Option<super::super::config::AgentProjectInstructionsDocument>,
     },
@@ -321,6 +343,10 @@ pub enum ConfigMutation {
 #[allow(clippy::large_enum_variant)] // Finite wire command; parsed and consumed once per CAS operation.
 #[schemars(rename = "SourceMutation")]
 pub enum SourceMutation<D = Box<crate::workflow_file::WorkflowFileDocument>> {
+    /// Replace the User's global AGENTS.md without changing rustx.toml.
+    GlobalGuidance {
+        document: String,
+    },
     /// Explicit repair of a configuration document violating its source contract. Never used
     /// for ordinary semantic-unit editing and never accepts an invalid source.
     RepairConfig {
@@ -335,7 +361,7 @@ pub enum SourceMutation<D = Box<crate::workflow_file::WorkflowFileDocument>> {
     },
     Agent {
         name: crate::runtime::subagent::SubagentName,
-        authored: Option<super::super::config::AgentProfileDocument>,
+        authored: Option<super::super::config::NamedAgentProfileDocument>,
     },
     /// One whole-file edit of exactly `<scope>/.agents/workflows/<id>.yaml`
     /// (Issue #491). The expected revision is that file's.
@@ -398,11 +424,9 @@ fn revision(bytes: Option<&[u8]>) -> String {
 /// automatic repair decide them; safe text only.
 fn source_resolution_diagnostic(document: &RuntimeLayer) -> Option<String> {
     match super::semantics::composition_semantics(document) {
-        Ok(super::semantics::Composition::Complete) => None,
-        Ok(super::semantics::Composition::NoDefaultModel) => Some(
-            "no unambiguous default model selected; set agent.model.model in User or Workspace rustx.toml"
-                .into(),
-        ),
+        // A saved Provider without a Model is valid configuration in progress.
+        // Session creation owns model readiness; source editors must stay usable.
+        Ok(_) => None,
         Err(failure) => Some(failure.summary()),
     }
 }
@@ -611,12 +635,29 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
                         return Err(SettingsError::Invalid);
                     }
                     Ok(Provider {
+                        display_name: authored.display_name,
+                        icon: authored.icon,
+                        hidden: authored.hidden,
+                        protocol: authored.protocol,
                         base_url: authored.base_url,
                         api_key: credential,
                     })
                 })
                 .transpose()?;
+            if provider.is_none()
+                && document
+                    .providers
+                    .as_ref()
+                    .is_some_and(|providers| providers.contains_key(&id))
+                && let Some(models) = &mut document.models
+            {
+                models.retain(|_, model| model.provider != id);
+            }
             identity_unit(&mut document.providers, id, provider);
+        }
+        M::RestoreProvider { id } => {
+            crate::model::catalog::ProviderId::parse(&id).map_err(|_| SettingsError::Invalid)?;
+            identity_unit(&mut document.providers, id, None);
         }
         M::Model { id, authored } => {
             crate::model::catalog::ModelRef::parse(&id).map_err(|_| SettingsError::Invalid)?;
@@ -650,12 +691,6 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
             authored,
         ),
         M::Skills { authored } => {
-            if let Some(value) = &authored {
-                for name in value.names() {
-                    crate::skills::package::validate_skill_name(name)
-                        .map_err(|_| SettingsError::Invalid)?;
-                }
-            }
             document.agent.get_or_insert_default().skills = authored;
         }
         M::Todo { authored } => {
@@ -695,9 +730,6 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
         M::AgentIdentity { authored } => document.agent_id = authored,
         M::Description { authored } => {
             document.agent.get_or_insert_default().description = authored;
-        }
-        M::Instructions { authored } => {
-            document.agent.get_or_insert_default().instructions = authored;
         }
         M::ProjectGuidance { authored } => {
             document.agent.get_or_insert_default().agents_md = authored;
@@ -740,6 +772,13 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
 fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
     #[derive(Serialize)]
     struct PrivateProvider {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display_name: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        hidden: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        icon: Option<String>,
+        protocol: crate::model::ModelProtocol,
         base_url: String,
         api_key: String,
     }
@@ -751,6 +790,10 @@ fn encode(document: RuntimeLayer) -> Result<Vec<u8>, SettingsError> {
     // its literal values here; only the wire projection redacts them.
     let document = document.project(
         |provider| PrivateProvider {
+            display_name: provider.display_name,
+            icon: provider.icon,
+            hidden: provider.hidden,
+            protocol: provider.protocol,
             base_url: provider.base_url,
             api_key: match provider.api_key {
                 CredentialSource::Literal(value) => value,
@@ -768,6 +811,7 @@ impl UserConfigManager {
     fn authoring_inventory(
         &self,
         target: &SourceTarget,
+        skills: Option<crate::skills::SkillDiscoveryOutcome>,
     ) -> crate::runtime::capability_inspection::CapabilityInspection {
         use crate::runtime::capability_inspection::{
             CapabilityInspection, ResourceDefinition, ResourceDiagnostic, ResourceFamily,
@@ -888,7 +932,6 @@ impl UserConfigManager {
                     &error,
                 )),
         }
-        let skills = self.discover_skills(workspace);
         if let Some(skills) = skills {
             inventory.definitions.extend(
                 skills
@@ -927,13 +970,11 @@ impl UserConfigManager {
         &self,
         workspace: Option<&Path>,
     ) -> Option<crate::skills::SkillDiscoveryOutcome> {
-        let user = self.resource_root(&SourceTarget::User);
         if let Some(workspace) = workspace {
             crate::tools::workspace::Workspace::new(workspace)
                 .ok()
                 .map(|workspace| {
                     crate::skills::SkillDiscovery::with_config(
-                        &workspace,
                         crate::skills::SkillDiscoveryConfig {
                             automatic: crate::skills::automatic_skill_roots(
                                 Some(&self.sources.home_directory),
@@ -946,7 +987,7 @@ impl UserConfigManager {
                 })
         } else {
             Some(
-                crate::skills::SkillDiscovery::user_root(user.join("skills"))
+                crate::skills::SkillDiscovery::user(&self.sources.home_directory)
                     .with_cancellation(self.resource_io.clone())
                     .discover(),
             )
@@ -959,6 +1000,30 @@ impl UserConfigManager {
         match target {
             SourceTarget::User => self.sources.home_directory.join("rustx/.agents"),
             SourceTarget::Workspace { directory } => directory.join(".agents"),
+        }
+    }
+    fn global_guidance_path(&self) -> PathBuf {
+        self.resource_root(&SourceTarget::User).join("AGENTS.md")
+    }
+
+    fn global_guidance(&self) -> SourceView<String> {
+        let path = self.global_guidance_path();
+        let (revision, authored, diagnostic) = match super::super::settings::read_source(&path) {
+            Ok(Some(bytes)) => {
+                let version = revision(Some(&bytes));
+                match String::from_utf8(bytes) {
+                    Ok(document) => (version, Some(document), None),
+                    Err(_) => (version, None, Some("AGENTS.md is not valid UTF-8.".into())),
+                }
+            }
+            Ok(None) => (revision(None), None, None),
+            Err(_) => (revision(None), None, Some("Cannot read AGENTS.md.".into())),
+        };
+        SourceView {
+            path,
+            revision,
+            authored,
+            diagnostic,
         }
     }
     pub(in crate::local_runtime) fn config_path(&self, target: &SourceTarget) -> PathBuf {
@@ -1006,6 +1071,7 @@ impl UserConfigManager {
     pub(in crate::local_runtime) fn capture_authored_settings(
         &self,
         target: &SourceTarget,
+        expected: Option<&crate::local_runtime::model_probe::ModelProbeSource>,
     ) -> Result<(Option<RuntimeLayer>, String), SettingsError> {
         self.with_source_documents(target, |user, workspace| {
             let user_bytes = user.read().map_err(|_| SettingsError::Io)?;
@@ -1014,6 +1080,13 @@ impl UserConfigManager {
                 .transpose()
                 .map_err(|_| SettingsError::Io)?
                 .flatten();
+            if let Some(expected) = expected
+                && (revision(user_bytes.as_deref()) != expected.user_revision
+                    || workspace.map(|_| revision(workspace_bytes.as_deref()))
+                        != expected.workspace_revision)
+            {
+                return Err(SettingsError::Invalid);
+            }
             let resolved = compose_authored_layers(
                 user.path(),
                 workspace.map(AdmittedSource::path),
@@ -1144,6 +1217,14 @@ impl UserConfigManager {
         if let Some(path) = &workspace {
             manifest.insert(path.clone(), revision(workspace_bytes.as_deref()));
         }
+        let skills = self.discover_skills(target.workspace());
+        let skill_revision = skills
+            .as_ref()
+            .map(crate::skills::SkillDiscoveryOutcome::revision);
+        if let Some(revision) = &skill_revision {
+            let root = self.resource_root(target).join(crate::skills::SKILLS_ROOT);
+            manifest.insert(root, revision.clone());
+        }
         let input_revision = super::capture::source_manifest_revision(&manifest);
         let mut provenance = BTreeMap::new();
         let resolved = compose_authored_layers(
@@ -1164,7 +1245,7 @@ impl UserConfigManager {
             }
             Ok(document) => source_resolution_diagnostic(document),
         };
-        let prospective_resources = Some(self.authoring_inventory(target));
+        let prospective_resources = Some(self.authoring_inventory(target, skills));
         let (repair_sequence, user_repair, workspace_repair) = self.repairs().snapshot(target);
         let result = SourceSettings {
             target: target.clone(),
@@ -1214,6 +1295,7 @@ impl UserConfigManager {
             workspace_repair,
             repair_sequence,
             user_resource_root: self.resource_root(&SourceTarget::User),
+            global_guidance: matches!(target, SourceTarget::User).then(|| self.global_guidance()),
             workspace_resource_root: target
                 .workspace()
                 .map(|directory| directory.join(".agents")),
@@ -1243,6 +1325,17 @@ impl UserConfigManager {
                 });
             }
         }
+        let actual = self
+            .discover_skills(target.workspace())
+            .as_ref()
+            .map(crate::skills::SkillDiscoveryOutcome::revision);
+        if skill_revision != actual {
+            return Err(SettingsError::Conflict {
+                scope: target.scope(),
+                expected: skill_revision.unwrap_or_default(),
+                actual: actual.unwrap_or_default(),
+            });
+        }
         Ok((result, input_revision))
     }
     /// Commit one typed semantic-unit edit under the source revision fence.
@@ -1262,6 +1355,12 @@ impl UserConfigManager {
             SourceMutation::Config { .. } | SourceMutation::RepairConfig { .. }
         );
         let path = match &mutation {
+            SourceMutation::GlobalGuidance { .. } => {
+                if scope != SourceScope::User {
+                    return Err(SettingsError::Invalid);
+                }
+                self.global_guidance_path()
+            }
             SourceMutation::Mcp { .. } => self.resource_root(target).join("mcp.toml"),
             SourceMutation::Config { .. } | SourceMutation::RepairConfig { .. } => {
                 self.config_path(target)
@@ -1325,6 +1424,7 @@ impl UserConfigManager {
                 capacity.admit(id)?;
             }
             let candidate = match mutation {
+                SourceMutation::GlobalGuidance { document } => Some(document.into_bytes()),
                 SourceMutation::RepairConfig { document } => {
                     // Manual repair exists for documents that fail their own
                     // source contract, including TOML-parsable ones; it never
@@ -1350,8 +1450,10 @@ impl UserConfigManager {
                     Some(mcp_candidate(original.as_deref(), id, authored)?)
                 }
                 SourceMutation::Config { mutation, .. } => {
-                    if scope == SourceScope::Workspace
-                        && matches!(mutation, ConfigMutation::AppServer { .. })
+                    if (scope == SourceScope::Workspace
+                        && matches!(mutation, ConfigMutation::AppServer { .. }))
+                        || (scope == SourceScope::User
+                            && matches!(mutation, ConfigMutation::RestoreProvider { .. }))
                     {
                         return Err(SettingsError::Invalid);
                     }
@@ -1370,12 +1472,7 @@ impl UserConfigManager {
                 }
                 SourceMutation::Agent { name, authored, .. } => authored
                     .map(|profile| {
-                        let resolved = crate::runtime::agent_profile::AgentProfile::from_document(
-                            &profile,
-                            crate::runtime::agent_profile::AgentProfileKind::Named,
-                            vec![],
-                        )
-                        .map_err(|_| SettingsError::Invalid)?;
+                        let resolved = profile.lower().map_err(|_| SettingsError::Invalid)?;
                         crate::runtime::subagent::NamedAgentDefinition::new(
                             name,
                             resolved,
@@ -1622,8 +1719,8 @@ mod mcp_write_tests {
                 .unwrap();
         apply(
             &mut document,
-            ConfigMutation::Instructions {
-                authored: Some("updated instructions".into()),
+            ConfigMutation::Description {
+                authored: Some("updated description".into()),
             },
         )
         .unwrap();
@@ -1634,8 +1731,8 @@ mod mcp_write_tests {
             Some(23_500)
         );
         assert_eq!(
-            reread.agent.unwrap().instructions.as_deref(),
-            Some("updated instructions")
+            reread.agent.unwrap().description.as_deref(),
+            Some("updated description")
         );
     }
 

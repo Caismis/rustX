@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { supersededHistoryReads, supersededTraceReads, type RequestTiming } from './session-latency';
+import { recoveredThreadStatusReads, supersededHistoryReads, supersededTraceReads, type RequestTiming } from './session-latency';
 
 const target = JSON.stringify(['session-a', 'conversation-a', 'runtime-1', 'attachment-1']);
 const otherTarget = JSON.stringify(['session-a', 'conversation-a', 'runtime-1', 'attachment-2']);
@@ -129,6 +129,70 @@ describe('latency evidence for a cold preview superseded by attachment', () => {
   });
 });
 
+describe('latency evidence for recovered native status capture', () => {
+  function evidence(): RequestTiming[] {
+    return [
+      { method: 'thread/read', connection: 1, threadId: 'thread-a', start: 10, end: 20, error: 'observation_unavailable' },
+      { method: 'thread/read', connection: 1, threadId: 'thread-a', resultThreadId: 'thread-a', resultType: 'thread', start: 20, end: 30 },
+    ];
+  }
+
+  it('retains the original error and only accepts a later strong read of the same Thread and connection', () => {
+    const rows = evidence(), original = structuredClone(rows);
+    expect(recoveredThreadStatusReads([rows[1], rows[0]])).toEqual([rows[0]]);
+    expect(recoveredThreadStatusReads(rows)[0]).toBe(rows[0]);
+    expect(rows).toEqual(original);
+    expect(recoveredThreadStatusReads(rows.slice(0, 1))).toEqual([]);
+    const other = { ...rows[0], threadId: 'thread-b' };
+    expect(recoveredThreadStatusReads([...rows, other])).toEqual([rows[0]]);
+  });
+
+  it.each([0, 1])('requires a complete valid read interval for row %i', index => {
+    for (const patch of [
+      { start: Number.NaN }, { end: undefined }, { end: Number.POSITIVE_INFINITY },
+      { start: -1 }, { end: evidence()[index].start - 1 },
+    ]) {
+      const rows = evidence(); Object.assign(rows[index], patch);
+      expect(recoveredThreadStatusReads(rows)).toEqual([]);
+    }
+  });
+
+  it('rejects earlier and overlapping recovery reads', () => {
+    for (const interval of [{ start: 0, end: 9 }, { start: 19, end: 30 }]) {
+      const rows = evidence(); Object.assign(rows[1], interval);
+      expect(recoveredThreadStatusReads(rows)).toEqual([]);
+    }
+  });
+
+  it.each([0, 1])('requires the exact connection and request Thread identity for row %i', index => {
+    for (const patch of [
+      { connection: undefined }, { connection: 0 }, { connection: -1 }, { connection: 1.5 },
+      { connection: Number.MAX_SAFE_INTEGER + 1 }, { connection: 2 },
+      { threadId: undefined }, { threadId: '' }, { threadId: 'thread-b' },
+    ]) {
+      const rows = evidence(); Object.assign(rows[index], patch);
+      expect(recoveredThreadStatusReads(rows)).toEqual([]);
+    }
+  });
+
+  it('requires a successful exact Thread response, without excusing other methods or errors', () => {
+    for (const patch of [
+      { resultThreadId: undefined }, { resultThreadId: '' }, { resultThreadId: 'thread-b' },
+      { resultType: undefined }, { resultType: 'sessions' },
+      { error: 'observation_unavailable' }, { error: '' }, { method: 'session/list' },
+    ]) {
+      const rows = evidence(); Object.assign(rows[1], patch);
+      expect(recoveredThreadStatusReads(rows)).toEqual([]);
+    }
+    for (const patch of [
+      { error: undefined }, { error: 'operation_failed' }, { error: 'stale_runtime' },
+      { method: 'session/history' }, { method: 'inbound/queue' }, { method: 'thread/resume' },
+    ]) {
+      const rows = evidence(); Object.assign(rows[0], patch);
+      expect(recoveredThreadStatusReads(rows)).toEqual([]);
+    }
+  });
+});
 
 describe('latency evidence for a superseded standalone Trace head', () => {
   const head = (): RequestTiming[] => [

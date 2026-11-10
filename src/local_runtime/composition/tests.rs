@@ -133,12 +133,12 @@ async fn compose_fixture_observed(
     let registry = fixture_registry(std::slice::from_ref(&fixture_model), &factory);
     let catalog_document = r#"
 [providers.scripted]
+protocol = "openai_chat_completions"
 base_url = "https://scripted.fixture.invalid/v1"
 api_key = "test-only-secret"
 [models."scripted/scripted"]
 provider = "scripted"
 id = "scripted"
-protocol = "openai_chat_completions"
 context_window = 1000000
 max_output_tokens = 4096
 capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
@@ -147,7 +147,7 @@ compat = { chat_reasoning_replay = "omit" }
 
     let echo_call_count_file = root.path().join("echo-call-count");
     let executable = std::env::current_exe().expect("test executable");
-    let mut config_document = serde_json::json!({"schema_version": 10, "agent_id": "agent-parent", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
+    let mut config_document = serde_json::json!({"schema_version": 11, "agent_id": "agent-parent", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
             SERVER_NAME: {
                 "command": executable,
                 "args": fixture_spawn_args(test_name),
@@ -616,13 +616,13 @@ async fn headless_first_submission_waits_ten_seconds_for_exact_selected_tools() 
     crate::launch_fixture::write_document(
         &root.path().join("rustx.toml"),
         &toml::to_string_pretty(&serde_json::json!({
-            "schema_version":10,
+            "schema_version":11,
             "context":{"reserve_tokens":0,"keep_recent_tokens":0},
             "agent":{"model":{"model":"scripted/scripted"},
                 "tools":{"builtin":["read"],"sources":{SERVER_NAME:[TOOL_NAME]}}},
-            "providers":{"scripted":{"base_url":provider.url("/v1"),"api_key":"fixture"}},
+            "providers":{"scripted":{"protocol":"openai_chat_completions","base_url":provider.url("/v1"),"api_key":"fixture"}},
             "models":{"scripted/scripted":{"provider":"scripted","id":"scripted",
-                "protocol":"openai_chat_completions","context_window":1_000_000,
+                "context_window":1_000_000,
                 "max_output_tokens":4096,
                 "capabilities":{"input_modalities":["text"],"output_modalities":["text"]},
                 "compat":{"chat_reasoning_replay":"omit"}}}

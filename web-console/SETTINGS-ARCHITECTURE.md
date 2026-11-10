@@ -233,7 +233,29 @@ base       following ⇄ pinned
 mutation   idle → submitting → acknowledged.{awaitingObservation → diverged} → settled
                             ↘ unconfirmed
 lifetime   live → retired (terminal)
+autosave   off ⇄ debouncing / held → ready → off
 ```
+
+Provider autosave is another orthogonal region on this same unit actor. It owns
+the debounce timer and the pending draft generation across editor unmount; it
+never copies the authored value. The UI sends field-edit, blur, hold, flush and
+cancel gestures. Once ready, the actor asks its target to submit only when the
+existing admission barrier and exact reviewed revision permit it. Observations
+and explicit review wake that wait. Submission consumes the pending generation;
+a rejection or uncertain outcome cannot replay it. Stopping the actor cancels
+its timer. No external WeakMap, subscription or queued mutation owns this work.
+
+Native mutation settlement and editor completion are separate facts. The unit
+records the settled submission token and its draft generation; shared
+`editingCompletion` accepts it only while the same generation is clean and owns
+no remaining edit intent. The target retains that proof when the unit retires.
+Typed forms, Agent and MCP editors consume that same completion contract, so
+late settlement of an older submission cannot close a newer draft.
+The shared editing bridge records the exact identity/token only after the target
+accepts this flow's submission. Its `onSaved` callback consumes only that matching
+completion, never a historical outcome found by the currently entered name.
+Changing identity/authority, discarding or starting a new editor clears the
+waiting relation. Consumers keep no independent submitted boolean.
 
 A clean Remove is exactly `intent.clean` + `base.pinned`: delete intent pins the
 reviewed revision without manufacturing a fake value draft. A late
@@ -270,6 +292,14 @@ commit — a retired transaction's next edit starts fresh from the observed
 source and revision — or reveals `diverged`, which keeps its review semantics.
 Other units stay editable throughout, behind the target-wide submission
 barrier.
+
+When a read carries the exact revision returned by a successful local write,
+drafts of other units in that document can advance from the revision that
+write replaced. The native mutation address proves those units were untouched.
+This does not change the draft or authorize another write; an unproven revision
+change still requires review. Discard restores the currently observed value for
+the selected unit. Routine save progress stays on the action itself, without
+an inline success message.
 
 #### Discarding browser intent
 

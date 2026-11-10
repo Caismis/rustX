@@ -364,6 +364,8 @@ impl SessionRuntimeManager {
                     }
                     Ok(Ok(_)) => {}
                 }
+                #[cfg(test)]
+                probe.status_before_wait.park().await;
                 tokio::select! { ()=wake.notified()=>{}, open=changes.changed()=>if !open{return;}, result=entries.changed()=>if result.is_err(){return;} }
             }
         })

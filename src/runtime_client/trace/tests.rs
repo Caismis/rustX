@@ -186,6 +186,7 @@ fn prepared_request(
         vec![],
         crate::runtime::RuntimeResourceRevision::new(1),
         ModelInvocationConfig {
+            replay_binding: Some("test-binding".into()),
             model: format!("historical-model-{retry}"),
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 100,
@@ -299,6 +300,7 @@ fn request_with_private_continuation(store: &dyn ConversationStore) -> RequestSn
         id: prior.provisional_message_id.clone(),
         content: vec![AssistantContentBlock::Reasoning(
             crate::message::types::ReasoningBlock {
+                origin: None,
                 text: None,
                 provider_state: Some(native.clone()),
             },
@@ -625,6 +627,7 @@ fn historical_request_detail_ignores_later_configuration_and_later_history() {
         vec![],
         crate::runtime::RuntimeResourceRevision::new(9),
         ModelInvocationConfig {
+            replay_binding: Some("test-binding".into()),
             model: "a-completely-different-model".into(),
             protocol: ModelProtocol::AnthropicMessages,
             max_output_tokens: 9999,

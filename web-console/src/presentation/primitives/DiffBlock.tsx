@@ -69,13 +69,13 @@ const ROW_CLASS: Record<DiffRow['kind'], string | undefined> = {
 const MAX_DIFF_EDIT_LENGTH = 256
 
 /** Derive exact local patches or a whole-fragment replacement when search exceeds the limit. */
-function localHunks(diff: DiffHunk) {
+export function localDiffHunks(diff: Pick<DiffHunk, 'oldText' | 'newText'>) {
   const oldLines = contentLines(diff.oldText ?? '')
   const newLines = contentLines(diff.newText)
   const normalize = (lines: string[]): string => lines.map(line => `${line}\n`).join('')
   return structuredPatch('', '', normalize(oldLines), normalize(newLines),
     undefined, undefined, { context: 3, maxEditLength: MAX_DIFF_EDIT_LENGTH })?.hunks
-    ?? [{ lines: [...oldLines.map(line => `-${line}`), ...newLines.map(line => `+${line}`)] }]
+    ?? [{ oldStart: 1, newStart: 1, lines: [...oldLines.map(line => `-${line}`), ...newLines.map(line => `+${line}`)] }]
 }
 
 /**
@@ -89,7 +89,7 @@ export function diffTotals(diffs: DiffHunk[]): { added: number; removed: number 
   let added = 0
   let removed = 0
   for (const diff of diffs) {
-    for (const hunk of localHunks(diff)) {
+    for (const hunk of localDiffHunks(diff)) {
       for (const line of hunk.lines) {
         if (line.startsWith('+')) added++
         if (line.startsWith('-')) removed++
@@ -115,7 +115,7 @@ function buildRows(diffs: DiffHunk[]): { rows: DiffRow[]; added: number; removed
     if (diff.path !== prevPath) rows.push({ kind: 'path', text: diff.path })
     else rows.push({ kind: 'gap', text: '⋯' })
     prevPath = diff.path
-    for (const [index, hunk] of localHunks(diff).entries()) {
+    for (const [index, hunk] of localDiffHunks(diff).entries()) {
       if (index > 0) rows.push({ kind: 'gap', text: '⋯' })
       for (const line of hunk.lines) {
         const kind = line.startsWith('-') ? 'del' : line.startsWith('+') ? 'add' : 'context'

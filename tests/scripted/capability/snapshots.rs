@@ -230,7 +230,7 @@ async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
                 .unwrap()
         )
     );
-    assert!(!rendered_catalog.contains(&visible_location));
+    assert!(rendered_catalog.contains(&visible_location));
     assert!(!rendered_catalog.contains("runtime-only"));
     // The hidden Skill stays in the snapshot with its own host location, but
     // never reaches the model-visible catalog.
@@ -267,48 +267,17 @@ async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
     assert_eq!(client_view.skills[0].location, visible_location);
 }
 
-/// Main filters suppress lazy guidance without erasing discovered packages
-/// from the independent child-admission authority.
+/// The reader controls prompt exposure without changing the frozen inventory.
 #[tokio::test]
-async fn selected_skills_remain_visible_independently_of_native_read() {
-    let policies = [
-        rustx::capabilities::AgentActivation {
-            profile: {
-                let mut profile = fixture_activation().profile;
-                profile.tools.builtin = Vec::new();
-                profile
-            },
-            ..fixture_activation()
-        },
-        rustx::capabilities::AgentActivation {
-            profile: {
-                let mut profile = fixture_activation().profile;
-                profile.tools.builtin = Vec::new();
-                profile
-            },
-            ..fixture_activation()
-        },
-        rustx::capabilities::AgentActivation {
-            profile: {
-                let mut profile = fixture_activation().profile;
-                profile.tools.builtin = vec!["write".to_owned()];
-                profile
-            },
-            ..fixture_activation()
-        },
-        rustx::capabilities::AgentActivation {
-            profile: rustx::local_runtime::config::AgentProfileDocument {
-                tools: rustx::capabilities::selection::ToolSelectionDocument {
-                    builtin: vec!["write".to_owned()],
-                    sources: std::collections::BTreeMap::default(),
-                },
-                ..fixture_activation().profile
-            },
-            ..fixture_activation()
-        },
-    ];
-
-    for policy in policies {
+async fn skill_prompt_uses_the_available_reader() {
+    for (tools, hint) in [
+        (vec![], None),
+        (vec!["write"], None),
+        (vec!["bash"], Some("Use bash to load")),
+        (vec!["read", "bash"], Some("Use the read tool to load")),
+    ] {
+        let mut policy = fixture_activation();
+        policy.profile.tools.builtin = tools.into_iter().map(str::to_owned).collect();
         let conversation = conversation_with_options(policy);
         write_skill(
             conversation.workspace.root(),
@@ -319,17 +288,15 @@ async fn selected_skills_remain_visible_independently_of_native_read() {
         let snapshot = prepare_and_commit(&conversation.coordinator).await;
         let location = skill_location(conversation.workspace.root(), "visible");
         assert_eq!(snapshot.skills().bindings().len(), 1);
-        assert_eq!(snapshot.skills().locations(), vec![location.clone()]);
-        assert!(!snapshot.tool_registry().names().contains(&"read"));
-        assert_eq!(snapshot.skills().catalog_entries().len(), 1);
         assert_eq!(snapshot.skills().catalog_entries()[0].location, location);
-        assert!(snapshot.skill_catalog().is_some());
-        let view = crate::runtime_client::projection::views::capability_view(
-            &snapshot,
-            &crate::capabilities::CapabilityAvailability::new(),
-            None,
-        );
-        assert_eq!(view.skills.len(), 1);
+        match hint {
+            Some(hint) => {
+                let prompt = snapshot.skill_catalog().expect("readable Skill prompt");
+                assert!(prompt.contains(hint));
+                assert!(prompt.contains(&location));
+            }
+            None => assert!(snapshot.skill_catalog().is_none()),
+        }
     }
 }
 
@@ -365,6 +332,7 @@ async fn cfg280_the_committed_generation_owns_sources_merge_and_root_visibility(
                 skills: Some(rustx::runtime::agent_profile::AgentSkillSelection::Exact(
                     vec!["rust-review".into(), "shared".into()],
                 )),
+                tools: fixture_activation().profile.tools,
                 ..rustx::local_runtime::config::builtin_root_profile()
             },
             ..Default::default()
@@ -1623,8 +1591,8 @@ async fn commit_is_busy_while_a_lease_is_active_then_commits_atomically() {
         )
     );
     assert!(
-        !prompt.contains(&skill_location(conversation.workspace.root(), "pdf")),
-        "prompt lists roots and names, never every absolute package path"
+        prompt.contains(&skill_location(conversation.workspace.root(), "pdf")),
+        "prompt lists the exact file path"
     );
     // The next attempt snapshots the new revision.
     let next_lease = conversation.coordinator.acquire_attempt_lease();
@@ -1832,11 +1800,8 @@ async fn failed_preparation_leaves_revision_authoritative() {
     );
 }
 
-/// #280 (11)(12): a malformed dependency declaration is a *package*
-/// exclusion, not a candidate failure. The candidate still prepares and
-/// publishes every unrelated valid Skill.
 #[tokio::test]
-async fn cfg280_a_malformed_declaration_excludes_only_its_own_package() {
+async fn cfg280_malformed_skill_dependencies_do_not_block_publication() {
     let conversation = conversation();
     write_skill(
         conversation.workspace.root(),
@@ -1858,16 +1823,16 @@ async fn cfg280_a_malformed_declaration_excludes_only_its_own_package() {
             .iter()
             .map(|entry| entry.name.as_str())
             .collect::<Vec<_>>(),
-        ["good"]
+        ["bad", "good"]
     );
     assert!(snapshot.python_environment().is_some());
-    assert!(snapshot.skills().diagnostics().iter().any(|fact| matches!(
-        fact,
-        rustx::skills::SkillDiagnostic::PackageInvalid {
-            cause: rustx::skills::SkillPackageError::InvalidDependencyDeclaration { .. },
-            ..
-        }
-    )));
+    assert!(
+        snapshot
+            .skills()
+            .diagnostics()
+            .iter()
+            .any(|fact| matches!(fact, rustx::skills::SkillDiagnostic::PackageWarning { .. }))
+    );
 }
 
 // ---------------------------------------------------------------------------

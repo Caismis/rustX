@@ -701,9 +701,7 @@ async fn scheduler85_review_reconcile_preserves_live_completed_return_and_digest
 async fn a_scheduler_cold_start_recovers_the_configuration_application() {
     bounded(async {
         use crate::local_runtime::configuration::application::UnitApplication;
-        use crate::local_runtime::configuration::settings::{
-            ConfigMutation, SourceMutation, SourceTarget,
-        };
+        use crate::local_runtime::configuration::settings::{SourceMutation, SourceTarget};
         let mut f = Fixture::with_session_count(None, 1).await;
         f.install_scheduled_workflow("Cold configuration owner");
         let clock = Clock::new();
@@ -722,11 +720,9 @@ async fn a_scheduler_cold_start_recovers_the_configuration_application() {
         f.manager
             .write_source_settings(
                 &SourceTarget::User,
-                source.user.revision,
-                SourceMutation::Config {
-                    mutation: ConfigMutation::Instructions {
-                        authored: Some("published, not recorded".into()),
-                    },
+                source.global_guidance.unwrap().revision,
+                SourceMutation::GlobalGuidance {
+                    document: "published, not recorded".into(),
                 },
             )
             .await

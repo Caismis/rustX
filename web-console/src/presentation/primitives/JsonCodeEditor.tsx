@@ -11,8 +11,8 @@ const CodeView = lazy(() => import('./JsonCodeView'));
 /** One settings JSON surface. The native constraint-validation control makes
  * contenteditable participate in its enclosing form and disabled fieldsets.
  * It carries no authored value; invalid submission focuses the actual editor. */
-export function JsonCodeEditor({ label, value, onChange, error = '', allowEmpty = true, placeholder, minHeight = 144, panel = false, headerActions }: {
-  label: string; value: string; onChange: (text: string) => void; error?: string;
+export function JsonCodeEditor({ label, value, onChange, error = '', hideErrorText = false, allowEmpty = true, placeholder, minHeight = 144, panel = false, headerActions }: {
+  label: string; value: string; onChange: (text: string) => void; error?: string; hideErrorText?: boolean;
   allowEmpty?: boolean; placeholder?: string; minHeight?: number; panel?: boolean; headerActions?: ReactNode;
 }) {
   const tx = useTranslation(), id = useId();
@@ -58,8 +58,8 @@ export function JsonCodeEditor({ label, value, onChange, error = '', allowEmpty 
         editor={editor} diagnostics={diagnostics} invalid={!!problem} disabled={disabled}
         placeholder={placeholder} minHeight={minHeight} fill={panel} formatDocument={formatDocument} />
     </Suspense>
-    <div id={`${id}-status`} className={css.status} data-problem={!!problem}>
-      {problem ? <>
+    <div id={`${id}-status`} className={css.status} hidden={hideErrorText && !!problem} data-problem={!!problem}>
+      {hideErrorText && problem ? null : problem ? <>
         <span role="alert">{problem}</span>
         {error && diagnostics[0] && <small>{diagnostics[0].message}</small>}
       </> : <small>{tx('settings:json-editor.auto-format')}</small>}

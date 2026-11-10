@@ -167,7 +167,7 @@ impl AppServerConnection {
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::{SourceChange, SourceKey};
         use crate::local_runtime::configuration::settings::SourceTarget;
-        // A v76 notice reaches only a connection that negotiated v76.
+        // A v78 notice reaches only a connection that negotiated v78.
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return None;
         }

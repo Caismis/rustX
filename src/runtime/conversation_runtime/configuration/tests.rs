@@ -35,12 +35,6 @@ fn prepare_context(runtime: &ConversationRuntime) -> PreparedConfiguration {
         .prepare_context_configuration(|configuration| crate::runtime::resources::ContextBinding {
             configuration: configuration.clone(),
             project_context_files: resources.project_context_files().to_vec(),
-            root_agent_project_files: resources
-                .root_profile()
-                .unwrap()
-                .project_instructions
-                .files
-                .clone(),
             skills: resources.capability().skills().clone(),
         })
         .expect("prepare bound context")
