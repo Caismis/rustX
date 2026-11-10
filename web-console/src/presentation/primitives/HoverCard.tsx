@@ -1,12 +1,16 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { ReactNode, RefObject, SyntheticEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/react-dom'
+import { autoUpdate, flip, hide, offset, shift, size, useFloating } from '@floating-ui/react-dom'
 import { writeClipboard } from './clipboard.ts'
 import { usePointerGrace } from './pointer-grace.ts'
 import css from './HoverCard.module.css'
+
+const VIEWPORT_MARGIN = 8
+const PREVIEW_INSET = 24
+const PREVIEW_MAX_HEIGHT = 420
 
 /**
  * Render an anchor with a hover-triggered preview card.
@@ -15,6 +19,7 @@ import css from './HoverCard.module.css'
  * readable and selectable, but it carries no dismissal affordance of its own.
  * @param props.openDelayMs - hover dwell before the card shows (default 500).
  * @param props.disabled - suppress opening; turning true closes an open card.
+ * @param props.previewAnchor - use a wide preview above or below the trigger, sized from this element.
  * @param props.copyText - optional primary value copied by activation and
  * included in the card's accessible name.
  * @param props.copyLabel - localized accessible activation-label prefix.
@@ -23,9 +28,8 @@ import css from './HoverCard.module.css'
  */
 export function HoverCard({
   anchor, content, openDelayMs = 500, disabled = false,
-  copyText, copyLabel, copiedLabel, variant = 'default',
+  copyText, copyLabel, copiedLabel, previewAnchor,
 }: {
-  variant?: 'default' | 'file-change'
   anchor: ReactNode
   content: ReactNode
   openDelayMs?: number
@@ -33,8 +37,10 @@ export function HoverCard({
   copyText?: string | undefined
   copyLabel: string
   copiedLabel: string
+  previewAnchor?: RefObject<HTMLElement | null>
 }) {
   const tx = useTranslation();
+  const rootRef = useRef<HTMLSpanElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -43,17 +49,6 @@ export function HoverCard({
   const copyingRef = useRef(false)
   const mountedRef = useRef(true)
   const [open, setOpen] = useState(false)
-  const { refs, floatingStyles, isPositioned } = useFloating({
-    open, placement: 'right-start', strategy: 'fixed', whileElementsMounted: autoUpdate,
-    middleware: [offset(8), flip({ padding: 8, fallbackAxisSideDirection: 'end' }), shift({ padding: 8, crossAxis: true }), size({
-      padding: 8,
-      apply: ({ availableWidth, availableHeight, elements }) => {
-        elements.floating.style.maxWidth = `${Math.max(0, availableWidth)}px`
-        elements.floating.style.maxHeight = `${Math.max(0, Math.min(variant === 'file-change' ? 640 : Infinity, availableHeight))}px`
-      },
-    })],
-  })
-  const setCard = useCallback((node: HTMLDivElement | null) => { cardRef.current = node; refs.setFloating(node) }, [refs.setFloating])
   const [copied, setCopied] = useState(false)
 
   const clearCopied = useCallback(() => {
@@ -101,6 +96,78 @@ export function HoverCard({
     }
   }, [])
 
+  useEffect(() => {
+    if (!open || !previewAnchor) return
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      cancelClose()
+      close()
+    }
+    window.addEventListener('keydown', dismiss)
+    return () => window.removeEventListener('keydown', dismiss)
+  }, [open, previewAnchor, cancelClose, close])
+
+  const padding = () => {
+    const frame = document.documentElement
+    const clearance = Number.parseFloat(getComputedStyle(frame).getPropertyValue('--dsh-frame-top-clearance'))
+    return {
+      top: previewAnchor && !Number.isNaN(clearance)
+        ? Math.max(VIEWPORT_MARGIN, (frame.hasAttribute('data-fullscreen') ? 0 : clearance) + 20)
+        : VIEWPORT_MARGIN,
+      right: VIEWPORT_MARGIN, bottom: VIEWPORT_MARGIN, left: VIEWPORT_MARGIN,
+    }
+  }
+  const { refs, x, y, strategy, isPositioned, middlewareData } = useFloating({
+    open, placement: previewAnchor ? 'top-start' : 'right-start', strategy: 'fixed',
+    whileElementsMounted: (reference, floating, update) => {
+      const follow = () => {
+        if (rootRef.current?.closest('[inert], [hidden]')) { close(); return }
+        void update()
+      }
+      const stop = autoUpdate(reference, floating, follow)
+      // The file card determines preview width, even if its trigger has not resized.
+      const observer = previewAnchor?.current && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(follow) : undefined
+      if (previewAnchor?.current) observer?.observe(previewAnchor.current)
+      const visibility = new MutationObserver(follow)
+      for (let element: HTMLElement | null = rootRef.current; element; element = element.parentElement) {
+        visibility.observe(element, { attributes: true, attributeFilter: ['hidden', 'inert'] })
+      }
+      return () => { stop(); observer?.disconnect(); visibility.disconnect() }
+    },
+    middleware: [
+      offset(VIEWPORT_MARGIN),
+      previewAnchor && {
+        name: 'previewAnchor',
+        fn: ({ rects }) => {
+          const bounds = previewAnchor.current?.getBoundingClientRect()
+          if (!bounds) return {}
+          const width = Math.max(0, Math.min(bounds.width - 2 * PREVIEW_INSET, window.innerWidth - 2 * VIEWPORT_MARGIN))
+          const floating = cardRef.current
+          if (floating && floating.style.width !== `${width}px`) {
+            floating.style.width = `${width}px`
+            return { reset: { rects: true } }
+          }
+          return { x: Math.max(VIEWPORT_MARGIN, Math.min(bounds.left + PREVIEW_INSET, window.innerWidth - rects.floating.width - VIEWPORT_MARGIN)) }
+        },
+      },
+      flip(() => ({ padding: padding(), ...(previewAnchor ? { fallbackPlacements: ['bottom-start'] as const } : { fallbackAxisSideDirection: 'end' as const }) })),
+      shift(() => ({ padding: padding(), crossAxis: !previewAnchor })),
+      size(() => ({
+        padding: padding(),
+        apply: ({ availableWidth, availableHeight, elements }) => {
+          elements.floating.style.maxWidth = `${Math.max(0, availableWidth)}px`
+          elements.floating.style.maxHeight = `${Math.max(0, Math.min(previewAnchor ? PREVIEW_MAX_HEIGHT : Infinity, availableHeight))}px`
+        },
+      })),
+      hide({ strategy: 'referenceHidden' }),
+    ],
+  })
+  const setRoot = useCallback((node: HTMLSpanElement | null) => { rootRef.current = node; refs.setReference(node) }, [refs.setReference])
+  const setCard = useCallback((node: HTMLDivElement | null) => { cardRef.current = node; refs.setFloating(node) }, [refs.setFloating])
+  useEffect(() => {
+    if (open && isPositioned && middlewareData.hide?.referenceHidden) close()
+  }, [open, isPositioned, middlewareData.hide?.referenceHidden, close])
+
   const copy = async (text: string): Promise<void> => {
     if (copied || copyingRef.current) return
     copyingRef.current = true
@@ -116,12 +183,19 @@ export function HoverCard({
   }
 
   const copyable = copyText !== undefined
+  const dismissFromAnchor = (event: SyntheticEvent<HTMLSpanElement>) => {
+    // Portal content can be scrolled or selected without activating the anchor.
+    if (cardRef.current?.contains(event.target as Node)) return
+    clearTimer()
+    cancelClose()
+    close()
+  }
   const card = open && (
     <div
       ref={setCard}
-      className={`${css.card}${copyable ? ` ${css.copyable}` : ''}${copied ? ` ${css.feedback}` : ''}${variant === 'file-change' ? ` ${css.fileChange}` : ''}`}
-      data-hover-card={variant}
-      style={{ ...floatingStyles, visibility: isPositioned ? undefined : 'hidden', minHeight: copied && copyHeightRef.current !== null ? copyHeightRef.current : undefined }}
+      className={`${css.card}${previewAnchor ? ` ${css.preview}` : ''}${copyable ? ` ${css.copyable}` : ''}${copied ? ` ${css.feedback}` : ''}`}
+      data-hover-card={previewAnchor ? 'preview' : 'default'}
+      style={{ position: strategy, left: x ?? 0, top: y ?? 0, visibility: isPositioned ? undefined : 'hidden', minHeight: copied && copyHeightRef.current !== null ? copyHeightRef.current : undefined }}
       role={copyable ? 'button' : undefined}
       tabIndex={copyable ? 0 : undefined}
       aria-label={copyable ? tx('common:hover-card.value-value', { p0: copyLabel, p1: copyText }) : undefined}
@@ -150,10 +224,10 @@ export function HoverCard({
 
   return (
     <span
-      ref={refs.setReference}
+      ref={setRoot}
       className={css.root}
-      onPointerEnter={() => {
-        if (disabled) return
+      onPointerEnter={event => {
+        if (disabled || previewAnchor && event.pointerType === 'touch') return
         // Coming back inside during the grace (the gap, or the card itself)
         // keeps the current card rather than restarting the dwell.
         cancelClose()
@@ -167,17 +241,8 @@ export function HoverCard({
         // open, matching Menu's shape.
         if (open) armClose()
       }}
-      // A press inside the anchor (row click, menu trigger) dismisses the
-      // card immediately, without waiting for the owner to flip `disabled`.
-      // Capture presses reach this handler from the card too — it is a React
-      // child of the wrapper — but a press there starts a selection, so the
-      // card must stay mounted under it (and the browser's click with it).
-      onPointerDownCapture={(e) => {
-        if (cardRef.current?.contains(e.target as Node)) return
-        clearTimer()
-        cancelClose()
-        close()
-      }}
+      onPointerDownCapture={dismissFromAnchor}
+      onClickCapture={previewAnchor ? dismissFromAnchor : undefined}
     >
       {anchor}
       {open && copyable && <span className={css.status} role="status">{copied ? copiedLabel : ''}</span>}

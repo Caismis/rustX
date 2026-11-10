@@ -236,6 +236,7 @@ fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
         Vec::new(),
         RuntimeResourceRevision::new(1),
         ModelInvocationConfig {
+            replay_binding: Some("test-binding".into()),
             model: "model-x".to_owned(),
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 128,
@@ -529,13 +530,13 @@ fn requirement_04_older_pages_have_stable_order_without_duplicates_or_gaps() {
 // ---------------------------------------------------------------------------
 
 const MODELS_TOML: &str = r#"[providers.local]
+protocol = "openai_chat_completions"
 base_url = "https://local.issue110.invalid/v1"
 api_key = "$RUSTX_ISSUE110_KEY"
 
 [models."local/issue110-model"]
 provider = "local"
 id = "issue110-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 
@@ -1328,6 +1329,7 @@ fn requirement_15_old_request_snapshot_reconstructs_old_system_bytes() {
         Vec::new(),
         RuntimeResourceRevision::new(1),
         ModelInvocationConfig {
+            replay_binding: Some("test-binding".into()),
             model: "old-model".to_owned(),
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 64,

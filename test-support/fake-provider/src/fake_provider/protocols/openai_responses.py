@@ -274,7 +274,7 @@ class OpenAiResponsesCodec:
                     "type": "reasoning",
                     "status": "completed",
                     "summary": [summary_part],
-                    "encrypted_content": None,
+                    "encrypted_content": item.encrypted_content,
                 }
                 emits.append(
                     event(

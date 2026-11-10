@@ -62,8 +62,9 @@ it('old mutation uncertainty stays inspectable and inert despite the same Sessio
   await client.attach('A'); await client.send('A', 'new explicit B operation');
   expect(b.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
   render(<ConnectionSettings connection={owner} client={client} />);
-  expect(screen.getByText('Detached authority diagnostics')).toBeTruthy();
-  expect(screen.getByRole('heading', { name: endpoint })).toBeTruthy();
+  expect(screen.getByText('Review previous connections')).toBeTruthy();
+  expect(screen.getByRole('heading', { name: 'Previous connection 1' })).toBeTruthy();
+  expect(screen.queryByText(endpoint)).toBeNull();
   await act(async () => owner.disconnect());
 });
 it.each(['committed_cleanup_pending', 'committed_durability_uncertain'] as const)('Remote %s is retained outside Local active views', async status => {
@@ -277,9 +278,9 @@ it('same-endpoint diagnostic capacity refusal has a disconnected UI acknowledgem
   expect(client.getSnapshot().connection).toBe('error');
   expect(a.socket.requests.map(row => row.method)).toEqual(['initialize']);
   render(<ConnectionSettings connection={owner} client={client} />);
-  fireEvent.click(screen.getByText('Detached authority diagnostics'));
+  fireEvent.click(screen.getByText('Review previous connections'));
   const count = a.requests.length;
-  fireEvent.click(screen.getAllByRole('button', { name: 'I have reviewed this historical evidence' })[0]);
+  fireEvent.click(screen.getAllByRole('button', { name: 'Dismiss after review' })[0]);
   expect(a.requests).toHaveLength(count);
   await act(async () => owner.reconnect());
   expect(client.getSnapshot().connection).toBe('connected');

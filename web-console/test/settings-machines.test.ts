@@ -3,7 +3,7 @@ import { displayText, translator } from '../src/locale/translation';
 import { workspaceApprovalBlock, approvalIdentity, approvalMutation } from '../src/app/new-conversation/approval';
 import { expect, it, vi } from 'vitest';
 import { assign, createActor, setup, type ActorRefFrom, type InspectionEvent } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v75';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v77';
 import { admitsSourceMutation, mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
 import { awaitingCommitObservation, discardable, requiresReview, unitTransactionMachine } from '../src/app/settings/machines/unit-transaction';
 import { applicationCurrent, applicationKnown, observationUnavailable, sessionConfigurationMachine } from '../src/app/settings/machines/session-configuration';
@@ -557,7 +557,7 @@ it('R22 reopening with an unobserved commit coalesces validation and post-commit
   // The definitive commit lands while nothing is presented.
   scripted.writes[0].resolve({ acknowledgement: sourceReceipt(projection('r2')) });
   await flush();
-  expect(actor.getSnapshot().context.unobservedSettlement).toEqual({ identity: toolsIdentity, selector: revisionSelector(toolsMutation), committed: true, revision: 'r2' });
+  expect(actor.getSnapshot().context.unobservedSettlement).toEqual({ identity: toolsIdentity, selector: revisionSelector(toolsMutation), committed: true, expected: 'r1', revision: 'r2' });
   actor.send({ type: 'ATTACH' });
   await flush();
   // The new attachment's validation and the commit's post-commit read are the
@@ -1732,7 +1732,7 @@ it('R36 the retirement announcement is a terminal state of the transaction itsel
   parent.start();
   const unit = parent.getSnapshot().context.unit!;
   unit.send({ type: 'EDIT', value: ['read'] });
-  unit.send({ type: 'SUBMIT', token: 1 });
+  unit.send({ type: 'SUBMIT', token: 1, selector: revisionSelector(toolsMutation) });
   unit.send({ type: 'COMMITTED', token: 1, revision: 'r2' });
   // A post-commit observation of anything else is a divergence, not a
   // settlement: the commit's obligation still stands.
@@ -2002,7 +2002,7 @@ function scriptedClient() {
 
 const PROVIDER_SECRET = 'R26-PROVIDER-SECRET';
 const providerIdentity = JSON.stringify({ kind: 'config', mutation: { unit: 'provider', id: 'secret', authored: null } });
-const providerWrite = { base_url: 'https://native.invalid', credential: { kind: 'literal', value: PROVIDER_SECRET } } as const;
+const providerWrite = { protocol: 'openai_responses', base_url: 'https://native.invalid', credential: { kind: 'literal', value: PROVIDER_SECRET } } as const;
 const providerMutation: SourceMutation = { kind: 'config', mutation: { unit: 'provider', id: 'secret', authored: providerWrite } };
 const retainedBy = (system: ConfigurationSystem) => JSON.stringify(system.transactionOwners().map(owner => owner.retainedState()));
 
@@ -2568,7 +2568,7 @@ it('R35 a mutation natively submitting refuses every other unit, which keeps its
   expect(unitOf(actor, statusIdentity).getSnapshot().context.draft).toEqual({ value: { enabled: true } });
 });
 
-it('R35 a definitive commit awaiting its post-commit observation refuses a second unit fenced on the pre-commit revision', async () => {
+it.each(['r2', 'r-external'])('R35 only observing the exact sibling commit advances a draft (observed %s)', async revision => {
   const scripted = scriptedPort();
   const actor = settingsActor(scripted.port);
   await flush();
@@ -2589,18 +2589,20 @@ it('R35 a definitive commit awaiting its post-commit observation refuses a secon
   await flush();
   expect(scripted.writes).toHaveLength(1);
   expectStatusDraftIntact(actor);
-  // The authoritative post-commit observation at r2 releases the barrier.
-  scripted.reads[1].resolve(projection('r2'));
+  scripted.reads[1].resolve(projection(revision));
   await flush();
   expect(admitted(actor)).toBe(true);
-  // B's pinned base still names r1, which the source moved on from: its CAS
-  // is never silently rebased. The explicit review fences it on r2.
-  expect(requiresReview(unitOf(actor, statusIdentity).getSnapshot())).toBe(true);
-  actor.send({ type: 'UNIT.REVIEW', identity: statusIdentity });
-  submitStatus(actor, 'r2');
+  const draft = unitOf(actor, statusIdentity).getSnapshot();
+  expect(draft.context.draft).toEqual({ value: { enabled: true } });
+  expect(requiresReview(draft)).toBe(revision !== 'r2');
+  if (revision !== 'r2') {
+    expect(draft.context.base).toBe('r1');
+    actor.send({ type: 'UNIT.REVIEW', identity: statusIdentity });
+  }
+  submitStatus(actor, revision);
   await flush();
   expect(scripted.writes).toHaveLength(2);
-  expect(scripted.writes[1].expected).toBe('r2');
+  expect(scripted.writes[1].expected).toBe(revision);
   expect(scripted.writes[1].mutation).toEqual(statusMutation);
 });
 
@@ -2882,15 +2884,15 @@ it('S2-09 each page keeps its own detail focus across page changes, and a new ta
   actor.send({ type: 'SELECT', page: 'models' });
   actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'deepseek' } });
   actor.send({ type: 'SELECT', page: 'extensions' });
-  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'skill', name: 'search' } });
+  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'managed_python', name: 'search' } });
   actor.send({ type: 'SELECT', page: 'models' });
   expect(actor.getSnapshot().context.focus).toEqual({
     models: { kind: 'provider', id: 'deepseek' },
-    extensions: { kind: 'extension', family: 'skill', name: 'search' },
+    extensions: { kind: 'extension', family: 'managed_python', name: 'search' },
   });
   // Leaving a detail for its list clears only that page's focus.
   actor.send({ type: 'FOCUS' });
-  expect(actor.getSnapshot().context.focus).toEqual({ extensions: { kind: 'extension', family: 'skill', name: 'search' } });
+  expect(actor.getSnapshot().context.focus).toEqual({ extensions: { kind: 'extension', family: 'managed_python', name: 'search' } });
   actor.send({ type: 'OPEN', target: workspaceSettingsTarget('wA', 'Workspace A') });
   expect(actor.getSnapshot().context.focus).toEqual({});
 });
@@ -2928,16 +2930,15 @@ it('S2-01 Settings internal sections remain navigable independently of Shell vis
 // state afterwards.
 
 const workspaceA = workspaceSettingsTarget('wA', 'Workspace A');
-const everyPage: readonly SettingsPage[] = ['general', 'models', 'agent', 'tools', 'mcp', 'extensions', 'advanced'];
+const everyPage: readonly SettingsPage[] = ['general', 'models', 'agent', 'tools', 'extensions', 'advanced'];
 const everyFocus: readonly SettingsFocus[] = [
-  { kind: 'mcp', name: 'search' },
   { kind: 'provider', id: 'deepseek' }, { kind: 'model', id: 'main', provider: 'deepseek' },
-  { kind: 'extension', family: 'skill', name: 'search' }, { kind: 'connection' },
+  { kind: 'extension', family: 'managed_python', name: 'search' }, { kind: 'connection' },
 ];
 /** The exact legal page → focus-kind matrix of each owner. */
 const legal = {
-  user: { general: [], models: ['provider', 'model'], agent: [], tools: [], mcp: ['mcp'], extensions: ['extension'], advanced: ['connection'] },
-  workspace: { models: ['provider', 'model'], agent: [], tools: [], mcp: ['mcp'], extensions: ['extension'], advanced: [] },
+  user: { general: [], models: ['provider', 'model'], agent: [], tools: [], extensions: ['extension'], advanced: ['connection'] },
+  workspace: { models: ['provider', 'model'], agent: [], tools: [], extensions: ['extension'], advanced: [] },
 } as const satisfies Record<'user' | 'workspace', Partial<Record<SettingsPage, readonly SettingsFocus['kind'][]>>>;
 function opened(target = userSettingsTarget as typeof userSettingsTarget | typeof workspaceA) {
   const actor = navigationActor(async () => ({ kind: 'retired' }));
@@ -2991,7 +2992,7 @@ it('N03 a Workspace target can never enter Connection focus', () => {
 it('N04 Models refuses an Extension focus and Extensions refuses a Provider or Model focus', () => {
   const actor = opened();
   actor.send({ type: 'SELECT', page: 'models' });
-  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'skill', name: 'search' } });
+  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'managed_python', name: 'search' } });
   expect(actor.getSnapshot().context.focus).toEqual({});
   actor.send({ type: 'SELECT', page: 'extensions' });
   actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'deepseek' } });
@@ -3044,7 +3045,7 @@ it('N07 switching User → Workspace drops User-only focus and lands on a Worksp
 it('N08 OPEN.CONNECTION explicitly retargets to User, Advanced and Connection focus', () => {
   const actor = opened(workspaceA);
   actor.send({ type: 'SELECT', page: 'extensions' });
-  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'agent', name: 'reviewer' } });
+  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'managed_python', name: 'reviewer' } });
   actor.send({ type: 'OPEN.CONNECTION' });
   expect(actor.getSnapshot().context).toMatchObject({ target: userSettingsTarget, page: 'advanced', focus: { advanced: { kind: 'connection' } } });
   // The Workspace's extension focus did not migrate into the global surface.
@@ -3061,7 +3062,7 @@ it('N09 legal per-page focus is restored after leaving a page, and illegal attem
   actor.send({ type: 'SELECT', page: 'models' });
   actor.send({ type: 'FOCUS', focus: { kind: 'model', id: 'main', provider: 'deepseek' } });
   actor.send({ type: 'SELECT', page: 'extensions' });
-  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'skill', name: 'search' } });
+  actor.send({ type: 'FOCUS', focus: { kind: 'extension', family: 'managed_python', name: 'search' } });
   actor.send({ type: 'SELECT', page: 'agent' });
   actor.send({ type: 'FOCUS', focus: { kind: 'provider', id: 'elsewhere' } });
   actor.send({ type: 'SELECT', page: 'advanced' });
@@ -3069,7 +3070,7 @@ it('N09 legal per-page focus is restored after leaving a page, and illegal attem
   actor.send({ type: 'SELECT', page: 'models' });
   expect(actor.getSnapshot().context.focus.models).toEqual({ kind: 'model', id: 'main', provider: 'deepseek' });
   actor.send({ type: 'SELECT', page: 'extensions' });
-  expect(actor.getSnapshot().context.focus.extensions).toEqual({ kind: 'extension', family: 'skill', name: 'search' });
+  expect(actor.getSnapshot().context.focus.extensions).toEqual({ kind: 'extension', family: 'managed_python', name: 'search' });
   actor.send({ type: 'SELECT', page: 'advanced' });
   expect(actor.getSnapshot().context.focus.advanced).toEqual({ kind: 'connection' });
   expect(actor.getSnapshot().context.focus).not.toHaveProperty('agent');

@@ -1,7 +1,20 @@
-import type { BoundedSourceSettings, SourceSettings, SourceFieldRef, SourceValueChunk } from './v75.ts';
+import type { BoundedSourceSettings, SourceSettings, SourceFieldRef, SourceValueChunk } from './v77.ts';
 import { materializeFields } from './field-observation.ts';
 const sourceCuts = new WeakMap<SourceSettings, BoundedSourceSettings>();
 export function sourceObservation(source: SourceSettings) { return sourceCuts.get(source); }
+/** Application settlement may advance between a bounded projection and its
+ * deferred fields. Restart the complete read cut, never mix revisions or
+ * replay a mutation. Continuous changes still surface as a read failure. */
+export async function readSourceSettings(capture:()=>Promise<BoundedSourceSettings>,read:(reference:SourceFieldRef,offset:number)=>Promise<SourceValueChunk>,current:()=>boolean):Promise<SourceSettings> {
+  for(let attempt=0;;attempt++) {
+    if(!current())throw new Error('Configuration view was replaced.');
+    try { return await materializeSource(await capture(),read,current); }
+    catch(error) {
+      const kind=(error as {error?:{data?:{kind?:string}}}|null)?.error?.data?.kind;
+      if(kind!=='read_cut_expired'||attempt===2||!current())throw error;
+    }
+  }
+}
 /** Finite configuration presentation cache; source revisions remain native-owned. */
 export async function materializeSource(view: BoundedSourceSettings, read: (reference: SourceFieldRef, offset: number) => Promise<SourceValueChunk>, current: () => boolean): Promise<SourceSettings> {
   const source=await materializeFields<SourceSettings,SourceFieldRef>(view,read,current);

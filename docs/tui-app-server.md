@@ -1,8 +1,8 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol v75. It does not parse
+The TUI is a projection/control client of App Server protocol v77. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v75.ts`](../protocol/app-server/v75.ts).
+[`protocol/app-server/v77.ts`](../protocol/app-server/v77.ts).
 
 Initial MCP preparation is native-owned. Early attachment remains asynchronous
 and the editor stays usable. On the first nonempty submission, the TUI sends
@@ -185,7 +185,7 @@ control submission until authoritative settlement. Success focuses an existing
 Session or opens the empty selector, without automatically creating a Session.
 Lost deletion responses are never replayed; reconnection inspects native state.
 
-`session/summaryInvalidated` is part of the mandatory v75 vocabulary and is
+`session/summaryInvalidated` is part of the mandatory v77 vocabulary and is
 decoded with its mandatory `catalog_changed` scope and routed by Session identity. The TUI
 holds no cached Session summary — `/resume` reads the catalog afresh every time
 it opens — so the notification is accepted and declined: it is never folded into
@@ -266,7 +266,7 @@ capacity/deletion blockers, committed Return data and a lossless next-page comma
 Workflow displays use native Tool/Scheduled origins; a Scheduled run has no outer
 canonical ToolCall or Human Attempt.
 
-The existing footer, working line and Session selector consume Native v75 Thread
+The existing footer, working line and Session selector consume Native v77 Thread
 status. Selector rows use their active-node Thread identity; the footer uses the
 exact focused attachment. Runtime waits come from Native activeFlags, with
 connection loss and incomplete repair shown as unavailable. Pure status reads and

@@ -8,7 +8,7 @@ import { App } from '../../src/app/App';
 import { Server, endpoint } from '../fixture';
 import { cfg3Application, cfg3Effective, cfg3Source } from '../cfg3-data';
 import { RpcFailure } from '../../src/client/errors';
-import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v75';
+import type { ConfigurationApplication, RuntimeClientEvent, SourceMutation } from '../../../protocol/app-server/v77';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -33,13 +33,13 @@ const variant = new URLSearchParams(location.search);
 // short names. None of them is a credential; credentials stay redacted.
 const longProvider = 'enterprise-inference-gateway-eu-central-primary-with-an-exceptionally-long-provider-identity';
 const longModel = 'enterprise-reasoning-model-2026-09-long-context-preview-with-an-exceptionally-long-identity';
-source.user.authored!.providers![longProvider] = {
+source.user.authored!.providers![longProvider] = { protocol: 'openai_responses',
   base_url: 'https://inference-gateway.eu-central-1.enterprise.example.invalid/v1/organizations/rustx-platform-team/deployments/primary',
   credential: { type: 'environment', variable: 'ENTERPRISE_INFERENCE_GATEWAY_EU_CENTRAL_PRIMARY_API_KEY' },
 };
-source.user.authored!.models![longModel] = { provider: longProvider, id: longModel, protocol: 'openai_chat_completions', context_window: '1048576', max_output_tokens: 65536,
+source.user.authored!.models![longModel] = { provider: longProvider, id: longModel, context_window: '1048576', max_output_tokens: 65536,
   capabilities: { input_modalities: ['text', 'image'], output_modalities: ['text'], json_schema_output: false } };
-source.workspace!.authored = { agent_id: 'rustx', agent: { description: 'A native coding assistant', instructions: 'Inspect the source, implement the change, and verify native boundaries.', tools: { builtin: ['read', 'glob'], sources: { 'python:analysis': 'all' } }, plugins: { goal: { enabled: true }, todo: { enabled: true } } }, models: effective.document.models, providers: source.user.authored!.providers };
+source.workspace!.authored = { agent_id: 'rustx', agent: { description: 'A native coding assistant', agents_md: { inherit: false }, tools: { builtin: ['read', 'glob'], sources: { 'python:analysis': 'all' } }, plugins: { goal: { enabled: true }, todo: { enabled: true } } }, models: effective.document.models, providers: source.user.authored!.providers };
 effective.document.providers = source.user.authored!.providers;
 effective.provenance = { 'models.main': { kind: 'workspace', base: '/workspace', document: '/workspace/rustx.toml' }, 'providers.transport': { kind: 'user', base: '/bound', document: '/bound/rustx.toml' } };
 effective.resources.definitions = [
@@ -64,6 +64,16 @@ if (variant.get('scenario') === 'conflict') server.handlers.set('configuration/s
   if (request.method !== 'configuration/sourceWrite') throw new Error('Unexpected fixture method');
   source.user.revision = 'user-external-edit';
   throw new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'user', expected: request.params.expected_revision, actual: source.user.revision } });
+});
+if (variant.get('scenario') === 'provider-autosave') server.handlers.set('configuration/sourceWrite', request => {
+  if (request.method !== 'configuration/sourceWrite' || request.params.expected_revision !== source.user.revision
+    || request.params.mutation.kind !== 'config' || request.params.mutation.mutation.unit !== 'provider') throw new Error('Expected a Provider write at the current revision');
+  const { id, authored } = request.params.mutation.mutation;
+  if (!authored || authored.credential.kind !== 'retain') throw new Error('Expected an icon edit retaining credentials');
+  const saved = source.user.authored!.providers![id];
+  source.user.authored!.providers![id] = { ...authored, credential: saved.credential };
+  source.user.revision = 'user-provider-saved';
+  return { type: 'sources_written', revision: source.user.revision, configuration_revision: null };
 });
 const session = variant.get('session');
 if (session) server.handlers.set('session/configuration', () => ({ type: 'session_configuration', projection: applicationReceipt(sessionApplication(session)) }));
@@ -90,6 +100,7 @@ if (variant.get('conversation') === 'ready') {
 server.workspaceHost.configureWorkspace = async (_id, _endpoint, operation) => {
   const projection = { ...source, target: { kind: 'workspace' as const, directory: '/workspace' } };
   if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: sourceReceipt(projection), reread: { status: 'observed', projection } } };
+  if (operation.kind === 'model_probe') return { kind: 'model_probe', outcome: 'connected' };
   if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:variant.get('scenario') === 'mcp-probe' && operation.id === 'broken' ? 'connection_failed' : 'reachable'}};
   return { kind: operation.kind, projection };
 };
@@ -120,7 +131,7 @@ if (variant.get('write') === 'held') {
     const view = source[scope]!, authored = view.authored!;
     if (mutation.kind !== 'config' || !('authored' in mutation.mutation) || mutation.mutation.authored !== null) throw new Error('The held-write fixture commits removals only');
     if (mutation.mutation.unit === 'provider') delete authored.providers![mutation.mutation.id];
-    else if (mutation.mutation.unit === 'agent_identity') delete authored.agent_id;
+    else if (mutation.mutation.unit === 'project_guidance') delete authored.agent?.agents_md;
     else throw new Error(`The held-write fixture has no removal of ${mutation.mutation.unit}`);
     view.revision = `${scope}-committed`;
     source.resolved = { ...source.user.authored, ...source.workspace!.authored };
@@ -153,6 +164,14 @@ if (variant.get('write') === 'held') {
     for (const release of releases.splice(0)) release();
   };
 }
+server.handlers.set('skills/list', request => {
+  if (request.method !== 'skills/list') throw new Error('Expected skill catalog');
+  return { type: 'skills', page: { data: [{
+    catalog: { name: 'review', description: 'Review changes and report findings.', location: '/workspace/.agents/skills/review/SKILL.md' },
+    provenance: { name: 'review', source: request.params.target.kind, location: '/workspace/.agents/skills/review/SKILL.md', shadowed: [] },
+    metadata_revision: 'review-1', disable_model_invocation: false,
+  }], diagnostics: [], diagnostics_truncated: false, revision: 'skills-1' } };
+});
 server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_configuration', projection: {revision:'fixture',inline:effective,fields:[],collections:[]} }));
 // The native requests this page issued, for browser assertions of exact
 // identity, ordering and request counts. Test fixture only.

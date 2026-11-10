@@ -99,6 +99,7 @@ async fn session_owned_model_selection_rejects_runtime_client_bypass_without_div
             &connection,
             20,
             crate::app_server::protocol::Method::ModelSet {
+                recover_unavailable_auxiliary: None,
                 target: target.clone(),
                 config: Box::new(selection("local/b")),
             },
@@ -142,6 +143,7 @@ async fn session_owned_model_selection_rejects_runtime_client_bypass_without_div
             &connection,
             21,
             crate::app_server::protocol::Method::ModelSet {
+                recover_unavailable_auxiliary: None,
                 target,
                 config: Box::new(selection("local/c")),
             },

@@ -1,25 +1,29 @@
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
-import type { ToolExecutionResult } from '../../../../protocol/app-server/v75';
+import type { ToolExecutionResult } from '../../../../protocol/app-server/v77';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { ArtifactResources } from '../../client/artifacts';
 import { PreviewContext } from './ArtifactPreview';
-import { AttachmentCard } from '../../presentation/attachments/AttachmentCard';
+import { AttachmentCard, InlineImage } from '../../presentation/attachments/AttachmentCard';
 import { MessageFile } from '../../presentation/agent/Message';
 import { PresentedFileCard, PresentedFiles } from '../../presentation/attachments/PresentedFileCard';
 import cardCss from '../../presentation/attachments/Deliverables.module.css';
 import { IconDownloadOutline16 } from '../../presentation/primitives/icons';
 import type { PresentedDelivery } from '../../bindings/present';
 export const ArtifactContext = createContext<ArtifactResources | undefined>(undefined);
-export function Artifact({ id, name = id, image = false, mimeType, messageAttachment = false }: { id: string; name?: string; image?: boolean; mimeType?: string; messageAttachment?: boolean }) {
+export function Artifact({ id, name = id, image = false, mimeType, messageAttachment = false, inlineImage }: {
+  id: string; name?: string; image?: boolean; mimeType?: string; messageAttachment?: boolean;
+  inlineImage?: 'compact' | 'full';
+}) {
   const resources = useContext(ArtifactContext);
   const preview = useContext(PreviewContext);
+  const tx = useTranslation();
   const [attempt, setAttempt] = useState(0);
   const [url, setUrl] = useState<string>();
   const [error, setError] = useNotice();
   const [loading, setLoading] = useState(false);
   useEffect(() => {
-    if (!image || !resources || !attempt) return;
+    if (!image || !resources || (!inlineImage && !attempt)) return;
     let live = true;
     let owned: string | undefined;
     setLoading(true); setError(''); setUrl(undefined);
@@ -28,13 +32,16 @@ export function Artifact({ id, name = id, image = false, mimeType, messageAttach
       owned = value; setUrl(value);
     }).catch(cause => { if (live) setError(String(cause)); }).finally(() => { if (live) setLoading(false); });
     return () => { live = false; if (owned) resources.release(owned); };
-  }, [resources, id, mimeType, image, attempt]);
+  }, [resources, id, mimeType, image, attempt, inlineImage]);
+  const retry = () => setAttempt(value => value + 1);
+  const decodeError = () => { if (url) resources?.release(url); setUrl(undefined); setError(message('artifacts:copy.image-could-not-be-decoded')); };
+  if (inlineImage && image) return <InlineImage name={name} url={url} compact={inlineImage === 'compact'}
+    error={resources ? error : tx('artifacts:copy.image-unavailable')} retry={resources ? retry : undefined} onDecodeError={decodeError}/>;
   if (messageAttachment && !image) return <MessageFile name={name} onOpen={preview && resources ? () => preview.openPreview({ source: { kind: 'artifact', id }, name, image, mimeType }) : undefined}/>;
   return <AttachmentCard name={name} image={image} url={url} error={error} loading={loading}
     onOpen={preview && resources ? () => preview.openPreview({ source: { kind: 'artifact', id }, name, image, mimeType }) : undefined}
     onDownload={preview && resources ? () => preview.download({ source: { kind: 'artifact', id }, name, image, mimeType }) : undefined}
-    onLoad={image && resources ? () => setAttempt(value => value + 1) : undefined}
-    onDecodeError={() => { if (url) resources?.release(url); setUrl(undefined); setError(message('artifacts:copy.image-could-not-be-decoded')); }} />;
+    onLoad={image && resources ? retry : undefined} onDecodeError={decodeError} />;
 }
 
 export function DeliveryCards({conversationId,deliveries,owned}:{conversationId:string;deliveries:PresentedDelivery[];owned?:()=>boolean}) {
@@ -51,11 +58,14 @@ export function DeliveryCards({conversationId,deliveries,owned}:{conversationId:
 }
 
 /** Only typed artifact/image/file facts; arbitrary tool JSON is never interpreted. */
-export function ToolArtifacts({ result }: { result: ToolExecutionResult }) {
+export function ToolArtifacts({ result, imageName }: { result: ToolExecutionResult; imageName?: string }) {
   const refs = new Map<string, { id: string; name?: string; image: boolean; mimeType?: string }>();
   for (const reference of result.artifacts ?? []) refs.set(reference.artifact_id, { id: reference.artifact_id, name: reference.name ?? undefined, mimeType: reference.mime_type ?? undefined, image: reference.mime_type?.startsWith('image/') ?? false });
   for (const block of result.content ?? []) {
-    if (block.type === 'image' || block.type === 'file') refs.set(block.artifact_id, { id: block.artifact_id, mimeType: block.type === 'file' ? block.mime_type ?? refs.get(block.artifact_id)?.mimeType : refs.get(block.artifact_id)?.mimeType, name: (block.type === 'image' ? block.alt : block.name) ?? undefined, image: block.type === 'image' || (block.mime_type?.startsWith('image/') ?? false) });
+    if (block.type === 'image' || block.type === 'file') refs.set(block.artifact_id, { id: block.artifact_id, mimeType: block.type === 'file' ? block.mime_type ?? refs.get(block.artifact_id)?.mimeType : refs.get(block.artifact_id)?.mimeType, name: (block.type === 'image' ? block.alt : block.name) ?? refs.get(block.artifact_id)?.name, image: block.type === 'image' || (block.mime_type?.startsWith('image/') ?? false) });
   }
-  return refs.size ? <div className="attachment-gallery">{[...refs.values()].map(reference => <Artifact key={reference.id} {...reference} />)}</div> : null;
+  return refs.size ? <div className="attachment-gallery">{[...refs.values()].map(reference => {
+    const inline = reference.image && imageName !== undefined;
+    return <Artifact key={reference.id} {...reference} name={reference.name ?? (inline ? imageName : undefined)} inlineImage={inline ? 'full' : undefined}/>;
+  })}</div> : null;
 }

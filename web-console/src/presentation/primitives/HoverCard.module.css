@@ -21,6 +21,19 @@
   border-radius: 12px;
   background: var(--dsw-hovercard-bg);
   box-shadow: var(--dsw-shadow-lv3);
+  overflow: auto;
+}
+
+.preview {
+  max-height: 420px;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  box-shadow: var(--dsw-elevation-panel);
 }
 
 .copyable {
@@ -52,16 +65,4 @@
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
-}
-
-/* File diffs need a reading surface; session previews keep their compact size. */
-.fileChange {
-  width: 720px;
-  max-width: calc(100vw - 16px);
-  max-height: min(640px, calc(100dvh - 16px));
-  overflow: auto;
-  padding: 0;
-  background: var(--dsw-alias-bg-layer-2);
-  color: var(--dsw-alias-label-primary);
-  border: 1px solid var(--dsw-alias-border-l3);
 }

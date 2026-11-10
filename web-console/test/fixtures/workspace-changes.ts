@@ -1,5 +1,5 @@
 import type { Server } from '../fixture';
-import type { ChangesSummary, RuntimeClientSnapshot } from '../../../protocol/app-server/v75';
+import type { ChangesSummary, RuntimeClientSnapshot } from '../../../protocol/app-server/v77';
 
 export function workspaceChangesFixture(server:Server,current:RuntimeClientSnapshot) {
   const completed=structuredClone(current);
@@ -12,15 +12,24 @@ export function workspaceChangesFixture(server:Server,current:RuntimeClientSnaps
     closing_locator:{type:'by_message_id',message_id:answer.id},deferred_fields:[],closing_message_id:answer.id,
     origin:{conversation_id:'conversation-A',attempt_id:'attempt-1',attempt_id_source:null,closing_message_id:answer.id},surface_revision:'2',completed_at:'2026-10-22T05:00:00Z',
   }};
+  const params = new URLSearchParams(location.search);
+  const longDiff = params.has('long-diff');
+  const longPath = `src/${'nested-workspace-folder/'.repeat(10)}file-1.ts`;
+  const longAddition = `export const path = '${'long-value-'.repeat(90)}';\n`;
   let summary:ChangesSummary|null=null;
-  const summarize=(count:number):ChangesSummary=>({files:Array.from({length:count},(_,i)=>({path:`/workspace/A/src/file-${i+1}.ts`,display:`src/file-${i+1}.ts`,added:2,deleted:1,binary:false,oversized:false})),total:count,added:count*2,deleted:count});
+  const summarize=(count:number):ChangesSummary=>({files:Array.from({length:count},(_,i)=>{
+    const display = longDiff && i === 0 ? longPath : `src/file-${i+1}.ts`;
+    return {path:`/workspace/A/${display}`,display,added:longDiff && i === 0 ? 41 : 2,deleted:1,binary:false,oversized:false};
+  }),total:count,added:count*2+(longDiff ? 39 : 0),deleted:count});
   server.handlers.set('conversation/changes',()=>({type:'workspace_changes',summary}));
   server.handlers.set('conversation/changeDiff',request=>({type:'workspace_change_diff',comparison:request.method==='conversation/changeDiff'&&request.params.index<6 ? {
-    hunks:[{old_start:1,new_start:1,old_text:'export const value = 1;\n',new_text:'export const value = 2;\nexport const enabled = true;\n'}],binary:false,oversized:false,truncated:false,
+    hunks:longDiff && request.params.index === 0
+      ? [{old_start:19,new_start:27,old_text:'export const old = 1;\n',new_text:longAddition+Array.from({length:40},(_,i)=>`export const value${i} = ${i};\n`).join('')}]
+      : [{old_start:1,new_start:1,old_text:'export const value = 1;\n',new_text:'export const value = 2;\nexport const enabled = true;\n'}],binary:false,oversized:false,truncated:false,
   }:null}));
   current.messages=current.messages.filter(message=>message.role==='user');current.transcript.entries=current.transcript.entries!.slice(0,1);
   current.attempt={attempt_id:'attempt-1',phase:{type:'running'},turn:1,in_flight:{message_id:answer.id,blocks:[{type:'text',block_index:0,text:'Updating workspace files…'}]}};
-  if(new URLSearchParams(location.search).has('complete')) {summary=summarize(6);Object.assign(current,structuredClone(completed));}
+  if(params.has('complete')) {summary=summarize(6);Object.assign(current,structuredClone(completed));}
   window.workspaceChangesFixture={
     async settle(count=6) {
       summary=summarize(count);

@@ -7,7 +7,7 @@ import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 import { conversationPreferences } from '../src/app/conversation-preferences';
 import { Server,snapshot,checkpoint } from './fixture';
-import type { ChangesSummary,RuntimeClientSnapshot } from '../../protocol/app-server/v75';
+import type { ChangesSummary,RuntimeClientSnapshot } from '../../protocol/app-server/v77';
 
 afterEach(()=>{cleanup();conversationPreferences().update({codingView:true},false);});
 const summary:ChangesSummary={files:Array.from({length:6},(_,i)=>({path:`/workspace/A/file-${i}.ts`,display:`file-${i}.ts`,added:2,deleted:1,binary:false,oversized:false})),total:6,added:12,deleted:6};
@@ -180,7 +180,7 @@ it('coding view and child scopes do not request or show top-level change records
   } finally {server.client.disconnect();}
 });
 
-it('a file preview fetches only while visible and exposes one full path header with the complete diff Copy',async()=>{
+it('a file preview fetches only while visible and shows the full path and diff; review copies the complete diff',async()=>{
   const {server,source}=await sourceFixture();
   const path='/workspace/A/'+ 'very-long-directory/'.repeat(12)+'配置.json';
   const changed={...summary,files:[{...summary.files[0],path,display:'配置.json'}]};
@@ -193,11 +193,14 @@ it('a file preview fetches only while visible and exposes one full path header w
     const ui=render(<ChangeComparison request={request} index={0} visible={false} preview/>);
     expect(server.requests.some(row=>row.request.method==='conversation/changeDiff')).toBe(false);
     ui.rerender(<ChangeComparison request={request} index={0} preview/>);
-    await ui.findByText('line 0');
+    await waitFor(()=>expect(ui.container.querySelector('[data-diff-line="add"]')?.textContent).toBe('1+line 0'));
     expect(ui.getAllByText(path)).toHaveLength(1);
-    expect(ui.getByTitle(path)).toBeTruthy();
+    expect(ui.container.querySelector('[data-changes-preview-path]')?.textContent).toBe(path);
     expect(ui.queryByText('配置.json:1')).toBeNull();
-    expect(ui.queryByText('line 40')).toBeNull();
+    expect(ui.container.querySelector('[data-diff-line="add"]:last-child')?.textContent).toBe('80+line 79');
+    expect(ui.queryByRole('button',{name:'Copy'})).toBeNull();
+    expect(ui.getByText('Only the first part of this comparison is shown.')).toBeTruthy();
+    ui.rerender(<ChangeComparison request={request} index={0}/>);
     fireEvent.click(ui.getByRole('button',{name:'Copy'}));
     await waitFor(()=>expect(writeText).toHaveBeenCalledOnce());
     expect(writeText.mock.calls[0][0]).toContain('line 79');

@@ -1,10 +1,44 @@
-import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react';
-import type { FileComparison } from '../../../../protocol/app-server/v75';
+import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import type { FileComparison } from '../../../../protocol/app-server/v77';
 import type { ChangesReviewRequest } from '../changes-review';
 import { useTranslation } from '../../locale/react';
-import { DiffBlock } from '../../presentation/primitives/DiffBlock';
+import { DiffBlock, localDiffHunks } from '../../presentation/primitives/DiffBlock';
+import { languageForPath } from '../../presentation/primitives/file-language';
+import { grammarLoadCount, highlightLines, subscribeGrammarLoaded } from '../../presentation/markdown/highlight';
 import { Button } from '../../presentation/primitives/Button';
 import css from './ChangesReview.module.css';
+
+function PreviewDiff({hunks, path}: {hunks: FileComparison['hunks']; path: string}) {
+  const language = languageForPath(path);
+  const grammarRevision = useSyncExternalStore(subscribeGrammarLoaded, grammarLoadCount, grammarLoadCount);
+  const rows = useMemo(() => hunks.map(hunk => localDiffHunks({oldText: hunk.old_text, newText: hunk.new_text}).flatMap(patch => {
+    let old = patch.oldStart - 1;
+    let next = patch.newStart - 1;
+    return patch.lines.map(line => ({
+      kind: line[0] === '+' ? 'add' : line[0] === '-' ? 'del' : 'context',
+      old: line[0] === '+' ? undefined : old++,
+      next: line[0] === '-' ? undefined : next++,
+      text: line.slice(1),
+    }));
+  })), [hunks]);
+  const highlights = useMemo(() => hunks.map(hunk => ({
+    old: highlightLines(hunk.old_text, language),
+    next: highlightLines(hunk.new_text, language),
+  })), [hunks, language, grammarRevision]);
+  return <div className={css.previewRows} data-review-view="unified">
+    {rows.map((section, index) => <div className={css.previewHunk} key={index}>
+      {section.map(({kind, old, next, text}, row) => {
+        const spans = old === undefined ? highlights[index]?.next?.[next!] : highlights[index]?.old?.[old];
+        return <div className={css.previewLine} data-diff-line={kind} key={row}>
+          <span className={css.number}>{old === undefined ? '' : hunks[index]!.old_start + old}</span>
+          <span className={css.number}>{next === undefined ? '' : hunks[index]!.new_start + next}</span>
+          <span className={css.sign}>{kind === 'add' ? '+' : kind === 'del' ? '-' : ' '}</span>
+          <span className={css.code}>{spans?.map((span, i) => <span key={i} style={span.style}>{span.text}</span>) ?? text}</span>
+        </div>;
+      })}
+    </div>)}
+  </div>;
+}
 
 export function ChangeComparison({request,index,visible=true,preview=false}: {request:ChangesReviewRequest;index:number;visible?:boolean;preview?:boolean}) {
   const tx=useTranslation(), current=useSyncExternalStore(request.client.subscribe,request.owned,request.owned);
@@ -21,14 +55,15 @@ export function ChangeComparison({request,index,visible=true,preview=false}: {re
   },[request.client,request.owned,identity,current,visible,retry]);
   const comparison=state.comparison, file=request.summary.files[index];
   if(!current)return <p>{tx('artifacts:changes.missing')}</p>;
-  return <div className={`${css.comparison}${preview ? ` ${css.preview}` : ''}`} data-change-comparison>
-    {preview && (!comparison || comparison.binary || comparison.oversized || !comparison.hunks.length) && <p className={css.path} title={file.path}>{file.path}</p>}
+  return <div className={preview ? css.preview : css.comparison} data-change-comparison data-changes-hover-preview={preview || undefined}>
+    {preview && <div className={css.previewHeader}><span className={css.path} data-changes-preview-path>{file.path}</span></div>}
     {state.error ? <p role="alert">{tx('artifacts:changes.error')} <Button size="sm" onClick={()=>setRetry(value=>value+1)}>{tx('artifacts:changes.retry')}</Button></p>
       : comparison===undefined ? <p role="status">{tx('artifacts:changes.loading')}</p>
       : comparison===null ? <p>{tx('artifacts:changes.missing')}</p>
       : comparison.binary ? <p>{tx('artifacts:changes.binary-diff')}</p>
       : comparison.oversized ? <p>{tx('artifacts:changes.oversized-diff')}</p>
-      : <DiffBlock filePreviewPath={preview ? file.path : undefined} diffs={comparison.hunks.map(hunk=>({path:`${file.display}:${hunk.new_start}`,oldText:hunk.old_text,newText:hunk.new_text}))} maxLines={preview?16:500} labels={{
+      : preview ? comparison.hunks.length > 0 && <PreviewDiff hunks={comparison.hunks} path={file.path}/>
+      : <DiffBlock diffs={comparison.hunks.map(hunk=>({path:`${file.display}:${hunk.new_start}`,oldText:hunk.old_text,newText:hunk.new_text}))} maxLines={500} labels={{
         copy:tx('artifacts:changes.copy'),copied:tx('artifacts:changes.copied'),collapseAria:tx('artifacts:changes.collapse'),collapse:tx('artifacts:changes.collapse'),
         expandAria:n=>tx('artifacts:changes.more-lines',{count:n}),expand:n=>tx('artifacts:changes.more-lines',{count:n}),files:()=>tx('artifacts:changes.title',{count:1}),
       }}/>}

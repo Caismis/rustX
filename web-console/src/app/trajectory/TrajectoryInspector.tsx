@@ -5,9 +5,10 @@ import { completeTools } from '../../client/request-system';
 import { useTraceContent, type ToolContent } from './useTraceContent';
 import { Button } from '../../presentation/primitives/Button';
 import { parseJson, isJsonNumber } from '../../presentation/primitives/json';
-import type { Translate, TranslationKey } from '../../locale/translation';
+import type { Translate } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { backgroundLaunch } from '../../bindings/jobs';
+import { READ_IMAGE_RECEIPT, READ_IMAGE_TOOL, readImageName } from '../../bindings/tools';
 import { traceStateLabel } from '../../bindings/status-labels';
 import { ToolDetails } from '../../presentation/agent/ToolDetails';
 import { recordedToolDetails } from '../../bindings/recorded-tool-details';
@@ -23,9 +24,7 @@ import { recordedToolDetails } from '../../bindings/recorded-tool-details';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { BoundedNames, CheckpointReadCut, ContentRef, TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v75';
-import { configurationDomainLabel, configurationNames } from '../../bindings/configuration-change';
-import { SourceContent } from '../agent/SourceContent';
+import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v77';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -79,7 +78,8 @@ export function inspectorTabs(item: InspectableDisplayItem): TrajectoryFacet[] {
   if (item.type === 'RequestBoundary') return ['overview', 'options', 'usage', 'timing'];
   if (item.type === 'ContextRow') return ['overview', 'rendered', 'raw', 'source'];
   switch (item.record.kind) {
-    case 'user': return ['overview', 'rendered', 'raw', 'source'];
+    case 'user':
+    case 'context': return ['overview', 'rendered', 'raw', 'source'];
     case 'assistant': return ['overview', 'rendered', 'raw'];
     case 'compaction': return ['overview', 'raw'];
     case 'tool': return ['overview', 'input', 'output', 'schema', 'timing'];
@@ -300,12 +300,13 @@ function MarkdownFragment({ text, preview, compact = false }: { text: string; pr
   </div>;
 }
 
-function Attachments({ artifacts, preview }: { artifacts: readonly TraceArtifact[]; preview: boolean }) {
+function Attachments({ artifacts, preview, imageName }: { artifacts: readonly TraceArtifact[]; preview: boolean; imageName?: string }) {
   const tx = useTranslation();
   if (!artifacts.length) return null;
   return <ul className={preview ? `${css.attachments} ${css.attachmentsPreview}` : css.attachments} aria-label={tx('trajectory:attachment.list')}>
     {artifacts.map(artifact => <li key={artifact.artifact_id} className={css.attachmentRow}>
-      <Artifact id={artifact.artifact_id} name={artifact.name ?? artifact.artifact_id} image={artifact.image} mimeType={artifact.mime_type ?? undefined} />
+      <Artifact id={artifact.artifact_id} name={artifact.name ?? (artifact.image ? imageName : undefined)} image={artifact.image}
+        mimeType={artifact.mime_type ?? undefined} inlineImage={artifact.image && imageName ? preview ? 'compact' : 'full' : undefined} />
     </li>)}
   </ul>;
 }
@@ -380,12 +381,17 @@ function MessageContent({ blocks, fallback, artifacts, rendered, preview = false
 }
 
 /** A Tool result's blocks, as Harness shows its output blocks. */
-function ToolResult({ record, detail, preview = false }: { record: TraceRecord; detail: Pick<ToolContent, 'result'> | null | undefined; preview?: boolean }) {
+function ToolResult({ record, detail, preview = false }: { record: TraceRecord; detail: Pick<ToolContent, 'result' | 'arguments'> | TraceDetail['tool']; preview?: boolean }) {
   const tx = useTranslation();
   const result = detail?.result;
   if (!result) return <><NoPayload>{tx(stateOf(record) === 'running' ? 'trajectory:code.running' : 'trajectory:record.no-result')}</NoPayload><Attachments artifacts={record.attachments} preview={preview} /></>;
   const error = result.outcome !== 'success';
   const artifacts = [...new Map([...record.attachments, ...result.attachments, ...blockArtifacts(result.blocks)].map(artifact => [artifact.artifact_id, artifact])).values()];
+  const imageRead = !error && record.tool?.tool_id === READ_IMAGE_TOOL && artifacts.some(artifact => artifact.image);
+  const args = detail?.arguments?.value;
+  const path = args && typeof args === 'object' && 'path' in args && typeof args.path === 'string' ? args.path : undefined;
+  const imageName = imageRead ? readImageName(path) ?? tx('tools:tool-card.read-image') : undefined;
+  const blocks = imageRead ? result.blocks.filter(block => block.type !== 'text' || block.text.truncated || block.text.text !== READ_IMAGE_RECEIPT) : result.blocks;
   const block = result.blocks.length === 1 ? result.blocks[0] : undefined;
   const value = block?.type === 'json' && !block.value.truncated ? block.value.value : undefined;
   const launch = !error ? backgroundLaunch(value, record.tool?.name ?? '') : undefined;
@@ -401,15 +407,15 @@ function ToolResult({ record, detail, preview = false }: { record: TraceRecord; 
   }
   const text = result.blocks.length === 1 && result.blocks[0]!.type === 'text' ? result.blocks[0]!.text.text : undefined;
   const json = text === undefined ? undefined : parseJsonContainer(text);
-  if (json !== undefined && !error) return <><Json value={json} label={tx('trajectory:record.result-json')} preview={preview} /><Attachments artifacts={artifacts} preview={preview} /></>;
+  if (json !== undefined && !error) return <><Json value={json} label={tx('trajectory:record.result-json')} preview={preview} /><Attachments artifacts={artifacts} preview={preview} imageName={imageName} /></>;
   return <div className={[css.resultBlocks, preview ? css.resultBlocksPreview : undefined, error ? css.errorPayload : undefined].filter(Boolean).join(' ')}>
     {error && result.detail?.text && <pre className={css.resultBlockText}>{result.detail.text}</pre>}
-    {result.blocks.map((block, index) => block.type === 'json'
+    {blocks.map((block, index) => block.type === 'json'
       ? <Json key={index} value={block.value.value} label={tx('trajectory:record.result-json')} preview={preview} error={error} />
       : block.type === 'image' || block.type === 'file' ? null
         : rawBlockContent(block) !== '' ? <pre key={index} className={css.resultBlockText}>{rawBlockContent(block)}</pre> : null)}
     {!result.blocks.length && !(error && result.detail?.text) && <pre className={`${css.resultBlockText} ${css.noOutputText}`}>{tx('trajectory:record.no-output')}</pre>}
-    <Attachments artifacts={artifacts} preview={preview} />
+    <Attachments artifacts={artifacts} preview={preview} imageName={imageName} />
   </div>;
 }
 
@@ -566,7 +572,7 @@ export interface TrajectoryInspectorProps {
   facet: TrajectoryFacet;
   onFacet: (facet: TrajectoryFacet) => void;
   detail?: TraceDetail | undefined;
-  detailPage?:import('../../../../protocol/app-server/v75').CheckpointPage;
+  detailPage?:import('../../../../protocol/app-server/v77').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
   loading?: boolean | undefined;
   stale?: boolean;
@@ -594,17 +600,6 @@ export interface TrajectoryInspectorProps {
  * @param props - the selected item, its fetched detail and navigation.
  * @returns the details panel contents.
  */
-/** The read owner changes only with the real reader or read cut, so a
- * parent rerender keeps the loaded text and its held read. */
-export function ConfigurationContent({ reader, cut, reference, json = false }: { reader: import('../../client/trace').TraceFieldReader; cut: CheckpointReadCut; reference: ContentRef; json?: boolean }) {
-  const tx = useTranslation(), cutKey = JSON.stringify(cut), owned = useRef(cut); if (JSON.stringify(owned.current) !== cutKey) owned.current = cut;
-  const exact = owned.current;
-  const read = useCallback((ref: ContentRef, offset: number, current: () => boolean) => reader.content(exact, ref, offset, current), [reader, exact]);
-  return <SourceContent bindings={[{ path: [], source_path: null, content_ref: reference, deferred: true }]} owned={() => true} read={read}>
-    {text => json ? <Json value={parseJsonContainer(text) ?? text} label={tx('trajectory:configuration.catalog')} /> : <pre className={css.payload}>{text}</pre>}
-  </SourceContent>;
-}
-
 export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFacet, detail, loading,stale,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen }: TrajectoryInspectorProps) {
   const tx = useTranslation();
   const inspection=detailPage?traceInspectionHead(detailPage,item.record.id):undefined;
@@ -636,8 +631,6 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   const ownRequest = record.kind === 'assistant' ? records.find(candidate => traceRequestAccepts(candidate,record)) : undefined;
   const assistantOf = (id: string) => [...executions].find(([, tools]) => tools.some(tool => tool.id === id))?.[0];
   const parentAssistant = record.kind === 'tool' ? assistantOf(record.id) : undefined;
-  const launchCalls = record.kind === 'background' && record.originating_tool_call_id ? records.filter(candidate => candidate.kind === 'tool' && candidate.tool?.call_id === record.originating_tool_call_id && sameTraceStep(candidate.location, record.location)) : [];
-  const launchCall = launchCalls.length === 1 ? launchCalls[0] : undefined;
   const requestAssistant = item.type === 'RequestBoundary' ? records.find(candidate => traceRequestAccepts(record,candidate)) : undefined;
   const openCall = (call: Extract<TraceContentBlock, {type:'tool_call'}>) => {
     const proposal = (call as TraceDisplayBlock).nativeOccurrence ?? record.calls.find(proposal => proposal.call_id != null && proposal.call_id === call.call_id)?.occurrence;
@@ -656,6 +649,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   const artifacts = [...(resolved?.attachments ?? []), ...(item.type === 'ContextRow' ? item.context.attachments : record.attachments)];
   const source = item.type === 'ContextRow' ? item.context.source : resolved?.source ?? messagesHead?.items[0]?.source ?? messages?.[0]?.source ?? undefined;
   const kind = cellKind(item);
+  const isInput = kind === 'user' || kind === 'context';
   // Admitted input cells are complete facts, whatever their Request later did.
   const state = item.type === 'ContextRow' || item.type === 'SystemPromptCell' ? 'complete' : stateOf(record);
   const toolDetail = resolved?.tool ?? detail?.tool ?? undefined;
@@ -685,7 +679,9 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   const pending = record.has_detail && !detail && !resolved;
   const detailError = native?.error ?? error;
   const toolResult = (preview = false) => pending
-    ? <><DetailPending error={detailError} /><Attachments artifacts={record.attachments} preview={preview} /></>
+    ? <><DetailPending error={detailError} />
+      {(record.tool?.tool_id !== READ_IMAGE_TOOL || detailError) && <Attachments artifacts={record.attachments} preview={preview} />}
+    </>
     : <ToolResult record={record} detail={toolDetail} preview={preview} />;
   const schema = (preview = false) => inspection?.content.type === 'tool' && inspection.content.definition.type !== 'available'
     ? <NoPayload>{tx(inspection.content.definition.type === 'absent' ? 'trajectory:record.schema-absent' : 'trajectory:record.schema-unavailable')}</NoPayload>
@@ -732,35 +728,6 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
         </div>
       </>;
     }
-    if (record.kind === 'configuration' && record.configuration) {
-      const change = record.configuration;
-      const names = (label: TranslationKey, list: BoundedNames) => list.total > 0 && <div key={label}><dt>{tx(label)}</dt><dd>{configurationNames(tx, list)}</dd></div>;
-      return <>
-        <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="" data-configuration-change="">
-          <div><dt>{tx('trajectory:configuration.reason')}</dt><dd>{tx(`trajectory:configuration.reason.${change.reason}`)}</dd></div>
-          <div><dt>{tx('trajectory:configuration.domains')}</dt><dd>{change.domains.map(domain => configurationDomainLabel(tx, domain)).join(', ')}</dd></div>
-          {names('trajectory:configuration.tools-added', change.tools.added)}
-          {names('trajectory:configuration.tools-removed', change.tools.removed)}
-          {names('trajectory:configuration.tools-changed', change.tools.changed)}
-          {names('trajectory:configuration.skills-added', change.skills.added)}
-          {names('trajectory:configuration.skills-removed', change.skills.removed)}
-          {names('trajectory:configuration.skills-changed', change.skills.changed)}
-          <div><dt>{tx('trajectory:configuration.binding')}</dt><dd>{change.previous_binding_revision} → {change.binding_revision}</dd></div>
-        </dl>
-        {record.configuration_instructions && <section className={`${css.overviewSection} ${css.summaryScrollRegion}`} data-summary-scroll-region="" data-configuration-instructions="">
-          <h3>{tx('trajectory:configuration.instructions')}</h3>
-          {detailReader && detailPage
-            ? <ConfigurationContent reader={detailReader} cut={detailPage.read_cut} reference={record.configuration_instructions} />
-            : <DetailPending error={detailError} />}
-        </section>}
-        {record.configuration_catalog && (change.tools.added.total > 0 || change.tools.changed.total > 0 || change.tools.removed.total > 0 || change.skills.added.total > 0 || change.skills.changed.total > 0 || change.skills.removed.total > 0) && <section className={`${css.overviewSection} ${css.summaryScrollRegion}`} data-summary-scroll-region="" data-configuration-catalog="">
-          <h3>{tx('trajectory:configuration.catalog')}</h3>
-          {detailReader && detailPage
-            ? <ConfigurationContent reader={detailReader} cut={detailPage.read_cut} reference={record.configuration_catalog} json />
-            : <DetailPending error={detailError} />}
-        </section>}
-      </>;
-    }
     if (record.kind === 'compaction') {
       return <>
         <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="">
@@ -774,7 +741,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     const markdown = record.kind !== 'tool';
     return <>
       <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="">
-        {(item.type === 'ContextRow' || record.kind === 'user') && source !== undefined && <div>
+        {isInput && source !== undefined && <div>
           <dt>{tx('trajectory:details.source')}</dt>
           <dd className={css.overviewParentLinks}><NavLink label={sourceLabel(tx, source)} onClick={() => onFacet('source')} /></dd>
         </div>}
@@ -786,11 +753,9 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
           <dt>{tx('trajectory:details.hierarchy')}</dt>
           <dd className={css.overviewParentLinks}><NavLink label={tx('trajectory:details.assistant-message')} onClick={() => onOpen(parentAssistant)} /></dd>
         </div>}
-        <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} nativeState={record.kind === 'background' ? record.state : undefined}/></div>
-        {record.kind === 'background' && record.native_id && <div><dt>{tx('common:activity.background-jobs')}</dt><dd>{record.native_id}</dd></div>}
-        {launchCall && <div><dt>{tx('common:activity.background-launch-call')}</dt><dd><NavLink label={launchCall.tool?.name ?? launchCall.tool?.tool_id ?? launchCall.id} onClick={() => onOpen(launchCall.id)}/></dd></div>}
+        <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state}/></div>
         {record.kind === 'assistant' && <TokenRows usage={usage} />}
-        {(item.type === 'ContextRow' || record.kind === 'user') && <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms) ?? 0)}</dd></div>}
+        {isInput && <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms) ?? 0)}</dd></div>}
       </dl>
       <div className={css.overviewSections}>
         {markdown
@@ -805,7 +770,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
             </>
             : null}
         {ownRequest && <OverviewSection label={tx('trajectory:timing.request')} onOpen={() => onOpen(ownRequest.id, 'timing')}><RequestTiming request={ownRequest} /></OverviewSection>}
-        {record.kind !== 'user' && record.kind !== 'assistant' && item.type !== 'ContextRow' && <OverviewSection label={tx('trajectory:tab.timing')} onOpen={() => onFacet('timing')}><RecordTiming record={record} preview /></OverviewSection>}
+        {!isInput && record.kind !== 'assistant' && <OverviewSection label={tx('trajectory:tab.timing')} onOpen={() => onFacet('timing')}><RecordTiming record={record} preview /></OverviewSection>}
       </div>
     </>;
   };

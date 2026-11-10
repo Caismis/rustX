@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
-import type { ScheduleTiming, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v75';
+import type { ScheduleTiming, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v77';
 import type { AppServerClient } from '../../client/app-server';
 import { sameValue, transportSelection, useClientSelector } from '../../client/selectors';
 import type { WorkspaceAuthority } from '../../workspaces/authority';
@@ -124,5 +124,5 @@ export function TaskCreateDialog({ client, host, authority, creation, open, clos
       </div>
     </Modal>;
   };
-  return open && selected ? <WorkspaceControls client={client} host={host} workspaceId={selected.id}>{(source, approval) => render(source, approval.reading, approval.block(), approval.actor.getSnapshot().context.readError, () => approval.actor.send({ type: 'REFRESH' }))}</WorkspaceControls> : render();
+  return open && selected ? <WorkspaceControls visible={open} presentationKey={id} client={client} host={host} workspaceId={selected.id}>{(source, approval) => render(source, approval.reading, approval.block(), approval.actor.getSnapshot().context.readError, () => approval.actor.send({ type: 'REFRESH' }))}</WorkspaceControls> : render();
 }

@@ -10,7 +10,7 @@ export interface NavigationPreferences { endpoint?: string; openViews: string[];
  * still establish all authority after startup. */
 function readRoute(value: unknown): SavedRoute | undefined {
   if (!value || typeof value !== 'object' || !('kind' in value)) return;
-  if (value.kind === 'workflows' || value.kind === 'schedules') return { kind: value.kind };
+  if (value.kind === 'workflows' || value.kind === 'schedules' || value.kind === 'subagents' || value.kind === 'mcp' || value.kind === 'skills') return { kind: value.kind };
   if (value.kind === 'session' && 'sessionId' in value && typeof value.sessionId === 'string') return { kind: 'session', sessionId: value.sessionId };
   if (value.kind === 'new-conversation') {
     if (!('workspaceId' in value)) return { kind: 'new-conversation' };

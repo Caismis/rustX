@@ -542,6 +542,7 @@ fn os_argv_non_unicode_model_document_selects_exact_file() {
         &[
             OsString::from("init"),
             OsString::from("--template=custom"),
+            OsString::from("--protocol=openai_chat_completions"),
             OsString::from("--provider=example"),
             OsString::from("--endpoint=http://localhost"),
             OsString::from("--credential-env=RUSTX_TEST_KEY"),

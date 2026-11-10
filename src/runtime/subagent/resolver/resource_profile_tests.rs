@@ -60,7 +60,6 @@ fn resource_only_spec(source: &ToolSourceId, binding: McpServerBinding) -> Resol
             tools: &available,
             availability: &availability,
             skills: &skills,
-            agents: &BTreeSet::new(),
             workflows: &BTreeSet::new(),
             scope: AgentScope::OneShotChild,
         },

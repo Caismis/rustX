@@ -25,8 +25,6 @@ export interface DiffHunk {
 export interface DiffBlockProps {
   /** One entry per applied hunk, in file order; empty renders nothing. */
   diffs: DiffHunk[]
-  /** Opt-in file preview: one full path header, reserved Copy space and no repeated summary. */
-  filePreviewPath?: string | undefined
   /** Localized chrome supplied by the owning render site. */
   labels: DiffBlockLabels
   /** Height cap in body lines before the middle collapses (default {@link DEFAULT_DIFF_MAX_LINES}). */
@@ -71,13 +69,13 @@ const ROW_CLASS: Record<DiffRow['kind'], string | undefined> = {
 const MAX_DIFF_EDIT_LENGTH = 256
 
 /** Derive exact local patches or a whole-fragment replacement when search exceeds the limit. */
-function localHunks(diff: DiffHunk) {
+export function localDiffHunks(diff: Pick<DiffHunk, 'oldText' | 'newText'>) {
   const oldLines = contentLines(diff.oldText ?? '')
   const newLines = contentLines(diff.newText)
   const normalize = (lines: string[]): string => lines.map(line => `${line}\n`).join('')
   return structuredPatch('', '', normalize(oldLines), normalize(newLines),
     undefined, undefined, { context: 3, maxEditLength: MAX_DIFF_EDIT_LENGTH })?.hunks
-    ?? [{ lines: [...oldLines.map(line => `-${line}`), ...newLines.map(line => `+${line}`)] }]
+    ?? [{ oldStart: 1, newStart: 1, lines: [...oldLines.map(line => `-${line}`), ...newLines.map(line => `+${line}`)] }]
 }
 
 /**
@@ -91,7 +89,7 @@ export function diffTotals(diffs: DiffHunk[]): { added: number; removed: number 
   let added = 0
   let removed = 0
   for (const diff of diffs) {
-    for (const hunk of localHunks(diff)) {
+    for (const hunk of localDiffHunks(diff)) {
       for (const line of hunk.lines) {
         if (line.startsWith('+')) added++
         if (line.startsWith('-')) removed++
@@ -117,7 +115,7 @@ function buildRows(diffs: DiffHunk[]): { rows: DiffRow[]; added: number; removed
     if (diff.path !== prevPath) rows.push({ kind: 'path', text: diff.path })
     else rows.push({ kind: 'gap', text: '⋯' })
     prevPath = diff.path
-    for (const [index, hunk] of localHunks(diff).entries()) {
+    for (const [index, hunk] of localDiffHunks(diff).entries()) {
       if (index > 0) rows.push({ kind: 'gap', text: '⋯' })
       for (const line of hunk.lines) {
         const kind = line.startsWith('-') ? 'del' : line.startsWith('+') ? 'add' : 'context'
@@ -173,7 +171,7 @@ function copyText(rows: DiffRow[]): string {
  * @param props - see {@link DiffBlockProps}.
  * @returns the diff block element.
  */
-export function DiffBlock({ diffs, labels, maxLines = DEFAULT_DIFF_MAX_LINES, className, filePreviewPath }: DiffBlockProps) {
+export function DiffBlock({ diffs, labels, maxLines = DEFAULT_DIFF_MAX_LINES, className }: DiffBlockProps) {
   const { rows, added, removed, files } = useMemo(() => buildRows(diffs), [diffs])
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -191,26 +189,20 @@ export function DiffBlock({ diffs, labels, maxLines = DEFAULT_DIFF_MAX_LINES, cl
 
   if (rows.length === 0) return null
 
-  const preview = filePreviewPath !== undefined
-  const visibleRows = preview ? rows.filter(row => row.kind !== 'path') : rows
-  const hidden = visibleRows.length - maxLines
+  const hidden = rows.length - maxLines
   const capped = hidden > 0 && !expanded
   // Same split arithmetic as TerminalBlock and the TUI transcript's collapsed
   // card, so a body's head and tail slices agree across the front ends.
   const headLines = Math.ceil(maxLines / 2)
   const tailLines = maxLines - headLines
-  const head = capped ? visibleRows.slice(0, headLines) : visibleRows
-  const tail = capped ? visibleRows.slice(visibleRows.length - tailLines) : []
+  const head = capped ? rows.slice(0, headLines) : rows
+  const tail = capped ? rows.slice(rows.length - tailLines) : []
 
   return (
-    <div className={clsx(css.block, preview && css.preview, className)} data-diff="" data-file-preview={preview || undefined}>
-      {preview && <div className={css.previewHeader}>
-        <span className={css.previewPath} title={filePreviewPath}>{filePreviewPath}</span>
-        <button type="button" className={css.previewCopy} onClick={onCopy}>{copied ? labels.copied : labels.copy}</button>
-      </div>}
-      {!preview && <button type="button" className={css.copyButton} onClick={onCopy}>
+    <div className={clsx(css.block, className)} data-diff="">
+      <button type="button" className={css.copyButton} onClick={onCopy}>
         {copied ? labels.copied : labels.copy}
-      </button>}
+      </button>
       <div className={css.body}>
         {head.map((row, index) => (
           <div key={index} className={clsx(css.line, ROW_CLASS[row.kind])}>{row.text}</div>
@@ -228,7 +220,7 @@ export function DiffBlock({ diffs, labels, maxLines = DEFAULT_DIFF_MAX_LINES, cl
           <div key={index} className={clsx(css.line, ROW_CLASS[row.kind])}>{row.text}</div>
         ))}
       </div>
-      {!preview && <div className={css.footer}>└ +{added} -{removed} · {labels.files(files)}</div>}
+      <div className={css.footer}>└ +{added} -{removed} · {labels.files(files)}</div>
     </div>
   )
 }

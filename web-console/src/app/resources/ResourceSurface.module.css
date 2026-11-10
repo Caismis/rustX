@@ -1,0 +1,17 @@
+.heading > button { white-space: nowrap; }
+.tab { display: grid; place-items: center; }
+.workspaceName { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.refresh { width: 34px; height: 34px; padding: 0; flex: none; }
+.editor { border: 0; padding: 0; margin: 0; min-width: 0; }
+.detailEditor { padding-block: 20px 0; scroll-padding-bottom: 76px; }
+.mcpDetail { margin-inline: auto; padding-bottom: 24px; }
+
+@media (max-width: 600px) {
+  .heading { flex-wrap: wrap; padding-bottom: 12px; }
+  .workspaceName { max-width: 110px; }
+}
+
+@media (max-width: 760px) {
+  .controls { min-height: 0; padding-block: 16px; }
+  .controls .tools { flex-basis: 100%; justify-content: flex-end; }
+}

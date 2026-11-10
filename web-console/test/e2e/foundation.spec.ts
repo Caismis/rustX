@@ -619,56 +619,52 @@ test('a keyboard-owned submenu survives passive pointer hover until a pointer pr
 });
 
 for (const locale of ['en', 'zh'] as const) for (const dark of [false, true]) {
-  test(`file-change hover has a bounded readable surface and independent Copy (${locale}, dark=${dark})`, async ({ page }) => {
+  test(`compact hover stays bounded and preserves copy feedback (${locale}, dark=${dark})`, async ({ page }) => {
     await page.addInitScript(value => localStorage.setItem('rustx-locale-v1', value), locale);
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`${fixtureOrigin}/test/fixtures/foundation.html`);
     await page.evaluate(dark => { if (dark) document.body.setAttribute('data-ds-dark-theme', ''); }, dark);
-    const fixture = page.locator('[data-file-hover-fixture]');
-    await fixture.evaluate(el => { el.setAttribute('style', 'position: fixed; width: 300px; right: 2px; bottom: 2px'); });
+    const fixture = page.locator('[data-copy-hover-fixture]');
+    await fixture.evaluate(el => { el.setAttribute('style', 'position: fixed; width: 120px; right: 2px; bottom: 2px'); });
     const trigger = fixture.getByRole('button');
     await trigger.hover();
-    const card = page.locator('[data-hover-card="file-change"]');
+    const card = page.locator('[data-hover-card="default"]');
     await expect(card).toBeVisible();
     const bounded = async () => {
       const rect = (await card.boundingBox())!, viewport = page.viewportSize()!;
+      expect(rect.width).toBeLessThanOrEqual(244);
       expect(rect.x).toBeGreaterThanOrEqual(7);
       expect(rect.y).toBeGreaterThanOrEqual(7);
       expect(rect.x + rect.width).toBeLessThanOrEqual(viewport.width - 7);
       expect(rect.y + rect.height).toBeLessThanOrEqual(viewport.height - 7);
       return rect;
     };
-    const wide = await bounded();
-    expect(wide.width).toBeGreaterThan(600);
-    const copy = card.getByRole('button', { name: locale === 'zh' ? '复制' : 'Copy', exact: true });
-    const path = card.locator('[title]');
-    expect((await path.textContent())!.length).toBeGreaterThan(200);
-    const pathRect = (await path.boundingBox())!, copyRect = (await copy.boundingBox())!;
-    expect(pathRect.x + pathRect.width).toBeLessThanOrEqual(copyRect.x);
-    // Travel through the gap, then select text: neither interaction dismisses the preview.
-    await copy.hover();
+    await bounded();
+    const path = card.locator('p');
+    const text = (await path.textContent())!;
+    expect(text.length).toBeGreaterThan(200);
+    await card.hover();
     await page.waitForTimeout(250);
     await expect(card).toBeVisible();
+    await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { (window as unknown as { copiedDetails: string }).copiedDetails = text; } } }); });
+    // A selection is preserved; clicking selected text does not trigger Copy.
     await path.evaluate(el => { const selection = window.getSelection()!; const range = document.createRange(); range.selectNodeContents(el); selection.removeAllRanges(); selection.addRange(range); });
-    await expect(card).toBeVisible();
-    expect(await card.locator('[data-diff]').evaluate(el => Number.parseFloat(getComputedStyle(el.querySelector('[class*="body"]')!).fontSize))).toBeGreaterThanOrEqual(13);
-    expect(await card.locator('[class*="body"]').evaluate(el => el.scrollWidth > el.clientWidth)).toBe(true);
-    // Copy is a separate control, even with an active selection, and never opens full review.
-    await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { (window as unknown as { copiedDiff: string }).copiedDiff = text; } } }); });
-    await copy.click();
-    await expect(page.getByLabel('Reviewed file')).toHaveText('-1');
-    expect(await page.evaluate(() => (window as unknown as { copiedDiff: string }).copiedDiff)).toContain('line 99');
-    await card.getByRole('button', { name: /^More/ }).click();
-    expect(await card.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+    await card.dispatchEvent('click');
+    expect(await page.evaluate(() => (window as unknown as { copiedDetails?: string }).copiedDetails)).toBeUndefined();
+    await page.evaluate(() => window.getSelection()!.removeAllRanges());
+    const beforeCopy = await bounded();
+    await card.click();
+    await expect(card).toHaveText(locale === 'zh' ? '已复制' : 'Copied');
+    expect(await page.evaluate(() => (window as unknown as { copiedDetails: string }).copiedDetails)).toBe(text);
+    expect((await card.boundingBox())!.height).toBeCloseTo(beforeCopy.height, 0);
+    await expect(path).toHaveText(text);
     await page.setViewportSize({ width: 420, height: 300 });
-    await expect.poll(async () => (await card.boundingBox())!.width).toBeLessThanOrEqual(404);
+    await expect.poll(async () => { const rect = (await card.boundingBox())!; return rect.x + rect.width; }).toBeLessThanOrEqual(413);
     await bounded();
     await trigger.click();
-    await expect(page.getByLabel('Reviewed file')).toHaveText('0');
     await expect(card).toHaveCount(0);
-    // The opt-in file layout does not widen an ordinary hover preview.
     await page.getByRole('button', { name: 'Details', exact: true }).hover();
-    await expect(page.locator('[data-hover-card="default"]')).toBeVisible();
-    expect((await page.locator('[data-hover-card="default"]').boundingBox())!.width).toBeLessThanOrEqual(244);
+    await expect(page.getByText('Hover details')).toBeVisible();
+    await bounded();
   });
 }

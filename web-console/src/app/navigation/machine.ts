@@ -1,7 +1,7 @@
 import { actionError } from '../../bindings/action-error';
 import { assign, fromCallback, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient } from '../../client/app-server';
-import type { CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v75';
+import type { CompletedResponseView, UserInputBlock } from '../../../../protocol/app-server/v77';
 import type { Observation } from '../../client/session-lifecycle/port';
 import { RpcFailure } from '../../client/errors';
 import { CommandSession, type HistoricalSelection, type HistoryAction } from '../commands/native';
@@ -16,13 +16,14 @@ import type { WorkspaceAuthority } from '../../workspaces/authority';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import { sameEndpoint } from '../../workspaces/endpoint';
 import type { WorkflowSurfaceActor } from '../workflows/machines/surface';
+import type { ResourceModule } from '../resources/types';
 
 class RetiredPreparation extends Error {}
 export type ConversationRoute = { kind: 'new-conversation'; workspaceId?: string } | { kind: 'session'; sessionId: string } | { kind: 'session-draft'; sessionId: string };
 export interface WorkflowsRoute { kind: 'workflows' }
 export interface SchedulesRoute { kind: 'schedules' }
 export interface SettingsRoute { kind: 'settings' }
-export type ShellRoute = ConversationRoute | WorkflowsRoute | SchedulesRoute | SettingsRoute;
+export type ShellRoute = ConversationRoute | WorkflowsRoute | SchedulesRoute | SettingsRoute | {kind:ResourceModule};
 export function isHomeRoute(route: ShellRoute): route is ConversationRoute {
   return route.kind === 'new-conversation' || route.kind === 'session' || route.kind === 'session-draft';
 }
@@ -42,7 +43,7 @@ type Destination =
 interface Pending { recovery?: true; destination: Destination; route: ShellRoute; generation: number; authority: number | undefined }
 interface Prepared { warning?: string; pending: Pending; route: ShellRoute; observation?: Observation; content?: UserInputBlock[]; replay?: ResponseRetry['replay'] }
 interface Input { drafts?: DraftPreparations; client: AppServerClient; settings: SettingsNavigationActor; host: ProductHostWorkspaces; workspaces: WorkspaceAuthority; workflows: WorkflowSurfaceActor; route?: ShellRoute }
-type NavigationEvent = Extract<ShellNavigationEvent, { type: 'OPEN' | 'DRAFT' | 'HOME' | 'WORKFLOWS' | 'SCHEDULES' | 'SETTINGS' }>;
+type NavigationEvent = Extract<ShellNavigationEvent, { type: 'OPEN' | 'DRAFT' | 'HOME' | 'WORKFLOWS' | 'SCHEDULES' | 'SETTINGS' | 'RESOURCES' }>;
 interface WorkflowLeave { event: NavigationEvent }
 export interface ShellNavigationContext extends Omit<Input, 'route'> {
   // Home keeps its editor and controls across primary pages. Executable
@@ -81,6 +82,7 @@ export type ShellNavigationEvent =
   | { type: 'WORKFLOW.CANCELLED'; intent: WorkflowLeave }
   | { type: 'WORKFLOWS' }
   | { type: 'SCHEDULES' }
+  | { type: 'RESOURCES'; module:ResourceModule }
   | { type: 'SIDEBAR.DISMISS' | 'DISMISS.ERROR' }
   | { type: 'CANCEL'; pending?: Pending }
   | { type: 'SESSION.RESUME'; intent: Pending; generation: number; authority: number | undefined }
@@ -350,7 +352,7 @@ export const shellNavigationMachine = setup({
       const intentRevision = context.intentRevision + 1, draft = context.draftSession;
       // Primary pages carry a currently eligible, previously admitted Home hint.
       // Replacement intents and unadmitted startup drafts keep stale revisions.
-      if ((event.type === 'WORKFLOWS' || event.type === 'SCHEDULES')
+      if ((event.type === 'WORKFLOWS' || event.type === 'SCHEDULES' || event.type === 'RESOURCES')
         && draft?.wasAdmitted && draft.intent.destination.kind === 'restore-session' && draft.intentRevision === context.intentRevision
         && context.home.kind === 'session-draft' && context.home.sessionId === draft.sessionId) {
         return { intentRevision, draftSession: { ...draft, intentRevision } };
@@ -365,7 +367,7 @@ export const shellNavigationMachine = setup({
     finishLeave: assign({ leaving: () => undefined, approvedLeave: () => undefined }),
     cancelWorkflowLeave: ({ context }) => { if (context.leaving) context.workflows.send({ type: 'CANCEL' }); },
     suspendSettings: ({ context }) => context.settings.send({ type: 'SUSPEND' }),
-    page: assign(({ event }) => ({ route: { kind: event.type === 'SETTINGS' ? 'settings' as const : event.type === 'WORKFLOWS' ? 'workflows' as const : 'schedules' as const }, pending: undefined, command: undefined, retry: undefined, error: undefined, dismissedSidebar: undefined })),
+    page: assign(({ event }) => ({ route: { kind: event.type === 'RESOURCES' ? event.module : event.type === 'SETTINGS' ? 'settings' as const : event.type === 'WORKFLOWS' ? 'workflows' as const : 'schedules' as const }, pending: undefined, command: undefined, retry: undefined, error: undefined, dismissedSidebar: undefined })),
     home: assign(({ context }) => ({ pending: { destination: { kind: 'home' as const, route: context.home, binding: context.binding }, route: context.route, generation: context.client.getSnapshot().generation, authority: context.client.getSnapshot().authorityRevision }, command: undefined, retry: undefined, error: undefined })),
     resumeSession: assign(({ context, event }) => {
       if (event.type !== 'SESSION.RESUME' || event.intent.destination.kind !== 'session' && event.intent.destination.kind !== 'restore-session') return {};
@@ -499,6 +501,7 @@ export const shellNavigationMachine = setup({
     SETTINGS: [{ guard: 'workflowLeave', actions: 'requestLeave' }, { target: '.idle', actions: ['finishLeave', 'page', 'settings'] }],
     WORKFLOWS: [{ guard: ({ context }) => context.route.kind === 'workflows', target: '.idle', actions: ['navigationIntent', 'cancelWorkflowLeave', 'finishLeave', 'page'] }, { target: '.idle', actions: ['navigationIntent', 'suspendSettings', 'page'] }],
     SCHEDULES: [{ guard: 'workflowLeave', actions: 'requestLeave' }, { target: '.idle', actions: ['navigationIntent', 'suspendSettings', 'finishLeave', 'page'] }],
+    RESOURCES: [{ guard: 'workflowLeave', actions: 'requestLeave' }, { target: '.idle', actions: ['navigationIntent', 'suspendSettings', 'finishLeave', 'page'] }],
     'SIDEBAR.DISMISS': [{ guard: 'selectedSessionDraft', actions: 'dismissSidebar' }, { guard: 'sidebar', target: '.idle', actions: 'retire' }],
     CANCEL: { guard: 'cancelling', target: '.idle', actions: 'retire' },
     AUTHORITY: { guard: 'changedAuthority', target: '.idle', actions: ['retireSettings', 'authority'] },

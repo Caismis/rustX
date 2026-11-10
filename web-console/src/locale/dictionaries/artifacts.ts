@@ -166,6 +166,7 @@ export const en = {
   "artifact-preview.this-artifact-has-no-supported-inline-viewer": "This artifact has no supported inline viewer.",
   "artifact-preview.download-artifact": "Download artifact",
   "copy.image-could-not-be-decoded": "Image could not be decoded",
+  "copy.image-unavailable": "Image preview unavailable",
   "preview.close": "Close Artifact preview"
 } as const;
 export type ArtifactsKey = keyof typeof en;
@@ -336,5 +337,6 @@ export const zh = {
   "artifact-preview.this-artifact-has-no-supported-inline-viewer": "此制品没有受支持的内嵌查看器。",
   "artifact-preview.download-artifact": "下载制品",
   "copy.image-could-not-be-decoded": "无法解码图片",
+  "copy.image-unavailable": "无法预览图片",
   "preview.close": "关闭产物预览"
 } satisfies Record<ArtifactsKey, string>;

@@ -13,7 +13,7 @@ import { prependTrace, beginTraceDetail, completeTraceDetail, fillTraceGap, refr
 import { completeHistoryThrough, ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v75';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v77';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -23,17 +23,33 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const noop = () => {};
-it.each(['cancelling', 'settling', 'outcome_unknown', 'cancelled'] as const)('background Inspector preserves %s and links only its original launch Step', state => {
-  const source = traceTool(1), other = traceTool(2, { location: { attempt_id: 'other-attempt', step_id: '1' } });
-  other.tool!.call_id = source.tool!.call_id;
-  const record = traceRecord(3, { kind: 'background', request: null, native_id: 'job-background', originating_tool_call_id: source.tool!.call_id, state, preview: null });
-  show(cacheOf([source, other, record]));
-  fireEvent.click(row('RecordRow', record.id));
-  const summary = screen.getByRole('tabpanel');
-  expect(within(summary).getByText(traceStateLabel(translator('en'), state))).toBeTruthy();
-  expect(within(summary).getByText('job-background')).toBeTruthy();
-  expect(within(summary).getByRole('button', { name: 'bash' })).toBeTruthy();
-  expect(recordText(translator('en'), record)).toContain(traceStateLabel(translator('en'), state));
+it('a page of background lifecycle records does not create standalone rows or empty Turns', () => {
+  const records = [
+    traceRecord(1, { kind: 'background', request: null, state: 'running' }),
+    traceRecord(2, { kind: 'background', request: null, location: {}, state: 'outcome_unknown' }),
+  ];
+  expect(projectTrajectory(translator('en'), records).sections).toEqual([]);
+});
+
+it('only the request using a configuration change introduces a System cell', () => {
+  const tx = translator('en');
+  const before = traceRecord(1);
+  const audit = traceRecord(2, { kind: 'configuration', request: null, location: {} });
+  const after = traceRecord(3, { location: { attempt_id: 'next-turn', step_id: '1' } });
+  after.request!.system_prompt.state = 'changed';
+  after.request!.tool_catalog = 'changed';
+
+  expect(projectTrajectory(tx, [before, audit])).toEqual(projectTrajectory(tx, [before]));
+  const projection = projectTrajectory(tx, [before, audit, after]);
+  expect(searchItems(projection, audit.id)?.size).toBe(0);
+  expect(flattenTrajectory(tx, projection).filter(item => item.type === 'SystemPromptCell')).toEqual([
+    expect.objectContaining({ owner_record_id: after.id, label: 'System Prompt and Tools Updated', facet: 'diff' }),
+  ]);
+  for (const mode of ['sequence', 'duration'] as const) {
+    const timeline = trajectoryTimeline(tx, projection, mode)!;
+    expect(timeline.spans.map(span => span.kind).sort()).toEqual(['request', 'request', 'system']);
+    expect(timeline.spans.find(span => span.kind === 'system')?.ownerId).toBe(after.id);
+  }
 });
 
 it('background launch Trace output describes acceptance without claiming the command finished', () => {
@@ -280,7 +296,7 @@ it('T1-06/10 Turn anchors regroup within the same Attempt without acquiring deta
   expect(target.native_record?.id).toBe(nativeAttempt.id);
   expect(target.anchor_record_id).toBe(nativeAttempt.id);
   expect('owner_record_id' in target).toBe(false);
-  const split = trajectoryItems([traceRecord(9), traceRecord(11, { kind: 'background', request: null, location: {} }), middle]);
+  const split = trajectoryItems([traceRecord(9), traceTool(11, { location: {} }), middle]);
   expect(split.filter(item => item.type === 'GroupHeader')).toHaveLength(1);
   expect(split.filter(item => item.type === 'RecordRow' || item.type === 'RequestBoundary').map(item => item.owner_record_id)).toEqual(['trace:9', 'trace:10', 'trace:11']);
 });
@@ -321,7 +337,7 @@ it('T1-07 exact scope isolates reused call IDs across Step/Attempt/Tool and page
   expect(matchingCalls([assistant, { ...assistant, id: 'other-proposer' }, execution(1)]).size).toBe(0);
 });
 
-it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes in %s and leaves native domains independent', locale => {
+it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes in %s without surfacing lifecycle audits', locale => {
   const tx = translator(locale);
   const assistant = proposal();
   const states = ['completed', 'failed', 'denied', 'waiting', 'outcome_unknown'] as const;
@@ -333,7 +349,7 @@ it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes in %s and leaves n
   // Harness names the folded calls by count and Tool name, never by lifecycle.
   expect(summary.summary).toBe(locale === 'en' ? '5 tool calls · same name' : '5 个工具调用 · same name');
   expect(executions.map(record => record.state)).toEqual(states);
-  for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(domain.kind === 'background');
+  for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(false);
   expect(visible.find((item): item is InspectableDisplayItem => item.type === 'RecordRow' && item.record.id === 'trace:20')?.label).toBe(tx('trajectory:copy.compacting'));
   for (const state of ['incomplete', 'failed', 'completed'] as const) {
     const item = flattenTrajectory(tx, projectTrajectory(tx, [traceRecord(21, { kind: 'compaction', request: null, state })])).find(item => item.type === 'RecordRow')!;
@@ -1582,6 +1598,16 @@ it('tool result attachments remain available in summary and result without an ex
   expect(within(screen.getByRole('tabpanel')).getByText('report.md')).toBeTruthy();
 });
 
+it('summarizes a successful image read by attachment count and retains its arguments', () => {
+  const record = traceTool(1, { preview: { text: 'Read static PNG image', truncated: false }, attachments: [{ artifact_id: 'shot', image: true }] });
+  Object.assign(record.tool!, { name: 'read_image', tool_id: 'tool-read-image', outcome: 'success', arguments: { text: '{"path":"sample.png"}', truncated: false } });
+  show(cacheOf([record]));
+  const imageRow = row('RecordRow', record.id);
+  expect(imageRow.textContent).toContain('Images ×1');
+  expect(imageRow.textContent).toContain('sample.png');
+  expect(imageRow.textContent).not.toContain('Read static PNG image');
+});
+
 it('Request markers retain canonical native state independently of error decoration', () => {
   show(cacheOf([traceRecord(0, { state: 'running' }), traceRecord(1, { state: 'completed' })]));
   expect(document.querySelector('[data-request-owner="trace:0"]')?.getAttribute('data-state')).toBe('running');
@@ -1673,7 +1699,7 @@ it('checkpoint summaries and unscoped reused history display Between turns witho
   expect(JSON.stringify(records)).toBe(original);
 });
 
-it.each(['background', 'workflow', 'tool'] as const)('unscoped %s activity is not a between-turn section or an inferred nearby Turn', kind => {
+it.each(['workflow', 'tool'] as const)('unscoped %s activity is not a between-turn section or an inferred nearby Turn', kind => {
   const records = [
     traceRecord(0, { kind: 'user', request: null, location: {}, preview: { text: 'Reused original context', truncated: false } }),
     traceRecord(1, { kind: 'compaction', request: null, location: {} }),

@@ -46,7 +46,7 @@ test('a real page reload restores the last selected Session on the same native a
     await openConnectionSettings(page);
     await expect(page.getByLabel('Connection mode', { exact: true })).toHaveValue('local');
     await page.getByLabel('Connection mode', { exact: true }).selectOption('remote');
-    await expect(page.getByLabel('Transport token', { exact: true })).toHaveValue('');
+    await expect(page.getByLabel('Access token', { exact: true })).toHaveValue('');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
     await expect(rowB).toHaveAttribute('aria-current', 'page');

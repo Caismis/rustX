@@ -14,7 +14,7 @@ it('boots the source-derived shell with no Host backend and exposes only support
   expect(screen.getAllByText('rustX').length).toBeGreaterThan(0);
   expect(screen.getByRole('button', { name: 'Reconnect now' })).toBeTruthy();
   expect(screen.queryByLabelText('WebSocket endpoint')).toBeNull();
-  expect(screen.queryByLabelText('Transport token')).toBeNull();
+  expect(screen.queryByLabelText('Access token')).toBeNull();
   expect(screen.queryByText(/Workspace manager|Provider settings|Install plugin|Retry turn|Queue prompt|Open file/)).toBeNull();
   expect(server.requests).toEqual([]);
 });

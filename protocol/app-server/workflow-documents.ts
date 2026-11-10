@@ -1,6 +1,6 @@
 /** Native document scratch keeps complete Workflows out of control records.
  * Both Web and Product Host use this carrier; scope and CAS remain native. */
-import type { MethodResult, Request1, SourceTarget, WorkflowDocumentRef, WorkflowFileDocument, WorkflowCheckReport, WorkflowSource as WireSource, WorkflowEdit as WireEdit } from './v75.ts';
+import type { MethodResult, Request1, SourceTarget, WorkflowDocumentRef, WorkflowFileDocument, WorkflowCheckReport, WorkflowSource as WireSource, WorkflowEdit as WireEdit } from './v77.ts';
 
 export type WorkflowSource = Omit<WireSource, 'document'> & { document?: WorkflowFileDocument | null };
 export type WorkflowEdit = Exclude<WireEdit, { operation: 'replace' }> | { operation: 'replace'; document: WorkflowFileDocument };

@@ -4,8 +4,6 @@ import { AppFrame } from '../../src/presentation/layout/AppFrame';
 import { Button } from '../../src/presentation/primitives/Button';
 import { Input } from '../../src/presentation/primitives/Input';
 import { Menu } from '../../src/presentation/primitives/Menu';
-import { ChangedFiles } from '../../src/presentation/attachments/ChangedFiles';
-import { DiffBlock } from '../../src/presentation/primitives/DiffBlock';
 import { useTranslation } from '../../src/locale/react';
 import { HoverCard } from '../../src/presentation/primitives/HoverCard';
 import { Modal } from '../../src/presentation/primitives/Modal';
@@ -29,7 +27,6 @@ const nestedItems = [
 
 function Fixture() {
   const tx = useTranslation();
-  const [reviewFile, setReviewFile] = useState(-1);
   const previewPath = 'src/非常长的文件夹/' + 'nested-component-directory/'.repeat(8) + 'configuration.json';
   const [menu, setMenu] = useState(false);
   const [nested, setNested] = useState(false);
@@ -52,10 +49,9 @@ function Fixture() {
     <Menu open={nested} onClose={() => setNested(false)} autoFocus anchor={<Button onClick={() => setNested(!nested)}>Nested actions</Button>} items={nestedItems} onSelect={id => { setNestedSelected(id); setNested(false); }} />
     <output aria-label="Nested choice">{nestedSelected}</output>
     <HoverCard anchor={<Button>Details</Button>} content={<p>Hover details</p>} copyLabel="Copy" copiedLabel="Copied" />
-    <div data-file-hover-fixture style={{ width: 300 }}>
-      <ChangedFiles changes={{ files: [{ path: previewPath, display: previewPath, added: 100, deleted: 1, binary: false, oversized: false }], total: 1, added: 100, deleted: 1 }} openReview={setReviewFile} preview={() => <DiffBlock filePreviewPath={previewPath} diffs={[{ path: previewPath + ':1', oldText: 'old value', newText: JSON.stringify({ value: 'long-json-value'.repeat(150) }) + '\n' + Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n') }]} labels={{ copy: tx('artifacts:changes.copy'), copied: tx('artifacts:changes.copied'), collapse: 'Collapse', collapseAria: 'Collapse', expand: n => `More ${n}`, expandAria: n => `More ${n}`, files: n => `${n} files` }} />} />
+    <div data-copy-hover-fixture>
+      <HoverCard anchor={<Button>Copy details</Button>} content={<p style={{ overflowWrap: 'anywhere' }}>{previewPath}</p>} copyText={previewPath} copyLabel={tx('artifacts:changes.copy')} copiedLabel={tx('artifacts:changes.copied')} />
     </div>
-    <output aria-label="Reviewed file">{reviewFile}</output>
     <Button onClick={() => setModal(true)}>Open dialog</Button>
     <Modal closeLabel="Close dialog" open={modal} onClose={() => setModal(false)} title="Example dialog" footer={<Button onClick={() => setModal(false)}>Done</Button>}><Input aria-label="Dialog value" /></Modal>
     <DisclosureRow icon={null} title="Expand details" expandable open={expanded} expandOnRowClick onToggle={() => setExpanded(value => !value)}><p>Expanded content</p></DisclosureRow>

@@ -52,8 +52,8 @@ async fn host_effect_is_unknown_after_process_death_and_is_never_automatically_r
         std::fs::write(root.path().join("token"),"trusted-host-test").unwrap();
         std::fs::write(root.path().join("rustx.toml"),toml::to_string_pretty(&serde_json::json!({
             "agent":{"model":{"model":"emulator/chat-model"},"tools":{"builtin":[]}},
-            "providers":{"emulator":{"base_url":provider.openai_base_url(),"api_key":"$HOST_TEST_KEY"}},
-            "models":{"emulator/chat-model":{"provider":"emulator","id":"chat-model","protocol":"openai_chat_completions","context_window":128_000,"max_output_tokens":1024,"capabilities":{"input_modalities":["text"],"output_modalities":["text"]},"compat":{"chat_reasoning_replay":"omit"}}}
+            "providers":{"emulator":{"protocol":"openai_chat_completions","base_url":provider.openai_base_url(),"api_key":"$HOST_TEST_KEY"}},
+            "models":{"emulator/chat-model":{"provider":"emulator","id":"chat-model","context_window":128_000,"max_output_tokens":1024,"capabilities":{"input_modalities":["text"],"output_modalities":["text"]},"compat":{"chat_reasoning_replay":"omit"}}}
         })).unwrap()).unwrap();
         let (mut process,endpoint,diagnostics)=start(root.path()).await;
         let mut client=Peer::connect(&endpoint).await;

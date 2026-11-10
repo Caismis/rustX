@@ -2,19 +2,16 @@ import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted Settings shell; see PROVENANCE.md. */
 import type { Theme } from '../appearance';
 import { useState, type ReactNode } from 'react';
-import { McpIcon } from './mcp/McpIcon';
-import { useMcpProbes } from './mcp/useMcpProbes';
-import { McpPage } from './mcp/McpPage';
 import { SettingsScopeMenu } from './SettingsScopeMenu';
 import { shallowEqual, useSelector } from '@xstate/react';
-import type { SourceScope } from '../../../../protocol/app-server/v75';
+import type { SourceScope } from '../../../../protocol/app-server/v77';
 import type { AppServerClient } from '../../client/app-server';
 import { Button } from '../../presentation/primitives/Button';
 import { UnitForm } from './forms/bridge';
 import css from '../../presentation/settings/SettingsContent.module.css';
 import { SourceContext } from './source-context';
 import { SettingsActorContext, useSettingsTarget } from './machines/react';
-import { mutationOutcome, type MutationOutcome } from './machines/settings-target';
+import { mutationOutcome } from './machines/settings-target';
 import { configurationSystem, type TransactionOwner } from './machines/system';
 import { SettingsPanel } from '../../presentation/settings/SettingsRoot';
 import {
@@ -26,6 +23,7 @@ import { ConnectionSettings } from './ConnectionSettings';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import { GeneralPage } from './general/GeneralPage';
+import { SettingsFeedback, SettingsNotice } from './SettingsFeedback';
 import { ModelsPage } from './models/ModelsPage';
 import { AgentPage } from './agent/AgentPage';
 import { ToolsPage } from './tools/ToolsPage';
@@ -55,17 +53,6 @@ export interface SettingsProps {
   navigation: SettingsNavigationActor;
 }
 
-/** The presentation of one mutation outcome that is not attributable to a
- * single unit — a read or convergence fact of the target as a whole. Each
- * unit's own save reports itself, next to the unit it is about. */
-function MutationNotice({ outcome }: { outcome: MutationOutcome }) {
-  const tx = useTranslation();
-  switch (outcome.kind) {
-    case 'uncertain': return <p role="alert" className={css.error}>{tx('settings:settings.save-outcome-uncertain-authority-is-reread-the-write-is-never-re')}</p>;
-    default: return null;
-  }
-}
-
 /** Each primary page's glyph from the existing Harness icon family. They tell
  * the pages apart at a glance; the page label stays the accessible name, so
  * nothing depends on recognizing a glyph or a color. */
@@ -74,7 +61,6 @@ const pageIcons: Record<SettingsPage, () => ReactNode> = {
   models: () => <IconDataOutline16 />,
   agent: () => <IconAgentPresetOutline16 />,
   tools: () => <IconShieldOutline16 />,
-  mcp: () => <McpIcon />,
   extensions: () => <IconPluginPinwheelOutline16 />,
   advanced: () => <IconCodeOutline16 />,
 };
@@ -116,13 +102,11 @@ export function Settings(props: SettingsProps) {
   return (visited || visible) && <SettingsPageContent key={settingsTargetKey(view.target)} {...props} visible={visible} target={view.target} page={view.page} focus={view.focus} />;
 }
 
-function SettingsPageContent({ client, host, associations, theme = 'system', setTheme, connection, navigation, target, page: current, focus, visible = true }: SettingsProps & {
+function SettingsPageContent({ client, host, theme = 'system', setTheme, connection, navigation, target, page: current, focus, visible = true }: SettingsProps & {
   target: SettingsTarget; page: SettingsPage; focus: FocusMap;
 }) {
   const tx = useTranslation();
-  const [mcpTarget, setMcpTarget] = useState(target);
-  // Resource scope selects the native owner without navigating the settings shell.
-  const activeTarget = current === 'mcp' ? mcpTarget : target;
+  const activeTarget = target;
   const [extensionFilter, setExtensionFilter] = useState<ExtensionFilter>('all');
   // The navigation machine admits only pages and details this owner
   // authorizes, so the page and focus are rendered exactly as they are.
@@ -138,7 +122,6 @@ function SettingsPageContent({ client, host, associations, theme = 'system', set
   // A View details inspection awaiting this owner's Auto Repair details.
   const inspection = useSelector(navigation, snapshot => snapshot.context.inspection);
   const source = useSelector(actor, snapshot => snapshot.context.observation ?? snapshot.context.staleObservation);
-  const mcpProbes = useMcpProbes(client, host, activeTarget, observed, current === 'mcp' && !focus.mcp, associations);
   const readError = useSelector(actor, snapshot => snapshot.context.readError);
   const convergenceError = useSelector(actor, snapshot => snapshot.context.convergenceError);
   const reconciling = useSelector(actor, snapshot => snapshot.matches({ maintenance: 'reconciling' }));
@@ -179,23 +162,20 @@ function SettingsPageContent({ client, host, associations, theme = 'system', set
   const structured = config.state === 'structured';
   const body = !source || !selected ? null : <fieldset disabled={!editable} className={css.editor}>
     {current === 'models' && (structured
-      ? <ModelsPage source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} onRefresh={() => actor.send({ type: 'REFRESH' })} />
+      ? <ModelsPage client={client} host={host} target={target} source={source} scope={scope} revision={config.revision} models={models} profiles={profiles} focus={focus.models} onFocus={onFocus} refreshing={busy} onRefresh={editable ? () => actor.send({ type: 'REFRESH' }) : undefined} />
       : <MalformedNotice config={config} />)}
-    {current === 'agent' && (structured
-      ? <AgentPage document={config.document} scope={scope} revision={config.revision} />
-      : <MalformedNotice config={config} />)}
+    {current === 'agent' && <>
+      {(structured || scope === 'user' && source.global_guidance) &&
+        <AgentPage config={structured ? config : undefined} globalGuidance={scope === 'user' ? source.global_guidance : undefined} />}
+      {!structured && <MalformedNotice config={config} />}
+    </>}
     {current === 'tools' && (structured
       ? <ToolsPage source={source} document={config.document} scope={scope} revision={config.revision} />
       : <MalformedNotice config={config} />)}
-    {/* Extensions spans several independent native documents. A malformed
-        `rustx.toml` closes the semantic units it authors and says nothing
-        about the MCP or named-Agent documents, each of which is its own
-        authority and reports its own state. */}
-    {current === 'mcp' && <McpPage source={source} scope={scope} revision={structured ? config.revision : undefined}
-      focus={focus.mcp} onFocus={onFocus} probeStates={mcpProbes.states} testConnection={mcpProbes.testConnection} probeAvailable={mcpProbes.available} refresh={() => actor.send({type:'REFRESH'})} refreshing={busy || reconciling}
-      scopeControl={<SettingsScopeMenu disabled={!!focus.mcp?.name} userLabel={tx('settings:mcp.user')} target={mcpTarget} host={host} onSelect={next => { onFocus(undefined); setMcpTarget(next); }}/>} />}
+    {/* A malformed configuration closes extension grants, while the native
+        managed-Python inventory remains available for inspection. */}
     {current === 'extensions' && <ExtensionsPage source={source} scope={scope}
-      revision={structured ? config.revision : undefined} models={models} profiles={profiles} focus={focus.extensions} onFocus={onFocus}
+      revision={structured ? config.revision : undefined} focus={focus.extensions} onFocus={onFocus}
       filter={extensionFilter} onFilter={setExtensionFilter} refresh={() => actor.send({type:'RECONCILE'})} refreshing={busy || reconciling}
       scopeControl={<SettingsScopeMenu key={`${transport.endpoint}:${transport.authorityRevision}`} target={target} host={host} onSelect={next => { navigation.send({type:'OPEN',target:next}); navigation.send({type:'SELECT',page:'extensions'}); }}/>} />}
     {current === 'advanced' && <AdvancedPage source={source} scope={scope}
@@ -203,18 +183,18 @@ function SettingsPageContent({ client, host, associations, theme = 'system', set
       repairFocused={focus.advanced?.kind === 'auto_repair'}
       inspection={inspection}
       repairPresented={observed && targetValid ? receiptId => navigation.send({ type: 'INSPECTED', receiptId, source: scope === 'user' ? { kind: 'user' } : observed.target }) : undefined}
-      closed={<MalformedNotice config={config} diagnostic={false} />}
-      processPolicyImpacts={source.process_policy_impacts} busy={busy} targetValid={targetValid} />}
+      closed={<MalformedNotice config={config} />}
+      busy={busy} targetValid={targetValid} />}
     {/* The one mutation a malformed `rustx.toml` admits, fenced on its exact
         current revision. It exists only while the source contract is invalid. */}
-    {config.state === 'malformed' && current !== 'extensions' && current !== 'mcp' && <UnitForm title={tx('settings:settings.repair-invalid-source')} blank="" revision={config.revision} removable={false}
+    {config.state === 'malformed' && current !== 'extensions' && <UnitForm title={tx('settings:settings.repair-invalid-source')} blank="" revision={config.revision} removable={false}
       mutation={replacement => ({ kind: 'repair_config', document: replacement ?? '' })}>
       {(value, change) => <label>{tx('settings:settings.replacement-toml')}<textarea value={value} onChange={event => change(event.target.value)} /></label>}
     </UnitForm>}
   </fieldset>;
 
   const pages = settingsPages(target).map(id => ({ id, label: tx(`settings:page.${id}`), icon: pageIcons[id]() }));
-  return <SettingsPanel pages={pages} activeId={current} visible={visible}
+  return <SettingsFeedback active={visible}><SettingsPanel pages={pages} activeId={current} visible={visible}
     onSelect={id => navigation.send({ type: 'SELECT', page: id as SettingsPage })}
     // Scope stays visible; internal observation metadata is not product copy.
     context={<div className={css.context} data-lifecycle={lifecycle}>
@@ -222,29 +202,25 @@ function SettingsPageContent({ client, host, associations, theme = 'system', set
         <h2>{settingsTargetLabel(tx, activeTarget)}</h2>
         {target.kind === 'workspace' && <Button size="sm" onClick={() => navigation.send({ type: 'OPEN', target: userSettingsTarget })}>{tx('settings:copy.open-user-settings')}</Button>}
       </div>
-      <Button size="sm" variant="outline" disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>{tx('settings:settings.reload-configuration')}</Button>
+      {(current !== 'models' || !editable || !structured) && <Button size="sm" variant="outline" disabled={busy || transport.connection !== 'connected'} onClick={() => actor.send({ type: 'REFRESH' })}>{tx('settings:settings.reload-configuration')}</Button>}
     </div>}>
-    <section className={`${css.settings} ${css.page}`} aria-busy={busy}>
-      {/* Target-wide facts, each reported as itself: a read failure, a
-          convergence report, an unknown save outcome and a maintenance
-          failure are separate alerts, and none of them hides another. */}
-      {readError && <p role="alert" className={css.error}>{tx('settings:settings.source-read-failed')}{' '}{readError}</p>}
-      {convergenceError && <p role="alert" className={css.error}>{convergenceError}</p>}
-      <MutationNotice outcome={outcome} />
-      {maintenanceError && <p role="alert" className={css.error}>{maintenanceError}</p>}
+    <section className={`${css.settings} ${css.page}`} data-settings-section={current} aria-busy={busy}>
       {current === 'general' ? <GeneralPage theme={theme} setTheme={setTheme} /> : connectionFocused
         ? <ConnectionSettings connection={connection} client={client} />
         : !source ? <SourcePending lifecycle={lifecycle} />
           : <SettingsActorContext value={actor}><SourceContext value={source}>
             <div key={editorKey}>{body}</div>
           </SourceContext></SettingsActorContext>}
+      <SettingsNotice text={convergenceError || maintenanceError}/>
+      <SettingsNotice text={outcome.kind === 'uncertain' ? tx('settings:settings.save-outcome-uncertain-authority-is-reread-the-write-is-never-re') : undefined}/>
+      <SettingsNotice text={readError ? `${tx('settings:settings.source-read-failed')} ${readError}` : undefined}/>
       {connectionReachable && <p>
         <Button onClick={() => onFocus(connectionFocused ? undefined : connectionFocus)}>
           {connectionFocused ? tx('settings:settings.back-to-advanced') : tx('settings:connection-settings.connection')}
         </Button>
       </p>}
     </section>
-  </SettingsPanel>;
+  </SettingsPanel></SettingsFeedback>;
 }
 
 /** The page body before this target has any projection to present — not even
@@ -258,17 +234,14 @@ function SourcePending({ lifecycle }: { lifecycle: ReturnType<typeof settingsLif
   return <div className={css.pending} data-lifecycle={lifecycle} aria-busy={lifecycle === 'loading' || lifecycle === 'connecting'}><p>{text}</p></div>;
 }
 
-/** A document that does not parse is named with the native reason it failed,
- * because that reason is what the repair below has to address. Advanced
- * reports that reason with its other native diagnostics instead. */
-function MalformedNotice({ config, diagnostic = true }: {
+/** Keep the actual parse error next to the configuration repair action. */
+function MalformedNotice({ config }: {
   config: { state: 'malformed'; path: string; diagnostic?: string } | { state: 'structured' } | { state: 'unavailable' };
-  diagnostic?: boolean;
 }) {
   const tx = useTranslation();
   if (config.state !== 'malformed') return null;
   return <>
     <p role="status">{tx('settings:settings.structured-editing-is-unavailable-because')}{' '}{config.path} {tx('settings:settings.violates-the-source-contract-repair-it-to-edit-again')}</p>
-    {diagnostic && <p role="alert" className={css.error}>{config.diagnostic ?? tx('settings:source.not-loaded')}</p>}
+    <SettingsNotice text={config.diagnostic ?? tx('settings:source.not-loaded')}/>
   </>;
 }

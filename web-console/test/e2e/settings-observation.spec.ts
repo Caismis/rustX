@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, openSettingsPage } from './shell-actions';
+import { connectRemote, openSettingsPage, settledSave } from './shell-actions';
 import { readSource } from './source-reading';
 
 /** Observe the real socket and hold selected server responses until the test
@@ -66,12 +66,12 @@ test('publications and an acknowledgement during outstanding convergence reads c
     await routeWorkspaceHost(page, f); await page.goto('/'); await connectRemote(page, f.endpoint, f.token);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
-    // Process policy and source revisions are both on Advanced.
+    // Runtime limits live on Advanced; coordination metadata stays internal.
     await openSettingsPage(page, 'Advanced');
-    await expect(settings.getByText(/Revision:/)).toBeVisible();
-    const field = settings.getByLabel('max_connections', { exact: true });
-    const save = settings.getByRole('button', { name: 'Save App Server policy', exact: true });
-    const notice = settings.getByText('App Server policy saved.');
+    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
+    const field = settings.getByLabel('Reserved tokens', { exact: true });
+    const save = settings.getByRole('button', { name: 'Save Context', exact: true });
+    const notice = settledSave(settings, 'Context');
     // Settle a save whose acknowledgement already landed: release held
     // authoritative reads one at a time until the post-commit read is adopted.
     // Each stale or superseded read may owe exactly one more bounded read.
@@ -122,16 +122,16 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     await routeWorkspaceHost(page, f); await page.goto('/'); await connectRemote(page, f.endpoint, f.token);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const settings = page.getByRole('region', { name: 'Settings', exact: true });
-    // Process policy and source revisions are both on Advanced.
+    // Runtime limits live on Advanced; coordination metadata stays internal.
     await openSettingsPage(page, 'Advanced');
-    await expect(settings.getByText(/Revision:/)).toBeVisible();
+    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
 
     // The write commits natively, but its acknowledgement is held on the wire.
-    await expect(settings.getByLabel('max_connections', { exact: true })).toBeEnabled();
+    await expect(settings.getByLabel('Reserved tokens', { exact: true })).toBeEnabled();
     probe.armWrites();
     probe.armReads();
-    await settings.getByLabel('max_connections', { exact: true }).fill('19');
-    await settings.getByRole('button', { name: 'Save App Server policy', exact: true }).click();
+    await settings.getByLabel('Reserved tokens', { exact: true }).fill('19');
+    await settings.getByRole('button', { name: 'Save Context', exact: true }).click();
     await expect.poll(() => probe.heldWrites.length).toBe(1);
     await expect.poll(() => probe.heldReads.length).toBeGreaterThan(0);
 
@@ -141,22 +141,21 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     const authored = readFileSync(f.settings, 'utf8');
     expect(authored).toContain('stream_idle_timeout_ms = 600000');
     writeFileSync(f.settings, authored.replace('stream_idle_timeout_ms = 600000', 'stream_idle_timeout_ms = 600001'));
-    const revision = settings.getByText(/Revision:/);
+    const timeout = settings.getByLabel('Response idle timeout (ms)', { exact: true });
     await remote.client.call('configuration/reconcile', { target: { kind: 'user' } }, 'configuration_receipt');
     const latest = await readSource(remote, { kind: 'user' });
     expect(latest.user.authored?.model_timeout_policy?.stream_idle_timeout_ms).toBe('600001');
-    const observed = `${f.settings} · Revision: ${latest.user.revision}`;
     // The held convergence read predates the external edit. Its delivery can
     // change the revision once before the newer publication is observed, so
-    // wait for the exact external revision rather than any revision change.
+    // wait for the exact external value rather than any unrelated update.
     probe.releaseReads();
-    await expect(revision).toHaveText(observed);
+    await expect(timeout).toHaveValue('600001');
 
     // The delayed acknowledgement settles only the save outcome. The visible
     // whole projection stays the authoritative one and nothing is replayed.
     probe.releaseWrites();
-    await expect(settings.getByText('App Server policy saved.')).toBeVisible();
-    await expect(revision).toHaveText(observed);
+    await expect(settledSave(settings, 'Context')).toBeVisible();
+    await expect(timeout).toHaveValue('600001');
     expect(probe.writes()).toBe(1);
   } finally { await remote.shutdown(); await f.stop(false); }
 });

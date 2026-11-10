@@ -76,15 +76,12 @@ pub(crate) const CHILD_TEST: &str =
 
 /// The one child entry point of this suite.
 ///
-/// In an ordinary test run there is no scenario in the environment and this
-/// test does nothing. When [`harness::Lab::spawn`] re-executes this binary it
-/// selects exactly this test, the scenario is present, and the process becomes
-/// a real runtime child that never returns: it is always ended by its parent's
-/// `SIGKILL`.
+/// [`harness::Lab::spawn`] selects this entry and supplies the scenario. The
+/// runtime child never returns because its parent ends it with `SIGKILL`.
 #[test]
+#[ignore = "fixture subprocess, invoked by its parent test"]
 fn fnd06_child_runtime_process() {
-    let Ok(scenario) = std::env::var(SCENARIO_ENV) else {
-        return;
-    };
+    let scenario =
+        std::env::var(SCENARIO_ENV).expect("fixture parent must provide its environment");
     child::run(&scenario);
 }

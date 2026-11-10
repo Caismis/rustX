@@ -814,6 +814,7 @@ fn t08_t12_t15_canonical_metadata_components_are_independent_bounded_sources() {
                     content: vec![
                         AssistantContentBlock::ToolCall(call.clone()),
                         AssistantContentBlock::Reasoning(ReasoningBlock {
+                            origin: None,
                             text: Some("visible text".into()),
                             provider_state: Some(ProviderContinuationState::Anthropic(
                                 AnthropicContinuation {
@@ -1094,6 +1095,7 @@ fn timed_request_snapshot(
         Vec::new(),
         crate::runtime::RuntimeResourceRevision::new(1),
         ModelInvocationConfig {
+            replay_binding: Some("test-binding".into()),
             model,
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 128,

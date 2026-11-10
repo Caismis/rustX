@@ -71,6 +71,9 @@ importers:
       '@lezer/highlight':
         specifier: 1.2.5
         version: 1.2.5
+      '@lobehub/icons-static-svg':
+        specifier: 1.102.0
+        version: 1.102.0
       '@shikijs/langs':
         specifier: 4.3.1
         version: 4.3.1
@@ -813,6 +816,9 @@ packages:
 
   '@lezer/python@1.1.19':
     resolution: {integrity: sha512-MhQIURHRytsNzP/YXnqpYKW6la6voAH3kyplTOOiCdjyFY6cWWGFVmYVdHIPrElqSDf4iCDktQCockB9FxuhzQ==}
+
+  '@lobehub/icons-static-svg@1.102.0':
+    resolution: {integrity: sha512-3Na6S2kdslmsfnBjuL0PQWQClrmuWe/pWThRN/3J2VzPg5MhVghy8knVu7kd1/lqA9ydZBvwmnKLzuBo0Wm6Qw==}
 
   '@marijn/find-cluster-break@1.0.4':
     resolution: {integrity: sha512-Wy0V7+SGUjnF9/TkiM1hKVDPj7jKXduPNboMVtHTA8dySMURWqfg/JZ9E2Sq8JgSJmkl7k7Qe9FLeMSrSraWmQ==}
@@ -3156,6 +3162,8 @@ snapshots:
       '@lezer/common': 1.5.3
       '@lezer/highlight': 1.2.5
       '@lezer/lr': 1.4.11
+
+  '@lobehub/icons-static-svg@1.102.0': {}
 
   '@marijn/find-cluster-break@1.0.4': {}
 

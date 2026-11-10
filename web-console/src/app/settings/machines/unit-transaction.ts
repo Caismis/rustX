@@ -67,11 +67,12 @@ import type { RevisionSelector } from '../projection';
  * Memory only. Nothing here is persisted, merged with sources, or used as
  * runtime state. */
 export interface UnitTransactionContext {
-  /** `JSON.stringify` of the unit's own mutation shape; the unit's identity. */
+  /** Stable browser unit identity; a creation draft exists before its native
+   * resource name is chosen, while an existing unit uses its mutation shape. */
   readonly identity: string;
-  /** The non-sensitive native descriptor naming which source revision settles
-   * this unit's mutations. Never the authored payload. */
-  readonly selector: RevisionSelector;
+  /** The native descriptor used to observe this unit. A creation draft binds
+   * its final resource identity when it submits. Never the authored payload. */
+  selector: RevisionSelector;
   /** The exact CAS revision the next mutation is fenced on. */
   base: string;
   /** The exact revision this unit's authoritative projection currently carries. */
@@ -89,20 +90,27 @@ export interface UnitTransactionContext {
    * submitted for, and once confirmed the committed revision — never a Provider
    * credential or a literal environment value. */
   submitted?: { token: number; generation: number; committed?: string };
+  /** Exact submission observed at its committed revision. This may belong to
+   * an older intent generation and cannot complete a newer editing flow. */
+  completion?: { token: number; generation: number };
+  /** Pending Provider autosave owns only the draft generation, never a second
+   * copy of its value or a native mutation waiting outside the actor. */
+  autosaveGeneration?: number;
 }
 
 export type UnitTransactionEvent =
   | { type: 'EDIT'; value: unknown }
   | { type: 'DISCARD' }
   | { type: 'REVIEW' }
-  | { type: 'SUBMIT'; token: number }
+  | { type: 'AUTOSAVE'; action: 'idle' | 'blur' | 'now' | 'flush' | 'hold' | 'cancel' }
+  | { type: 'SUBMIT'; token: number; selector: RevisionSelector }
   | { type: 'COMMITTED'; token: number; revision: string }
   | { type: 'FAILED'; token: number }
   /** An authoritative projection carries `revision` for this unit.
    * `postCommit` is true exactly when the read that produced it was issued after
    * every definitive commit the owning target has recorded, so it is evidence
    * about this unit's commit rather than about the source before it. */
-  | { type: 'OBSERVED'; revision: string; postCommit: boolean }
+  | { type: 'OBSERVED'; revision: string; postCommit: boolean; previousRevision?: string }
   /** Internal: a discard or a commit settlement has been answered by every
    * region; retire if the transaction now owns nothing. */
   | { type: 'RELEASE' };
@@ -139,14 +147,22 @@ export const unitTransactionMachine = setup({
      * observation or carries its divergence, so a pinned base is browser intent
      * rather than the committed revision of a commit. */
     noMutationObligation: and([not('inFlight'), not(stateIn({ mutation: 'acknowledged' }))]),
+    /** The target proved this local commit left our unit untouched. A draft
+     * already based on an older revision still needs its own review. */
+    continuesUnaffectedDraft: ({ context, event }) => event.type === 'OBSERVED' && event.previousRevision === context.base,
     /** No browser intent, no pinned base and no native commit whose
      * observation is still owed: the transaction owns nothing. */
     ownsNothing: and([stateIn({ intent: 'clean' }), stateIn({ base: 'following' }), 'noMutationObligation']),
   },
   actions: {
+    scheduleAutosave: assign({ autosaveGeneration: ({ context }) => context.generation }),
+    clearAutosave: assign({ autosaveGeneration: () => undefined }),
+    requestAutosave: sendParent({ type: 'AUTOSAVE.CHECK' }),
     recordObservation: assign({ observed: ({ context, event }) => event.type === 'OBSERVED' ? event.revision : context.observed }),
     followObservation: assign({ base: ({ context, event }) => event.type === 'OBSERVED' ? event.revision : context.observed }),
     beginSubmission: assign({
+      completion: () => undefined,
+      selector: ({ context, event }) => event.type === 'SUBMIT' ? event.selector : context.selector,
       submitted: ({ context, event }) => event.type === 'SUBMIT'
         ? { token: event.token, generation: context.generation }
         : context.submitted,
@@ -158,6 +174,9 @@ export const unitTransactionMachine = setup({
         : context.submitted,
     }),
     retireSubmission: assign({ submitted: () => undefined }),
+    recordCompletion: assign({ completion: ({ context }) => context.submitted && {
+      token: context.submitted.token, generation: context.submitted.generation,
+    } }),
     dropDraft: assign({ draft: () => undefined }),
     recordEdit: assign({
       draft: ({ context, event }) => event.type === 'EDIT' ? { value: event.value } : context.draft,
@@ -182,6 +201,48 @@ export const unitTransactionMachine = setup({
   }),
   type: 'parallel',
   states: {
+    /** Provider field gestures schedule this generation. Timers, admission
+     * waits, and cancellation survive editor unmount under the target actor. */
+    autosave: {
+      initial: 'off',
+      on: {
+        EDIT: { guard: 'editable', target: '.off', actions: 'clearAutosave' },
+        DISCARD: { guard: not('inFlight'), target: '.off', actions: 'clearAutosave' },
+        SUBMIT: { target: '.off', actions: 'clearAutosave' },
+        AUTOSAVE: [
+          { guard: ({ event }) => event.action === 'idle', target: '.debouncing', actions: 'scheduleAutosave' },
+          { guard: ({ event }) => event.action === 'blur', target: '.held', actions: 'scheduleAutosave' },
+          { guard: ({ event }) => event.action === 'now', target: '.ready', actions: 'scheduleAutosave' },
+          { guard: ({ event }) => event.action === 'cancel', target: '.off', actions: 'clearAutosave' },
+        ],
+      },
+      states: {
+        off: {},
+        held: { on: { AUTOSAVE: { guard: ({ event }) => event.action === 'flush', target: 'ready' } } },
+        debouncing: {
+          after: { 1200: 'ready' },
+          on: { AUTOSAVE: [
+            { guard: ({ event }) => event.action === 'idle', target: 'debouncing', reenter: true, actions: 'scheduleAutosave' },
+            { guard: ({ event }) => event.action === 'flush', target: 'ready' },
+            { guard: ({ event }) => event.action === 'hold', target: 'held' },
+          ] },
+        },
+        ready: {
+          entry: 'requestAutosave',
+          on: {
+            // The target sends observations to its children after its own
+            // transition. Check admission only once this actor has also
+            // applied the new revision and any proven local rebase.
+            OBSERVED: { actions: 'requestAutosave' },
+            AUTOSAVE: [
+              { guard: ({ event }) => event.action === 'now', actions: ['scheduleAutosave', 'requestAutosave'] },
+              { guard: ({ event }) => event.action === 'hold', target: 'held' },
+              { guard: ({ event }) => event.action === 'flush', actions: 'requestAutosave' },
+            ],
+          },
+        },
+      },
+    },
     /** Does this browser hold a value override for the unit? */
     intent: {
       initial: 'clean',
@@ -217,14 +278,12 @@ export const unitTransactionMachine = setup({
         },
         pinned: {
           on: {
-            // A pinned base never advances on an observation alone. Only a
-            // confirmed commit, the explicit reviewed-revision gesture, or the
-            // observation that settles the commit of a transaction that
-            // authored nothing since moves it. The settling observation is the
-            // same event the `mutation` region settles on, so both regions
-            // answer it in one microstep, before `RELEASE` is evaluated.
+            // A pinned draft follows an unrelated local commit only when the
+            // target proved its exact revision transition. Otherwise native
+            // changes still require explicit review.
             OBSERVED: [
               { guard: and(['settlesCommit', 'nothingAuthored']), target: 'following', actions: ['recordObservation', 'followObservation'] },
+              { guard: and(['continuesUnaffectedDraft', 'noMutationObligation']), actions: ['recordObservation', 'followObservation'] },
               { actions: 'recordObservation' },
             ],
             REVIEW: { actions: ['reviewObservation', 'announceReset'] },
@@ -257,7 +316,7 @@ export const unitTransactionMachine = setup({
             OBSERVED: {
               guard: 'settlesCommit',
               target: 'settled',
-              actions: ['recordObservation', 'retireSubmission', raise({ type: 'RELEASE' })],
+              actions: ['recordObservation', 'recordCompletion', 'retireSubmission', raise({ type: 'RELEASE' })],
             },
             SUBMIT: { target: 'submitting', actions: 'beginSubmission' },
           },
@@ -335,4 +394,17 @@ export function discardable(snapshot: UnitTransactionSnapshot): boolean {
 /** Whether the last submitted mutation is natively confirmed. */
 export function committed(snapshot: UnitTransactionSnapshot): boolean {
   return snapshot.matches({ mutation: 'acknowledged' }) || snapshot.matches({ mutation: 'settled' });
+}
+
+/** Editor completion is stronger than native settlement. A later draft, even
+ * one subsequently discarded, never belongs to this submission's completion. */
+export function editingCompletion(snapshot: UnitTransactionSnapshot): number | undefined {
+  const { completion, generation } = snapshot.context;
+  return snapshot.matches({ mutation: 'settled' }) && snapshot.matches({ intent: 'clean' })
+    && !discardable(snapshot) && completion?.generation === generation ? completion.token : undefined;
+}
+
+export function autosaveReady(snapshot: UnitTransactionSnapshot): boolean {
+  return snapshot.matches({ autosave: 'ready' }) && snapshot.context.draft !== undefined
+    && snapshot.context.autosaveGeneration === snapshot.context.generation;
 }

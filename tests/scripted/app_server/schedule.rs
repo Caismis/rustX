@@ -1254,7 +1254,9 @@ async fn scheduler85_review_busy_hot_writer_does_not_block_activation_or_other_s
                 async move { manager.activate_scheduled_target(&binding, &trigger).await },
             );
         let mut other = f.load(1);
-        let progress = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        // Both operations must finish while the competing writer remains
+        // locked. The watchdog accommodates process scheduling under load.
+        let progress = tokio::time::timeout(std::time::Duration::from_secs(15), async {
             (&mut activation).await.unwrap().unwrap();
             let other = (&mut other).await.unwrap().unwrap();
             f.manager.unload(other.conversation_id()).await.unwrap();

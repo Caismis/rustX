@@ -1,5 +1,5 @@
 import { threadFor } from '../../protocol/app-server/testing';
-import type { ScheduleHeader, ScheduleSnapshot, ScheduleCommandResult, ScheduledWorkflowRecovery } from '../../protocol/app-server/v75';
+import type { ScheduleHeader, ScheduleSnapshot, ScheduleCommandResult, ScheduledWorkflowRecovery } from '../../protocol/app-server/v77';
 import { Server, snapshot } from './fixture';
 import { cfg3Source } from './cfg3-data';
 export const nodeA = 'node_00000000-0000-7000-8000-000000000001';

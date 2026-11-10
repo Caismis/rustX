@@ -108,8 +108,8 @@ export async function startDogfood(scenario = 'web_console_dogfood', measurement
     });
     const primaryModel = ['tui_multi_session', 'mcp_startup'].includes(scenario) ? 'integration-model' : 'console-model';
     const profiles = scenario === 'tui_multi_session' ? '\ndefault_profile = "high"\n[models."fixture/integration-model".profiles.high]\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nmax_output_tokens = 1024\n' : '';
-    const catalog = `[providers.fixture]\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
-      [primaryModel, 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\nprotocol = "openai_chat_completions"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"] }\ncompat = { chat_reasoning_replay = "omit" }\n${id === primaryModel ? profiles : ''}`).join('');
+    const catalog = `[providers.fixture]\nprotocol = "openai_chat_completions"\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
+      [primaryModel, 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"] }\ncompat = { chat_reasoning_replay = "omit" }\n${id === primaryModel ? profiles : ''}`).join('');
     if (['web_chat_history', 'web_child_capabilities'].includes(scenario)) {
       const agents = join(fixtureHome, 'rustx/.agents');
       mkdirSync(agents, { recursive: true });
@@ -179,10 +179,19 @@ timezone = "UTC"
     const workspaceHost = await startWorkspaceHost(hostConfig);
     const hostConfigFile = join(directory, 'host-config.json');
     writeFileSync(hostConfigFile, JSON.stringify(hostConfig), { mode: 0o600 });
+    const startOnSameEndpoint = async () => {
+      const restarted = await startApp(endpoint);
+      if (new URL(restarted).href !== new URL(endpoint).href) throw new Error('Fixture restart changed the native endpoint.');
+    };
     return { automaticTitles: scenario.startsWith('web_session_title_'), hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
       gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors, native: nativeDiagnostics(appIdentity) }),
+      async restartApp() {
+        app!.kill('SIGTERM');
+        await exited(app!);
+        await startOnSameEndpoint();
+      },
       /** Public creation materializes defaults. Seed inherited intent only
        * before the browser connects, with the native owner physically stopped. */
       async seedInheritedSession(modelFields: string) {
@@ -199,8 +208,7 @@ timezone = "UTC"
         delete catalog.sessions[id].state.model;
         writeFileSync(catalogPath, JSON.stringify(catalog));
         writeSettings(primaryModel, modelFields);
-        const restarted = await startApp(endpoint);
-        if (new URL(restarted).href !== new URL(endpoint).href) throw new Error('Fixture restart changed the native endpoint.');
+        await startOnSameEndpoint();
         return id;
       },
       async stop(check = true) {

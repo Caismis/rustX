@@ -109,12 +109,30 @@ pub(crate) enum Composition {
 pub(in crate::local_runtime) fn catalog_document(
     layer: &RuntimeLayer,
 ) -> crate::model::catalog::ModelCatalogDocument {
+    authored_catalog(layer).into()
+}
+
+pub(in crate::local_runtime) fn authored_catalog(
+    layer: &RuntimeLayer,
+) -> crate::model::authoring::Catalog {
     crate::model::authoring::Catalog {
         schema_version: crate::model::catalog::MODEL_CATALOG_SCHEMA_VERSION,
         providers: layer.providers.clone().unwrap_or_default(),
         models: layer.models.clone().unwrap_or_default(),
     }
-    .into()
+}
+
+/// A model can reference a Provider owned by another source. If that Provider
+/// is removed, keep recoverable orphan entries editable outside the live catalog.
+pub(in crate::local_runtime) fn available_catalog(
+    layer: &RuntimeLayer,
+    may_omit_orphan: impl Fn(&str) -> bool,
+) -> crate::model::authoring::Catalog {
+    let mut catalog = authored_catalog(layer);
+    catalog.models.retain(|name, model| {
+        catalog.providers.contains_key(&model.provider) || !may_omit_orphan(name)
+    });
+    catalog
 }
 
 /// Source-intrinsic native semantics: every constraint an authored document
@@ -129,6 +147,41 @@ pub(in crate::local_runtime) fn catalog_document(
 pub(in crate::local_runtime) fn source_semantics(
     layer: &RuntimeLayer,
 ) -> Result<(), SemanticFailure> {
+    for provider in layer
+        .providers
+        .iter()
+        .flat_map(|providers| providers.values())
+    {
+        if let Some(name) = &provider.display_name
+            && (name.is_empty()
+                || name.trim() != name
+                || name.chars().count() > 100
+                || name.chars().any(char::is_control)
+                || name.contains(['\u{2028}', '\u{2029}']))
+        {
+            return Err(SemanticFailure::new(
+                "providers.*.display_name",
+                "invalid provider display name",
+                "use a single line of 1–100 characters without leading or trailing spaces".into(),
+            ));
+        }
+        if let Some(icon) = &provider.icon
+            && (icon.is_empty()
+                || icon.len() > 64
+                || !icon
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                || icon.starts_with('-')
+                || icon.ends_with('-'))
+        {
+            return Err(SemanticFailure::new(
+                "providers.*.icon",
+                "invalid provider icon",
+                "use a LobeHub icon slug of 1–64 lowercase letters, digits or internal hyphens"
+                    .into(),
+            ));
+        }
+    }
     if let Some(policy) = &layer.app_server {
         policy.validate().map_err(|detail| {
             SemanticFailure::new("app_server", "invalid App Server process policy", detail)

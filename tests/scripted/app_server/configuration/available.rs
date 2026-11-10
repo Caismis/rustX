@@ -28,14 +28,7 @@ async fn t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_r
             toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
         document["agent"]["model"]["model"] = "local/b".into();
         std::fs::write(&source.user.path, toml::to_string(&document).unwrap()).unwrap();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("available after success".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "available after success".into()).await;
         probe.before_configuration_prepare.entered().await;
         let create = || {
             fixture.manager.create_session(SessionPersistentState {
@@ -54,8 +47,8 @@ async fn t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_r
                 .clone()
         };
         assert_eq!(
-            retained(&during).config.agent.instructions,
-            before.configuration().unwrap().config.agent.instructions
+            guidance(&retained(&during).project_context_files),
+            guidance(before.project_context_files())
         );
         assert!(fixture.manager.configuration_runtime(&during).is_none());
         probe.fail_configuration_once.store(true, Ordering::SeqCst);
@@ -67,8 +60,8 @@ async fn t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_r
         ));
         let after_failure = create().await.unwrap().session.id;
         assert_eq!(
-            retained(&after_failure).config.agent.instructions,
-            retained(&during).config.agent.instructions
+            guidance(&retained(&after_failure).project_context_files),
+            guidance(&retained(&during).project_context_files)
         );
         assert_eq!(
             retained(&after_failure).session_model(),
@@ -91,7 +84,7 @@ async fn t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_r
         );
         let after_success = create().await.unwrap().session.id;
         assert_eq!(
-            retained(&after_success).config.agent.instructions,
+            guidance(&retained(&after_success).project_context_files),
             "available after success"
         );
         assert_eq!(
@@ -107,26 +100,24 @@ async fn t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_r
             "local/a"
         );
         assert_ne!(
-            retained(&after_failure).config.agent.instructions,
+            guidance(&retained(&after_failure).project_context_files),
             "available after success"
         );
         assert_ne!(
-            retained(&during).config.agent.instructions,
+            guidance(&retained(&during).project_context_files),
             "available after success"
         );
         fixture.manager.load(&after_failure, None).await.unwrap();
         assert_eq!(
-            fixture
-                .manager
-                .configuration_runtime(&after_failure)
-                .unwrap()
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
-            before.configuration().unwrap().config.agent.instructions
+            guidance(
+                fixture
+                    .manager
+                    .configuration_runtime(&after_failure)
+                    .unwrap()
+                    .runtime_resources()
+                    .project_context_files()
+            ),
+            guidance(before.project_context_files())
         );
         fixture.close().await;
     }))
@@ -165,25 +156,7 @@ async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget
     );
     std::fs::write(&source.user.path, toml::to_string(&document).unwrap()).unwrap();
     let before = fixture.manager.registry.0.lock().unwrap().entries.len();
-    fixture
-        .manager
-        .write_source_settings(
-            &crate::local_runtime::configuration::settings::SourceTarget::User,
-            fixture
-                .manager
-                .source_settings(&crate::local_runtime::configuration::settings::SourceTarget::User)
-                .await
-                .unwrap()
-                .user
-                .revision,
-            SourceMutation::Config {
-                mutation: ConfigMutation::Instructions {
-                    authored: Some("cold desired context".into()),
-                },
-            },
-        )
-        .await
-        .unwrap();
+    write_guidance(&fixture, "cold desired context".into()).await;
     let mut changed = fixture.manager.configuration_changes();
     loop {
         if ids
@@ -226,15 +199,15 @@ async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget
         .await
         .unwrap();
     assert_eq!(
-        fixture
-            .manager
-            .sessions
-            .configuration_bindings
-            .lock()
-            .unwrap()[&subsequent.session.id]
-            .config
-            .agent
-            .instructions,
+        guidance(
+            &fixture
+                .manager
+                .sessions
+                .configuration_bindings
+                .lock()
+                .unwrap()[&subsequent.session.id]
+                .project_context_files
+        ),
         "cold desired context"
     );
     assert!(
@@ -264,13 +237,7 @@ async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget
         before + 1
     );
     assert_eq!(
-        runtime
-            .runtime_resources()
-            .configuration()
-            .unwrap()
-            .config
-            .agent
-            .instructions,
+        guidance(runtime.runtime_resources().project_context_files()),
         "cold desired context"
     );
     // It composed from the retained binding and committed the cold desire on
@@ -309,14 +276,7 @@ async fn t09_t15_new_session_during_preparation_keeps_available_binding_after_su
             .manager
             .probe(&fixture.sessions[0].active_conversation_id);
         probe.before_configuration_prepare.arm();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("P2 available".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "P2 available".into()).await;
         probe.before_configuration_prepare.entered().await;
         let create = || {
             fixture.manager.create_session(SessionPersistentState {
@@ -340,13 +300,16 @@ async fn t09_t15_new_session_during_preparation_keeps_available_binding_after_su
         );
         assert_eq!(retained(&during).session_model(), before.session_model());
         assert_eq!(
-            retained(&during).config.agent.instructions,
-            before.config.agent.instructions
+            guidance(&retained(&during).project_context_files),
+            guidance(&before.project_context_files)
         );
         probe.before_configuration_prepare.release();
         applied(&fixture, 0).await;
         let after = create().await.unwrap().session.id;
-        assert_eq!(retained(&after).config.agent.instructions, "P2 available");
+        assert_eq!(
+            guidance(&retained(&after).project_context_files),
+            "P2 available"
+        );
         assert_eq!(
             retained(&during).component_revisions,
             before.component_revisions
@@ -362,13 +325,7 @@ async fn t09_t15_new_session_during_preparation_keeps_available_binding_after_su
         // a client; canonical history is untouched.
         session_applied(&fixture, &during).await;
         assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
+            guidance(runtime.runtime_resources().project_context_files()),
             "P2 available"
         );
         assert_eq!(
@@ -589,14 +546,7 @@ async fn t03_t06_t09_t15_t16_healthy_registration_preserves_complete_policy_auth
     std::fs::write(fixture.workspaces[0].join("rustx.toml"),
         "approval_mode='full_access'\n[model_timeout_policy]\nresponse_start_timeout_ms=12345\nstream_idle_timeout_ms=23456\n[tool_deadline_policy]\nhard_deadline_ms=34567\n[subagents]\nmax_concurrent=3\n").unwrap();
     // Save publishes policy independently; Instructions then explicitly adopt.
-    write(
-        &fixture,
-        0,
-        ConfigMutation::Instructions {
-            authored: Some("healthy N+1".into()),
-        },
-    )
-    .await;
+    write_guidance(&fixture, "healthy N+1".into()).await;
     settled(&fixture, 0).await;
     let independent =
         crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
@@ -666,7 +616,7 @@ async fn t03_t06_t09_t15_t16_healthy_registration_preserves_complete_policy_auth
         .lock()
         .unwrap()[second]
         .clone();
-    assert_eq!(adopted.config.agent.instructions, "healthy N+1");
+    assert_eq!(guidance(&adopted.project_context_files), "healthy N+1");
     assert!(!fixture.manager.applications.is_deferred(second.as_str()));
     assert!(fixture.manager.configuration_application(second).is_none());
     let second_probe = fixture.manager.probe(&created.active_conversation_id);

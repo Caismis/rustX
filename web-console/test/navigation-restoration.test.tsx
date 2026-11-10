@@ -12,6 +12,7 @@ function newServer() {
     if (request.method !== 'workflow/list') throw new Error('Expected Workflow library read');
     return {type:'workflow_library',library:{target:request.params.target,directory:'/workflows',absent_revision:'empty',files:[],diagnostic:null}};
   });
+  s.handlers.set('skills/list', () => ({ type: 'skills', page: { data: [], revision: 'skills-empty', diagnostics: [], diagnostics_truncated: false, next_offset: null } }));
   return s;
 }
 afterEach(() => { cleanup(); server?.client.disconnect(); localStorage.clear(); });
@@ -32,14 +33,14 @@ it.each(['same client', 'new client'] as const)('reload restores selected B with
   if (mode === 'new client') await act(async () => server.connect());
   expect(title()).toBe('Session B');
 });
-it.each(['workflows', 'schedules', 'new-conversation'] as const)('reload preserves the %s page', async kind => {
+it.each(['workflows', 'schedules', 'subagents', 'mcp', 'skills', 'new-conversation'] as const)('reload preserves the %s page', async kind => {
   server = newServer(); await server.attached('A', 'B');
   const ui = await mount(); await click(ui, 'Open Session A');
-  await click(ui, kind === 'workflows' ? 'Workflows' : kind === 'schedules' ? 'Scheduled Tasks' : 'New Conversation');
+  await click(ui, kind === 'workflows' ? 'Workflows' : kind === 'schedules' ? 'Scheduled Tasks' : kind === 'subagents' ? 'Manage subagents' : kind === 'mcp' ? 'MCP servers' : kind === 'skills' ? 'Skills' : 'New Conversation');
   expect(hints().route).toEqual(kind === 'new-conversation' ? { kind, workspaceId: 'workspace-a' } : { kind });
   await act(async () => ui.unmount()); await server.client.disconnect(); server = newServer();
   await mount(); await act(async () => server.connect());
-  expect(kind === 'workflows' ? document.querySelector('[data-workflows-level]') : document.querySelector(`[data-shell-route="${kind}"]`)).not.toBeNull();
+  expect(kind === 'workflows' ? document.querySelector('[data-workflows-level]') : ['subagents', 'mcp', 'skills'].includes(kind) ? document.querySelector(`[data-resource-module="${kind}"]`) : document.querySelector(`[data-shell-route="${kind}"]`)).not.toBeNull();
   expect(title()).toBeUndefined();
 });
 it('cold startup cannot overwrite its saved selection with the initial new conversation', async () => {
@@ -65,12 +66,12 @@ it('an explicit cold Session selection still saves a safe new conversation while
   expect(document.querySelector('[data-shell-route="session-draft"]')).not.toBeNull();
   expect(hints().route).toEqual({kind:'new-conversation'});
 });
-it.each(['Workflows', 'New Conversation'] as const)('a user choosing %s before connection supersedes startup restoration', async name => {
+it.each(['Workflows', 'Skills', 'New Conversation'] as const)('a user choosing %s before connection supersedes startup restoration', async name => {
   seed({kind:'session',sessionId:'B'}); server = newServer();
   const ui = await mount();
   await click(ui, name); await act(async () => server.connect());
   expect(title()).toBeUndefined();
-  expect(hints().route).toEqual(name === 'Workflows' ? { kind: 'workflows' } : { kind: 'new-conversation', workspaceId: 'workspace-a' });
+  expect(hints().route).toEqual(name === 'Workflows' ? { kind: 'workflows' } : name === 'Skills' ? { kind: 'skills' } : { kind: 'new-conversation', workspaceId: 'workspace-a' });
   expect(server.requests.some(row => row.request.method === 'thread/resume' && row.request.params.threadId === 'conversation-B')).toBe(false);
 });
 it('a later user selection owns navigation after the restored Attach completes', async () => {
@@ -163,7 +164,7 @@ it('reload retries the unresolved startup selection after a transient failure an
   expect(server.requests.some(row => row.request.method === 'session/read' && row.request.params.session_id === 'B')).toBe(true);
   expect(title()).toBe('Session B');
 });
-it.each(['Workflows', 'Scheduled Tasks', 'New Conversation', 'Open Session A'] as const)('a failed startup restore yields its saved hint to explicit %s intent', async name => {
+it.each(['Workflows', 'Scheduled Tasks', 'Skills', 'New Conversation', 'Open Session A'] as const)('a failed startup restore yields its saved hint to explicit %s intent', async name => {
   seed({kind:'session',sessionId:'B'}); server = newServer(); server.held.add('session/read');
   const ui = await mount(); await act(async () => server.connect());
   const pending = await server.waitFor('session/read', 1);
@@ -171,14 +172,14 @@ it.each(['Workflows', 'Scheduled Tasks', 'New Conversation', 'Open Session A'] a
   const other = await server.waitFor('session/read', 2);
   server.held.delete('session/read'); await act(async () => server.reply(other));
   await click(ui, name);
-  expect(hints().route).toEqual(name === 'Open Session A' ? {kind:'session',sessionId:'A'} : name === 'Workflows' ? {kind:'workflows'} : name === 'Scheduled Tasks' ? {kind:'schedules'} : {kind:'new-conversation',workspaceId:'workspace-a'});
-  if (name === 'Workflows' || name === 'Scheduled Tasks') {
+  expect(hints().route).toEqual(name === 'Open Session A' ? {kind:'session',sessionId:'A'} : name === 'Workflows' ? {kind:'workflows'} : name === 'Scheduled Tasks' ? {kind:'schedules'} : name === 'Skills' ? {kind:'skills'} : {kind:'new-conversation',workspaceId:'workspace-a'});
+  if (name === 'Workflows' || name === 'Scheduled Tasks' || name === 'Skills') {
     await click(ui, 'Home');
     expect(server.client.isAttachmentControlCurrent('B', server.client.getSnapshot().views.B?.attachmentObservation)).toBe(false);
     expect(hints().route).toEqual({kind:'new-conversation'});
   }
 });
-it.each(['Settings', 'Workflows', 'Scheduled Tasks'])('a failed Fork keeps its startup hint retired through repeated %s/Home returns and a fresh page', async page => {
+it.each(['Settings', 'Workflows', 'Scheduled Tasks', 'Skills'])('a failed Fork keeps its startup hint retired through repeated %s/Home returns and a fresh page', async page => {
   seed({kind:'session',sessionId:'B'}); server = newServer(); server.held.add('session/read');
   const ui = await mount(); await act(async () => server.connect());
   const pending = await server.waitFor('session/read', 1);
@@ -227,7 +228,7 @@ it('a failed replacement retires an admitted selection while its Native recovery
   await click(ui, 'Session actions for Session A');
   await act(async () => fireEvent.click(ui.getByRole('menuitem', {name:'Fork session'})));
   expect(ui.getByRole('alert').textContent).toContain('completed response');
-  for (const page of ['Settings', 'Workflows', 'Scheduled Tasks']) {
+  for (const page of ['Settings', 'Workflows', 'Scheduled Tasks', 'Skills']) {
     await click(ui, page); await click(ui, 'Home');
     expect(hints().route).toEqual({kind:'new-conversation'});
     expect(server.client.isAttachmentControlCurrent('B', server.client.getSnapshot().views.B?.attachmentObservation)).toBe(false);
@@ -266,7 +267,7 @@ it.each([false, true])('Connection Settings preserves startup restoration while 
   await click(ui, 'Connection');
   await act(async () => fireEvent.change(ui.getByLabelText('Connection mode', { exact: true }), { target: { value: 'remote' } }));
   fireEvent.change(ui.getByLabelText('WebSocket endpoint', { exact: true }), { target: { value: endpoint } });
-  fireEvent.change(ui.getByLabelText('Transport token', { exact: true }), { target: { value: TOKEN } });
+  fireEvent.change(ui.getByLabelText('Access token', { exact: true }), { target: { value: TOKEN } });
   await click(ui, 'Connect');
   expect(server.client.getSnapshot().connection).toBe('connected');
   await click(ui, 'Home');

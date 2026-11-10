@@ -1,7 +1,7 @@
 import { encodeField, type ArrayEdit, type FieldAddress } from '../../document/fields';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import clsx from 'clsx';
-import type { WorkflowVocabulary } from '../../../../../../protocol/app-server/v75';
+import type { WorkflowVocabulary } from '../../../../../../protocol/app-server/v77';
 import { useTranslation } from '../../../../locale/react';
 import { IconCloseOutline16 } from '../../../../presentation/primitives/icons';
 import { nodePresentation } from '../../document/geometry';

@@ -2,7 +2,7 @@ import { test, expect, type Page, type TestInfo } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, closeSessionView } from './shell-actions';
-import { supersededHistoryReads, type RequestTiming } from '../session-latency';
+import { recoveredThreadStatusReads, supersededHistoryReads, type RequestTiming } from '../session-latency';
 
 type HttpTiming = { path: string; start: number; end?: number };
 type Mark = { kind: 'click' | 'selected' | 'phase'; name: string; time: number };
@@ -18,6 +18,7 @@ async function observeLatency(page: Page) {
     window.__sessionLatency = evidence;
     const NativeSocket = window.WebSocket;
     const lineage = new Map<string, { sessionId: string; nodeId: string }>();
+    let connectionSequence = 0;
     const attachmentIdentity = (target?: Record<string, unknown>) => {
       if (!target) return undefined;
       const identity = [target.session_id, target.conversation_id, target.runtime_incarnation, target.attachment_id];
@@ -25,11 +26,12 @@ async function observeLatency(page: Page) {
     };
     window.WebSocket = class extends NativeSocket {
       private calls = new Map<unknown, RequestTiming>();
+      private readonly connection = ++connectionSequence;
       constructor(url: string | URL, protocols?: string | string[]) {
         super(url, protocols);
         this.addEventListener('message', event => {
           const reply = JSON.parse(event.data) as { id?: unknown; error?: { data?: { kind?: string } }; result?: {
-            type?: string; target?: Record<string, unknown>;
+            type?: string; target?: Record<string, unknown>; thread?: { id?: string };
             session?: { id: string; active_node: string; active_conversation_id: string };
             node?: { id: string; conversation_id: string };
           } };
@@ -51,15 +53,16 @@ async function observeLatency(page: Page) {
               row.target = attachmentIdentity(target);
               if (observed && observed.sessionId === target?.session_id) { row.sessionId = observed.sessionId; row.nodeId = observed.nodeId; }
             }
+            if (row.method === 'thread/read' && !row.error) row.resultThreadId = reply.result?.thread?.id;
             this.calls.delete(reply.id);
           }
         });
       }
       send(data: Parameters<WebSocket['send']>[0]) {
         if (typeof data === 'string') {
-          const call = JSON.parse(data) as { id?: unknown; method?: string; params?: { session_id?: string; node_id?: string; target?: Record<string, unknown>; at?: { type?: string } } };
+          const call = JSON.parse(data) as { id?: unknown; method?: string; params?: { session_id?: string; node_id?: string; threadId?: string; target?: Record<string, unknown>; at?: { type?: string } } };
           if (call.id !== undefined && call.method) {
-            const row: RequestTiming = { method: call.method, start: performance.now(), historyAt: call.method === 'session/history' ? call.params?.at?.type : undefined, sessionId: call.params?.session_id, nodeId: call.params?.node_id, target: attachmentIdentity(call.params?.target) };
+            const row: RequestTiming = { method: call.method, start: performance.now(), connection: this.connection, threadId: call.params?.threadId, historyAt: call.method === 'session/history' ? call.params?.at?.type : undefined, sessionId: call.params?.session_id, nodeId: call.params?.node_id, target: attachmentIdentity(call.params?.target) };
             evidence.rpc.push(row); this.calls.set(call.id, row);
           }
         }
@@ -92,11 +95,11 @@ async function report(page: Page, info: TestInfo) {
   for (const attach of evidence.rpc.filter(row => row.method === 'thread/resume' && row.error === undefined && row.resultType === 'attached')) {
     expect(attach).toMatchObject({ sessionId: expect.any(String), nodeId: expect.any(String), target: expect.any(String) });
   }
-  // Native rejects optional cold history while attach owns a Loading runtime.
-  // Keep the rejection in the evidence and require its exact successful live
-  // handoff; unrelated reads and every required operation must still succeed.
-  const superseded = new Set(supersededHistoryReads(evidence.rpc));
-  expect(evidence.rpc.filter(row => row.error !== undefined && !superseded.has(row))).toEqual([]);
+  // Preserve every rejection. A cold preview needs its exact live handoff;
+  // unavailable status capture needs a new strong read proving recovery.
+  // Unrelated reads and every required operation must still succeed.
+  const recovered = new Set([...supersededHistoryReads(evidence.rpc), ...recoveredThreadStatusReads(evidence.rpc)]);
+  expect(evidence.rpc.filter(row => row.error !== undefined && !recovered.has(row))).toEqual([]);
   return evidence;
 }
 

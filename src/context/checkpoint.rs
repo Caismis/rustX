@@ -881,6 +881,7 @@ mod tests {
             let source = MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new("reasoning-source"),
                 content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                    origin: None,
                     text: Some("original thinking".into()),
                     provider_state: Some(native),
                 })],

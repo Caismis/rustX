@@ -4,7 +4,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { openEmptySession, selectedSettingsPage, settingsSectionMenu } from './shell-actions';
 
-const settingsPageOrder = ['General', 'Models', 'Agent', 'Tools & Permissions', 'MCP servers', 'Extensions', 'Advanced'];
+const settingsPageOrder = ['General', 'Models', 'Agent', 'Tools & Permissions', 'Extensions', 'Advanced'];
 
 for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and editor reachability at ${width}px`, async ({ page }) => {
   const fixture = await startDogfood();
@@ -56,7 +56,7 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     await tabTo(page.getByRole('button', { name: 'Connection', exact: true })); await page.keyboard.press('Enter');
     await tabTo(page.getByLabel('Connection mode')); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
     await tabTo(page.getByLabel('WebSocket endpoint')); await page.keyboard.press('ControlOrMeta+A'); await page.keyboard.type(fixture.endpoint);
-    await tabTo(page.getByLabel('Transport token')); await page.keyboard.type(fixture.token);
+    await tabTo(page.getByLabel('Access token')); await page.keyboard.type(fixture.token);
     await tabTo(page.getByRole('button', { name: 'Connect', exact: true })); await page.keyboard.press('Enter');
     await expect(page.locator('.connection-status')).toHaveText('Connected');
     await tabTo(page.getByRole('button', { name: 'Home', exact: true })); await page.keyboard.press('Enter');
@@ -109,33 +109,24 @@ for (const width of [390, 820, 1280, 1600]) test(`one product keyboard and edito
     const endpoint = settings.getByLabel('Base URL', { exact: true });
     await tabTo(endpoint); await expect(endpoint).toBeFocused();
     await page.keyboard.press('End'); await page.keyboard.type('/draft-only');
-    // A select opens and closes from the keyboard without changing the value.
-    const credential = settings.getByRole('button', { name: /Credential source$/ });
-    await tabTo(credential); await page.keyboard.press('Enter');
-    await expect(page.getByRole('listbox')).toBeVisible();
-    await page.keyboard.press('Escape'); await expect(page.getByRole('listbox')).toHaveCount(0);
-    await expect(credential).toBeFocused();
-    // A disclosure toggles from the keyboard.
-    const revision = settings.getByRole('form', { name: 'Provider fixture', exact: true }).getByRole('button', { name: 'Configuration details', exact: true });
-    await tabTo(revision); await page.keyboard.press('Enter');
-    await expect(revision).toHaveAttribute('aria-expanded', 'true');
-    // A destructive action opens a modal confirmation that holds focus, is
-    // dismissed with Escape without writing, and returns focus to its trigger.
-    const remove = settings.getByRole('button', { name: 'Remove Provider fixture', exact: true });
-    await tabTo(remove); await page.keyboard.press('Enter');
-    const confirmation = page.getByRole('alertdialog');
-    await expect(confirmation).toBeVisible();
-    await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
-    await page.keyboard.press('Tab'); await page.keyboard.press('Tab');
-    await expect(confirmation.getByRole('button', { name: 'Cancel' })).toBeFocused();
+    const actions = settings.getByRole('button', { name: 'Provider actions', exact: true });
+    await tabTo(actions);
+    // Leaving the endpoint starts its native autosave. The focusable menu
+    // trigger refuses activation until that write has been observed.
+    await expect(actions).toHaveAttribute('aria-disabled', 'false');
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('menuitem', { name: 'Choose provider icon', exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
-    await expect(confirmation).toHaveCount(0); await expect(remove).toBeFocused();
+    await expect(actions).toBeFocused();
     await expect(endpoint).toHaveValue(/\/draft-only$/);
     // The dedicated MCP page and create flow are keyboard reachable.
-    await keyboardPage('MCP servers');
-    await tabTo(settings.getByRole('button', { name: '＋ New', exact: true })); await page.keyboard.press('Enter');
-    await tabTo(settings.getByLabel('Name', { exact: true })); await page.keyboard.type('keyboard-draft');
-    await tabTo(settings.getByLabel('Command', { exact: true })); await page.keyboard.type('inert-draft');
+    await tabTo(page.getByRole('navigation',{name:'Primary navigation'}).getByRole('button',{name:'MCP servers',exact:true}));
+    await page.keyboard.press('Enter');
+    const mcp=page.getByRole('region',{name:'MCP servers',exact:true});
+    await tabTo(mcp.getByRole('tab',{selected:true}));await page.keyboard.press('End');
+    await tabTo(mcp.getByRole('button', { name: '＋ New MCP server', exact: true })); await page.keyboard.press('Enter');
+    await tabTo(mcp.getByLabel('Name', { exact: true })); await page.keyboard.type('keyboard-draft');
+    await tabTo(mcp.getByLabel('Command', { exact: true })); await page.keyboard.type('inert-draft');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(await page.locator('main').evaluate(el => getComputedStyle(el.parentElement!).transitionDuration)).toBe('0s');
     await page.screenshot({ path: `test-results/acceptance-keyboard-${width}.png`, fullPage: true });

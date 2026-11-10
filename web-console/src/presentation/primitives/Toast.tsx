@@ -7,8 +7,8 @@ import { IconCheckOutline16 } from './icons';
 
 /** Non-blocking Harness announcement, centered over its owner's composer.
  * Key each new announcement separately, including repeated identical errors. */
-export function Toast({ text, icon, anchor, label, tone, holdMs = 3000, actions, onDone }: {
-  text: string; label?: string; icon?: ReactNode; anchor?: HTMLElement | null; tone?: 'success'; holdMs?: number;
+export function Toast({ text, icon, anchor, label, tone, portal, foreground, holdMs = 3000, actions, onDone }: {
+  text: string; label?: string; portal?: HTMLElement; foreground?: boolean; icon?: ReactNode; anchor?: HTMLElement | null; tone?: 'success'; holdMs?: number;
   actions?: readonly { label: string; onClick: () => void }[]; onDone: () => void;
 }) {
   const done = useRef(onDone);
@@ -29,9 +29,9 @@ export function Toast({ text, icon, anchor, label, tone, holdMs = 3000, actions,
     elements: { reference }, whileElementsMounted: autoUpdate,
     middleware: [offset(8), shift({ padding: 24 })],
   });
-  return createPortal(<div ref={refs.setFloating} className={css.toast} role={tone === 'success' ? 'status' : 'alert'} aria-label={label} data-toast
+  return createPortal(<div ref={refs.setFloating} className={css.toast} role={tone === 'success' ? 'status' : 'alert'} aria-label={label} data-toast data-foreground={foreground || undefined}
     style={{ ...floatingStyles, '--dsh-toast-hold': `${holdMs}ms`, visibility: isPositioned ? undefined : 'hidden' } as CSSProperties}>
     {tone === 'success' ? <span className={`${css.icon} ${css.success}`} aria-hidden><IconCheckOutline16/></span> : icon && <span className={css.icon} aria-hidden>{icon}</span>}
     <span className={css.text}>{text}{actions?.map(action => <Fragment key={action.label}>{' '}<button type="button" className={css.action} onClick={action.onClick}>{action.label}</button></Fragment>)}</span>
-  </div>, document.body);
+  </div>, portal ?? document.body);
 }

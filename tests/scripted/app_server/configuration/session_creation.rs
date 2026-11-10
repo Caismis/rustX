@@ -163,13 +163,33 @@ async fn issue402_workspace_session_models_are_the_created_session_catalog() {
             catalog
         );
 
-        // Where native cannot bind a Session, there is no catalog to choose
-        // from, and the read creates no Session.
+        // A missing default model can fall back to a selectable model without
+        // altering the authored preference or creating a Session on a read.
+        let removed = fixture.workspaces[0].parent().unwrap().join("removed");
+        std::fs::create_dir(&removed).unwrap();
+        std::fs::write(
+            removed.join("rustx.toml"),
+            "[agent.model]\nmodel = \"local/missing\"\n",
+        )
+        .unwrap();
+        let fallback = fixture
+            .manager
+            .source_settings(&SourceTarget::Workspace { directory: removed })
+            .await
+            .unwrap();
+        assert!(
+            matches!(fallback.session_models, Some(SessionModelsView::Available {
+            default_model, ..
+        }) if default_model.model.as_str() == "local/a")
+        );
+
+        // An invalid preset for an existing model is still a configuration
+        // failure. A read creates no Session where native cannot bind one.
         let broken = fixture.workspaces[0].parent().unwrap().join("broken");
         std::fs::create_dir(&broken).unwrap();
         std::fs::write(
             broken.join("rustx.toml"),
-            "[agent.model]\nmodel = \"local/missing\"\n",
+            "[agent.model]\nmodel = \"local/a\"\nprofile = \"missing-profile\"\n",
         )
         .unwrap();
         let count = || async {
@@ -196,10 +216,309 @@ async fn issue402_workspace_session_models_are_the_created_session_catalog() {
                 source.session_models
             )
         };
-        assert!(diagnostic.contains("local/missing"), "{diagnostic}");
+        assert!(diagnostic.contains("missing-profile"), "{diagnostic}");
         assert_eq!(count().await, before);
         assert!(create(broken).await.is_err());
         fixture.close().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleting_a_model_releases_creation_when_a_named_agent_depends_on_it() {
+    use crate::local_runtime::configuration::settings::{SessionModelsView, SourceTarget};
+    use crate::runtime::subagent::SubagentName;
+    Box::pin(bounded(async {
+        let fixture = Fixture::with_session_count(None, 0).await;
+        let directory = fixture.workspaces[0].clone();
+        let target = SourceTarget::Workspace {
+            directory: directory.clone(),
+        };
+        let agent = SubagentName::parse("reviewer").unwrap();
+        let stable = SubagentName::parse("stable").unwrap();
+        let agent_directory = directory.join(".agents/agents");
+        std::fs::create_dir_all(&agent_directory).unwrap();
+        std::fs::write(
+            agent_directory.join("reviewer.toml"),
+            "instructions = 'Review changes'\n[model]\nmodel = 'local/a'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            agent_directory.join("stable.toml"),
+            "instructions = 'Review changes'\n[model]\nmodel = 'local/b'\n[model.title_model]\nmode = 'explicit'\nmodel = 'local/a'\n",
+        )
+        .unwrap();
+        let settings = directory.join("rustx.toml");
+        let before = std::fs::read_to_string(&settings).unwrap();
+        std::fs::write(
+            &settings,
+            format!("{before}\n[agent]\nagents = ['reviewer', 'stable']\n"),
+        )
+        .unwrap();
+
+        let create = || {
+            fixture.manager.create_session(SessionPersistentState {
+                cwd: directory.clone(),
+                model: None,
+            })
+        };
+        let old_session = create().await.unwrap().session;
+        let old = old_session.id;
+        let old_binding = fixture
+            .manager
+            .sessions
+            .configuration_bindings
+            .lock()
+            .unwrap()[&old]
+            .clone();
+        assert_eq!(old_binding.config.agent.agents, [agent.clone(), stable.clone()]);
+        assert!(fixture.manager.configuration_runtime(&old).is_none());
+
+        let original_model = issue459_authored_a(&fixture).await;
+        let source = fixture
+            .manager
+            .source_settings(&SourceTarget::User)
+            .await
+            .unwrap();
+        fixture
+            .manager
+            .write_source_settings(
+                &SourceTarget::User,
+                source.user.revision,
+                SourceMutation::Config {
+                    mutation: ConfigMutation::Model {
+                        id: "local/a".into(),
+                        authored: None,
+                    },
+                },
+            )
+            .await
+            .unwrap();
+        let source = fixture.manager.source_settings(&target).await.unwrap();
+        let Some(SessionModelsView::Available {
+            catalog,
+            default_model,
+        }) = source.session_models
+        else {
+            panic!("creation should use the updated catalog")
+        };
+        assert_eq!(default_model.model.as_str(), "local/b");
+        assert_eq!(catalog.models.len(), 1);
+        assert_eq!(catalog.models[0].model.as_str(), "local/b");
+
+        let new_session = create().await.unwrap().session;
+        let created = new_session.id;
+        fixture.manager.load(&created, None).await.unwrap();
+        let current = fixture.manager.configuration_runtime(&created).unwrap();
+        assert_eq!(current.model_catalog(), catalog);
+        assert_eq!(current.model_view().configured.model.as_str(), "local/b");
+        let binding = fixture
+            .manager
+            .sessions
+            .configuration_bindings
+            .lock()
+            .unwrap()[&created]
+            .clone();
+        assert_eq!(binding.config.agent.agents, std::slice::from_ref(&stable));
+        assert!(binding.subagents.get(&agent).is_some());
+        assert_eq!(old_binding.session_model().model.as_str(), "local/a");
+
+        let mut changes = fixture.manager.configuration_changes();
+        fixture.manager.load(&old, None).await.unwrap();
+        let resumed = fixture.manager.configuration_runtime(&old).unwrap();
+        while resumed.model_catalog() != catalog {
+            changes.changed().await.unwrap();
+        }
+        let unavailable = resumed.model_view();
+        assert_eq!(unavailable.configured.model.as_str(), "local/a");
+        assert!(unavailable.unavailable.is_some());
+        let (recovered, _) = fixture
+            .manager
+            .set_model(&old, *default_model)
+            .await
+            .unwrap();
+        assert!(recovered.unavailable.is_none());
+        assert_eq!(recovered.configured.model.as_str(), "local/b");
+
+        fixture.manager.unload(&old_session.active_conversation_id).await.unwrap();
+        fixture.manager.unload(&new_session.active_conversation_id).await.unwrap();
+        assert!(fixture.manager.configuration_runtime(&old).is_none());
+        assert!(fixture.manager.configuration_runtime(&created).is_none());
+        write(
+            &fixture,
+            0,
+            ConfigMutation::Model { id: "local/a".into(), authored: Some(original_model) },
+        ).await;
+        let restored = create().await.unwrap().session.id;
+        let restored = fixture.manager.sessions.configuration_bindings.lock().unwrap()[&restored].clone();
+        assert_eq!(restored.session_model().model.as_str(), "local/a");
+        assert_eq!(restored.config.agent.agents, [agent.clone(), stable.clone()]);
+        let main = restored.inspection.main.as_ref().unwrap();
+        assert_eq!(main.agents, [agent, stable]);
+        assert!(!main.agent_controls.is_empty());
+        assert!(!restored.inspection.resource_diagnostics.iter()
+            .any(|item| item.reason == "selected Agent model is unavailable"));
+        fixture.close().await;
+    }))
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hidden_default_models_and_providers_recover_creation_without_reselecting_existing_sessions()
+ {
+    use crate::local_runtime::configuration::settings::{
+        CredentialEdit, ProviderWrite, SessionModelsView, SourceTarget,
+    };
+    Box::pin(bounded(async {
+        for hide_provider in [false, true] {
+            let fixture = Fixture::with_session_count(None, 0).await;
+            let directory = fixture.workspaces[0].clone();
+            let target = SourceTarget::Workspace {
+                directory: directory.clone(),
+            };
+            let path = fixture
+                .manager
+                .configuration
+                .source_bindings()
+                .config_path
+                .clone();
+            let mut document: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let other = document["providers"]["local"].clone();
+            document["providers"]
+                .as_table_mut()
+                .unwrap()
+                .insert("other".into(), other);
+            document["models"]["local/b"]["provider"] = "other".into();
+            std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
+            let create = || {
+                fixture.manager.create_session(SessionPersistentState {
+                    cwd: directory.clone(),
+                    model: None,
+                })
+            };
+            let old = create().await.unwrap().session.id;
+            fixture.manager.load(&old, None).await.unwrap();
+            let runtime = fixture.manager.configuration_runtime(&old).unwrap();
+            assert_eq!(runtime.model_view().configured.model.as_str(), "local/a");
+            let authored = fixture
+                .manager
+                .source_settings(&SourceTarget::User)
+                .await
+                .unwrap()
+                .user
+                .authored
+                .unwrap();
+            let model_a = authored.models.as_ref().unwrap()["local/a"].clone();
+            let model_b = authored.models.as_ref().unwrap()["local/b"].clone();
+            let provider = authored.providers.as_ref().unwrap()["local"].clone();
+            let toggle = |hidden| {
+                if hide_provider {
+                    ConfigMutation::Provider {
+                        id: "local".into(),
+                        authored: Some(ProviderWrite {
+                            display_name: provider.display_name.clone(),
+                            hidden,
+                            icon: provider.icon.clone(),
+                            protocol: provider.protocol,
+                            base_url: provider.base_url.clone(),
+                            credential: CredentialEdit::Retain,
+                        }),
+                    }
+                } else {
+                    let mut model = model_a.clone();
+                    model.hidden = hidden;
+                    ConfigMutation::Model {
+                        id: "local/a".into(),
+                        authored: Some(model),
+                    }
+                }
+            };
+            let mut changes = fixture.manager.configuration_changes();
+            write(&fixture, 0, toggle(true)).await;
+            let source = fixture.manager.source_settings(&target).await.unwrap();
+            let Some(SessionModelsView::Available {
+                catalog,
+                default_model,
+            }) = source.session_models
+            else {
+                panic!(
+                    "a visible replacement must keep creation available: {:?}",
+                    source.session_models
+                );
+            };
+            assert_eq!(default_model.model.as_str(), "local/b");
+            assert_eq!(
+                catalog
+                    .models
+                    .iter()
+                    .map(|model| model.model.as_str())
+                    .collect::<Vec<_>>(),
+                ["local/b"]
+            );
+            while runtime.model_catalog() != catalog {
+                changes.changed().await.unwrap();
+            }
+            let retained = runtime.model_view();
+            assert_eq!(retained.configured.model.as_str(), "local/a");
+            assert!(retained.unavailable.is_none());
+            assert_eq!(retained.effective.unwrap().model.as_str(), "local/a");
+            let created = create().await.unwrap().session.id;
+            fixture.manager.load(&created, None).await.unwrap();
+            let created = fixture.manager.configuration_runtime(&created).unwrap();
+            assert_eq!(created.model_view().configured.model.as_str(), "local/b");
+            assert_eq!(created.model_catalog(), catalog);
+
+            let mut hidden_b = model_b;
+            hidden_b.hidden = true;
+            write(
+                &fixture,
+                0,
+                ConfigMutation::Model {
+                    id: "local/b".into(),
+                    authored: Some(hidden_b),
+                },
+            )
+            .await;
+            let empty = fixture.manager.source_settings(&target).await.unwrap();
+            assert!(matches!(
+                empty.session_models,
+                Some(SessionModelsView::Unavailable { .. })
+            ));
+            assert!(
+                create().await.is_err(),
+                "all hidden is unavailable, never a hidden default"
+            );
+
+            write(&fixture, 0, toggle(false)).await;
+            let restored = fixture.manager.source_settings(&target).await.unwrap();
+            let Some(SessionModelsView::Available {
+                catalog,
+                default_model,
+            }) = restored.session_models
+            else {
+                panic!("reenabling the authored default must restore creation");
+            };
+            assert_eq!(default_model.model.as_str(), "local/a");
+            assert_eq!(catalog.models.len(), 1);
+            let source: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(source["agent"]["model"]["model"].as_str(), Some("local/a"));
+            let restored = create().await.unwrap().session.id;
+            fixture.manager.load(&restored, None).await.unwrap();
+            assert_eq!(
+                fixture
+                    .manager
+                    .configuration_runtime(&restored)
+                    .unwrap()
+                    .model_view()
+                    .configured
+                    .model
+                    .as_str(),
+                "local/a"
+            );
+            fixture.close().await;
+        }
     }))
     .await;
 }
@@ -482,12 +801,17 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                 .path;
             let mut document: toml::Value =
                 toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            let instructions_a = document["agent"].get("instructions").cloned();
-            document["agent"]["model"]["model"] = "local/b".into();
-            document["agent"]
-                .as_table_mut()
+            let instructions_a = f
+                .manager
+                .source_settings(&SourceTarget::User)
+                .await
                 .unwrap()
-                .insert("instructions".into(), "configuration B".into());
+                .global_guidance
+                .unwrap()
+                .authored
+                .unwrap_or_default();
+            document["agent"]["model"]["model"] = "local/b".into();
+            set_file_guidance(&f, "configuration B");
             std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
             let source = SourceTarget::Workspace {
                 directory: f.workspaces[0].clone(),
@@ -511,7 +835,7 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
                 )
                 .unwrap();
             assert_eq!(fresh.session_model().model.to_string(), "local/b");
-            assert_eq!(fresh.config().agent.instructions, "configuration B");
+            assert_eq!(guidance(&fresh.project_context_files), "configuration B");
             if uncertain {
                 f.manager
                     .sessions
@@ -548,10 +872,8 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
             assert!(sessions.iter().any(|session| session.id == id));
             let retained = f.manager.sessions.configuration_bindings.lock().unwrap()[&id].clone();
             assert_eq!(retained.session_model().model.to_string(), "local/a");
-            assert_ne!(retained.config().agent.instructions, "configuration B");
-            if let Some(toml::Value::String(text)) = instructions_a {
-                assert_eq!(retained.config().agent.instructions, text);
-            }
+            assert_ne!(guidance(&retained.project_context_files), "configuration B");
+            assert_eq!(guidance(&retained.project_context_files), instructions_a);
             let MethodResult::Attached { target, .. } = super::super::protocol::call(
                 &observer,
                 3,
@@ -571,14 +893,8 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
             };
             let runtime = f.manager.configuration_runtime(&id).unwrap();
             assert_eq!(
-                runtime
-                    .runtime_resources()
-                    .configuration()
-                    .unwrap()
-                    .config
-                    .agent
-                    .instructions,
-                retained.config().agent.instructions
+                guidance(runtime.runtime_resources().project_context_files()),
+                guidance(&retained.project_context_files)
             );
             assert_eq!(runtime.model_view().configured, *retained.session_model());
             assert!(!create.is_finished());
@@ -616,14 +932,8 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
             );
             assert_eq!(runtime.model_view().configured, *retained.session_model());
             assert_eq!(
-                runtime
-                    .runtime_resources()
-                    .configuration()
-                    .unwrap()
-                    .config
-                    .agent
-                    .instructions,
-                retained.config().agent.instructions
+                guidance(runtime.runtime_resources().project_context_files()),
+                guidance(&retained.project_context_files)
             );
             publication.before_catalog_publication.release();
             // The catalog publishes, then the desired instructions commit
@@ -641,13 +951,7 @@ async fn issue422_creation_binding_precedes_multi_client_visibility() {
             );
             assert_eq!(runtime.model_view().configured, *retained.session_model());
             assert_eq!(
-                runtime
-                    .runtime_resources()
-                    .configuration()
-                    .unwrap()
-                    .config
-                    .agent
-                    .instructions,
+                guidance(runtime.runtime_resources().project_context_files()),
                 "configuration B"
             );
             assert_eq!(
