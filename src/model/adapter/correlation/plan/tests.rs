@@ -110,3 +110,55 @@ fn oversized_synthetic_labels_and_new_raw_hash_collisions_match_full_allocator()
         reference(&raw, protocol).unwrap()
     );
 }
+
+#[test]
+fn adversarial_id_sequences_match_the_full_allocator() {
+    for protocol in [
+        ModelProtocol::OpenAiChatCompletions,
+        ModelProtocol::OpenAiResponses,
+        ModelProtocol::AnthropicMessages,
+    ] {
+        for seed in 1..=64_u64 {
+            let mut state = seed;
+            let mut plan = plan(protocol);
+            let mut raw = Vec::new();
+            for index in 0..64_u32 {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let native = protocol == ModelProtocol::OpenAiResponses && state.is_multiple_of(7);
+                let id = match state % 8 {
+                    0 => "repeat".to_owned(),
+                    1 => format!("rustx_occurrence_{}", state % 9),
+                    2 => "invalid id".to_owned(),
+                    3 => "x".repeat(65),
+                    4 if !plan.calls.is_empty() => {
+                        let count = u64::try_from(plan.calls.len()).unwrap();
+                        plan.calls[usize::try_from(state % count).unwrap()]
+                            .label
+                            .to_string()
+                    }
+                    _ => format!("id_{}", state % 17),
+                };
+                raw.push((id.clone(), native));
+                let expected = reference(&raw, protocol);
+                let actual = plan.push((index, 0), &id, native);
+                assert_eq!(
+                    actual.is_ok(),
+                    expected.is_ok(),
+                    "{protocol:?} seed={seed} at {index}"
+                );
+                let Ok(expected) = expected else { break };
+                assert_eq!(
+                    plan.calls
+                        .iter()
+                        .map(|call| call.label.to_string())
+                        .collect::<Vec<_>>(),
+                    expected,
+                    "{protocol:?} seed={seed} at {index}"
+                );
+                plan.pending.remove(id.as_str());
+            }
+        }
+    }
+}

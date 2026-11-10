@@ -1724,19 +1724,13 @@ fn finish_messages<'a>(
         .preparation()
         .lock()
         .expect("input preparation cache");
-    if cache
-        .correlation
-        .as_ref()
-        .is_some_and(|current| current.epoch == plan.epoch)
-    {
-        cache.chat = Some(prefix);
-    }
     if let Some(current) = cache
         .correlation
         .as_mut()
         .filter(|current| current.epoch == plan.epoch && current.matches(&request.messages))
     {
         current.dirty.clear();
+        cache.chat = Some(prefix);
     }
     Ok(messages)
 }
@@ -2311,5 +2305,31 @@ mod tests {
             .collect();
         assert_eq!(wire_parts.as_slice(), projection.parts());
         assert!(wire_parts[0].contains("input schema validation failed: query is required"));
+    }
+}
+
+#[cfg(test)]
+mod prefix_publication_tests {
+    use super::*;
+    use crate::model::adapter::cache::tests::{append, oracle, prepared, request};
+
+    #[test]
+    fn late_old_preparation_cannot_replace_current_prefix() {
+        let mut current = request();
+        current.invocation.protocol = crate::model::ModelProtocol::OpenAiChatCompletions;
+        append(&mut current, 0, true, true);
+        let old = current.clone();
+        assert_eq!(prepared(&old), oracle(&old));
+        let tools =
+            crate::model::adapter::validation::validate_request(&old, old.protocol()).unwrap();
+        // Pause the old request after it has taken its immutable cached prefix.
+        let staged = stage_messages(&old, &tools.correlation).unwrap();
+        append(&mut current, 1, true, true);
+        let expected = oracle(&current);
+        assert_eq!(prepared(&current), expected);
+        // Complete the old preparation after the new one has published its
+        // prefix and consumed the old call/result's relabeling work.
+        finish_messages(&old, &tools.correlation, staged, None).unwrap();
+        assert_eq!(prepared(&current), expected);
     }
 }

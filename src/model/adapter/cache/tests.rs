@@ -8,7 +8,7 @@ use crate::model::{ModelInputMessage, ModelProtocol, ModelRequest};
 use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
 use crate::tools::types::{ModelToolDefinition, ToolCall};
 
-fn request() -> ModelRequest {
+pub(crate) fn request() -> ModelRequest {
     let mut request = crate::scripted_suites::common::simple_request(
         ModelProtocol::OpenAiChatCompletions,
         "fixture",
@@ -25,7 +25,7 @@ fn request() -> ModelRequest {
     request
 }
 
-fn append(request: &mut ModelRequest, turn: usize, tool: bool, repeated: bool) {
+pub(crate) fn append(request: &mut ModelRequest, turn: usize, tool: bool, repeated: bool) {
     let user = crate::scripted_suites::common::simple_request(
         ModelProtocol::OpenAiChatCompletions,
         "fixture",
@@ -76,13 +76,13 @@ fn append(request: &mut ModelRequest, turn: usize, tool: bool, repeated: bool) {
     );
 }
 
-fn prepared(request: &ModelRequest) -> Vec<u8> {
+pub(crate) fn prepared(request: &ModelRequest) -> Vec<u8> {
     super::super::validation::prepare_request(request.clone(), request.protocol())
         .unwrap()
         .body
         .to_vec()
 }
-fn oracle(request: &ModelRequest) -> Vec<u8> {
+pub(crate) fn oracle(request: &ModelRequest) -> Vec<u8> {
     let tools = super::super::validation::validate_request(request, request.protocol()).unwrap();
     match request.protocol() {
         ModelProtocol::OpenAiChatCompletions => serde_json::to_vec(
