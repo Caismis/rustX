@@ -78,7 +78,7 @@ pub(super) fn fragment_snapshot(
 }
 pub(super) fn source_row_counts(store: &SqliteConversationStore) -> (u64, u64, u64) {
     let connection = store.lock().unwrap();
-    connection.query_row("SELECT (SELECT count(*) FROM request_source_pages),(SELECT count(*) FROM request_source_nodes),(SELECT count(*) FROM request_source_roots)",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap()
+    connection.query_row("SELECT (SELECT count(*) FROM request_source_pages),(SELECT count(*) FROM native_input_nodes WHERE source_metadata IS NOT NULL),(SELECT count(*) FROM request_source_roots)",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap()
 }
 pub(super) fn assert_composed_work(work: observation_request::composed::Work) {
     assert!(

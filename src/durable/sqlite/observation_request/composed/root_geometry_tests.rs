@@ -29,7 +29,13 @@ fn native(
     if let Some((left, right)) = children {
         connection.execute("INSERT INTO native_input_nodes(id,digest,count,height,left_id,right_id,left_digest,right_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)", params![id,native.digest.as_slice(),count,height,left.id,right.id,left.digest.as_slice(),right.digest.as_slice()]).unwrap();
     } else {
-        connection.execute("INSERT INTO native_input_nodes(id,digest,count,height,item_digest,item_json) VALUES(?1,?2,1,1,?3,'null')", params![id,native.digest.as_slice(),hash(b"null").as_slice()]).unwrap();
+        connection
+            .execute(
+                "INSERT INTO native_input_items(id,item_json)VALUES(?1,'null')",
+                [id],
+            )
+            .unwrap();
+        connection.execute("INSERT INTO native_input_nodes(id,digest,count,height,item_digest,item_id) VALUES(?1,?2,1,1,?3,?1)", params![id,native.digest.as_slice(),hash(b"null").as_slice()]).unwrap();
     }
     native
 }
@@ -53,7 +59,10 @@ fn leaf(
         max_key_path: 0,
         content: Content::Leaf {
             leaf: Leaf {
-                templates: vec![[0; 32]],
+                templates: vec![index::BlobRef {
+                    id: 1,
+                    hash: [0; 32],
+                }],
                 variants: vec![0; weights::CLASSES],
             },
         },
