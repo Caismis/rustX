@@ -829,9 +829,10 @@ impl SqliteConversationStore {
         // No Journal facts are inserted between this frontier and the start.
         // Bind the one public alias before validating the frozen input; its
         // deferred FK must resolve to the exact start at this transaction's commit.
-        let start_sequence = through
+        let start_sequence = seq_to_i64(through)?
             .checked_add(1)
-            .ok_or(ConversationStoreError::SequenceExhausted)?;
+            .ok_or_else(|| storage("event sequence exhausted"))?;
+        let start_sequence = sequence_from_i64(start_sequence)?;
         auxiliary::insert_owner_tx(
             transaction,
             &snapshot.request_id,
