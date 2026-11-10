@@ -676,15 +676,13 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
         .await;
         applied(&fixture, 0).await;
         assert_eq!(runtime.model_view().effective, primary_before);
-        let Some(crate::model::session::AuxiliaryModelView::Session { effective: auxiliary }) =
-            runtime.model_view().auxiliary
+        let Some(crate::model::session::AuxiliaryModelView::Session {
+            effective: auxiliary,
+        }) = runtime.model_view().auxiliary
         else {
             panic!("session auxiliary");
         };
-        assert_eq!(
-            auxiliary.profile,
-            Some(ModelProfileId::new("fast"))
-        );
+        assert_eq!(auxiliary.profile, Some(ModelProfileId::new("fast")));
         let created = fixture
             .manager
             .create_session(SessionPersistentState {
@@ -1630,8 +1628,9 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
             pins.effective.as_ref().unwrap().profile,
             Some(ModelProfileId::new("balanced"))
         );
-        let Some(crate::model::session::AuxiliaryModelView::Session { effective: pinned_aux }) =
-            pins.auxiliary
+        let Some(crate::model::session::AuxiliaryModelView::Session {
+            effective: pinned_aux,
+        }) = pins.auxiliary
         else {
             panic!("pinned session auxiliary");
         };

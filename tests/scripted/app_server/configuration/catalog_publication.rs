@@ -232,11 +232,7 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
                     .reasoning_profile_order
                     .as_ref()
                     .map(|ids| ids.iter().map(ToString::to_string).collect::<Vec<_>>()),
-                Some(vec![
-                    "balanced".into(),
-                    "fast".into(),
-                    "creative".into()
-                ])
+                Some(vec!["balanced".into(), "fast".into(), "creative".into()])
             );
         }
 
