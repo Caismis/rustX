@@ -136,6 +136,45 @@ fn captured_at_budget(budget: usize) -> (SqliteConversationStore, PublicationHea
 }
 
 #[test]
+fn publication_block_rebinding_rejects_a_foreign_native_position() {
+    let message = raw_message(1);
+    let (store, mut draft) = captured(&message);
+    let mut foreign = message.clone();
+    let MessageBlock::Assistant(assistant) = &mut foreign else {
+        unreachable!();
+    };
+    assistant.id = MessageId::new("foreign-publication-owner");
+    let connection = store.lock().unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+    let transaction = connection.unchecked_transaction().unwrap();
+    transaction
+        .execute(
+            "INSERT INTO message_ledger(position,message_id,message_json) VALUES(2,?1,?2)",
+            params![
+                foreign.id().as_str(),
+                serde_json::to_string(&foreign).unwrap()
+            ],
+        )
+        .unwrap();
+    crate::durable::sqlite::content::index_message(&transaction, &foreign).unwrap();
+    index_publication_message(&transaction, &foreign, 2).unwrap();
+    transaction.execute("UPDATE observation_block_headers SET message_id=?1 WHERE ledger_position=2 AND block_index=8", [message.id().as_str()]).unwrap();
+    let before: Vec<u8> = transaction.query_row(
+        "SELECT header_json FROM observation_block_headers WHERE ledger_position=2 AND block_index=8",
+        [], |row| row.get(0),
+    ).unwrap();
+    // A relabelled draft must not redirect a Tool rebind to another message.
+    // The block capture checks its actual native MessageId-to-position binding.
+    draft.header.ledger_position = Some(2);
+    assert!(draft.rebind(&transaction, &message, 2).is_err());
+    let after: Vec<u8> = transaction.query_row(
+        "SELECT header_json FROM observation_block_headers WHERE ledger_position=2 AND block_index=8",
+        [], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
 fn publication_header_pretrim_draft_restores_display_after_shorter_original_raw_binding() {
     let (store, draft, message) = captured_at_budget(16_386);
     assert!(bounded_bytes(&draft.header, 16_384).is_none());

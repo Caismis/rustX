@@ -32,7 +32,7 @@ impl PublicationHeader {
                 block,
                 crate::message::types::AssistantContentBlock::ToolCall(_)
             ) {
-                rebind_tool_block(connection, message, index)?;
+                rebind_tool_block(connection, message, position, index)?;
             }
         }
         for binding in self.header.content.iter_mut().take(self.captured_bindings) {
@@ -87,11 +87,12 @@ impl PublicationHeader {
 fn rebind_tool_block(
     connection: &Connection,
     message: &MessageBlock,
+    position: u64,
     index: usize,
 ) -> Result<(), ConversationStoreError> {
     let bytes: Vec<u8> = connection.query_row_cached(
-        "SELECT header_json FROM observation_block_headers WHERE message_id=?1 AND block_index=?2",
-        params![message.id().as_str(), index], |row| row.get(0),
+        "SELECT header_json FROM observation_block_headers WHERE ledger_position=?1 AND block_index=?2 AND message_id=?3",
+        params![position, index, message.id().as_str()], |row| row.get(0),
     ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("oversized canonical block header"));
@@ -104,7 +105,7 @@ fn rebind_tool_block(
     // Original admitted value is unchanged; only final physical descriptors
     // need rebinding. The shared builder preserves order, deferred markers,
     // raw spelling, metadata fallback and the complete 16 KiB admission.
-    let rebound = block_bytes(
+    let (rebound, actual_position) = block_bytes(
         connection,
         message,
         index,
@@ -112,10 +113,13 @@ fn rebind_tool_block(
         header.value,
         &["arguments"],
     )?;
+    if actual_position != position {
+        return Err(storage("publication block changed its native Ledger owner"));
+    }
     if rebound != bytes {
         connection.execute_cached(
-            "UPDATE observation_block_headers SET header_json=?3 WHERE message_id=?1 AND block_index=?2",
-            params![message.id().as_str(), index, rebound],
+            "UPDATE observation_block_headers SET header_json=?3 WHERE ledger_position=?1 AND block_index=?2 AND message_id=?4",
+            params![position, index, rebound, message.id().as_str()],
         ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     }
     Ok(())

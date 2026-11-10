@@ -567,11 +567,12 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 bootstrap_initialized INTEGER NOT NULL DEFAULT 0 CHECK(bootstrap_initialized IN (0,1))
             );
             CREATE TABLE IF NOT EXISTS observation_block_headers (
-                ledger_position INTEGER NOT NULL REFERENCES message_ledger(position),
+                ledger_position INTEGER NOT NULL,
                 block_index INTEGER NOT NULL CHECK(block_index>=0),
                 header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
-                message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
-                PRIMARY KEY(ledger_position,block_index),UNIQUE(message_id,block_index)
+                message_id TEXT NOT NULL,
+                PRIMARY KEY(ledger_position,block_index),
+                FOREIGN KEY(ledger_position,message_id) REFERENCES message_ledger(position,message_id)
             );
             CREATE TABLE IF NOT EXISTS audit_observation_blocks (
                 transcript_position INTEGER NOT NULL REFERENCES transcript_order(position) ON DELETE CASCADE,
@@ -621,7 +622,6 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 snapshot_json TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS observation_block_ledger_kind_idx ON observation_block_headers(ledger_position,json_extract(header_json,'$.kind'),block_index);
-            CREATE INDEX IF NOT EXISTS observation_block_kind_idx ON observation_block_headers(message_id,json_extract(header_json,'$.kind'),block_index);
             CREATE TABLE IF NOT EXISTS observation_models (
                 owner_anchor INTEGER NOT NULL REFERENCES events(sequence),
                 ordinal INTEGER NOT NULL CHECK(ordinal>=0),

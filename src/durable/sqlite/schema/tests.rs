@@ -278,7 +278,7 @@ fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 105);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 106);
 
     // And the refusal is not ceremony: had the gate admitted the file,
     // these are the rows the typed decoder would have had to interpret,
@@ -343,7 +343,7 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 105);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 106);
 
     // And the refusal is not ceremony: the envelope framing is unchanged,
     // and the row the gate refused really is undecodable under the current
@@ -618,11 +618,65 @@ fn preceding_schema_is_rejected_before_event_deserialization() {
 }
 
 #[test]
+fn message_keyed_block_layout_is_rejected_without_rewriting_either_open_path() {
+    for version in [105, SQLITE_SCHEMA_VERSION] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("message-keyed-blocks.sqlite");
+        let id = ConversationId::generate();
+        {
+            let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+            let connection = store.lock().unwrap();
+            connection.execute_batch(
+                "DROP TABLE observation_block_headers;
+                 CREATE TABLE observation_block_headers (
+                    ledger_position INTEGER NOT NULL REFERENCES message_ledger(position),
+                    block_index INTEGER NOT NULL CHECK(block_index>=0),
+                    header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
+                    message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
+                    PRIMARY KEY(ledger_position,block_index),UNIQUE(message_id,block_index)
+                 );
+                 CREATE INDEX observation_block_ledger_kind_idx ON observation_block_headers(ledger_position,json_extract(header_json,'$.kind'),block_index);
+                 CREATE INDEX observation_block_kind_idx ON observation_block_headers(message_id,json_extract(header_json,'$.kind'),block_index);",
+            ).unwrap();
+            connection
+                .execute(
+                    "UPDATE rustx_store SET schema_version=?1 WHERE id=1",
+                    [version],
+                )
+                .unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        for existing_only in [false, true] {
+            let result = if existing_only {
+                SqliteConversationStore::open_existing(id.clone(), &path)
+            } else {
+                SqliteConversationStore::open(id.clone(), &path)
+            };
+            if version == 105 {
+                assert!(matches!(
+                    result,
+                    Err(ConversationStoreError::SchemaVersionMismatch {
+                        stored: 105,
+                        expected: SQLITE_SCHEMA_VERSION,
+                    })
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ConversationStoreError::IncompatibleSchema(_))
+                ));
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+        }
+    }
+}
+
+#[test]
 fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite() {
     use crate::runtime::identity::AuxiliaryCallId;
     use crate::runtime::workflow::read_model::WorkflowWait;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 105);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 106);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-wait.sqlite");
@@ -679,7 +733,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
 fn workflow_node_io_and_indexes_require_current_schema_without_rewrite() {
     use crate::runtime::workflow::read_model::WorkflowNodeKind;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 105);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 106);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-node-io.sqlite");
