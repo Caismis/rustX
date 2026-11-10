@@ -131,6 +131,15 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
         ));
     }
     verify_unique_columns(connection, "message_ledger", &["position", "message_id"])?;
+    let paired: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_list('surface_ops') a JOIN pragma_foreign_key_list('surface_ops') b ON a.id=b.id WHERE a.\"table\"='message_ledger' AND a.\"from\"='ledger_position' AND a.\"to\"='position' AND b.\"from\"='message_id' AND b.\"to\"='message_id' AND a.seq=0 AND b.seq=1)",
+        [], |row| row.get(0),
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    if !paired {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "Surface canonical identity is not paired".into(),
+        ));
+    }
     verify_unique_column(
         connection,
         "inherited_message_membership",
@@ -326,7 +335,12 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
         ),
         (
             "surface_ops",
-            &["revision", "compaction_generation", "ledger_position"],
+            &[
+                "revision",
+                "compaction_generation",
+                "ledger_position",
+                "message_id",
+            ],
         ),
         ("surface_head", &["revision", "compaction_generation"]),
         ("request_configurations", &["digest", "configuration_json"]),

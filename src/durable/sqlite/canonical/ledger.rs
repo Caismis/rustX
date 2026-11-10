@@ -610,7 +610,7 @@ pub(in crate::durable::sqlite) fn append_surface_op(
     let SurfaceOp::Append { message_id } = operation;
     let inserted=transaction
         .execute_cached(
-            "INSERT INTO surface_ops(revision,compaction_generation,ledger_position) SELECT ?1,?2,position FROM message_ledger WHERE message_id=?3",
+            "INSERT INTO surface_ops(revision,compaction_generation,ledger_position,message_id) SELECT ?1,?2,position,?3 FROM message_ledger WHERE message_id=?3",
             params![
                 seq_to_i64(revision.get())?,
                 seq_to_i64(generation)?,
@@ -742,6 +742,20 @@ pub(in crate::durable::sqlite) fn load_surface_history(
     Ok(replay_surface_history(connection, through)?.1)
 }
 
+pub(in crate::durable::sqlite) fn surface_append_operation(
+    message_id: String,
+    ledger_message_id: Option<&str>,
+) -> Result<SurfaceOp, ConversationStoreError> {
+    if ledger_message_id != Some(message_id.as_str()) {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Surface operation references missing or mismatched Ledger message {message_id}"
+        )));
+    }
+    Ok(SurfaceOp::Append {
+        message_id: MessageId::new(message_id),
+    })
+}
+
 pub(in crate::durable::sqlite) fn replay_surface_history(
     connection: &Connection,
     revision: SurfaceRevision,
@@ -764,7 +778,7 @@ pub(in crate::durable::sqlite) fn replay_surface_history(
     let mut history = Vec::new();
     let mut statement = connection
         .prepare(
-            "SELECT s.revision,s.compaction_generation,m.message_id
+            "SELECT s.revision,s.compaction_generation,s.message_id,m.message_id
              FROM surface_ops s LEFT JOIN message_ledger m ON m.position=s.ledger_position WHERE s.revision <= ?1 ORDER BY s.revision",
         )
         .map_err(|error| {
@@ -776,6 +790,7 @@ pub(in crate::durable::sqlite) fn replay_surface_history(
                 row.get::<_, i64>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         })
         .map_err(|error| {
@@ -786,7 +801,7 @@ pub(in crate::durable::sqlite) fn replay_surface_history(
         })?;
     let mut expected_revision = 1_u64;
     for row in rows {
-        let (stored_revision, stored_generation, message_id) =
+        let (stored_revision, stored_generation, message_id, ledger_message_id) =
             row.map_err(|error| storage(format!("Surface history row: {error}")))?;
         if u64::try_from(stored_revision).ok() != Some(expected_revision) {
             return Err(ConversationStoreError::InvalidReference(
@@ -794,10 +809,7 @@ pub(in crate::durable::sqlite) fn replay_surface_history(
             ));
         }
         let _ = nonnegative(stored_generation, "canonical append metadata")?;
-        let operation = SurfaceOp::Append {
-            message_id: MessageId::new(message_id),
-        };
-        validate_surface_operation_references(connection, &operation)?;
+        let operation = surface_append_operation(message_id, ledger_message_id.as_deref())?;
         apply_surface_op(&mut active, &operation)?;
         history.push(operation);
         expected_revision = expected_revision

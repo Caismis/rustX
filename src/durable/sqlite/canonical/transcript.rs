@@ -2,7 +2,8 @@
 
 use crate::conversation::{SurfaceOp, SurfaceRevision};
 use crate::durable::sqlite::canonical::ledger::{
-    apply_surface_op, read_surface_head, validate_surface_operation_references_from_ledger,
+    apply_surface_op, read_surface_head, surface_append_operation,
+    validate_surface_operation_references_from_ledger,
 };
 use crate::durable::sqlite::{decode, nonnegative, provenance, seq_to_i64, storage};
 use crate::durable::{
@@ -437,7 +438,7 @@ pub(in crate::durable::sqlite) fn load_user_message_boundaries_page_internal(
     let mut seen = BTreeSet::new();
     let mut statement = connection
         .prepare(
-            "SELECT s.revision,s.compaction_generation,m.message_id
+            "SELECT s.revision,s.compaction_generation,s.message_id,m.message_id
              FROM surface_ops s LEFT JOIN message_ledger m ON m.position=s.ledger_position WHERE s.revision <= ?1 ORDER BY s.revision",
         )
         .map_err(|error| {
@@ -449,6 +450,7 @@ pub(in crate::durable::sqlite) fn load_user_message_boundaries_page_internal(
                 row.get::<_, i64>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         })
         .map_err(|error| {
@@ -459,7 +461,7 @@ pub(in crate::durable::sqlite) fn load_user_message_boundaries_page_internal(
         })?;
     let mut expected_revision = 1_u64;
     for row in rows {
-        let (stored_revision, stored_generation, message_id) =
+        let (stored_revision, stored_generation, message_id, ledger_message_id) =
             row.map_err(|error| storage(format!("Surface history row: {error}")))?;
         if u64::try_from(stored_revision).ok() != Some(expected_revision) {
             return Err(ConversationStoreError::InvalidReference(
@@ -467,9 +469,7 @@ pub(in crate::durable::sqlite) fn load_user_message_boundaries_page_internal(
             ));
         }
         let _ = nonnegative(stored_generation, "canonical append metadata")?;
-        let operation = SurfaceOp::Append {
-            message_id: MessageId::new(message_id),
-        };
+        let operation = surface_append_operation(message_id, ledger_message_id.as_deref())?;
         validate_surface_operation_references_from_ledger(&ledger, &operation)?;
         let appended_message_id = match &operation {
             SurfaceOp::Append { message_id } => Some(message_id.clone()),

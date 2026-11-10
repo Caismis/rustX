@@ -19,6 +19,7 @@ use std::sync::Arc;
 mod append_head;
 mod initialization_state;
 mod layout;
+mod surface_identity;
 
 #[test]
 fn snapshot_transcript_excludes_later_tool_results() {
@@ -489,15 +490,13 @@ fn corrupt_surface_operation_reference_fails_closed() {
     let store = store();
     store.initialize(&[user_message("a", "A")]).unwrap();
     let connection = store.conn.lock().unwrap();
-    connection.execute_batch("PRAGMA foreign_keys=OFF; INSERT INTO surface_ops(revision,compaction_generation,ledger_position) VALUES(2,0,999); PRAGMA foreign_keys=ON").unwrap();
-    connection
-        .execute("UPDATE surface_head SET revision=2 WHERE id=1", [])
-        .unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=OFF; UPDATE surface_ops SET ledger_position=999 WHERE revision=1; PRAGMA foreign_keys=ON").unwrap();
     drop(connection);
+    assert_eq!(store.load_head().unwrap().revision, SurfaceRevision::new(1));
     assert!(matches!(
-        store.load_head(),
+        store.reconstruct_surface(SurfaceRevision::new(1)),
         Err(ConversationStoreError::InvalidReference(detail))
-            if detail.contains("canonical frontier metadata")
+            if detail.contains("Surface operation references")
     ));
 }
 

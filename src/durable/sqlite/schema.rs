@@ -754,7 +754,9 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
             CREATE TABLE IF NOT EXISTS surface_ops (
                 revision INTEGER PRIMARY KEY,
                 compaction_generation INTEGER NOT NULL,
-                ledger_position INTEGER NOT NULL REFERENCES message_ledger(position)
+                ledger_position INTEGER NOT NULL,
+                message_id TEXT NOT NULL,
+                FOREIGN KEY(ledger_position,message_id) REFERENCES message_ledger(position,message_id)
             );
             CREATE TABLE IF NOT EXISTS surface_head (
                 id INTEGER PRIMARY KEY CHECK(id=1),

@@ -1855,7 +1855,7 @@ fn t08_t15_t20_surface_boundary_pages_read_native_headers_without_surface_or_mes
         .execute("UPDATE message_ledger SET message_json='invalid JSON'", [])
         .unwrap();
     connection
-        .execute("UPDATE surface_ops SET ledger_position=1", [])
+        .execute_batch("PRAGMA foreign_keys=OFF; UPDATE surface_ops SET ledger_position=1; PRAGMA foreign_keys=ON")
         .unwrap();
     drop(connection);
     let store = SqliteConversationStore::open(conversation, &path).unwrap();
