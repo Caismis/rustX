@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 
 use crate::model::error::{ModelError, ModelErrorKind};
-use crate::model::invocation::validate_content_modalities;
+use crate::model::invocation::validate_required_modalities;
 use crate::model::types::{ModelProtocol, ModelRequest};
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::ToolId;
@@ -20,26 +20,86 @@ use crate::runtime::identity::ToolId;
 /// Tools validated for one request, resolved by model-facing name.
 #[derive(Debug, Clone, Default)]
 pub struct ValidatedTools {
-    by_name: BTreeMap<String, ToolId>,
+    table: std::sync::Arc<ToolCatalog>,
+    pub(super) correlation: super::correlation::Plan,
     pub(super) continuation_boundary: Option<usize>,
 }
 
+#[derive(Default)]
+pub(super) struct ToolCatalog {
+    definitions: std::sync::OnceLock<Vec<crate::tools::types::ModelToolDefinition>>,
+    by_name: BTreeMap<String, ToolId>,
+    wire: [std::sync::OnceLock<std::sync::Arc<serde_json::value::RawValue>>; 3],
+}
+impl std::fmt::Debug for ToolCatalog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolCatalog")
+            .field("by_name", &self.by_name)
+            .finish_non_exhaustive()
+    }
+}
+impl ToolCatalog {
+    fn matches(&self, definitions: &[crate::tools::types::ModelToolDefinition]) -> bool {
+        let Some(cached) = self.definitions.get() else {
+            return self.by_name.is_empty() && definitions.is_empty();
+        };
+        cached.len() == definitions.len()
+            && cached.iter().zip(definitions).all(|(a, b)| {
+                a.id == b.id
+                    && a.name == b.name
+                    && a.description == b.description
+                    && std::sync::Arc::ptr_eq(&a.input_schema, &b.input_schema)
+            })
+    }
+}
+
 impl ValidatedTools {
+    pub(super) fn encoded_tools<T: serde::Serialize>(
+        &self,
+        protocol: ModelProtocol,
+        limit: Option<usize>,
+        definitions: &[crate::tools::types::ModelToolDefinition],
+        encode: impl FnOnce() -> T,
+    ) -> Result<Option<std::sync::Arc<serde_json::value::RawValue>>, ModelError> {
+        if self.is_empty() {
+            return Ok(None);
+        }
+        let index = match protocol {
+            ModelProtocol::OpenAiChatCompletions => 0,
+            ModelProtocol::OpenAiResponses => 1,
+            ModelProtocol::AnthropicMessages => 2,
+        };
+        let slot = &self.table.wire[index];
+        if let Some(raw) = slot.get() {
+            if limit.is_some_and(|limit| raw.get().len() > limit) {
+                return Err(wire_budget_error());
+            }
+            return Ok(Some(raw.clone()));
+        }
+        let raw = super::cache::encode_raw(&encode(), limit)?;
+        #[cfg(test)]
+        super::cache::work(|work| work.catalog_bytes += raw.get().len());
+        // Keep the exact owner certificate only after bounded encoding succeeds.
+        self.table.definitions.get_or_init(|| definitions.to_vec());
+        let _ = slot.set(raw);
+        Ok(slot.get().cloned())
+    }
+
     /// The tool names in deterministic (sorted) order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.by_name.keys().map(String::as_str)
+        self.table.by_name.keys().map(String::as_str)
     }
 
     /// Whether the request exposed no tool to the model at all.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.by_name.is_empty()
+        self.table.by_name.is_empty()
     }
 
     /// Resolves a model-facing tool name to its canonical [`ToolId`].
     #[must_use]
     pub fn resolve(&self, name: &str) -> Option<&ToolId> {
-        self.by_name.get(name)
+        self.table.by_name.get(name)
     }
 }
 
@@ -70,33 +130,10 @@ pub fn validate_request(
 
     super::structured::validate_request(request)?;
 
-    // Effective-capability agreement is checked before anything else that
-    // could reach the network: content the invocation cannot represent is
-    // rejected here, not by the provider.
-    {
-        #[cfg(feature = "issue-387-profile")]
-        let _profile = super::profile::phase(super::profile::Phase::Modalities);
-        #[cfg(feature = "issue-387-profile")]
-        let messages = request.messages.iter().enumerate().map(|(index, message)| {
-            super::profile::item(index);
-            message
-        });
-        #[cfg(not(feature = "issue-387-profile"))]
-        let messages = &request.messages;
-        validate_content_modalities(messages, &request.invocation.capabilities)?;
-    }
-    if request.images.len() > 16 || {
-        #[cfg(feature = "issue-387-profile")]
-        let _profile = super::profile::phase(super::profile::Phase::ImageCount);
-        #[cfg(feature = "issue-387-profile")]
-        let messages = request.messages.iter().enumerate().map(|(index, message)| {
-            super::profile::item(index);
-            message
-        });
-        #[cfg(not(feature = "issue-387-profile"))]
-        let messages = &request.messages;
-        crate::model::images::image_count(messages) > 16
-    } {
+    // Capability-independent certificates survive changes of model capabilities.
+    let (required, images) = super::cache::admission(&request.messages);
+    validate_required_modalities(&required, &request.invocation.capabilities)?;
+    if request.images.len() > 16 || images > 16 {
         return Err(invalid_request(
             "request exceeds the 16-image limit".to_owned(),
         ));
@@ -121,9 +158,11 @@ pub fn validate_request(
     // Wire coverage/correlation is part of deterministic adapter admission,
     // including accepted stored calls absent from this request's explicit input.
     let boundary = request.continuation_boundary().map_err(invalid_request)?;
-    super::correlation::request_labels_at(request, boundary).map_err(invalid_request)?;
+    let correlation =
+        super::correlation::request_plan(request, boundary).map_err(invalid_request)?;
     let mut tools = validate_tools(request)?;
     tools.continuation_boundary = boundary;
+    tools.correlation = correlation;
     Ok(tools)
 }
 
@@ -213,25 +252,18 @@ pub(crate) fn prepare_request_with_limit(
     #[cfg(test)]
     PREFLIGHTS.with(|v| v.set(v.get() + 1));
     let tools = validate_request(&request, protocol)?;
-    let wire = translate_prepared(&request, &tools)?;
+    let wire = translate_prepared(&request, &tools, body_limit)?;
     #[cfg(feature = "issue-387-profile")]
     let _encoding = super::profile::phase(super::profile::Phase::HttpEncode);
     #[cfg(test)]
     PREPARATION_WORK.with(|work| work.update(|(translated, encoded)| (translated, encoded + 1)));
-    let body = match body_limit {
-        Some(limit) => crate::bounded_json::encode_capped_bytes(&wire, limit),
-        None => serde_json::to_vec(&wire),
+    let body = if let Some(limit) = body_limit {
+        crate::bounded_json::encode_capped_bytes(&wire, limit)
+    } else {
+        let mut body = Vec::with_capacity(wire.capacity_hint());
+        serde_json::to_writer(&mut body, &wire).map(|()| body)
     }
-    .map_err(|error| {
-        if error.is_io() {
-            let mut error =
-                invalid_request("translated provider request exceeds byte budget".into());
-            error.kind = ModelErrorKind::ContextWindowExceeded;
-            error
-        } else {
-            invalid_request(format!("failed to encode provider request: {error}"))
-        }
-    })?;
+    .map_err(|error| wire_encoding_error(&error))?;
     #[cfg(test)]
     let (body, body_lifetime) = track_body_lifetime(body);
     #[cfg(not(test))]
@@ -259,7 +291,7 @@ pub(crate) fn validate_bounded_prepared_request(
     request: &ModelRequest,
     limit: usize,
 ) -> Result<usize, ModelError> {
-    let translated = prepared_wire_request(request)?;
+    let translated = prepared_wire_request_with_limit(request, Some(limit))?;
     crate::context::resources::bounded_encoded_len(&translated, limit).map_err(|_| {
         let mut error = invalid_request("translated provider request exceeds byte budget".into());
         error.kind = ModelErrorKind::ContextWindowExceeded;
@@ -275,34 +307,54 @@ enum PreparedWireRequest<'a> {
     Anthropic(super::anthropic::mapping::WireRequest<'a>),
 }
 
+impl PreparedWireRequest<'_> {
+    fn capacity_hint(&self) -> usize {
+        match self {
+            Self::Chat(request) => request.capacity_hint(),
+            Self::Responses(request) => request.capacity_hint(),
+            Self::Anthropic(request) => request.capacity_hint(),
+        }
+    }
+}
+
+#[cfg(test)]
 fn prepared_wire_request(request: &ModelRequest) -> Result<PreparedWireRequest<'_>, ModelError> {
+    prepared_wire_request_with_limit(request, None)
+}
+
+fn prepared_wire_request_with_limit(
+    request: &ModelRequest,
+    limit: Option<usize>,
+) -> Result<PreparedWireRequest<'_>, ModelError> {
     #[cfg(test)]
     PREFLIGHTS.with(|v| v.set(v.get() + 1));
     #[cfg(feature = "issue-387-profile")]
     let _request = super::profile::RequestScope::new(request.protocol(), "preflight");
     let tools = validate_request(request, request.protocol())?;
-    translate_prepared(request, &tools)
+    translate_prepared(request, &tools, limit)
 }
 
 fn translate_prepared<'a>(
     request: &'a ModelRequest,
     tools: &ValidatedTools,
+    limit: Option<usize>,
 ) -> Result<PreparedWireRequest<'a>, ModelError> {
     #[cfg(test)]
     PREPARATION_WORK.with(|work| work.update(|(translated, encoded)| (translated + 1, encoded)));
     match request.protocol() {
         ModelProtocol::OpenAiChatCompletions => {
-            super::openai::chat_completions::translate_request(request)
+            super::openai::chat_completions::translate_request_with_limit(request, tools, limit)
                 .map(PreparedWireRequest::Chat)
         }
-        ModelProtocol::OpenAiResponses => super::openai::responses::translate_request(
+        ModelProtocol::OpenAiResponses => super::openai::responses::translate_request_with_limit(
             request,
             tools,
             request.invocation.compat.responses_storage,
+            limit,
         )
         .map(PreparedWireRequest::Responses),
         ModelProtocol::AnthropicMessages => {
-            super::anthropic::mapping::translate_request(request, tools)
+            super::anthropic::mapping::translate_request_with_limit(request, tools, limit)
                 .map(PreparedWireRequest::Anthropic)
         }
     }
@@ -362,6 +414,21 @@ fn validate_continuation(
 fn validate_tools(request: &ModelRequest) -> Result<ValidatedTools, ModelError> {
     #[cfg(feature = "issue-387-profile")]
     let _profile = super::profile::phase(super::profile::Phase::Tools);
+    let mut cache = request
+        .messages
+        .preparation()
+        .lock()
+        .expect("input preparation cache");
+    if let Some(table) = cache
+        .tools
+        .as_ref()
+        .filter(|table| table.matches(&request.tools))
+    {
+        return Ok(ValidatedTools {
+            table: table.clone(),
+            ..ValidatedTools::default()
+        });
+    }
     let mut by_name: BTreeMap<String, ToolId> = BTreeMap::new();
     for tool in &request.tools {
         if tool.name.is_empty() {
@@ -383,10 +450,29 @@ fn validate_tools(request: &ModelRequest) -> Result<ValidatedTools, ModelError> 
             )));
         }
     }
-    Ok(ValidatedTools {
+    let table = std::sync::Arc::new(ToolCatalog {
+        definitions: std::sync::OnceLock::new(),
         by_name,
-        continuation_boundary: None,
+        wire: std::array::from_fn(|_| std::sync::OnceLock::new()),
+    });
+    cache.tools = Some(table.clone());
+    Ok(ValidatedTools {
+        table,
+        ..ValidatedTools::default()
     })
+}
+
+pub(super) fn wire_budget_error() -> ModelError {
+    let mut error = invalid_request("translated provider request exceeds byte budget".into());
+    error.kind = ModelErrorKind::ContextWindowExceeded;
+    error
+}
+pub(super) fn wire_encoding_error(error: &serde_json::Error) -> ModelError {
+    if error.is_io() {
+        wire_budget_error()
+    } else {
+        invalid_request(format!("failed to encode provider request: {error}"))
+    }
 }
 
 fn invalid_request(message: String) -> ModelError {

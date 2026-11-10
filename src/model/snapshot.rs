@@ -944,7 +944,7 @@ mod tests {
                             )
                             .unwrap();
                             match protocol {
-                                ModelProtocol::OpenAiChatCompletions => serde_json::to_value(crate::model::adapter::openai::chat_completions::translate_request(input).unwrap()).unwrap(),
+                                ModelProtocol::OpenAiChatCompletions => serde_json::to_value(crate::model::adapter::openai::chat_completions::translate_request(input,&tools).unwrap()).unwrap(),
                                 ModelProtocol::OpenAiResponses => serde_json::to_value(crate::model::adapter::openai::responses::translate_request(input,&tools,input.invocation.compat.responses_storage).unwrap()).unwrap(),
                                 ModelProtocol::AnthropicMessages => serde_json::to_value(crate::model::adapter::anthropic::mapping::translate_request(input,&tools).unwrap()).unwrap(),
                             }

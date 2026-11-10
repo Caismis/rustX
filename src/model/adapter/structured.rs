@@ -59,6 +59,8 @@ pub(crate) fn validate_request(request: &ModelRequest) -> Result<(), ModelError>
 /// Check protected keys before flattening opaque parameters. Ordinary requests
 /// borrow the original map. Native structured output adds the exact owned format.
 pub(crate) fn request_params(request: &ModelRequest) -> Result<Cow<'_, RequestParams>, ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _phase = super::profile::phase(super::profile::Phase::FinalParams);
     let params = request.request_params();
     validate_request_params_layer(
         params,

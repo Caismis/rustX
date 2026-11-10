@@ -656,8 +656,8 @@ fn large_assistant_origin_set_is_shared_across_reload_retry_continuation_and_arc
     assert_eq!(origins.len(), 1024);
     assert_eq!(
         history.native_summary_entries(),
-        600,
-        "wire-ID summaries also share their set"
+        0,
+        "Chat does not retain unused native replay summaries"
     );
     assert!(
         history

@@ -2,72 +2,53 @@
 use crate::model::types::ModelProtocol;
 use serde_json::Value;
 
-/// Labels from the exact request plan, excluding Stored output already owned by
-/// the provider. Native labels stay reserved in the complete plan.
-pub(super) fn transmitted_labels(
-    request: &crate::model::ModelRequest,
-    boundary: Option<usize>,
-) -> Result<Vec<String>, String> {
-    let stored = is_stored(request);
-    Ok(request_labels_at(request, boundary)?
-        .into_iter()
-        .filter(|((message, _), _)| !stored || boundary != Some(*message as usize))
-        .map(|(_, label)| label)
-        .collect())
-}
+mod plan;
+pub(crate) use plan::Plan;
 
 /// Apply the validated request labels directly to typed wire correlation fields.
-pub(super) fn encode_fields(
-    labels: &[String],
+#[cfg(test)]
+pub(super) fn encode_fields<S: AsRef<str>>(
+    labels: impl IntoIterator<Item = S>,
     mut visit: impl FnMut(&mut dyn FnMut(bool, &mut Value)),
 ) -> Result<(), &'static str> {
     #[cfg(feature = "issue-387-profile")]
     let _profile = crate::model::adapter::profile::phase(
         crate::model::adapter::profile::Phase::WireCorrelation,
     );
-    let mut raw = Vec::new();
-    let mut pending_ids = std::collections::BTreeSet::new();
-    let mut invalid = None;
-    // Wire strings cannot identify which of two unresolved occurrences owns
-    // a result. Reject before editing the detached wire object, not after an
-    // overwritten association has reached the provider or frozen metadata.
-    visit(&mut |call, id| {
-        #[cfg(feature = "issue-387-profile")]
-        crate::model::adapter::profile::wire_field();
-        let source = id.as_str().unwrap_or_default();
-        if source.is_empty() {
-            invalid = Some("empty provider wire correlation ID");
-        }
-        if call {
-            if !pending_ids.insert(source.to_owned()) {
-                invalid = Some("ambiguous unresolved provider wire correlation ID");
-            }
-            raw.push(source.to_owned());
-        } else {
-            pending_ids.remove(source);
-        }
-    });
-    if let Some(error) = invalid {
-        return Err(error);
-    }
-    if raw.len() != labels.len() {
-        return Err("wire call count differs from request correlation plan");
-    }
-    let mut ordinal = 0;
+    let mut labels = labels.into_iter();
     let mut pending = std::collections::BTreeMap::new();
+    let mut invalid = None;
+    let mut missing_label = false;
+    // This wire tree is detached. A failed validation discards it before I/O.
     visit(&mut |call, id| {
         #[cfg(feature = "issue-387-profile")]
         crate::model::adapter::profile::wire_field();
         let source = id.as_str().unwrap_or_default().to_owned();
+        if source.is_empty() {
+            invalid = Some("empty provider wire correlation ID");
+        }
         if call {
-            let label = labels[ordinal].clone();
-            ordinal += 1;
-            pending.insert(source, label.clone());
+            let label = labels.next().map_or_else(
+                || {
+                    missing_label = true;
+                    source.clone()
+                },
+                |label| label.as_ref().to_owned(),
+            );
+            if pending.insert(source, label.clone()).is_some() {
+                invalid = Some("ambiguous unresolved provider wire correlation ID");
+            }
             *id = Value::String(label);
         } else if let Some(label) = pending.remove(&source) {
             *id = Value::String(label);
         }
     });
+    if let Some(error) = invalid {
+        return Err(error);
+    }
+    if missing_label || labels.next().is_some() {
+        return Err("wire call count differs from request correlation plan");
+    }
     Ok(())
 }
 /// Explicit labels for each transmitted canonical `ToolCall` coordinate. Stored
@@ -82,79 +63,23 @@ pub(crate) fn request_labels_at(
     request: &crate::model::ModelRequest,
     boundary: Option<usize>,
 ) -> Result<std::collections::BTreeMap<(u32, u32), String>, String> {
-    use crate::message::types::AssistantContentBlock;
-    use crate::model::projected::ModelMessageView;
-    use crate::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
+    request_plan(request, boundary).map(|plan| plan.coordinates())
+}
+
+pub(super) fn request_plan(
+    request: &crate::model::ModelRequest,
+    boundary: Option<usize>,
+) -> Result<Plan, String> {
     #[cfg(feature = "issue-387-profile")]
     let _profile = crate::model::adapter::profile::phase(
         crate::model::adapter::profile::Phase::RequestCorrelation,
     );
-    let stored = is_stored(request);
-    let start = if stored {
-        boundary.ok_or("stored continuation lacks accepted output")?
-    } else {
-        0
-    };
-    let origin = request.invocation.replay_origin();
-    let mut calls = Vec::new();
-    let indices = if stored {
-        (start..request.messages.len()).collect()
-    } else {
-        request.messages.tool_indices()
-    };
-    for message in indices {
-        #[cfg(feature = "issue-387-profile")]
-        crate::model::adapter::profile::item(message);
-        if let ModelMessageView::Assistant(content) = request.messages[message].view() {
-            let native = request.protocol() == ModelProtocol::OpenAiResponses && (
-                (stored && Some(message) == boundary) || content.iter().any(|block| matches!(block,
-                    AssistantContentBlock::Reasoning(reasoning) if reasoning.belongs_to(origin.as_ref())
-                        && matches!(reasoning.provider_state, Some(ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless { .. })))
-                ))
-            );
-            for (block, item) in content.iter().enumerate() {
-                #[cfg(feature = "issue-387-profile")]
-                crate::model::adapter::profile::block();
-                if let AssistantContentBlock::ToolCall(call) = item {
-                    if call.id.as_str().is_empty() {
-                        return Err("empty provider wire correlation ID".into());
-                    }
-                    calls.push((
-                        (
-                            u32::try_from(message)
-                                .map_err(|_| "request message coordinate overflow")?,
-                            u32::try_from(block)
-                                .map_err(|_| "request block coordinate overflow")?,
-                        ),
-                        call.id.to_string(),
-                        native,
-                    ));
-                }
-            }
-        }
-    }
-    // The allocator preserves the last occurrence of an ID. Give native calls
-    // that priority regardless of their chronological position in the history.
-    let order = (0..calls.len())
-        .filter(|i| !calls[*i].2)
-        .chain((0..calls.len()).filter(|i| calls[*i].2))
-        .collect::<Vec<_>>();
-    let labels = wire_labels(
-        &order
-            .iter()
-            .map(|i| calls[*i].1.clone())
-            .collect::<Vec<_>>(),
-        request.protocol(),
-    );
-    let mut mapped = std::collections::BTreeMap::new();
-    for (index, label) in order.into_iter().zip(labels) {
-        let (coordinate, raw, native) = &calls[index];
-        if *native && &label != raw {
-            return Err("native output has conflicting or invalid wire correlation IDs".into());
-        }
-        mapped.insert(*coordinate, label);
-    }
-    Ok(mapped)
+    let mut cache = request
+        .messages
+        .preparation()
+        .lock()
+        .expect("input preparation cache");
+    plan::prepare(&mut cache, request, boundary)
 }
 
 fn is_stored(request: &crate::model::ModelRequest) -> bool {
@@ -169,21 +94,23 @@ fn is_stored(request: &crate::model::ModelRequest) -> bool {
         )
 }
 
-pub(crate) fn wire_labels(raw: &[String], protocol: ModelProtocol) -> Vec<String> {
-    use sha2::{Digest, Sha256};
-    let mut labels = crate::model::occurrence::wire_labels(raw);
+fn valid_wire_id(id: &str, protocol: ModelProtocol) -> bool {
     let limit = if protocol == ModelProtocol::OpenAiChatCompletions {
         40
     } else {
         64
     };
-    let valid = |id: &str| {
-        !id.is_empty()
-            && id.len() <= limit
-            && id
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
-    };
+    !id.is_empty()
+        && id.len() <= limit
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+}
+
+pub(crate) fn wire_labels(raw: &[String], protocol: ModelProtocol) -> Vec<String> {
+    use sha2::{Digest, Sha256};
+    let mut labels = crate::model::occurrence::wire_labels(raw);
+    let valid = |id: &str| valid_wire_id(id, protocol);
     let mut occupied = labels
         .iter()
         .filter(|id| valid(id))
