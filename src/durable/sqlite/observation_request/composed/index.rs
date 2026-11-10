@@ -36,7 +36,7 @@ enum Page {
 // SQLite rolls it back with page writes/savepoints; hits authenticate current bytes.
 pub(super) fn install_cache(connection: &Connection) -> Result<(), ConversationStoreError> {
     connection.execute_batch("CREATE TEMP TABLE IF NOT EXISTS request_source_page_memo(stamp INTEGER PRIMARY KEY,hash BLOB NOT NULL UNIQUE,page_id INTEGER NOT NULL)")
-        .map_err(|error|storage(error.to_string()))
+        .map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))
 }
 fn remember(connection: &Connection, reference: BlobRef) -> Result<(), ConversationStoreError> {
     connection
@@ -44,14 +44,14 @@ fn remember(connection: &Connection, reference: BlobRef) -> Result<(), Conversat
             "DELETE FROM request_source_page_memo WHERE hash=?1",
             [reference.hash.as_slice()],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     connection
         .execute_cached(
             "INSERT INTO request_source_page_memo(hash,page_id)VALUES(?1,?2)",
             params![reference.hash.as_slice(), reference.id],
         )
-        .map_err(|error| storage(error.to_string()))?;
-    connection.execute_cached("DELETE FROM request_source_page_memo WHERE stamp=(SELECT min(stamp) FROM request_source_page_memo) AND (SELECT count(*) FROM request_source_page_memo)>256",[]).map_err(|error|storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    connection.execute_cached("DELETE FROM request_source_page_memo WHERE stamp=(SELECT min(stamp) FROM request_source_page_memo) AND (SELECT count(*) FROM request_source_page_memo)>256",[]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
 fn encode(page: &Page) -> Result<Vec<u8>, ConversationStoreError> {
@@ -97,7 +97,7 @@ pub(super) fn store_blob(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if let Some(id) = cached {
         let reference = BlobRef { id, hash };
         load_blob_reusing(connection, reference, Some(bytes))?;
@@ -497,6 +497,55 @@ pub(super) fn encode_test_page(page: serde_json::Value) -> Vec<u8> {
 #[cfg(test)]
 mod memo_tests {
     use super::*;
+
+    #[test]
+    fn memo_lookup_cancellation_cannot_be_contained_as_optional_source_failure() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch("CREATE TABLE request_source_pages(id INTEGER PRIMARY KEY,hash BLOB NOT NULL,bytes BLOB NOT NULL); CREATE TABLE native_marker(id INTEGER PRIMARY KEY)").unwrap();
+        install_cache(&connection).unwrap();
+        let interrupt = Arc::new(AtomicBool::new(false));
+        let armed = interrupt.clone();
+        connection
+            .authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "request_source_page_memo",
+                        ..
+                    }
+                ) {
+                    armed.store(true, Ordering::SeqCst);
+                }
+                Authorization::Allow
+            }))
+            .unwrap();
+        connection
+            .progress_handler(1, Some(move || interrupt.swap(false, Ordering::SeqCst)))
+            .unwrap();
+        {
+            let transaction = connection.transaction().unwrap();
+            transaction
+                .execute("INSERT INTO native_marker VALUES(1)", [])
+                .unwrap();
+            let result = crate::durable::sqlite::optional_display_layout(&transaction, || {
+                store_blob(&transaction, b"cancelled Source geometry")
+            });
+            assert!(
+                matches!(result, Err(ConversationStoreError::OperationCancelled)),
+                "{result:?}"
+            );
+        }
+        let committed: u64 = connection
+            .query_row("SELECT count(*) FROM native_marker", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(committed, 0);
+    }
 
     #[test]
     fn bounded_memo_keeps_hot_pages_and_authenticates_each_hit_and_rollback() {

@@ -611,3 +611,57 @@ fn colocated_source_mutation_preserves_native_seats_but_native_mutation_revokes_
     assert!(owner.epoch.load(Ordering::Acquire) > epoch);
     assert!(load(&connection, Some(root)).is_err());
 }
+
+#[test]
+fn frozen_body_insert_preserves_cancellation_and_rolls_back() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::{Arc, atomic::AtomicBool};
+
+    let mut connection = connection();
+    let input = SelectedInputManifest::from_messages(&ConversationId::generate(), &[message(1)]);
+    let owner = Owner::uninstalled();
+    let interrupt = Arc::new(AtomicBool::new(false));
+    let armed = interrupt.clone();
+    connection
+        .authorizer(Some(move |context: AuthContext<'_>| {
+            if matches!(
+                context.action,
+                AuthAction::Insert {
+                    table_name: "native_input_items"
+                }
+            ) {
+                armed.store(true, Ordering::SeqCst);
+            }
+            Authorization::Allow
+        }))
+        .unwrap();
+    connection
+        .progress_handler(1, Some(move || interrupt.swap(false, Ordering::SeqCst)))
+        .unwrap();
+    {
+        let transaction = connection.transaction().unwrap();
+        let result = persist(&transaction, &input, &owner);
+        assert!(
+            matches!(result, Err(ConversationStoreError::OperationCancelled)),
+            "{result:?}"
+        );
+    }
+    connection
+        .progress_handler(0, None::<fn() -> bool>)
+        .unwrap();
+    connection
+        .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+        .unwrap();
+    for table in ["native_input_items", "native_input_nodes"] {
+        let count: u64 = connection
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+    let transaction = connection.transaction().unwrap();
+    let selected = persist(&transaction, &input, &owner).unwrap();
+    let root = selected.root;
+    transaction.commit().unwrap();
+    selected.commit(&owner);
+    assert_eq!(load(&connection, root).unwrap(), input);
+}

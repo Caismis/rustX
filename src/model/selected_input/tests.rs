@@ -448,10 +448,10 @@ fn cold_freeze_rejects_overbudget_before_constructing_cloning_or_hashing_input()
 #[test]
 fn skew_append_allocates_at_most_four_nodes_with_all_old_cuts_retained() {
     let scope = ConversationId::generate();
-    let message = user(0);
     let mut selected = SelectedInputManifest::default();
     let mut roots = Vec::new();
     for history in 0..8192 {
+        let message = user(history);
         take_node_work();
         selected = selected.append(&scope, &message);
         let work = take_node_work();
@@ -463,7 +463,9 @@ fn skew_append_allocates_at_most_four_nodes_with_all_old_cuts_retained() {
     for history in [8, 64, 512, 4096, 8192] {
         let old = &roots[history - 1];
         assert_eq!(old.len(), history);
-        assert_eq!(old.get(0), old.get(history - 1));
-        assert_eq!(old.messages().get(history / 2), Some(&message));
+        let expected = flat_frozen(&scope, &[user(0), user(history - 1)]);
+        assert_eq!(old.get(0), Some(&expected[0]));
+        assert_eq!(old.get(history - 1), Some(&expected[1]));
+        assert_eq!(old.messages().get(history / 2), Some(&user(history / 2)));
     }
 }
