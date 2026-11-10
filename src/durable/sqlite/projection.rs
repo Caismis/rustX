@@ -1200,10 +1200,16 @@ fn selected_history_cut(
         })
         .map(|(_, h)| h.clone());
     let mut result = if let Some(mut history) = cached {
-        append_history_delta(connection, scope, cut, &mut history)?;
+        append_history_delta(connection, scope, cut, &mut history, &owner.bodies)?;
         history
     } else {
-        compile_history(connection, scope, cut, head(connection)?.as_ref())?
+        compile_history_with_bodies(
+            connection,
+            scope,
+            cut,
+            head(connection)?.as_ref(),
+            Some(&owner.bodies),
+        )?
     };
     result
         .input_manifest
@@ -1234,6 +1240,7 @@ fn append_history_message(
     scope: &ConversationId,
     history: &mut crate::durable::projection::HistoricalModelInput,
     pending: &mut PendingTailCalls,
+    bodies: &crate::conversation::bodies::CanonicalBodies,
     message: crate::message::types::MessageBlock,
 ) -> Result<(), ConversationStoreError> {
     use crate::model::projected::FrozenModelInput;
@@ -1241,7 +1248,7 @@ fn append_history_message(
         .map_err(|_| invalid("request occurrence overflow"))?;
     history.input_manifest = history
         .input_manifest
-        .append(scope, &crate::model::ModelInputMessage::Canonical(message));
+        .append_shared(scope, bodies.share(message));
     let FrozenModelInput::Original(reference) = history.input_manifest.get(index as usize).unwrap()
     else {
         unreachable!()
@@ -1304,13 +1311,6 @@ fn append_history_message(
         }
         crate::message::types::MessageBlock::User(_) => {}
     }
-    history
-        .items
-        .push_back(crate::context::checkpoint::CheckpointItem {
-            message: CheckpointMessage::Original(reference),
-            call_sources: Vec::new(),
-            result_call: None,
-        });
     Ok(())
 }
 
@@ -1319,6 +1319,7 @@ fn append_history_delta(
     scope: &ConversationId,
     cut: &crate::context::resources::ResourceReadCut,
     history: &mut crate::durable::projection::HistoricalModelInput,
+    bodies: &crate::conversation::bodies::CanonicalBodies,
 ) -> Result<(), ConversationStoreError> {
     let mut after = history.cut.ledger;
     let mut pending = std::collections::BTreeMap::new();
@@ -1344,7 +1345,7 @@ fn append_history_delta(
             return Err(invalid("historical Tail materialization exceeds bound"));
         }
         for (position, message) in page.rows {
-            append_history_message(scope, history, &mut pending, message)?;
+            append_history_message(scope, history, &mut pending, bodies, message)?;
             after = LedgerFrontier(position);
         }
     }
@@ -1415,13 +1416,21 @@ fn compile_history(
     read_cut: &crate::context::resources::ResourceReadCut,
     checkpoint: Option<&ProjectionCheckpoint>,
 ) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
+    compile_history_with_bodies(connection, scope, read_cut, checkpoint, None)
+}
+
+#[allow(clippy::too_many_lines)]
+fn compile_history_with_bodies(
+    connection: &Connection,
+    scope: &ConversationId,
+    read_cut: &crate::context::resources::ResourceReadCut,
+    checkpoint: Option<&ProjectionCheckpoint>,
+    bodies: Option<&crate::conversation::bodies::CanonicalBodies>,
+) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
     use crate::durable::projection::{HistoricalModelInput, RequestHistoryCut};
     let mut messages = Vec::new();
     let mut tool_associations = Vec::new();
     let mut pending_tail = std::collections::BTreeMap::new();
-    let mut items = checkpoint
-        .as_ref()
-        .map_or_else(Vec::new, |p| p.candidate.items.clone());
     let base = checkpoint
         .as_ref()
         .map_or(LedgerFrontier(0), |p| p.candidate.base_frontier);
@@ -1562,13 +1571,6 @@ fn compile_history(
                 crate::message::types::MessageBlock::User(_) => {}
             }
             after = LedgerFrontier(position);
-            items.push(crate::context::checkpoint::CheckpointItem {
-                message: CheckpointMessage::Original(
-                    crate::model::projected::CanonicalMessageRef::of(scope, &message),
-                ),
-                call_sources: Vec::new(),
-                result_call: None,
-            });
             messages.push(message.into());
         }
     }
@@ -1577,7 +1579,17 @@ fn compile_history(
             "canonical Tail ends inside an incomplete Tool batch",
         ));
     }
-    let input_manifest = crate::model::SelectedInputManifest::from_messages(scope, &messages);
+    let mut input_manifest =
+        crate::model::SelectedInputManifest::from_messages(scope, std::iter::empty());
+    for message in messages {
+        let actual = match (message, bodies) {
+            (crate::model::ModelInputMessage::Canonical(message), Some(bodies)) => {
+                bodies.share(message)
+            }
+            (message, _) => Arc::new(message),
+        };
+        input_manifest = input_manifest.append_shared(scope, actual);
+    }
     Ok(HistoricalModelInput {
         tool_associations: tool_associations.into_iter().collect(),
         cut: RequestHistoryCut {
@@ -1592,7 +1604,7 @@ fn compile_history(
         },
         messages: input_manifest.messages(),
         input_manifest,
-        items: items.into_iter().collect(),
+        checkpoint_fingerprint: checkpoint.map(|p| Arc::from(p.fingerprint.as_str())),
         materialized_bytes: bytes,
     })
 }

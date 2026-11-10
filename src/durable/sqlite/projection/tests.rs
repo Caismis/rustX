@@ -3389,3 +3389,282 @@ fn auxiliary_history_excludes_the_incomplete_tool_batch_at_the_exact_cached_or_c
         assert_eq!(store.projected_history().unwrap(), after);
     }
 }
+
+#[test]
+fn native_history_actual_leases_canonical_ledger_allocations_before_and_after_resume() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let mut state = crate::conversation::ConversationState::new();
+    state.bind_bodies(store.canonical_bodies());
+    let mut old_cut = None;
+    for h in 1..=512 {
+        let value = message(h);
+        store.append_canonical(&value).unwrap();
+        state.commit(value).unwrap();
+        let history = store.projected_history().unwrap();
+        let actual = history
+            .messages
+            .get(usize::try_from(h).unwrap() - 1)
+            .unwrap()
+            .as_canonical()
+            .unwrap();
+        assert!(std::ptr::eq(
+            actual,
+            state.ledger().get(actual.id()).unwrap()
+        ));
+        if h == 8 {
+            old_cut = Some(history);
+        }
+    }
+    let history = store.projected_history().unwrap();
+    let restored = crate::conversation::ConversationState::from_shared_durable_head(
+        (0..history.messages.len()).map(|i| history.messages.shared(i)),
+        history
+            .messages
+            .iter()
+            .map(|m| m.canonical_id().unwrap().clone())
+            .collect(),
+        crate::conversation::SurfaceRevision::new(history.cut.ledger.0),
+        history.cut.activation.0,
+    )
+    .unwrap();
+    for actual in &history.messages {
+        let actual = actual.as_canonical().unwrap();
+        assert!(std::ptr::eq(
+            actual,
+            restored.ledger().get(actual.id()).unwrap()
+        ));
+    }
+    assert_eq!(
+        old_cut.unwrap().messages.to_vec(),
+        (1..=8).map(|i| message(i).into()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn compaction_items_are_materialized_from_the_exact_checkpoint_and_tail() {
+    let store = store();
+    let initial: Vec<_> = (1..=8).map(message).collect();
+    store.initialize(&initial).unwrap();
+    let original = CheckpointItem {
+        message: CheckpointMessage::Original(CanonicalMessageRef::of(
+            store.conversation_id(),
+            &initial[4],
+        )),
+        call_sources: Vec::new(),
+        result_call: None,
+    };
+    let signal = CancellationSignal::new();
+    let candidate = candidate(
+        &store,
+        "cold-items",
+        vec![summary("exact Derived"), original],
+    );
+    let input = commit_input(&store, "cold-items-operation", candidate, &signal);
+    store.commit_projection(input).unwrap();
+    let checkpoint = store.projection_head().unwrap().unwrap();
+    store.append_canonical(&message(9)).unwrap();
+    let history = store.projected_history().unwrap();
+    let mut expected = checkpoint.candidate.items.clone();
+    expected.push(CheckpointItem {
+        message: CheckpointMessage::Original(CanonicalMessageRef::of(
+            store.conversation_id(),
+            &message(9),
+        )),
+        call_sources: Vec::new(),
+        result_call: None,
+    });
+    assert_eq!(
+        history.checkpoint_items(Some(&checkpoint)).unwrap(),
+        expected
+    );
+    assert!(history.checkpoint_items(None).is_err());
+    let mut changed = checkpoint.clone();
+    changed.candidate.items.swap(0, 1);
+    assert!(
+        history.checkpoint_items(Some(&changed)).is_err(),
+        "matching cut coordinates cannot authenticate changed checkpoint content"
+    );
+    store.append_canonical(&message(10)).unwrap();
+    assert_eq!(
+        history.checkpoint_items(Some(&checkpoint)).unwrap(),
+        expected,
+        "an old cut never takes the latest Tail"
+    );
+}
+
+#[test]
+fn ordinary_recovery_reads_no_completed_canonical_bodies_at_8_64_512_4096() {
+    for h in [8, 64, 512, 4096] {
+        let store = store();
+        let messages: Vec<_> = (1..=h).map(message).collect();
+        store.initialize(&messages).unwrap();
+        super::super::canonical::ledger::take_body_loads();
+        super::super::compaction_resources::take_body_decodes();
+        let evidence = crate::runtime::recovery::RecoveryEvidence::reconstruct(&store).unwrap();
+        assert!(evidence.tool_repair_messages().is_empty());
+        assert_eq!(super::super::canonical::ledger::take_body_loads(), 0, "{h}");
+        assert_eq!(
+            super::super::compaction_resources::take_body_decodes(),
+            0,
+            "{h}"
+        );
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One native ownership/cut/corruption and independent-domain oracle.
+fn recovery_result_ownership_uses_exact_primary_evidence_at_the_fact_cut() {
+    use crate::message::types::{
+        AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, ToolMessageBlock,
+    };
+    use crate::runtime::identity::{AttemptId, ToolCallId, ToolId};
+    let seeded = store();
+    let call = crate::tools::types::ToolCall {
+        id: ToolCallId::new("owner-wire"),
+        tool_id: ToolId::new("owner-tool"),
+        name: "owner-tool".into(),
+        arguments: serde_json::json!({}),
+    };
+    let assistant = MessageBlock::Assistant(AssistantMessageBlock {
+        id: MessageId::new("owner-assistant"),
+        content: vec![AssistantContentBlock::ToolCall(call.clone())],
+    });
+    let result = MessageBlock::Tool(ToolMessageBlock {
+        id: MessageId::new("owner-assistant-recovered-tool-owner-wire"),
+        occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+            assistant.id().clone(),
+            ContentBlockIndex::new(0),
+        ),
+        tool_call_id: call.id.clone(),
+        tool_id: call.tool_id,
+        result: crate::scripted_suites::support::fake::success_result("known result").into(),
+    });
+    seeded
+        .initialize(&[assistant.clone(), result.clone()])
+        .unwrap();
+    assert!(
+        seeded
+            .recovery_tool_result_owner(result.id(), &call.id, 0)
+            .unwrap()
+            .is_none()
+    );
+    let store = store();
+    store.initialize(&[]).unwrap();
+    // Existing arbitrary producer identities are not limited by a cache cap.
+    let attempt = AttemptId::new("owner-attempt".repeat(512));
+    let envelope = |event| RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: EventId::new(""),
+        sequence: 0,
+        conversation_id: store.conversation_id().clone(),
+        attempt_id: Some(attempt.clone()),
+        turn_id: None,
+        timestamp: chrono::Utc::now(),
+        event,
+    };
+    store
+        .append_event(envelope(RuntimeEvent::AttemptStarted {
+            attempt_id: attempt.clone(),
+        }))
+        .unwrap();
+    let commit = store
+        .append_canonical_with_event(
+            &assistant,
+            envelope(RuntimeEvent::AssistantMessageCommitted {
+                message_id: assistant.id().clone(),
+            }),
+        )
+        .unwrap();
+    let commit = commit.0;
+    let mut repaired = envelope(RuntimeEvent::ToolMessageCommitted {
+        message_id: result.id().clone(),
+        tool_call_id: call.id.clone(),
+    });
+    repaired.attempt_id = None;
+    let repaired = store
+        .append_canonical_with_event(&result, repaired)
+        .unwrap()
+        .0;
+    let owner = store
+        .recovery_tool_result_owner(result.id(), &call.id, repaired.sequence)
+        .unwrap()
+        .unwrap();
+    assert_eq!(owner.assistant_message_id, *assistant.id());
+    assert_eq!(owner.attempt_id, attempt);
+    assert!(
+        store
+            .recovery_tool_result_owner(result.id(), &call.id, commit.sequence - 1)
+            .is_err()
+    );
+    assert!(
+        store
+            .recovery_tool_result_owner(
+                result.id(),
+                &ToolCallId::new("different-wire"),
+                repaired.sequence
+            )
+            .is_err()
+    );
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE events SET observation_trace_fact=NULL WHERE sequence=?1",
+            [commit.sequence],
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .recovery_tool_result_owner(result.id(), &call.id, repaired.sequence)
+            .unwrap()
+            .unwrap(),
+        owner
+    );
+    super::super::canonical::ledger::take_body_loads();
+    super::super::compaction_resources::take_body_decodes();
+    let evidence = crate::runtime::recovery::RecoveryEvidence::reconstruct(&store).unwrap();
+    assert!(evidence.tool_repair_messages().is_empty());
+    assert_eq!(super::super::canonical::ledger::take_body_loads(), 0);
+    assert_eq!(super::super::compaction_resources::take_body_decodes(), 0);
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE canonical_tool_calls SET attempt_id='changed-owner' WHERE result_message_id=?1",
+            [result.id().as_str()],
+        )
+        .unwrap();
+    assert!(
+        store
+            .recovery_tool_result_owner(result.id(), &call.id, repaired.sequence)
+            .is_err(),
+        "Trace evidence never substitutes a missing primary ownership proof"
+    );
+}
+
+#[test]
+fn recovery_leases_an_oversized_unsettled_assistant_without_compaction_policy() {
+    use crate::message::types::{AssistantContentBlock, AssistantMessageBlock};
+    use crate::runtime::identity::{ToolCallId, ToolId};
+    let store = store();
+    let assistant = MessageBlock::Assistant(AssistantMessageBlock {
+        id: MessageId::new("oversized-unsettled"),
+        content: vec![
+            AssistantContentBlock::Text(crate::message::TextBlock {
+                text: "x".repeat(2 * 1024 * 1024),
+            }),
+            AssistantContentBlock::ToolCall(crate::tools::types::ToolCall {
+                id: ToolCallId::new("oversized-wire"),
+                tool_id: ToolId::new("oversized-tool"),
+                name: "oversized-tool".into(),
+                arguments: serde_json::json!({}),
+            }),
+        ],
+    });
+    store.initialize(std::slice::from_ref(&assistant)).unwrap();
+    let evidence = crate::runtime::recovery::RecoveryEvidence::reconstruct(&store).unwrap();
+    assert_eq!(evidence.tool_repair_messages(), &[assistant]);
+}

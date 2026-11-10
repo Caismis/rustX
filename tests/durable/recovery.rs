@@ -2800,7 +2800,7 @@ fn the_recovery_fold_retains_only_unresolved_work() {
     let plan = RecoveryPlan::classify(&evidence);
     assert_eq!(plan.attempt_class(), &AttemptRecoveryClass::AlreadyTerminal);
     assert!(plan.background_classes().is_empty());
-    assert!(evidence.active_messages().is_empty());
+    assert!(evidence.tool_repair_messages().is_empty());
     assert!(evidence.pending_inbound().is_empty());
     assert_eq!(evidence.next_attempt_ordinal(), 40);
     // 160 durable events and 40 request snapshots are behind this fold; the

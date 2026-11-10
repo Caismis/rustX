@@ -196,7 +196,7 @@ impl<'a> AgentExecution<'a> {
                 runtime_workspace: tool_runtime.workspace().root().to_path_buf(),
             });
         }
-        let conversation = core::mem::take(&mut request.conversation);
+        let mut conversation = core::mem::take(&mut request.conversation);
         // Standalone fixtures may provide a fresh store rather than
         // constructing a ConversationRuntime first; initialize it once from
         // the supplied current facts (normal construction already did).
@@ -208,6 +208,7 @@ impl<'a> AgentExecution<'a> {
                 .initialize(&conversation.ledger().audit_records())
                 .map_err(MailboxError::Durable)?;
         }
+        conversation.bind_bodies(store.canonical_bodies());
         let admitted_tools = std::sync::Arc::new(
             capability
                 .snapshot()
