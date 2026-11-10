@@ -313,8 +313,21 @@ pub(super) fn persist(
         },
         MAX_BYTES + REFERENCE_BYTES + 512,
     )?;
-    if materialized_bytes(json.len(), configuration.json.len(), association_binding)? > MAX_BYTES {
+    let bytes = materialized_bytes(json.len(), configuration.json.len(), association_binding)?;
+    if bytes > MAX_BYTES {
         return Err(invalid("frozen request exceeds storage byte budget"));
+    }
+    let association_limit = MAX_BYTES - bytes + 2;
+    if snapshot
+        .tool_associations
+        .encoded_len_upper_bound()
+        .is_none_or(|upper| upper > association_limit)
+    {
+        crate::context::resources::bounded_encoded_len(
+            &snapshot.tool_associations,
+            association_limit,
+        )
+        .map_err(|_| invalid("frozen request exceeds storage byte budget"))?;
     }
     match configuration.matches(connection)? {
         Some(true) => {}

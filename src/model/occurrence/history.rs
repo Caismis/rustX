@@ -57,6 +57,7 @@ pub struct ToolAssociationHistory {
     values: imbl::Vector<Arc<AssociationNode>>,
     native: imbl::HashMap<[u8; 32], NativeIds>,
     empty_id: bool,
+    pub(super) encoded_bytes_upper: usize,
 }
 impl PartialEq for ToolAssociationHistory {
     fn eq(&self, other: &Self) -> bool {
@@ -94,6 +95,29 @@ impl ToolAssociationHistory {
     /// Panics if the association count exceeds `u32::MAX`. Native selections
     /// admit at most 8192 occurrences.
     pub fn push_back(&mut self, value: HistoricalToolAssociation) {
+        // Wire labels contain at most 64 ASCII bytes. Reserve ten decimal
+        // digits for either shifted coordinate and bind the request ID later.
+        let maximum = super::ActualRequestToolAssociation {
+            call: super::ActualRequestCallCoordinate {
+                message: crate::context::checkpoint::RequestMessageOccurrence {
+                    request_id: crate::runtime::RequestId::new(""),
+                    item_index: u32::MAX,
+                },
+                block: crate::context::checkpoint::RequestBlockIndex(value.call_block),
+            },
+            result: crate::context::checkpoint::RequestMessageOccurrence {
+                request_id: crate::runtime::RequestId::new(""),
+                item_index: u32::MAX,
+            },
+            source: value.source.clone(),
+            wire_id: Some(ProviderWireCorrelationId(String::new())),
+        };
+        self.encoded_bytes_upper = self.encoded_bytes_upper.saturating_add(
+            serde_json::to_vec(&maximum)
+                .expect("Tool association serializes")
+                .len()
+                .saturating_add(64),
+        );
         let id = value.wire_id.as_ref().map_or("", |id| id.0.as_str());
         self.empty_id |= id.is_empty();
         for origin in &value.native_origins {

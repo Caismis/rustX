@@ -361,3 +361,68 @@ fn oversized_raw_wire_ids_preserve_the_original_flat_snapshot_byte_budget() {
         .is_err()
     );
 }
+
+#[test]
+fn tool_association_storage_budget_includes_request_bound_flat_array() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let messages: Vec<_> = (0..128)
+        .flat_map(|turn| selected_tool_batch(&format!("budget-{turn}")))
+        .collect();
+    store.append_canonical_batch(&messages).unwrap();
+    let (mut snapshot, _) = selected_snapshot(&store, 1);
+    snapshot.identity.attempt_id = AttemptId::new("a".repeat(256 * 1024));
+    snapshot.request_id = snapshot.identity.request_id();
+    snapshot.provisional_message_id = snapshot.identity.provisional_message_id();
+    snapshot
+        .tool_associations
+        .rebind_request(&snapshot.request_id);
+    let Err(error) = store.commit_model_turn_start(&[], &snapshot, Utc::now()) else {
+        panic!("the original 64 MiB metadata limit includes both request IDs per association");
+    };
+    assert!(error.to_string().contains("byte budget"), "{error}");
+    let connection = store.lock().unwrap();
+    for table in [
+        "request_snapshots",
+        "request_snapshot_payloads",
+        "tool_association_nodes",
+    ] {
+        assert_eq!(
+            connection
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                    .get::<_, usize>(0))
+                .unwrap(),
+            0,
+            "admission must roll back {table}"
+        );
+    }
+}
+
+#[test]
+fn rejected_bounded_association_read_never_materializes_the_flat_array() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let messages: Vec<_> = (0..32)
+        .flat_map(|turn| selected_tool_batch(&format!("read-budget-{turn}")))
+        .collect();
+    store.append_canonical_batch(&messages).unwrap();
+    let (snapshot, _) = selected_snapshot(&store, 1);
+    store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap();
+    crate::model::occurrence::MATERIALIZATIONS.with(|work| work.set(0));
+    assert!(
+        load_request_snapshot_bounded(
+            &store.lock().unwrap(),
+            store.conversation_id(),
+            &snapshot.request_id,
+            4096
+        )
+        .is_err()
+    );
+    assert_eq!(
+        crate::model::occurrence::MATERIALIZATIONS.with(std::cell::Cell::get),
+        0,
+        "the reader must enforce its byte budget before cloning every request-bound association"
+    );
+}
