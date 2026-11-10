@@ -391,37 +391,37 @@ it('a named Agent preserves and edits the complete explicit Auxiliary Model inde
   await commit({ ...model, auxiliary: { mode: 'explicit', model: 'summary-a', profile: { mode: 'lowest' } } });
 });
 
-it('the explicit Summary Model variant owns complete labels in each locale without changing native payloads', async () => {
-  const summary = { mode: 'explicit' as const, model: 'summary-a', profile: 'deep', max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
+it('the explicit Auxiliary Model variant owns complete labels in each locale without changing native payloads', async () => {
+  const summary = { mode: 'explicit' as const, model: 'summary-a', profile: { mode: 'explicit' as const, id: 'deep' }, max_output_tokens: { mode: 'limit' as const, tokens: 2048 }, request_params: { temperature: .2 } };
   const model = { model: 'main', profile: 'main-profile', max_output_tokens: { mode: 'limit' as const, tokens: 4096 }, request_params: { temperature: .7 }, auxiliary: summary };
   const source = cfg3Source();
   source.agents = [{ name: 'reviewer', scope: 'workspace', source: { path: '/agent.toml', revision: 'r1', authored: { model } } }];
   const { writes: write, context } = await renderEditor(<AgentEditor source={source} target={{ kind: "workspace", id: "A", displayName: "A" }} onClose={() => {}} models={['main', 'summary-a']} profiles={{ main: ['main-profile'], 'summary-a': ['deep', 'quick'] }} name="reviewer" />, { source, context: source });
   const labels = (locale: 'en' | 'zh') => {
     const tx = translator(locale);
-    const group = screen.getByRole('group', { name: tx('settings:models-page.explicit-summary-model-settings') });
+    const group = screen.getByRole('group', { name: tx('settings:models-page.auxiliary-model-settings') });
     const nested = within(group);
     return {
       group,
-      profile: nested.getByRole('button', { name: (name: string) => name.endsWith(tx('settings:models-page.profile-summary')) }),
-      limit: nested.getByLabelText(tx('settings:models-page.output-limit-summary')) as HTMLInputElement,
-      params: nested.getByLabelText(tx('settings:models-page.request-parameter-overrides-summary')) as HTMLElement,
+      profile: screen.getByRole('button', { name: (name: string) => name.endsWith(tx('settings:models-page.auxiliary-profile')) }),
+      limit: nested.getByLabelText(tx('settings:models-page.output-limit-auxiliary')) as HTMLInputElement,
+      params: nested.getByLabelText(tx('settings:models-page.request-parameter-overrides-auxiliary')) as HTMLElement,
       outer: screen.getByLabelText(tx('settings:models-page.request-parameter-overrides')) as HTMLElement,
     };
   };
   const english = labels('en');
   expect([english.limit.value, readJson(english.params), readJson(english.outer)]).toEqual(['2048', '{\n  "temperature": 0.2\n}', '{\n  "temperature": 0.7\n}']);
   expect(english.profile.textContent).toContain('deep');
-  expect(screen.getByLabelText('Output limit (Summary)')).toBe(english.limit);
+  expect(screen.getByLabelText('Output limit (Auxiliary)')).toBe(english.limit);
   const snapshot = context();
 
   act(() => localeController.setLocale('zh'));
   const chinese = labels('zh');
   expect([chinese.limit, chinese.params, chinese.outer]).toEqual([english.limit, english.params, english.outer]);
-  expect(screen.getByLabelText('输出上限（摘要）')).toBe(english.limit);
-  expect(screen.getByLabelText('请求参数覆盖（摘要）')).toBe(english.params);
-  expect(within(chinese.group).getByRole('button', { name: /预设（摘要）$/ })).toBe(chinese.profile);
-  expect(within(chinese.group).queryAllByRole('button', { name: /Summary/ })).toEqual([]);
+  expect(screen.getByLabelText('输出上限（辅助）')).toBe(english.limit);
+  expect(screen.getByLabelText('请求参数覆盖（辅助）')).toBe(english.params);
+  expect(screen.getByRole('button', { name: /辅助配置档$/ })).toBe(chinese.profile);
+  expect(within(chinese.group).queryAllByRole('button', { name: /Summary|Auxiliary/ })).toEqual([]);
   expect(chinese.group.textContent).not.toMatch(/Summary|Profile|Output limit|Request parameter/);
   expect(write).not.toHaveBeenCalled();
   expect(context()).toBe(snapshot);
