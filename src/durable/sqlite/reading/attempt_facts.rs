@@ -87,7 +87,7 @@ mod tests {
             // decoder in exactly the same order instead of being filtered out.
             let json =
                 serde_json::json!({"event":{"type":kind},"attempt_id":"different"}).to_string();
-            connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,attempt_id,event_json) VALUES(?1,?2,1,'conversation','time',?3,?4)", params![sequence, format!("event-{sequence}"), owner, json]).unwrap();
+            connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,attempt_id,event_json) VALUES(?1,?2,1,(SELECT conversation_id FROM rustx_store WHERE id=1),'time',?3,?4)", params![sequence, format!("event-{sequence}"), owner, json]).unwrap();
         }
         for (sql, kinds) in [(&**EXECUTION, EXECUTION_KINDS), (&**LINEAGE, LINEAGE_KINDS)] {
             let oracle = format!(
@@ -125,13 +125,13 @@ mod tests {
                     )
                     .unwrap()
             );
-            connection.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<?1) INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,attempt_id,event_json) SELECT x,'event-'||x,1,'conversation','time','selected','{\"event\":{\"type\":\"unrelated\"}}' FROM n", [history]).unwrap();
+            connection.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<?1) INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,attempt_id,event_json) SELECT x,'event-'||x,1,(SELECT conversation_id FROM rustx_store WHERE id=1),'time','selected','{\"event\":{\"type\":\"unrelated\"}}' FROM n", [history]).unwrap();
             for (sequence, kind) in [
                 (history + 1, "assistant_message_committed"),
                 (history + 2, "attempt_completed"),
                 (history + 3, "assistant_message_committed"),
             ] {
-                connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,attempt_id,event_json) VALUES(?1,?2,1,'conversation','time','selected',?3)", params![sequence, format!("event-{sequence}"), serde_json::json!({"event":{"type":kind}}).to_string()]).unwrap();
+                connection.execute("INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,attempt_id,event_json) VALUES(?1,?2,1,(SELECT conversation_id FROM rustx_store WHERE id=1),'time','selected',?3)", params![sequence, format!("event-{sequence}"), serde_json::json!({"event":{"type":kind}}).to_string()]).unwrap();
             }
             let mut current_steps = Vec::new();
             for (sql, kinds) in [(&**EXECUTION, EXECUTION_KINDS), (&**LINEAGE, LINEAGE_KINDS)] {

@@ -13,7 +13,7 @@ const CASES: &[(&str, &str, bool, usize)] = &[
 
 fn insert(connection: &Connection, sequence: u64, mask: u8, attempt: Option<&str>) {
     connection.execute(
-        "INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,attempt_id,observation_trace_total,observation_statistics,observation_execution,observation_members) VALUES(?1,?2,?3,'conversation','time','{}',?4,CASE WHEN (?5&1)>0 THEN ?1 END,CASE WHEN (?5&2)>0 THEN CAST(?2 AS BLOB) END,CASE WHEN (?5&4)>0 THEN CAST(?2 AS BLOB) END,CASE WHEN (?5&8)>0 THEN CAST(?2 AS BLOB) END)",
+        "INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json,attempt_id,observation_trace_total,observation_statistics,observation_execution,observation_members) VALUES(?1,?2,?3,(SELECT conversation_id FROM rustx_store WHERE id=1),'time','{}',?4,CASE WHEN (?5&1)>0 THEN ?1 END,CASE WHEN (?5&2)>0 THEN CAST(?2 AS BLOB) END,CASE WHEN (?5&4)>0 THEN CAST(?2 AS BLOB) END,CASE WHEN (?5&8)>0 THEN CAST(?2 AS BLOB) END)",
         params![sequence, format!("event-{sequence}"), EVENT_SCHEMA_VERSION, attempt, mask],
     ).unwrap();
 }

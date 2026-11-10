@@ -5,6 +5,8 @@ use super::{append_facts, attempt_start, event_insert, native_request};
 use crate::durable::sqlite::statements::FixedStatements;
 #[cfg(test)]
 mod identity_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod identity_write_tests;
 #[cfg(test)]
 mod tests;
 
@@ -758,9 +760,6 @@ pub(in crate::durable::sqlite) fn persist_event_tx_with_requests(
             }
         }
     }
-    // Keep native uniqueness after the lifecycle guards, including their error
-    // precedence. A producer may have reserved this spelling as an earlier
-    // custom alias; both identity trees must agree before inserting the row.
     if find_event_sequence(transaction, event.event_id.as_str())?.is_some() {
         return Err(storage(
             "insert runtime event: UNIQUE constraint failed: events.event_id",
@@ -1182,8 +1181,6 @@ pub(super) fn runtime_event_dependency_name(event: &RuntimeEvent) -> &'static st
 }
 
 // The first seek is only a candidate: exact scalar identity is always checked.
-// An arbitrary producer alias, including a future default spelling, lives in
-// the sparse partial tree. Both seeks together return at most two distinct rows.
 const EVENT_SEQUENCE_SQL: &str = "SELECT min(sequence),count(*) FROM (
     SELECT sequence FROM events WHERE sequence=?2 AND event_id=?1
     UNION ALL SELECT sequence FROM events INDEXED BY events_alias_idx

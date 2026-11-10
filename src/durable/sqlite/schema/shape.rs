@@ -67,6 +67,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
     }
 
     verify_required_index_sql(connection)?;
+    super::events::verify_schema(connection)?;
     for table in ["inherited_turn_provenance", "inherited_response_provenance"] {
         let primary: (String, i64) = connection
             .query_row(
@@ -822,6 +823,7 @@ pub(in crate::durable::sqlite) fn verify_witness_field_order(
 #[allow(clippy::too_many_lines)] // One closed required-index contract and its verifier.
 fn verify_required_index_sql(connection: &Connection) -> Result<(), ConversationStoreError> {
     let mut expected = [
+        ("rustx_store_conversation_idx", ("CREATE UNIQUE INDEX rustx_store_conversation_idx ON rustx_store(conversation_id COLLATE BINARY)".to_owned(), false)),
         ("events_alias_idx", ("CREATE UNIQUE INDEX events_alias_idx ON events(event_id) WHERE event_id != conversation_id || '-event-' || sequence".to_owned(), true)),
         ("publication_streams_open_idx", ("CREATE INDEX publication_streams_open_idx ON publication_streams(stream_id) WHERE settlement IS NULL".to_owned(), false)),
         ("publication_proposals_call_idx", ("CREATE INDEX publication_proposals_call_idx ON publication_proposals(call_id)".to_owned(), false)),
