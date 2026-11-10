@@ -42,7 +42,7 @@ fn layout_cached(
         .prepare_cached(super::event_heads::EXECUTION)
         .and_then(|mut statement| {
             statement.query_row(params![attempt.as_str(), through], |row| {
-                super::append_facts::read_fold(row, cache.map(|cache| &cache.0), decode_layout)
+                read_layout(row, cache)
             })
         })
         .optional()
@@ -913,11 +913,30 @@ fn layout_at(
     connection: &Connection,
     sequence: u64,
 ) -> Result<ExecutionLayout, ConversationStoreError> {
-    let bytes: Option<Vec<u8>> = connection
-        .prepare_cached("SELECT observation_execution FROM events WHERE sequence=?1")
-        .and_then(|mut statement| statement.query_row([sequence], |row| row.get(0)))
+    let state = connection
+        .prepare_cached("SELECT observation_execution,observation_execution_owner FROM events WHERE sequence=?1")
+        .and_then(|mut statement| statement.query_row([sequence], |row| read_layout(row, None)))
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
-    decode_layout(&bytes.ok_or_else(|| storage("native execution header unavailable"))?)
+    state?.ok_or_else(|| storage("native execution header unavailable"))
+}
+
+// Numeric model keys may only be used after the current header agrees with
+// its own observation-domain owner column, including on a fold-cache hit.
+fn read_layout(
+    row: &rusqlite::Row<'_>,
+    cache: Option<&FoldCache>,
+) -> rusqlite::Result<Result<Option<ExecutionLayout>, ConversationStoreError>> {
+    let owner: Option<u64> = row.get(1)?;
+    let state = super::append_facts::read_fold(row, cache.map(|cache| &cache.0), decode_layout)?;
+    Ok(state.and_then(|state| {
+        if state
+            .as_ref()
+            .is_some_and(|state| state.owner_anchor == 0 || Some(state.owner_anchor) != owner)
+        {
+            return Err(storage("native execution owner relationship corrupt"));
+        }
+        Ok(state)
+    }))
 }
 
 fn decode_layout(bytes: &[u8]) -> Result<ExecutionLayout, ConversationStoreError> {

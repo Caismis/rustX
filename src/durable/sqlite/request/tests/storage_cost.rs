@@ -137,6 +137,46 @@ fn numeric_request_start_is_bound_once_and_its_owner_fk_is_deferred() {
 }
 
 #[test]
+fn exhausted_request_start_preserves_the_journal_error_and_rolls_back() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE rustx_store SET next_event_sequence=?1 WHERE id=1",
+            [i64::MAX],
+        )
+        .unwrap();
+    let snapshot = test_request_snapshot(store.load_head().unwrap().revision, invocation());
+    let result = store.commit_model_turn_start(&[], &snapshot, Utc::now());
+    assert!(
+        matches!(result, Err(ConversationStoreError::Storage(message)) if message == "event sequence exhausted")
+    );
+    let connection = store.lock().unwrap();
+    for table in [
+        "events",
+        "request_owners",
+        "request_snapshots",
+        "request_snapshot_payloads",
+        "request_configurations",
+    ] {
+        assert_eq!(
+            connection
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row
+                    .get::<_, u64>(0))
+                .unwrap(),
+            0,
+            "{table}"
+        );
+    }
+    assert_eq!(
+        journal_prefix(&connection).unwrap(),
+        u64::try_from(i64::MAX).unwrap()
+    );
+}
+
+#[test]
 fn a_trigger_cannot_reassign_the_staged_request_start_sequence() {
     for table in ["request_owners", "request_snapshots"] {
         let store = store();
