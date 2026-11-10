@@ -518,7 +518,7 @@ pub(super) fn index_request_read_layouts(
         observation_trace::index_context(transaction, event.sequence, snapshot, context)
     })?; // Catalog identity evidence is independent of optional request-body layouts.
     let _ = optional_display_layout(transaction, || {
-        observation_trace::index_catalog(transaction, event.sequence, snapshot)
+        observation_trace::index_catalog(transaction, event.sequence, snapshot, configuration)
     })?;
     Ok(())
 }

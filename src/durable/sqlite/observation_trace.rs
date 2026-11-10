@@ -9,17 +9,23 @@ use crate::durable::observation::{
 use crate::durable::sqlite::statements::FixedStatements;
 use crate::observation::trace::{TraceFieldKind, TraceFieldSource};
 mod canonical;
+mod catalog;
+#[cfg(test)]
+mod catalog_tests;
 mod event;
 mod inspection;
 mod request;
 mod storage;
 pub(super) use canonical::{index_canonical, index_proposals};
+pub(super) use catalog::{
+    INVALIDATIONS as CATALOG_INVALIDATIONS, create_schema as create_catalog_schema, index_catalog,
+};
 pub(super) use event::{
     Prepared, index_event, prepare_event, prepare_request_core, request_core, settle_fields,
 };
 #[cfg(test)]
 pub(super) use event::{accepted_compare_work, accepted_identity_equal};
-pub(super) use inspection::{adoption_page, capture_definitions, index_catalog, tool_definition};
+pub(super) use inspection::{adoption_page, capture_definitions, tool_definition};
 pub(super) use request::{context, index_context, predecessor, retry_failure};
 
 impl TraceFactKind {
@@ -523,8 +529,8 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
         "CREATE UNIQUE INDEX request_trace_retry_idx ON request_snapshots(observation_step_anchor,observation_retry_number) WHERE observation_step_anchor IS NOT NULL",
         "CREATE UNIQUE INDEX state_observation_children_idx ON state_observation_fields(source_id,parent_path,ordinal)",
         "CREATE INDEX request_trace_catalog_identity_idx ON request_trace_catalogs(provisional_message_id,source_sequence)",
-        "CREATE INDEX request_trace_definition_identity_idx ON request_trace_definitions(source_sequence,tool_id,ordinal)",
-        "CREATE INDEX request_trace_definition_digest_idx ON request_trace_definitions(source_sequence,tool_identity_digest,ordinal)",
+        "CREATE INDEX request_trace_definition_identity_idx ON request_trace_definitions(catalog_id,tool_id,ordinal)",
+        "CREATE INDEX request_trace_definition_digest_idx ON request_trace_definitions(catalog_id,tool_identity_digest,ordinal)",
     ] {
         let name = sql
             .split("INDEX ")
@@ -547,6 +553,32 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             ));
         }
     }
+    for sql in catalog::INVALIDATIONS {
+        let name = sql.split_whitespace().nth(2).expect("literal trigger");
+        let actual: Option<String> = connection
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type='trigger' AND name=?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        if actual.as_deref() != Some(sql) {
+            return Err(ConversationStoreError::IncompatibleSchema(
+                "invalid native Trace catalog invalidation".into(),
+            ));
+        }
+    }
+    super::schema::shape::verify_unique_column(
+        connection,
+        "request_trace_catalog_versions",
+        "configuration_digest",
+    )?;
+    super::schema::shape::verify_unique_columns(
+        connection,
+        "request_trace_definitions",
+        &["catalog_id", "ordinal"],
+    )?;
     verify_header_layout(connection)?;
     super::schema::shape::verify_unique_column(
         connection,
@@ -582,7 +614,21 @@ fn verify_header_layout(connection: &Connection) -> Result<(), ConversationStore
             "trace_adoption_members",
             "CHECK(length(identity_digest)=32)",
         ),
+        (
+            "request_trace_catalog_versions",
+            "id INTEGER PRIMARY KEY AUTOINCREMENT",
+        ),
+        ("request_trace_catalog_versions", "CHECK(tool_count>=0)"),
+        ("request_trace_catalog_versions", "CHECK(complete IN (0,1))"),
+        (
+            "request_trace_catalog_versions",
+            "CHECK(typeof(configuration_digest)='text' AND octet_length(configuration_digest)=64)",
+        ),
         ("request_trace_catalogs", "CHECK(tool_count>=0)"),
+        (
+            "request_trace_catalogs",
+            "CHECK(length(catalog_witness)=32)",
+        ),
         ("request_trace_definitions", "CHECK(ordinal>=0)"),
         (
             "request_trace_definitions",

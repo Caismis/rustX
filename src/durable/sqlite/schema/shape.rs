@@ -424,17 +424,22 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
             ],
         ),
         (
+            "request_trace_catalog_versions",
+            &["id", "configuration_digest", "tool_count", "complete"],
+        ),
+        (
             "request_trace_catalogs",
-            &["source_sequence", "provisional_message_id", "tool_count"],
+            &[
+                "source_sequence",
+                "provisional_message_id",
+                "tool_count",
+                "catalog_id",
+                "catalog_witness",
+            ],
         ),
         (
             "request_trace_definitions",
-            &[
-                "source_sequence",
-                "ordinal",
-                "tool_identity_digest",
-                "tool_id",
-            ],
+            &["catalog_id", "ordinal", "tool_identity_digest", "tool_id"],
         ),
         (
             "trace_adoption_members",
@@ -716,7 +721,7 @@ pub(in crate::durable::sqlite) fn verify_witness_field_order(
         (
             "request_trace_catalogs",
             "provisional_message_id",
-            &["tool_count"] as &[&str],
+            &["catalog_id", "tool_count", "catalog_witness"] as &[&str],
         ),
         (
             "canonical_tool_calls",
