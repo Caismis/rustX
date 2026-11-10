@@ -692,17 +692,11 @@ fn finish_messages<'a>(
         .preparation()
         .lock()
         .expect("input preparation cache");
-    if cache
-        .correlation
-        .as_ref()
-        .is_some_and(|current| current.epoch == tools.correlation.epoch)
-    {
-        cache.anthropic = Some(prefix);
-    }
     if let Some(current) = cache.correlation.as_mut().filter(|current| {
         current.epoch == tools.correlation.epoch && current.matches(&request.messages)
     }) {
         current.dirty.clear();
+        cache.anthropic = Some(prefix);
     }
     Ok(messages)
 }
@@ -1611,5 +1605,31 @@ mod tests {
         assert_eq!(combined.input_tokens, Some(14));
         assert_eq!(combined.output_tokens, Some(0));
         assert_eq!(combined.total_tokens, Some(14));
+    }
+}
+
+#[cfg(test)]
+mod prefix_publication_tests {
+    use super::*;
+    use crate::model::adapter::cache::tests::{append, oracle, prepared, request};
+
+    #[test]
+    fn late_old_preparation_cannot_replace_current_prefix() {
+        let mut current = request();
+        current.invocation.protocol = crate::model::ModelProtocol::AnthropicMessages;
+        append(&mut current, 0, true, true);
+        let old = current.clone();
+        assert_eq!(prepared(&old), oracle(&old));
+        let tools =
+            crate::model::adapter::validation::validate_request(&old, old.protocol()).unwrap();
+        // Pause the old request after it has taken its immutable cached prefix.
+        let staged = stage_messages(&old, &tools).unwrap();
+        append(&mut current, 1, true, true);
+        let expected = oracle(&current);
+        assert_eq!(prepared(&current), expected);
+        // Complete the old preparation after the new one has published its
+        // prefix and consumed the old call/result's relabeling work.
+        finish_messages(&old, &tools, staged, None).unwrap();
+        assert_eq!(prepared(&current), expected);
     }
 }

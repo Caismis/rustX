@@ -213,4 +213,4 @@ pub(crate) fn take_work() -> Work {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
