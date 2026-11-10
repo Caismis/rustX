@@ -142,6 +142,23 @@ impl SqliteConversationStore {
         through: i64,
     ) -> io::Result<Option<(i64, String)>> {
         use rusqlite::OptionalExtension;
+        if matches!(authority, Authority::Surface) {
+            let connection = self.lock().map_err(error)?;
+            let selected: Option<(i64, String, Option<String>)> = connection.query_row(
+                "SELECT s.revision,s.message_id,m.message_id FROM surface_ops s LEFT JOIN message_ledger m ON m.position=s.ledger_position WHERE s.revision>?1 AND s.revision<=?2 ORDER BY s.revision LIMIT 1",
+                params![after, through], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).optional().map_err(error)?;
+            return selected
+                .map(|(revision, message_id, ledger_message_id)| {
+                    let operation = super::canonical::ledger::surface_append_operation(
+                        message_id,
+                        ledger_message_id.as_deref(),
+                    )
+                    .map_err(error)?;
+                    Ok((revision, serde_json::to_string(&operation).map_err(error)?))
+                })
+                .transpose();
+        }
         if matches!(authority, Authority::Journal) {
             // Bounds apply before copying a corrupted auxiliary payload into Rust.
             return self.lock().map_err(error)?.query_row(
@@ -236,13 +253,9 @@ impl Authority {
         match self {
             Self::Journal => ("events", "sequence", "event_json"),
             Self::Messages => ("message_ledger", "position", "message_json"),
-            Self::Surface => (
-                "surface_ops",
-                "revision",
-                "json_object('op','append','message_id',(SELECT message_id FROM message_ledger WHERE position=surface_ops.ledger_position))",
-            ),
             Self::PublicationAudits => ("publication_audits", "rowid", "audit_json"),
-            Self::Requests
+            Self::Surface
+            | Self::Requests
             | Self::InheritedResponses
             | Self::InheritedTurns
             | Self::Projections => {

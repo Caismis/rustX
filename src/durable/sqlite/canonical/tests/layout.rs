@@ -123,7 +123,7 @@ fn transcript_carrier_header_reads_and_append_sql_are_bounded_by_delta() {
 }
 
 #[test]
-fn surface_operations_store_one_numeric_ledger_binding_and_keep_old_revisions() {
+fn surface_operations_store_original_identity_and_keep_old_revisions_without_extra_index() {
     let store = store();
     store.initialize(&[user_message("one", "first")]).unwrap();
     store
@@ -131,13 +131,19 @@ fn surface_operations_store_one_numeric_ledger_binding_and_keep_old_revisions() 
         .unwrap();
     let connection = store.lock().unwrap();
     let bindings = connection
-        .prepare("SELECT revision,ledger_position FROM surface_ops ORDER BY revision")
+        .prepare("SELECT revision,ledger_position,message_id FROM surface_ops ORDER BY revision")
         .unwrap()
-        .query_map([], |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)))
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, u64>(0)?,
+                row.get::<_, u64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    assert_eq!(bindings, vec![(1, 1), (2, 2)]);
+    assert_eq!(bindings, vec![(1, 1, "one".into()), (2, 2, "two".into())]);
     let old = crate::durable::sqlite::canonical::ledger::reconstruct_surface(
         &connection,
         crate::conversation::SurfaceRevision::new(1),
@@ -153,7 +159,36 @@ fn surface_operations_store_one_numeric_ledger_binding_and_keep_old_revisions() 
         .unwrap();
     assert_eq!(
         columns,
-        ["revision", "compaction_generation", "ledger_position"]
+        [
+            "revision",
+            "compaction_generation",
+            "ledger_position",
+            "message_id"
+        ]
+    );
+    let indexes: u64 = connection
+        .query_row(
+            "SELECT count(*) FROM pragma_index_list('surface_ops')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(indexes, 0);
+    assert!(
+        connection
+            .execute(
+                "UPDATE surface_ops SET ledger_position=2 WHERE revision=1",
+                []
+            )
+            .is_err()
+    );
+    assert!(
+        connection
+            .execute(
+                "UPDATE message_ledger SET message_id='relabelled' WHERE position=1",
+                []
+            )
+            .is_err()
     );
 }
 
