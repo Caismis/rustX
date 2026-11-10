@@ -1,0 +1,2022 @@
+{
+  "scope": "Four balanced independent pairs, 128 sessions in each process, sampled after 8/16/32 turns. Ordinary GNU allocator; server PID only. PSS endpoints, retained file sizes and cumulative process writes remain distinct. No statistical-significance claim. All 1024 consistent backup hashes, schema (105/106 by side), integrity, FKs and exact ordered messages independently checked.",
+  "rows": [
+    {
+      "pair": 0,
+      "side": "before",
+      "binary_sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "fixture_sha256": "f6506d8c7fc8d5ce4967ea134c172d7f253cba8fb7b8154e424e4f36aa49a06c",
+      "directory": "memory-0-before",
+      "phases": {
+        "empty_server": {
+          "anon_pss_mib": 16.28125,
+          "pss_mib": 54.12890625,
+          "retained_files": {
+            "other": {
+              "files": 3,
+              "logical_bytes": 921,
+              "allocated_bytes": 8192,
+              "largest_logical_bytes": 728
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 1
+          }
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 343.33203125,
+          "pss_mib": 408.5556640625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 126773,
+              "allocated_bytes": 651264,
+              "largest_logical_bytes": 120797
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 65536000,
+              "allocated_bytes": 65536000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 128,
+            "configuration/changed": 1618,
+            "thread/status/changed": 1024,
+            "thread/status/resyncRequired": 4
+          }
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 667.21484375,
+          "pss_mib": 740.9384765625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140470,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134494
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 108265472,
+              "allocated_bytes": 108527616,
+              "largest_logical_bytes": 845824
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 279541760,
+              "allocated_bytes": 279969792,
+              "largest_logical_bytes": 2183920
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 4685,
+            "configuration/changed": 1618,
+            "thread/status/changed": 9220,
+            "thread/status/resyncRequired": 52,
+            "session/event": 10147
+          }
+        },
+        "seeded_history_16": {
+          "anon_pss_mib": 846.34375,
+          "pss_mib": 920.0673828125,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140467,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134491
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 171870208,
+              "allocated_bytes": 171966464,
+              "largest_logical_bytes": 1343488
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 279541760,
+              "allocated_bytes": 279969792,
+              "largest_logical_bytes": 2183920
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 8781,
+            "configuration/changed": 1618,
+            "thread/status/changed": 17424,
+            "thread/status/resyncRequired": 112,
+            "session/event": 20297
+          }
+        },
+        "seeded_history_32": {
+          "anon_pss_mib": 1162.88671875,
+          "pss_mib": 1236.6103515625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140470,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134494
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 256679936,
+              "allocated_bytes": 256901120,
+              "largest_logical_bytes": 2009088
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 280126064,
+              "allocated_bytes": 280440832,
+              "largest_logical_bytes": 2200496
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 16973,
+            "configuration/changed": 1618,
+            "thread/status/changed": 33828,
+            "thread/status/resyncRequired": 220,
+            "session/event": 40567
+          }
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 1170.3515625,
+          "pss_mib": 1240.3876953125,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140470,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134494
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 274882560,
+              "allocated_bytes": 275349504,
+              "largest_logical_bytes": 2150400
+            },
+            "shm": {
+              "files": 2,
+              "logical_bytes": 65536,
+              "allocated_bytes": 65536,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 2,
+              "logical_bytes": 2192208,
+              "allocated_bytes": 2195456,
+              "largest_logical_bytes": 2192208
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 151,
+            "session/summaryInvalidated": 4339,
+            "configuration/changed": 489,
+            "thread/status/changed": 8713,
+            "thread/status/resyncRequired": 55,
+            "session/event": 10134
+          }
+        }
+      },
+      "growth_8_to_32_mib": 495.671875,
+      "seed_cpu_ms_per_turn": 14.10888671875,
+      "seed_write_kib_per_turn": 685.2216796875,
+      "compiler_overlap_samples": 0
+    },
+    {
+      "pair": 0,
+      "side": "after",
+      "binary_sha256": "5d0e525df819d7ab3663f886a4a2a7f8a4d9ecfd37d2c148a9c791018de1951b",
+      "fixture_sha256": "f6506d8c7fc8d5ce4967ea134c172d7f253cba8fb7b8154e424e4f36aa49a06c",
+      "directory": "memory-0-after",
+      "phases": {
+        "empty_server": {
+          "anon_pss_mib": 16.26171875,
+          "pss_mib": 54.8291015625,
+          "retained_files": {
+            "other": {
+              "files": 3,
+              "logical_bytes": 921,
+              "allocated_bytes": 8192,
+              "largest_logical_bytes": 728
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 1
+          }
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 335.86328125,
+          "pss_mib": 401.681640625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 126645,
+              "allocated_bytes": 651264,
+              "largest_logical_bytes": 120669
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 65011712,
+              "allocated_bytes": 65011712,
+              "largest_logical_bytes": 507904
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 128,
+            "configuration/changed": 1609,
+            "thread/status/changed": 1024
+          }
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 659.19140625,
+          "pss_mib": 733.259765625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140342,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134366
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 107741184,
+              "allocated_bytes": 108003328,
+              "largest_logical_bytes": 841728
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 273707008,
+              "allocated_bytes": 274202624,
+              "largest_logical_bytes": 2138336
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 4686,
+            "configuration/changed": 1609,
+            "thread/status/changed": 9232,
+            "session/event": 10160,
+            "thread/status/resyncRequired": 64
+          }
+        },
+        "seeded_history_16": {
+          "anon_pss_mib": 828.703125,
+          "pss_mib": 902.771484375,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140342,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134366
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 173930496,
+              "allocated_bytes": 174063616,
+              "largest_logical_bytes": 1359872
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 284690680,
+              "allocated_bytes": 284901376,
+              "largest_logical_bytes": 2229504
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 8782,
+            "configuration/changed": 1609,
+            "thread/status/changed": 17444,
+            "session/event": 20295,
+            "thread/status/resyncRequired": 128
+          }
+        },
+        "seeded_history_32": {
+          "anon_pss_mib": 1123.92578125,
+          "pss_mib": 1198.181640625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140339,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134363
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 258097152,
+              "allocated_bytes": 258195456,
+              "largest_logical_bytes": 2031616
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 284690680,
+              "allocated_bytes": 284901376,
+              "largest_logical_bytes": 2229504
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 16974,
+            "configuration/changed": 1609,
+            "thread/status/changed": 33852,
+            "session/event": 40603,
+            "thread/status/resyncRequired": 228
+          }
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 1125.9296875,
+          "pss_mib": 1196.498046875,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140339,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134363
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 272965632,
+              "allocated_bytes": 273469440,
+              "largest_logical_bytes": 2136064
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 151,
+            "session/summaryInvalidated": 4340,
+            "configuration/changed": 501,
+            "thread/status/changed": 8719,
+            "session/event": 10134,
+            "thread/status/resyncRequired": 58
+          }
+        }
+      },
+      "growth_8_to_32_mib": 464.734375,
+      "seed_cpu_ms_per_turn": 13.3447265625,
+      "seed_write_kib_per_turn": 675.2197265625,
+      "compiler_overlap_samples": 0
+    },
+    {
+      "pair": 1,
+      "side": "after",
+      "binary_sha256": "5d0e525df819d7ab3663f886a4a2a7f8a4d9ecfd37d2c148a9c791018de1951b",
+      "fixture_sha256": "f6506d8c7fc8d5ce4967ea134c172d7f253cba8fb7b8154e424e4f36aa49a06c",
+      "directory": "memory-1-after",
+      "phases": {
+        "empty_server": {
+          "anon_pss_mib": 16.28125,
+          "pss_mib": 54.9736328125,
+          "retained_files": {
+            "other": {
+              "files": 3,
+              "logical_bytes": 921,
+              "allocated_bytes": 8192,
+              "largest_logical_bytes": 728
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 1
+          }
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 340.03125,
+          "pss_mib": 405.7236328125,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 126642,
+              "allocated_bytes": 651264,
+              "largest_logical_bytes": 120666
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 65011712,
+              "allocated_bytes": 65011712,
+              "largest_logical_bytes": 507904
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 128,
+            "configuration/changed": 1622,
+            "thread/status/changed": 1024
+          }
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 655.40234375,
+          "pss_mib": 729.4697265625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140339,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134363
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 107741184,
+              "allocated_bytes": 108003328,
+              "largest_logical_bytes": 841728
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 273707008,
+              "allocated_bytes": 274202624,
+              "largest_logical_bytes": 2138336
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 4695,
+            "configuration/changed": 1622,
+            "thread/status/changed": 9224,
+            "session/event": 10146,
+            "thread/status/resyncRequired": 36
+          }
+        },
+        "seeded_history_16": {
+          "anon_pss_mib": 820.41796875,
+          "pss_mib": 894.4853515625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140339,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134363
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 173944832,
+              "allocated_bytes": 174063616,
+              "largest_logical_bytes": 1359872
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 284715544,
+              "allocated_bytes": 284962816,
+              "largest_logical_bytes": 2229504
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 8791,
+            "configuration/changed": 1622,
+            "thread/status/changed": 17424,
+            "session/event": 20270,
+            "thread/status/resyncRequired": 88
+          }
+        },
+        "seeded_history_32": {
+          "anon_pss_mib": 1114.92578125,
+          "pss_mib": 1189.1181640625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140339,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134363
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 258105344,
+              "allocated_bytes": 258211840,
+              "largest_logical_bytes": 2033664
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 284827432,
+              "allocated_bytes": 285073408,
+              "largest_logical_bytes": 2289592
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 16983,
+            "configuration/changed": 1622,
+            "thread/status/changed": 33824,
+            "session/event": 40580,
+            "thread/status/resyncRequired": 172
+          }
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 1116.9140625,
+          "pss_mib": 1187.3564453125,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140339,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134363
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 272971776,
+              "allocated_bytes": 273444864,
+              "largest_logical_bytes": 2136064
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 151,
+            "session/summaryInvalidated": 4340,
+            "configuration/changed": 490,
+            "thread/status/changed": 8712,
+            "session/event": 10178,
+            "thread/status/resyncRequired": 43
+          }
+        }
+      },
+      "growth_8_to_32_mib": 459.5234375,
+      "seed_cpu_ms_per_turn": 13.535156250000002,
+      "seed_write_kib_per_turn": 675.3203125,
+      "compiler_overlap_samples": 0
+    },
+    {
+      "pair": 1,
+      "side": "before",
+      "binary_sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "fixture_sha256": "f6506d8c7fc8d5ce4967ea134c172d7f253cba8fb7b8154e424e4f36aa49a06c",
+      "directory": "memory-1-before",
+      "phases": {
+        "empty_server": {
+          "anon_pss_mib": 16.3046875,
+          "pss_mib": 54.0283203125,
+          "retained_files": {
+            "other": {
+              "files": 3,
+              "logical_bytes": 921,
+              "allocated_bytes": 8192,
+              "largest_logical_bytes": 728
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 1
+          }
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 339.04296875,
+          "pss_mib": 404.205078125,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 126773,
+              "allocated_bytes": 651264,
+              "largest_logical_bytes": 120797
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 65536000,
+              "allocated_bytes": 65536000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 128,
+            "configuration/changed": 1601,
+            "thread/status/changed": 1024
+          }
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 657.62890625,
+          "pss_mib": 731.166015625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140470,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134494
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 108265472,
+              "allocated_bytes": 108527616,
+              "largest_logical_bytes": 845824
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 279541760,
+              "allocated_bytes": 279969792,
+              "largest_logical_bytes": 2183920
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 4679,
+            "configuration/changed": 1601,
+            "thread/status/changed": 9236,
+            "session/event": 10150,
+            "thread/status/resyncRequired": 36
+          }
+        },
+        "seeded_history_16": {
+          "anon_pss_mib": 840.6796875,
+          "pss_mib": 914.216796875,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140467,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134491
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 171843584,
+              "allocated_bytes": 171962368,
+              "largest_logical_bytes": 1343488
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 279541760,
+              "allocated_bytes": 279969792,
+              "largest_logical_bytes": 2183920
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 8775,
+            "configuration/changed": 1601,
+            "thread/status/changed": 17440,
+            "session/event": 20283,
+            "thread/status/resyncRequired": 96
+          }
+        },
+        "seeded_history_32": {
+          "anon_pss_mib": 1157.46484375,
+          "pss_mib": 1231.064453125,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140470,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134494
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 256667648,
+              "allocated_bytes": 256892928,
+              "largest_logical_bytes": 2009088
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 280115704,
+              "allocated_bytes": 280436736,
+              "largest_logical_bytes": 2212928
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 16967,
+            "configuration/changed": 1601,
+            "thread/status/changed": 33844,
+            "session/event": 40594,
+            "thread/status/resyncRequired": 236
+          }
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 1160.453125,
+          "pss_mib": 1230.240234375,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140470,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134494
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 275021824,
+              "allocated_bytes": 275492864,
+              "largest_logical_bytes": 2152448
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 151,
+            "session/summaryInvalidated": 4340,
+            "configuration/changed": 480,
+            "thread/status/changed": 8717,
+            "session/event": 10169,
+            "thread/status/resyncRequired": 60
+          }
+        }
+      },
+      "growth_8_to_32_mib": 499.8359375,
+      "seed_cpu_ms_per_turn": 13.92578125,
+      "seed_write_kib_per_turn": 685.2783203125,
+      "compiler_overlap_samples": 0
+    },
+    {
+      "pair": 2,
+      "side": "before",
+      "binary_sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "fixture_sha256": "f6506d8c7fc8d5ce4967ea134c172d7f253cba8fb7b8154e424e4f36aa49a06c",
+      "directory": "memory-2-before",
+      "phases": {
+        "empty_server": {
+          "anon_pss_mib": 16.29296875,
+          "pss_mib": 53.953125,
+          "retained_files": {
+            "other": {
+              "files": 3,
+              "logical_bytes": 921,
+              "allocated_bytes": 8192,
+              "largest_logical_bytes": 728
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 1
+          }
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 337.74609375,
+          "pss_mib": 402.9072265625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 126773,
+              "allocated_bytes": 651264,
+              "largest_logical_bytes": 120797
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 65536000,
+              "allocated_bytes": 65536000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 128,
+            "configuration/changed": 1605,
+            "thread/status/changed": 1024
+          }
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 659.67578125,
+          "pss_mib": 733.2119140625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140470,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134494
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 108265472,
+              "allocated_bytes": 108527616,
+              "largest_logical_bytes": 845824
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 279541760,
+              "allocated_bytes": 279969792,
+              "largest_logical_bytes": 2183920
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 4657,
+            "configuration/changed": 1605,
+            "thread/status/changed": 9228,
+            "session/event": 10144,
+            "thread/status/resyncRequired": 40
+          }
+        },
+        "seeded_history_16": {
+          "anon_pss_mib": 844.59375,
+          "pss_mib": 918.1298828125,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140470,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134494
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 171810816,
+              "allocated_bytes": 171962368,
+              "largest_logical_bytes": 1343488
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 279541760,
+              "allocated_bytes": 279969792,
+              "largest_logical_bytes": 2183920
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 8753,
+            "configuration/changed": 1605,
+            "thread/status/changed": 17424,
+            "session/event": 20293,
+            "thread/status/resyncRequired": 88
+          }
+        },
+        "seeded_history_32": {
+          "anon_pss_mib": 1160.50390625,
+          "pss_mib": 1234.1025390625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140470,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134494
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 256673792,
+              "allocated_bytes": 256884736,
+              "largest_logical_bytes": 2009088
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 280097056,
+              "allocated_bytes": 280412160,
+              "largest_logical_bytes": 2204640
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 16945,
+            "configuration/changed": 1605,
+            "thread/status/changed": 33836,
+            "session/event": 40607,
+            "thread/status/resyncRequired": 208
+          }
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 1162.4609375,
+          "pss_mib": 1232.2470703125,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140470,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134494
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 274987008,
+              "allocated_bytes": 275509248,
+              "largest_logical_bytes": 2150400
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 151,
+            "session/summaryInvalidated": 4334,
+            "configuration/changed": 484,
+            "thread/status/changed": 8715,
+            "session/event": 10167,
+            "thread/status/resyncRequired": 52
+          }
+        }
+      },
+      "growth_8_to_32_mib": 500.828125,
+      "seed_cpu_ms_per_turn": 13.87939453125,
+      "seed_write_kib_per_turn": 685.21484375,
+      "compiler_overlap_samples": 0
+    },
+    {
+      "pair": 2,
+      "side": "after",
+      "binary_sha256": "5d0e525df819d7ab3663f886a4a2a7f8a4d9ecfd37d2c148a9c791018de1951b",
+      "fixture_sha256": "f6506d8c7fc8d5ce4967ea134c172d7f253cba8fb7b8154e424e4f36aa49a06c",
+      "directory": "memory-2-after",
+      "phases": {
+        "empty_server": {
+          "anon_pss_mib": 16.26953125,
+          "pss_mib": 55.025390625,
+          "retained_files": {
+            "other": {
+              "files": 3,
+              "logical_bytes": 921,
+              "allocated_bytes": 8192,
+              "largest_logical_bytes": 728
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 1
+          }
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 337.03125,
+          "pss_mib": 402.537109375,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 126645,
+              "allocated_bytes": 651264,
+              "largest_logical_bytes": 120669
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 65011712,
+              "allocated_bytes": 65011712,
+              "largest_logical_bytes": 507904
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 128,
+            "configuration/changed": 1610,
+            "thread/status/changed": 1024
+          }
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 651.24609375,
+          "pss_mib": 725.439453125,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140342,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134366
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 107741184,
+              "allocated_bytes": 108003328,
+              "largest_logical_bytes": 841728
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 273707008,
+              "allocated_bytes": 274202624,
+              "largest_logical_bytes": 2138336
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 4685,
+            "configuration/changed": 1610,
+            "thread/status/changed": 9220,
+            "session/event": 10177,
+            "thread/status/resyncRequired": 44
+          }
+        },
+        "seeded_history_16": {
+          "anon_pss_mib": 825.24609375,
+          "pss_mib": 899.439453125,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140342,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134366
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 173930496,
+              "allocated_bytes": 174063616,
+              "largest_logical_bytes": 1359872
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 284698968,
+              "allocated_bytes": 284897280,
+              "largest_logical_bytes": 2229504
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 8781,
+            "configuration/changed": 1610,
+            "thread/status/changed": 17432,
+            "session/event": 20316,
+            "thread/status/resyncRequired": 112
+          }
+        },
+        "seeded_history_32": {
+          "anon_pss_mib": 1122.8203125,
+          "pss_mib": 1197.076171875,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140342,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134366
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 258080768,
+              "allocated_bytes": 258191360,
+              "largest_logical_bytes": 2021376
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 284698968,
+              "allocated_bytes": 284897280,
+              "largest_logical_bytes": 2229504
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 16973,
+            "configuration/changed": 1610,
+            "thread/status/changed": 33840,
+            "session/event": 40595,
+            "thread/status/resyncRequired": 208
+          }
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 1124.890625,
+          "pss_mib": 1195.396484375,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140342,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134366
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 272941056,
+              "allocated_bytes": 273408000,
+              "largest_logical_bytes": 2136064
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 151,
+            "session/summaryInvalidated": 4339,
+            "configuration/changed": 498,
+            "thread/status/changed": 8716,
+            "session/event": 10138,
+            "thread/status/resyncRequired": 52
+          }
+        }
+      },
+      "growth_8_to_32_mib": 471.57421875,
+      "seed_cpu_ms_per_turn": 13.437499999999998,
+      "seed_write_kib_per_turn": 675.2021484375,
+      "compiler_overlap_samples": 0
+    },
+    {
+      "pair": 3,
+      "side": "after",
+      "binary_sha256": "5d0e525df819d7ab3663f886a4a2a7f8a4d9ecfd37d2c148a9c791018de1951b",
+      "fixture_sha256": "f6506d8c7fc8d5ce4967ea134c172d7f253cba8fb7b8154e424e4f36aa49a06c",
+      "directory": "memory-3-after",
+      "phases": {
+        "empty_server": {
+          "anon_pss_mib": 16.3046875,
+          "pss_mib": 54.99609375,
+          "retained_files": {
+            "other": {
+              "files": 3,
+              "logical_bytes": 921,
+              "allocated_bytes": 8192,
+              "largest_logical_bytes": 728
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 1
+          }
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 337.9921875,
+          "pss_mib": 402.9345703125,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 126645,
+              "allocated_bytes": 651264,
+              "largest_logical_bytes": 120669
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 65011712,
+              "allocated_bytes": 65011712,
+              "largest_logical_bytes": 507904
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 128,
+            "configuration/changed": 1593,
+            "thread/status/changed": 1024
+          }
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 660.95703125,
+          "pss_mib": 734.7119140625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140342,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134366
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 107741184,
+              "allocated_bytes": 108003328,
+              "largest_logical_bytes": 841728
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 273707008,
+              "allocated_bytes": 274202624,
+              "largest_logical_bytes": 2138336
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 4678,
+            "configuration/changed": 1593,
+            "thread/status/changed": 9228,
+            "session/event": 10169,
+            "thread/status/resyncRequired": 48
+          }
+        },
+        "seeded_history_16": {
+          "anon_pss_mib": 828.59375,
+          "pss_mib": 902.3486328125,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140342,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134366
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 173940736,
+              "allocated_bytes": 174063616,
+              "largest_logical_bytes": 1359872
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 284713472,
+              "allocated_bytes": 284946432,
+              "largest_logical_bytes": 2231576
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 8774,
+            "configuration/changed": 1593,
+            "thread/status/changed": 17436,
+            "session/event": 20317,
+            "thread/status/resyncRequired": 116
+          }
+        },
+        "seeded_history_32": {
+          "anon_pss_mib": 1126.15234375,
+          "pss_mib": 1199.9072265625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140342,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134366
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 258091008,
+              "allocated_bytes": 258166784,
+              "largest_logical_bytes": 2035712
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 284744552,
+              "allocated_bytes": 284979200,
+              "largest_logical_bytes": 2258512
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 16966,
+            "configuration/changed": 1593,
+            "thread/status/changed": 33832,
+            "session/event": 40647,
+            "thread/status/resyncRequired": 196
+          }
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 1128.6171875,
+          "pss_mib": 1198.8095703125,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140342,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134366
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 272949248,
+              "allocated_bytes": 273424384,
+              "largest_logical_bytes": 2136064
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 151,
+            "session/summaryInvalidated": 4335,
+            "configuration/changed": 490,
+            "thread/status/changed": 8714,
+            "session/event": 10178,
+            "thread/status/resyncRequired": 51
+          }
+        }
+      },
+      "growth_8_to_32_mib": 465.1953125,
+      "seed_cpu_ms_per_turn": 13.413085937500002,
+      "seed_write_kib_per_turn": 675.4775390625,
+      "compiler_overlap_samples": 0
+    },
+    {
+      "pair": 3,
+      "side": "before",
+      "binary_sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "fixture_sha256": "f6506d8c7fc8d5ce4967ea134c172d7f253cba8fb7b8154e424e4f36aa49a06c",
+      "directory": "memory-3-before",
+      "phases": {
+        "empty_server": {
+          "anon_pss_mib": 16.3046875,
+          "pss_mib": 54.2158203125,
+          "retained_files": {
+            "other": {
+              "files": 3,
+              "logical_bytes": 921,
+              "allocated_bytes": 8192,
+              "largest_logical_bytes": 728
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 1
+          }
+        },
+        "all_subscribed_empty": {
+          "anon_pss_mib": 349.56640625,
+          "pss_mib": 415.478515625,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 126770,
+              "allocated_bytes": 651264,
+              "largest_logical_bytes": 120794
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 65536000,
+              "allocated_bytes": 65536000,
+              "largest_logical_bytes": 512000
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 0,
+              "allocated_bytes": 0,
+              "largest_logical_bytes": 0
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 128,
+            "configuration/changed": 1592,
+            "thread/status/changed": 1024,
+            "thread/status/resyncRequired": 4
+          }
+        },
+        "seeded_history_8": {
+          "anon_pss_mib": 708.6171875,
+          "pss_mib": 782.716796875,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140467,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134491
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 108265472,
+              "allocated_bytes": 108527616,
+              "largest_logical_bytes": 845824
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 279541760,
+              "allocated_bytes": 279969792,
+              "largest_logical_bytes": 2183920
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 4662,
+            "configuration/changed": 1592,
+            "thread/status/changed": 9224,
+            "thread/status/resyncRequired": 64,
+            "session/event": 10157
+          }
+        },
+        "seeded_history_16": {
+          "anon_pss_mib": 896.01171875,
+          "pss_mib": 970.111328125,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140467,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134491
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 171843584,
+              "allocated_bytes": 171966464,
+              "largest_logical_bytes": 1343488
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 279541760,
+              "allocated_bytes": 279969792,
+              "largest_logical_bytes": 2183920
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 8758,
+            "configuration/changed": 1592,
+            "thread/status/changed": 17432,
+            "thread/status/resyncRequired": 108,
+            "session/event": 20294
+          }
+        },
+        "seeded_history_32": {
+          "anon_pss_mib": 1221.625,
+          "pss_mib": 1295.849609375,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140467,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134491
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 256667648,
+              "allocated_bytes": 256888832,
+              "largest_logical_bytes": 2007040
+            },
+            "shm": {
+              "files": 128,
+              "logical_bytes": 4194304,
+              "allocated_bytes": 4194304,
+              "largest_logical_bytes": 32768
+            },
+            "wal": {
+              "files": 128,
+              "logical_bytes": 280082552,
+              "allocated_bytes": 280395776,
+              "largest_logical_bytes": 2196352
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 250,
+            "session/summaryInvalidated": 16950,
+            "configuration/changed": 1592,
+            "thread/status/changed": 33832,
+            "thread/status/resyncRequired": 188,
+            "session/event": 40578
+          }
+        },
+        "all_unloaded": {
+          "anon_pss_mib": 1224.5,
+          "pss_mib": 1294.974609375,
+          "retained_files": {
+            "other": {
+              "files": 131,
+              "logical_bytes": 140467,
+              "allocated_bytes": 663552,
+              "largest_logical_bytes": 134491
+            },
+            "main": {
+              "files": 128,
+              "logical_bytes": 275058688,
+              "allocated_bytes": 275496960,
+              "largest_logical_bytes": 2152448
+            }
+          },
+          "notifications": {
+            "configuration/sourceRepairChanged": 151,
+            "session/summaryInvalidated": 4330,
+            "configuration/changed": 477,
+            "thread/status/changed": 8714,
+            "thread/status/resyncRequired": 47,
+            "session/event": 10150
+          }
+        }
+      },
+      "growth_8_to_32_mib": 513.0078125,
+      "seed_cpu_ms_per_turn": 13.91357421875,
+      "seed_write_kib_per_turn": 685.2861328125,
+      "compiler_overlap_samples": 0
+    }
+  ],
+  "summary": {
+    "empty_server": {
+      "before": {
+        "median": 16.298828125,
+        "range": [
+          16.28125,
+          16.3046875
+        ],
+        "values": [
+          16.28125,
+          16.3046875,
+          16.29296875,
+          16.3046875
+        ]
+      },
+      "after": {
+        "median": 16.275390625,
+        "range": [
+          16.26171875,
+          16.3046875
+        ],
+        "values": [
+          16.26171875,
+          16.28125,
+          16.26953125,
+          16.3046875
+        ]
+      },
+      "paired_delta": [
+        -0.01953125,
+        -0.0234375,
+        -0.0234375,
+        0.0
+      ],
+      "paired_percent": [
+        -0.11996161228406908,
+        -0.1437470052707235,
+        -0.14385039558858786,
+        0.0
+      ],
+      "median_paired_percent": -0.1318543087773963
+    },
+    "all_subscribed_empty": {
+      "before": {
+        "median": 341.1875,
+        "range": [
+          337.74609375,
+          349.56640625
+        ],
+        "values": [
+          343.33203125,
+          339.04296875,
+          337.74609375,
+          349.56640625
+        ]
+      },
+      "after": {
+        "median": 337.51171875,
+        "range": [
+          335.86328125,
+          340.03125
+        ],
+        "values": [
+          335.86328125,
+          340.03125,
+          337.03125,
+          337.9921875
+        ]
+      },
+      "paired_delta": [
+        -7.46875,
+        0.98828125,
+        -0.71484375,
+        -11.57421875
+      ],
+      "paired_percent": [
+        -2.1753723277166555,
+        0.29149144535975574,
+        -0.21165122653620622,
+        -3.31102146632547
+      ],
+      "median_paired_percent": -1.1935117771264308
+    },
+    "seeded_history_8": {
+      "before": {
+        "median": 663.4453125,
+        "range": [
+          657.62890625,
+          708.6171875
+        ],
+        "values": [
+          667.21484375,
+          657.62890625,
+          659.67578125,
+          708.6171875
+        ]
+      },
+      "after": {
+        "median": 657.296875,
+        "range": [
+          651.24609375,
+          660.95703125
+        ],
+        "values": [
+          659.19140625,
+          655.40234375,
+          651.24609375,
+          660.95703125
+        ]
+      },
+      "paired_delta": [
+        -8.0234375,
+        -2.2265625,
+        -8.4296875,
+        -47.66015625
+      ],
+      "paired_percent": [
+        -1.202526828525763,
+        -0.3385743051801869,
+        -1.277853112028281,
+        -6.725797382666506
+      ],
+      "median_paired_percent": -1.240189970277022
+    },
+    "seeded_history_16": {
+      "before": {
+        "median": 845.46875,
+        "range": [
+          840.6796875,
+          896.01171875
+        ],
+        "values": [
+          846.34375,
+          840.6796875,
+          844.59375,
+          896.01171875
+        ]
+      },
+      "after": {
+        "median": 826.919921875,
+        "range": [
+          820.41796875,
+          828.703125
+        ],
+        "values": [
+          828.703125,
+          820.41796875,
+          825.24609375,
+          828.59375
+        ]
+      },
+      "paired_delta": [
+        -17.640625,
+        -20.26171875,
+        -19.34765625,
+        -67.41796875
+      ],
+      "paired_percent": [
+        -2.084333345641177,
+        -2.410159190387242,
+        -2.290764790764791,
+        -7.524228460321128
+      ],
+      "median_paired_percent": -2.3504619905760165
+    },
+    "seeded_history_32": {
+      "before": {
+        "median": 1161.6953125,
+        "range": [
+          1157.46484375,
+          1221.625
+        ],
+        "values": [
+          1162.88671875,
+          1157.46484375,
+          1160.50390625,
+          1221.625
+        ]
+      },
+      "after": {
+        "median": 1123.373046875,
+        "range": [
+          1114.92578125,
+          1126.15234375
+        ],
+        "values": [
+          1123.92578125,
+          1114.92578125,
+          1122.8203125,
+          1126.15234375
+        ]
+      },
+      "paired_delta": [
+        -38.9609375,
+        -42.5390625,
+        -37.68359375,
+        -95.47265625
+      ],
+      "paired_percent": [
+        -3.350363958226262,
+        -3.675192618566304,
+        -3.24717508894641,
+        -7.815217947406119
+      ],
+      "median_paired_percent": -3.512778288396283
+    },
+    "all_unloaded": {
+      "before": {
+        "median": 1166.40625,
+        "range": [
+          1160.453125,
+          1224.5
+        ],
+        "values": [
+          1170.3515625,
+          1160.453125,
+          1162.4609375,
+          1224.5
+        ]
+      },
+      "after": {
+        "median": 1125.41015625,
+        "range": [
+          1116.9140625,
+          1128.6171875
+        ],
+        "values": [
+          1125.9296875,
+          1116.9140625,
+          1124.890625,
+          1128.6171875
+        ]
+      },
+      "paired_delta": [
+        -44.421875,
+        -43.5390625,
+        -37.5703125,
+        -95.8828125
+      ],
+      "paired_percent": [
+        -3.795600947898935,
+        -3.751901870228494,
+        -3.2319634396317083,
+        -7.830364434463045
+      ],
+      "median_paired_percent": -3.7737514090637143
+    },
+    "growth_8_to_32_mib": {
+      "before": {
+        "median": 500.33203125,
+        "range": [
+          495.671875,
+          513.0078125
+        ],
+        "values": [
+          495.671875,
+          499.8359375,
+          500.828125,
+          513.0078125
+        ]
+      },
+      "after": {
+        "median": 464.96484375,
+        "range": [
+          459.5234375,
+          471.57421875
+        ],
+        "values": [
+          464.734375,
+          459.5234375,
+          471.57421875,
+          465.1953125
+        ]
+      },
+      "paired_delta": [
+        -30.9375,
+        -40.3125,
+        -29.25390625,
+        -47.8125
+      ],
+      "paired_percent": [
+        -6.241528228729944,
+        -8.065146376154676,
+        -5.841106916669267,
+        -9.32003350338841
+      ],
+      "median_paired_percent": -7.15333730244231
+    },
+    "seed_cpu_ms_per_turn": {
+      "before": {
+        "median": 13.919677734375,
+        "range": [
+          13.87939453125,
+          14.10888671875
+        ],
+        "values": [
+          14.10888671875,
+          13.92578125,
+          13.87939453125,
+          13.91357421875
+        ]
+      },
+      "after": {
+        "median": 13.42529296875,
+        "range": [
+          13.3447265625,
+          13.535156250000002
+        ],
+        "values": [
+          13.3447265625,
+          13.535156250000002,
+          13.437499999999998,
+          13.413085937500002
+        ]
+      },
+      "paired_delta": [
+        -0.76416015625,
+        -0.3906249999999982,
+        -0.4418945312500018,
+        -0.5004882812499982
+      ],
+      "paired_percent": [
+        -5.416161965738017,
+        -2.8050490883590333,
+        -3.1838170624450433,
+        -3.597122302158261
+      ],
+      "median_paired_percent": -3.390469682301652
+    },
+    "seed_write_kib_per_turn": {
+      "before": {
+        "median": 685.25,
+        "range": [
+          685.21484375,
+          685.2861328125
+        ],
+        "values": [
+          685.2216796875,
+          685.2783203125,
+          685.21484375,
+          685.2861328125
+        ]
+      },
+      "after": {
+        "median": 675.27001953125,
+        "range": [
+          675.2021484375,
+          675.4775390625
+        ],
+        "values": [
+          675.2197265625,
+          675.3203125,
+          675.2021484375,
+          675.4775390625
+        ]
+      },
+      "paired_delta": [
+        -10.001953125,
+        -9.9580078125,
+        -10.0126953125,
+        -9.80859375
+      ],
+      "paired_percent": [
+        -1.4596667650039121,
+        -1.4531333499590295,
+        -1.4612490379956105,
+        -1.4313136192825477
+      ],
+      "median_paired_percent": -1.4564000574814708
+    }
+  }
+}
