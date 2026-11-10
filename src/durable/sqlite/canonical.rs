@@ -568,7 +568,7 @@ impl CanonicalStore for SqliteConversationStore {
         message_id: &MessageId,
     ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
         let position: Option<i64> = self.lock()?.query_row_cached(
-            "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",
+            "SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1",
             [message_id.as_str()], |row| row.get(0),
         ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("process control position: {error}")))?;
         position
@@ -580,7 +580,7 @@ impl CanonicalStore for SqliteConversationStore {
         event_id: &EventId,
     ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
         let position: Option<i64> = self.lock()?.query_row(
-            "SELECT position FROM transcript_order WHERE reference_kind='attempt_terminal' AND reference_id=?1",
+            "SELECT position FROM transcript_entries WHERE native_reference_kind='attempt_terminal' AND native_reference_id=?1",
             [event_id.as_str()], |row| row.get(0),
         ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("terminal control position: {error}")))?;
         position
@@ -953,15 +953,15 @@ impl CanonicalStore for SqliteConversationStore {
         // the current ledger head. Pending rows are supplied below from C.
         let mut statement = connection
             .prepare(
-                "SELECT t.position,t.reference_kind,t.reference_id FROM transcript_order t
-             WHERE (t.reference_kind='message' AND EXISTS
-               (SELECT 1 FROM message_ledger m WHERE m.message_id=t.reference_id)
-               AND (t.position<=?1 OR t.reference_id IN (SELECT value FROM json_each(?2))))
-             OR (t.reference_kind='publication_audit' AND
-               (t.position<=?1 OR t.reference_id IN (SELECT value FROM json_each(?3))))
-             OR (t.reference_kind='inherited_turn' AND t.position<=?1)
-             OR (t.reference_kind IN ('interaction_event','configuration_event','attempt_terminal') AND EXISTS
-               (SELECT 1 FROM events e WHERE e.event_id=t.reference_id AND e.sequence<=?4))
+                "SELECT t.position,t.native_reference_kind,t.native_reference_id FROM transcript_entries t
+             WHERE (t.native_reference_kind='message' AND EXISTS
+               (SELECT 1 FROM message_ledger m WHERE m.message_id=t.native_reference_id)
+               AND (t.position<=?1 OR t.native_reference_id IN (SELECT value FROM json_each(?2))))
+             OR (t.native_reference_kind='publication_audit' AND
+               (t.position<=?1 OR t.native_reference_id IN (SELECT value FROM json_each(?3))))
+             OR (t.native_reference_kind='inherited_turn' AND t.position<=?1)
+             OR (t.native_reference_kind IN ('interaction_event','configuration_event','attempt_terminal') AND EXISTS
+               (SELECT 1 FROM events e WHERE e.event_id=t.native_reference_id AND e.sequence<=?4))
              ORDER BY t.position DESC LIMIT ?5",
             )
             .map_err(|e| storage(e.to_string()))?;
@@ -1001,7 +1001,7 @@ impl CanonicalStore for SqliteConversationStore {
                 let result: Option<(String, i64)> = connection.query_row(
                     "SELECT m.message_id,t.position FROM canonical_tool_calls c
                      JOIN message_ledger m ON m.message_id=c.result_message_id
-                     JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.message_id
+                     JOIN transcript_entries t ON t.native_reference_kind='message' AND t.native_reference_id=m.message_id
                      WHERE c.assistant_message_id=?1 AND c.block_index=?2",
                     params![tool.message_id.as_str(), tool.block_index.get()],
                     |row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(|e| storage(e.to_string()))?;
@@ -1108,7 +1108,7 @@ pub(super) fn canonical_observation_batch(
                 |row| row.get(0),
             )
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
-        source_unavailable |= connection.execute_cached("UPDATE observation_headers SET journal_position=?1,header_json=CAST(json_set(header_json,'$.transcript_cursor',transcript_position) AS BLOB) WHERE ledger_position=?2",params![through,position]).is_err();
+        source_unavailable |= connection.execute_cached("UPDATE transcript_entries SET journal_position=?1,header_json=CAST(json_set(header_json,'$.transcript_cursor',CASE WHEN position>0 THEN position END) AS BLOB) WHERE ledger_position=?2",params![through,position]).is_err();
         positions.push(position);
     }
     let first_position = *positions.first().expect("nonempty canonical batch");

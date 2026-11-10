@@ -245,7 +245,7 @@ fn t12_t14_t19_request_shapes_keep_old_requests_exact_after_header_and_raw_json_
     let connection = store.lock().unwrap();
     let header: Vec<u8> = connection
         .query_row(
-            "SELECT header_json FROM observation_headers WHERE ledger_position=1",
+            "SELECT header_json FROM transcript_entries WHERE ledger_position=1",
             [],
             |row| row.get(0),
         )
@@ -255,7 +255,7 @@ fn t12_t14_t19_request_shapes_keep_old_requests_exact_after_header_and_raw_json_
     assert_ne!(header, replacement, "the native header bytes really change");
     connection
         .execute(
-            "UPDATE observation_headers SET header_json=?1 WHERE ledger_position=1",
+            "UPDATE transcript_entries SET header_json=?1 WHERE ledger_position=1",
             [replacement],
         )
         .unwrap();

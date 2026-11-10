@@ -102,7 +102,14 @@ fn t09_t12_t19_pending_layout_cleanup_failure_cannot_refuse_native_adoption() {
             Err(ConversationStoreError::InvalidReference(_))
         ));
         store.adopt_pending_batch(next.sequence, None).unwrap();
-        let remaining: u64 = store.lock().unwrap().query_row("SELECT COUNT(*) FROM content_frontiers WHERE source_kind='pending' AND source_id=?1",[next.sequence.get().to_string()],|row|row.get(0)).unwrap();
+        let connection = store.lock().unwrap();
+        let source_id = crate::durable::sqlite::content::keys::read(
+            &connection,
+            "pending",
+            &next.sequence.get().to_string(),
+        )
+        .unwrap();
+        let remaining: u64 = connection.query_row("SELECT COUNT(*) FROM content_frontiers WHERE source_kind='pending' AND source_id=?1",[source_id],|row|row.get(0)).unwrap();
         assert_eq!(
             remaining, 0,
             "unfaulted cleanup still removes derived bytes"
@@ -123,7 +130,12 @@ pub(in crate::durable::sqlite) fn assert_stale_pending_layout_is_unreachable(
                 &format!(
                     "SELECT COUNT(*) FROM {table} WHERE source_kind='pending' AND source_id=?1"
                 ),
-                [sequence.to_string()],
+                [crate::durable::sqlite::content::keys::read(
+                    &connection,
+                    "pending",
+                    &sequence.to_string(),
+                )
+                .unwrap()],
                 |row| row.get(0),
             )
             .unwrap();

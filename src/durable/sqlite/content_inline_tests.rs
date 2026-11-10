@@ -7,7 +7,7 @@ fn immutable_inline_reads_keep_the_selected_revision_when_another_frontier_exist
     let bytes = vec![b'a'; 65_550];
     put(&connection, key, 1, &bytes, false).unwrap();
     connection.execute(
-        "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end,bytes) VALUES('canonical','revision-isolation',0,'t',2,65550,?1)",
+        "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end,bytes) VALUES('canonical',(SELECT -id FROM content_source_ids WHERE alias='revision-isolation'),0,'t',2,65550,?1)",
         [&vec![b'b'; 65_536]],
     ).unwrap();
     for (start, end) in [(0, 16), (65_530, 65_545)] {
@@ -26,7 +26,7 @@ fn immutable_inline_reads_keep_the_selected_revision_when_another_frontier_exist
     }
     connection
         .execute(
-            "DELETE FROM content_frontiers WHERE source_id='revision-isolation' AND revision=1",
+            "DELETE FROM content_frontiers WHERE source_id=(SELECT -id FROM content_source_ids WHERE alias='revision-isolation') AND revision=1",
             [],
         )
         .unwrap();
@@ -49,7 +49,7 @@ fn connection() -> Connection {
 fn stored_rows(connection: &Connection, id: &str) -> (u64, u64) {
     connection.query_row(
         "SELECT (SELECT count(*) FROM content_frontiers WHERE source_id=?1),(SELECT count(*) FROM content_segments WHERE source_id=?1)",
-        [id], |row| Ok((row.get(0)?, row.get(1)?)),
+        [keys::read(connection,"canonical",id).unwrap()], |row| Ok((row.get(0)?, row.get(1)?)),
     ).unwrap()
 }
 
@@ -193,19 +193,21 @@ fn append_prior_vm_work_is_independent_of_frontier_history() {
     for count in [1u64, 16, 256, 4_096, 16_384] {
         let connection = connection();
         let key = ("live", "selected", 0, Rep::Utf8Text);
-        let bindings = params![key.0, key.1, key.2, key.3.key()];
+        let source_id = keys::write(&connection, key.0, key.1).unwrap();
+        keys::write(&connection, "live", "unrelated").unwrap();
+        let bindings = params![key.0, source_id, key.2, key.3.key()];
         connection
             .execute(
                 "WITH RECURSIVE frames(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM frames WHERE n<?1)
              INSERT INTO content_frontiers
-             SELECT 'live','unrelated',0,'t',1,1,NULL
-             UNION ALL SELECT 'live','selected',0,'t',n*3,(n+1)/2,NULL FROM frames",
+             SELECT 'live',(SELECT -id FROM content_source_ids WHERE alias='unrelated'),0,'t',1,1,NULL
+             UNION ALL SELECT 'live',(SELECT -id FROM content_source_ids WHERE alias='selected'),0,'t',n*3,(n+1)/2,NULL FROM frames",
                 [count],
             )
             .unwrap();
         connection
             .execute(
-                "INSERT INTO content_segments VALUES('live','selected',0,'t',0,zeroblob(?1))",
+                "INSERT INTO content_segments VALUES('live',(SELECT -id FROM content_source_ids WHERE alias='selected'),0,'t',0,zeroblob(?1))",
                 [count.div_ceil(2)],
             )
             .unwrap();
@@ -284,7 +286,7 @@ fn compact_content_representation_keys_keep_original_public_wire_names() {
             ))
             .is_err()
     );
-    let (count, bytes, distinct): (u64,u64,u64) = connection.query_row("SELECT count(*),sum(length(representation)),count(DISTINCT representation) FROM content_frontiers WHERE source_id='same-source'", [], |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+    let (count, bytes, distinct): (u64,u64,u64) = connection.query_row("SELECT count(*),sum(length(representation)),count(DISTINCT representation) FROM content_frontiers WHERE source_id=(SELECT -id FROM content_source_ids WHERE alias='same-source')", [], |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
     assert_eq!((count, bytes, distinct), (4, 4, 4));
 }
 
@@ -403,7 +405,7 @@ fn immutable_inline_corruption_and_rollback_do_not_change_other_sources() {
         .unwrap();
     }
     for assignment in ["bytes=NULL", "bytes=x'ff'", "bytes=x''"] {
-        connection.execute_batch(&format!("SAVEPOINT corrupt; UPDATE content_frontiers SET {assignment} WHERE source_id='selected'")).unwrap();
+        connection.execute_batch(&format!("SAVEPOINT corrupt; UPDATE content_frontiers SET {assignment} WHERE source_id=(SELECT -id FROM content_source_ids WHERE alias='selected')")).unwrap();
         assert!(
             range_bytes(
                 &connection,
@@ -427,7 +429,7 @@ fn immutable_inline_corruption_and_rollback_do_not_change_other_sources() {
             .execute_batch("ROLLBACK TO corrupt; RELEASE corrupt")
             .unwrap();
     }
-    connection.execute_batch("CREATE TEMP TRIGGER reject_inline BEFORE INSERT ON content_frontiers WHEN NEW.source_id='rollback' BEGIN SELECT RAISE(FAIL,'frontier fault'); END; SAVEPOINT capture").unwrap();
+    connection.execute_batch("CREATE TEMP TRIGGER reject_inline BEFORE INSERT ON content_frontiers WHEN NEW.source_id=(SELECT -id FROM content_source_ids WHERE alias='rollback') BEGIN SELECT RAISE(FAIL,'frontier fault'); END; SAVEPOINT capture").unwrap();
     assert!(
         put(
             &connection,
@@ -466,7 +468,7 @@ fn inline_layout_keeps_live_revisions_and_independent_raw_evidence() {
         range_bytes(&connection, live, 0, 12).unwrap(),
         b"first suffix"
     );
-    let revisions: Vec<(u64,u64)> = connection.prepare("SELECT revision,readable_end FROM content_frontiers WHERE source_id='stream' ORDER BY revision").unwrap().query_map([], |row| Ok((row.get(0)?,row.get(1)?))).unwrap().collect::<Result<_,_>>().unwrap();
+    let revisions: Vec<(u64,u64)> = connection.prepare("SELECT revision,readable_end FROM content_frontiers WHERE source_id=(SELECT -id FROM content_source_ids WHERE alias='stream') ORDER BY revision").unwrap().query_map([], |row| Ok((row.get(0)?,row.get(1)?))).unwrap().collect::<Result<_,_>>().unwrap();
     assert_eq!(revisions, [(1, 5), (2, 12)]);
     transfer(
         &connection,
@@ -485,7 +487,7 @@ fn inline_layout_keeps_live_revisions_and_independent_raw_evidence() {
     put(&connection, raw, 1, br#"{ "n": 1.00 }"#, false).unwrap();
     assert_eq!(stored_rows(&connection, "raw"), (1, 1));
     connection
-        .execute("DELETE FROM content_frontiers WHERE source_id='raw'", [])
+        .execute("DELETE FROM content_frontiers WHERE source_id=(SELECT -id FROM content_source_ids WHERE alias='raw')", [])
         .unwrap();
     assert_eq!(
         stored_rows(&connection, "raw"),
@@ -588,7 +590,7 @@ fn audit_transfer_preserves_large_text_raw_and_completed_json_across_chunk_bound
 
 fn assert_inline_audit_layout(connection: &Connection) {
     let first_chunks: Vec<String> = connection
-        .prepare("SELECT representation FROM content_segments WHERE source_kind='audit' AND source_id='retained-audit' AND segment=0 ORDER BY representation")
+        .prepare("SELECT representation FROM content_segments WHERE source_kind='audit' AND source_id=(SELECT -id FROM content_source_ids WHERE alias='retained-audit') AND segment=0 ORDER BY representation")
         .unwrap()
         .query_map([], |row| row.get(0))
         .unwrap()
@@ -596,7 +598,7 @@ fn assert_inline_audit_layout(connection: &Connection) {
         .unwrap();
     assert_eq!(first_chunks, ["r"]);
     let inline: Vec<(String, bool)> = connection
-        .prepare("SELECT representation,bytes IS NOT NULL FROM content_frontiers WHERE source_kind='audit' AND source_id='retained-audit' ORDER BY representation")
+        .prepare("SELECT representation,bytes IS NOT NULL FROM content_frontiers WHERE source_kind='audit' AND source_id=(SELECT -id FROM content_source_ids WHERE alias='retained-audit') ORDER BY representation")
         .unwrap()
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
         .unwrap()
@@ -713,7 +715,7 @@ fn stream_layout_work(width: usize, suffix_size: usize) -> LayoutWork {
         let frontier: usize = connection
             .query_row(
                 "SELECT readable_end FROM content_frontiers WHERE source_kind='live' AND source_id=?1 AND block_index=0 AND representation='t' AND revision=?2",
-                params![key.1, revision],
+                params![keys::read(&connection,key.0,key.1).unwrap(), revision],
                 |row| row.get(0),
             )
             .unwrap();

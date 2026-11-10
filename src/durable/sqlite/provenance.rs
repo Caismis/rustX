@@ -214,7 +214,7 @@ pub(super) fn validate_turn_cursor(
     if let Some(cursor) = cursor {
         let present: bool = connection
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM transcript_order WHERE position=?1)",
+                "SELECT EXISTS(SELECT 1 FROM transcript_entries WHERE position=?1)",
                 [cursor.get()],
                 |row| row.get(0),
             )
@@ -516,7 +516,7 @@ fn validated_turn(
     }
     if turn.process_message_ids.is_empty() {
         use crate::durable::reading::InheritedTurnOutcome;
-        let anchor:Option<i64>=connection.query_row("SELECT position FROM transcript_order WHERE reference_kind='inherited_turn' AND reference_id=?1",[ordinal.to_string()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        let anchor:Option<i64>=connection.query_row("SELECT position FROM transcript_entries WHERE native_reference_kind='inherited_turn' AND native_reference_id=?1",[ordinal.to_string()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if matches!(
             turn.outcome,
             InheritedTurnOutcome::Completed | InheritedTurnOutcome::IncompleteAtCut
@@ -891,7 +891,7 @@ pub(super) fn observation_native_oracle(
     let mut turns: BTreeMap<i64, TurnReadingProvenance> = BTreeMap::new();
     let mut responses: BTreeMap<i64, crate::durable::observation::InheritedResponseHeader> =
         BTreeMap::new();
-    let mut statement=connection.prepare_cached("SELECT m.turn_ordinal,m.response_ordinal,m.membership_digest,t.display_provenance,r.display_provenance FROM message_ledger l JOIN observation_headers h ON h.reference_kind='message' AND h.reference_id=l.message_id LEFT JOIN inherited_message_membership m ON m.assistant_message_id=l.message_id AND m.assistant_ledger_position=l.position LEFT JOIN inherited_turn_provenance t ON t.ordinal=m.turn_ordinal LEFT JOIN inherited_response_provenance r ON r.ordinal=m.response_ordinal WHERE l.message_id=?1 AND json_extract(h.header_json,'$.role')='assistant' AND l.position<=(SELECT message_count FROM bootstrap_identity WHERE id=1)").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT m.turn_ordinal,m.response_ordinal,m.membership_digest,t.display_provenance,r.display_provenance FROM message_ledger l JOIN transcript_entries h ON h.reference_kind='message' AND h.reference_id=l.message_id LEFT JOIN inherited_message_membership m ON m.assistant_message_id=l.message_id AND m.assistant_ledger_position=l.position LEFT JOIN inherited_turn_provenance t ON t.ordinal=m.turn_ordinal LEFT JOIN inherited_response_provenance r ON r.ordinal=m.response_ordinal WHERE l.message_id=?1 AND json_extract(h.header_json,'$.role')='assistant' AND l.position<=(SELECT message_count FROM bootstrap_identity WHERE id=1)").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     for id in messages.iter().collect::<BTreeSet<_>>() {
         let row: Option<DisplayMembershipRow> = statement
             .query_row([id.as_str()], |row| {
@@ -975,7 +975,7 @@ pub(super) fn observation_models(
     if offset > header.models_total {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    let rows=connection.prepare_cached("SELECT block_index,readable_end FROM content_frontiers WHERE source_kind='inherited_model' AND source_id=?1 AND representation='j' AND revision=1 AND block_index>=?2 AND block_index<?3 ORDER BY block_index LIMIT ?4").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_map(params![ordinal.to_string(),offset,header.models_total,limit],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,u64>(1)?))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|storage(error.to_string()))?;
+    let rows=connection.prepare_cached("SELECT block_index,readable_end FROM content_frontiers WHERE source_kind='inherited_model' AND source_id=?1 AND representation='j' AND revision=1 AND block_index>=?2 AND block_index<?3 ORDER BY block_index LIMIT ?4").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_map(params![super::content::keys::read(connection,"inherited_model",&ordinal.to_string())?,offset,header.models_total,limit],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,u64>(1)?))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.collect::<Result<Vec<_>,_>>().map_err(|error|storage(error.to_string()))?;
     let mut names = Vec::with_capacity(rows.len());
     for (index, encoded_bytes) in rows {
         let value = if encoded_bytes <= 1024 {

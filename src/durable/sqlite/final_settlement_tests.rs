@@ -716,7 +716,7 @@ fn final_readiness(store: &SqliteConversationStore) -> FinalReadiness {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     let transcript = connection
-        .prepare("SELECT t.position,NOT EXISTS(SELECT 1 FROM transcript_observation_readiness r WHERE r.position=t.position) FROM transcript_order t WHERE t.position>(SELECT transcript FROM observation_readiness_epoch) AND t.observation_readiness_missing=0 ORDER BY t.position")
+        .prepare("SELECT t.position,NOT EXISTS(SELECT 1 FROM transcript_observation_readiness r WHERE r.position=t.position) FROM transcript_entries t WHERE t.position>(SELECT transcript FROM observation_readiness_epoch) AND t.observation_readiness_missing=0 ORDER BY t.position")
         .unwrap()
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
         .unwrap()
@@ -1419,7 +1419,7 @@ fn publication_display_rows(store: &SqliteConversationStore) -> Vec<Vec<rusqlite
     let connection = store.lock().unwrap();
     let mut result = Vec::new();
     for sql in [
-        "SELECT header_json,ledger_position,transcript_position,journal_position FROM observation_headers WHERE reference_kind='message' ORDER BY ledger_position",
+        "SELECT header_json,ledger_position,position,journal_position FROM transcript_entries WHERE reference_kind='message' ORDER BY ledger_position",
         "SELECT header_json,ledger_position,block_index,NULL FROM observation_block_headers ORDER BY ledger_position,block_index",
     ] {
         let mut statement = connection.prepare(sql).unwrap();
@@ -1567,19 +1567,19 @@ fn publication_header_keeps_shared_failure_repair_and_custom_trigger_order() {
         for fixture in [&prepared, &original] {
             let sql = match fault {
                 "header_before_t" => {
-                    "ALTER TABLE observation_headers ADD COLUMN reject_early INTEGER CHECK(reference_kind!='message' OR json_extract(header_json,'$.transcript_cursor') IS NOT NULL)"
+                    "ALTER TABLE transcript_entries ADD COLUMN reject_early INTEGER CHECK(reference_kind!='message' OR json_extract(header_json,'$.transcript_cursor') IS NOT NULL)"
                 }
                 "content" => {
                     "ALTER TABLE content_frontiers ADD COLUMN reject_metadata INTEGER GENERATED ALWAYS AS (source_kind='cm') VIRTUAL CHECK(reject_metadata=0)"
                 }
                 "header_after_t" => {
-                    "ALTER TABLE observation_headers ADD COLUMN reject_late INTEGER CHECK(reference_kind!='message' OR json_extract(header_json,'$.transcript_cursor') IS NULL)"
+                    "ALTER TABLE transcript_entries ADD COLUMN reject_late INTEGER CHECK(reference_kind!='message' OR json_extract(header_json,'$.transcript_cursor') IS NULL)"
                 }
                 "tool_after_raw" => {
                     "ALTER TABLE observation_block_headers ADD COLUMN reject_raw INTEGER CHECK(instr(CAST(header_json AS TEXT),'raw_json_utf8')=0)"
                 }
                 _ => {
-                    "CREATE TEMP TRIGGER observe_publication_header AFTER INSERT ON observation_headers BEGIN SELECT NEW.reference_id; END"
+                    "CREATE TEMP TRIGGER observe_publication_header AFTER INSERT ON transcript_entries BEGIN SELECT NEW.reference_id; END"
                 }
             };
             fixture.store.lock().unwrap().execute_batch(sql).unwrap();
@@ -1637,12 +1637,18 @@ fn publication_header_keeps_shared_failure_repair_and_custom_trigger_order() {
             };
             assert_eq!(count(&prepared), count(&original), "{fault}: {table}");
         }
-        if fault == "header_after_t" || fault == "tool_after_raw" {
+        if fault == "header_before_t" {
+            // T is installed before the first capture, so this constraint no
+            // longer rejects an intermediate descriptor.
+            assert_eq!(work, (1, 1, 1));
+        } else if fault == "tool_after_raw" {
             // A real final CHECK rejection is one optional attempt; reuse does
             // not add a second complete capture or change the failure domain.
-            assert_eq!(work, (1, 1, 0));
+            assert_eq!(work, (1, 1, 0), "{fault}");
         } else {
             assert_eq!(work.2, 0, "{fault}");
+            // The final-T constraint now rejects the first complete capture,
+            // so no successful header can be reused at final settlement.
             assert_eq!(work.0, if fault == "content" { 1 } else { 2 }, "{fault}");
         }
         if fault == "header_before_t" || fault == "content" {
@@ -1654,7 +1660,7 @@ fn publication_header_keeps_shared_failure_repair_and_custom_trigger_order() {
                     .transcript_cursor
                     .is_some()
             );
-            assert_eq!(connection.query_row("SELECT count(*) FROM content_frontiers WHERE source_kind IN ('canonical','cb','cm')",[],|row|row.get::<_,u64>(0)).unwrap(),0);
+            assert_eq!(connection.query_row("SELECT count(*) FROM content_frontiers WHERE source_kind IN ('canonical','cb','cm')",[],|row|row.get::<_,u64>(0)).unwrap(),if fault=="header_before_t" {3} else {0});
         }
     }
 }

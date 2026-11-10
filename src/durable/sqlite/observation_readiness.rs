@@ -23,7 +23,7 @@ pub(super) const EVENT_DELETION: &str =
                      AND hi>=OLD.sequence;
              END";
 pub(super) const TRANSCRIPT_DELETION: &str =
-    "CREATE TRIGGER transcript_readiness_source_deleted AFTER DELETE ON main.transcript_order
+    "CREATE TRIGGER transcript_readiness_source_deleted AFTER DELETE ON main.transcript_entries
              BEGIN
                  DELETE FROM transcript_observation_readiness WHERE position=OLD.position;
              END";
@@ -283,7 +283,7 @@ pub(super) fn mark_transcript(
             "invalid native transcript publication position".into(),
         ));
     }
-    let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM transcript_order WHERE position=?1 AND observation_readiness_missing=1 AND position>(SELECT transcript FROM observation_readiness_epoch WHERE id=1))").map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row([cursor], |row| row.get(0)).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM transcript_entries WHERE position=?1 AND observation_readiness_missing=1 AND position>(SELECT transcript FROM observation_readiness_epoch WHERE id=1))").map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row([cursor], |row| row.get(0)).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if missing {
         return Err(storage("native transcript readiness evidence unavailable"));
     }
@@ -312,7 +312,7 @@ pub(super) fn mark_canonical(
     }
     // Numeric L selects only this C batch, excluding unrelated Audit or
     // interaction T positions allocated between its canonical messages.
-    let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM message_ledger m JOIN transcript_order t ON t.position=m.native_transcript WHERE m.position>=?1 AND m.position<=?2 AND (t.observation_readiness_missing=1 AND t.position>(SELECT transcript FROM observation_readiness_epoch WHERE id=1)))").map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row(params![first,last], |row| row.get(0)).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let missing: bool = connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM message_ledger m JOIN transcript_entries t ON t.position=m.native_transcript WHERE m.position>=?1 AND m.position<=?2 AND (t.observation_readiness_missing=1 AND t.position>(SELECT transcript FROM observation_readiness_epoch WHERE id=1)))").map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row(params![first,last], |row| row.get(0)).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if missing {
         return Err(storage(
             "native canonical transcript readiness evidence unavailable",
@@ -331,7 +331,7 @@ pub(super) fn transcript_frontier(
             "invalid native transcript publication cut".into(),
         ));
     }
-    let (head, hole, missing): (u64, Option<u64>, Option<u64>) = connection.prepare_cached("SELECT next_transcript_position,(SELECT MIN(position) FROM transcript_observation_readiness WHERE position>?1 AND position<=?2),(SELECT MIN(position) FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND position>epoch.transcript AND position>?1 AND position<=?2) FROM rustx_store,observation_readiness_epoch epoch WHERE rustx_store.id=1 AND epoch.id=1")
+    let (head, hole, missing): (u64, Option<u64>, Option<u64>) = connection.prepare_cached("SELECT next_transcript_position,(SELECT MIN(position) FROM transcript_observation_readiness WHERE position>?1 AND position<=?2),(SELECT MIN(position) FROM transcript_entries INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND position>0 AND position>epoch.transcript AND position>?1 AND position<=?2) FROM rustx_store,observation_readiness_epoch epoch WHERE rustx_store.id=1 AND epoch.id=1")
         .and_then(|mut statement| statement.query_row(params![after,through], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))))
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if through > head {

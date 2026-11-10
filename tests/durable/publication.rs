@@ -4309,7 +4309,7 @@ fn t14_t19_t20_audit_settlement_head_uses_exact_native_positions_without_body_re
         receipts[32].header.publication_settlement.as_ref().unwrap()
     );
     assert_eq!(store.publication_settlement_head(&audit_cut).unwrap(), head);
-    connection.execute("DELETE FROM observation_headers WHERE reference_kind='publication_audit' AND reference_id=?1",[receipts[32].summary.stream_id.as_ref().unwrap().as_str()]).unwrap();
+    connection.execute("UPDATE transcript_entries SET header_json=NULL,reference_kind=NULL,reference_id=NULL,ledger_position=NULL WHERE reference_kind='publication_audit' AND reference_id=?1",[receipts[32].summary.stream_id.as_ref().unwrap().as_str()]).unwrap();
     assert!(
         store.publication_settlement_head(&cut).is_err(),
         "missing layout is unavailable, never a smaller authoritative head"
@@ -4326,7 +4326,7 @@ fn t10_t19_audit_layout_failure_retains_positive_native_settlement_receipt() {
         .stage_publication_frames(&start, &[text(0, &start, "retained released bytes")])
         .unwrap();
     let connection = rusqlite::Connection::open(&durable.path).unwrap();
-    connection.execute_batch("CREATE TRIGGER reject_audit_header BEFORE INSERT ON observation_headers BEGIN SELECT RAISE(ABORT,'display header unavailable'); END;").unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_audit_header BEFORE UPDATE OF header_json ON transcript_entries BEGIN SELECT RAISE(ABORT,'display header unavailable'); END;").unwrap();
     let (audit, receipt) = store
         .terminalize_publication_audit(&start, fixed_time())
         .unwrap();
@@ -4474,7 +4474,7 @@ fn t08_t14_t15_t19_audit_blocks_advance_past_giant_proposal_metadata_and_exact_r
 
 fn publication_row_counts(durable: &Durable) -> [u64; 8] {
     rusqlite::Connection::open(&durable.path).unwrap().query_row(
-        "SELECT (SELECT COUNT(*) FROM publication_streams),(SELECT COUNT(*) FROM publication_frames),(SELECT COUNT(*) FROM publication_proposals),(SELECT COUNT(*) FROM publication_audits),(SELECT COUNT(*) FROM transcript_order WHERE reference_kind='publication_audit'),(SELECT COUNT(*) FROM content_segments WHERE source_kind IN ('live','live_block_metadata')),(SELECT COUNT(*) FROM content_frontiers WHERE source_kind IN ('live','live_block_metadata')),(SELECT COUNT(*) FROM publication_metadata_segments)",
+        "SELECT (SELECT COUNT(*) FROM publication_streams),(SELECT COUNT(*) FROM publication_frames),(SELECT COUNT(*) FROM publication_proposals),(SELECT COUNT(*) FROM publication_audits),(SELECT COUNT(*) FROM transcript_entries WHERE native_reference_kind='publication_audit'),(SELECT COUNT(*) FROM content_segments WHERE source_kind IN ('live','live_block_metadata')),(SELECT COUNT(*) FROM content_frontiers WHERE source_kind IN ('live','live_block_metadata')),(SELECT COUNT(*) FROM publication_metadata_segments)",
         [], |row| Ok([row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?]),
     ).unwrap()
 }

@@ -125,7 +125,7 @@ fn state_preview_rejects_malformed_bytes_and_invalid_geometry_without_repair() {
     let value = fixture();
     let connection = connection();
     index_state(&connection, "preview_test", "source", &value).unwrap();
-    connection.execute_batch("SAVEPOINT malformed; UPDATE content_frontiers SET bytes=zeroblob(length(bytes)) WHERE source_kind='preview_test' AND source_id='source'; UPDATE content_segments SET bytes=zeroblob(length(bytes)) WHERE source_kind='preview_test' AND source_id='source';").unwrap();
+    connection.execute_batch("SAVEPOINT malformed; UPDATE content_frontiers SET bytes=zeroblob(length(bytes)) WHERE source_kind='preview_test' AND source_id=(SELECT -id FROM content_source_ids WHERE alias='source'); UPDATE content_segments SET bytes=zeroblob(length(bytes)) WHERE source_kind='preview_test' AND source_id=(SELECT -id FROM content_source_ids WHERE alias='source');").unwrap();
     assert!(
         field_from(
             &connection,
@@ -369,10 +369,22 @@ fn duplicate_named_paths_keep_existing_optional_failure_and_historical_bytes() {
         "content_segments",
         "content_frontiers",
     ] {
+        let source_id = if table == "state_observation_fields" {
+            rusqlite::types::Value::Text("duplicate".into())
+        } else {
+            rusqlite::types::Value::Integer(
+                crate::durable::sqlite::content::keys::read(
+                    &connection,
+                    "preview_test",
+                    "duplicate",
+                )
+                .unwrap(),
+            )
+        };
         let count: u64 = connection
             .query_row(
-                &format!("SELECT count(*) FROM {table} WHERE source_id='duplicate'"),
-                [],
+                &format!("SELECT count(*) FROM {table} WHERE source_id=?1"),
+                [source_id],
                 |row| row.get(0),
             )
             .unwrap();

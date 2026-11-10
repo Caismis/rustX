@@ -912,9 +912,9 @@ fn inherited_boundary_query_work_is_independent_of_seed_size() {
             let mut aggregate = connection.prepare(
                 "SELECT COALESCE(MAX(position),0) FROM (
                  SELECT t.position FROM message_ledger m
-                 JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.message_id
+                 JOIN transcript_entries t ON t.native_reference_kind='message' AND t.native_reference_id=m.message_id
                  WHERE m.position <= (SELECT message_count FROM bootstrap_identity WHERE id=1)
-                 UNION ALL SELECT position FROM transcript_order WHERE reference_kind='inherited_turn')",
+                 UNION ALL SELECT position FROM transcript_entries WHERE native_reference_kind='inherited_turn')",
             ).unwrap();
             assert_eq!(
                 aggregate.query_row([], |row| row.get::<_, i64>(0)).unwrap(),
@@ -1175,7 +1175,7 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
     let id = ConversationId::generate();
     {
         let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
-        assert_eq!(crate::durable::sqlite::SQLITE_SCHEMA_VERSION, 108);
+        assert_eq!(crate::durable::sqlite::SQLITE_SCHEMA_VERSION, 109);
         store.lock().unwrap().execute_batch("ALTER TABLE bootstrap_identity DROP COLUMN inherited_transcript_through; UPDATE rustx_store SET schema_version=56 WHERE id=1").unwrap();
     }
     assert!(matches!(

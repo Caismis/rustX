@@ -236,7 +236,11 @@ impl Authority {
         match self {
             Self::Journal => ("events", "sequence", "event_json"),
             Self::Messages => ("message_ledger", "position", "message_json"),
-            Self::Surface => ("surface_ops", "revision", "op_json"),
+            Self::Surface => (
+                "surface_ops",
+                "revision",
+                "json_object('op','append','message_id',(SELECT message_id FROM message_ledger WHERE position=surface_ops.ledger_position))",
+            ),
             Self::PublicationAudits => ("publication_audits", "rowid", "audit_json"),
             Self::Requests
             | Self::InheritedResponses

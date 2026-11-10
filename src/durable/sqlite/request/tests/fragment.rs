@@ -372,7 +372,7 @@ pub(super) fn assert_uncaptured_fragment_header_failure(
         .lock()
         .unwrap()
         .query_row(
-            "SELECT ledger_position,header_json FROM observation_headers ORDER BY ledger_position DESC LIMIT 1",
+            "SELECT ledger_position,header_json FROM transcript_entries ORDER BY ledger_position DESC LIMIT 1",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -381,7 +381,7 @@ pub(super) fn assert_uncaptured_fragment_header_failure(
         .lock()
         .unwrap()
         .execute(
-            "UPDATE observation_headers SET header_json=X'7b' WHERE ledger_position=?1",
+            "UPDATE transcript_entries SET header_json=X'7b' WHERE ledger_position=?1",
             [position],
         )
         .unwrap();
@@ -410,7 +410,7 @@ pub(super) fn assert_uncaptured_fragment_header_failure(
         .lock()
         .unwrap()
         .execute(
-            "UPDATE observation_headers SET header_json=?1 WHERE ledger_position=?2",
+            "UPDATE transcript_entries SET header_json=?1 WHERE ledger_position=?2",
             params![header, position],
         )
         .unwrap();

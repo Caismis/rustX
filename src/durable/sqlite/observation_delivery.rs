@@ -70,7 +70,7 @@ pub(super) fn selected(
     }
     let ordinal = u32::try_from(index).map_err(|_| ConversationStoreError::InvalidContentRange)?;
     let key = format!("ledger:{position}");
-    let end:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='canonical_file_delivery' AND source_id=?1 AND block_index=?2 AND representation='j' AND revision=1",params![key,ordinal],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let end:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='canonical_file_delivery' AND source_id=?1 AND block_index=?2 AND representation='j' AND revision=1",params![super::content::keys::read(connection,"canonical_file_delivery",&key)?,ordinal],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let end = end.ok_or_else(|| storage("native selected delivery span unavailable"))?;
     if end > 65_536 {
         return Err(storage("native selected delivery exceeds finite capacity"));
@@ -115,7 +115,7 @@ fn metadata_end(
     index: u64,
 ) -> Result<u64, ConversationStoreError> {
     let ordinal = u32::try_from(index).map_err(|_| ConversationStoreError::InvalidContentRange)?;
-    connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='canonical_file_delivery' AND source_id=?1 AND block_index=?2 AND representation='j' AND revision=1",params![format!("ledger:{position}"),ordinal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"native selected delivery span unavailable"))
+    connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='canonical_file_delivery' AND source_id=?1 AND block_index=?2 AND representation='j' AND revision=1",params![super::content::keys::read(connection,"canonical_file_delivery",&format!("ledger:{position}"))?,ordinal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"native selected delivery span unavailable"))
 }
 pub(super) fn read(
     connection: &Connection,

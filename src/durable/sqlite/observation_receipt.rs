@@ -479,7 +479,7 @@ pub(super) fn tool_results(
         .flatten()?;
         let bytes: Vec<u8> = connection
             .query_row(
-                "SELECT header_json FROM observation_headers WHERE ledger_position=?1",
+                "SELECT header_json FROM transcript_entries WHERE ledger_position=?1",
                 [result_ledger_position],
                 |row| row.get(0),
             )
@@ -600,7 +600,7 @@ pub(super) fn status_sources(
         let position: u64 = connection.query_row_cached("SELECT position FROM message_ledger WHERE message_id=?1",[contribution.message_id.as_str()],|row|row.get(0)).ok()?;
         let locator = Locator::ByLedgerPosition {position};
         let reference = |locator: &Locator, component: Component, representation: Rep| crate::durable::sqlite::content::descriptor(connection,conversation,&ContentSource::CanonicalMessageBlock {component,locator:locator.clone(),block_index:crate::message::types::ContentBlockIndex::new(0)},representation).ok().flatten();
-        let target = contribution.opportunities.fresh_inbound.as_ref().and_then(|fresh| connection.query_row("SELECT m.position,t.position FROM message_ledger m LEFT JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.message_id WHERE m.message_id=?1",[fresh.target_message_id.as_str()],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,Option<u64>>(1)?))).ok());
+        let target = contribution.opportunities.fresh_inbound.as_ref().and_then(|fresh| connection.query_row("SELECT m.position,t.position FROM message_ledger m LEFT JOIN transcript_entries t ON t.native_reference_kind='message' AND t.native_reference_id=m.message_id WHERE m.message_id=?1",[fresh.target_message_id.as_str()],|row|Ok((row.get::<_,u64>(0)?,row.get::<_,Option<u64>>(1)?))).ok());
         let target_locator=target.map(|(position,_)|Locator::ByLedgerPosition {position});
         Some(crate::durable::StatusObservationSource {
             contribution_ordinal:ordinal as u64,

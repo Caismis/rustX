@@ -84,7 +84,7 @@ fn validate_canonical_provenance(
     if expected.ledger_through == 0 {
         return Ok(());
     }
-    let (journal,transcript): (Option<u64>,Option<u64>)=connection.prepare_cached("SELECT h.journal_position,l.native_transcript FROM message_ledger l LEFT JOIN observation_headers h ON h.ledger_position=l.position WHERE l.position=?1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row([expected.ledger_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.ok_or_else(||storage("native canonical source position missing"))?;
+    let (journal,transcript): (Option<u64>,Option<u64>)=connection.prepare_cached("SELECT h.journal_position,l.native_transcript FROM message_ledger l LEFT JOIN transcript_entries h ON h.ledger_position=l.position WHERE l.position=?1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row([expected.ledger_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.ok_or_else(||storage("native canonical source position missing"))?;
     let journal = journal.ok_or_else(|| storage("native canonical cut provenance unavailable"))?;
     let append:Option<u64>=connection.prepare_cached("SELECT first_append_revision FROM message_ledger INDEXED BY message_ledger_append_position_idx WHERE first_append_revision IS NOT NULL AND position<=?1 ORDER BY position DESC LIMIT 1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row([expected.ledger_through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if journal > expected.read.journal
@@ -180,7 +180,7 @@ pub(super) fn enrich_message_header(
 // Both the access path and the physical window are part of the read contract.
 // Filtering by kind must never make SQLite scan/sort that kind's entire history,
 // or walk beyond the requested ledger window when a descriptor is missing.
-pub(super) const MESSAGE_HEADERS_SQL: &str = "SELECT h.header_json FROM observation_headers h INDEXED BY observation_headers_ledger_idx WHERE h.ledger_position>?1 AND h.ledger_position<=?2 AND h.reference_kind='message' ORDER BY h.ledger_position";
+pub(super) const MESSAGE_HEADERS_SQL: &str = "SELECT h.header_json FROM transcript_entries h INDEXED BY transcript_entries_ledger_idx WHERE h.ledger_position>?1 AND h.ledger_position<=?2 AND h.reference_kind='message' ORDER BY h.ledger_position";
 
 pub(super) fn messages(
     connection: &Connection,
@@ -308,7 +308,7 @@ fn transcript_at(
         at.read.transcript.saturating_add(1),
         crate::durable::TranscriptCursor::get,
     );
-    let mut statement=connection.prepare_cached("SELECT t.position,t.reference_kind,CASE WHEN t.reference_kind='message' THEN COALESCE(json_extract(h.header_json,'$.identity'),'ledger:'||h.ledger_position) ELSE COALESCE(json_extract(h.header_json,'$.reference_id'),'transcript:'||t.position) END,h.header_json,h.ledger_position,h.journal_position FROM transcript_order t LEFT JOIN observation_headers h ON h.transcript_position=t.position AND h.reference_kind=t.reference_kind WHERE t.position<?1 AND t.position<=?2 ORDER BY t.position DESC LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT t.position,t.native_reference_kind,CASE WHEN t.native_reference_kind='message' THEN COALESCE(json_extract(t.header_json,'$.identity'),'ledger:'||t.ledger_position) ELSE COALESCE(json_extract(t.header_json,'$.reference_id'),'transcript:'||t.position) END,CASE WHEN t.reference_kind=t.native_reference_kind THEN t.header_json END,t.ledger_position,t.journal_position FROM transcript_entries t WHERE t.position>0 AND t.position<?1 AND t.position<=?2 ORDER BY t.position DESC LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
             params![
@@ -544,19 +544,23 @@ fn transcript_message_header(
 }
 
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
+    let numeric_key: bool = connection.query_row(
+        "SELECT count(*)=1 FROM pragma_table_info('transcript_entries') WHERE name='position' AND type='INTEGER' AND pk=1",
+        [], |row| row.get(0),
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    if !numeric_key {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "numeric transcript carrier required".into(),
+        ));
+    }
     super::schema::shape::verify_unique_columns(
         connection,
-        "observation_headers",
-        &["transcript_position"],
-    )?;
-    super::schema::shape::verify_unique_columns(
-        connection,
-        "observation_headers",
+        "transcript_entries",
         &["reference_kind", "reference_id"],
     )?;
     let sql: String = connection
         .query_row(
-            "SELECT sql FROM sqlite_schema WHERE type='table' AND name='observation_headers'",
+            "SELECT sql FROM sqlite_schema WHERE type='table' AND name='transcript_entries'",
             [],
             |row| row.get(0),
         )
@@ -594,13 +598,13 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
     )?;
     let first_column: String = connection
         .query_row(
-            "SELECT name FROM pragma_table_info('observation_headers') ORDER BY cid LIMIT 1",
+            "SELECT name FROM pragma_table_info('transcript_entries') ORDER BY cid LIMIT 1",
             [],
             |row| row.get(0),
         )
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?; // ROWID indirection and metadata-first layout keep numeric header reads
     // independent of enormous retained original identity keys.
-    if !sql.contains("CHECK(length(header_json)<=16384)")
+    if !sql.contains("CHECK(header_json IS NULL OR length(header_json)<=16384)")
         || sql.contains("WITHOUT ROWID")
         || first_column != "header_json"
     {
@@ -615,7 +619,7 @@ pub(super) fn message(
     connection: &Connection,
     message_id: &crate::runtime::identity::MessageId,
 ) -> Result<Option<MessageHeader>, ConversationStoreError> {
-    let bytes:Option<Vec<u8>>=connection.query_row_cached("SELECT h.header_json FROM message_ledger m JOIN observation_headers h ON h.reference_kind='message' AND h.reference_id=m.message_id WHERE m.message_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let bytes:Option<Vec<u8>>=connection.query_row_cached("SELECT h.header_json FROM message_ledger m JOIN transcript_entries h ON h.reference_kind='message' AND h.reference_id=m.message_id WHERE m.message_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     bytes
         .map(|bytes| {
             if bytes.len() > HEADER_ENCODED_MAX {
@@ -776,7 +780,7 @@ pub(super) fn blocks_by_locator(
             "canonical block source beyond captured cut".into(),
         ));
     }
-    let bytes:Vec<u8>=connection.query_row("SELECT h.header_json FROM observation_headers h WHERE h.reference_kind='message' AND h.ledger_position=?1",[position],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row("SELECT h.header_json FROM transcript_entries h WHERE h.reference_kind='message' AND h.ledger_position=?1",[position],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("oversized canonical observation header"));
     }
@@ -984,7 +988,7 @@ fn tool_owner(
     position: u64,
     offset: u64,
 ) -> Result<MessageHeader, ConversationStoreError> {
-    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers WHERE reference_kind='message' AND ledger_position=?1 AND journal_position<=?2",params![position,at.read.journal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM transcript_entries WHERE reference_kind='message' AND ledger_position=?1 AND journal_position<=?2",params![position,at.read.journal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("oversized canonical Tool owner header"));
     }
@@ -1033,7 +1037,7 @@ fn tools_by_locator_at(
         ));
     }
     let assistant = tool_owner(connection, at, position, offset)?;
-    let mut statement=connection.prepare_cached("SELECT c.block_index,c.observation_call_id,c.observation_tool_id,b.header_json,h.header_json FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_observation_idx JOIN observation_block_headers b ON b.ledger_position=c.observation_ledger AND b.block_index=c.block_index LEFT JOIN observation_headers h ON h.ledger_position=c.result_ledger_position AND h.transcript_position<=?5 AND h.ledger_position<=?3 AND h.journal_position<=?6 WHERE c.observation_ledger=?1 AND c.block_index>=?2 ORDER BY c.block_index LIMIT ?4").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT c.block_index,c.observation_call_id,c.observation_tool_id,b.header_json,h.header_json FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_observation_idx JOIN observation_block_headers b ON b.ledger_position=c.observation_ledger AND b.block_index=c.block_index LEFT JOIN transcript_entries h ON h.ledger_position=c.result_ledger_position AND h.position<=?5 AND h.ledger_position<=?3 AND h.journal_position<=?6 WHERE c.observation_ledger=?1 AND c.block_index>=?2 ORDER BY c.block_index LIMIT ?4").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
             params![
@@ -1172,7 +1176,7 @@ pub(super) fn window(
     if let Some(first) = page.headers.first() {
         let older: bool = connection
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM transcript_order WHERE position<?1)",
+                "SELECT EXISTS(SELECT 1 FROM transcript_entries WHERE position>0 AND position<?1)",
                 [seq_to_i64(first.cursor.get())?],
                 |row| row.get(0),
             )
@@ -1182,7 +1186,7 @@ pub(super) fn window(
     let newer_cursor = if let Some(last) = page.headers.last() {
         let newer: bool = connection
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM transcript_order WHERE position>?1 AND position<=?2)",
+                "SELECT EXISTS(SELECT 1 FROM transcript_entries WHERE position>?1 AND position<=?2)",
                 params![
                     seq_to_i64(last.cursor.get())?,
                     seq_to_i64(captured.read.transcript)?
@@ -1279,7 +1283,7 @@ pub(super) fn pending_value(
     if !at.reconstructible_from(&actual) {
         return Err(ConversationStoreError::ObservationCutExpired);
     }
-    let retained:Option<(u64,u64)>=connection.query_row("SELECT p.revision,f.readable_end FROM pending_inbound p JOIN content_frontiers f ON f.source_kind='pending' AND f.source_id=CAST(p.sequence AS TEXT) AND f.block_index=0 AND f.representation='j' AND f.revision=p.revision+1 WHERE p.sequence=?1 AND p.sequence<=?2",params![sequence,at.pending_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let retained:Option<(u64,u64)>=connection.query_row("SELECT p.revision,f.readable_end FROM pending_inbound p JOIN content_frontiers f ON f.source_kind='pending' AND f.source_id=?3 AND f.block_index=0 AND f.representation='j' AND f.revision=p.revision+1 WHERE p.sequence=?1 AND p.sequence<=?2",params![sequence,at.pending_through,super::content::keys::read(connection,"pending",&sequence.to_string())?],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let (revision, readable_end) = retained
         .ok_or_else(|| ConversationStoreError::InvalidReference("pending source expired".into()))?;
     if offset > readable_end {
@@ -1394,7 +1398,7 @@ pub(super) fn surface_boundaries(
             "Surface boundary offset beyond native frontier".into(),
         ));
     }
-    let mut statement=connection.prepare("SELECT b.surface_revision,h.header_json,b.ordinal FROM surface_observation_boundaries b CROSS JOIN observation_headers h ON h.ledger_position=b.ledger_position WHERE b.ordinal>=?1 AND b.ordinal<?2 AND h.reference_kind='message' ORDER BY b.ordinal LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let mut statement=connection.prepare("SELECT b.surface_revision,h.header_json,b.ordinal FROM surface_observation_boundaries b CROSS JOIN transcript_entries h ON h.ledger_position=b.ledger_position WHERE b.ordinal>=?1 AND b.ordinal<?2 AND h.reference_kind='message' ORDER BY b.ordinal LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(params![offset, total, limit], |row| {
             Ok((
@@ -1442,7 +1446,7 @@ pub(super) fn publication_settlement_head(
     ConversationStoreError,
 > {
     validate(connection, conversation, at)?;
-    let mut statement = connection.prepare_cached("SELECT t.position,h.header_json,h.journal_position FROM transcript_order t INDEXED BY transcript_order_audit_position_idx LEFT JOIN observation_headers h ON h.reference_kind=t.reference_kind AND h.reference_id=t.reference_id WHERE t.reference_kind='publication_audit' AND t.position<=?1 ORDER BY t.position DESC LIMIT 32").map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let mut statement = connection.prepare_cached("SELECT t.position,CASE WHEN t.reference_kind=t.native_reference_kind AND t.reference_id=t.native_reference_id THEN t.header_json END,t.journal_position FROM transcript_entries t INDEXED BY transcript_entries_audit_position_idx WHERE t.native_reference_kind='publication_audit' AND t.position<=?1 ORDER BY t.position DESC LIMIT 32").map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map([seq_to_i64(at.read.transcript)?], |row| {
             Ok((
@@ -1486,7 +1490,7 @@ pub(super) fn audit_blocks(
     if transcript > at.read.transcript {
         return Err(storage("audit position exceeds native cut"));
     }
-    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers WHERE transcript_position=?1 AND reference_kind='publication_audit' AND journal_position<=?2",params![transcript,at.read.journal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM transcript_entries WHERE position=?1 AND reference_kind='publication_audit' AND journal_position<=?2",params![transcript,at.read.journal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let header: TranscriptHeader =
         serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
     let total = header

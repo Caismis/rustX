@@ -268,16 +268,22 @@ fn t08_t19_original_span_duplicate_ordinal_keys_preserve_legacy_last_wins_header
             [sequence.to_string()],
         )
         .unwrap();
+    let content_source_id = crate::durable::sqlite::content::keys::read(
+        &transaction,
+        "trace_request",
+        &sequence.to_string(),
+    )
+    .unwrap();
     transaction
         .execute(
             "DELETE FROM content_segments WHERE source_kind='trace_request' AND source_id=?1",
-            [sequence.to_string()],
+            [content_source_id],
         )
         .unwrap();
     transaction
         .execute(
             "DELETE FROM content_frontiers WHERE source_kind='trace_request' AND source_id=?1",
-            [sequence.to_string()],
+            [content_source_id],
         )
         .unwrap();
     observation_request::index_test_request_fields(&transaction, sequence, &DuplicateOrdinalKeys)
