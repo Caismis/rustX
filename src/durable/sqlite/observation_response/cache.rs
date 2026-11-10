@@ -83,6 +83,7 @@ enum Domain {
     Journal,
     Ledger,
     Transcript,
+    TranscriptEntry,
 }
 
 impl Owner {
@@ -112,7 +113,7 @@ impl Owner {
                 "transcript_entries",
                 vec![
                     ("ledger_position", Domain::Ledger),
-                    ("position", Domain::Transcript),
+                    ("position", Domain::TranscriptEntry),
                 ],
             ),
             (
@@ -186,11 +187,18 @@ impl Owner {
         let frontier = match domain {
             Domain::Journal => &self.journal,
             Domain::Ledger => &self.ledger,
-            Domain::Transcript => &self.transcript,
+            Domain::Transcript | Domain::TranscriptEntry => &self.transcript,
         }
         .load(Ordering::Relaxed);
         match value {
             Ok(ValueRef::Null) => false,
+            // Negative carrier rowids are not T cursors. Ledger dependencies
+            // still invalidate changes to already observed hidden messages.
+            Ok(ValueRef::Integer(value))
+                if matches!(domain, Domain::TranscriptEntry) && *value < 0 =>
+            {
+                false
+            }
             Ok(ValueRef::Integer(value)) => {
                 u64::try_from(*value).map_or(true, |value| value <= frontier)
             }

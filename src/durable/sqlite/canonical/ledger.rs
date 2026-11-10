@@ -381,8 +381,13 @@ fn append_message_ledger_with_capture(
             params![position, id.as_str(), encode(message, "canonical message")?,ordinary_user,human_activity_at.map(|time|time.to_rfc3339()),activity_max.map(|value|value.0),activity_max.map(|value|value.1),opening_preview,observation_state::todo_value(message).is_some(),ordinary_human,title_source_text],
         )
         .map_err(|error| map_insert_error(&error, &id))?;
-    // Allocate the permanent numeric carrier before writing optional evidence.
-    // Both domains still publish only after this transaction commits.
+    // The physical carrier is allocated first, but descriptor admission must
+    // still see the cursor that existed before this append, as it did before
+    // co-location. Admitting the new cursor early can discard an inline body.
+    let prior_cursor = match load_transcript_reference(transaction, "message", id.as_str()) {
+        Err(error @ ConversationStoreError::OperationCancelled) => return Err(error),
+        result => result,
+    };
     let transcript_cursor = transcript_visible_message(message)
         .then(|| append_transcript_reference(transaction, "message", id.as_str()))
         .transpose()?;
@@ -390,11 +395,13 @@ fn append_message_ledger_with_capture(
     let captured = optional_display_layout(transaction, || {
         content::index_message(transaction, message)?;
         let position = nonnegative(position, "header ledger position")?;
-        if retain_publication {
-            observation::index_publication_message(transaction, message, position)
-        } else {
-            observation::index_message(transaction, message, Some(position)).map(|()| None)
-        }
+        observation::index::index_message_capture(
+            transaction,
+            message,
+            Some(position),
+            retain_publication,
+            prior_cursor?,
+        )
     })?;
     if let Some(publication_header) = publication_header {
         // A proof escapes only after the whole original optional domain commits.
@@ -433,6 +440,9 @@ fn append_message_ledger_with_capture(
         observation_trace::index_proposals(transaction, &conversation, position, message)?;
         observation_trace::index_canonical(transaction, &conversation, position, message)
     })?;
+    if let Some(cursor) = transcript_cursor {
+        patch_message_transcript(transaction, &id, cursor)?;
+    }
     Ok(transcript_cursor)
 }
 
@@ -548,7 +558,7 @@ pub(in crate::durable::sqlite) fn append_transcript_reference(
 }
 
 pub(in crate::durable::sqlite) fn load_transcript_reference(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     reference_kind: &str,
     reference_id: &str,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
@@ -572,6 +582,23 @@ pub(in crate::durable::sqlite) fn load_transcript_reference(
                 .map_err(|_| storage("negative transcript position"))
         })
         .transpose()
+}
+
+pub(in crate::durable::sqlite) fn patch_message_transcript(
+    connection: &Connection,
+    id: &MessageId,
+    cursor: TranscriptCursor,
+) -> Result<(), ConversationStoreError> {
+    // Preserve the separate, optional post-admission JSON patch and its failure
+    // boundary. It must not rerun typed admission or roll back native authority.
+    let _ = optional_display_layout(connection, || {
+        connection.execute_cached(
+            "UPDATE transcript_entries SET header_json=CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) WHERE reference_kind='message' AND reference_id=?2",
+            params![cursor.get(), id.as_str()],
+        ).map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        Ok(())
+    })?;
+    Ok(())
 }
 
 pub(in crate::durable::sqlite) fn append_surface_op(

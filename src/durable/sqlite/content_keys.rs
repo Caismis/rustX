@@ -1,6 +1,7 @@
 //! Compact, domain-local content coordinates. Public aliases are retained once;
 //! canonical Ledger and Journal coordinates need no alias row or string index.
-use super::{Connection, ConversationStoreError, OptionalExtension, storage};
+use super::{Connection, ConversationStoreError, OptionalExtension};
+use crate::durable::sqlite::sqlite_error;
 use crate::durable::sqlite::statements::FixedStatements;
 
 const ABSENT: i64 = i64::MIN;
@@ -48,7 +49,7 @@ pub(in crate::durable::sqlite) fn read(
         )
         .optional()
         .map(|id| id.unwrap_or(ABSENT))
-        .map_err(|error| storage(error.to_string()))
+        .map_err(|error| sqlite_error(&error, error.to_string()))
 }
 
 pub(in crate::durable::sqlite) fn write(
@@ -68,7 +69,7 @@ pub(in crate::durable::sqlite) fn write(
             [alias],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))
+        .map_err(|error| sqlite_error(&error, error.to_string()))
 }
 
 pub(in crate::durable::sqlite) fn verify_schema(
@@ -85,14 +86,14 @@ pub(in crate::durable::sqlite) fn verify_schema(
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
     if !sql.contains("INTEGER PRIMARY KEY AUTOINCREMENT") {
         return Err(ConversationStoreError::IncompatibleSchema(
             "content aliases require non-reused numeric identities".into(),
         ));
     }
     for table in ["content_frontiers", "content_segments"] {
-        let numeric:bool=connection.query_row("SELECT count(*)=1 FROM pragma_table_info(?1) WHERE name='source_id' AND type='INTEGER' AND [notnull]=1",[table],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let numeric:bool=connection.query_row("SELECT count(*)=1 FROM pragma_table_info(?1) WHERE name='source_id' AND type='INTEGER' AND [notnull]=1",[table],|row|row.get(0)).map_err(|error|sqlite_error(&error,error.to_string()))?;
         if !numeric {
             return Err(ConversationStoreError::IncompatibleSchema(
                 "numeric content source required".into(),
@@ -152,6 +153,67 @@ mod tests {
         let next = write(&connection, "live", "next").unwrap();
         assert!(next < first);
         assert_eq!(read(&connection, "live", "first").unwrap(), ABSENT);
+    }
+
+    #[test]
+    fn alias_lookup_and_claim_cancellation_never_become_optional_missing_evidence() {
+        use rusqlite::trace::{TraceEvent, TraceEventCodes};
+        use std::cell::Cell;
+
+        thread_local! {
+            static TARGET: Cell<Option<&'static str>> = const { Cell::new(None) };
+            static INTERRUPT: Cell<bool> = const { Cell::new(false) };
+        }
+        fn arm_interrupt(event: TraceEvent<'_>) {
+            if let TraceEvent::Stmt(statement, _) = event {
+                TARGET.with(|target| {
+                    if target
+                        .get()
+                        .is_some_and(|sql| statement.sql().contains(sql))
+                    {
+                        target.set(None);
+                        INTERRUPT.with(|pending| pending.set(true));
+                    }
+                });
+            }
+        }
+
+        let mut connection = Connection::open_in_memory().unwrap();
+        schema::create_schema(&mut connection).unwrap();
+        for sql in ["SELECT -id", "INSERT INTO content_source_ids"] {
+            let transaction = connection.transaction().unwrap();
+            transaction
+                .execute("UPDATE rustx_store SET next_inbound_sequence=7", [])
+                .unwrap();
+            TARGET.with(|target| target.set(Some(sql)));
+            transaction.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(arm_interrupt));
+            transaction
+                .progress_handler(1, Some(|| INTERRUPT.with(|pending| pending.replace(false))))
+                .unwrap();
+            let result = crate::durable::sqlite::optional_display_layout(&transaction, || {
+                write(&transaction, "live", "cancelled-alias")
+            });
+            transaction.trace_v2(TraceEventCodes::empty(), None);
+            transaction
+                .progress_handler(0, None::<fn() -> bool>)
+                .unwrap();
+            assert!(TARGET.with(|target| target.get().is_none()), "missed {sql}");
+            assert_eq!(
+                result.unwrap_err(),
+                ConversationStoreError::OperationCancelled,
+                "{sql}"
+            );
+            drop(transaction);
+            let retained: (u64, u64) = connection.query_row(
+                "SELECT next_inbound_sequence,(SELECT count(*) FROM content_source_ids) FROM rustx_store WHERE id=1",
+                [], |row| Ok((row.get(0)?, row.get(1)?)),
+            ).unwrap();
+            assert_eq!(
+                retained,
+                (0, 0),
+                "cancelled capture must roll back native and alias writes"
+            );
+        }
     }
 
     #[test]

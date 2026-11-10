@@ -1,4 +1,36 @@
 #[test]
+fn new_hidden_context_carriers_preserve_completed_response_reuse() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    for index in 0..8 {
+        let name = format!("hidden-carrier-response-{index}");
+        let attempt = response_start(&store, &name);
+        response_message(&store, &attempt, &name);
+        response_complete(&store, &attempt);
+    }
+    let before = store.observation_read_cut().unwrap();
+    let page = response_page_at(&store, &before);
+    let original = response_cache_prime(&store, &before, &page);
+    store.append_canonical(&request_context_message("new-hidden-context", "context")).unwrap();
+    let after = store.observation_read_cut().unwrap();
+    let selections = crate::runtime_client::response::response_page_selections(&page);
+    super::super::observation_response::read_work();
+    super::super::observation_response::cache_work();
+    let reused = store.observation_response_page(&after, &selections).unwrap();
+    assert_eq!(super::super::observation_response::read_work(), (0, 0));
+    assert_eq!(super::super::observation_response::cache_work(), (8, 0, 1));
+    store.conn.response.invalidate();
+    let fresh = store.observation_response_page(&after, &selections).unwrap();
+    assert_eq!(format!("{fresh:?}"), format!("{reused:?}"));
+    let current = assert_response_page_oracle(&store, &after);
+    assert_eq!(current.source_cut.as_ref(), Some(&after));
+    let mut expected = original;
+    assert_eq!(expected.source_cut.as_ref(), Some(&before));
+    expected.source_cut.clone_from(&current.source_cut);
+    assert_eq!(current, expected);
+}
+
+#[test]
 fn completed_response_reuse_skips_native_owner_queries_and_decodes_across_new_journal() {
     let store = store();
     store.initialize(&[]).unwrap();

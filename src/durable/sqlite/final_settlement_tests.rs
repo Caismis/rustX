@@ -1530,7 +1530,7 @@ fn publication_header_reuses_one_body_capture_and_only_rebinds_changed_tool_bloc
             // Independent original complete capture at the actual final T/raw
             // coordinates must produce the same byte-level stored descriptors.
             let connection = fixture.store.lock().unwrap();
-            observation::index_message(&connection, &fixture.message, Some(1)).unwrap();
+            observation::index::index_message(&connection, &fixture.message, Some(1)).unwrap();
         }
         assert_eq!(publication_display_rows(&fixture.store), actual, "{kind}");
         assert!(
@@ -1637,18 +1637,12 @@ fn publication_header_keeps_shared_failure_repair_and_custom_trigger_order() {
             };
             assert_eq!(count(&prepared), count(&original), "{fault}: {table}");
         }
-        if fault == "header_before_t" {
-            // T is installed before the first capture, so this constraint no
-            // longer rejects an intermediate descriptor.
-            assert_eq!(work, (1, 1, 1));
-        } else if fault == "tool_after_raw" {
+        if fault == "header_after_t" || fault == "tool_after_raw" {
             // A real final CHECK rejection is one optional attempt; reuse does
             // not add a second complete capture or change the failure domain.
             assert_eq!(work, (1, 1, 0), "{fault}");
         } else {
             assert_eq!(work.2, 0, "{fault}");
-            // The final-T constraint now rejects the first complete capture,
-            // so no successful header can be reused at final settlement.
             assert_eq!(work.0, if fault == "content" { 1 } else { 2 }, "{fault}");
         }
         if fault == "header_before_t" || fault == "content" {
@@ -1660,7 +1654,7 @@ fn publication_header_keeps_shared_failure_repair_and_custom_trigger_order() {
                     .transcript_cursor
                     .is_some()
             );
-            assert_eq!(connection.query_row("SELECT count(*) FROM content_frontiers WHERE source_kind IN ('canonical','cb','cm')",[],|row|row.get::<_,u64>(0)).unwrap(),if fault=="header_before_t" {3} else {0});
+            assert_eq!(connection.query_row("SELECT count(*) FROM content_frontiers WHERE source_kind IN ('canonical','cb','cm')",[],|row|row.get::<_,u64>(0)).unwrap(),0);
         }
     }
 }

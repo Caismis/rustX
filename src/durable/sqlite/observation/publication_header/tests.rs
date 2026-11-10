@@ -1,7 +1,8 @@
-use super::super::{PublicationHeader, index_message, index_publication_message};
+use super::super::PublicationHeader;
 #[cfg(test)]
 use crate::durable::CanonicalStore;
 use crate::durable::sqlite::SqliteConversationStore;
+use crate::durable::sqlite::observation::index::{index_message, index_message_capture};
 use crate::message::content::TextBlock;
 use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, MessageBlock};
 use crate::observation::{bounded::bounded_bytes, preflight::required_budget};
@@ -27,7 +28,7 @@ fn captured(message: &MessageBlock) -> (SqliteConversationStore, PublicationHead
             )
             .unwrap();
         crate::durable::sqlite::content::index_message(&connection, message).unwrap();
-        index_publication_message(&connection, message, 1)
+        index_message_capture(&connection, message, Some(1), true, None)
             .unwrap()
             .unwrap()
     };
@@ -45,7 +46,7 @@ fn bytes(store: &SqliteConversationStore) -> Vec<u8> {
         .unwrap()
 }
 #[test]
-fn publication_header_capture_admits_the_permanent_transcript_cursor_before_reuse() {
+fn publication_header_recapture_admits_the_permanent_transcript_cursor_before_reuse() {
     let (store, draft, message) = captured_at_budget(16_383);
     assert_eq!(bounded_bytes(&draft.header, 16_384).unwrap(), bytes(&store));
     let connection = store.lock().unwrap();
@@ -62,15 +63,15 @@ fn publication_header_capture_admits_the_permanent_transcript_cursor_before_reus
         message.id().as_str(),
     )
     .unwrap();
-    // The production writer now allocates T before the first capture. Exercise
-    // that order at the typed admission boundary, without a post-capture patch.
+    // A full re-capture after T exists must still apply typed admission to its
+    // current cursor, as the final publication repair does.
     transaction
         .execute(
             "DELETE FROM transcript_entries WHERE position<0 AND ledger_position=1",
             [],
         )
         .unwrap();
-    let prepared = index_publication_message(&transaction, &message, 1)
+    let prepared = index_message_capture(&transaction, &message, Some(1), true, Some(cursor))
         .unwrap()
         .unwrap();
     let admitted = super::super::message(&transaction, message.id())
@@ -143,6 +144,28 @@ fn captured_at_budget(budget: usize) -> (SqliteConversationStore, PublicationHea
 }
 
 #[test]
+fn canonical_append_preserves_the_original_header_admission_before_cursor_patch() {
+    let (oracle, _, message) = captured_at_budget(16_383);
+    let expected: Vec<u8> = oracle
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT CAST(json_set(header_json,'$.transcript_cursor',1) AS BLOB) FROM transcript_entries WHERE ledger_position=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let expected_header: crate::durable::observation::MessageHeader =
+        serde_json::from_slice(&expected).unwrap();
+    assert!(expected_header.display.is_some());
+    assert!(expected.len() <= 16_384);
+    let store = crate::durable::sqlite::test_support::store();
+    store.initialize(&[]).unwrap();
+    store.append_canonical(&message).unwrap();
+    assert_eq!(bytes(&store), expected);
+}
+
+#[test]
 fn publication_block_rebinding_rejects_a_foreign_native_position() {
     let message = raw_message(1);
     let (store, mut draft) = captured(&message);
@@ -164,7 +187,7 @@ fn publication_block_rebinding_rejects_a_foreign_native_position() {
         )
         .unwrap();
     crate::durable::sqlite::content::index_message(&transaction, &foreign).unwrap();
-    index_publication_message(&transaction, &foreign, 2).unwrap();
+    index_message_capture(&transaction, &foreign, Some(2), true, None).unwrap();
     transaction.execute("UPDATE observation_block_headers SET message_id=?1 WHERE ledger_position=2 AND block_index=8", [message.id().as_str()]).unwrap();
     let before: Vec<u8> = transaction.query_row(
         "SELECT header_json FROM observation_block_headers WHERE ledger_position=2 AND block_index=8",

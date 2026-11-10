@@ -9,6 +9,7 @@ mod tests;
 use super::AdmissionFaultOperation;
 use super::canonical::ledger::{
     append_transcript_reference, load_message_tx, load_transcript_reference, message_exists,
+    patch_message_transcript,
 };
 use super::journal::reference::validate_subagent_terminal_publication;
 use super::journal::{find_event_by_id, persist_event_tx};
@@ -758,6 +759,11 @@ pub(super) fn accept_scheduled_inbound_tx(
     // ordinary transcript content, so they never receive an ordering row.
     // Adoption later reuses this same reference when a visible body moves
     // into the Message Ledger.
+    let prior_cursor = match load_transcript_reference(transaction, "message", message_id.as_str())
+    {
+        Err(error @ ConversationStoreError::OperationCancelled) => return Err(error),
+        result => result,
+    };
     let transcript_cursor = if matches!(message.kind, InboundKind::Context(_)) {
         None
     } else {
@@ -769,8 +775,18 @@ pub(super) fn accept_scheduled_inbound_tx(
     };
     let _ = optional_display_layout(transaction, || {
         content::index_pending(transaction, &message, sequence, 0)?;
-        observation::index::index_message(transaction, &MessageBlock::User(message.clone()), None)
+        observation::index::index_message_capture(
+            transaction,
+            &MessageBlock::User(message.clone()),
+            None,
+            false,
+            prior_cursor?,
+        )
+        .map(|_| ())
     })?;
+    if let Some(cursor) = transcript_cursor {
+        patch_message_transcript(transaction, &message_id, cursor)?;
+    }
     let _ = observation::index::index_pending_header(
         transaction,
         sequence,
