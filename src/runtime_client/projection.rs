@@ -356,6 +356,8 @@ pub(crate) struct RuntimeClientProjection {
     transcript_bindings: prepared_capture::PreparedBindingHead,
     transcript_head: crate::observation::transcript::PreparedTranscriptHead,
     foreground_content: Vec<ForegroundResultContent>,
+    // Direct Committed fixtures use these headers; native receipts own theirs.
+    #[cfg(test)]
     prepared_messages: std::collections::BTreeMap<
         MessageId,
         (
