@@ -330,10 +330,6 @@ for (const replaceLastProvider of [false, true]) test(replaceLastProvider
 [agent.model.auxiliary]
 mode = "explicit"
 model = "fixture/console-model"
-
-[agent.model.auxiliary]
-mode = "explicit"
-model = "fixture/second-model"
 `);
     if (!replaceLastProvider) appendFileSync(fixture.settings, `
 [providers.alternative]
