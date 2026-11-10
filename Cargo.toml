@@ -173,3 +173,7 @@ nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir"] }
 # preserving file/line backtraces. Match incremental builds' CGU partitioning.
 debug = "line-tables-only"
 codegen-units = 256
+
+[profile.release.package.rustx]
+# Optimize the shared serde codec instances together to reduce resident code.
+codegen-units = 1
