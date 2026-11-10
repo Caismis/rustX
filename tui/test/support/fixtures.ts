@@ -198,17 +198,22 @@ export function attemptModel(
   model: string,
   overrides: Partial<ModelInvocationView> = {},
 ): AttemptModelView {
-  return { primary: invocation(model, overrides), summary: { mode: "session" } };
+  const primary = invocation(model, overrides);
+  return {
+    primary,
+    summary: { mode: "session", effective: primary },
+  };
 }
 
 export function sessionModel(
   model: string,
   overrides: Partial<ModelInvocationView> = {},
 ): SessionModelView {
+  const effective = invocation(model, overrides);
   return {
     configured: { model },
-    effective: invocation(model, overrides),
-    summary: { mode: "session" },
+    effective,
+    auxiliary: { mode: "session", effective },
   };
 }
 

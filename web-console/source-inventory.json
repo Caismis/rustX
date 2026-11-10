@@ -261,7 +261,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "adeb752c89e6c92bd674447c9935c486119df28accef4d7b2667d337ee6556b0",
+      "local_sha256": "06a36a127923b71d82286a565a722b3cb972f1ae2c2cf1b58591bd1747a36cf4",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -310,7 +310,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "3505fa0a87067b124272bf747ec21d829089bd3cfbcda0fddfc97cef9b1e3cb8",
+      "local_sha256": "0827517cf10e6a19159c1d4c12700436190683934775be856bbcd4f801a6a889",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.tsx",
@@ -368,7 +368,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "32d872e3baaa6ed25ee9b6ce9d57ae964d0203af166913f2c0ba8e8552d10b1e"
+      "local_sha256": "c0a5670beff9e2d874b2514be8a54541187d2175d31e5c0341cbc6372ea68642"
     },
     {
       "upstream": "packages/client/ui-commands/src/client/PopupSelectView.module.css",
@@ -488,7 +488,7 @@
         "clear/tombstone control"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "83684099d54a6c76124d6436039668915fc41e6a413fce4f731c2bc5c12529dd"
+      "local_sha256": "76b14848982a6e1ac4ca0726a80b6bee8e06d9bd692eeb78d5f2146c8ca0e320"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.module.css",
@@ -528,7 +528,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "ac7de9a0f4464cbcb2aec618faa6837fa685b7196625b996ecb073f6944c82e4"
+      "local_sha256": "5b4a325c03f5f65c4fb2a34a9ee4f9510f316340b243c1096edc33ae5e078d96"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -566,7 +566,7 @@
         "Harness locale runtime"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "701fa0358e5275041a06666c38230c6861a6bdc1e2d31111172713f561cbe639"
+      "local_sha256": "969ae525ad106f774c5cfede324ffe6f698d5a88f3c3a9bf184eb03b60a2f093"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
@@ -667,7 +667,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "26ca8832f1933cfc0ce36e5fa6e15d8b324f4e8b985c785e9b595602ba0f3198"
+      "local_sha256": "57ee96dd325aa88e530dafeab0e3337f7a278ef9dc9f748e776c28405e05494d"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -723,7 +723,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "d2d19295ff09be7a85a7b0463db52be6da4cd0ef9d7f5cf5d3bb89b64c979331"
+      "local_sha256": "7a018315deaf7ec9c1ccea2d9792626621ec1f2688354d51a4d9a2b3f3b308a3"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/SettingsRoot.tsx",
@@ -775,7 +775,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3fba9375459f8e3b160405879e2a36ca5e45f3868a2cb45e4e001a3542ceb9a1"
+      "local_sha256": "4df35294c8260b7455d1bac3e4c96d1936a96a24b25265d14534bed4a381371b"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.module.css",
@@ -993,7 +993,7 @@
           "treatment": "Render recorded image results in the shared inline gallery."
         }
       ],
-      "local_sha256": "83f718213ecafe18f50c29ba5a9ee2bf95317ccbd238e7d441b5c986301fd440"
+      "local_sha256": "1399fc5fe51d2847df60f1a0bbba02a265ff6d6d5349c813967da70aee5e459a"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -1085,7 +1085,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "e2db735f22dfe8f9ab617cea905ce80150b5b81fd1b6e597ea0daf093eedeee3",
+      "local_sha256": "81c95fd7c416ad3d15e6ebf7d33bdf4165bb8d5d7acf19562950ccd20231f004",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/layout.ts",
@@ -1180,7 +1180,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "7ac44fc948fe877523757d327932425ae8fb9a0809da044e6d4bdbd758e5ee0c",
+      "local_sha256": "d2b3a1dd8c8af8e647489e839715aee3673780d58ac1dc031a1a41113895c545",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/timeline.ts",
@@ -3368,7 +3368,7 @@
           "upstream_sha256": "8b0a7e2827df55d62aa456570d5fdc012964f94953edf1fbaa95c20b1842f225"
         }
       ],
-      "local_sha256": "c514a1658d815c159f27e16706f707e5e90de1c7fa7496874b32c4d9bda0ca35"
+      "local_sha256": "f70fddd18f92ab653ba68d02ddb52d2b5dafd3db3f7c09759db6aaf40631fe55"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.tsx",
@@ -3418,7 +3418,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "072359b3253c2d82f886af42911eb0390c11e62a779c677bb1a44740b0546af3"
+      "local_sha256": "f8ae1366f62b45b1fa8eeaa276466fc2a730ea9a85287fd2b753a89f952cbf40"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/MessageIconActions.module.css",
@@ -3503,7 +3503,7 @@
           "treatment": "Summarize successful image results from recorded attachments."
         }
       ],
-      "local_sha256": "ed52788d2f3139efe7ac0e3d88641c01cabfd06f51d89dbe543676b4ca77a71c"
+      "local_sha256": "87ba3b14dcfea49db70e9dcfd8ea4d466da78ff052285a5caf371cd1cae6a1e6"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -3549,7 +3549,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "87001a37ce925340c9f1e6edf7b41d0cc974bd4692322ef345bf77af77308cdf",
+      "local_sha256": "2518d66796d0e6f4ae124e9d0134fac57394a034fc6618cd76c1fc929f356511",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
@@ -3971,7 +3971,7 @@
         "react"
       ],
       "upstream_sha256": "bb87019d9291d93af6e69ed02ca4f47f040272244af0d023112ec565be9e3427",
-      "local_sha256": "39e3d80600344fde4b7ab9ff0c8ae766e5c33c9afba0416e4be194efe7414cc2"
+      "local_sha256": "b094ac972821a71eb1bdf9d6cbffcdec41222d40b21d587db19780e54a83577e"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -4152,7 +4152,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "b174a2e23394586d90cf3e740b7f7d93094efdab9ad0490bd8ffb978c64f5723"
+      "local_sha256": "62962ea4d9548042670b1a8616b5e88d00ef7a823c4fc2d30170c11676da751c"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -4265,7 +4265,7 @@
           "treatment": "Event-cell turn label (full/compact) and active-turn rail adapted onto native Turn/Step/Request controls."
         }
       ],
-      "local_sha256": "72c12eafd7a9f210d6f83ba1f970c1b878f506bc3526adc203800ea1c7b1a5f4"
+      "local_sha256": "45a93abb71e152cb2519a556a7e7cf6f633aa5c55aa133cdabf09dd0cc14d51a"
     },
     {
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
@@ -4342,7 +4342,7 @@
         "Harness scroll ownership",
         "Total-sized virtualizer measurement cache"
       ],
-      "local_sha256": "668982fb06765ad70bc4525e349c30007b52567527477abb49e08a5c83b39122"
+      "local_sha256": "5a1413894d4f7d66f3869ec625b0a8cdbfef4c6d2614549afd76a58648c68237"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/stop-sequence.ts",
@@ -4535,7 +4535,7 @@
         "./token-format"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "c1058723815068ccfdc8363652773e8e0b9db87bd531aba2e9401ebad46d1c9e"
+      "local_sha256": "408edfac439ae66e7a001c61ecc817f151630c7bc57e0135839f3794ff9a32aa"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/StatsPills.module.css",
@@ -6372,7 +6372,7 @@
         "Harness retry event protocol and runtime authority"
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "1886fe64455d10661412e5c7a952dab1a06610925b4bb9e9a80ad84b36dd9332",
+      "local_sha256": "405de0e31bf34858ef07b388d5003f572ad69f9882586dea36eea0298508e044",
       "classification": "A"
     },
     {
@@ -6578,7 +6578,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "b32c10b1397bd13dde003029aa9a058e4d204d08799093d655cdd494596cca03"
+      "local_sha256": "c5e14234afaa174166b9e30530a2900aa8a26f14787bff67906a4a2648c9bf9f"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -6720,7 +6720,7 @@
       ],
       "excluded_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "local_sha256": "d098d7bf2247362e5e2c8d6d36d7692bef6be43bcf2276f3b8ed5f061b898d22",
+      "local_sha256": "8e775ab0379b64fa298bb1ce140388e230889d4da65a9cd172a0e3aec455a619",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.tsx",
@@ -6856,7 +6856,7 @@
         "react-dom"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "5c0bd888bc0b2d02420f9cebc8b607a69739bc1596e416d8c8a4f3b454c0a354"
+      "local_sha256": "35d338d9a858294c0777d654746c931478368b9806ce6e5b2f2a28eca540adc0"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -6916,7 +6916,7 @@
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "c37d2964d523cc35ca626914b505f433fce2f450b750836e9ddce1127c2d101c"
+      "local_sha256": "ac731f54769bde4a49a5748c9cd75485e47b351d6c6d2a196fa1d77952c8271b"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -6980,7 +6980,7 @@
         "DSH child Session navigation and controller",
         "DSH Remote interaction settlement"
       ],
-      "local_sha256": "4876e911d4faa977b85c4f216e92345eeb1e0f229d1fcf62f796d3edec67b1a3",
+      "local_sha256": "17dac3816767789b3265eacc7b07f998b7e7ead72e69feda92bffbb15c4666d4",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workflow-run/src/client/WorkflowRunPanel.tsx",
@@ -7297,7 +7297,7 @@
         "Harness Session manager and Host RPC",
         "Cordis runtime and projection stores"
       ],
-      "local_sha256": "27d4af12ba9cb644e770eb9ba174070c41261f42ff88778f97898a70f8947681"
+      "local_sha256": "a063d05b1e360d864c5db4bb425ca9a65aff0aced020e90130551d980f62f9cd"
     },
     {
       "upstream": "packages/client/ui-theme/src/styles/focus.css",
@@ -7330,7 +7330,7 @@
       "excluded_dependencies": [
         "Harness Session controller, event stream and projection assembly"
       ],
-      "local_sha256": "567cd7bcd88b91907f4038cb0a7c2f04f2c240a535c4eb3b71d026b0a4de6881",
+      "local_sha256": "218c876f07891338f030bd65df35e1f4a19489b9ee3e2618e31285c5cc0c33e1",
       "additional_sources": [
         {
           "upstream": "packages/api/session-controller/src/history.ts",
@@ -7416,7 +7416,7 @@
         "Harness Cordis slots, stores and plugin runtime",
         "Harness Agent execution and session observation authority"
       ],
-      "local_sha256": "8ee29d510de621cdd8cd1773e82e88a966087c1007f1bad6ce2745fdb0ace1f8",
+      "local_sha256": "b4bed95b138a7acb7a2b780cf8daf09bb152bd5d611f53072fce14955607dc50",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -7617,7 +7617,7 @@
         "Harness context injection history, request diffing and runtime authority"
       ],
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-      "local_sha256": "387ce9f6310694dcf76f8732ddb336e1e7f5db4f948663ceac3ab410a466fc60"
+      "local_sha256": "eb2a2346773484457ab0abd9b226a13951e3d08633c05c162fd13972b7e7183f"
     },
     {
       "upstream": "packages/client/ui-settings-models/src/client/ProviderEditor.tsx",
@@ -7663,7 +7663,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "fe40ccbba2f74a395e9f881154efb3dd6d5530a0ab5ecf39b983c1258ddd204c"
+      "local_sha256": "0b5dde9c25e8613b07d0ee2174587da8bed3e3788ac5b4fad43512dfd33768d7"
     },
     {
       "upstream": "packages/client/ui-deliverables/src/client/ChangedFiles.tsx",
@@ -8005,7 +8005,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "e8f6932ea9dfca70855c4949d9f3c6c3c3ff779d3fc85af10edbd4612635dbb6"
+      "local_sha256": "5730a72dc724e89bf84004c5ca20bb4f1c15fb0aae5453741038ee76a202601c"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -8033,7 +8033,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "1ae76385ea28905ae0fdb635b3e8ee9acefccacfd1c5be09966e3c58f443b4c0"
+      "local_sha256": "0bffe3f4a2bb19862d1c2afac85d5902fa766ca4307083fd4a43616d92eb499e"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -8151,7 +8151,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "0c71d8015c3600fcacb45504c499f0228c501000b93a035de139a42bc630656a"
+      "local_sha256": "e0d386bee87281fb690dd76104ba3eb6d55d7fdea2a0313c137b26af1c96f9b6"
     },
     {
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
@@ -8415,7 +8415,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "f34361dd7520b9f4938bb216a51d9b8fd896b498edaf791e448dc7deb50da848"
+      "local_sha256": "3d1c56ccbfacb3087d81ba8887d52f6e77c6b76fc7dc7996d866cb05970bab1d"
     },
     {
       "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
@@ -8470,7 +8470,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "7b473579966b52a6eab55a9452a25b387aa17ffd23e8d380007f0bb2cab8b8f4"
+      "local_sha256": "3dd4259114cb96102ee0fd37983b0bd44569bd7dc51a2066dbc73d7075f41d54"
     }
   ],
   "inspected_only": [

@@ -874,7 +874,7 @@ it("absent metadata is omitted and footer never reads transcript history", () =>
 it("an unavailable selection is named as configured, never shown through a fallback", () => {
   // Issue #459: the published catalog no longer admits the configured Model.
   const retained = stateOf({ model: { ...sessionModel("gone/model"), unavailable: "unknown model gone/model" } });
-  const loaded = stateOf({ model: { ...sessionModel("gone/model"), effective: undefined, summary: undefined, unavailable: "unknown model gone/model" } });
+  const loaded = stateOf({ model: { ...sessionModel("gone/model"), effective: undefined, auxiliary: undefined, unavailable: "unknown model gone/model" } });
   for (const state of [retained, loaded]) {
     const rendered = plainText(footer(state, "connected"));
     assert.match(rendered, /gone\/model unavailable/);
