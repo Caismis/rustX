@@ -18,31 +18,6 @@ pub(in crate::durable::sqlite) fn tool_identity_digest(
     digest.finalize().into()
 }
 
-pub(in crate::durable::sqlite) fn index_catalog(
-    connection: &Connection,
-    start: u64,
-    snapshot: &crate::model::RequestSnapshot,
-) -> Result<(), ConversationStoreError> {
-    connection.execute_cached(
-        "INSERT INTO request_trace_catalogs(source_sequence,provisional_message_id,tool_count) VALUES(?1,?2,?3)",
-        params![start,snapshot.provisional_message_id.as_str(),snapshot.tool_definitions.len() as u64],
-    ).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
-    let mut insert = connection.prepare_cached(
-        "INSERT INTO request_trace_definitions(source_sequence,ordinal,tool_identity_digest,tool_id) VALUES(?1,?2,?3,?4)",
-    ).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
-    for (ordinal, definition) in snapshot.tool_definitions.iter().enumerate() {
-        insert
-            .execute(params![
-                start,
-                ordinal as u64,
-                tool_identity_digest(&definition.id).as_slice(),
-                definition.id.as_str()
-            ])
-            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
-    }
-    Ok(())
-}
-
 /// Called under a nested optional savepoint after native Assistant C/J assignment.
 /// Exact original provisional identity and native owner select a unique request;
 /// neither request recency nor a wire call/name participates in this relationship.
@@ -53,7 +28,7 @@ pub(in crate::durable::sqlite) fn capture_definitions(
     message: &crate::runtime::identity::MessageId,
 ) -> Result<(), ConversationStoreError> {
     let mut candidates = connection.prepare_cached(
-        "SELECT c.source_sequence,c.tool_count FROM request_trace_catalogs c INDEXED BY request_trace_catalog_identity_idx JOIN events e ON e.sequence=c.source_sequence WHERE c.provisional_message_id=?1 AND e.attempt_id IS ?2 AND e.turn_id IS ?3 AND c.source_sequence<?4 ORDER BY c.source_sequence LIMIT 2",
+        "SELECT c.source_sequence FROM request_trace_catalogs c INDEXED BY request_trace_catalog_identity_idx JOIN events e ON e.sequence=c.source_sequence WHERE c.provisional_message_id=?1 AND e.attempt_id IS ?2 AND e.turn_id IS ?3 AND c.source_sequence<?4 ORDER BY c.source_sequence LIMIT 2",
     ).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let mut rows = candidates
         .query(params![
@@ -74,7 +49,6 @@ pub(in crate::durable::sqlite) fn capture_definitions(
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .ok_or_else(|| storage("original Tool definition request relationship unavailable"))?;
     let start: u64 = row.get(0).map_err(|error| storage(error.to_string()))?;
-    let count: u64 = row.get(1).map_err(|error| storage(error.to_string()))?;
     if rows
         .next()
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
@@ -90,18 +64,7 @@ pub(in crate::durable::sqlite) fn capture_definitions(
             "original Tool definition provisional identity differs",
         ));
     }
-    let retained: u64 = connection
-        .query_row_cached(
-            "SELECT count(*) FROM request_trace_definitions WHERE source_sequence=?1",
-            [start],
-            |row| row.get(0),
-        )
-        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
-    if retained != count {
-        return Err(storage(
-            "original Tool definition catalog evidence incomplete",
-        ));
-    }
+    let catalog = super::catalog::binding(connection, start)?;
     connection
         .execute_cached(
             "UPDATE request_snapshots SET observation_accepted_ledger=?2 WHERE started_sequence=?1",
@@ -111,8 +74,8 @@ pub(in crate::durable::sqlite) fn capture_definitions(
     // Native historical_definition uses the first exact ToolId in the frozen Vec.
     // This work belongs to original capture; public reads never compare giant IDs.
     connection.execute_cached(
-        "UPDATE canonical_tool_calls SET observation_definition_start=?2,observation_definition_commit=?3,observation_definition_ordinal=(SELECT ordinal FROM request_trace_definitions d INDEXED BY request_trace_definition_identity_idx WHERE d.source_sequence=?2 AND d.tool_id=canonical_tool_calls.tool_id ORDER BY ordinal LIMIT 1),observation_definition_ready=1 WHERE observation_ledger=?1",
-        params![position,start,event.sequence],
+        "UPDATE canonical_tool_calls SET observation_definition_start=?2,observation_definition_commit=?3,observation_definition_ordinal=(SELECT ordinal FROM request_trace_definitions d INDEXED BY request_trace_definition_identity_idx WHERE d.catalog_id=?4 AND d.tool_id=canonical_tool_calls.tool_id ORDER BY ordinal LIMIT 1),observation_definition_ready=1 WHERE observation_ledger=?1",
+        params![position,start,event.sequence,catalog.id],
     ).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
@@ -159,20 +122,21 @@ pub(in crate::durable::sqlite) fn tool_definition(
         .filter(|start| *start < committed)
         .ok_or_else(|| storage("original Tool definition request relationship unavailable"))?;
     super::super::observation_request::validate_start(connection, start, cut.read.journal)?;
-    let count: u64 = connection
-        .query_row(
-            "SELECT c.tool_count FROM request_trace_catalogs c JOIN request_snapshots r INDEXED BY request_snapshots_started_idx ON r.started_sequence=c.source_sequence WHERE c.source_sequence=?1 AND r.observation_accepted_ledger=?2",
-            params![start,occurrence.ledger_position],
-            |row| row.get(0),
-        )
-        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,"original Tool definition catalog unavailable"))?;
+    let accepted: bool = connection.query_row_cached(
+        "SELECT EXISTS(SELECT 1 FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1 AND observation_accepted_ledger=?2)",
+        params![start,occurrence.ledger_position], |row| row.get(0),
+    ).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    if !accepted {
+        return Err(storage("original Tool definition catalog unavailable"));
+    }
+    let catalog = super::catalog::binding(connection, start)?;
     let Some(definition) = definition else {
         // A cleared positive pointer cannot claim native catalog absence.
         // Both the native Tool digest and the indexed original catalog must
         // positively prove no matching definition, without loading either ID.
         let (valid, found): (bool, bool) = connection.query_row(
-            "SELECT typeof(c.observation_tool_identity_digest)='blob' AND length(c.observation_tool_identity_digest)=32,EXISTS(SELECT 1 FROM request_trace_definitions d INDEXED BY request_trace_definition_digest_idx WHERE d.source_sequence=?3 AND d.tool_identity_digest=c.observation_tool_identity_digest LIMIT 1) FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_observation_idx WHERE c.observation_ledger=?1 AND c.block_index=?2",
-            params![occurrence.ledger_position,occurrence.block_index.get(),start],|row|Ok((row.get(0)?,row.get(1)?)),
+            "SELECT typeof(c.observation_tool_identity_digest)='blob' AND length(c.observation_tool_identity_digest)=32,EXISTS(SELECT 1 FROM request_trace_definitions d INDEXED BY request_trace_definition_digest_idx WHERE d.catalog_id=?3 AND d.tool_identity_digest=c.observation_tool_identity_digest LIMIT 1) FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_observation_idx WHERE c.observation_ledger=?1 AND c.block_index=?2",
+            params![occurrence.ledger_position,occurrence.block_index.get(),catalog.id],|row|Ok((row.get(0)?,row.get(1)?)),
         ).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if !valid || found {
             return Err(storage(
@@ -181,12 +145,12 @@ pub(in crate::durable::sqlite) fn tool_definition(
         }
         return Ok(None);
     };
-    if definition >= count || definition > 9_007_199_254_740_991 {
+    if definition >= catalog.count || definition > 9_007_199_254_740_991 {
         return Err(storage("original Tool definition ordinal differs"));
     }
     let same: bool = connection.query_row(
-        "SELECT CASE WHEN typeof(c.observation_tool_identity_digest)='blob' AND length(c.observation_tool_identity_digest)=32 AND typeof(d.tool_identity_digest)='blob' AND length(d.tool_identity_digest)=32 AND c.observation_tool_identity_digest=d.tool_identity_digest AND d.ordinal=(SELECT ordinal FROM request_trace_definitions f INDEXED BY request_trace_definition_digest_idx WHERE f.source_sequence=d.source_sequence AND f.tool_identity_digest=c.observation_tool_identity_digest ORDER BY ordinal LIMIT 1) THEN 1 ELSE 0 END FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_observation_idx JOIN request_trace_definitions d ON d.source_sequence=?3 AND d.ordinal=?4 WHERE c.observation_ledger=?1 AND c.block_index=?2",
-        params![occurrence.ledger_position,occurrence.block_index.get(),start,definition],|row|row.get(0),
+        "SELECT CASE WHEN typeof(c.observation_tool_identity_digest)='blob' AND length(c.observation_tool_identity_digest)=32 AND typeof(d.tool_identity_digest)='blob' AND length(d.tool_identity_digest)=32 AND c.observation_tool_identity_digest=d.tool_identity_digest AND d.ordinal=(SELECT ordinal FROM request_trace_definitions f INDEXED BY request_trace_definition_digest_idx WHERE f.catalog_id=d.catalog_id AND f.tool_identity_digest=c.observation_tool_identity_digest ORDER BY ordinal LIMIT 1) THEN 1 ELSE 0 END FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_observation_idx JOIN request_trace_definitions d ON d.catalog_id=?3 AND d.ordinal=?4 WHERE c.observation_ledger=?1 AND c.block_index=?2",
+        params![occurrence.ledger_position,occurrence.block_index.get(),catalog.id,definition],|row|row.get(0),
     ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.unwrap_or(false);
     if !same {
         return Err(storage(
