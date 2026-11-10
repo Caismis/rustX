@@ -878,7 +878,7 @@ mod tests {
                                             ),
                                         ),
                                         native_origins: crate::model::occurrence::native_origins(
-                                            message,
+                                            &message.view(),
                                         ),
                                     }
                                 })
