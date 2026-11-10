@@ -1594,7 +1594,7 @@ fn auxiliary_completion_never_establishes_primary_p_marker() {
             .lock()
             .unwrap()
             .query_row(
-                "SELECT completed_sequence FROM request_snapshots WHERE request_id=?1",
+                "SELECT completed_sequence FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                 [snapshot.request_id.as_str()],
                 |row| row.get(0),
             )

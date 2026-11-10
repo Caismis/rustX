@@ -388,7 +388,7 @@ fn started(
     request: &RequestId,
     through: u64,
 ) -> Result<u64, ConversationStoreError> {
-    let sequence:Option<u64>=connection.query_row_cached("SELECT started_sequence FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let sequence:Option<u64>=connection.query_row_cached("SELECT started_sequence FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1) AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     sequence.ok_or_else(|| {
         ConversationStoreError::InvalidReference("request is outside native read cut".into())
     })
@@ -870,7 +870,7 @@ pub(super) fn terminal(
     // execution fact or invent a frozen source to make it readable.
     let retained: bool = connection
         .query_row_cached(
-            "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE request_id=?1)",
+            "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1))",
             [request.as_str()],
             |row| row.get(0),
         )
@@ -942,7 +942,7 @@ pub(super) fn terminal(
     };
     let bytes = crate::observation::bounded::bounded_bytes(&header, 16_384)
         .ok_or_else(|| storage("native request outcome header exceeds bound"))?;
-    let changed=connection.execute_cached("UPDATE request_snapshots SET observation_terminal_sequence=?2,observation_terminal_header=?3 WHERE request_id=?1 AND observation_terminal_sequence IS NULL",params![request.as_str(),event.sequence,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let changed=connection.execute_cached("UPDATE request_snapshots SET observation_terminal_sequence=?2,observation_terminal_header=?3 WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1) AND observation_terminal_sequence IS NULL",params![request.as_str(),event.sequence,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if changed != 1 {
         return Err(storage(
             "native request terminal header owner missing or duplicated",
@@ -957,7 +957,7 @@ pub(super) fn outcome_at(
 ) -> Result<Option<crate::durable::observation::RequestObservationOutcome>, ConversationStoreError>
 {
     validate_start(connection, source_sequence, through)?;
-    let row:Option<(Option<u64>,Option<Vec<u8>>)>=connection.query_row("SELECT completed_sequence,observation_terminal_header FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|sqlite_error(&error, error.to_string()))?;
+    let row:Option<(Option<u64>,Option<Vec<u8>>)>=connection.query_row("SELECT completed_sequence,observation_terminal_header FROM request_snapshots WHERE started_sequence=?1",[source_sequence],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|sqlite_error(&error, error.to_string()))?;
     let (terminal, bytes) =
         row.ok_or_else(|| storage("original Request snapshot source absent"))?;
     if terminal.is_none_or(|sequence| sequence > through) {

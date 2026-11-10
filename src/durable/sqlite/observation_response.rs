@@ -400,7 +400,13 @@ impl Reader<'_> {
             request,
             self.cut.read.journal,
         )?;
-        let position: Option<u64> = self.connection.prepare_cached("SELECT retry_ledger_position FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1").and_then(|mut statement| statement.query_row([request], |row| row.get(0))).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        let position: Option<u64> = self
+            .connection
+            .prepare_cached(
+                "SELECT retry_ledger_position FROM request_snapshots WHERE started_sequence=?1",
+            )
+            .and_then(|mut statement| statement.query_row([request], |row| row.get(0)))
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let Some(position) = position else {
             return Ok((None, None));
         };

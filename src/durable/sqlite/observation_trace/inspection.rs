@@ -123,7 +123,7 @@ pub(in crate::durable::sqlite) fn tool_definition(
         .ok_or_else(|| storage("original Tool definition request relationship unavailable"))?;
     super::super::observation_request::validate_start(connection, start, cut.read.journal)?;
     let accepted: bool = connection.query_row_cached(
-        "SELECT EXISTS(SELECT 1 FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1 AND observation_accepted_ledger=?2)",
+        "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE started_sequence=?1 AND observation_accepted_ledger=?2)",
         params![start,occurrence.ledger_position], |row| row.get(0),
     ).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if !accepted {

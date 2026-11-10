@@ -857,10 +857,9 @@ pub(super) fn deny_trace_original_columns(
             (
                 "events",
                 "event_json" | "attempt_id" | "turn_id" | "event_id"
-            ) | (
-                "request_snapshots",
-                "request_id" | "snapshot_json" | "previous_request_id"
-            ) | ("request_snapshot_payloads", "request_id" | "snapshot_json")
+            ) | ("request_snapshots", "previous_started_sequence")
+                | ("request_snapshot_payloads", "snapshot_json")
+                | ("request_owners", "request_id")
                 | ("message_ledger", "message_id" | "message_json")
         ) =>
         {
@@ -1124,6 +1123,92 @@ pub(super) fn trace_original_failure_bytes(
     }
     actual
 }
+#[test]
+fn execution_model_routing_rejects_a_foreign_owner_in_the_stored_layout() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let mut requests = Vec::new();
+    for name in ["first-model-owner", "second-model-owner"] {
+        let attempt = AttemptId::new(name);
+        let anchor = store
+            .append_event(envelope(
+                store.conversation_id(),
+                &format!("{name}-start"),
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .unwrap()
+            .sequence;
+        let mut snapshot = progress_request_snapshot(
+            name,
+            "1",
+            0,
+            store.load_head().unwrap().revision,
+            Vec::new(),
+        );
+        snapshot.invocation.model = format!("{name}-model");
+        freeze_test_input(&store, &mut snapshot, &[]);
+        let request = store
+            .commit_model_turn_start(&[], &snapshot, Utc::now())
+            .unwrap()
+            .started
+            .sequence;
+        requests.push((attempt, anchor, request, snapshot.invocation.model));
+    }
+    let (attempt, anchor, request, model) = &requests[0];
+    let through = requests[1].2;
+    let expected = store
+        .observation_models_page(attempt, through, 0, 8)
+        .unwrap();
+    assert_eq!(expected.names.len(), 1);
+    assert_eq!(expected.names[0].value.as_ref(), Some(model));
+    let connection = store.lock().unwrap();
+    let original: Vec<u8> = connection
+        .query_row(
+            "SELECT observation_execution FROM events WHERE sequence=?1",
+            [request],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut layout: serde_json::Value = observation_codec::decode(&original).unwrap();
+    layout[0] = serde_json::json!(requests[1].1);
+    connection
+        .execute(
+            "UPDATE events SET observation_execution=?2 WHERE sequence=?1",
+            params![
+                request,
+                observation_codec::encode_admitted(&layout).unwrap()
+            ],
+        )
+        .unwrap();
+    drop(connection);
+    let changed = store.observation_models_page(attempt, through, 0, 8);
+    assert!(changed.is_err(), "{changed:?}");
+    assert!(
+        store
+            .observation_model_value_read(attempt, through, 0, 0, 64)
+            .is_err()
+    );
+    let cut = store.observation_read_cut().unwrap();
+    assert!(store.observation_models_at(&cut, *anchor, 0, 8).is_err());
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE events SET observation_execution=?2 WHERE sequence=?1",
+            params![request, original],
+        )
+        .unwrap();
+    assert_eq!(
+        store
+            .observation_models_page(attempt, through, 0, 8)
+            .unwrap(),
+        expected
+    );
+}
+
 #[test]
 fn t08_t14_t15_t19_execution_models_and_failure_use_numeric_original_request_sources() {
     let store = store();

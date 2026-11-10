@@ -206,7 +206,7 @@ pub(super) fn request_snapshot_exists(
 ) -> Result<bool, ConversationStoreError> {
     transaction
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE request_id=?1)",
+            "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1))",
             [request_id.as_str()],
             |row| row.get(0),
         )
@@ -743,7 +743,7 @@ pub(super) fn request_snapshot_started_sequence(
 ) -> Result<Option<u64>, ConversationStoreError> {
     transaction
         .query_row(
-            "SELECT started_sequence FROM request_snapshots WHERE request_id=?1",
+            "SELECT started_sequence FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
             [request_id.as_str()],
             |row| row.get::<_, Option<i64>>(0),
         )
