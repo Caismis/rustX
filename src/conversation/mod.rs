@@ -10,6 +10,7 @@
 //! attempts and `AgentExecution` owns it while running. It caches retained Original
 //! facts, never gives Derived projected content a canonical `MessageId`.
 
+pub mod bodies;
 pub mod ledger;
 pub mod selection;
 pub mod surface;
@@ -274,15 +275,33 @@ impl ConversationState {
         revision: SurfaceRevision,
         compaction_generation: u64,
     ) -> Result<Self, ConversationError> {
+        Self::from_shared_durable_head(
+            messages.into_iter().map(|m| Arc::new(m.into())),
+            active_ids,
+            revision,
+            compaction_generation,
+        )
+    }
+
+    pub(crate) fn from_shared_durable_head(
+        messages: impl IntoIterator<Item = Arc<crate::model::ModelInputMessage>>,
+        active_ids: Vec<MessageId>,
+        revision: SurfaceRevision,
+        compaction_generation: u64,
+    ) -> Result<Self, ConversationError> {
         let mut ledger = MessageLedger::new();
-        for message in messages {
+        for shared in messages {
+            let message = shared.as_canonical().expect("canonical Ledger body");
             if ledger
                 .get(message.id())
-                .is_some_and(|existing| existing == &message)
+                .is_some_and(|existing| existing == message)
             {
                 continue;
             }
-            ledger.append(message)?;
+            if ledger.contains(message.id()) {
+                return Err(LedgerError::DuplicateMessageId(message.id().clone()).into());
+            }
+            ledger.append_shared_after_validation(shared);
         }
         let mut active_ids = active_ids;
         let mut seen = BTreeSet::new();
@@ -303,6 +322,11 @@ impl ConversationState {
                 compaction_generation,
             ),
         })
+    }
+
+    /// Bind native immutable bodies to the session's shared allocation registry.
+    pub(crate) fn bind_bodies(&mut self, bodies: Arc<bodies::CanonicalBodies>) {
+        self.ledger.bind_bodies(bodies);
     }
 
     /// The immutable hot Message Ledger read model. Retired durable records

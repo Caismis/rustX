@@ -754,13 +754,15 @@ mod tests {
             };
             identities.push(Arc::downgrade(&id.0));
             surface
-                .append(Arc::new(MessageBlock::User(UserMessageBlock {
-                    id,
-                    content: Vec::new(),
-                    source: UserSource::Human,
-                    kind: InboundKind::Message,
-                    timestamp: None,
-                })))
+                .append(Arc::new(crate::model::ModelInputMessage::Canonical(
+                    MessageBlock::User(UserMessageBlock {
+                        id,
+                        content: Vec::new(),
+                        source: UserSource::Human,
+                        kind: InboundKind::Message,
+                        timestamp: None,
+                    }),
+                )))
                 .unwrap();
             if ![32, 512, 4096].contains(&count) {
                 continue;

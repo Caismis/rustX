@@ -606,12 +606,25 @@ impl SelectedInputManifest {
     /// Appends one actual occurrence, retaining the certified unfinished SHA prefix.
     #[must_use]
     pub fn append(&self, scope: &ConversationId, message: &ModelInputMessage) -> Self {
+        self.append_shared(scope, Arc::new(message.clone()))
+    }
+    /// Append a lease on one immutable body, without copying its content.
+    #[must_use]
+    pub(crate) fn append_shared(
+        &self,
+        scope: &ConversationId,
+        message: Arc<ModelInputMessage>,
+    ) -> Self {
         let mut selected = self.clone();
-        if !admit_change(self, message, None) || self.len() >= 8192 {
+        if !admit_change(self, &message, None) || self.len() >= 8192 {
             selected.invalid_budget = true;
             return selected;
         }
-        let leaf = InputNode::leaf(freeze(scope, message), Some(Arc::new(message.clone())));
+        selected.semantic.clone_from(&self.semantic);
+        if let Some(sha) = &mut selected.semantic {
+            super::types::append_semantic_message(sha, &message);
+        }
+        let leaf = InputNode::leaf(freeze(scope, &message), Some(message));
         selected.root = Some(self.root.as_ref().map_or_else(
             || leaf.clone(),
             |root| InputNode::join(root.clone(), leaf.clone()),
@@ -621,10 +634,6 @@ impl SelectedInputManifest {
                 index: self.len(),
                 node: leaf,
             });
-        }
-        selected.semantic.clone_from(&self.semantic);
-        if let Some(sha) = &mut selected.semantic {
-            super::types::append_semantic_message(sha, message);
         }
         selected
     }
@@ -830,6 +839,23 @@ fn set_actual(node: &mut Arc<InputNode>, index: usize, value: Arc<ModelInputMess
         }
     }
 }
+#[cfg(test)]
+fn shared_actual(node: &InputNode, index: usize) -> Arc<ModelInputMessage> {
+    match &node.kind {
+        InputNodeKind::Leaf(_) => Arc::clone(
+            node.actual
+                .as_ref()
+                .expect("materialized native selected input"),
+        ),
+        InputNodeKind::Branch { left, right } => {
+            if index < left.count {
+                shared_actual(left, index)
+            } else {
+                shared_actual(right, index - left.count)
+            }
+        }
+    }
+}
 fn actual(node: &InputNode, index: usize) -> &ModelInputMessage {
     match &node.kind {
         InputNodeKind::Leaf(_) => {
@@ -866,6 +892,34 @@ impl SelectedModelInput {
         &self.1
     }
 
+    /// Lease one exact actual allocation from this immutable selection.
+    #[cfg(test)]
+    pub(crate) fn shared(&self, index: usize) -> Arc<ModelInputMessage> {
+        assert!(index < self.len(), "native input index");
+        shared_actual(self.0.root.as_ref().expect("nonempty input"), index)
+    }
+    /// Lease an ordered native input page without a keyed tree walk per item.
+    pub(crate) fn shared_iter(&self) -> impl Iterator<Item = Arc<ModelInputMessage>> + '_ {
+        let mut pending = self.0.root.iter().map(Arc::as_ref).collect::<Vec<_>>();
+        std::iter::from_fn(move || {
+            loop {
+                let node = pending.pop()?;
+                match &node.kind {
+                    InputNodeKind::Leaf(_) => {
+                        return Some(Arc::clone(
+                            node.actual
+                                .as_ref()
+                                .expect("materialized native selected input"),
+                        ));
+                    }
+                    InputNodeKind::Branch { left, right } => {
+                        pending.push(right);
+                        pending.push(left);
+                    }
+                }
+            }
+        })
+    }
     /// Original ranks that contain media, skipping immutable media-free subtrees.
     #[must_use]
     pub(crate) fn media_indices(&self) -> Vec<usize> {

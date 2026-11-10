@@ -2253,6 +2253,49 @@ fn recovery_repairs_exact_occurrences_when_provider_ids_repeat_on_the_surface() 
     store.projected_history().unwrap();
 }
 
+#[test]
+fn recovery_preserves_surface_order_for_multiple_unsettled_assistants() {
+    let durable = Durable::new();
+    {
+        let store = durable.open();
+        store
+            .initialize(&[
+                assistant_with_calls("z-first", &["first-call"]),
+                assistant_with_calls("a-second", &["second-call"]),
+            ])
+            .unwrap();
+    }
+    let store = durable.open();
+    let report = recover(&store, &FixedClock).unwrap();
+    assert_eq!(
+        report.reconciliation().repaired_tool_results,
+        vec![
+            ToolCallId::new("first-call"),
+            ToolCallId::new("second-call")
+        ]
+    );
+    let repaired: Vec<_> = store
+        .load_canonical()
+        .unwrap()
+        .into_iter()
+        .filter_map(|message| match message {
+            MessageBlock::Tool(tool) => Some(tool.occurrence.assistant_message_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        repaired,
+        vec![MessageId::new("z-first"), MessageId::new("a-second")]
+    );
+    assert!(
+        recover(&store, &FixedClock)
+            .unwrap()
+            .reconciliation()
+            .repaired_tool_results
+            .is_empty()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Finding-15 regression — historical attempt evidence never aliases the
 // current unresolved call
@@ -2800,7 +2843,7 @@ fn the_recovery_fold_retains_only_unresolved_work() {
     let plan = RecoveryPlan::classify(&evidence);
     assert_eq!(plan.attempt_class(), &AttemptRecoveryClass::AlreadyTerminal);
     assert!(plan.background_classes().is_empty());
-    assert!(evidence.active_messages().is_empty());
+    assert!(evidence.tool_repair_messages().is_empty());
     assert!(evidence.pending_inbound().is_empty());
     assert_eq!(evidence.next_attempt_ordinal(), 40);
     // 160 durable events and 40 request snapshots are behind this fold; the
