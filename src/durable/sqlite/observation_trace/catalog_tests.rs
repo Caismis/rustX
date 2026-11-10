@@ -75,6 +75,20 @@ fn unchanged_catalog_writes_one_binding_and_zero_definitions_at_growing_history_
                 |row| Ok((row.get(0)?, row.get(1)?)),
             ).unwrap();
             assert_eq!(rows, (1, first.tool_definitions.len() as u64));
+            // Grow the binding table itself, and exercise both its old and new
+            // ends. Growing only the version table cannot catch a binding scan.
+            for source in [start, next] {
+                let mut lookup = connection.prepare(BINDING_SQL).unwrap();
+                let ids: Vec<u64> = lookup
+                    .query_map([source], |row| row.get(0))
+                    .unwrap()
+                    .collect::<Result<_, _>>()
+                    .unwrap();
+                assert_eq!(ids, [original_id]);
+                assert!(lookup.get_status(StatementStatus::VmStep) < 100);
+                assert_eq!(lookup.get_status(StatementStatus::FullscanStep), 0);
+                assert_eq!(lookup.get_status(StatementStatus::Sort), 0);
+            }
         }
     }
     let connection = store.lock().unwrap();
@@ -118,16 +132,19 @@ fn catalog_binding_and_version_seeks_have_constant_vm_work_as_history_grows() {
             ).unwrap();
         }
         let mut binding = connection.prepare(BINDING_SQL).unwrap();
-        assert!(binding.query([start]).unwrap().next().unwrap().is_some());
+        let ids: Vec<u64> = binding
+            .query_map([start], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(ids, [catalog_id(&connection, start)]);
         let mut version = connection.prepare(VERSION_SQL).unwrap();
-        assert!(
-            version
-                .query([configuration.identity()])
-                .unwrap()
-                .next()
-                .unwrap()
-                .is_some()
-        );
+        let ids: Vec<u64> = version
+            .query_map([configuration.identity()], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(ids, [catalog_id(&connection, start)]);
         let steps = (
             binding.get_status(StatementStatus::VmStep),
             version.get_status(StatementStatus::VmStep),
@@ -299,6 +316,62 @@ fn missing_or_corrupt_shared_catalog_never_changes_native_or_other_trace_evidenc
             assert_damage_is_independent(damage, before_capture);
         }
     }
+}
+
+#[test]
+fn changed_version_identity_cannot_be_adopted_by_a_later_configuration() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("catalog-identity.sqlite");
+    let conversation = ConversationId::generate();
+    let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+    store.initialize(&[]).unwrap();
+    let (first, start) = inspection_request(&store, 0, "original schema");
+    let (_, _, original_occurrence) = inspection_assistant(&store, &first);
+    let original_cut = store.observation_read_cut().unwrap();
+    inspection_result(&store, &first);
+    let id = catalog_id(&store.lock().unwrap(), start);
+    let mut changed = first.clone();
+    // The true first matching ToolId is now ordinal zero. Reusing the old
+    // members would silently return the unrelated definition at ordinal one.
+    changed.tool_definitions.swap(0, 1);
+    let configuration = FreshConfiguration::capture(&changed).unwrap();
+    drop(store);
+    let external = Connection::open(&path).unwrap();
+    external
+        .execute(
+            "UPDATE request_trace_catalog_versions SET configuration_digest=?2 WHERE id=?1",
+            params![id, configuration.identity()],
+        )
+        .unwrap();
+    drop(external);
+    let store = SqliteConversationStore::open(conversation, &path).unwrap();
+    assert!(matches!(
+        store.observation_trace_tool_definition(&original_cut, &original_occurrence),
+        Err(ConversationStoreError::Storage(_))
+    ));
+    let (second, next) = unchanged_request(&store, &changed, 1);
+    let (_, _, occurrence) = inspection_assistant(&store, &second);
+    let cut = store.observation_read_cut().unwrap();
+    let definition = store.observation_trace_tool_definition(&cut, &occurrence);
+    assert!(
+        matches!(definition, Err(ConversationStoreError::Storage(_))),
+        "changed catalog identity was trusted: {definition:?}"
+    );
+    assert!(super::catalog::binding(&store.lock().unwrap(), next).is_err());
+    assert_eq!(
+        store.load_request_snapshot(&second.request_id).unwrap(),
+        second
+    );
+    assert!(
+        store
+            .observation_trace_tool_proposal(&cut, &occurrence)
+            .is_ok()
+    );
+    assert!(
+        store
+            .request_field_header_at(next, cut.read.journal, &[])
+            .is_ok()
+    );
 }
 
 #[test]

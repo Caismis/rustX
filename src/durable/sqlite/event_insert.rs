@@ -95,15 +95,15 @@ fn schema_versions(connection: &Connection) -> Result<(i64, i64), ConversationSt
 /// Triggers can observe or change intermediate native/derived rows. Preserve
 /// those SQL programs' ordering, including TEMP triggers and dynamic DDL. The
 /// exceptions are our exact TEMP cleanup and catalog invalidation programs:
-/// neither source deletion nor catalog definition mutation occurs while
+/// neither source deletion nor catalog mutation occurs while
 /// preparing or inserting an event.
 fn no_custom_triggers(connection: &Connection) -> Result<bool, ConversationStoreError> {
     #[cfg(test)]
     GUARD_SCANS.with(|count| count.set(count.get() + 1));
     connection.query_row_cached(
-        "SELECT NOT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE type='trigger' AND (sql IS NULL OR sql NOT IN(?3,?4,?5))) AND NOT EXISTS(SELECT 1 FROM temp.sqlite_schema WHERE type='trigger' AND (sql IS NULL OR sql NOT IN(?1,?2)))",
+        "SELECT NOT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE type='trigger' AND (sql IS NULL OR sql NOT IN(?3,?4,?5,?6))) AND NOT EXISTS(SELECT 1 FROM temp.sqlite_schema WHERE type='trigger' AND (sql IS NULL OR sql NOT IN(?1,?2)))",
         params![observation_readiness::EVENT_DELETION, observation_readiness::TRANSCRIPT_DELETION,
-            observation_trace::CATALOG_INVALIDATIONS[0],observation_trace::CATALOG_INVALIDATIONS[1],observation_trace::CATALOG_INVALIDATIONS[2]], |row| row.get(0),
+            observation_trace::CATALOG_INVALIDATIONS[0],observation_trace::CATALOG_INVALIDATIONS[1],observation_trace::CATALOG_INVALIDATIONS[2],observation_trace::CATALOG_INVALIDATIONS[3]], |row| row.get(0),
     ).map_err(|error|super::sqlite_error(&error,error.to_string()))
 }
 
