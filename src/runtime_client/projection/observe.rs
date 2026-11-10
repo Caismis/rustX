@@ -532,7 +532,7 @@ impl RuntimeClientProjection {
             } => {
                 use crate::durable::observation::ModelTurnObservationBoundary;
                 self.prepare_native_witness(batch, provider, &mut observations);
-                self.prepare_native_canonical_headers(
+                self.prepare_native_canonical_receipt(
                     assistant,
                     canonical.attempt_id.clone(),
                     &mut observations,
@@ -553,7 +553,7 @@ impl RuntimeClientProjection {
                             observations
                                 .push(ConversationObservation::PendingReceipt(pending.clone()));
                         }
-                        self.prepare_native_canonical_headers(
+                        self.prepare_native_canonical_receipt(
                             canonical,
                             adoption.attempt_id.clone(),
                             &mut observations,
@@ -640,7 +640,7 @@ impl RuntimeClientProjection {
         observations.push(ConversationObservation::JournalFact(witness.clone()));
     }
 
-    fn prepare_native_canonical_headers(
+    fn prepare_native_canonical_receipt(
         &mut self,
         canonical: &Arc<crate::durable::CanonicalObservationBatch>,
         attempt_id: Option<AttemptId>,
@@ -655,21 +655,6 @@ impl RuntimeClientProjection {
                         .content
                         .iter()
                         .map(|binding| Arc::clone(&binding.content_ref))
-                })
-                .collect(),
-        );
-        self.prepare_message_headers(
-            canonical
-                .head
-                .iter()
-                .filter_map(|header| {
-                    header.identity.as_ref().map(|identity| {
-                        (
-                            identity.clone(),
-                            header.clone(),
-                            Some(canonical.read_cut.surface_revision),
-                        )
-                    })
                 })
                 .collect(),
         );
@@ -700,7 +685,7 @@ impl RuntimeClientProjection {
                 }
                 _ => None,
             };
-            self.prepare_native_canonical_headers(canonical, attempt_id, observations);
+            self.prepare_native_canonical_receipt(canonical, attempt_id, observations);
         }
     }
 

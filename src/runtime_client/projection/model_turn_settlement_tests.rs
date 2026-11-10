@@ -218,6 +218,8 @@ fn model_turn_family_matches_ordered_native_members_and_keeps_assistant_before_l
             before.get() + 1,
             "one complete published cut"
         );
+        assert!(actual.prepared_messages.is_empty());
+        assert!(expected.prepared_messages.is_empty());
         assert_eq!(
             actual.snapshot, expected.snapshot,
             "pending={pending_count}"

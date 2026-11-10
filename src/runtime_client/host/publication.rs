@@ -4,6 +4,7 @@
 use super::ProjectionStage;
 use super::sources::native_actor_transition;
 use super::sources::observation_domain_sources;
+#[cfg(test)]
 use super::sources::observation_headers;
 #[cfg(test)]
 use super::sources::observation_terminal_positions;
@@ -322,6 +323,7 @@ pub(super) fn apply_prepared_observations(
         let publication_content =
             super::super::checkpoint::publication_content_evidence(&observation);
         let references = super::super::checkpoint::observation_metadata(store, &observation);
+        #[cfg(test)]
         let headers = observation_headers(store, &observation);
         #[cfg(test)]
         let terminals = observation_terminal_positions(store, &observation, None);
@@ -334,6 +336,7 @@ pub(super) fn apply_prepared_observations(
             let sources = weighted_sources(sources);
             projection.prepare_publication_content(publication_content);
             projection.install_content_metadata(references);
+            #[cfg(test)]
             projection.prepare_message_headers(headers);
             #[cfg(test)]
             projection.prepare_terminal_positions(terminals);

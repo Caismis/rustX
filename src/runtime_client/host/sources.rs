@@ -1,7 +1,9 @@
 //! Display domain sources from native observations. Owner sources are prepared
 //! outside projection synchronization. Agent detail reads use the native
 //! registry; activity is folded only into the current working snapshot.
-use super::{Arc, ConversationObservation, ConversationStore, MessageId, background_view};
+use super::{Arc, ConversationObservation, background_view};
+#[cfg(test)]
+use super::{ConversationStore, MessageId};
 
 /// No Store operation occurs under the native Projection synchronization
 /// boundary. Preparation serializes drain order; every prepared observation
@@ -253,6 +255,7 @@ pub(super) fn observation_terminal_positions(
         _ => Vec::new(),
     }
 }
+#[cfg(test)]
 pub(super) fn observation_headers(
     store: &dyn ConversationStore,
     observation: &ConversationObservation,
@@ -261,25 +264,9 @@ pub(super) fn observation_headers(
     crate::durable::observation::MessageHeader,
     Option<crate::conversation::SurfaceRevision>,
 )> {
-    let _ = store; // The direct Committed source seam exists only in cfg(test).
     observation
         .facts()
         .flat_map(|fact| match fact {
-            ConversationObservation::CanonicalCommitted { receipt, .. } => receipt
-                .observation
-                .head
-                .iter()
-                .filter_map(|header| {
-                    header.identity.as_ref().map(|identity| {
-                        (
-                            identity.clone(),
-                            header.clone(),
-                            Some(receipt.observation.read_cut.surface_revision),
-                        )
-                    })
-                })
-                .collect::<Vec<_>>(),
-            #[cfg(test)]
             ConversationObservation::Committed { block, .. } => store
                 .message_header(block.id())
                 .ok()

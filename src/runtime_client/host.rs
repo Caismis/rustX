@@ -157,7 +157,9 @@ use crate::runtime::conversation_runtime::{
     CancelAttemptError, ConversationRuntime, InboundAdmissionError, ManualCompactionError,
     ModelUpdateError, RuntimeBootstrapError,
 };
-use crate::runtime::identity::{ConversationId, MessageId, ToolExecutionId};
+#[cfg(test)]
+use crate::runtime::identity::MessageId;
+use crate::runtime::identity::{ConversationId, ToolExecutionId};
 use crate::runtime::interaction::{InteractionRef, InteractionResponse, RoutedInteractionError};
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::request_history::{RequestHistory, RequestHistoryError};
