@@ -105,8 +105,9 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       await expect(form.getByRole('button', { name: /Auxiliary model$/ })).toContainText('Follow selected model');
       await expect(form.getByRole('button', { name: /Auxiliary reasoning profile$/ })).toContainText('Lowest');
       await expect(nested.getByLabel('Output limit (Auxiliary)')).toHaveValue('');
-      await expect(nested.getByLabel('Request parameter overrides (Auxiliary)', {exact:true})).toHaveText('', {useInnerText:true});
+      await expect(nested.getByLabel('Request parameter overrides (Auxiliary)', {exact:true})).toHaveText('{}', {useInnerText:true});
       expect(readFileSync(sourceFile, 'utf8')).toMatch(/mode\s*=\s*"session"/);
+      expect(readFileSync(sourceFile, 'utf8')).not.toMatch(/temperature|seed|stop/);
     }
     surface=await openResourceModule(page,'mcp','Workspace A');
     for (const transport of ['http', 'stdio'] as const) {
