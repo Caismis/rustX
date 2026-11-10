@@ -5,7 +5,7 @@ use super::{
 };
 use crate::durable::store::canonical::FirstHumanSource;
 
-pub(in crate::durable::sqlite) const FIRST_HUMAN_SQL: &str = "SELECT l.position,l.message_id,l.title_source_text,l.position>(SELECT message_count FROM bootstrap_identity WHERE id=1),s.consumed,s.call_id,EXISTS(SELECT 1 FROM auxiliary_title_calls b WHERE b.message_id=l.message_id),EXISTS(SELECT 1 FROM auxiliary_requests r WHERE r.call_id=s.call_id),c.settled_sequence FROM message_ledger l INDEXED BY message_ledger_first_human_idx LEFT JOIN auxiliary_title_sources s ON s.message_id=l.message_id LEFT JOIN auxiliary_calls c ON c.call_id=s.call_id WHERE l.ordinary_human=1 ORDER BY l.position LIMIT 1";
+pub(in crate::durable::sqlite) const FIRST_HUMAN_SQL: &str = "SELECT l.position,l.message_id,l.title_source_text,l.position>(SELECT message_count FROM bootstrap_identity WHERE id=1),s.consumed,s.call_sequence,EXISTS(SELECT 1 FROM auxiliary_title_calls b WHERE b.ledger_position=l.position),EXISTS(SELECT 1 FROM auxiliary_requests r WHERE r.call_id=c.call_id),c.settled_sequence FROM message_ledger l INDEXED BY message_ledger_first_human_idx LEFT JOIN auxiliary_title_sources s ON s.ledger_position=l.position LEFT JOIN auxiliary_calls c ON c.started_sequence=s.call_sequence WHERE l.ordinary_human=1 ORDER BY l.position LIMIT 1";
 
 pub(in crate::durable::sqlite) fn read(
     connection: &Connection,
@@ -19,7 +19,7 @@ pub(in crate::durable::sqlite) fn read(
                 row.get::<_, Option<String>>(2)?,
                 row.get::<_, bool>(3)?,
                 row.get::<_, Option<bool>>(4)?,
-                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<u64>>(5)?,
                 row.get::<_, bool>(6)?,
                 row.get::<_, bool>(7)?,
                 row.get::<_, Option<u64>>(8)?,

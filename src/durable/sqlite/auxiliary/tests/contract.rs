@@ -1058,20 +1058,18 @@ fn request_cardinality_and_call_terminal_absorbing_rules_are_enforced() {
 
 #[test]
 fn required_schema_indexes_and_constraints_are_current() {
-    assert_eq!(SQLITE_SCHEMA_VERSION, 108);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 109);
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     let connection = store.lock().unwrap();
     for index in [
         "auxiliary_requests_open_idx",
-        "auxiliary_requests_request_idx",
         "auxiliary_requests_terminal_idx",
         "auxiliary_audit_offset_idx",
         "auxiliary_audit_call_idx",
-        "auxiliary_audit_request_idx",
-        "auxiliary_audit_sequence_idx",
-        "auxiliary_calls_started_idx",
-        "auxiliary_calls_settled_idx",
         "request_owners_source_idx",
+        "request_owners_terminal_idx",
+        "auxiliary_calls_terminal_idx",
+        "auxiliary_requests_outcome_idx",
         "events_auxiliary_call_id_kind_idx",
         "events_auxiliary_fact_type_idx",
     ] {
@@ -1241,16 +1239,16 @@ fn missing_required_index_is_rejected_without_schema_rewrite() {
 fn falsely_named_indexes_are_rejected_without_schema_rewrite() {
     for (expected_name, corruption) in [
         (
-            "auxiliary_audit_sequence_idx",
-            "DROP INDEX auxiliary_audit_sequence_idx;
-             CREATE INDEX auxiliary_audit_sequence_idx
+            "auxiliary_audit_offset_idx",
+            "DROP INDEX auxiliary_audit_offset_idx;
+             CREATE INDEX auxiliary_audit_offset_idx
                  ON auxiliary_audit_facts(kind,audit_offset);",
         ),
         (
-            "auxiliary_audit_request_idx",
-            "DROP INDEX auxiliary_audit_request_idx;
-             CREATE INDEX auxiliary_audit_request_idx
-                 ON auxiliary_audit_facts(call_id,sequence);",
+            "auxiliary_audit_call_idx",
+            "DROP INDEX auxiliary_audit_call_idx;
+             CREATE INDEX auxiliary_audit_call_idx
+                 ON auxiliary_audit_facts(request_id,sequence);",
         ),
     ] {
         let directory = tempfile::tempdir().unwrap();
@@ -1308,7 +1306,7 @@ fn auxiliary_frontier_queries_use_bounded_index_seeks() {
     assert!(
         derived
             .iter()
-            .any(|detail| detail.contains("auxiliary_audit_sequence_idx")),
+            .any(|detail| detail.contains("INTEGER PRIMARY KEY")),
         "{derived:?}"
     );
     assert!(

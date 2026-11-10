@@ -267,8 +267,7 @@ pub(super) fn prepare_cached(
         RuntimeEvent::ModelRequestStarted {
             request_id, model, ..
         } => {
-            model_insert =
-                request_started(connection, event, attempt, request_id, model, &mut state)?;
+            model_insert = request_started(connection, event, request_id, model, &mut state)?;
             if !pending && let Some(model) = model_insert.take() {
                 insert_model(
                     connection,
@@ -406,7 +405,6 @@ fn attempt_failed(
 fn request_started(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
-    attempt: &AttemptId,
     request_id: &RequestId,
     model: &str,
     state: &mut ExecutionLayout,
@@ -429,10 +427,10 @@ fn request_started(
     let model_hash: Vec<u8> = sha2::Sha256::digest(model.as_bytes()).to_vec();
     let known: bool = connection
         .prepare_cached(
-            "SELECT EXISTS(SELECT 1 FROM observation_models WHERE attempt_id=?1 AND model_hash=?2)",
+            "SELECT EXISTS(SELECT 1 FROM observation_models WHERE owner_anchor=?1 AND model_hash=?2)",
         )
         .and_then(|mut statement| {
-            statement.query_row(params![attempt.as_str(), model_hash], |row| row.get(0))
+            statement.query_row(params![state.owner_anchor, model_hash], |row| row.get(0))
         })
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if !known {
@@ -470,11 +468,7 @@ fn insert_model(
     summary: &AttemptExecutionSummary,
     model: &PreparedModel,
 ) -> Result<(), ConversationStoreError> {
-    let attempt = event
-        .attempt_id
-        .as_ref()
-        .ok_or_else(|| storage("native model owner unavailable"))?;
-    connection.prepare_cached("INSERT INTO observation_models(attempt_id,ordinal,first_sequence,request_alias,request_encoded_bytes,model_hash,encoded_bytes,owner_anchor) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)").and_then(|mut statement| statement.execute(params![attempt.as_str(),model.ordinal,event.sequence,summary.last_request_id.as_ref().map(RequestId::as_str),model.request_encoded_bytes,model.hash,model.encoded_bytes,owner])).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    connection.prepare_cached("INSERT INTO observation_models(owner_anchor,ordinal,first_sequence,request_alias,request_encoded_bytes,model_hash,encoded_bytes) VALUES(?1,?2,?3,?4,?5,?6,?7)").and_then(|mut statement| statement.execute(params![owner,model.ordinal,event.sequence,summary.last_request_id.as_ref().map(RequestId::as_str),model.request_encoded_bytes,model.hash,model.encoded_bytes])).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
 fn request_settled(
@@ -550,15 +544,16 @@ pub(super) fn models(
     if limit == 0 || limit > HEADER_PAGE_MAX {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    let summary = summary(connection, attempt, through)?;
+    let state = layout(connection, attempt, through)?;
+    let summary = state.summary;
     if offset > summary.models_total {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    let mut statement=connection.prepare("SELECT ordinal,request_alias,request_encoded_bytes,first_sequence,encoded_bytes FROM observation_models WHERE attempt_id=?1 AND ordinal>=?2 AND ordinal<?3 AND first_sequence<=?4 ORDER BY ordinal LIMIT ?5").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let mut statement=connection.prepare("SELECT ordinal,request_alias,request_encoded_bytes,first_sequence,encoded_bytes FROM observation_models WHERE owner_anchor=?1 AND ordinal>=?2 AND ordinal<?3 AND first_sequence<=?4 ORDER BY ordinal LIMIT ?5").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
             params![
-                attempt.as_str(),
+                state.owner_anchor,
                 offset,
                 summary.models_total,
                 through,
@@ -634,8 +629,9 @@ pub(super) fn model_value(
     {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    let total = summary(connection, attempt, through)?.models_total;
-    let source:Option<(u64,u64)>=connection.prepare_cached("SELECT first_sequence,encoded_bytes FROM observation_models WHERE attempt_id=?1 AND ordinal=?2 AND ordinal<?3 AND first_sequence<=?4").and_then(|mut statement| statement.query_row(params![attempt.as_str(),ordinal,total,through],|row|Ok((row.get(0)?,row.get(1)?)))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let state = layout(connection, attempt, through)?;
+    let total = state.summary.models_total;
+    let source:Option<(u64,u64)>=connection.prepare_cached("SELECT first_sequence,encoded_bytes FROM observation_models WHERE owner_anchor=?1 AND ordinal=?2 AND ordinal<?3 AND first_sequence<=?4").and_then(|mut statement| statement.query_row(params![state.owner_anchor,ordinal,total,through],|row|Ok((row.get(0)?,row.get(1)?)))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let (request, end) = source.ok_or_else(|| {
         ConversationStoreError::InvalidReference("model name source unavailable".into())
     })?;

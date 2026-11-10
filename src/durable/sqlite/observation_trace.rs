@@ -385,7 +385,14 @@ pub(super) fn summary(
     through: u64,
 ) -> Result<Option<RequestReadSummary>, ConversationStoreError> {
     super::observation_request::validate_start(connection, start, through)?;
-    let row:Option<Option<Vec<u8>>>=connection.query_row("SELECT observation_summary FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[start],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let row: Option<Option<Vec<u8>>> = connection
+        .query_row(
+            "SELECT observation_summary FROM request_snapshots WHERE started_sequence=?1",
+            [start],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     row.map(|bytes| decode(&bytes.ok_or_else(|| storage("native request summary unavailable"))?))
         .transpose()
 }
@@ -580,10 +587,10 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
         &["catalog_id", "ordinal"],
     )?;
     verify_header_layout(connection)?;
-    super::schema::shape::verify_unique_column(
+    super::schema::shape::verify_integer_primary_key(
         connection,
         "request_snapshots",
-        "observation_source_id",
+        "started_sequence",
     )?;
     Ok(())
 }
@@ -652,7 +659,7 @@ fn verify_header_layout(connection: &Connection) -> Result<(), ConversationStore
         ),
         (
             "request_source_roots",
-            "REFERENCES request_snapshots(observation_source_id)",
+            "REFERENCES request_snapshots(started_sequence)",
         ),
     ] {
         let sql: String = connection

@@ -31,6 +31,19 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
             "compact primary tree required for observation_models".into(),
         ));
     }
+    for (table, column) in [
+        ("request_snapshots", "started_sequence"),
+        ("request_snapshot_payloads", "started_sequence"),
+        ("lifecycle_state", "id"),
+    ] {
+        verify_integer_primary_key(connection, table, column)?;
+    }
+    for columns in [
+        &["owner_anchor", "ordinal"][..],
+        &["owner_anchor", "model_hash"][..],
+    ] {
+        verify_unique_columns(connection, "observation_models", columns)?;
+    }
     content::verify_binary_schema(connection)?;
     provenance::verify_turn_header_shape(connection)?;
     projection::verify_completion_index(connection)?;
@@ -331,7 +344,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
         ("request_configurations", &["digest", "configuration_json"]),
         (
             "request_snapshot_payloads",
-            &["request_id", "snapshot_json"],
+            &["started_sequence", "snapshot_json"],
         ),
         (
             "tool_association_origin_sets",
@@ -359,7 +372,6 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "observation_accepted_ledger",
                 "observation_summary",
                 "observation_source_id",
-                "request_id",
                 "canonical_frontier",
                 "manifest_digest",
                 "input_root",
@@ -498,7 +510,10 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
             ],
         ),
         ("agent_authorities", &["agent_id", "authority_json"]),
-        ("lifecycle_state", &["lifecycle_key", "terminal_event_id"]),
+        (
+            "lifecycle_state",
+            &["id", "lifecycle_key", "terminal_sequence"],
+        ),
     ];
     for (table, required_columns) in required {
         let mut statement = connection
@@ -577,8 +592,6 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
         ("inherited_message_membership", "assistant_message_id"),
         ("agent_authorities", "agent_id"),
         ("events", "event_id"),
-        ("request_snapshots", "request_id"),
-        ("request_snapshot_payloads", "request_id"),
         ("tool_association_nodes", "digest"),
         ("tool_association_origin_sets", "digest"),
         ("request_configurations", "digest"),
@@ -627,6 +640,30 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
     crate::durable::sqlite::scheduled_workflow::verify_schema(connection)?;
     projection::verify_auxiliary_lineage_schema(connection)?;
     request_owner_shape::verify(connection)?;
+    Ok(())
+}
+
+/// The integer key must be the physical rowid, without a shadow PK tree.
+pub(in crate::durable::sqlite) fn verify_integer_primary_key(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<(), ConversationStoreError> {
+    let valid: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) c
+         WHERE c.name=?2 AND c.type='INTEGER' AND c.pk=1
+           AND (SELECT wr FROM pragma_table_list WHERE schema='main' AND name=?1)=0
+           AND NOT EXISTS(SELECT 1 FROM pragma_index_list(?1) WHERE origin='pk'))",
+            rusqlite::params![table, column],
+            |row| row.get(0),
+        )
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    if !valid {
+        return Err(ConversationStoreError::IncompatibleSchema(format!(
+            "table {table} requires an INTEGER PRIMARY KEY on {column}"
+        )));
+    }
     Ok(())
 }
 
@@ -738,8 +775,11 @@ pub(in crate::durable::sqlite) fn verify_witness_field_order(
                 "completed_sequence",
             ] as &[&str],
         ),
-        ("request_snapshots", "previous_request_id", REQUEST_WITNESS),
-        ("request_snapshots", "request_id", REQUEST_WITNESS),
+        (
+            "request_snapshots",
+            "previous_started_sequence",
+            REQUEST_WITNESS,
+        ),
         (
             "request_trace_catalogs",
             "provisional_message_id",
@@ -836,7 +876,6 @@ fn verify_required_index_sql(connection: &Connection) -> Result<(), Conversation
         ("message_ledger_identity_position_idx", ("CREATE UNIQUE INDEX message_ledger_identity_position_idx ON message_ledger(position,message_id)".to_owned(), false)),
         ("message_ledger_native_transcript_idx", ("CREATE UNIQUE INDEX message_ledger_native_transcript_idx ON message_ledger(native_transcript) WHERE native_transcript IS NOT NULL".to_owned(), false)),
         ("inherited_response_owner_idx", ("CREATE INDEX inherited_response_owner_idx ON inherited_response_provenance(json_extract(payload,'$.origin.conversation_id'),json_extract(payload,'$.origin.attempt_id'),ordinal)".to_owned(), false)),
-        ("observation_models_owner_idx", ("CREATE INDEX observation_models_owner_idx ON observation_models(owner_anchor,ordinal)".to_owned(), false)),
         ("events_observation_turn_ordinal_idx", ("CREATE UNIQUE INDEX events_observation_turn_ordinal_idx ON events(observation_turn_ordinal) WHERE observation_turn_ordinal IS NOT NULL".to_owned(), true)),
         ("events_observation_turn_anchor_idx", ("CREATE INDEX events_observation_turn_anchor_idx ON events(observation_turn_anchor) WHERE observation_turn_header IS NOT NULL".to_owned(), true)),
         ("events_observation_turn_prompt_idx", ("CREATE INDEX events_observation_turn_prompt_idx ON events(attempt_id) WHERE observation_turn_prompt_positive=1".to_owned(), true)),

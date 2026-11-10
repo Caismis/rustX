@@ -14,7 +14,7 @@ const TABLES: [(&str, &str); 4] = [
     ),
     (
         "request_source_roots",
-        r"CREATE TABLE request_source_roots(source_id TEXT PRIMARY KEY REFERENCES request_snapshots(observation_source_id),metadata BLOB NOT NULL CHECK(typeof(metadata)='blob' AND length(metadata)<=16384),checksum BLOB NOT NULL CHECK(typeof(checksum)='blob' AND length(checksum)=32)) WITHOUT ROWID",
+        r"CREATE TABLE request_source_roots(source_id TEXT PRIMARY KEY REFERENCES request_snapshots(started_sequence),metadata BLOB NOT NULL CHECK(typeof(metadata)='blob' AND length(metadata)<=16384),checksum BLOB NOT NULL CHECK(typeof(checksum)='blob' AND length(checksum)=32)) WITHOUT ROWID",
     ),
 ];
 pub(in crate::durable::sqlite) fn create_schema(

@@ -171,7 +171,7 @@ pub(in crate::durable::sqlite) fn load_request_snapshot_bounded(
     });
     let size = native_request::MATERIALIZED_BYTES_SQL;
     let sql = format!(
-        "SELECT canonical_frontier,CASE WHEN ({size})<=?2 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END,coalesce(({size})>67108864,1) FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(request_id) WHERE request_id=?1"
+        "SELECT canonical_frontier,CASE WHEN ({size})<=?2 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END,coalesce(({size})>67108864,1) FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(started_sequence) WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)"
     );
     let (stored_canonical_frontier, json, started_sequence, digest, native_oversized): (
         i64,
@@ -455,7 +455,7 @@ pub(in crate::durable::sqlite) fn read_request_snapshot_with_validation(
     let row: Option<StoredSnapshotRow> = transaction
         .query_row_cached(
             "SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=67109466 THEN snapshot_json END,started_sequence,completed_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END
-             FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(request_id) WHERE request_id=?1",
+             FROM request_snapshots LEFT JOIN request_snapshot_payloads USING(started_sequence) WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
             [request_id.as_str()],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, read_manifest_digest(row, 4)?)),
         )
@@ -735,7 +735,7 @@ pub(in crate::durable::sqlite) fn read_stored_snapshot_root(
     type RootRow = (Option<u64>, Option<Vec<u8>>, u64, Option<u8>, bool);
     let row: Option<RootRow> = connection.prepare_cached(
         "SELECT r.input_root,CASE WHEN length(r.input_root_digest)=32 THEN r.input_root_digest END,r.input_count,n.height,r.input_root_digest IS NULL
-         FROM request_snapshots r LEFT JOIN native_input_nodes n ON n.id=r.input_root WHERE r.request_id=?1",
+         FROM request_snapshots r LEFT JOIN native_input_nodes n ON n.id=r.input_root WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
     ).map_err(|error| sqlite_error(&error, format!("request input root lookup: {error}")))?
         .query_row([request.as_str()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))
         .optional().map_err(|error| sqlite_error(&error, format!("request input root row: {error}")))?;

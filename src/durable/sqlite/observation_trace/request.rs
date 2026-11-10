@@ -45,7 +45,7 @@ pub(in crate::durable::sqlite) fn retry_failure(
     through: u64,
 ) -> Result<Option<crate::model::error::ModelErrorKind>, ConversationStoreError> {
     super::super::observation_request::validate_start(connection, start, through)?;
-    let (step,retry):(Option<u64>,Option<u32>)=connection.query_row("SELECT observation_step_anchor,observation_retry_number FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[start],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"original request retry relationship absent"))?;
+    let (step,retry):(Option<u64>,Option<u32>)=connection.query_row("SELECT observation_step_anchor,observation_retry_number FROM request_snapshots WHERE started_sequence=?1",[start],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"original request retry relationship absent"))?;
     let retry = retry.ok_or_else(|| storage("native retry relationship unavailable"))?;
     if retry == 0 {
         return Ok(None);
@@ -146,7 +146,15 @@ pub(in crate::durable::sqlite) fn context(
             "invalid bounded Context page".into(),
         ));
     }
-    let total:Option<u64>=connection.query_row("SELECT observation_context_total FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[start],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"original request snapshot absent"))?;
+    let total: Option<u64> = connection
+        .query_row(
+            "SELECT observation_context_total FROM request_snapshots WHERE started_sequence=?1",
+            [start],
+            |row| row.get(0),
+        )
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, "original request snapshot absent")
+        })?;
     let total = total.ok_or_else(|| storage("native request Context evidence unavailable"))?;
     let mut statement=connection.prepare_cached("SELECT ordinal,header_json FROM request_trace_contexts WHERE source_sequence=?1 AND ordinal>=?2 AND ordinal<?3 ORDER BY ordinal LIMIT ?4").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement

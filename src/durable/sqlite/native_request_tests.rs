@@ -39,7 +39,7 @@ fn stored_configuration_metadata(
         .lock()
         .unwrap()
         .query_row(
-            "SELECT snapshot_json FROM request_snapshot_payloads WHERE request_id=?1",
+            "SELECT snapshot_json FROM request_snapshot_payloads WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
             [snapshot.request_id.as_str()],
             |row| row.get(0),
         )
@@ -351,7 +351,7 @@ fn replace_configuration_tx(
     payload: &str,
 ) {
     let mut metadata: serde_json::Value = transaction.query_row(
-        "SELECT snapshot_json FROM request_snapshot_payloads WHERE request_id=?1",
+        "SELECT snapshot_json FROM request_snapshot_payloads WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
         [snapshot.request_id.as_str()], |row| row.get::<_, String>(0),
     ).map(|json| serde_json::from_str(&json).unwrap()).unwrap();
     let old = metadata["configuration_digest"].as_str().unwrap().to_owned();
@@ -367,8 +367,8 @@ fn replace_configuration_tx(
         "UPDATE request_configurations SET digest=?1,configuration_json=?2 WHERE digest=?3",
         params![digest,payload,old],
     ).unwrap();
-    transaction.execute("UPDATE request_snapshot_payloads SET snapshot_json=?1 WHERE request_id=?2",params![metadata,snapshot.request_id.as_str()]).unwrap();
-    transaction.execute("UPDATE request_snapshots SET manifest_digest=?1 WHERE request_id=?2",params![manifest,snapshot.request_id.as_str()]).unwrap();
+    transaction.execute("UPDATE request_snapshot_payloads SET snapshot_json=?1 WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?2)",params![metadata,snapshot.request_id.as_str()]).unwrap();
+    transaction.execute("UPDATE request_snapshots SET manifest_digest=?1 WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?2)",params![manifest,snapshot.request_id.as_str()]).unwrap();
 }
 
 #[test]
@@ -394,7 +394,7 @@ fn native_request_transaction_validation_reuses_exact_typed_ownership_and_live_s
         assert_eq!(serde_json::to_string(&again.tool_definitions).unwrap(), serde_json::to_string(&snapshot.tool_definitions).unwrap());
         assert_eq!(again.effective_system_prompt, snapshot.effective_system_prompt);
     }
-    transaction.execute("UPDATE request_snapshots SET completed_sequence=123 WHERE request_id=?1", [snapshot.request_id.as_str()]).unwrap();
+    transaction.execute("UPDATE request_snapshots SET completed_sequence=123 WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)", [snapshot.request_id.as_str()]).unwrap();
     let (again, _, completed) = require_started_request_with_validation(&mut validation, store.conversation_id(), &snapshot.request_id).unwrap();
     assert!(Arc::ptr_eq(&first.0, &again.0));
     assert_eq!(completed, Some(123));

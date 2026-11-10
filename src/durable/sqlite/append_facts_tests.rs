@@ -329,8 +329,8 @@ fn lifecycle_probes_reuse_existence_until_the_first_write() {
     assert_eq!(append_facts::take_lifecycle_probes(), 2);
     assert_eq!(store.read_events(None, 64).unwrap().events.len(), 2);
     let connection = store.lock().unwrap();
-    let terminal: String = connection.query_row("SELECT terminal_event_id FROM lifecycle_state WHERE lifecycle_key='turn:lifecycle-probe-owner:lifecycle-probe-turn'", [], |row| row.get(0)).unwrap();
-    assert_eq!(terminal, "lifecycle-existing");
+    let terminal: u64 = connection.query_row("SELECT terminal_sequence FROM lifecycle_state WHERE lifecycle_key='turn:lifecycle-probe-owner:lifecycle-probe-turn'", [], |row| row.get(0)).unwrap();
+    assert_eq!(terminal, 2);
 }
 
 #[test]
@@ -342,13 +342,13 @@ fn lifecycle_first_write_rechecks_trigger_changed_later_keys() {
         if !insert_later {
             connection
                 .execute(
-                    "INSERT INTO lifecycle_state VALUES('turn:trigger-owner:trigger-turn',NULL)",
+                    "INSERT INTO lifecycle_state(lifecycle_key,terminal_sequence) VALUES('turn:trigger-owner:trigger-turn',NULL)",
                     [],
                 )
                 .unwrap();
         }
         let mutation = if insert_later {
-            "INSERT INTO lifecycle_state VALUES('turn:trigger-owner:trigger-turn',NULL);"
+            "INSERT INTO lifecycle_state(lifecycle_key,terminal_sequence) VALUES('turn:trigger-owner:trigger-turn',NULL);"
         } else {
             "DELETE FROM lifecycle_state WHERE lifecycle_key='turn:trigger-owner:trigger-turn';"
         };
@@ -367,7 +367,7 @@ fn lifecycle_first_write_rechecks_trigger_changed_later_keys() {
         store.append_event(event).unwrap();
         assert_eq!(append_facts::take_lifecycle_probes(), 3);
         let connection = store.lock().unwrap();
-        let count: u64 = connection.query_row("SELECT count(*) FROM lifecycle_state WHERE lifecycle_key IN ('attempt:trigger-owner','turn:trigger-owner:trigger-turn') AND terminal_event_id IS NULL", [], |row| row.get(0)).unwrap();
+        let count: u64 = connection.query_row("SELECT count(*) FROM lifecycle_state WHERE lifecycle_key IN ('attempt:trigger-owner','turn:trigger-owner:trigger-turn') AND terminal_sequence IS NULL", [], |row| row.get(0)).unwrap();
         assert_eq!(count, 2);
         drop(connection);
         assert_eq!(store.read_events(None, 64).unwrap().events.len(), 1);
