@@ -929,6 +929,9 @@ mod tests {
                                         .cloned()
                                         .map(crate::model::occurrence::ProviderWireCorrelationId);
                                 }
+                                let encoded = serde_json::to_vec(&frozen).unwrap();
+                                assert!(frozen.encoded_len_upper_bound().unwrap() >= encoded.len());
+                                assert_eq!(encoded, serde_json::to_vec(&expected).unwrap());
                                 assert_eq!(
                                     *frozen, expected,
                                     "protocol={protocol:?} mode={mode} derived={derived_call}/{derived_result} insertion={insertion:?} retry={retry}"

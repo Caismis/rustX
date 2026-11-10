@@ -86,7 +86,17 @@ impl From<Vec<ActualRequestToolAssociation>> for FrozenToolAssociations {
 }
 impl Serialize for FrozenToolAssociations {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        (**self).serialize(serializer)
+        use serde::ser::SerializeSeq;
+        if let Some(values) = self.values.get() {
+            return values.serialize(serializer);
+        }
+        let mut sequence = serializer.serialize_seq(Some(self.len()))?;
+        if let Some(binding) = &self.binding {
+            for value in binding.iter() {
+                sequence.serialize_element(&value)?;
+            }
+        }
+        sequence.end()
     }
 }
 impl<'de> Deserialize<'de> for FrozenToolAssociations {
@@ -103,47 +113,46 @@ impl std::ops::Deref for FrozenToolAssociations {
             };
             #[cfg(test)]
             MATERIALIZATIONS.with(|work| work.set(work.get() + binding.history.len()));
-            let labels = binding.coordinates.labels(&binding.history);
-            binding
-                .history
-                .iter()
-                .map(|a| {
-                    let call_message = binding.coordinates.position(a.call_message);
-                    ActualRequestToolAssociation {
-                        call: ActualRequestCallCoordinate {
-                            message: RequestMessageOccurrence {
-                                request_id: binding.request.clone(),
-                                item_index: call_message,
-                            },
-                            block: RequestBlockIndex(a.call_block),
-                        },
-                        result: RequestMessageOccurrence {
-                            request_id: binding.request.clone(),
-                            item_index: binding.coordinates.position(a.result_message),
-                        },
-                        source: a.source.clone(),
-                        wire_id: if binding.coordinates.wire.is_some() {
-                            labels
-                                .get(&(call_message, a.call_block))
-                                .cloned()
-                                .map(ProviderWireCorrelationId)
-                        } else {
-                            a.wire_id.clone()
-                        },
-                    }
-                })
-                .collect()
+            binding.iter().collect()
+        })
+    }
+}
+impl AssociationBinding {
+    fn iter(&self) -> impl Iterator<Item = ActualRequestToolAssociation> + '_ {
+        let labels = self.coordinates.labels(&self.history);
+        self.history.iter().map(move |a| {
+            let call_message = self.coordinates.position(a.call_message);
+            ActualRequestToolAssociation {
+                call: ActualRequestCallCoordinate {
+                    message: RequestMessageOccurrence {
+                        request_id: self.request.clone(),
+                        item_index: call_message,
+                    },
+                    block: RequestBlockIndex(a.call_block),
+                },
+                result: RequestMessageOccurrence {
+                    request_id: self.request.clone(),
+                    item_index: self.coordinates.position(a.result_message),
+                },
+                source: a.source.clone(),
+                wire_id: if self.coordinates.wire.is_some() {
+                    labels
+                        .get(&(call_message, a.call_block))
+                        .cloned()
+                        .map(ProviderWireCorrelationId)
+                } else {
+                    a.wire_id.clone()
+                },
+            }
         })
     }
 }
 impl std::ops::DerefMut for FrozenToolAssociations {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        let values = (**self).clone();
+        let _ = &**self;
         self.validation = None;
         self.binding = None;
-        self.values = Arc::new(OnceLock::from(values));
-        Arc::get_mut(&mut self.values)
-            .expect("detached associations")
+        Arc::make_mut(&mut self.values)
             .get_mut()
             .expect("materialized associations")
     }
@@ -192,6 +201,25 @@ fn association_policy(
     digest.finalize().into()
 }
 impl FrozenToolAssociations {
+    /// An incremental, conservative JSON bound for native request admission.
+    /// The rare near-limit case still uses exact streaming byte accounting.
+    pub(crate) fn encoded_len_upper_bound(&self) -> Option<usize> {
+        if self.is_empty() {
+            return Some(2);
+        }
+        let binding = self.binding.as_ref()?;
+        binding.coordinates.wire.as_ref()?;
+        let request_bytes = serde_json::to_vec(&binding.request)
+            .ok()?
+            .len()
+            .checked_sub(2)?;
+        binding
+            .history
+            .encoded_bytes_upper
+            .checked_add(request_bytes.checked_mul(2)?.checked_mul(self.len())?)?
+            .checked_add(self.len().saturating_sub(1))?
+            .checked_add(2)
+    }
     pub(crate) fn from_history(
         history: ToolAssociationHistory,
         request: RequestId,

@@ -237,6 +237,9 @@ pub(super) fn load(
             return Err(invalid("Tool association integrity mismatch"));
         }
         let value = super::decode::<HistoricalToolAssociation>(&json, "Tool association")?;
+        if value.call_message >= value.result_message || value.result_message >= 8192 {
+            return Err(invalid("Tool association occurrence bounds"));
+        }
         if binding.relabel && value.wire_id.as_ref().is_none_or(|id| id.0.is_empty()) {
             return Err(invalid("invalid historical wire correlation ID"));
         }
@@ -250,3 +253,41 @@ thread_local! {pub(super) static WRITTEN:std::cell::Cell<(usize,usize)>=const{st
 
 #[cfg(test)]
 thread_local! {pub(super) static VISITED:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authenticated_association_bytes_cannot_overflow_shifted_coordinates() {
+        use crate::durable::{CanonicalStore, ConversationStore};
+        let store = super::super::test_support::store();
+        store.initialize(&[]).unwrap();
+        // A digest proves stored bytes, not that decoded coordinates are safe.
+        let json = serde_json::json!({
+            "call_message": u32::MAX, "call_block": 0, "result_message": 1,
+            "source": {"assistant": {
+                "conversation_id": store.conversation_id(), "message_id": "call",
+                "content_digest": "00"
+            }, "block": 0},
+            "wire_id": "wire", "native_origins": []
+        })
+        .to_string();
+        let hash = digest(None, &json);
+        let connection = store.lock().unwrap();
+        connection.execute("INSERT INTO tool_association_nodes(id,digest,count,association_json) VALUES(1,?1,1,?2)", params![hash.as_slice(), json]).unwrap();
+        let binding = Binding {
+            root: Some(AssociationRoot {
+                id: 1,
+                digest: hash,
+                count: 1,
+            }),
+            inserted_at: Some(0),
+            relabel: true,
+            stored_boundary: None,
+        };
+        assert!(
+            matches!(load(&connection, &binding, 4096), Err(ConversationStoreError::InvalidReference(message)) if message == "Tool association occurrence bounds")
+        );
+    }
+}
