@@ -1,0 +1,3494 @@
+{
+  "text": {
+    "schema": 106,
+    "requests": 512,
+    "metadata_bytes": 688736,
+    "association_bytes": 1024,
+    "first_request": {
+      "request_index": 0,
+      "turn": 1,
+      "metadata_bytes": 1336,
+      "associations": 0,
+      "association_bytes": 2
+    },
+    "last_request": {
+      "request_index": 511,
+      "turn": 512,
+      "metadata_bytes": 1348,
+      "associations": 0,
+      "association_bytes": 2
+    },
+    "owners": [
+      {
+        "name": "events",
+        "pages": 4620,
+        "bytes": 9461760,
+        "payload": 8190246,
+        "group": "event rows"
+      },
+      {
+        "name": "request_source_pages",
+        "pages": 1606,
+        "bytes": 3289088,
+        "payload": 2511448,
+        "group": "input manifest and Source"
+      },
+      {
+        "name": "observation_headers",
+        "pages": 1030,
+        "bytes": 2109440,
+        "payload": 1143934,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "request_snapshots",
+        "pages": 1027,
+        "bytes": 2103296,
+        "payload": 1700143,
+        "group": "request snapshots"
+      },
+      {
+        "name": "request_source_nodes",
+        "pages": 882,
+        "bytes": 1806336,
+        "payload": 1680126,
+        "group": "input manifest and Source"
+      },
+      {
+        "name": "message_ledger",
+        "pages": 515,
+        "bytes": 1054720,
+        "payload": 811936,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "native_input_nodes",
+        "pages": 499,
+        "bytes": 1021952,
+        "payload": 905467,
+        "group": "input manifest and Source"
+      },
+      {
+        "name": "content_frontiers",
+        "pages": 407,
+        "bytes": 833536,
+        "payload": 702436,
+        "group": "content frontiers/layout"
+      },
+      {
+        "name": "observation_block_headers",
+        "pages": 345,
+        "bytes": 706560,
+        "payload": 569292,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "events_attempt_kind_idx",
+        "pages": 165,
+        "bytes": 337920,
+        "payload": 289918,
+        "group": "event indexes"
+      },
+      {
+        "name": "sqlite_autoindex_events_1",
+        "pages": 133,
+        "bytes": 272384,
+        "payload": 232237,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_step_kind_idx",
+        "pages": 117,
+        "bytes": 239616,
+        "payload": 205194,
+        "group": "event indexes"
+      },
+      {
+        "name": "request_source_roots",
+        "pages": 111,
+        "bytes": 227328,
+        "payload": 185886,
+        "group": "input manifest and Source"
+      },
+      {
+        "name": "request_trace_definitions",
+        "pages": 106,
+        "bytes": 217088,
+        "payload": 178064,
+        "group": "Trace catalog"
+      },
+      {
+        "name": "publication_streams",
+        "pages": 87,
+        "bytes": 178176,
+        "payload": 169946,
+        "group": "other"
+      },
+      {
+        "name": "request_trace_definition_digest_idx",
+        "pages": 86,
+        "bytes": 176128,
+        "payload": 138640,
+        "group": "Trace catalog"
+      },
+      {
+        "name": "events_attempt_heads_idx",
+        "pages": 86,
+        "bytes": 176128,
+        "payload": 151435,
+        "group": "event indexes"
+      },
+      {
+        "name": "sqlite_autoindex_request_source_pages_1",
+        "pages": 81,
+        "bytes": 165888,
+        "payload": 133701,
+        "group": "input manifest and Source"
+      },
+      {
+        "name": "events_trace_owner_idx",
+        "pages": 70,
+        "bytes": 143360,
+        "payload": 108799,
+        "group": "event indexes"
+      },
+      {
+        "name": "lifecycle_state",
+        "pages": 65,
+        "bytes": 133120,
+        "payload": 118801,
+        "group": "other"
+      },
+      {
+        "name": "events_request_id_kind_idx",
+        "pages": 58,
+        "bytes": 118784,
+        "payload": 101124,
+        "group": "event indexes"
+      },
+      {
+        "name": "surface_ops",
+        "pages": 52,
+        "bytes": 106496,
+        "payload": 95014,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "observation_models",
+        "pages": 51,
+        "bytes": 104448,
+        "payload": 87300,
+        "group": "other"
+      },
+      {
+        "name": "request_owners",
+        "pages": 44,
+        "bytes": 90112,
+        "payload": 78596,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_transcript_order_1",
+        "pages": 43,
+        "bytes": 88064,
+        "payload": 71846,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "sqlite_autoindex_observation_headers_2",
+        "pages": 43,
+        "bytes": 88064,
+        "payload": 71846,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "sqlite_autoindex_lifecycle_state_1",
+        "pages": 41,
+        "bytes": 83968,
+        "payload": 67748,
+        "group": "other"
+      },
+      {
+        "name": "message_ledger_identity_position_idx",
+        "pages": 41,
+        "bytes": 83968,
+        "payload": 66598,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "sqlite_autoindex_publication_streams_1",
+        "pages": 40,
+        "bytes": 81920,
+        "payload": 67748,
+        "group": "other"
+      },
+      {
+        "name": "request_trace_definition_identity_idx",
+        "pages": 40,
+        "bytes": 81920,
+        "payload": 59792,
+        "group": "Trace catalog"
+      },
+      {
+        "name": "transcript_order",
+        "pages": 39,
+        "bytes": 79872,
+        "payload": 70950,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "sqlite_schema",
+        "pages": 38,
+        "bytes": 77824,
+        "payload": 63511,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_message_ledger_1",
+        "pages": 38,
+        "bytes": 77824,
+        "payload": 63654,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "events_message_id_kind_idx",
+        "pages": 29,
+        "bytes": 59392,
+        "payload": 48514,
+        "group": "event indexes"
+      },
+      {
+        "name": "sqlite_autoindex_observation_models_2",
+        "pages": 27,
+        "bytes": 55296,
+        "payload": 45458,
+        "group": "other"
+      },
+      {
+        "name": "inbound_correlation",
+        "pages": 25,
+        "bytes": 51200,
+        "payload": 43284,
+        "group": "other"
+      },
+      {
+        "name": "events_primary_trace_kind_idx",
+        "pages": 24,
+        "bytes": 49152,
+        "payload": 28544,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_kind_idx",
+        "pages": 24,
+        "bytes": 49152,
+        "payload": 28544,
+        "group": "event indexes"
+      },
+      {
+        "name": "sqlite_autoindex_request_snapshots_2",
+        "pages": 23,
+        "bytes": 47104,
+        "payload": 38674,
+        "group": "request snapshots"
+      },
+      {
+        "name": "sqlite_autoindex_request_owners_1",
+        "pages": 23,
+        "bytes": 47104,
+        "payload": 38674,
+        "group": "other"
+      },
+      {
+        "name": "publication_streams_message_settlement_idx",
+        "pages": 22,
+        "bytes": 45056,
+        "payload": 39186,
+        "group": "other"
+      },
+      {
+        "name": "request_trace_catalog_identity_idx",
+        "pages": 21,
+        "bytes": 43008,
+        "payload": 35698,
+        "group": "Trace catalog"
+      },
+      {
+        "name": "request_trace_catalogs",
+        "pages": 20,
+        "bytes": 40960,
+        "payload": 34194,
+        "group": "Trace catalog"
+      },
+      {
+        "name": "observation_models_owner_idx",
+        "pages": 19,
+        "bytes": 38912,
+        "payload": 30082,
+        "group": "other"
+      },
+      {
+        "name": "events_aggregate_heads_idx",
+        "pages": 19,
+        "bytes": 38912,
+        "payload": 20880,
+        "group": "event indexes"
+      },
+      {
+        "name": "sqlite_autoindex_inbound_correlation_2",
+        "pages": 18,
+        "bytes": 36864,
+        "payload": 29460,
+        "group": "other"
+      },
+      {
+        "name": "events_primary_request_kind_idx",
+        "pages": 18,
+        "bytes": 36864,
+        "payload": 27616,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_execution_owner_idx",
+        "pages": 15,
+        "bytes": 30720,
+        "payload": 17761,
+        "group": "event indexes"
+      },
+      {
+        "name": "trace_adoption_members",
+        "pages": 13,
+        "bytes": 26624,
+        "payload": 20910,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_inbound_correlation_1",
+        "pages": 11,
+        "bytes": 22528,
+        "payload": 15744,
+        "group": "other"
+      },
+      {
+        "name": "observation_block_ledger_kind_idx",
+        "pages": 10,
+        "bytes": 20480,
+        "payload": 13056,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "events_observation_turn_anchor_idx",
+        "pages": 10,
+        "bytes": 20480,
+        "payload": 10657,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_context_reading_idx",
+        "pages": 10,
+        "bytes": 20480,
+        "payload": 14832,
+        "group": "event indexes"
+      },
+      {
+        "name": "message_ledger_append_position_idx",
+        "pages": 8,
+        "bytes": 16384,
+        "payload": 9856,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "sqlite_autoindex_observation_headers_1",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 6912,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "sqlite_autoindex_observation_block_headers_1",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 7936,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "request_configurations",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 11220,
+        "group": "other"
+      },
+      {
+        "name": "observation_headers_ledger_idx",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 6912,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "message_ledger_native_transcript_idx",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 6912,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "message_ledger_human_activity_idx",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 8570,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "events_observation_member_anchor_idx",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 7105,
+        "group": "event indexes"
+      },
+      {
+        "name": "publication_streams_settlement_idx",
+        "pages": 6,
+        "bytes": 12288,
+        "payload": 7040,
+        "group": "other"
+      },
+      {
+        "name": "surface_observation_boundaries",
+        "pages": 5,
+        "bytes": 10240,
+        "payload": 3966,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "sqlite_autoindex_surface_observation_boundaries_2",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3389,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "sqlite_autoindex_surface_observation_boundaries_1",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3389,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "sqlite_autoindex_request_snapshots_1",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 4342,
+        "group": "request snapshots"
+      },
+      {
+        "name": "sqlite_autoindex_request_owners_3",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3440,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_request_owners_2",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3440,
+        "group": "other"
+      },
+      {
+        "name": "request_trace_retry_idx",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3952,
+        "group": "other"
+      },
+      {
+        "name": "request_snapshots_started_idx",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3440,
+        "group": "request snapshots"
+      },
+      {
+        "name": "request_snapshots_canonical_frontier_idx",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3391,
+        "group": "request snapshots"
+      },
+      {
+        "name": "message_ledger_opening_idx",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3454,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "message_ledger_first_human_idx",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3454,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "events_observation_turn_ordinal_idx",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3440,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_assistant_ledger_idx",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3505,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_turn_prompt_idx",
+        "pages": 3,
+        "bytes": 6144,
+        "payload": 2543,
+        "group": "event indexes"
+      },
+      {
+        "name": "transcript_order_audit_position_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "transcript_observation_readiness_missing_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "surface_head",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 6,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "state_observation_sources",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "state_observation_ledger_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "state_observation_journal_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "state_observation_fields",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 112,
+        "group": "other"
+      },
+      {
+        "name": "state_observation_children_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 61,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_scheduled_workflow_starts_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_scheduled_workflow_effects_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_scheduled_workflow_effects_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_schedule_commands_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_publication_proposals_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_publication_observation_blocks_3",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_publication_observation_blocks_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_publication_frames_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_publication_audits_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_projection_checkpoints_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_pending_inbound_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_inherited_response_provenance_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_inherited_message_membership_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_inherited_message_membership_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_inherited_auxiliary_audits_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_contribution_emission_heads_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_compaction_operations_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_canonical_tool_calls_3",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_canonical_tool_calls_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_canonical_tool_calls_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_title_sources_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_title_sources_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_title_calls_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_retries_3",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_retries_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_retries_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_requests_4",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_requests_3",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_requests_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_requests_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_calls_3",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_calls_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_calls_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_agent_authorities_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "schedules_due",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "schedules_completed",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "schedules",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "scheduled_workflow_starts",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "scheduled_workflow_schedule",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "scheduled_workflow_pending",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "scheduled_workflow_effects",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "scheduled_workflow_completed",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "schedule_control",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 4,
+        "group": "other"
+      },
+      {
+        "name": "schedule_commands",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "rustx_store",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 108,
+        "group": "other"
+      },
+      {
+        "name": "request_trace_contexts",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "request_source_scalars",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 225,
+        "group": "input manifest and Source"
+      },
+      {
+        "name": "request_owners_source_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "publication_proposals",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "publication_observation_counts",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "publication_observation_blocks",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "publication_metadata_segments",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "publication_frames_unindexed_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "publication_frames",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "publication_audits",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "projection_ledger_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "projection_head",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "projection_checkpoints",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "projection_checkpoint_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "projection_activations",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "pending_scheduler_correlation",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "pending_inbound",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "message_ledger_todo_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "message_ledger_boundary_holes_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "inherited_turn_provenance",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_turn_identity_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_response_provenance",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_response_owner_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_response_closing_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_message_membership",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_membership_turn_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_auxiliary_audits_call_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_auxiliary_audits",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "goal_state",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "events_workflow_node_run_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_workflow_node_instance_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_workflow_coordinates_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_tool_call_scope_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_subagent_id_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_run_id_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_projection_completion_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_owner_holes_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_unavailable_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_turn_prompt_holes_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_transcript_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_tool_occurrence_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_tool_lifecycle_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_tool_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_readiness_missing_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_member_holes_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_invalid_request_owner_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_interaction_id_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_execution_id_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_compaction_operation_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_auxiliary_submission_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_auxiliary_fact_type_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_auxiliary_call_id_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_aggregate_holes_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "contribution_emission_heads",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "content_segments",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "content frontiers/layout"
+      },
+      {
+        "name": "compaction_operations",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "canonical_tool_calls_scope_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "canonical_tool_calls_result_ledger_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "canonical_tool_calls_pending",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "canonical_tool_calls_observation_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "canonical_tool_calls",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "canonical_binary_sources",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "canonical_binary_segments",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "bootstrap_identity",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 348,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_title_sources",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_title_calls_source_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_title_calls",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_retries",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_requests_terminal_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_requests_request_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_requests_open_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_requests",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_calls_started_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_calls_settled_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_calls",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_audit_sequence_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_audit_request_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_audit_offset_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_audit_facts",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_audit_call_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "audit_observation_blocks",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "agent_authorities",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      }
+    ],
+    "retained_groups": {
+      "event rows": 9461760,
+      "input manifest and Source": 6512640,
+      "canonical/transcript/layout": 4556800,
+      "request snapshots": 2174976,
+      "content frontiers/layout": 835584,
+      "event indexes": 1679360,
+      "Trace catalog": 559104,
+      "other": 1337344
+    },
+    "windows": [
+      {
+        "turn_midpoint": 16.5,
+        "metadata_bytes_per_turn": 1339.75,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 11810.0
+      },
+      {
+        "turn_midpoint": 48.5,
+        "metadata_bytes_per_turn": 1341.875,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 15842.0
+      },
+      {
+        "turn_midpoint": 80.5,
+        "metadata_bytes_per_turn": 1343.0,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 19874.0
+      },
+      {
+        "turn_midpoint": 112.5,
+        "metadata_bytes_per_turn": 1345.625,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 23906.0
+      },
+      {
+        "turn_midpoint": 144.5,
+        "metadata_bytes_per_turn": 1346.0,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 27938.0
+      },
+      {
+        "turn_midpoint": 176.5,
+        "metadata_bytes_per_turn": 1346.0,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 31970.0
+      },
+      {
+        "turn_midpoint": 208.5,
+        "metadata_bytes_per_turn": 1346.0,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 36002.0
+      },
+      {
+        "turn_midpoint": 240.5,
+        "metadata_bytes_per_turn": 1346.0,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 40034.0
+      },
+      {
+        "turn_midpoint": 272.5,
+        "metadata_bytes_per_turn": 1346.0,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 44066.0
+      },
+      {
+        "turn_midpoint": 304.5,
+        "metadata_bytes_per_turn": 1346.0,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 48098.0
+      },
+      {
+        "turn_midpoint": 336.5,
+        "metadata_bytes_per_turn": 1346.0,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 52130.0
+      },
+      {
+        "turn_midpoint": 368.5,
+        "metadata_bytes_per_turn": 1346.0,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 56162.0
+      },
+      {
+        "turn_midpoint": 400.5,
+        "metadata_bytes_per_turn": 1346.0,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 60194.0
+      },
+      {
+        "turn_midpoint": 432.5,
+        "metadata_bytes_per_turn": 1346.0,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 64226.0
+      },
+      {
+        "turn_midpoint": 464.5,
+        "metadata_bytes_per_turn": 1346.0,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 68258.0
+      },
+      {
+        "turn_midpoint": 496.5,
+        "metadata_bytes_per_turn": 1346.75,
+        "association_bytes_per_turn": 2.0,
+        "wire_body_bytes_per_turn": 72290.0
+      }
+    ],
+    "logical_slopes": {
+      "metadata_bytes_per_turn": {
+        "slope_per_history_turn": 0.008961397058823529,
+        "intercept": 1342.8889016544117,
+        "r_squared": 0.5063417557175682
+      },
+      "association_bytes_per_turn": {
+        "slope_per_history_turn": 0.0,
+        "intercept": 2.0,
+        "r_squared": null
+      },
+      "wire_body_bytes_per_turn": {
+        "slope_per_history_turn": 126.0,
+        "intercept": 9731.0,
+        "r_squared": 1.0
+      }
+    },
+    "row_increments": [
+      {
+        "turn_end": 64,
+        "native_input_nodes": 319,
+        "request_source_nodes": 319,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      },
+      {
+        "turn_end": 96,
+        "native_input_nodes": 351,
+        "request_source_nodes": 351,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      },
+      {
+        "turn_end": 128,
+        "native_input_nodes": 352,
+        "request_source_nodes": 352,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      },
+      {
+        "turn_end": 160,
+        "native_input_nodes": 383,
+        "request_source_nodes": 383,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      },
+      {
+        "turn_end": 192,
+        "native_input_nodes": 384,
+        "request_source_nodes": 384,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      },
+      {
+        "turn_end": 224,
+        "native_input_nodes": 384,
+        "request_source_nodes": 384,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      },
+      {
+        "turn_end": 256,
+        "native_input_nodes": 384,
+        "request_source_nodes": 384,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      },
+      {
+        "turn_end": 288,
+        "native_input_nodes": 415,
+        "request_source_nodes": 415,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      },
+      {
+        "turn_end": 320,
+        "native_input_nodes": 416,
+        "request_source_nodes": 416,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      },
+      {
+        "turn_end": 352,
+        "native_input_nodes": 416,
+        "request_source_nodes": 416,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      },
+      {
+        "turn_end": 384,
+        "native_input_nodes": 416,
+        "request_source_nodes": 416,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      },
+      {
+        "turn_end": 416,
+        "native_input_nodes": 416,
+        "request_source_nodes": 416,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      },
+      {
+        "turn_end": 448,
+        "native_input_nodes": 416,
+        "request_source_nodes": 416,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      },
+      {
+        "turn_end": 480,
+        "native_input_nodes": 416,
+        "request_source_nodes": 416,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      },
+      {
+        "turn_end": 512,
+        "native_input_nodes": 416,
+        "request_source_nodes": 416,
+        "events": 256,
+        "request_trace_catalogs": 32,
+        "request_trace_definitions": 224
+      }
+    ]
+  },
+  "tool": {
+    "schema": 106,
+    "requests": 1024,
+    "metadata_bytes": 141321946,
+    "association_bytes": 139945412,
+    "first_request": {
+      "request_index": 0,
+      "turn": 1,
+      "metadata_bytes": 1336,
+      "associations": 0,
+      "association_bytes": 2
+    },
+    "last_request": {
+      "request_index": 1023,
+      "turn": 512,
+      "metadata_bytes": 275114,
+      "associations": 512,
+      "association_bytes": 273768
+    },
+    "owners": [
+      {
+        "name": "request_snapshots",
+        "pages": 70467,
+        "bytes": 144316416,
+        "payload": 143348029,
+        "group": "request snapshots"
+      },
+      {
+        "name": "events",
+        "pages": 9240,
+        "bytes": 18923520,
+        "payload": 16294980,
+        "group": "event rows"
+      },
+      {
+        "name": "request_source_pages",
+        "pages": 3174,
+        "bytes": 6500352,
+        "payload": 5207786,
+        "group": "input manifest and Source"
+      },
+      {
+        "name": "observation_headers",
+        "pages": 2058,
+        "bytes": 4214784,
+        "payload": 2598006,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "request_source_nodes",
+        "pages": 1910,
+        "bytes": 3911680,
+        "payload": 3658088,
+        "group": "input manifest and Source"
+      },
+      {
+        "name": "message_ledger",
+        "pages": 1545,
+        "bytes": 3164160,
+        "payload": 2223456,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "native_input_nodes",
+        "pages": 1054,
+        "bytes": 2158592,
+        "payload": 1933757,
+        "group": "input manifest and Source"
+      },
+      {
+        "name": "observation_block_headers",
+        "pages": 1030,
+        "bytes": 2109440,
+        "payload": 1412518,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "content_frontiers",
+        "pages": 891,
+        "bytes": 1824768,
+        "payload": 1538416,
+        "group": "content frontiers/layout"
+      },
+      {
+        "name": "events_attempt_kind_idx",
+        "pages": 339,
+        "bytes": 694272,
+        "payload": 615182,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_step_kind_idx",
+        "pages": 303,
+        "bytes": 620544,
+        "payload": 538626,
+        "group": "event indexes"
+      },
+      {
+        "name": "sqlite_autoindex_events_1",
+        "pages": 264,
+        "bytes": 540672,
+        "payload": 465709,
+        "group": "event indexes"
+      },
+      {
+        "name": "canonical_tool_calls",
+        "pages": 257,
+        "bytes": 526336,
+        "payload": 457780,
+        "group": "other"
+      },
+      {
+        "name": "request_source_roots",
+        "pages": 216,
+        "bytes": 442368,
+        "payload": 372258,
+        "group": "input manifest and Source"
+      },
+      {
+        "name": "request_trace_definitions",
+        "pages": 212,
+        "bytes": 434176,
+        "payload": 356240,
+        "group": "Trace catalog"
+      },
+      {
+        "name": "publication_streams",
+        "pages": 172,
+        "bytes": 352256,
+        "payload": 340916,
+        "group": "other"
+      },
+      {
+        "name": "request_trace_definition_digest_idx",
+        "pages": 170,
+        "bytes": 348160,
+        "payload": 277392,
+        "group": "Trace catalog"
+      },
+      {
+        "name": "sqlite_autoindex_request_source_pages_1",
+        "pages": 160,
+        "bytes": 327680,
+        "payload": 266901,
+        "group": "input manifest and Source"
+      },
+      {
+        "name": "events_trace_owner_idx",
+        "pages": 141,
+        "bytes": 288768,
+        "payload": 226047,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_attempt_heads_idx",
+        "pages": 139,
+        "bytes": 284672,
+        "payload": 242257,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_request_id_kind_idx",
+        "pages": 115,
+        "bytes": 235520,
+        "payload": 202280,
+        "group": "event indexes"
+      },
+      {
+        "name": "surface_ops",
+        "pages": 104,
+        "bytes": 212992,
+        "payload": 194634,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "lifecycle_state",
+        "pages": 103,
+        "bytes": 210944,
+        "payload": 178154,
+        "group": "other"
+      },
+      {
+        "name": "request_owners",
+        "pages": 87,
+        "bytes": 178176,
+        "payload": 157224,
+        "group": "other"
+      },
+      {
+        "name": "events_tool_call_scope_kind_idx",
+        "pages": 87,
+        "bytes": 178176,
+        "payload": 149662,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_tool_idx",
+        "pages": 87,
+        "bytes": 178176,
+        "payload": 146590,
+        "group": "event indexes"
+      },
+      {
+        "name": "sqlite_autoindex_transcript_order_1",
+        "pages": 86,
+        "bytes": 176128,
+        "payload": 148938,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "sqlite_autoindex_observation_headers_2",
+        "pages": 86,
+        "bytes": 176128,
+        "payload": 148938,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "message_ledger_identity_position_idx",
+        "pages": 82,
+        "bytes": 167936,
+        "payload": 138570,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "events_message_id_kind_idx",
+        "pages": 81,
+        "bytes": 165888,
+        "payload": 143518,
+        "group": "event indexes"
+      },
+      {
+        "name": "transcript_order",
+        "pages": 80,
+        "bytes": 163840,
+        "payload": 147018,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "request_trace_definition_identity_idx",
+        "pages": 79,
+        "bytes": 161792,
+        "payload": 119696,
+        "group": "Trace catalog"
+      },
+      {
+        "name": "sqlite_autoindex_publication_streams_1",
+        "pages": 78,
+        "bytes": 159744,
+        "payload": 135624,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_message_ledger_1",
+        "pages": 77,
+        "bytes": 157696,
+        "payload": 132554,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "events_primary_trace_kind_idx",
+        "pages": 64,
+        "bytes": 131072,
+        "payload": 88960,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_kind_idx",
+        "pages": 64,
+        "bytes": 131072,
+        "payload": 88960,
+        "group": "event indexes"
+      },
+      {
+        "name": "sqlite_autoindex_lifecycle_state_1",
+        "pages": 59,
+        "bytes": 120832,
+        "payload": 101430,
+        "group": "other"
+      },
+      {
+        "name": "publication_proposals",
+        "pages": 52,
+        "bytes": 106496,
+        "payload": 92452,
+        "group": "other"
+      },
+      {
+        "name": "observation_models",
+        "pages": 51,
+        "bytes": 104448,
+        "payload": 87316,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_request_snapshots_2",
+        "pages": 47,
+        "bytes": 96256,
+        "payload": 77476,
+        "group": "request snapshots"
+      },
+      {
+        "name": "sqlite_autoindex_request_owners_1",
+        "pages": 47,
+        "bytes": 96256,
+        "payload": 77476,
+        "group": "other"
+      },
+      {
+        "name": "publication_streams_message_settlement_idx",
+        "pages": 46,
+        "bytes": 94208,
+        "payload": 78500,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_publication_proposals_1",
+        "pages": 44,
+        "bytes": 90112,
+        "payload": 74916,
+        "group": "other"
+      },
+      {
+        "name": "request_trace_catalog_identity_idx",
+        "pages": 42,
+        "bytes": 86016,
+        "payload": 71428,
+        "group": "Trace catalog"
+      },
+      {
+        "name": "canonical_tool_calls_scope_idx",
+        "pages": 40,
+        "bytes": 81920,
+        "payload": 70812,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_schema",
+        "pages": 38,
+        "bytes": 77824,
+        "payload": 63511,
+        "group": "other"
+      },
+      {
+        "name": "request_trace_catalogs",
+        "pages": 38,
+        "bytes": 77824,
+        "payload": 68388,
+        "group": "Trace catalog"
+      },
+      {
+        "name": "events_aggregate_heads_idx",
+        "pages": 36,
+        "bytes": 73728,
+        "payload": 39320,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_primary_request_kind_idx",
+        "pages": 34,
+        "bytes": 69632,
+        "payload": 55264,
+        "group": "event indexes"
+      },
+      {
+        "name": "sqlite_autoindex_observation_models_2",
+        "pages": 27,
+        "bytes": 55296,
+        "payload": 45458,
+        "group": "other"
+      },
+      {
+        "name": "inbound_correlation",
+        "pages": 25,
+        "bytes": 51200,
+        "payload": 43284,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_canonical_tool_calls_3",
+        "pages": 24,
+        "bytes": 49152,
+        "payload": 41234,
+        "group": "other"
+      },
+      {
+        "name": "events_execution_owner_idx",
+        "pages": 24,
+        "bytes": 49152,
+        "payload": 28545,
+        "group": "event indexes"
+      },
+      {
+        "name": "sqlite_autoindex_canonical_tool_calls_2",
+        "pages": 20,
+        "bytes": 40960,
+        "payload": 34578,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_canonical_tool_calls_1",
+        "pages": 20,
+        "bytes": 40960,
+        "payload": 34578,
+        "group": "other"
+      },
+      {
+        "name": "observation_block_ledger_kind_idx",
+        "pages": 20,
+        "bytes": 40960,
+        "payload": 28928,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "observation_models_owner_idx",
+        "pages": 19,
+        "bytes": 38912,
+        "payload": 30090,
+        "group": "other"
+      },
+      {
+        "name": "events_context_reading_idx",
+        "pages": 19,
+        "bytes": 38912,
+        "payload": 29680,
+        "group": "event indexes"
+      },
+      {
+        "name": "sqlite_autoindex_inbound_correlation_2",
+        "pages": 18,
+        "bytes": 36864,
+        "payload": 29460,
+        "group": "other"
+      },
+      {
+        "name": "message_ledger_append_position_idx",
+        "pages": 16,
+        "bytes": 32768,
+        "payload": 20096,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "content_segments",
+        "pages": 16,
+        "bytes": 32768,
+        "payload": 25323,
+        "group": "content frontiers/layout"
+      },
+      {
+        "name": "trace_adoption_members",
+        "pages": 13,
+        "bytes": 26624,
+        "payload": 20950,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_observation_block_headers_1",
+        "pages": 13,
+        "bytes": 26624,
+        "payload": 16128,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "sqlite_autoindex_observation_headers_1",
+        "pages": 12,
+        "bytes": 24576,
+        "payload": 14080,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "observation_headers_ledger_idx",
+        "pages": 12,
+        "bytes": 24576,
+        "payload": 14080,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "message_ledger_native_transcript_idx",
+        "pages": 12,
+        "bytes": 24576,
+        "payload": 14080,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "events_observation_turn_anchor_idx",
+        "pages": 12,
+        "bytes": 24576,
+        "payload": 14273,
+        "group": "event indexes"
+      },
+      {
+        "name": "sqlite_autoindex_inbound_correlation_1",
+        "pages": 11,
+        "bytes": 22528,
+        "payload": 15744,
+        "group": "other"
+      },
+      {
+        "name": "publication_streams_settlement_idx",
+        "pages": 11,
+        "bytes": 22528,
+        "payload": 14208,
+        "group": "other"
+      },
+      {
+        "name": "events_observation_member_anchor_idx",
+        "pages": 10,
+        "bytes": 20480,
+        "payload": 10705,
+        "group": "event indexes"
+      },
+      {
+        "name": "sqlite_autoindex_request_snapshots_1",
+        "pages": 8,
+        "bytes": 16384,
+        "payload": 8950,
+        "group": "request snapshots"
+      },
+      {
+        "name": "events_observation_tool_lifecycle_idx",
+        "pages": 8,
+        "bytes": 16384,
+        "payload": 9648,
+        "group": "event indexes"
+      },
+      {
+        "name": "sqlite_autoindex_request_owners_3",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 7024,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_request_owners_2",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 7024,
+        "group": "other"
+      },
+      {
+        "name": "request_trace_retry_idx",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 8048,
+        "group": "other"
+      },
+      {
+        "name": "request_snapshots_started_idx",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 7024,
+        "group": "request snapshots"
+      },
+      {
+        "name": "request_snapshots_canonical_frontier_idx",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 6975,
+        "group": "request snapshots"
+      },
+      {
+        "name": "request_configurations",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 11220,
+        "group": "other"
+      },
+      {
+        "name": "message_ledger_human_activity_idx",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 8635,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "events_observation_assistant_ledger_idx",
+        "pages": 7,
+        "bytes": 14336,
+        "payload": 7089,
+        "group": "event indexes"
+      },
+      {
+        "name": "surface_observation_boundaries",
+        "pages": 5,
+        "bytes": 10240,
+        "payload": 4030,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "sqlite_autoindex_surface_observation_boundaries_2",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3421,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "sqlite_autoindex_surface_observation_boundaries_1",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3421,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "message_ledger_opening_idx",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3518,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "message_ledger_first_human_idx",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3518,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "events_observation_turn_ordinal_idx",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3448,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_tool_occurrence_idx",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 4056,
+        "group": "event indexes"
+      },
+      {
+        "name": "canonical_tool_calls_result_ledger_idx",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3424,
+        "group": "other"
+      },
+      {
+        "name": "canonical_tool_calls_observation_idx",
+        "pages": 4,
+        "bytes": 8192,
+        "payload": 3936,
+        "group": "other"
+      },
+      {
+        "name": "events_observation_turn_prompt_idx",
+        "pages": 3,
+        "bytes": 6144,
+        "payload": 2551,
+        "group": "event indexes"
+      },
+      {
+        "name": "transcript_order_audit_position_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "transcript_observation_readiness_missing_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "surface_head",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 6,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "state_observation_sources",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "state_observation_ledger_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "state_observation_journal_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "state_observation_fields",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 112,
+        "group": "other"
+      },
+      {
+        "name": "state_observation_children_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 61,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_scheduled_workflow_starts_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_scheduled_workflow_effects_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_scheduled_workflow_effects_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_schedule_commands_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_publication_observation_blocks_3",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_publication_observation_blocks_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_publication_frames_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_publication_audits_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_projection_checkpoints_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_pending_inbound_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_inherited_response_provenance_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_inherited_message_membership_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_inherited_message_membership_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_inherited_auxiliary_audits_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_contribution_emission_heads_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_compaction_operations_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_title_sources_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_title_sources_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_title_calls_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_retries_3",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_retries_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_retries_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_requests_4",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_requests_3",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_requests_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_requests_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_calls_3",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_calls_2",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_auxiliary_calls_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "sqlite_autoindex_agent_authorities_1",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "schedules_due",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "schedules_completed",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "schedules",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "scheduled_workflow_starts",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "scheduled_workflow_schedule",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "scheduled_workflow_pending",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "scheduled_workflow_effects",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "scheduled_workflow_completed",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "schedule_control",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 4,
+        "group": "other"
+      },
+      {
+        "name": "schedule_commands",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "rustx_store",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 108,
+        "group": "other"
+      },
+      {
+        "name": "request_trace_contexts",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "request_source_scalars",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 225,
+        "group": "input manifest and Source"
+      },
+      {
+        "name": "request_owners_source_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "publication_observation_counts",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "publication_observation_blocks",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "publication_metadata_segments",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "publication_frames_unindexed_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "publication_frames",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "publication_audits",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "projection_ledger_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "projection_head",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "projection_checkpoints",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "projection_checkpoint_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "projection_activations",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "pending_scheduler_correlation",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "pending_inbound",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "message_ledger_todo_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "message_ledger_boundary_holes_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "canonical/transcript/layout"
+      },
+      {
+        "name": "inherited_turn_provenance",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_turn_identity_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_response_provenance",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_response_owner_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_response_closing_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_message_membership",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_membership_turn_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_auxiliary_audits_call_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "inherited_auxiliary_audits",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "goal_state",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "events_workflow_node_run_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_workflow_node_instance_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_workflow_coordinates_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_subagent_id_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_run_id_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_projection_completion_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_owner_holes_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_unavailable_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_turn_prompt_holes_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_transcript_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_readiness_missing_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_observation_member_holes_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_invalid_request_owner_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_interaction_id_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_execution_id_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_compaction_operation_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_auxiliary_submission_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_auxiliary_fact_type_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_auxiliary_call_id_kind_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "events_aggregate_holes_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "event indexes"
+      },
+      {
+        "name": "contribution_emission_heads",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "compaction_operations",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "canonical_tool_calls_pending",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "canonical_binary_sources",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "canonical_binary_segments",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "bootstrap_identity",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 348,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_title_sources",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_title_calls_source_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_title_calls",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_retries",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_requests_terminal_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_requests_request_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_requests_open_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_requests",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_calls_started_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_calls_settled_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_calls",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_audit_sequence_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_audit_request_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_audit_offset_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_audit_facts",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "auxiliary_audit_call_idx",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "audit_observation_blocks",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      },
+      {
+        "name": "agent_authorities",
+        "pages": 1,
+        "bytes": 2048,
+        "payload": 0,
+        "group": "other"
+      }
+    ],
+    "retained_groups": {
+      "request snapshots": 144457728,
+      "event rows": 18923520,
+      "input manifest and Source": 13342720,
+      "canonical/transcript/layout": 10784768,
+      "content frontiers/layout": 1857536,
+      "event indexes": 3819520,
+      "other": 2852864,
+      "Trace catalog": 1107968
+    },
+    "windows": [
+      {
+        "turn_midpoint": 16.5,
+        "metadata_bytes_per_turn": 19577.0625,
+        "association_bytes_per_turn": 16900.375,
+        "wire_body_bytes_per_turn": 32004.0
+      },
+      {
+        "turn_midpoint": 48.5,
+        "metadata_bytes_per_turn": 53530.0,
+        "association_bytes_per_turn": 50848.0,
+        "wire_body_bytes_per_turn": 56836.0
+      },
+      {
+        "turn_midpoint": 80.5,
+        "metadata_bytes_per_turn": 87514.0,
+        "association_bytes_per_turn": 84832.0,
+        "wire_body_bytes_per_turn": 81668.0
+      },
+      {
+        "turn_midpoint": 112.5,
+        "metadata_bytes_per_turn": 121926.75,
+        "association_bytes_per_turn": 119239.5,
+        "wire_body_bytes_per_turn": 106500.0
+      },
+      {
+        "turn_midpoint": 144.5,
+        "metadata_bytes_per_turn": 156152.0,
+        "association_bytes_per_turn": 153464.0,
+        "wire_body_bytes_per_turn": 131332.0
+      },
+      {
+        "turn_midpoint": 176.5,
+        "metadata_bytes_per_turn": 190328.0,
+        "association_bytes_per_turn": 187640.0,
+        "wire_body_bytes_per_turn": 156164.0
+      },
+      {
+        "turn_midpoint": 208.5,
+        "metadata_bytes_per_turn": 224504.0,
+        "association_bytes_per_turn": 221816.0,
+        "wire_body_bytes_per_turn": 180996.0
+      },
+      {
+        "turn_midpoint": 240.5,
+        "metadata_bytes_per_turn": 258683.0,
+        "association_bytes_per_turn": 255994.25,
+        "wire_body_bytes_per_turn": 205828.0
+      },
+      {
+        "turn_midpoint": 272.5,
+        "metadata_bytes_per_turn": 292948.0,
+        "association_bytes_per_turn": 290256.0,
+        "wire_body_bytes_per_turn": 230660.0
+      },
+      {
+        "turn_midpoint": 304.5,
+        "metadata_bytes_per_turn": 327252.0,
+        "association_bytes_per_turn": 324560.0,
+        "wire_body_bytes_per_turn": 255492.0
+      },
+      {
+        "turn_midpoint": 336.5,
+        "metadata_bytes_per_turn": 361556.0,
+        "association_bytes_per_turn": 358864.0,
+        "wire_body_bytes_per_turn": 280324.0
+      },
+      {
+        "turn_midpoint": 368.5,
+        "metadata_bytes_per_turn": 395860.0,
+        "association_bytes_per_turn": 393168.0,
+        "wire_body_bytes_per_turn": 305156.0
+      },
+      {
+        "turn_midpoint": 400.5,
+        "metadata_bytes_per_turn": 430164.0,
+        "association_bytes_per_turn": 427472.0,
+        "wire_body_bytes_per_turn": 329988.0
+      },
+      {
+        "turn_midpoint": 432.5,
+        "metadata_bytes_per_turn": 464468.0,
+        "association_bytes_per_turn": 461776.0,
+        "wire_body_bytes_per_turn": 354820.0
+      },
+      {
+        "turn_midpoint": 464.5,
+        "metadata_bytes_per_turn": 498772.0,
+        "association_bytes_per_turn": 496080.0,
+        "wire_body_bytes_per_turn": 379652.0
+      },
+      {
+        "turn_midpoint": 496.5,
+        "metadata_bytes_per_turn": 533076.0,
+        "association_bytes_per_turn": 530384.0,
+        "wire_body_bytes_per_turn": 404484.0
+      }
+    ],
+    "logical_slopes": {
+      "metadata_bytes_per_turn": {
+        "slope_per_history_turn": 1070.2143525965073,
+        "intercept": 1509.4443402458564,
+        "r_squared": 0.9999989666686884
+      },
+      "association_bytes_per_turn": {
+        "slope_per_history_turn": 1070.1878963694853,
+        "intercept": -1172.3126062729862,
+        "r_squared": 0.9999989441380984
+      },
+      "wire_body_bytes_per_turn": {
+        "slope_per_history_turn": 776.0,
+        "intercept": 19200.0,
+        "r_squared": 1.0
+      }
+    },
+    "row_increments": [
+      {
+        "turn_end": 64,
+        "native_input_nodes": 703,
+        "request_source_nodes": 703,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      },
+      {
+        "turn_end": 96,
+        "native_input_nodes": 767,
+        "request_source_nodes": 767,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      },
+      {
+        "turn_end": 128,
+        "native_input_nodes": 768,
+        "request_source_nodes": 768,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      },
+      {
+        "turn_end": 160,
+        "native_input_nodes": 831,
+        "request_source_nodes": 831,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      },
+      {
+        "turn_end": 192,
+        "native_input_nodes": 832,
+        "request_source_nodes": 832,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      },
+      {
+        "turn_end": 224,
+        "native_input_nodes": 832,
+        "request_source_nodes": 832,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      },
+      {
+        "turn_end": 256,
+        "native_input_nodes": 832,
+        "request_source_nodes": 832,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      },
+      {
+        "turn_end": 288,
+        "native_input_nodes": 895,
+        "request_source_nodes": 895,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      },
+      {
+        "turn_end": 320,
+        "native_input_nodes": 896,
+        "request_source_nodes": 896,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      },
+      {
+        "turn_end": 352,
+        "native_input_nodes": 896,
+        "request_source_nodes": 896,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      },
+      {
+        "turn_end": 384,
+        "native_input_nodes": 896,
+        "request_source_nodes": 896,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      },
+      {
+        "turn_end": 416,
+        "native_input_nodes": 896,
+        "request_source_nodes": 896,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      },
+      {
+        "turn_end": 448,
+        "native_input_nodes": 896,
+        "request_source_nodes": 896,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      },
+      {
+        "turn_end": 480,
+        "native_input_nodes": 896,
+        "request_source_nodes": 896,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      },
+      {
+        "turn_end": 512,
+        "native_input_nodes": 896,
+        "request_source_nodes": 896,
+        "events": 512,
+        "request_trace_catalogs": 64,
+        "request_trace_definitions": 448
+      }
+    ]
+  }
+}

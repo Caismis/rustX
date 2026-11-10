@@ -1,0 +1,32 @@
+[
+  {
+    "path": "strace/result.json",
+    "bytes": 35705088,
+    "sha256": "7ede5ce35329ca83482c90fcaf2b69c90db11acb94c5c509cf690f8126e883d4",
+    "compressed": "strace/result.json.gz"
+  },
+  {
+    "path": "strace/text/result.json",
+    "bytes": 5330032,
+    "sha256": "10c10916cf3a76147a869e9389d54c74bc3aa3e07adec6d6795b7b4acbbfa3dd",
+    "compressed": "strace/text/result.json.gz"
+  },
+  {
+    "path": "strace/text/windows.json",
+    "bytes": 5009521,
+    "sha256": "7eb01e6d66fd97de1b846f4a06c7f04c1d0af4e29a03d24f93ca17556a8e136d",
+    "compressed": "strace/text/windows.json.gz"
+  },
+  {
+    "path": "strace/tool/result.json",
+    "bytes": 27148030,
+    "sha256": "f17af4a2d4841a9e16be470be107871ef8945d370d02a9ddb4e1037f920488ed",
+    "compressed": "strace/tool/result.json.gz"
+  },
+  {
+    "path": "strace/tool/windows.json",
+    "bytes": 25780915,
+    "sha256": "3aa6d536727652f0c6e17bcba2fd98d49381df23ac6730636657b3b92c32ea8d",
+    "compressed": "strace/tool/windows.json.gz"
+  }
+]

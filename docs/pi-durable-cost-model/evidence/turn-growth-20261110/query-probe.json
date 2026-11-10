@@ -1,0 +1,164 @@
+[
+  {
+    "sqlite": "3.53.2",
+    "ledger_rows": 64,
+    "queries": [
+      {
+        "forced_existing_index": false,
+        "plan": [
+          "SEARCH h USING INDEX sqlite_autoindex_observation_headers_2 (reference_kind=?)",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "rows": 8,
+        "vm_steps": 420,
+        "sorts": 1
+      },
+      {
+        "forced_existing_index": true,
+        "plan": [
+          "SEARCH h USING INDEX observation_headers_ledger_idx (ledger_position>? AND ledger_position<?)"
+        ],
+        "rows": 8,
+        "vm_steps": 79,
+        "sorts": 0
+      }
+    ],
+    "scenario": "text",
+    "history_turns": 32
+  },
+  {
+    "sqlite": "3.53.2",
+    "ledger_rows": 256,
+    "queries": [
+      {
+        "forced_existing_index": false,
+        "plan": [
+          "SEARCH h USING INDEX sqlite_autoindex_observation_headers_2 (reference_kind=?)",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "rows": 8,
+        "vm_steps": 1380,
+        "sorts": 1
+      },
+      {
+        "forced_existing_index": true,
+        "plan": [
+          "SEARCH h USING INDEX observation_headers_ledger_idx (ledger_position>? AND ledger_position<?)"
+        ],
+        "rows": 8,
+        "vm_steps": 79,
+        "sorts": 0
+      }
+    ],
+    "scenario": "text",
+    "history_turns": 128
+  },
+  {
+    "sqlite": "3.53.2",
+    "ledger_rows": 1024,
+    "queries": [
+      {
+        "forced_existing_index": false,
+        "plan": [
+          "SEARCH h USING INDEX sqlite_autoindex_observation_headers_2 (reference_kind=?)",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "rows": 8,
+        "vm_steps": 5220,
+        "sorts": 1
+      },
+      {
+        "forced_existing_index": true,
+        "plan": [
+          "SEARCH h USING INDEX observation_headers_ledger_idx (ledger_position>? AND ledger_position<?)"
+        ],
+        "rows": 8,
+        "vm_steps": 79,
+        "sorts": 0
+      }
+    ],
+    "scenario": "text",
+    "history_turns": 512
+  },
+  {
+    "sqlite": "3.53.2",
+    "ledger_rows": 128,
+    "queries": [
+      {
+        "forced_existing_index": false,
+        "plan": [
+          "SEARCH h USING INDEX sqlite_autoindex_observation_headers_2 (reference_kind=?)",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "rows": 8,
+        "vm_steps": 740,
+        "sorts": 1
+      },
+      {
+        "forced_existing_index": true,
+        "plan": [
+          "SEARCH h USING INDEX observation_headers_ledger_idx (ledger_position>? AND ledger_position<?)"
+        ],
+        "rows": 8,
+        "vm_steps": 79,
+        "sorts": 0
+      }
+    ],
+    "scenario": "tool",
+    "history_turns": 32
+  },
+  {
+    "sqlite": "3.53.2",
+    "ledger_rows": 512,
+    "queries": [
+      {
+        "forced_existing_index": false,
+        "plan": [
+          "SEARCH h USING INDEX sqlite_autoindex_observation_headers_2 (reference_kind=?)",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "rows": 8,
+        "vm_steps": 2660,
+        "sorts": 1
+      },
+      {
+        "forced_existing_index": true,
+        "plan": [
+          "SEARCH h USING INDEX observation_headers_ledger_idx (ledger_position>? AND ledger_position<?)"
+        ],
+        "rows": 8,
+        "vm_steps": 79,
+        "sorts": 0
+      }
+    ],
+    "scenario": "tool",
+    "history_turns": 128
+  },
+  {
+    "sqlite": "3.53.2",
+    "ledger_rows": 2048,
+    "queries": [
+      {
+        "forced_existing_index": false,
+        "plan": [
+          "SEARCH h USING INDEX sqlite_autoindex_observation_headers_2 (reference_kind=?)",
+          "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "rows": 8,
+        "vm_steps": 10340,
+        "sorts": 1
+      },
+      {
+        "forced_existing_index": true,
+        "plan": [
+          "SEARCH h USING INDEX observation_headers_ledger_idx (ledger_position>? AND ledger_position<?)"
+        ],
+        "rows": 8,
+        "vm_steps": 79,
+        "sorts": 0
+      }
+    ],
+    "scenario": "tool",
+    "history_turns": 512
+  }
+]

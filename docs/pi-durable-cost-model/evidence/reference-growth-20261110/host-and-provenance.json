@@ -1,0 +1,553 @@
+{
+  "cpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           46 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  32\nOn-line CPU(s) list:                     0-31\nVendor ID:                               GenuineIntel\nModel name:                              Intel(R) Core(TM) i9-14900K\nCPU family:                              6\nModel:                                   183\nThread(s) per core:                      2\nCore(s) per socket:                      24\nSocket(s):                               1\nStepping:                                1\nCPU(s) scaling MHz:                      34%\nCPU max MHz:                             6000.0000\nCPU min MHz:                             800.0000\nBogoMIPS:                                6374.40\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb intel_pt sha_ni xsaveopt xsavec xgetbv1 xsaves split_lock_detect user_shstk avx_vnni dtherm ida arat pln pts hwp hwp_notify hwp_act_window hwp_epp hwp_pkg_req hfi vnmi umip pku ospke waitpkg gfni vaes vpclmulqdq tme rdpid movdiri movdir64b fsrm md_clear serialize pconfig arch_lbr ibt flush_l1d arch_capabilities ibpb_exit_to_user\nVirtualization:                          VT-x\nL1d cache:                               896 KiB (24 instances)\nL1i cache:                               1.3 MiB (24 instances)\nL2 cache:                                32 MiB (12 instances)\nL3 cache:                                36 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-31\nVulnerability Gather data sampling:      Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Reg file data sampling:    Mitigation; Clear Register File\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Not affected\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI BHI_DIS_S\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Mitigation; IBPB before exit to userspace",
+  "topology": "CPU CORE    MAXMHZ\n  0    0 5700.0000\n  1    0 5700.0000\n  2    1 5700.0000\n  3    1 5700.0000\n  4    2 6000.0000\n  5    2 6000.0000\n  6    3 6000.0000\n  7    3 6000.0000\n  8    4 5700.0000\n  9    4 5700.0000\n 10    5 5700.0000\n 11    5 5700.0000\n 12    6 5700.0000\n 13    6 5700.0000\n 14    7 5700.0000\n 15    7 5700.0000\n 16    8 4400.0000\n 17    9 4400.0000\n 18   10 4400.0000\n 19   11 4400.0000\n 20   12 4400.0000\n 21   13 4400.0000\n 22   14 4400.0000\n 23   15 4400.0000\n 24   16 4400.0000\n 25   17 4400.0000\n 26   18 4400.0000\n 27   19 4400.0000\n 28   20 4400.0000\n 29   21 4400.0000\n 30   22 4400.0000\n 31   23 4400.0000",
+  "filesystem": "Filesystem     Type  1K-blocks       Used Available Use% Mounted on\n/dev/nvme0n1p2 ext4 1967357936 1227230452 640117452  66% /",
+  "kernel": "Linux capi608 6.8.0-149-generic #149-Ubuntu SMP PREEMPT_DYNAMIC Fri Oct 23 13:21:10 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "process_snapshot_after_runs": [
+    "PID %CPU PSR COMMAND",
+    "1747192  400   4 node",
+    "1747180 52.9  30 python3",
+    " 115956  2.8  12 ChatGPT",
+    "  50571  1.9   2 cinnamon",
+    "  51375  1.5   6 chrome",
+    " 114844  1.5  10 ChatGPT",
+    "   1816  1.4  31 dockerd",
+    " 127117  1.3  17 claude-desktop",
+    " 127855  1.0   9 claude-desktop",
+    " 114789  0.9  10 ChatGPT",
+    "1650209  0.9  12 claude",
+    "   2822  0.9  16 daed",
+    " 162065  0.8   2 zcode",
+    " 663066  0.7  10 pi-desktop",
+    "  51321  0.6  12 chrome",
+    " 115746  0.6  22 codex",
+    "1655806  0.6  18 codex",
+    "  59611  0.6   5 mintreport-tray",
+    "2441965  0.5   3 codex",
+    "1663913  0.5  30 codex",
+    "  49860  0.5  16 Xorg",
+    "  51673  0.4  10 chrome",
+    "  45015  0.4  19 mysqld",
+    "   1525  0.3  16 containerd"
+  ],
+  "reference_status": {
+    "/home/capi/Documents/codes/pi": {
+      "revision": "1cedd32724abfcb0915f76cc61b6827e2c16dbad",
+      "status": ""
+    },
+    "/home/capi/Documents/codes/pi-rust": {
+      "revision": "4056176bf4867f913099b101fd65b773895c99ba",
+      "status": ""
+    }
+  },
+  "pi_dependency_lock_sha256": "4694eb371dcc1ee9812c7bdcdfb01d6ddcf2fb3ef18c2640d0d5a6100e8b9b00",
+  "pi_source_lock_sha256": "4694eb371dcc1ee9812c7bdcdfb01d6ddcf2fb3ef18c2640d0d5a6100e8b9b00",
+  "rpi_build_fingerprints": {
+    "/home/capi/.cache/rustx-four-harness-20261109/pi-rust-target/release/.fingerprint/rpi-cli-0d086b5ee026dfe1/bin-rpi.json": {
+      "rustc": 1625334936438085654,
+      "features": "[\"clipboard\", \"default\"]",
+      "declared_features": "[\"clipboard\", \"default\", \"experimental-native-store\"]",
+      "target": 14456288785952073969,
+      "profile": 5072365204301164249,
+      "path": 1488954798444800133,
+      "deps": [
+        [
+          86246135597337767,
+          "arboard",
+          false,
+          11237256607293076815
+        ],
+        [
+          1821923722828794727,
+          "futures",
+          false,
+          3055253957901413376
+        ],
+        [
+          1823399657867702949,
+          "png",
+          false,
+          17662886727234873985
+        ],
+        [
+          2145939652136225981,
+          "tokio",
+          false,
+          17811878365749729712
+        ],
+        [
+          2243358505525018114,
+          "rpi_tools",
+          false,
+          5792835651970496648
+        ],
+        [
+          5330460842384404171,
+          "serde_json",
+          false,
+          7437813929168149448
+        ],
+        [
+          5452785045801004098,
+          "nix",
+          false,
+          13102759440727171964
+        ],
+        [
+          5925002302895875179,
+          "rpi_ai",
+          false,
+          11648886781980241739
+        ],
+        [
+          6160674483794904837,
+          "rpi_tui",
+          false,
+          1707589183793748267
+        ],
+        [
+          6557439603276904804,
+          "serde",
+          false,
+          9715404227603026756
+        ],
+        [
+          6803352382179706244,
+          "percent_encoding",
+          false,
+          16470650598774789064
+        ],
+        [
+          6913375703034175521,
+          "schemars",
+          false,
+          7804131862164050618
+        ],
+        [
+          8008191657135824715,
+          "thiserror",
+          false,
+          4055470288373715227
+        ],
+        [
+          8128303468064674118,
+          "fs2",
+          false,
+          10134203213986955770
+        ],
+        [
+          8186600278162099296,
+          "rpi_plugin_sdk",
+          false,
+          18180212338692153919
+        ],
+        [
+          8256202458064874477,
+          "dirs",
+          false,
+          7193513633299957480
+        ],
+        [
+          9247859321945827334,
+          "rpi_extensions",
+          false,
+          7494956723498851040
+        ],
+        [
+          9680020106200215617,
+          "semver",
+          false,
+          8063442917656302456
+        ],
+        [
+          9723370144619655183,
+          "tempfile",
+          false,
+          13857261375246108927
+        ],
+        [
+          9800012718262444189,
+          "uuid",
+          false,
+          7257301232693624275
+        ],
+        [
+          9857275760291862238,
+          "sha2",
+          false,
+          4294105666044498928
+        ],
+        [
+          10260941683582100114,
+          "async_trait",
+          false,
+          16963924268074224783
+        ],
+        [
+          11170888599999288826,
+          "rpi_cli",
+          false,
+          16419643695586172372
+        ],
+        [
+          11665512473972967714,
+          "rpi_agent",
+          false,
+          12292083693717645277
+        ],
+        [
+          12042141479599086367,
+          "globset",
+          false,
+          1934371810621931602
+        ],
+        [
+          12772493545338815881,
+          "rpassword",
+          false,
+          11453289429670248644
+        ],
+        [
+          13077212702700853852,
+          "base64",
+          false,
+          6238725048947198304
+        ],
+        [
+          13446551438807115857,
+          "crossterm",
+          false,
+          11059501945098871151
+        ],
+        [
+          13949257674666446993,
+          "indexmap",
+          false,
+          7374235607239041933
+        ],
+        [
+          14757622794040968908,
+          "tracing",
+          false,
+          16359011359282699226
+        ],
+        [
+          14902507476044331531,
+          "rpi_telemetry",
+          false,
+          7459149178787246130
+        ],
+        [
+          15748011318654447077,
+          "rpi_runtime",
+          false,
+          8600776385756135794
+        ],
+        [
+          15859736843299468745,
+          "rpi_harness",
+          false,
+          13942117179520711137
+        ],
+        [
+          16096353056231309054,
+          "flate2",
+          false,
+          14503187577902111466
+        ],
+        [
+          16903685049634663364,
+          "tar",
+          false,
+          5635577378458858277
+        ],
+        [
+          17325453097244291330,
+          "reqwest",
+          false,
+          769223588906281176
+        ],
+        [
+          18193492161279344325,
+          "tokio_util",
+          false,
+          15976691108886070014
+        ],
+        [
+          18372475104564266000,
+          "zip",
+          false,
+          7485499896087052420
+        ]
+      ],
+      "local": [
+        {
+          "CheckDepInfo": {
+            "dep_info": "release/.fingerprint/rpi-cli-0d086b5ee026dfe1/dep-bin-rpi",
+            "checksum": false
+          }
+        }
+      ],
+      "rustflags": [],
+      "config": 9396254390672932401,
+      "compile_kind": 0
+    },
+    "/home/capi/.cache/rustx-four-harness-20261109/pi-rust-target/release/.fingerprint/rpi-cli-425a01651a1e74bb/lib-rpi_cli.json": {
+      "rustc": 1625334936438085654,
+      "features": "[\"clipboard\", \"default\"]",
+      "declared_features": "[\"clipboard\", \"default\", \"experimental-native-store\"]",
+      "target": 6365250073885828546,
+      "profile": 11557936342324433185,
+      "path": 4276883778143337209,
+      "deps": [
+        [
+          86246135597337767,
+          "arboard",
+          false,
+          11237256607293076815
+        ],
+        [
+          1821923722828794727,
+          "futures",
+          false,
+          3055253957901413376
+        ],
+        [
+          1823399657867702949,
+          "png",
+          false,
+          17662886727234873985
+        ],
+        [
+          2145939652136225981,
+          "tokio",
+          false,
+          17811878365749729712
+        ],
+        [
+          2243358505525018114,
+          "rpi_tools",
+          false,
+          5792835651970496648
+        ],
+        [
+          5330460842384404171,
+          "serde_json",
+          false,
+          7437813929168149448
+        ],
+        [
+          5452785045801004098,
+          "nix",
+          false,
+          13102759440727171964
+        ],
+        [
+          5925002302895875179,
+          "rpi_ai",
+          false,
+          11648886781980241739
+        ],
+        [
+          6160674483794904837,
+          "rpi_tui",
+          false,
+          1707589183793748267
+        ],
+        [
+          6557439603276904804,
+          "serde",
+          false,
+          9715404227603026756
+        ],
+        [
+          6803352382179706244,
+          "percent_encoding",
+          false,
+          16470650598774789064
+        ],
+        [
+          6913375703034175521,
+          "schemars",
+          false,
+          7804131862164050618
+        ],
+        [
+          8008191657135824715,
+          "thiserror",
+          false,
+          4055470288373715227
+        ],
+        [
+          8128303468064674118,
+          "fs2",
+          false,
+          10134203213986955770
+        ],
+        [
+          8186600278162099296,
+          "rpi_plugin_sdk",
+          false,
+          18180212338692153919
+        ],
+        [
+          8256202458064874477,
+          "dirs",
+          false,
+          7193513633299957480
+        ],
+        [
+          9247859321945827334,
+          "rpi_extensions",
+          false,
+          7494956723498851040
+        ],
+        [
+          9680020106200215617,
+          "semver",
+          false,
+          8063442917656302456
+        ],
+        [
+          9723370144619655183,
+          "tempfile",
+          false,
+          13857261375246108927
+        ],
+        [
+          9800012718262444189,
+          "uuid",
+          false,
+          7257301232693624275
+        ],
+        [
+          9857275760291862238,
+          "sha2",
+          false,
+          4294105666044498928
+        ],
+        [
+          10260941683582100114,
+          "async_trait",
+          false,
+          16963924268074224783
+        ],
+        [
+          11665512473972967714,
+          "rpi_agent",
+          false,
+          12292083693717645277
+        ],
+        [
+          12042141479599086367,
+          "globset",
+          false,
+          1934371810621931602
+        ],
+        [
+          12772493545338815881,
+          "rpassword",
+          false,
+          11453289429670248644
+        ],
+        [
+          13077212702700853852,
+          "base64",
+          false,
+          6238725048947198304
+        ],
+        [
+          13446551438807115857,
+          "crossterm",
+          false,
+          11059501945098871151
+        ],
+        [
+          13949257674666446993,
+          "indexmap",
+          false,
+          7374235607239041933
+        ],
+        [
+          14757622794040968908,
+          "tracing",
+          false,
+          16359011359282699226
+        ],
+        [
+          14902507476044331531,
+          "rpi_telemetry",
+          false,
+          7459149178787246130
+        ],
+        [
+          15748011318654447077,
+          "rpi_runtime",
+          false,
+          8600776385756135794
+        ],
+        [
+          15859736843299468745,
+          "rpi_harness",
+          false,
+          13942117179520711137
+        ],
+        [
+          16096353056231309054,
+          "flate2",
+          false,
+          14503187577902111466
+        ],
+        [
+          16903685049634663364,
+          "tar",
+          false,
+          5635577378458858277
+        ],
+        [
+          17325453097244291330,
+          "reqwest",
+          false,
+          769223588906281176
+        ],
+        [
+          18193492161279344325,
+          "tokio_util",
+          false,
+          15976691108886070014
+        ],
+        [
+          18372475104564266000,
+          "zip",
+          false,
+          7485499896087052420
+        ]
+      ],
+      "local": [
+        {
+          "CheckDepInfo": {
+            "dep_info": "release/.fingerprint/rpi-cli-425a01651a1e74bb/dep-lib-rpi_cli",
+            "checksum": false
+          }
+        }
+      ],
+      "rustflags": [],
+      "config": 9396254390672932401,
+      "compile_kind": 0
+    }
+  },
+  "rpi_prior_build_log_sha256": "0b9ae6f99b0ad392379174f368cfe713382d136e763acbdb1311cc4e1055e637",
+  "rpi_prior_revision_record": "4056176bf4867f913099b101fd65b773895c99ba",
+  "rpi_prior_binary_record": "4762ec079d86ce548d38a2840b2970ac6f8b093ada210692479b0c384b7a7017  /home/capi/.cache/rustx-four-harness-20261109/pi-rust-target/release/rpi",
+  "driver_hashes": {
+    "benchmarks/runtime/reference-growth/README.md": "94b715744aa7f43620d0bb584a66092150cb85fd6c9b6f7ca49fa9c1418e0ca9",
+    "benchmarks/runtime/reference-growth/audit.py": "54a83b63b0155ad55bb6117591d747e8eb44089e643c70c546ae53cbec769fb5",
+    "benchmarks/runtime/reference-growth/pi-imports.mjs": "3d17f5a7f3804988a00fc79e2c0fdd171b71a2cebf999514d2202798dee34163",
+    "benchmarks/runtime/reference-growth/pi-worker.mjs": "e96b0868c31e1daabb2e1a0313f98dc24117c1b96102732f034e9e27097b375f",
+    "benchmarks/runtime/reference-growth/provider.py": "9904c80805e5a5b55ba02e1f675d6911aba106e7c71533751030c1f6fa42dadc",
+    "benchmarks/runtime/reference-growth/run.py": "1d1af22e29551588575b5324c66f7118eb2e7421602e7cee7dbd89dcd6f5f6f7",
+    "benchmarks/runtime/reference-growth/summarize.py": "a83f5ae0549517013d3fddaabdadd3761e284377d1223f891986869dac3a6a91"
+  }
+}

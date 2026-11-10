@@ -1,0 +1,135 @@
+{
+  "text": {
+    "cells": {
+      "low128": {
+        "samples": 756,
+        "counts": {
+          "observation/read projection": 413,
+          "event commit": 54,
+          "other/unclassified": 156,
+          "input manifest and Source": 54,
+          "native request metadata": 15,
+          "request commit": 2,
+          "statistics": 9,
+          "context": 6,
+          "provider adapter": 19,
+          "canonical commit/read": 25,
+          "selected input": 3
+        },
+        "sqlite_inclusive_samples": 228,
+        "named_inclusive": {
+          "sqlite::observation::messages<": 12,
+          "sqlite::native_request": 5,
+          "model::adapter::validation::prepare_request": 8
+        }
+      },
+      "high128": {
+        "samples": 1191,
+        "counts": {
+          "context": 4,
+          "observation/read projection": 685,
+          "other/unclassified": 206,
+          "event commit": 76,
+          "input manifest and Source": 75,
+          "tool association/correlation": 2,
+          "provider adapter": 57,
+          "native request metadata": 34,
+          "statistics": 17,
+          "canonical commit/read": 28,
+          "selected input": 4,
+          "request commit": 3
+        },
+        "sqlite_inclusive_samples": 449,
+        "named_inclusive": {
+          "model::adapter::validation::prepare_request": 49,
+          "sqlite::observation::messages<": 152,
+          "sqlite::native_request": 17
+        }
+      }
+    },
+    "high_minus_low_ms_per_turn_at_500hz": {
+      "observation/read projection": 4.25,
+      "event commit": 0.34375,
+      "other/unclassified": 0.78125,
+      "native request metadata": 0.296875,
+      "provider adapter": 0.59375,
+      "tool association/correlation": 0.03125,
+      "input manifest and Source": 0.328125,
+      "context": -0.03125,
+      "selected input": 0.015625,
+      "request commit": 0.015625,
+      "canonical commit/read": 0.046875,
+      "statistics": 0.125
+    },
+    "total_difference_ms_per_turn": 6.796875,
+    "method": "Exclusive innermost recognizable rustX owner, full symbol stacks. 128 turns per cell. 2 ms/sample at 500 Hz. Diagnostic only, no inline debug expansion; negative deltas retained."
+  },
+  "tool": {
+    "cells": {
+      "low128": {
+        "samples": 2357,
+        "counts": {
+          "observation/read projection": 1476,
+          "other/unclassified": 353,
+          "event commit": 113,
+          "canonical commit/read": 49,
+          "provider adapter": 57,
+          "native request metadata": 92,
+          "input manifest and Source": 112,
+          "statistics": 36,
+          "tool association/correlation": 40,
+          "context": 13,
+          "request commit": 10,
+          "selected input": 6
+        },
+        "sqlite_inclusive_samples": 724,
+        "named_inclusive": {
+          "sqlite::observation::messages<": 153,
+          "model::adapter::validation::prepare_request": 64,
+          "sqlite::native_request": 52,
+          "model::occurrence::freeze_associations": 12
+        }
+      },
+      "high128": {
+        "samples": 4355,
+        "counts": {
+          "observation/read projection": 2195,
+          "other/unclassified": 637,
+          "native request metadata": 325,
+          "provider adapter": 303,
+          "input manifest and Source": 210,
+          "event commit": 160,
+          "context": 36,
+          "tool association/correlation": 292,
+          "canonical commit/read": 52,
+          "selected input": 60,
+          "statistics": 40,
+          "request commit": 45
+        },
+        "sqlite_inclusive_samples": 1719,
+        "named_inclusive": {
+          "sqlite::observation::messages<": 656,
+          "sqlite::native_request": 193,
+          "model::adapter::validation::prepare_request": 492,
+          "model::occurrence::freeze_associations": 81
+        }
+      }
+    },
+    "high_minus_low_ms_per_turn_at_500hz": {
+      "observation/read projection": 11.234375,
+      "event commit": 0.734375,
+      "native request metadata": 3.640625,
+      "other/unclassified": 4.4375,
+      "provider adapter": 3.84375,
+      "tool association/correlation": 3.9375,
+      "input manifest and Source": 1.53125,
+      "context": 0.359375,
+      "selected input": 0.84375,
+      "request commit": 0.546875,
+      "canonical commit/read": 0.046875,
+      "statistics": 0.0625
+    },
+    "total_difference_ms_per_turn": 31.21875,
+    "method": "Exclusive innermost recognizable rustX owner, full symbol stacks. 128 turns per cell. 2 ms/sample at 500 Hz. Diagnostic only, no inline debug expansion; negative deltas retained."
+  }
+}

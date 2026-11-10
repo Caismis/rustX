@@ -1,0 +1,167 @@
+{
+  "accepted": true,
+  "products": [
+    {
+      "run": "run-1",
+      "engine": "pi-rust",
+      "scenario": "text",
+      "turns": 512,
+      "requests": 512,
+      "windows": 16,
+      "reopens": [
+        32,
+        128,
+        512
+      ]
+    },
+    {
+      "run": "run-1",
+      "engine": "pi-rust",
+      "scenario": "tool",
+      "turns": 512,
+      "requests": 1024,
+      "windows": 16,
+      "reopens": [
+        32,
+        128,
+        512
+      ]
+    },
+    {
+      "run": "run-1",
+      "engine": "pi-durable",
+      "scenario": "text",
+      "turns": 512,
+      "requests": 512,
+      "windows": 16,
+      "reopens": [
+        32,
+        128,
+        512
+      ]
+    },
+    {
+      "run": "run-1",
+      "engine": "pi-durable",
+      "scenario": "tool",
+      "turns": 512,
+      "requests": 1024,
+      "windows": 16,
+      "reopens": [
+        32,
+        128,
+        512
+      ]
+    },
+    {
+      "run": "run-2",
+      "engine": "pi-durable",
+      "scenario": "tool",
+      "turns": 512,
+      "requests": 1024,
+      "windows": 16,
+      "reopens": [
+        32,
+        128,
+        512
+      ]
+    },
+    {
+      "run": "run-2",
+      "engine": "pi-durable",
+      "scenario": "text",
+      "turns": 512,
+      "requests": 512,
+      "windows": 16,
+      "reopens": [
+        32,
+        128,
+        512
+      ]
+    },
+    {
+      "run": "run-2",
+      "engine": "pi-rust",
+      "scenario": "tool",
+      "turns": 512,
+      "requests": 1024,
+      "windows": 16,
+      "reopens": [
+        32,
+        128,
+        512
+      ]
+    },
+    {
+      "run": "run-2",
+      "engine": "pi-rust",
+      "scenario": "text",
+      "turns": 512,
+      "requests": 512,
+      "windows": 16,
+      "reopens": [
+        32,
+        128,
+        512
+      ]
+    },
+    {
+      "run": "run-3",
+      "engine": "pi-rust",
+      "scenario": "text",
+      "turns": 512,
+      "requests": 512,
+      "windows": 16,
+      "reopens": [
+        32,
+        128,
+        512
+      ]
+    },
+    {
+      "run": "run-3",
+      "engine": "pi-rust",
+      "scenario": "tool",
+      "turns": 512,
+      "requests": 1024,
+      "windows": 16,
+      "reopens": [
+        32,
+        128,
+        512
+      ]
+    },
+    {
+      "run": "run-3",
+      "engine": "pi-durable",
+      "scenario": "text",
+      "turns": 512,
+      "requests": 512,
+      "windows": 16,
+      "reopens": [
+        32,
+        128,
+        512
+      ]
+    },
+    {
+      "run": "run-3",
+      "engine": "pi-durable",
+      "scenario": "tool",
+      "turns": 512,
+      "requests": 1024,
+      "windows": 16,
+      "reopens": [
+        32,
+        128,
+        512
+      ]
+    }
+  ],
+  "products_count": 12,
+  "turns": 6144,
+  "requests": 9216,
+  "same_sse_chunks_across_all_runs": true,
+  "measured_source_hashes_unchanged": true,
+  "sqlite_integrity_checks": "passed"
+}

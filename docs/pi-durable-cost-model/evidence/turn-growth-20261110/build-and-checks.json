@@ -1,0 +1,26 @@
+{
+  "head": "63207416a1d3a87ffc870d52cd5aeb549d057896",
+  "branch": "codex/pr485-main-reconciliation",
+  "src_tree": "7e4b4834d0a9a9b35657d27e8485c6affbce55e7",
+  "production_diff": "",
+  "build": "cargo build --release --locked --bin rustx",
+  "build_elapsed": "5m23s",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "binary_sha256": "5dfc1a26ad58692ccd96a275422967a78f62fb44a6ba20970dc3017e8fbeff06",
+  "kernel": "6.8.0-149-generic",
+  "clock_ticks_per_second": 100,
+  "reference_revisions": {
+    "pi-rust": "4056176bf4867f913099b101fd65b773895c99ba",
+    "pi-durable": "1cedd32724abfcb0915f76cc61b6827e2c16dbad"
+  },
+  "query_probe_linked_archive": "target/release/build/libsqlite3-sys-5391703acd79354d/out/libsqlite3.a",
+  "query_probe_sqlite_version": "3.53.2",
+  "checks": [
+    "v78 initialize + subscribed terminal delivery",
+    "512 fixed prompts and provider response oracle per scenario",
+    "one real read result per tool turn; two provider requests",
+    "SQLite integrity_check and native ledger role/content counts",
+    "consistent backup request counts 32/128/512 and 64/256/1024",
+    "Python syntax + exact OLS unit fixture + git diff --check"
+  ]
+}

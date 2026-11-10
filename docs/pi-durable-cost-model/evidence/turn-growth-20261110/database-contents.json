@@ -1,0 +1,382 @@
+[
+  {
+    "path": "baseline/text/cut-128.sqlite",
+    "bytes": 7149568,
+    "sha256": "da1e15b552180ea9b1feadae9446255468f1ae8fa4ad7ae4766a6ff17c6095f8"
+  },
+  {
+    "path": "baseline/text/cut-32.sqlite",
+    "bytes": 2205696,
+    "sha256": "5b7b7f28318c5602c303d76d2ce1ee49dfef16ac0c5fc5cc1bab33685c99d24d"
+  },
+  {
+    "path": "baseline/text/cut-512.sqlite",
+    "bytes": 27117568,
+    "sha256": "32d3106c9d337fc7806266844802fe0103ff2eb427822807198da950ab1372a1"
+  },
+  {
+    "path": "baseline/text/runtime/configuration-backups/user-844009d43be61ae4-e54e2313a8b9b2fb5fac857cd500d584da4557f6e8dc6cac320a93f730289bda.toml",
+    "bytes": 684,
+    "sha256": "e54e2313a8b9b2fb5fac857cd500d584da4557f6e8dc6cac320a93f730289bda"
+  },
+  {
+    "path": "baseline/text/runtime/.product-writer.lock",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "baseline/text/runtime/conversation-reservations/conv_01a1c4a0-dbad-7f22-9262-ffecbbb191a9",
+    "bytes": 41,
+    "sha256": "3c07489a80373031ffb4ba834107d1f5f03f769830e39b1b621e20169c892156"
+  },
+  {
+    "path": "baseline/text/runtime/sessions/ses_01a1c4a0-dbad-7f22-9262-ffcae6c0799d/conversations/conv_01a1c4a0-dbad-7f22-9262-ffecbbb191a9/conversation.sqlite",
+    "bytes": 27117568,
+    "sha256": "861b227ea70c727960ccf28f74ddad1240792446d5c4add323fbb325bf39244f"
+  },
+  {
+    "path": "baseline/text/runtime/sessions/ses_01a1c4a0-dbad-7f22-9262-ffcae6c0799d/conversations/conv_01a1c4a0-dbad-7f22-9262-ffecbbb191a9/conversation.sqlite-shm",
+    "bytes": 32768,
+    "sha256": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb"
+  },
+  {
+    "path": "baseline/text/runtime/sessions/ses_01a1c4a0-dbad-7f22-9262-ffcae6c0799d/conversations/conv_01a1c4a0-dbad-7f22-9262-ffecbbb191a9/conversation.sqlite-wal",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "baseline/text/runtime/sessions/catalog.json",
+    "bytes": 1172,
+    "sha256": "99f718bf1d4c0435e689449d1438df20f980d2efe323436eacbebd9ec4976462"
+  },
+  {
+    "path": "baseline/tool/cut-128.sqlite",
+    "bytes": 23339008,
+    "sha256": "6ece9f4cc58c061f23bcc05442882093c0fd36f0fc8e2a96429b473da6e08992"
+  },
+  {
+    "path": "baseline/tool/cut-32.sqlite",
+    "bytes": 4587520,
+    "sha256": "905b846583b45bfd1e5bc86e4d73efe273fe2e432e40c63e0ad1e8841749c60f"
+  },
+  {
+    "path": "baseline/tool/cut-512.sqlite",
+    "bytes": 197419008,
+    "sha256": "99f204ff933bd8954cc3710a579d859ccbbe23599179008429f25cfe70856650"
+  },
+  {
+    "path": "baseline/tool/runtime/configuration-backups/user-f2bbf400b2bbefd2-28f2bfbb3a06f48a2f793cb5211729b6b8d182cc2a1cfc53dca9ce56657f24dd.toml",
+    "bytes": 684,
+    "sha256": "28f2bfbb3a06f48a2f793cb5211729b6b8d182cc2a1cfc53dca9ce56657f24dd"
+  },
+  {
+    "path": "baseline/tool/runtime/.product-writer.lock",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "baseline/tool/runtime/conversation-reservations/conv_01a1c4a1-314e-7803-ba06-7f52954c29af",
+    "bytes": 41,
+    "sha256": "78f0b7a08f2a5bf49b06a37a050a1b5b9aa94964b62a704b66a3ae4e8caff4ff"
+  },
+  {
+    "path": "baseline/tool/runtime/sessions/ses_01a1c4a1-314e-7803-ba06-7f38fe229ce8/conversations/conv_01a1c4a1-314e-7803-ba06-7f52954c29af/conversation.sqlite",
+    "bytes": 197419008,
+    "sha256": "ff8d56584ec149aa6cf776dc536b782c8db8868eabf07e71d5d996f54bf35c86"
+  },
+  {
+    "path": "baseline/tool/runtime/sessions/ses_01a1c4a1-314e-7803-ba06-7f38fe229ce8/conversations/conv_01a1c4a1-314e-7803-ba06-7f52954c29af/conversation.sqlite-shm",
+    "bytes": 32768,
+    "sha256": "fd4c9fda9cd3f9ae7c962b0ddf37232294d55580e1aa165aa06129b8549389eb"
+  },
+  {
+    "path": "baseline/tool/runtime/sessions/ses_01a1c4a1-314e-7803-ba06-7f38fe229ce8/conversations/conv_01a1c4a1-314e-7803-ba06-7f52954c29af/conversation.sqlite-wal",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "baseline/tool/runtime/sessions/catalog.json",
+    "bytes": 1172,
+    "sha256": "13137a862530c25a28d764a2b1cb50863fe86017e7255c51d202f2c9a07bf71b"
+  },
+  {
+    "path": "cpu-high128/text/runtime/configuration-backups/user-cbdf976e096fa890-aac562d18bbd3a08efa5144c4f83779d09b4b4de9bdd6bb82c6c4f07fcc0dae2.toml",
+    "bytes": 684,
+    "sha256": "aac562d18bbd3a08efa5144c4f83779d09b4b4de9bdd6bb82c6c4f07fcc0dae2"
+  },
+  {
+    "path": "cpu-high128/text/runtime/.product-writer.lock",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "cpu-high128/text/runtime/conversation-reservations/conv_01a1c49e-2741-7340-981a-ef0f95f1a7df",
+    "bytes": 41,
+    "sha256": "a212bd2eb86067901255752a86d2624d8b6f867112b460287b7db3211d215de2"
+  },
+  {
+    "path": "cpu-high128/text/runtime/sessions/ses_01a1c49e-2741-7340-981a-eee594238bf6/conversations/conv_01a1c49e-2741-7340-981a-ef0f95f1a7df/conversation.sqlite",
+    "bytes": 27123712,
+    "sha256": "f7c27b393cbcdc63d49ca87fad2484cddc9343270c90b1f1bc47878d844c7226"
+  },
+  {
+    "path": "cpu-high128/text/runtime/sessions/ses_01a1c49e-2741-7340-981a-eee594238bf6/conversations/conv_01a1c49e-2741-7340-981a-ef0f95f1a7df/conversation.sqlite-shm",
+    "bytes": 32768,
+    "sha256": "510bf648e95b7bbe216eb08a2167ce87055eeee231eec5eb17d4157e9f75daad"
+  },
+  {
+    "path": "cpu-high128/text/runtime/sessions/ses_01a1c49e-2741-7340-981a-eee594238bf6/conversations/conv_01a1c49e-2741-7340-981a-ef0f95f1a7df/conversation.sqlite-wal",
+    "bytes": 2306168,
+    "sha256": "ea814bbb39259645ca96b0682fb8cf702903d5adcd802ba9f60dd5950ec6540d"
+  },
+  {
+    "path": "cpu-high128/text/runtime/sessions/catalog.json",
+    "bytes": 1172,
+    "sha256": "24a3f3aa4cdc97a40669fec8ec7712d2733d86ddfcce3fdcd3154f2a70ba08eb"
+  },
+  {
+    "path": "cpu-high128/tool/runtime/configuration-backups/user-a20c215323c20136-21032647f30156d15edbe92c3e9b9a0e376f2411013b79389fdd358fc2838da3.toml",
+    "bytes": 684,
+    "sha256": "21032647f30156d15edbe92c3e9b9a0e376f2411013b79389fdd358fc2838da3"
+  },
+  {
+    "path": "cpu-high128/tool/runtime/.product-writer.lock",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "cpu-high128/tool/runtime/conversation-reservations/conv_01a1c49e-6025-70c3-a9f7-8822c51ccef9",
+    "bytes": 41,
+    "sha256": "192108c910404fddc7cd67da1cda17c0fe5587f2f08de93f7fd33c810cd1959d"
+  },
+  {
+    "path": "cpu-high128/tool/runtime/sessions/ses_01a1c49e-6025-70c3-a9f7-88038bf10571/conversations/conv_01a1c49e-6025-70c3-a9f7-8822c51ccef9/conversation.sqlite",
+    "bytes": 197079040,
+    "sha256": "0218e1bae93cd442cbb6ab969888974528384d319b5bfdf07a4b73a7c4c55208"
+  },
+  {
+    "path": "cpu-high128/tool/runtime/sessions/ses_01a1c49e-6025-70c3-a9f7-88038bf10571/conversations/conv_01a1c49e-6025-70c3-a9f7-8822c51ccef9/conversation.sqlite-shm",
+    "bytes": 32768,
+    "sha256": "82943b1ce20c2c340b2311754e002299d9a4e5d54084d7703545c08ad64f802d"
+  },
+  {
+    "path": "cpu-high128/tool/runtime/sessions/ses_01a1c49e-6025-70c3-a9f7-88038bf10571/conversations/conv_01a1c49e-6025-70c3-a9f7-8822c51ccef9/conversation.sqlite-wal",
+    "bytes": 2708136,
+    "sha256": "fc37d895da469e258baaa64e53892de53b207b476cba0cc4ec407a149673c1d0"
+  },
+  {
+    "path": "cpu-high128/tool/runtime/sessions/catalog.json",
+    "bytes": 1172,
+    "sha256": "368a60a6a2de932e2685dcc986a50b377be51c6bacf3ac337ede4246cb4d46c8"
+  },
+  {
+    "path": "cpu-low/text/runtime/configuration-backups/user-32487955bfce6dd2-eecec7387df2ef935da4ebbb978ae4ec1e4bba7f8cf7feb4ba233f9a695d2b25.toml",
+    "bytes": 684,
+    "sha256": "eecec7387df2ef935da4ebbb978ae4ec1e4bba7f8cf7feb4ba233f9a695d2b25"
+  },
+  {
+    "path": "cpu-low/text/runtime/.product-writer.lock",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "cpu-low/text/runtime/conversation-reservations/conv_01a1c49b-d5ff-7ff0-93af-c0a99f5c3335",
+    "bytes": 41,
+    "sha256": "3efa2ba838b26448757a8b3d11a24721c319d41d3c708b1f61699d86e2e12f71"
+  },
+  {
+    "path": "cpu-low/text/runtime/sessions/ses_01a1c49b-d5ff-7ff0-93af-c08788bb7fc1/conversations/conv_01a1c49b-d5ff-7ff0-93af-c0a99f5c3335/conversation.sqlite",
+    "bytes": 2078720,
+    "sha256": "daab51d5a3e16230b512eaea052012eeb77b2d36ba696e1ea6017e07ce610a55"
+  },
+  {
+    "path": "cpu-low/text/runtime/sessions/ses_01a1c49b-d5ff-7ff0-93af-c08788bb7fc1/conversations/conv_01a1c49b-d5ff-7ff0-93af-c0a99f5c3335/conversation.sqlite-shm",
+    "bytes": 32768,
+    "sha256": "c52aa3ef8fa745f629ea176c067c8313ed39128251740deb41a0404f06a05442"
+  },
+  {
+    "path": "cpu-low/text/runtime/sessions/ses_01a1c49b-d5ff-7ff0-93af-c08788bb7fc1/conversations/conv_01a1c49b-d5ff-7ff0-93af-c0a99f5c3335/conversation.sqlite-wal",
+    "bytes": 2237792,
+    "sha256": "d52361bdba7728cc806a2f1924e0ec6315b9ce28a1f5dc099caac0966b2e00c3"
+  },
+  {
+    "path": "cpu-low/text/runtime/sessions/catalog.json",
+    "bytes": 1171,
+    "sha256": "c18fa45f9f778e329f5f76190c3af1b61161e1dc850710285b43bb5d9307769d"
+  },
+  {
+    "path": "cpu-low/tool/runtime/configuration-backups/user-e9d00353777b3b52-9acf01af1fdd7e33c6a64c22b6044c60df7c70fba2804f546f52d9db558b56fd.toml",
+    "bytes": 684,
+    "sha256": "9acf01af1fdd7e33c6a64c22b6044c60df7c70fba2804f546f52d9db558b56fd"
+  },
+  {
+    "path": "cpu-low/tool/runtime/.product-writer.lock",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "cpu-low/tool/runtime/conversation-reservations/conv_01a1c49b-db32-7cb1-88ac-76556337b424",
+    "bytes": 41,
+    "sha256": "17b0d115198f8cb2022e202b7c6c63e6d29dba8a7c5cbf2d127ec50842782953"
+  },
+  {
+    "path": "cpu-low/tool/runtime/sessions/catalog.json",
+    "bytes": 1171,
+    "sha256": "527c6d1a95e8439628ea50d5a7e157cbeea50ba3bb0b3040c3dbe4918293b0f0"
+  },
+  {
+    "path": "cpu-low/tool/runtime/sessions/ses_01a1c49b-db32-7cb1-88ac-763afae791bc/conversations/conv_01a1c49b-db32-7cb1-88ac-76556337b424/conversation.sqlite",
+    "bytes": 4589568,
+    "sha256": "ef78a4e60c6d808088bdc5174af2871ecd0831f2bde8fca59e1d1a65af54a1a3"
+  },
+  {
+    "path": "cpu-low/tool/runtime/sessions/ses_01a1c49b-db32-7cb1-88ac-763afae791bc/conversations/conv_01a1c49b-db32-7cb1-88ac-76556337b424/conversation.sqlite-shm",
+    "bytes": 32768,
+    "sha256": "0706ced808a3fe709744a7e9ed3bcf40c40f33b01196ecb9650e7e6a56ea1706"
+  },
+  {
+    "path": "cpu-low/tool/runtime/sessions/ses_01a1c49b-db32-7cb1-88ac-763afae791bc/conversations/conv_01a1c49b-db32-7cb1-88ac-76556337b424/conversation.sqlite-wal",
+    "bytes": 2254368,
+    "sha256": "9559091849b2f6910665d822b98cd603b835e05e46c6f2ea1e701582dae0dd4f"
+  },
+  {
+    "path": "cpu-low128/text/runtime/configuration-backups/user-9cf29779d79f9ea7-4e5c8e80c7c155639feae3e742becb0acba1a10f56642eb1f5ff140d961defc2.toml",
+    "bytes": 684,
+    "sha256": "4e5c8e80c7c155639feae3e742becb0acba1a10f56642eb1f5ff140d961defc2"
+  },
+  {
+    "path": "cpu-low128/text/runtime/.product-writer.lock",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "cpu-low128/text/runtime/conversation-reservations/conv_01a1c49d-73c1-73e0-a31e-ff966f8ceb91",
+    "bytes": 41,
+    "sha256": "fd61806d2a4c5014e248a067ffbe4da8e302e7c002bf317fd56ef93f39744ec2"
+  },
+  {
+    "path": "cpu-low128/text/runtime/sessions/ses_01a1c49d-73c1-73e0-a31e-ff7eca805c2b/conversations/conv_01a1c49d-73c1-73e0-a31e-ff966f8ceb91/conversation.sqlite",
+    "bytes": 7047168,
+    "sha256": "6825f27ecd9cb5bca5baf48d523ae732456c2ea7583e6d7a93853eab926ea504"
+  },
+  {
+    "path": "cpu-low128/text/runtime/sessions/ses_01a1c49d-73c1-73e0-a31e-ff7eca805c2b/conversations/conv_01a1c49d-73c1-73e0-a31e-ff966f8ceb91/conversation.sqlite-shm",
+    "bytes": 32768,
+    "sha256": "fee7ae08e761105f21be1fe7bdb7a1e098068a8a0bbec6d32b7368cf550aad62"
+  },
+  {
+    "path": "cpu-low128/text/runtime/sessions/ses_01a1c49d-73c1-73e0-a31e-ff7eca805c2b/conversations/conv_01a1c49d-73c1-73e0-a31e-ff966f8ceb91/conversation.sqlite-wal",
+    "bytes": 2237792,
+    "sha256": "66c44a4d634321151173fca64a980cdfa58d26b81c8d7e54df1ec89fb5364c17"
+  },
+  {
+    "path": "cpu-low128/text/runtime/sessions/catalog.json",
+    "bytes": 1172,
+    "sha256": "f94b10722aac29b292a5d443a80e7734ce07d2a171b75fa72387a3dd91109b1a"
+  },
+  {
+    "path": "cpu-low128/tool/runtime/configuration-backups/user-81b1ccb47e851281-8d4345e4d5242a2f8242f41ed77c2f29a3a33c723cb9a42a7f83d12c99a9d42b.toml",
+    "bytes": 684,
+    "sha256": "8d4345e4d5242a2f8242f41ed77c2f29a3a33c723cb9a42a7f83d12c99a9d42b"
+  },
+  {
+    "path": "cpu-low128/tool/runtime/.product-writer.lock",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "cpu-low128/tool/runtime/conversation-reservations/conv_01a1c49d-806f-7902-8d0f-7b34b6aff56f",
+    "bytes": 41,
+    "sha256": "18a6a9a465caf9113302fb1498d67f231dc23886a0dbace8e3db625cea070fa4"
+  },
+  {
+    "path": "cpu-low128/tool/runtime/sessions/catalog.json",
+    "bytes": 1172,
+    "sha256": "dfa69eebf22b639509743ebde9075d032234e6c27e8b348128b18a15344e9f59"
+  },
+  {
+    "path": "cpu-low128/tool/runtime/sessions/ses_01a1c49d-806f-7902-8d0f-7b136337d8f9/conversations/conv_01a1c49d-806f-7902-8d0f-7b34b6aff56f/conversation.sqlite",
+    "bytes": 23097344,
+    "sha256": "5adcb15afef2c966712317e70cab0e9623d3f11044d5156aebd5a749385bcb31"
+  },
+  {
+    "path": "cpu-low128/tool/runtime/sessions/ses_01a1c49d-806f-7902-8d0f-7b136337d8f9/conversations/conv_01a1c49d-806f-7902-8d0f-7b34b6aff56f/conversation.sqlite-shm",
+    "bytes": 32768,
+    "sha256": "9e1aaad3b09f8035cfdb60dd09ba4158b47db53d71405a54f3d1639f51dae6ae"
+  },
+  {
+    "path": "cpu-low128/tool/runtime/sessions/ses_01a1c49d-806f-7902-8d0f-7b136337d8f9/conversations/conv_01a1c49d-806f-7902-8d0f-7b34b6aff56f/conversation.sqlite-wal",
+    "bytes": 2418056,
+    "sha256": "a755c3399f379576d5a32de2af85eca6d004c9a6fb88b6cbef7ccdef056a467f"
+  },
+  {
+    "path": "strace/text/runtime/configuration-backups/user-46b38475c3bc53c6-b41be86c0d054c9f47fab007044548711c0c9a46866822cbf5d01f2364afe626.toml",
+    "bytes": 684,
+    "sha256": "b41be86c0d054c9f47fab007044548711c0c9a46866822cbf5d01f2364afe626"
+  },
+  {
+    "path": "strace/text/runtime/.product-writer.lock",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "strace/text/runtime/conversation-reservations/conv_01a1c4a2-0866-73d2-89ba-2eb551c0c3e0",
+    "bytes": 41,
+    "sha256": "ed2b6403bf3d9dedb4ec0fb86382ffe533d038daa187b14ad843a5fadfa081af"
+  },
+  {
+    "path": "strace/text/runtime/sessions/ses_01a1c4a2-0866-73d2-89ba-2e9cf74e4e50/conversations/conv_01a1c4a2-0866-73d2-89ba-2eb551c0c3e0/conversation.sqlite",
+    "bytes": 27015168,
+    "sha256": "f7988c86be29f6e944be49f9f112a3fba76b7e9593a33b0291497ceef11d6e9e"
+  },
+  {
+    "path": "strace/text/runtime/sessions/ses_01a1c4a2-0866-73d2-89ba-2e9cf74e4e50/conversations/conv_01a1c4a2-0866-73d2-89ba-2eb551c0c3e0/conversation.sqlite-shm",
+    "bytes": 32768,
+    "sha256": "87f3cfcb81c04ed433fac94c22e152a7c581ec83dd3b3bdf0aa6277c9ee855d7"
+  },
+  {
+    "path": "strace/text/runtime/sessions/ses_01a1c4a2-0866-73d2-89ba-2e9cf74e4e50/conversations/conv_01a1c4a2-0866-73d2-89ba-2eb551c0c3e0/conversation.sqlite-wal",
+    "bytes": 2281304,
+    "sha256": "d91e61653b4be5bb8fa18923dfc3c62cf15fffedadd081104c5caa63668e4f31"
+  },
+  {
+    "path": "strace/text/runtime/sessions/catalog.json",
+    "bytes": 1172,
+    "sha256": "6ac1811c732fdb43e1166731f7b4be8ce0779070698ab3c64bf7a05d8e91a251"
+  },
+  {
+    "path": "strace/tool/runtime/configuration-backups/user-cb67d3dc710709c3-f76a288d394acc621e91738bc633e10740f6bbf5e939a98e6c3b89472cc7a21d.toml",
+    "bytes": 684,
+    "sha256": "f76a288d394acc621e91738bc633e10740f6bbf5e939a98e6c3b89472cc7a21d"
+  },
+  {
+    "path": "strace/tool/runtime/.product-writer.lock",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "path": "strace/tool/runtime/conversation-reservations/conv_01a1c4a2-b746-7a92-af18-46c6bf06a23d",
+    "bytes": 41,
+    "sha256": "0530fe0f790e7548e260add2c66bc8482adfd1e1693eb1d6860a9cfda85dfdbd"
+  },
+  {
+    "path": "strace/tool/runtime/sessions/ses_01a1c4a2-b746-7a92-af18-46a3b6bf22cf/conversations/conv_01a1c4a2-b746-7a92-af18-46c6bf06a23d/conversation.sqlite",
+    "bytes": 197449728,
+    "sha256": "ba60cfd775a4d882b6b0b6aa4eeb227bed6bf837a71eb14047ae6dc2c26b1bd1"
+  },
+  {
+    "path": "strace/tool/runtime/sessions/ses_01a1c4a2-b746-7a92-af18-46a3b6bf22cf/conversations/conv_01a1c4a2-b746-7a92-af18-46c6bf06a23d/conversation.sqlite-shm",
+    "bytes": 32768,
+    "sha256": "b26143a22213d633d7e9a302f09bb7d31e239f0ed083bb7a6464d6f03f924217"
+  },
+  {
+    "path": "strace/tool/runtime/sessions/ses_01a1c4a2-b746-7a92-af18-46a3b6bf22cf/conversations/conv_01a1c4a2-b746-7a92-af18-46c6bf06a23d/conversation.sqlite-wal",
+    "bytes": 2716424,
+    "sha256": "9b033297e1f270b677913b3b0a6ef4ac91b1bd1553cedba535cdf9b4371e64c7"
+  },
+  {
+    "path": "strace/tool/runtime/sessions/catalog.json",
+    "bytes": 1172,
+    "sha256": "b09a59dbc522c33ba6e4ad1b2606e816dec58c384666055a7beaf0cb684a17b0"
+  }
+]

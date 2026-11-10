@@ -1,0 +1,11 @@
+{
+  "url": "https://github.com/gperftools/gperftools/releases/download/gperftools-2.16/gperftools-2.16.tar.gz",
+  "files": {
+    "/tmp/rustx-turn-growth-profiler/gperftools.tar.gz": "f12624af5c5987f2cc830ee534f754c3c5961eec08004c26a8b80de015cf056f",
+    "/tmp/rustx-turn-growth-profiler/gperftools-2.16/.libs/libprofiler.so.0.5.13": "8af281b8003b5f0ddcbb3b5ac761940e4d01d8176bbce81c89df64a42a25d15b"
+  },
+  "kernel": "6.8.0-149-generic",
+  "strace": "strace -- version 6.8",
+  "perf_event_paranoid": "4",
+  "configure": "./configure --prefix=/tmp/rustx-turn-growth-profiler/install --enable-shared --disable-heap-profiler --disable-heap-checker --disable-debugalloc --disable-dependency-tracking; make -j4 libprofiler.la"
+}
