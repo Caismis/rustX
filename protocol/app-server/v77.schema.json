@@ -10219,6 +10219,15 @@
         "disable_model_invocation": {
           "type": "boolean"
         },
+        "enabled_by_default": {
+          "type": "boolean"
+        },
+        "operation_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "display": {
           "anyOf": [
             {
@@ -10235,7 +10244,8 @@
         "catalog",
         "provenance",
         "metadata_revision",
-        "disable_model_invocation"
+        "disable_model_invocation",
+        "enabled_by_default"
       ]
     },
     "SkillCatalogEntry": {
@@ -38521,6 +38531,23 @@
           ]
         },
         {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "skill_delete"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
           "description": "Copy or move a resource between User and the addressed Workspace.\nThe expected revision belongs to the source resource document.",
           "type": "object",
           "properties": {
@@ -39337,6 +39364,27 @@
             "family": {
               "type": "string",
               "const": "mcp"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "family",
+            "source",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string"
+            },
+            "destination": {
+              "type": "string"
+            },
+            "family": {
+              "type": "string",
+              "const": "skill"
             }
           },
           "additionalProperties": false,

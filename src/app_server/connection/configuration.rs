@@ -438,6 +438,7 @@ impl AppServerConnection {
                         authored,
                         upload,
                     },
+                    SourceMutation::SkillDelete { name } => SourceMutation::SkillDelete { name },
                     SourceMutation::ResourceTransfer {
                         from,
                         operation,

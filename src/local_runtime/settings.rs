@@ -593,6 +593,10 @@ impl SourceDirectory {
         self.identity
     }
 
+    pub(super) fn descriptor(&self) -> &std::os::fd::OwnedFd {
+        &self.directory
+    }
+
     /// Write and sync `bytes` to a new private file in this directory. The
     /// staged file is removed again unless it is published.
     pub(super) fn stage(&self, bytes: &[u8]) -> std::io::Result<Staged<'_>> {

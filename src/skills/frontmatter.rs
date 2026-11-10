@@ -1,11 +1,12 @@
 //! Bounded prefix I/O. Bodies and assets are runtime files, never discovery inputs.
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 
 use crate::runtime::CancellationSignal;
 
 /// Bound the metadata read independently of the size of the body.
 pub(crate) const MAX_FRONTMATTER_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const DEFAULT_DISABLED_KEY: &str = "rustx-default-disabled";
 const BUFFER_BYTES: usize = 4096;
 
 #[cfg(test)]
@@ -16,6 +17,10 @@ thread_local! {
 }
 
 pub(crate) fn read(path: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, String> {
+    verified_prefix(path, signal).map(|(header, _)| header)
+}
+
+fn verified_prefix(path: &Path, signal: &CancellationSignal) -> Result<(Vec<u8>, usize), String> {
     let parent = path.parent().ok_or("Skill file has no parent directory")?;
     let name = path.file_name().ok_or("Skill file has no name")?;
     let directory = crate::package_io::PackageDirectory::open(parent).map_err(|e| e.to_string())?;
@@ -68,7 +73,7 @@ pub(crate) fn read(path: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, 
                     ));
                 }
                 if header.len() >= 7 && header.ends_with(b"\n---") {
-                    return Ok(header);
+                    return Ok((header, MAX_FRONTMATTER_BYTES - remaining));
                 }
             }
             reader.consume(used);
@@ -86,4 +91,49 @@ pub(crate) fn read(path: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, 
     }
     crate::package_io::check_cancelled(signal).map_err(|e| e.to_string())?;
     Ok(header)
+}
+
+/// Rewrite only package identity and the copy's default selection. The closing
+/// delimiter and instruction body after it retain their original bytes.
+pub(crate) fn rewrite(
+    path: &Path,
+    name: &str,
+    copy: bool,
+    signal: &CancellationSignal,
+) -> io::Result<()> {
+    let (header, end) = verified_prefix(path, signal).map_err(io::Error::other)?;
+    let yaml = &header[3..header.len() - 3];
+    let mut fields: serde_yaml::Mapping = serde_yaml::from_slice(yaml).map_err(io::Error::other)?;
+    fields.insert("name".into(), name.into());
+    if copy {
+        let metadata = fields
+            .entry("metadata".into())
+            .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+        if !metadata.is_mapping() {
+            *metadata = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+        }
+        metadata
+            .as_mapping_mut()
+            .expect("metadata is a mapping")
+            .insert(DEFAULT_DISABLED_KEY.into(), true.into());
+    }
+    let yaml = serde_yaml::to_string(&fields).map_err(io::Error::other)?;
+    if yaml.len() + 7 > MAX_FRONTMATTER_BYTES {
+        return Err(io::Error::other("Skill frontmatter exceeds 2 MiB"));
+    }
+    let mut original = std::fs::File::open(path)?;
+    let mut file = tempfile::NamedTempFile::new_in(
+        path.parent()
+            .ok_or_else(|| io::Error::other("no package parent"))?,
+    )?;
+    file.write_all(b"---\n")?;
+    file.write_all(yaml.as_bytes())?;
+    file.write_all(b"---")?;
+    io::Seek::seek(&mut original, io::SeekFrom::Start(end as u64))?;
+    io::copy(&mut original, &mut file)?;
+    file.as_file()
+        .set_permissions(original.metadata()?.permissions())?;
+    file.as_file().sync_all()?;
+    file.persist(path)?;
+    Ok(())
 }

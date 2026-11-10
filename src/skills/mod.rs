@@ -40,7 +40,7 @@ pub(crate) mod dependencies;
 mod diagnostics;
 pub(crate) mod discovery;
 pub mod environments;
-mod frontmatter;
+pub(crate) mod frontmatter;
 pub(crate) mod identity;
 pub(crate) mod package;
 pub mod source;

@@ -4,7 +4,9 @@ import type {AppServerClient} from '../../../client/app-server';
 
 /** Native discovery and display information share a paginated catalog revision. */
 export function useSkillCatalog(client:AppServerClient|undefined,source:SourceSettings,enabled:boolean,scope:SourceScope=source.target.kind,refresh=0) {
- const [result,setResult]=useState<{source:SourceSettings;scope:SourceScope;skills:SkillDescriptor[];error?:string}>();
+ const directory=scope==='workspace'&&source.target.kind==='workspace'?source.target.directory:undefined;
+ const generation=client?.getSnapshot().generation;
+ const [result,setResult]=useState<{source:SourceSettings;scope:SourceScope;directory?:string;generation:number;refresh:number;skills:SkillDescriptor[];error?:string}>();
  useEffect(()=>{
   if(!enabled||!client)return;
   let alive=true;
@@ -21,9 +23,10 @@ export function useSkillCatalog(client:AppServerClient|undefined,source:SourceSe
     if(page.next_offset==null)break;
     offset=page.next_offset;
    } while(current());
-   if(current())setResult({source,scope,skills});
-  })().catch(error=>{if(current())setResult({source,scope,skills:[],error:String(error)});});
+   if(current())setResult({source,scope,directory,generation,refresh,skills});
+  })().catch(error=>{if(current())setResult({source,scope,directory,generation,refresh,skills:[],error:String(error)});});
   return()=>{alive=false;};
- },[client,source,enabled,scope,refresh]);
- return result?.source===source&&result.scope===scope?result:undefined;
+ },[client,source,enabled,scope,directory,generation,refresh]);
+ return enabled&&result&&result.scope===scope&&result.directory===directory&&result.generation===generation
+  ? {...result,pending:result.source!==source||result.refresh!==refresh}:undefined;
 }

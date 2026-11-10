@@ -58,6 +58,19 @@ the same asset. Saving preserves other metadata and leaves existing asset
 files in place. The skill's identifier, instructions, and runtime description
 come from `SKILL.md`.
 
+In the Web UI's Workspace skill list, a directory skill's menu can copy or
+move the package between the current Workspace and Global. The operation
+includes all authored files and directories, including the presentation
+sidecar and assets. A changed destination name updates the `name` in
+`SKILL.md`. Copies also set `metadata.rustx-default-disabled: true`, so
+automatic selection leaves the copy off until it is explicitly selected.
+An unchanged-name move preserves the instruction file verbatim. **Delete**
+removes the confirmed directory from its own scope.
+
+Package transfer accepts regular files and directories, with limits of
+4,096 entries, 64 nested levels, and 256 MiB of files. Symlinked installs
+and standalone Markdown files remain browseable.
+
 ## Version and configuration semantics
 
 `SkillVersionId` is `sha256:<64 lowercase hex>` over the domain

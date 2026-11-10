@@ -1,6 +1,6 @@
 import AxeBuilder from '@axe-core/playwright';
 import {expect,test,type Locator,type Page} from '@playwright/test';
-import {existsSync,mkdirSync,readdirSync,readFileSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
+import {existsSync,mkdirSync,readdirSync,readFileSync,statSync,symlinkSync,unlinkSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {PNG} from 'pngjs';
@@ -176,6 +176,134 @@ test('skill cards render, edit and upload package display information from the w
     await expect(page.getByRole('dialog', {name: 'Review Toolkit', exact: true})).toContainText('Original instructions.');
     expect(errors).toEqual([]);
   } finally { await f.stop(false); }
+});
+
+test('skill directories copy, move and delete from their exact scopes', async ({page}) => {
+  const fixture = await startDogfood();
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  try {
+    const user = join(fixture.directory, 'home/rustx/.agents/skills');
+    const local = join(fixture.workspaceA, '.agents/skills');
+    const body = '\r\n# Skill instructions\r\nRead references before continuing.\r\n';
+    const icon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5"/></svg>';
+    const seed = (root: string, name: string, description: string) => {
+      const directory = join(root, name);
+      for (const folder of ['agents', 'assets', 'references/empty', 'scripts']) {
+        mkdirSync(join(directory, folder), {recursive: true});
+      }
+      writeFileSync(join(directory, 'SKILL.md'), `---\r\nname: ${name}\r\ndescription: ${description}\r\n---${body}`);
+      writeFileSync(join(directory, 'agents/openai.yaml'), 'interface:\n  short_description: Portable skill package\n  icon_small: ./assets/icon.svg\n');
+      writeFileSync(join(directory, 'assets/icon.svg'), icon);
+      writeFileSync(join(directory, 'references/guide.txt'), 'Reference notes.\n');
+      writeFileSync(join(directory, 'scripts/inspect.sh'), '#!/bin/sh\nprintf inspection\n', {mode: 0o755});
+      return directory;
+    };
+    const globalOriginal = seed(join(user, 'team'), 'global-guide', 'Original global guide');
+    const localOriginal = seed(local, 'local-guide', 'Original workspace guide');
+    const globalShadow = seed(user, 'shadow-guide', 'Global shadow definition');
+    const localShadow = seed(local, 'shadow-guide', 'Workspace shadow definition');
+    writeFileSync(fixture.settings, readFileSync(fixture.settings, 'utf8') + '\n[agent]\nskills = "all"\n');
+
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await expect(page).toHaveTitle(/rustX/);
+    const skills = await openResourceModule(page, 'skills', 'Workspace A');
+    const global = skills.getByRole('group', {name: 'Available from Global', exact: true});
+    const installed = skills.getByRole('group', {name: 'Installed here', exact: true});
+    const card = (group: Locator, name: string) => group.getByRole('listitem', {name, exact: true});
+    const action = async (row: Locator, name: string) => {
+      await row.getByRole('button', {name: /^Actions for /}).click({timeout: 8_000});
+      await page.getByRole('menuitem', {name, exact: true}).click({timeout: 8_000});
+    };
+    const transfer = async (row: Locator, name: string, operation: 'Copy' | 'Move') => {
+      await action(row, name);
+      return page.getByRole('dialog', {name: `${operation} resource`, exact: true});
+    };
+    const submit = async (dialog: Locator, operation: 'Copy' | 'Move') => {
+      await dialog.getByRole('button', {name: operation, exact: true}).click();
+      await expect(dialog).toHaveCount(0);
+    };
+    const checkPackage = (from: string, to: string) => {
+      for (const file of ['agents/openai.yaml', 'assets/icon.svg', 'references/guide.txt', 'scripts/inspect.sh']) {
+        expect(readFileSync(join(to, file))).toEqual(readFileSync(join(from, file)));
+      }
+      expect(statSync(join(to, 'references/empty')).isDirectory()).toBe(true);
+      expect(statSync(join(to, 'scripts/inspect.sh')).mode & 0o111).toBe(0o111);
+    };
+
+    const globalGuide = card(global, 'global-guide');
+    const localGuide = card(installed, 'local-guide');
+    await expect(globalGuide.getByRole('switch')).toBeChecked();
+    await expect(localGuide.getByRole('switch')).toBeChecked();
+    const copyToWorkspace = await transfer(globalGuide, 'Copy to Workspace', 'Copy');
+    await expect(copyToWorkspace.getByLabel('Destination name')).toHaveValue('global-guide-copy');
+    await copyToWorkspace.getByLabel('Destination name').fill('shadow-guide');
+    await expect(copyToWorkspace.getByRole('button', {name: 'Copy', exact: true})).toBeDisabled();
+    await copyToWorkspace.getByLabel('Destination name').fill('global-guide-copy');
+    await submit(copyToWorkspace, 'Copy');
+    const workspaceCopy = card(installed, 'global-guide-copy');
+    await expect(workspaceCopy.getByRole('switch')).not.toBeChecked();
+    const workspaceCopyPath = join(local, 'global-guide-copy');
+    checkPackage(globalOriginal, workspaceCopyPath);
+    const rewritten = readFileSync(join(workspaceCopyPath, 'SKILL.md'), 'utf8');
+    expect(rewritten).toContain('name: global-guide-copy');
+    expect(rewritten).toContain('rustx-default-disabled: true');
+    expect(rewritten.endsWith(body)).toBe(true);
+
+    await submit(await transfer(localGuide, 'Copy to Global', 'Copy'), 'Copy');
+    const globalCopy = card(global, 'local-guide-copy');
+    await expect(globalCopy.getByRole('switch')).not.toBeChecked();
+    checkPackage(localOriginal, join(user, 'local-guide-copy'));
+    expect(readFileSync(fixture.settings, 'utf8')).toContain('skills = "all"');
+
+    const moveToWorkspace = await transfer(globalGuide, 'Move to Workspace', 'Move');
+    const globalMarker = join(globalOriginal, 'SKILL.md');
+    writeFileSync(globalMarker, readFileSync(globalMarker, 'utf8') + '\r\nUpdated outside the editor.\r\n');
+    await moveToWorkspace.getByRole('button', {name: 'Move', exact: true}).click();
+    await expect(moveToWorkspace.getByRole('alert')).toContainText('changed');
+    expect(existsSync(join(local, 'global-guide'))).toBe(false);
+    await moveToWorkspace.getByRole('button', {name: 'Cancel', exact: true}).click();
+    const globalText = readFileSync(globalMarker);
+    await expect(globalGuide.getByRole('switch')).toBeChecked();
+    await submit(await transfer(globalGuide, 'Move to Workspace', 'Move'), 'Move');
+    await expect(card(installed, 'global-guide')).toBeVisible();
+    expect(existsSync(globalOriginal)).toBe(false);
+    expect(readFileSync(join(local, 'global-guide/SKILL.md'))).toEqual(globalText);
+    expect(readFileSync(join(local, 'global-guide/assets/icon.svg'), 'utf8')).toBe(icon);
+
+    const localText = readFileSync(join(localOriginal, 'SKILL.md'));
+    await submit(await transfer(localGuide, 'Move to Global', 'Move'), 'Move');
+    await expect(card(global, 'local-guide')).toBeVisible();
+    expect(existsSync(localOriginal)).toBe(false);
+    expect(readFileSync(join(user, 'local-guide/SKILL.md'))).toEqual(localText);
+    expect(readFileSync(join(user, 'local-guide/assets/icon.svg'), 'utf8')).toBe(icon);
+
+    await workspaceCopy.getByRole('switch').click();
+    await expect(workspaceCopy.getByRole('switch')).toBeChecked();
+    await expect(globalCopy.getByRole('switch')).not.toBeChecked();
+
+    await page.setViewportSize({width: 390, height: 850});
+    const deleteDialog = page.getByRole('dialog', {name: 'Delete skill?', exact: true});
+    await action(card(global, 'shadow-guide'), 'Delete');
+    await expect(deleteDialog).toContainText(globalShadow);
+    await captureEvidence(deleteDialog, 'skill-delete-global-mobile');
+    await deleteDialog.getByRole('button', {name: 'Cancel', exact: true}).click();
+    expect(existsSync(globalShadow)).toBe(true);
+    await action(card(global, 'shadow-guide'), 'Delete');
+    await deleteDialog.getByRole('button', {name: 'Delete', exact: true}).click();
+    await expect(card(global, 'shadow-guide')).toHaveCount(0);
+    expect(existsSync(globalShadow)).toBe(false);
+    expect(existsSync(localShadow)).toBe(true);
+    await action(workspaceCopy, 'Delete');
+    await expect(deleteDialog).toContainText('Workspace A');
+    await deleteDialog.getByRole('button', {name: 'Delete', exact: true}).click();
+    await expect(workspaceCopy).toHaveCount(0);
+    expect(existsSync(workspaceCopyPath)).toBe(false);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
 });
 
 for(const width of [1440,390]) test(`independent resources have exact global and workspace toggles, and read-only skills at ${width}px`,async({page})=>{

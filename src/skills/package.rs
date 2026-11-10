@@ -123,6 +123,13 @@ pub struct SkillPackage {
 }
 
 impl SkillPackage {
+    pub(crate) fn enabled_by_default(&self) -> bool {
+        self.metadata()
+            .get(super::frontmatter::DEFAULT_DISABLED_KEY)
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+    }
+
     /// The source authority that published this package.
     ///
     /// Provenance, never identity: the content-derived `SkillVersionId` is
@@ -626,7 +633,7 @@ fn discover_package(
 /// Checks one Skill name against the Agent Skills naming recommendations:
 /// 1-64 characters, lowercase letters, numbers, and hyphens only, no
 /// leading/trailing or consecutive hyphens.
-fn validate_skill_name(name: &str) -> Result<(), String> {
+pub(crate) fn validate_skill_name(name: &str) -> Result<(), String> {
     let count = name.encode_utf16().count();
     if !(1..=MAX_SKILL_NAME_CHARS).contains(&count) {
         return Err(format!(

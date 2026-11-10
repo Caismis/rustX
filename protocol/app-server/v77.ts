@@ -2223,6 +2223,10 @@ export type SourceMutation =
       kind: 'skill_display';
     }
   | {
+      name: string;
+      kind: 'skill_delete';
+    }
+  | {
       from: SourceScope;
       operation: TransferOperation;
       resource: ResourceTransfer;
@@ -2583,6 +2587,11 @@ export type ResourceTransfer =
       source: McpServerId;
       destination: McpServerId;
       family: 'mcp';
+    }
+  | {
+      source: string;
+      destination: string;
+      family: 'skill';
     };
 /**
  * One whole-file Workflow mutation of the exact file the mutation names.
@@ -10448,6 +10457,8 @@ export interface SkillDescriptor {
   provenance: SkillProvenance;
   metadata_revision: string;
   disable_model_invocation: boolean;
+  enabled_by_default: boolean;
+  operation_revision?: string | null;
   display?: SkillDisplay | null;
 }
 /**

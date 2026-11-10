@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 mod display;
+mod operations;
 use display::{SkillDisplay, read_display};
 pub use display::{SkillDisplayWrite, SkillIconUpload};
 
@@ -21,6 +22,9 @@ pub struct SkillDescriptor {
     pub provenance: SkillProvenance,
     pub metadata_revision: String,
     pub disable_model_invocation: bool,
+    pub enabled_by_default: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation_revision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display: Option<SkillDisplay>,
 }
@@ -55,6 +59,8 @@ fn descriptor(
         },
         provenance: provenance.clone(),
         disable_model_invocation: package.disable_model_invocation(),
+        enabled_by_default: package.enabled_by_default(),
+        operation_revision: operations::operation_revision(package, collection),
         metadata_revision: digest(&package.definition()).map_err(|_| SettingsError::Io)?,
         display: read_display(package, collection),
     };

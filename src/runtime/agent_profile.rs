@@ -46,6 +46,14 @@ impl From<AgentSkillSelection> for crate::capabilities::selection::SourceToolSel
     }
 }
 impl AgentSkillSelection {
+    pub(crate) fn selects_package(&self, package: &crate::skills::SkillPackage) -> bool {
+        !package.disable_model_invocation()
+            && match self {
+                Self::All => package.enabled_by_default(),
+                Self::Exact(names) => names.iter().any(|name| name == package.name()),
+            }
+    }
+
     #[must_use]
     pub fn names(&self) -> &[String] {
         match self {
@@ -270,7 +278,13 @@ fn select_skills(
             }
         }
         AgentSkillSelection::All => {
-            skills.extend(eligible.iter().map(|entry| entry.name.clone()));
+            skills.extend(
+                catalog
+                    .packages()
+                    .iter()
+                    .filter(|package| selection.selects_package(package))
+                    .map(|package| package.name().to_owned()),
+            );
         }
     }
     skills

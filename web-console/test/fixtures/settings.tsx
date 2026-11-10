@@ -169,7 +169,7 @@ server.handlers.set('skills/list', request => {
   return { type: 'skills', page: { data: [{
     catalog: { name: 'review', description: 'Review changes and report findings.', location: '/workspace/.agents/skills/review/SKILL.md' },
     provenance: { name: 'review', source: request.params.target.kind, location: '/workspace/.agents/skills/review/SKILL.md', shadowed: [] },
-    metadata_revision: 'review-1', disable_model_invocation: false,
+    metadata_revision: 'review-1', disable_model_invocation: false, enabled_by_default: true,
   }], diagnostics: [], diagnostics_truncated: false, revision: 'skills-1' } };
 });
 server.handlers.set('session/effectiveConfiguration', () => ({ type: 'effective_configuration', projection: {revision:'fixture',inline:effective,fields:[],collections:[]} }));

@@ -22,10 +22,11 @@ export function cfg3Client(handler?: (operation: Request1, source: SourceSetting
             provenance: {name: row.name, source: row.location.scope, location: row.location.path, shadowed: []},
             metadata_revision: 'skill-1',
             disable_model_invocation: false,
+            enabled_by_default: true,
         }));
         return {type: 'skills', page: {data, revision: 'skills-1', diagnostics: [], diagnostics_truncated: false, next_offset: null}} as never;
     }
-    if(operation.method==='skills/read')return {type:'skill_content',content:{skill:{catalog:{name:operation.params.name,description:'Skill '+operation.params.name,location:'/skills/'+operation.params.name+'/SKILL.md'},provenance:{name:operation.params.name,source:'user',location:'/skills/'+operation.params.name+'/SKILL.md',shadowed:[]},metadata_revision:'skill-1',disable_model_invocation:false},revision:'skill-1',kind:operation.params.kind,data_base64:Buffer.from('Instructions for '+operation.params.name).toString('base64'),next_offset:null}} as never;
+    if(operation.method==='skills/read')return {type:'skill_content',content:{skill:{catalog:{name:operation.params.name,description:'Skill '+operation.params.name,location:'/skills/'+operation.params.name+'/SKILL.md'},provenance:{name:operation.params.name,source:'user',location:'/skills/'+operation.params.name+'/SKILL.md',shadowed:[]},metadata_revision:'skill-1',disable_model_invocation:false,enabled_by_default:true},revision:'skill-1',kind:operation.params.kind,data_base64:Buffer.from('Instructions for '+operation.params.name).toString('base64'),next_offset:null}} as never;
     if (operation.method === 'model/probe') return { type: 'model_probe', outcome: 'connected' } as never;
     if (operation.method === 'mcp/probe') return {type:'mcp_probe',result:{id:operation.params.id,revision:operation.params.expected_revision,outcome:'reachable'}} as never; if (operation.method === 'session/configuration')
     return { type: 'session_configuration', projection:(applicationReceipt((source.application ?? null))) } as never; if (operation.method === 'session/effectiveConfiguration')

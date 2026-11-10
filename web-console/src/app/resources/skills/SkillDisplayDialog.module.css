@@ -56,3 +56,4 @@
 .assetPaths summary { padding: 0; cursor: pointer; color: var(--dsw-alias-label-secondary); }
 .pathFields { display: grid; gap: 8px; margin-top: 8px; }
 .form .error { margin: 0; overflow-wrap: anywhere; color: var(--dsw-alias-state-error-primary); }
+.danger { background: var(--dsw-alias-state-error-primary) !important; color: #fff !important; }

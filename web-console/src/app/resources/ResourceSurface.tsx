@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
-import type { SkillDescriptor, SourceScope, SourceSettings } from '../../../../protocol/app-server/v77';
+import type { SkillDescriptor, SourceMutation, SourceScope, SourceSettings } from '../../../../protocol/app-server/v77';
 import { bindResourceTransfer } from '../../workspaces/resource-transfer';
 import type { AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
@@ -78,6 +78,7 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const [view, setView] = useState<CatalogView>('cards');
   const [detailScope, setDetailScope] = useState<SourceScope>();
   const [transferIntent, setTransferIntent] = useState<TransferIntent>();
+  const [skillCatalogRefresh, setSkillCatalogRefresh] = useState(0);
   const [mcpFocus, setMcpFocus] = useState<McpFocus>();
   const mcpDrafts = useRef(new Map<string, { draft: McpEditorDraft; hostOwner?: string }>());
   const [resourceFocus, setResourceFocus] = useState<string>();
@@ -162,21 +163,20 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
   const editorConfig = configAuthoring(editorSource, editorTarget.kind);
   const refresh = () => {
     actor.send({ type: 'REFRESH' });
+    if (module === 'skills') setSkillCatalogRefresh(value => value + 1);
     if (showingWorkspace && module !== 'skills') globalActor.send({ type: 'REFRESH' });
   };
-  const bindSkillDisplayWrite = (skill: SkillDescriptor): SkillDisplayWriter | undefined => {
-    const expected_revision = skill.display?.revision;
+  const bindSkillWrite = (skill: SkillDescriptor, expected_revision?: string) => {
     if (!expected_revision || !editable) return;
     const { endpoint, authorityRevision } = client.getSnapshot();
     const hostAuthority = authority.capture();
-    return async (authored, upload) => {
+    return async (mutation: SourceMutation) => {
       const current = () => {
         const snapshot = client.getSnapshot();
         return snapshot.endpoint === endpoint && snapshot.authorityRevision === authorityRevision && snapshot.connection === 'connected';
       };
       const unavailable = () => new Error(tx('resources:scope.unavailable'));
       if (!current()) throw unavailable();
-      const mutation = { kind: 'skill_display' as const, name: skill.catalog.name, authored, upload };
       if (skill.provenance.source === 'user') {
         await client.request({ method: 'configuration/sourceWrite', params: { target: { kind: 'user' }, expected_revision, mutation } },
           'sources_written', undefined, current);
@@ -190,22 +190,30 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
       if (result.kind !== 'write') throw unavailable();
     };
   };
+  const bindSkillDisplayWrite = (skill: SkillDescriptor): SkillDisplayWriter | undefined => {
+    const write = bindSkillWrite(skill, skill.display?.revision ?? undefined);
+    if (write) return (authored, upload) => write({ kind: 'skill_display', name: skill.catalog.name, authored, upload });
+  };
+  const bindSkillDelete = (skill: SkillDescriptor) => {
+    const write = bindSkillWrite(skill, skill.operation_revision ?? undefined);
+    if (write) return () => write({ kind: 'skill_delete', name: skill.catalog.name });
+  };
   const resourceNames = (shown: SourceSettings | undefined, owner: SourceScope) => module === 'subagents'
     ? shown?.agents.filter(agent => agent.scope === owner).map(agent => agent.name) ?? []
     : Object.keys((owner === 'user' ? shown?.user_mcp : shown?.workspace_mcp)?.authored ?? {});
-  const startTransfer = (from: SourceScope, name: string, revision: string, operation: TransferIntent['operation']) => {
-    if (!showingWorkspace || !workspace || !directory || !editable || !globalEditable) return;
+  const startTransfer = (from: SourceScope, name: string, revision: string, operation: TransferIntent['operation'], skillNames?: ReadonlySet<string>) => {
+    if (!showingWorkspace || !workspace || !directory || !editable || (module !== 'skills' && !globalEditable)) return;
     const destination = from === 'user' ? resourceNames(source, 'workspace') : resourceNames(globalSource, 'user');
     const names = from === 'user' ? resourceNames(globalSource, 'user') : resourceNames(source, 'workspace');
     setTransferIntent({
-      from, name, revision, operation, family: module === 'subagents' ? 'agent' : 'mcp', directory,
+      from, name, revision, operation, family: module === 'skills' ? 'skill' : module === 'subagents' ? 'agent' : 'mcp', directory,
       destinationLabel: from === 'user' ? workspace.displayName : tx('resources:scope.global'),
-      taken: new Set([...names.filter(id => id !== name), ...destination]),
+      taken: skillNames ?? new Set([...names.filter(id => id !== name), ...destination]),
       transfer: bindResourceTransfer(client, () => host, authority.capture(), workspace.id),
     });
   };
   const transfer = showingWorkspace && workspace ? startTransfer : undefined;
-  const transferDisabled = !directory || !editable || !globalEditable || busy || !host.configureWorkspace;
+  const transferDisabled = !directory || !editable || (module !== 'skills' && !globalEditable) || busy || !host.configureWorkspace;
   const renderResources = (shown: SourceSettings, owner: SourceScope, inherited = false) => {
     const config = configAuthoring(shown, owner);
     const revision = config.state === 'structured' ? config.revision : undefined;
@@ -295,7 +303,8 @@ function ResourcePage({ module, visible, client, host, authority, associations, 
             {!source ? <p className={catalogCss.state} role="status">{tx('resources:loading')}</p> : <SettingsActorContext value={actor}><SourceContext value={source}>
               <fieldset className={css.editor} disabled={!editable} key={lifetime}>
                 {module === 'skills' ? <ResourceBrowser client={client} source={source} scope={scope} revision={revision}
-                  query={query} view={view} focus={resourceFocus} onFocus={setResourceFocus} bindDisplayWrite={bindSkillDisplayWrite} /> : renderResources(source, scope)}
+                  query={query} view={view} refresh={skillCatalogRefresh} onRefresh={refresh} workspaceLabel={workspace?.displayName}
+                  bindDisplayWrite={bindSkillDisplayWrite} bindDelete={bindSkillDelete} onTransfer={transfer} transferDisabled={transferDisabled} /> : renderResources(source, scope)}
               </fieldset>
             </SourceContext></SettingsActorContext>}
           </>}

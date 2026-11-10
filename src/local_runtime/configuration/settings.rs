@@ -373,6 +373,9 @@ pub enum SourceMutation<D = Box<crate::workflow_file::WorkflowFileDocument>> {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         upload: Option<super::super::skill_management::SkillIconUpload>,
     },
+    SkillDelete {
+        name: String,
+    },
     /// Copy or move a resource between User and the addressed Workspace.
     /// The expected revision belongs to the source resource document.
     ResourceTransfer {
@@ -1403,6 +1406,9 @@ impl UserConfigManager {
                     upload.as_ref(),
                 );
             }
+            SourceMutation::SkillDelete { name } => {
+                return self.delete_skill(target, name, expected);
+            }
             SourceMutation::ResourceTransfer {
                 from,
                 operation,
@@ -1532,7 +1538,9 @@ impl UserConfigManager {
                         scope,
                     )?
                 }
-                SourceMutation::ResourceTransfer { .. } | SourceMutation::SkillDisplay { .. } => {
+                SourceMutation::ResourceTransfer { .. }
+                | SourceMutation::SkillDisplay { .. }
+                | SourceMutation::SkillDelete { .. } => {
                     unreachable!()
                 }
             };

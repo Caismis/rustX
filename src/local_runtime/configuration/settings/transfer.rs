@@ -33,6 +33,10 @@ pub enum ResourceTransfer {
         source: McpServerId,
         destination: McpServerId,
     },
+    Skill {
+        source: String,
+        destination: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -68,6 +72,7 @@ impl ResourceTransfer {
                 .join("agents")
                 .join(format!("{}.toml", if destination { id } else { source })),
             Self::Mcp { .. } => manager.resource_root(target).join("mcp.toml"),
+            Self::Skill { .. } => unreachable!(),
         }
     }
 
@@ -82,6 +87,10 @@ impl ResourceTransfer {
                 destination,
             } => source == destination,
             Self::Mcp {
+                source,
+                destination,
+            } => source == destination,
+            Self::Skill {
                 source,
                 destination,
             } => source == destination,
@@ -110,6 +119,7 @@ impl ResourceTransfer {
                         SourceToolSelection::Exact(names) => !names.is_empty(),
                     })
             }
+            Self::Skill { .. } => unreachable!(),
         }
     }
 
@@ -183,6 +193,7 @@ impl ResourceTransfer {
                     encode(&target)?,
                 ));
             }
+            Self::Skill { .. } => unreachable!(),
         }
         if destination.is_some() {
             return Err(SettingsError::TransferRejected(
@@ -248,6 +259,20 @@ impl UserConfigManager {
         } else {
             (workspace, user)
         };
+        if let ResourceTransfer::Skill {
+            source,
+            destination,
+        } = resource
+        {
+            return self.transfer_skill(
+                source_target,
+                destination_target,
+                operation,
+                source,
+                destination,
+                expected,
+            );
+        }
         let capacity = match resource {
             ResourceTransfer::Workflow { destination, .. } => Some((
                 workflow_authoring::Capacity::lock(self, destination_target)?,

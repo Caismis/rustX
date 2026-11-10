@@ -28,11 +28,13 @@ export function transferActions(tx: ReturnType<typeof useTranslation>, from: Sou
   ];
 }
 
-function copyName(name: string, taken: ReadonlySet<string>, bounded: boolean) {
+function copyName(name: string, taken: ReadonlySet<string>, family: TransferIntent['family']) {
+  const base = family === 'skill' ? name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'skill' : name;
   let index = 1;
   while (true) {
     const suffix = index === 1 ? '-copy' : `-copy-${index}`;
-    const candidate = (bounded ? name.slice(0, 64 - suffix.length) : name) + suffix;
+    const prefix = family === 'mcp' ? base : base.slice(0, 64 - suffix.length);
+    const candidate = (family === 'skill' ? prefix.replace(/-$/, '') : prefix) + suffix;
     if (!taken.has(candidate)) return candidate;
     index += 1;
   }
@@ -41,15 +43,17 @@ function copyName(name: string, taken: ReadonlySet<string>, bounded: boolean) {
 export function TransferDialog({ intent, close, refresh }: { intent: TransferIntent; close: () => void; refresh: () => void }) {
   const tx = useTranslation();
   const moving = intent.operation === 'move';
-  const [name, setName] = useState(() => moving ? intent.name : copyName(intent.name, intent.taken, intent.family !== 'mcp'));
+  const [name, setName] = useState(() => moving ? intent.name : copyName(intent.name, intent.taken, intent.family));
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [reopen, setReopen] = useState(false);
   const submitting = useRef(false);
   const input = useId();
   const destination = name.trim();
-  const invalid = !destination || (intent.family !== 'mcp' && (!/^[a-z][a-z0-9_-]{0,63}$/.test(destination) || intent.family === 'workflow' && destination === 'workflow_output'))
-    || intent.family === 'mcp' && destination.startsWith('python:');
+  const invalid = !destination || (intent.family === 'skill'
+    ? destination.length > 64 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(destination)
+    : intent.family === 'mcp' ? destination.startsWith('python:')
+      : !/^[a-z][a-z0-9_-]{0,63}$/.test(destination) || intent.family === 'workflow' && destination === 'workflow_output');
   const taken = intent.taken.has(destination) || !moving && destination === intent.name;
   const submit = async () => {
     if (submitting.current || reopen || invalid || taken) return;
@@ -93,7 +97,9 @@ export function TransferDialog({ intent, close, refresh }: { intent: TransferInt
     <form className={css.settings} onSubmit={event => { event.preventDefault(); void submit(); }}>
       <label htmlFor={input}>{tx('resources:transfer.destination-name')}</label>
       <input id={input} value={name} autoFocus spellCheck={false} disabled={busy || reopen}
-        aria-invalid={invalid || taken} onChange={event => { setName(event.target.value); setFailure(undefined); }} />
+        aria-invalid={invalid || taken} aria-describedby={intent.family === 'skill' ? `${input}-hint` : undefined}
+        onChange={event => { setName(event.target.value); setFailure(undefined); }} />
+      {intent.family === 'skill' && <small id={`${input}-hint`}>{tx('resources:skills.transfer-name-hint')}</small>}
       {(taken || failure) && <p role="alert">{taken ? tx('resources:transfer.name_taken') : failure}</p>}
     </form>
   </Modal>;

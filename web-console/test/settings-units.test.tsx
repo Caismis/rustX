@@ -214,8 +214,8 @@ it('authors general Model Profiles as complete presets, moving model parameters 
 it.each(['all', 'none', 'exact'] as const)('changes one Skill from native %s membership without changing the others', async mode => {
  const source=workspaceSource();
  source.workspace!.authored={agent:{skills:mode==='all'?'all':mode==='none'?[]:['existing']}};
- source.prospective_resources={definitions:[{family:'skill',name:'review',valid:true,location:{scope:'workspace',path:'/review'}},{family:'skill',name:'existing',valid:true,location:{scope:'workspace',path:'/existing'}}]} as never;
- const {writes}=await renderEditor(<ResourceAvailability source={source} scope="workspace" revision="s1" family="skill" name="review" valid={true}/>,{source,context:source});
+ const {writes}=await renderEditor(<ResourceAvailability source={source} scope="workspace" revision="s1" family="skill" name="review" valid={true}
+  skillNames={['review','existing']} skillEnabledByDefault/>,{source,context:source});
  fireEvent.click(screen.getByRole('switch'));
  await waitFor(()=>expect(writes).toHaveBeenCalledWith({kind:'config',mutation:{unit:'skills',authored:mode==='all'?['existing']:mode==='none'?['review']:['existing','review']}},'s1'));
 });
