@@ -11,6 +11,62 @@ use std::sync::Arc;
 
 const ARC_HEADER: usize = 2 * size_of::<usize>();
 
+fn event_variant(event: &RuntimeClientEvent) -> &'static str {
+    match event {
+        RuntimeClientEvent::ProjectionTransition { .. } => "variant_ProjectionTransition",
+        RuntimeClientEvent::CheckpointAdvanced { .. } => "variant_CheckpointAdvanced",
+        RuntimeClientEvent::BlockContentAdvanced { .. } => "variant_BlockContentAdvanced",
+        RuntimeClientEvent::ReadDomainsUpdated { .. } => "variant_ReadDomainsUpdated",
+        RuntimeClientEvent::TraceChanged => "variant_TraceChanged",
+        RuntimeClientEvent::GoalChanged { .. } => "variant_GoalChanged",
+        RuntimeClientEvent::WorkflowsUpdated { .. } => "variant_WorkflowsUpdated",
+        RuntimeClientEvent::AttemptStarted { .. } => "variant_AttemptStarted",
+        RuntimeClientEvent::AttemptSettled { .. } => "variant_AttemptSettled",
+        RuntimeClientEvent::AttemptTurnUpdated { .. } => "variant_AttemptTurnUpdated",
+        RuntimeClientEvent::AttemptUsageUpdated { .. } => "variant_AttemptUsageUpdated",
+        RuntimeClientEvent::PendingHeadChanged { .. } => "variant_PendingHeadChanged",
+        RuntimeClientEvent::InteractionPending { .. } => "variant_InteractionPending",
+        RuntimeClientEvent::InteractionSettled { .. } => "variant_InteractionSettled",
+        RuntimeClientEvent::InteractionRemoved { .. } => "variant_InteractionRemoved",
+        RuntimeClientEvent::InteractionAuditRequested { .. } => "variant_InteractionAuditRequested",
+        RuntimeClientEvent::InteractionAuditSettled { .. } => "variant_InteractionAuditSettled",
+        RuntimeClientEvent::ConfigurationApplied { .. } => "variant_ConfigurationApplied",
+        RuntimeClientEvent::ContextCompactionStarted { .. } => "variant_ContextCompactionStarted",
+        RuntimeClientEvent::ContextCompactionFailed { .. } => "variant_ContextCompactionFailed",
+        RuntimeClientEvent::ContextCompacted { .. } => "variant_ContextCompacted",
+        RuntimeClientEvent::AssistantMessageStarted { .. } => "variant_AssistantMessageStarted",
+        RuntimeClientEvent::ToolCallStarted { .. } => "variant_ToolCallStarted",
+        RuntimeClientEvent::ToolCallAssembled { .. } => "variant_ToolCallAssembled",
+        RuntimeClientEvent::AssistantPublicationSettled { .. } => {
+            "variant_AssistantPublicationSettled"
+        }
+        RuntimeClientEvent::AssistantPublicationDeferredSettled { .. } => {
+            "variant_AssistantPublicationDeferredSettled"
+        }
+        RuntimeClientEvent::ToolOccurrenceRebound { .. } => "variant_ToolOccurrenceRebound",
+        RuntimeClientEvent::ToolResultCommitted { .. } => "variant_ToolResultCommitted",
+        RuntimeClientEvent::ToolExecutionStarted { .. } => "variant_ToolExecutionStarted",
+        RuntimeClientEvent::ToolExecutionProgress { .. } => "variant_ToolExecutionProgress",
+        RuntimeClientEvent::ToolExecutionSettled { .. } => "variant_ToolExecutionSettled",
+        RuntimeClientEvent::MessageDescriptorCommitted { .. } => {
+            "variant_MessageDescriptorCommitted"
+        }
+        RuntimeClientEvent::MessageCommitted { .. } => "variant_MessageCommitted",
+        RuntimeClientEvent::AgentStatusComposed { .. } => "variant_AgentStatusComposed",
+        RuntimeClientEvent::PendingInboundChanged { .. } => "variant_PendingInboundChanged",
+        RuntimeClientEvent::InboundEnqueued { .. } => "variant_InboundEnqueued",
+        RuntimeClientEvent::InboundDrained { .. } => "variant_InboundDrained",
+        RuntimeClientEvent::CollectionChanged { .. } => "variant_CollectionChanged",
+        RuntimeClientEvent::JobUpdated { .. } => "variant_JobUpdated",
+        RuntimeClientEvent::AgentUpdated { .. } => "variant_AgentUpdated",
+        RuntimeClientEvent::CapabilityUpdated { .. } => "variant_CapabilityUpdated",
+        RuntimeClientEvent::ResourceGenerationUpdated { .. } => "variant_ResourceGenerationUpdated",
+        RuntimeClientEvent::SessionModelChanged { .. } => "variant_SessionModelChanged",
+        RuntimeClientEvent::RuntimeShutdown => "variant_RuntimeShutdown",
+        RuntimeClientEvent::RuntimeDurabilityFailed { .. } => "variant_RuntimeDurabilityFailed",
+    }
+}
+
 #[derive(Default, Serialize)]
 struct Allocation {
     owners: usize,
@@ -211,8 +267,26 @@ impl Census {
             self.plain_frontiers(&page.collections);
         }
     }
+    fn status(&mut self, value: &crate::observation::status::AgentStatusView) {
+        self.count("status_references", 1);
+        // Inline rows are charged by their containing Vec or event envelope.
+        // Count their actual owned buffers separately, without a second debit.
+        if !self.owner("status_values", std::ptr::from_ref(value) as usize, 0) {
+            return;
+        }
+        self.vector("status_section_vectors", &value.sections);
+        if value.rendered.capacity() > 0 {
+            self.owner(
+                "status_rendered_strings",
+                value.rendered.as_ptr() as usize,
+                value.rendered.capacity(),
+            );
+        }
+        self.domain("individual_status_values", value);
+    }
     fn event(&mut self, event: &RuntimeClientEvent) {
         self.count("event_values", 1);
+        self.count(event_variant(event), 1);
         match event {
             RuntimeClientEvent::ProjectionTransition { events, metadata } => {
                 self.vector("nested_event_vectors", events);
@@ -239,6 +313,10 @@ impl Census {
                     self.descriptor(row);
                 }
                 self.transcript(&snapshot.transcript);
+                self.vector("checkpoint_status_vectors", &snapshot.statuses);
+                for status in &snapshot.statuses {
+                    self.status(status);
+                }
                 self.domain("checkpoint_messages", &snapshot.messages);
                 self.domain("checkpoint_model", &snapshot.model);
                 self.domain("checkpoint_capabilities", &snapshot.capabilities);
@@ -265,6 +343,7 @@ impl Census {
                     kind.capacity() + inline_delta.as_ref().map_or(0, String::capacity),
                 );
             }
+            RuntimeClientEvent::AgentStatusComposed { status, .. } => self.status(status),
             _ => self.count("other_event_values", 1),
         }
     }
@@ -290,7 +369,7 @@ impl RuntimeClientProjection {
             .map(|value| value.known_requested_bytes)
             .sum::<usize>()
             .into();
-        output["scope"] = "Replay-reachable unique Arc/Vec/Box owners, metadata paths and shallow rows. Excludes persistent-map nodes, nested row/tool/model payloads, IDs, prepared caches, working/current seeds, allocator rounding and SQLite. Domain serde bytes are logical repetition, not heap bytes.".into();
+        output["scope"] = "Replay-reachable unique Arc/Vec/Box owners, metadata paths and shallow rows, including status row vectors, section vectors and rendered strings. Excludes nested status-section bodies, persistent-map nodes, other nested row/tool/model payloads, IDs, prepared caches, working/current seeds, allocator rounding and SQLite. Inline status rows are charged only through their containing vector or event. Domain serde bytes are logical repetition, not heap bytes.".into();
         output
     }
 }
@@ -355,5 +434,37 @@ mod tests {
         assert_eq!(census.logical_domains["field"].instances, 2);
         assert_eq!(census.logical_domains["field"].unique_values, 1);
         assert!(census.allocations.is_empty());
+    }
+
+    #[test]
+    fn equal_owned_status_rows_are_counted_without_double_charging_inline_storage() {
+        let view = crate::observation::status::AgentStatusView {
+            attempt_id: crate::runtime::identity::AttemptId::new("status-owner-attempt"),
+            turn: 1,
+            status_message_id: None,
+            source_locator: None,
+            request_id: None,
+            rendered_ref: None,
+            opportunities: crate::observation::status::AgentStatusOpportunityView {
+                fresh_inbound: None,
+                post_tool_batch: None,
+            },
+            sections: Vec::new(),
+            rendered: "status body".into(),
+        };
+        let rows = vec![view.clone(), view];
+        let mut census = Census::default();
+        census.vector("checkpoint_status_vectors", &rows);
+        census.status(&rows[0]);
+        census.status(&rows[0]);
+        census.status(&rows[1]);
+        assert_eq!(census.allocations["status_values"].owners, 2);
+        assert_eq!(census.allocations["status_values"].known_requested_bytes, 0);
+        assert_eq!(census.allocations["status_rendered_strings"].owners, 2);
+        assert_eq!(
+            census.logical_domains["individual_status_values"].unique_values,
+            1
+        );
+        assert_eq!(census.counts["status_references"], 3);
     }
 }
