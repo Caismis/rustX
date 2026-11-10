@@ -759,7 +759,7 @@ pub struct TranscriptSnapshotCut {
 #[allow(clippy::missing_errors_doc)]
 pub trait CanonicalStore: Send + Sync + 'static {
     /// Resolve the exact canonical result's committing Assistant/Attempt from
-    /// primary canonical and Journal evidence, without decoding its body.
+    /// primary canonical and Journal evidence, validating the native result.
     fn recovery_tool_result_owner(
         &self,
         message: &MessageId,
