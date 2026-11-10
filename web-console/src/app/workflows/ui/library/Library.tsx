@@ -4,14 +4,15 @@ import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
 import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/v77';
 import { useTranslation } from '../../../../locale/react';
-import { CatalogSearch, CatalogViewSwitch } from '../../../../presentation/catalog/CatalogControls';
+import { CardMenu } from '../../../../presentation/catalog/CardMenu';
+import { TransferDialog, transferActions, type TransferIntent } from '../../../resources/shared/ResourceTransfer';
+import { CatalogSearch, CatalogViewSwitch, type CatalogView } from '../../../../presentation/catalog/CatalogControls';
 import css from '../../../../presentation/catalog/Catalog.module.css';
 import { Button } from '../../../../presentation/primitives/Button';
-import { Menu } from '../../../../presentation/primitives/Menu';
 import { Switch } from '../../../../presentation/primitives/Switch';
-import { IconChevronDownOutline14, IconCopyOutline16, IconEditOutline16, IconEllipsisOutline16, IconPlusOutline16, IconSearchOutline16, IconTrashOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
+import { IconChevronDownOutline14, IconCopyOutline16, IconEditOutline16, IconPlusOutline16, IconSearchOutline16, IconTrashOutline16, IconWarningOutline16 } from '../../../../presentation/primitives/icons';
 import type { WorkspaceAuthority } from '../../../../workspaces/authority';
-import type { LibraryOperation } from '../../machines/library';
+import type { LibraryOperation, WorkflowLibraryActor, WorkflowLibrarySnapshot } from '../../machines/library';
 import type { WorkflowSurfaceActor } from '../../machines/surface';
 import { USER_SCOPE, type WorkflowScope } from '../../port';
 import { IconFile, IconFolder } from '../icons';
@@ -32,14 +33,14 @@ function useModified() {
   }, [tx.language]);
 }
 
-/** Level 1: the Workflow files physically owned by one selected scope.
- * Registered Workspaces come from the Product Host catalog only; choosing
- * one changes this library, never a conversation or execution context. */
+/** The selected Workspace library and its independently authored Global section. */
 export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfaceActor; authority: WorkspaceAuthority }) {
   const tx = useTranslation();
   const library = useSelector(surface, snapshot => snapshot.context.library);
+  const globalLibrary = useSelector(surface, snapshot => snapshot.context.globalLibrary);
+  const globalState = useSelector(globalLibrary, snapshot => snapshot);
   const state = useSelector(library, snapshot => snapshot);
-  const { scope, observation, listFailure, operationFailure, confirmation } = state.context;
+  const { scope, observation } = state.context;
   const listing = observation?.listing;
   // While a read replaces the shown listing, nothing new starts from it.
   const settled = state.matches('ready');
@@ -72,20 +73,84 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   const [query, setQuery] = useState('');
   const [view, setView] = useState(readView);
   const chooseView = (next: 'cards' | 'list') => { setView(next); try { localStorage.setItem(VIEW, next); } catch { /* view preference only */ } };
-  const modified = useModified();
-  const operationName = (operation: LibraryOperation) => operation.kind === 'enable' ? tx(operation.enabled ? 'workflows:library.operation-enable' : 'workflows:library.operation-disable')
-    : tx(`workflows:library.${operation.kind === 'create' ? 'new' : operation.kind}`);
-
   const workspace = scope.kind === 'workspace' ? workspaces.find(row => row.id === scope.workspaceId) : undefined;
-  const labelOf = (shown: WorkflowScope) => shown.kind === 'user' ? tx('workflows:scope.global-files') : workspaces.find(row => row.id === shown.workspaceId)?.displayName ?? shown.workspaceId;
   const scopeLabel = scope.kind === 'user' ? tx('workflows:scope.global-files') : workspace?.displayName ?? '';
   const showingWorkspace = tab === 'workspace';
   const revoked = showingWorkspace && scope.kind === 'workspace' && !!catalog && !workspace;
-  const files = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const rows = listing?.files ?? [];
-    return needle ? rows.filter(file => [file.file_name, file.description ?? '', file.relative_path, file.display?.title ?? '', file.display?.description ?? ''].some(text => text.toLowerCase().includes(needle))) : rows;
-  }, [listing, query]);
+  useEffect(() => { if (showingWorkspace) globalLibrary.send({ type: 'ACTIVATE' }); }, [showingWorkspace, globalLibrary]);
+  const [transferIntent, setTransferIntent] = useState<TransferIntent>();
+  const transfer = observation?.port.transferResource;
+  const workspaceDirectory = listing?.target.kind === 'workspace' ? listing.target.directory : undefined;
+  const globalListing = globalState.context.observation?.listing;
+  const transferAvailable = showingWorkspace && workspace && transfer && workspaceDirectory;
+  const transferDisabled = !settled || !globalState.matches('ready') || !!listing?.diagnostic || !!globalListing?.diagnostic;
+  const startTransfer = (from: WorkflowScope['kind'], file: WorkflowFileSummary, operation: TransferIntent['operation']) => {
+    if (!transferAvailable || !file.id || transferDisabled) return;
+    const [source, destination] = from === 'user' ? [globalListing, listing] : [listing, globalListing];
+    const ids = (rows: typeof listing) => rows?.files.flatMap(row => row.id ? [row.id] : []) ?? [];
+    setTransferIntent({
+      operation, family: 'workflow', from, name: file.id, revision: file.revision,
+      directory: workspaceDirectory, destinationLabel: from === 'user' ? workspace.displayName : tx('resources:scope.global'),
+      taken: new Set([...ids(source).filter(id => id !== file.id), ...ids(destination)]),
+      transfer,
+    });
+  };
+  const onTransfer = transferAvailable ? startTransfer : undefined;
+  const context = listing && !(showingWorkspace && !workspace) && <p className={css.context}>{scopeLabel}<span aria-hidden> · </span>{listing.files.length === 1 ? tx('workflows:library.count-one') : tx('workflows:library.count', { p0: listing.files.length })}</p>;
+
+  return <section className={css.library} aria-labelledby="workflows-title">
+    <header className={css.pageHead}>
+      <div><h1 id="workflows-title">{tx('workflows:library.title')}</h1><p className={css.muted}>{tx('workflows:library.subtitle')}</p></div>
+      <Button variant="primary" icon={<IconPlusOutline16 />} disabled={!settled || !listing || (showingWorkspace && (!workspace || revoked))}
+        onClick={() => library.send({ type: 'CONFIRM', kind: 'create' })}>{tx('workflows:library.new')}</Button>
+    </header>
+    <div className={css.tabs} role="tablist" aria-label={tx('workflows:library.scopes')}>
+      {(['workspace', 'global'] as const).map(name => <button key={name} type="button" role="tab" aria-selected={tab === name} className={clsx(css.tab, tab === name && css.tabActive)} onClick={() => chooseTab(name)}>
+        {tx(name === 'workspace' ? 'workflows:scope.workspace' : 'workflows:scope.global')}
+      </button>)}
+    </div>
+    <div className={clsx(css.controls, !showingWorkspace && css.globalControls)}>
+      {showingWorkspace && <div className={css.controlsLeft}>
+        <span className={css.subtle}>{tx('workflows:scope.choose-workspace')}</span>
+        <WorkspaceChooser workspaces={workspaces} selected={workspace?.id} onSelect={id => select({ kind: 'workspace', workspaceId: id })} />
+      </div>}
+      {!showingWorkspace && context}
+      <div className={css.controlsRight}>
+        <CatalogSearch label={tx('workflows:library.search')} value={query} onChange={setQuery} />
+        <CatalogViewSwitch view={view} onChange={chooseView} />
+      </div>
+    </div>
+    {showingWorkspace && context}
+    {showingWorkspace && catalog && !workspaces.length ? <p className={css.state}>{tx('workflows:library.no-workspaces')}</p>
+      : <WorkflowFiles library={library} state={state} scopeLabel={scopeLabel} query={query} view={view} revoked={revoked}
+        onTransfer={onTransfer} transferDisabled={transferDisabled} />}
+    {showingWorkspace && <section className={css.scopeGroup} aria-label={tx('resources:scope.inherited')}>
+      <h2 className={css.context}>{tx('resources:scope.inherited')}{globalListing && <> · {globalListing.files.length}</>}</h2>
+      <WorkflowFiles library={globalLibrary} state={globalState} scopeLabel={tx('workflows:scope.global-files')} query={query} view={view}
+        onTransfer={onTransfer} transferDisabled={transferDisabled} />
+    </section>}
+    {transferIntent && <TransferDialog intent={transferIntent} close={() => setTransferIntent(undefined)} refresh={() => {
+      library.send({ type: 'REFRESH' });
+      globalLibrary.send({ type: 'REFRESH' });
+    }} />}
+  </section>;
+}
+
+function WorkflowFiles({ library, state, scopeLabel, query, view, revoked, onTransfer, transferDisabled }: {
+  library: WorkflowLibraryActor; state: WorkflowLibrarySnapshot; scopeLabel: string; query: string; view: CatalogView; revoked?: boolean;
+  onTransfer?: (scope: WorkflowScope['kind'], file: WorkflowFileSummary, operation: TransferIntent['operation']) => void;
+  transferDisabled: boolean;
+}) {
+  const tx = useTranslation();
+  const { scope, observation, listFailure, operationFailure, confirmation } = state.context;
+  const listing = observation?.listing;
+  const settled = state.matches('ready');
+  const modified = useModified();
+  const operationName = (operation: LibraryOperation) => operation.kind === 'enable' ? tx(operation.enabled ? 'workflows:library.operation-enable' : 'workflows:library.operation-disable')
+    : tx(`workflows:library.${operation.kind === 'create' ? 'new' : operation.kind}`);
+  const needle = query.trim().toLowerCase();
+  const rows = listing?.files ?? [];
+  const files = needle ? rows.filter(file => [file.file_name, file.description ?? '', file.relative_path, file.display?.title ?? '', file.display?.description ?? ''].some(text => text.toLowerCase().includes(needle))) : rows;
   // The library machine binds a confirmation or an opened editor to the
   // accepted observation it starts from; the UI only names the file.
   const open = (file: WorkflowFileSummary) => library.send({ type: 'OPEN', file: file.file_name });
@@ -95,6 +160,7 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
   const actions = (file: WorkflowFileSummary) => [
     { id: 'edit', label: tx('workflows:library.edit'), icon: <IconEditOutline16 />, disabled: !settled || !file.id || !file.revision || unreadable(file) },
     { id: 'copy', label: tx('workflows:library.copy'), icon: <IconCopyOutline16 />, disabled: !settled || !file.id || !file.revision || unreadable(file) },
+    ...(onTransfer ? transferActions(tx, scope.kind, transferDisabled || !file.id || !file.revision || unreadable(file)) : []),
     { type: 'separator' as const, id: 'separator' },
     { id: 'delete', label: tx('workflows:library.delete'), icon: <IconTrashOutline16 />, danger: true, disabled: !settled || !file.id || !file.revision },
   ];
@@ -112,11 +178,11 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
     if (action === 'edit') confirm('edit', file);
     else if (action === 'copy') confirm('copy', file);
     else if (action === 'delete') confirm('delete', file);
+    else onTransfer?.(scope.kind, file, action === 'copy-scope' ? 'copy' : 'move');
   };
 
   let body;
-  if (showingWorkspace && catalog && !workspaces.length) body = <p className={css.state}>{tx('workflows:library.no-workspaces')}</p>;
-  else if (revoked || listFailure?.kind === 'unavailable') body = <div className={css.state} role="alert"><p>{tx('workflows:library.unavailable')}</p><Button variant="outline" size="sm" onClick={() => library.send({ type: 'REFRESH' })}>{tx('workflows:library.retry')}</Button></div>;
+  if (revoked || listFailure?.kind === 'unavailable') body = <div className={css.state} role="alert"><p>{tx('workflows:library.unavailable')}</p><Button variant="outline" size="sm" onClick={() => library.send({ type: 'REFRESH' })}>{tx('workflows:library.retry')}</Button></div>;
   else if (state.matches('failed') && listFailure) body = <div className={css.state} role="alert"><p>{tx('workflows:library.read-failed', { p0: listFailure.kind === 'failed' ? listFailure.message : listFailure.kind })}</p><Button variant="outline" size="sm" onClick={() => library.send({ type: 'REFRESH' })}>{tx('workflows:library.retry')}</Button></div>;
   else if (!listing) body = <p className={css.state} role="status">{tx('workflows:library.loading')}</p>;
   else if (listing.diagnostic) body = <p className={css.state} role="alert">{tx('workflows:library.directory-invalid', { p0: listing.diagnostic.reason })}</p>;
@@ -145,30 +211,7 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
     </tr>)}</tbody>
   </table>;
 
-  const context = listing && !(showingWorkspace && !workspace) && <p className={css.context}>{scopeLabel}<span aria-hidden> · </span>{listing.files.length === 1 ? tx('workflows:library.count-one') : tx('workflows:library.count', { p0: listing.files.length })}</p>;
-
-  return <section className={css.library} aria-labelledby="workflows-title">
-    <header className={css.pageHead}>
-      <div><h1 id="workflows-title">{tx('workflows:library.title')}</h1><p className={css.muted}>{tx('workflows:library.subtitle')}</p></div>
-      <Button variant="primary" icon={<IconPlusOutline16 />} disabled={!settled || !listing || (showingWorkspace && (!workspace || revoked))} onClick={() => confirm('create')}>{tx('workflows:library.new')}</Button>
-    </header>
-    <div className={css.tabs} role="tablist" aria-label={tx('workflows:library.scopes')}>
-      {(['workspace', 'global'] as const).map(name => <button key={name} type="button" role="tab" aria-selected={tab === name} className={clsx(css.tab, tab === name && css.tabActive)} onClick={() => chooseTab(name)}>
-        {tx(name === 'workspace' ? 'workflows:scope.workspace' : 'workflows:scope.global')}
-      </button>)}
-    </div>
-    <div className={clsx(css.controls, !showingWorkspace && css.globalControls)}>
-      {showingWorkspace && <div className={css.controlsLeft}>
-        <span className={css.subtle}>{tx('workflows:scope.choose-workspace')}</span>
-        <WorkspaceChooser workspaces={workspaces} selected={workspace?.id} onSelect={id => select({ kind: 'workspace', workspaceId: id })} />
-      </div>}
-      {!showingWorkspace && context}
-      <div className={css.controlsRight}>
-        <CatalogSearch label={tx('workflows:library.search')} value={query} onChange={setQuery} />
-        <CatalogViewSwitch view={view} onChange={chooseView} />
-      </div>
-    </div>
-    {showingWorkspace && context}
+  return <>
     {operationFailure && <div className={css.banner} role="alert">
       {operationFailure.failure.kind === 'uncertain'
         ? tx('workflows:library.operation-uncertain', { p0: operationName(operationFailure.operation) })
@@ -176,8 +219,8 @@ export function WorkflowLibrary({ surface, authority }: { surface: WorkflowSurfa
       {!confirmation && <Button size="sm" onClick={() => library.send({ type: 'DISMISS' })}>{tx('workflows:notice.dismiss')}</Button>}
     </div>}
     {body}
-    {confirmation && <LibraryDialog key={confirmation.seq} confirmation={confirmation} scopeLabel={labelOf(confirmation.observation.port.scope)} library={library} />}
-  </section>;
+    {confirmation && <LibraryDialog key={confirmation.seq} confirmation={confirmation} scopeLabel={scopeLabel} library={library} />}
+  </>;
 }
 
 /** A file the editor cannot open: unparseable, or not a Workflow at all.
@@ -200,12 +243,6 @@ function FileFacts({ file, compact }: { file: WorkflowFileSummary; compact?: boo
     </span>}
     {file.shadows_global && <span className={css.badge} title={tx('workflows:library.shadows-global-detail')}>{tx('workflows:library.shadows-global')}</span>}
   </p>;
-}
-
-function CardMenu({ label, items, onSelect }: { label: string; items: Parameters<typeof Menu>[0]['items']; onSelect: (id: string) => void }) {
-  const [open, setOpen] = useState(false);
-  return <Menu open={open} onClose={() => setOpen(false)} align="end" autoFocus items={items} onSelect={id => { setOpen(false); onSelect(id); }}
-    anchor={<button type="button" className={css.dots} aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)}><IconEllipsisOutline16 /></button>} />;
 }
 
 /** A searchable chooser over the Product Host's registered Workspaces. */

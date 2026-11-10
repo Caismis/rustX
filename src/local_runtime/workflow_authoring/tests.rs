@@ -2594,3 +2594,63 @@ fn issue527_incomplete_unused_tree_keeps_startup_and_settings_usable_with_comple
         "candidate membership includes invalid identities"
     );
 }
+
+#[test]
+fn cross_scope_transfer_rejects_enabled_names_and_keeps_source_until_destination_is_durable() {
+    use super::super::configuration::settings::{
+        ResourceTransfer, TransferOperation, TransferRejection,
+    };
+    use crate::runtime::resources::SourceScope;
+
+    let roots = Roots::new();
+    let user = SourceTarget::User;
+    let target = workspace(&roots.a);
+    let source = roots.create(&user, "original", "Original workflow");
+    let transfer = |operation, destination, expected| {
+        roots.manager.write_source_settings(
+            &target,
+            expected,
+            SourceMutation::ResourceTransfer {
+                from: SourceScope::User,
+                operation,
+                resource: ResourceTransfer::Workflow {
+                    source: id("original"),
+                    destination: id(destination),
+                },
+            },
+        )
+    };
+    std::fs::write(
+        roots.a.join("rustx.toml"),
+        "[agent]\nworkflows = ['already-enabled']\n",
+    )
+    .unwrap();
+    assert!(matches!(
+        transfer(TransferOperation::Copy, "already-enabled", &source),
+        Err(SettingsError::TransferRejected(
+            TransferRejection::NameEnabled
+        ))
+    ));
+    assert_eq!(roots.read(&target, "already-enabled").revision, "missing");
+
+    assert!(matches!(
+        transfer(TransferOperation::Copy, "copy", "stale"),
+        Err(SettingsError::Conflict { .. })
+    ));
+    assert_eq!(roots.read(&target, "copy").revision, "missing");
+
+    roots.manager.test_hooks.fail_once("directory_sync");
+    assert!(matches!(
+        transfer(TransferOperation::Move, "original", &source),
+        Err(SettingsError::Committed)
+    ));
+    assert_eq!(roots.read(&user, "original").revision, source);
+    assert_eq!(roots.read(&target, "original").revision, source);
+    assert!(matches!(
+        transfer(TransferOperation::Move, "original", &source),
+        Err(SettingsError::TransferRejected(
+            TransferRejection::NameTaken
+        ))
+    ));
+    assert_eq!(roots.read(&user, "original").revision, source);
+}

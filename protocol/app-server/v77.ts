@@ -2217,6 +2217,12 @@ export type SourceMutation =
       kind: 'agent';
     }
   | {
+      from: SourceScope;
+      operation: TransferOperation;
+      resource: ResourceTransfer;
+      kind: 'resource_transfer';
+    }
+  | {
       id: WorkflowId;
       edit: WorkflowEdit;
       kind: 'workflow';
@@ -2542,6 +2548,31 @@ export type ApprovalMode = 'policy' | 'full_access';
  * via the `definition` "NativeTool".
  */
 export type NativeTool = 'read' | 'write' | 'edit' | 'glob' | 'grep' | 'bash';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TransferOperation".
+ */
+export type TransferOperation = 'copy' | 'move';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ResourceTransfer".
+ */
+export type ResourceTransfer =
+  | {
+      source: WorkflowId;
+      destination: WorkflowId;
+      family: 'workflow';
+    }
+  | {
+      source: SubagentName;
+      destination: SubagentName;
+      family: 'agent';
+    }
+  | {
+      source: McpServerId;
+      destination: McpServerId;
+      family: 'mcp';
+    };
 /**
  * One whole-file Workflow mutation of the exact file the mutation names.
  *
@@ -6484,6 +6515,10 @@ export type ErrorData =
       kind: 'source_conflict';
     }
   | {
+      reason: TransferRejection;
+      kind: 'resource_transfer_rejected';
+    }
+  | {
       expected: string;
       actual: string;
       kind: 'stale_settings';
@@ -6577,6 +6612,12 @@ export type SessionArchivePrepareError =
   | 'corrupt_authority'
   | 'storage'
   | 'cancelled';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TransferRejection".
+ */
+export type TransferRejection =
+  'name_taken' | 'name_enabled' | 'protected_mcp_values' | 'same_directory';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "Notification".

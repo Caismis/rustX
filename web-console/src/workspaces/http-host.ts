@@ -109,7 +109,13 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     this.settledFileCall<import('../../shared/documents.ts').DocumentResult>('document', scope, request, signal);
   readDelivery = (scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal) =>
     this.settledFileCall<DeliveryBytes>('file', scope, read, signal);
-  configureWorkspace = (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => this.call<WorkspaceConfigurationResult>('configuration', { id, endpoint, operation });
+  configureWorkspace = async (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => {
+    try { return await this.call<WorkspaceConfigurationResult>('configuration', { id, endpoint, operation }); }
+    catch (cause) {
+      if (cause instanceof WorkspaceHostError || operation.kind !== 'transfer') throw cause;
+      throw new WorkspaceHostError('Resource transfer acknowledgement lost', undefined, true);
+    }
+  };
   workflowWorkspace = async (scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation) => {
     try { return await this.call<WorkflowHostResult>('workflow', { scope, native, id, operation }); }
     catch (cause) {

@@ -33,7 +33,7 @@ export function cfg3Client(handler?: (operation: Request1, source: SourceSetting
     return {type:'configuration_receipt',scope:(source.application ?? cfg3Application())?.scope??'configuration',version:(source.application ?? cfg3Application())?.version??'0'} as never; if (operation.method === 'configuration/sourceWrite') {
     source.application = cfg3Application();
     source[operation.params.target.kind]!.revision = 'saved-2';
-    return {type:'sources_written',revision:selectedRevision(source,revisionSelector(operation.params.mutation)),configuration_revision:'1'} as never;
+    return {type:'sources_written',revision:selectedRevision({ ...source, target: operation.params.target },revisionSelector(operation.params.mutation)),configuration_revision:'1'} as never;
 } if ('target' in (operation.params ?? {}) && operation.method.startsWith('configuration/'))
     source.target = (operation as Extract<Request1, {
         method: 'configuration/sourcesRead';

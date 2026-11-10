@@ -488,8 +488,21 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     } finally { await client.close(); }
   }
   async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult> {
-    return this.nativeLane(id, () => this.resolveExpectedDirectory(id, endpoint, operation.expected_directory), async (client, cwd, current) => {
+    const transfer = operation.kind === 'transfer' ? operation : undefined;
+    if (transfer && (typeof transfer.native !== 'string' || !transfer.native || !transfer.expected_directory
+      || typeof transfer.scope?.endpoint !== 'string' || !sameEndpoint(transfer.scope.endpoint, endpoint)
+      || transfer.mutation?.kind !== 'resource_transfer')) {
+      throw new WorkspaceHostError('Invalid resource transfer');
+    }
+    return this.nativeLane(id, () => {
+      if (transfer) this.mutationScope(transfer.scope);
+      return this.resolveExpectedDirectory(id, endpoint, operation.expected_directory);
+    }, async (client, cwd, current) => {
       const target = { kind: 'workspace' as const, directory: cwd };
+      if (operation.kind === 'transfer') {
+        await client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: operation.mutation }, 'sources_written');
+        return { kind: 'transfer' };
+      }
       const readSource = async () => {
         return readSourceSettings(async()=>(await client.call('configuration/sourcesRead', {target}, 'source_settings')).projection, async(reference,offset)=>(await client.call('configuration/sourceValueRead',{target,reference,offset,max_bytes:65536},'source_value_chunk')).chunk, ()=>true);
       };
@@ -509,6 +522,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         return { kind: 'mcp_probe', result };
       }
       if (operation.kind === 'write') {
+        if (operation.mutation.kind === 'resource_transfer') throw new WorkspaceHostError('Transfer requires Workspace authority');
         // The native write is the linearization point. Once it acknowledges,
         // the mutation is committed and nothing below may turn it into a
         // rejection; the authoritative reread is a separate, independent fact.
@@ -527,7 +541,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       const projection = await readSource();
       if (!await current()) throw new Error('Workspace authority changed');
       return { kind: operation.kind, projection };
-    });
+    }, transfer?.native);
   }
 
   private async resolveExpectedDirectory(id: string, endpoint: string, expected?: string) {

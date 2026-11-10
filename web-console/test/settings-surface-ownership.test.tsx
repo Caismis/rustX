@@ -584,7 +584,7 @@ it('S1-15 an explicit Workspace Provider override authors only that unit and nev
   expect(JSON.stringify(writes(s)[0][0])).not.toContain('models');
 });
 
-it('S1-15 an inherited MCP definition and named Agent are discoverable from the native inventory alone', async () => {
+it('S1-15 global MCP and named Agent cards are reachable from the Workspace and edit their authored scope', async () => {
   const s = cfg3Client();
   s.source.prospective_resources = {
     definitions: [
@@ -595,6 +595,9 @@ it('S1-15 an inherited MCP definition and named Agent are discoverable from the 
     resource_diagnostics: [], agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [],
   } as never;
   s.source.workspace_mcp!.authored = { local: { definition: { type: 'stdio', command: 'local-server' }, retained_env: [], retained_headers: [] } };
+  s.source.agents = [{ scope: 'user', name: 'reviewer', source: {
+    path: '/home/user/rustx/.agents/agents/reviewer.toml', revision: 'reviewer-1', authored: { description: 'Global reviewer' },
+  } }];
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'A')} host={cfg3Host(s)} />);
   await settingsReady();
   await openSettingsPage('Extensions');
@@ -604,16 +607,9 @@ it('S1-15 an inherited MCP definition and named Agent are discoverable from the 
   await openSettingsPage('Extensions');
   await openResourceModule('subagents');
   await openResourceRow('reviewer');
-  // The inherited profile is reported as inherited, from the native inventory
-  // alone: even without its User document projected it is not "new", so the
-  // Workspace editor is inert until an explicit override, which starts empty.
   const reviewer = within(screen.getByRole('form', { name: 'Agent reviewer' }));
-  expect(reviewer.getByText('Using global settings.')).toBeTruthy();
-  expect(screen.getByRole('form', { name: 'Agent reviewer' }).getAttribute('data-definition')).toBe('inherited');
-  expect((reviewer.getByLabelText('Description') as HTMLInputElement).value).toBe('');
-  expect((reviewer.getByLabelText('Description') as HTMLInputElement).matches(':disabled')).toBe(true);
-  expect(reviewer.queryByRole('button', { name: 'Save Agent reviewer' })).toBeNull();
-  expect(reviewer.getByRole('button', { name: 'Override Agent reviewer in this Workspace' })).toBeTruthy();
+  expect((reviewer.getByLabelText('Description') as HTMLInputElement).value).toBe('Global reviewer');
+  expect((reviewer.getByLabelText('Description') as HTMLInputElement).matches(':disabled')).toBe(false);
   expect(writes(s)).toHaveLength(0);
 });
 

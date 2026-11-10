@@ -446,11 +446,25 @@ const definitionState = (title: string) => definition(title).getAttribute('data-
 const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
 const disabled = (element: HTMLElement) => element.matches(':disabled');
 
+async function openWorkspaceDefinition(name: string, module: 'mcp' | 'subagents') {
+  await screen.findByRole('heading', { name: module === 'mcp' ? 'MCP servers' : 'Subagents' });
+  const ownGroup = screen.queryByRole('group', { name: module === 'mcp' ? 'Installed' : 'Custom subagents' });
+  const owned = ownGroup && within(ownGroup).queryByRole('listitem', { name });
+  if (owned) {
+    fireEvent.click(within(owned).getByRole('button', { name: module === 'mcp' ? `MCP ${name}` : name }));
+  } else {
+    const global = await screen.findByRole('group', { name: 'Available from Global' });
+    fireEvent.click(within(global).getByRole('button', { name: `Actions for ${name}` }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Override in Workspace' }));
+  }
+  if (module === 'mcp') openMcpContractEditor();
+}
+
 it('S2-07 an inherited MCP definition is inspected read-only; only Override begins a Workspace draft, and Save writes it once', async () => {
   const s = inheritingWorkspace();
   await workspace(s, 'Extensions');
   await openResourceModule('mcp');
-  await openResourceRow('search');
+  await openWorkspaceDefinition('search', 'mcp');
   // Inspecting: the inherited safe facts are shown, nothing is writable, no
   // Workspace draft exists and nothing is written.
   expect(definitionState('Edit MCP server')).toBe('inherited');
@@ -498,8 +512,7 @@ it('S2-07 an inherited MCP definition is inspected read-only; only Override begi
     } },
   });
   expect(JSON.stringify(writes(s))).not.toContain(INHERITED_SECRET);
-  await screen.findByRole('listitem',{name:'search'});
-  await openResourceRow('search');
+  await openWorkspaceDefinition('search', 'mcp');
   expect(definitionState('Edit MCP server')).toBe('authored');
   // The definition save did not submit the root selection on its behalf.
   expect(writes(s)).toHaveLength(1);
@@ -515,8 +528,7 @@ it('S2-07 an inherited MCP definition is inspected read-only; only Override begi
   await confirmAction('Use global default MCP search');
   await waitFor(() => expect(writes(s)).toHaveLength(3));
   expect(writes(s)[2].params).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'mcp', id: 'search', authored: null } });
-  await screen.findByRole('listitem',{name:'search'});
-  await openResourceRow('search');
+  await openWorkspaceDefinition('search', 'mcp');
   expect(definitionState('Edit MCP server')).toBe('inherited');
   expect(s.source.user_mcp!.authored!.search).toBeTruthy();
   expect(field('Command').value).toBe('search-server');
@@ -527,7 +539,7 @@ it('S2-07 discarding a Workspace MCP override writes nothing and returns to insp
   const s = inheritingWorkspace();
   await workspace(s, 'Extensions');
   await openResourceModule('mcp');
-  await openResourceRow('search');
+  await openWorkspaceDefinition('search', 'mcp');
   fireEvent.click(screen.getByRole('button', { name: 'Override' }));
   fireEvent.change(field('Command'), { target: { value: 'abandoned' } });
   fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
@@ -538,16 +550,16 @@ it('S2-07 discarding a Workspace MCP override writes nothing and returns to insp
   expect(writes(s)).toHaveLength(0);
 });
 
-async function reopenReviewer() {
-  await screen.findByRole('listitem', { name: 'reviewer' });
-  await openResourceRow('reviewer');
+async function reopenReviewer(scope: 'user' | 'workspace' = 'user') {
+  if (scope === 'workspace') await openWorkspaceDefinition('reviewer', 'subagents');
+  else await openResourceRow('reviewer');
 }
 
 it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Use global default are each one explicit Workspace mutation', async () => {
   const s = inheritingWorkspace();
   await workspace(s, 'Extensions');
   await openResourceModule('subagents');
-  await openResourceRow('reviewer');
+  await openWorkspaceDefinition('reviewer', 'subagents');
   expect(definitionState('Agent reviewer')).toBe('inherited');
   expect(field('Description').value).toBe('User reviewer');
   expect(disabled(field('Description'))).toBe(true);
@@ -563,7 +575,7 @@ it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Us
   expect(writes(s)).toHaveLength(0);
   fireEvent.change(field('Description'), { target: { value: 'Workspace reviewer' } });
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-  await openResourceRow('reviewer');
+  await openWorkspaceDefinition('reviewer', 'subagents');
   expect(field('Description').value).toBe('User reviewer');
   fireEvent.click(screen.getByRole('button', { name: 'Override Agent reviewer in this Workspace' }));
   fireEvent.change(field('Description'), { target: { value: 'Workspace reviewer' } });
@@ -574,7 +586,7 @@ it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Us
     target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'missing',
     mutation: { kind: 'agent', name: 'reviewer', authored: { description: 'Workspace reviewer', instructions: 'Review carefully.' } },
   });
-  await reopenReviewer();
+  await reopenReviewer('workspace');
   expect(definitionState('Agent reviewer')).toBe('authored');
   // The root delegation allowlist is a separate unit that nothing wrote.
   expect(writes(s).some(op => op.params.mutation.kind === 'config')).toBe(false);
@@ -583,7 +595,7 @@ it('S2-07 an inherited named Agent is inspected read-only; Override, Save and Us
   await confirmAction('Use global default Agent reviewer');
   await waitFor(() => expect(writes(s)).toHaveLength(2));
   expect(writes(s)[1].params).toMatchObject({ target: { kind: 'workspace', directory: '/workspace/A' }, mutation: { kind: 'agent', name: 'reviewer', authored: null } });
-  await reopenReviewer();
+  await reopenReviewer('workspace');
   expect(definitionState('Agent reviewer')).toBe('inherited');
   expect(s.source.agents.filter(agent => agent.scope === 'user').map(agent => agent.name)).toEqual(['reviewer']);
 });
@@ -656,7 +668,7 @@ function agentFiles(files: { user?: 'valid' | 'malformed'; workspace?: 'valid' |
 async function openReviewer(s: Subject, scope: 'user' | 'workspace') {
   await (scope === 'user' ? user : workspace)(s, 'Extensions');
   await openResourceModule('subagents');
-  await openResourceRow('reviewer');
+  await reopenReviewer(scope);
 }
 const authoredValue = (title: string) => definition(title).getAttribute('data-authored-value');
 const enabled = (name: string) => !(screen.getByRole('button', { name }) as HTMLButtonElement).disabled;
@@ -749,7 +761,7 @@ it('S2-07 a malformed Workspace named Agent is the Workspace definition shadowin
     target: { kind: 'workspace', directory: '/workspace/A' }, expected_revision: 'agent-workspace-bad',
     mutation: { kind: 'agent', name: 'reviewer', authored: { description: 'Workspace reviewer' } },
   });
-  await reopenReviewer();
+  await reopenReviewer('workspace');
   expect(authoredValue('Agent reviewer')).toBe('parsed');
   expect(screen.queryByText('Invalid definition')).toBeNull();
   expect(writes(s).filter(op => op.params.target.kind === 'user')).toHaveLength(0);
@@ -767,7 +779,7 @@ it('S2-07 using the global default in place of a malformed Workspace named Agent
   });
   // The authoritative reread shows the User definition in effect again,
   // inspected read-only, with no Workspace draft created by the transition.
-  await reopenReviewer();
+  await reopenReviewer('workspace');
   expect(definitionState('Agent reviewer')).toBe('inherited');
   expect(screen.getByText('Using global settings.')).toBeTruthy();
   expect(field('Description').value).toBe('User reviewer');

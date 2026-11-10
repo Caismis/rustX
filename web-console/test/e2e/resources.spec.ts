@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {startDogfood} from './dogfood-server';
 import {routeWorkspaceHost} from './workspace-host';
-import {confirmSettingsAction,connectRemote,newSubagent,openSettingsPage,returnHome} from './shell-actions';
+import {connectRemote,newSubagent,openResourceModule,openSettingsPage,returnHome} from './shell-actions';
 import {captureEvidence} from './screenshot';
 import {wireProbe} from './wire-probe';
 
@@ -268,22 +268,17 @@ for(const width of [1440,390]) test(`independent resources have exact global and
   await expect(inheritedServer.getByRole('switch')).toBeEnabled();
   await checkCatalogView(mcp, inheritedServer);
   await captureEvidence(mcp,`workspace-mcp-${width}`);
-  const globalMcp=readFileSync(join(userRoot,'mcp.toml'),'utf8');
+  const localDefinition = readFileSync(join(workspaceRoot, 'mcp.toml'), 'utf8');
   await inheritedServer.getByRole('button',{name:'MCP global-server',exact:true}).click();
-  await expect(mcp.getByLabel('Command',{exact:true})).toBeDisabled();
-  await expect(mcp.getByRole('button',{name:'Save',exact:true})).toBeDisabled();
-  await expect(mcp.getByRole('button',{name:'JSON',exact:true})).toBeDisabled();
-  await mcp.getByRole('button',{name:'Override',exact:true}).click();
-  await expect(mcp.getByLabel('Command',{exact:true})).toBeEnabled();
-  await mcp.getByRole('button',{name:'Save',exact:true}).click();
-  await expect(mcp.getByRole('listitem',{name:'global-server',exact:true})).toBeVisible();
-  expect(readFileSync(join(workspaceRoot,'mcp.toml'),'utf8')).toContain('[mcp_servers.global-server]');
-  expect(readFileSync(join(userRoot,'mcp.toml'),'utf8')).toBe(globalMcp);
-  await mcp.getByRole('button',{name:'MCP global-server',exact:true}).click();
-  await confirmSettingsAction(page,'Use global default MCP global-server');
-  await expect(mcp.getByRole('group',{name:'Available from Global',exact:true}).getByRole('listitem',{name:'global-server',exact:true})).toBeVisible();
-  expect(readFileSync(join(workspaceRoot,'mcp.toml'),'utf8')).not.toContain('[mcp_servers.global-server]');
-  expect(readFileSync(join(userRoot,'mcp.toml'),'utf8')).toBe(globalMcp);
+  const command = mcp.getByLabel('Command', { exact: true });
+  await expect(command).toBeEnabled();
+  await expect(command).toHaveValue('python3');
+  await expect(mcp.getByRole('button', { name: 'JSON', exact: true })).toBeEnabled();
+  await command.fill('/usr/bin/python3');
+  await mcp.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(inheritedServer).toBeVisible();
+  expect(readFileSync(join(userRoot, 'mcp.toml'), 'utf8')).toContain('command = "/usr/bin/python3"');
+  expect(readFileSync(join(workspaceRoot, 'mcp.toml'), 'utf8')).toBe(localDefinition);
   const accessibility=await new AxeBuilder({page}).include('[data-resource-module="mcp"]').withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();
   expect(accessibility.violations.filter(row=>['serious','critical'].includes(row.impact??'')).map(row=>row.id)).toEqual([]);
   // Returning to a module resumes its own scope, independently of Settings.
@@ -301,4 +296,116 @@ for(const width of [1440,390]) test(`independent resources have exact global and
  } catch(error) {
   await test.info().attach('native-diagnostics',{body:JSON.stringify(f.diagnostics()),contentType:'application/json'});throw error;
  } finally {await f.stop(false);}
+});
+
+test('Workspace cards edit Global resources and transfer definitions in both directions', async ({ page }) => {
+  const fixture = await startDogfood();
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  try {
+    const user = join(fixture.directory, 'home/rustx/.agents');
+    const local = join(fixture.workspaceA, '.agents');
+    for (const root of [user, local]) {
+      mkdirSync(join(root, 'workflows'), { recursive: true });
+      mkdirSync(join(root, 'agents'), { recursive: true });
+    }
+    const flow = JSON.stringify({
+      description: 'A portable workflow',
+      block: { input: { type: 'object', properties: {}, additionalProperties: false }, nodes: { start: { type: 'start' }, done: { type: 'return', outputs: [] } }, edges: [{ from: 'start', to: 'done' }] },
+    });
+    writeFileSync(join(user, 'workflows/shared-flow.yaml'), flow);
+    writeFileSync(join(local, 'workflows/local-flow.yaml'), flow);
+    writeFileSync(join(user, 'agents/shared-agent.toml'), 'description = "Global profile"\ninstructions = "Review changes."\n');
+    writeFileSync(join(local, 'agents/local-agent.toml'), 'description = "Workspace profile"\ninstructions = "Review changes."\n');
+    writeFileSync(join(user, 'mcp.toml'), '[mcp_servers.shared-mcp]\ntype = "http"\nurl = "http://127.0.0.1:9/mcp"\n');
+    writeFileSync(join(local, 'mcp.toml'), '[mcp_servers.local-mcp]\ntype = "http"\nurl = "http://127.0.0.1:9/mcp"\n');
+    writeFileSync(fixture.settings, readFileSync(fixture.settings, 'utf8') + '\n[agent]\nworkflows = ["shared-flow"]\nagents = ["shared-agent"]\n[agent.tools.sources]\nshared-mcp = "all"\n');
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await expect(page).toHaveTitle(/rustX/);
+
+    const transfer = async (card: Locator, action: string, name: string, operation: 'Copy' | 'Move') => {
+      await card.getByRole('button', { name: /^Actions for / }).click();
+      await page.getByRole('menuitem', { name: action, exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: `${operation} resource`, exact: true });
+      await dialog.getByLabel('Destination name').fill(name);
+      await dialog.getByRole('button', { name: operation, exact: true }).click();
+      await expect(dialog).toBeHidden();
+    };
+    await page.getByRole('button', { name: 'Workflows', exact: true }).click();
+    const workflows = page.locator('[data-workflows-level="library"]');
+    await expect(workflows.getByRole('tab', { name: 'Workspace', exact: true })).toHaveAttribute('aria-selected', 'true');
+    const globalFlows = workflows.getByRole('region', { name: 'Available from Global', exact: true });
+    const workflowCard = (scope: Locator, name: string) => scope.getByRole('listitem').filter({ has: page.getByRole('button', { name, exact: true }) });
+    const sharedFlow = workflowCard(globalFlows, 'shared-flow');
+    await expect(sharedFlow.getByRole('switch')).toBeChecked();
+    await sharedFlow.getByRole('button', { name: 'shared-flow', exact: true }).click();
+    await expect(page.getByRole('region', { name: 'Workflow canvas' })).toBeVisible();
+    await page.getByRole('button', { name: 'Back to Workflows', exact: true }).first().click();
+    const workflowMenu = sharedFlow.getByRole('button', { name: 'Actions for shared-flow.yaml', exact: true });
+    await workflowMenu.click();
+    await page.getByRole('menuitem', { name: 'Edit info', exact: true }).click();
+    const info = page.getByRole('dialog', { name: 'Edit Workflow info', exact: true });
+    await info.getByRole('textbox', { name: /^Name / }).fill('shared-flow');
+    await info.getByRole('textbox', { name: 'Description (optional)', exact: true }).fill('Updated Global workflow');
+    await info.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(sharedFlow).toContainText('Updated Global workflow');
+    const savedFlow = readFileSync(join(user, 'workflows/shared-flow.yaml'), 'utf8');
+    expect(savedFlow).toContain('Updated Global workflow');
+    await workflowMenu.click();
+    await expect(page.getByRole('menuitem', { name: 'Copy to Workspace', exact: true })).toBeEnabled();
+    await captureEvidence(page, 'workspace-global-workflows-menu');
+    await page.keyboard.press('Escape');
+    await transfer(sharedFlow, 'Copy to Workspace', 'shared-flow-copy', 'Copy');
+    const copiedFlow = workflows.getByRole('listitem').filter({ has: page.getByRole('button', { name: 'Actions for shared-flow-copy.yaml', exact: true }) });
+    await expect(copiedFlow.getByRole('switch')).not.toBeChecked();
+    expect(readFileSync(join(local, 'workflows/shared-flow-copy.yaml'), 'utf8')).toBe(savedFlow);
+    await transfer(workflowCard(workflows, 'local-flow'), 'Copy to Global', 'local-flow-copy', 'Copy');
+    await expect(workflowCard(globalFlows, 'local-flow-copy').getByRole('switch')).not.toBeChecked();
+    await transfer(workflowCard(workflows, 'local-flow'), 'Move to Global', 'local-flow', 'Move');
+    await expect(workflowCard(globalFlows, 'local-flow')).toBeVisible();
+    expect(existsSync(join(local, 'workflows/local-flow.yaml'))).toBe(false);
+
+    const agents = await openResourceModule(page, 'subagents', 'Workspace A');
+    const globalAgents = agents.getByRole('group', { name: 'Available from Global', exact: true });
+    const sharedAgent = globalAgents.getByRole('listitem', { name: 'shared-agent', exact: true });
+    await sharedAgent.getByRole('button', { name: 'shared-agent', exact: true }).click();
+    const editor = agents.getByRole('form', { name: 'Agent shared-agent', exact: true });
+    await editor.getByLabel('Description', { exact: true }).fill('Updated Global profile');
+    await editor.getByRole('button', { name: 'Save Agent shared-agent', exact: true }).click();
+    await expect(sharedAgent).toContainText('Updated Global profile');
+    expect(readFileSync(join(user, 'agents/shared-agent.toml'), 'utf8')).toContain('Updated Global profile');
+    await transfer(sharedAgent, 'Copy to Workspace', 'shared-agent-copy', 'Copy');
+    await expect(agents.getByRole('listitem', { name: 'shared-agent-copy', exact: true }).getByRole('switch')).not.toBeChecked();
+    await transfer(sharedAgent, 'Move to Workspace', 'shared-agent', 'Move');
+    await expect(globalAgents.getByRole('listitem', { name: 'shared-agent', exact: true })).toHaveCount(0);
+    expect(readFileSync(join(local, 'agents/shared-agent.toml'), 'utf8')).toContain('Updated Global profile');
+
+    const mcp = await openResourceModule(page, 'mcp', 'Workspace A');
+    const globalMcp = mcp.getByRole('group', { name: 'Available from Global', exact: true });
+    const sharedMcp = globalMcp.getByRole('listitem', { name: 'shared-mcp', exact: true });
+    await transfer(sharedMcp, 'Copy to Workspace', 'shared-mcp-copy', 'Copy');
+    await expect(mcp.getByRole('listitem', { name: 'shared-mcp-copy', exact: true }).getByRole('switch')).not.toBeChecked();
+    await transfer(mcp.getByRole('listitem', { name: 'local-mcp', exact: true }), 'Move to Global', 'local-mcp', 'Move');
+    await expect(globalMcp.getByRole('listitem', { name: 'local-mcp', exact: true })).toBeVisible();
+    expect(readFileSync(join(local, 'mcp.toml'), 'utf8')).not.toContain('[mcp_servers.local-mcp]');
+    expect(readFileSync(join(user, 'mcp.toml'), 'utf8')).toContain('[mcp_servers.local-mcp]');
+
+    await page.setViewportSize({ width: 390, height: 850 });
+    await sharedMcp.getByRole('button', { name: 'Actions for shared-mcp', exact: true }).click();
+    await expect(page.getByRole('menuitem', { name: 'Copy to Workspace', exact: true })).toBeVisible();
+    await captureEvidence(page, 'workspace-global-mcp-menu-mobile');
+    await page.getByRole('menuitem', { name: 'Copy to Workspace', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Copy resource', exact: true });
+    await expect(dialog.getByLabel('Destination name')).toHaveValue('shared-mcp-copy-2');
+    await dialog.getByLabel('Destination name').fill('shared-mcp-copy');
+    await expect(dialog.getByRole('button', { name: 'Copy', exact: true })).toBeDisabled();
+    await expect(dialog.getByRole('alert')).toContainText('already in use');
+    await captureEvidence(page, 'workspace-copy-conflict-mobile');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally { await fixture.stop(false); }
 });

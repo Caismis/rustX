@@ -785,9 +785,18 @@ impl SessionRuntimeManager {
         let owner = self.clone();
         let target = target.clone();
         tokio::task::spawn_blocking(move || {
-            use super::super::configuration::settings::{ConfigMutation, SourceMutation};
+            use super::super::configuration::settings::{
+                ConfigMutation, SourceMutation, SourceTarget, TransferOperation,
+            };
+            use crate::runtime::resources::SourceScope;
             target.validate().map_err(SourceSettingsError::Source)?;
             let mut application = owner.applications.lock();
+            let transfer = match &mutation {
+                SourceMutation::ResourceTransfer {
+                    from, operation, ..
+                } => Some((*from, *operation)),
+                _ => None,
+            };
             let publish_catalog = match &mutation {
                 SourceMutation::Config {
                     mutation:
@@ -814,7 +823,16 @@ impl SessionRuntimeManager {
                     Err(super::super::configuration::settings::SettingsError::Committed)
                 )
             {
-                owner.capture_source_consumers(&mut application, &target);
+                if let Some((from, operation)) = transfer {
+                    if from == SourceScope::User || operation == TransferOperation::Move {
+                        owner.capture_source_consumers(&mut application, &target);
+                    }
+                    if from == SourceScope::Workspace || operation == TransferOperation::Move {
+                        owner.capture_source_consumers(&mut application, &SourceTarget::User);
+                    }
+                } else {
+                    owner.capture_source_consumers(&mut application, &target);
+                }
                 if let Some(removing) = publish_catalog {
                     application.publish_creation_catalog(
                         target.workspace(),

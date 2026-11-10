@@ -6,6 +6,8 @@ use crate::runtime::resources::RuntimeResourceLoadError;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub(super) const MAX_MCP_DEFINITIONS: usize = 128;
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct McpCatalog {
     pub locations: BTreeMap<McpServerId, crate::runtime::resources::ResourceLocation>,
@@ -38,7 +40,7 @@ fn parse_entries(
     }
     let raw: Raw = crate::toml_authoring::parse(bytes)
         .map_err(|e| RuntimeResourceLoadError::new(e).at(path, "mcp_servers"))?;
-    if raw.mcp_servers.len() > 128 {
+    if raw.mcp_servers.len() > MAX_MCP_DEFINITIONS {
         return Err(
             RuntimeResourceLoadError::new("MCP catalog exceeds 128 definitions")
                 .at(path, "mcp_servers"),

@@ -6,6 +6,7 @@ import { workflowLibraryMachine, type LibraryCreated, type WorkflowLibraryActor 
 export interface SurfaceContext {
   readonly ports: (scope: WorkflowScope) => WorkflowScopePort;
   library: WorkflowLibraryActor;
+  globalLibrary: WorkflowLibraryActor;
   editor?: WorkflowEditorActor;
   /** The navigation to continue once unsaved edits are discarded. */
   leaving?: { kind: 'back' } | { kind: 'external'; proceed: () => void; cancelled?: () => void };
@@ -53,7 +54,11 @@ export const workflowSurfaceMachine = setup({
   },
 }).createMachine({
   id: 'workflowSurface',
-  context: ({ input, spawn }) => ({ ports: input.ports, library: spawn('library', { id: 'library', input: { ports: input.ports, scope: input.scope ?? USER_SCOPE } }) as WorkflowLibraryActor }),
+  context: ({ input, spawn }) => ({
+    ports: input.ports,
+    library: spawn('library', { id: 'library', input: { ports: input.ports, scope: input.scope ?? USER_SCOPE } }),
+    globalLibrary: spawn('library', { id: 'globalLibrary', input: { ports: input.ports, scope: USER_SCOPE } }),
+  }),
   initial: 'library',
   on: {
     // Leaving the route keeps a clean editor for return; unsaved edits ask first.

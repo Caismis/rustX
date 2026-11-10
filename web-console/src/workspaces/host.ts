@@ -6,7 +6,10 @@ import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts'
 import type { FileBytes, FileReadOptions } from '../../shared/file-preview.ts';
 export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; locator: CanonicalContentLocator; delivery_index: number; read?: FileReadOptions }
 export interface DeliveryBytes extends FileBytes { file: SessionFileReference }
-export type WorkspaceConfigurationOperation = ({ kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'model_probe'; model: string; source: ModelProbeSource } | { kind: 'write'; expected_revision: string; mutation: SourceMutation }) & { expected_directory?: string };
+export type ResourceTransferMutation = Extract<SourceMutation, { kind: 'resource_transfer' }>;
+export type WorkspaceConfigurationOperation =
+  | (({ kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'model_probe'; model: string; source: ModelProbeSource } | { kind: 'write'; expected_revision: string; mutation: SourceMutation }) & { expected_directory?: string })
+  | { kind: 'transfer'; scope: WorkspaceAuthorityScope; native: string; expected_directory: string; expected_revision: string; mutation: ResourceTransferMutation };
 /** The separate authoritative read attempted after a confirmed write. It may
  * succeed or fail without changing the fact that the write committed. */
 export type WorkspaceConfigurationReread =
@@ -23,6 +26,7 @@ export interface WorkspaceConfigurationCommit {
  * authoritative reread stay distinct facts for a write, so a failed reread can
  * never be mistaken for an uncommitted write. */
 export type WorkspaceConfigurationResult =
+  | { kind: 'transfer' }
   | { kind: 'mcp_probe'; result: McpProbeResult }
   | { kind: 'model_probe'; outcome: ModelProbeOutcome }
   | { kind: 'read' | 'reconcile'; projection: SourceSettings }

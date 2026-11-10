@@ -15,6 +15,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod transfer;
+pub use transfer::{ResourceTransfer, TransferOperation, TransferRejection};
+
 /// Native source authority. A Session is never an authoring target.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -363,6 +366,13 @@ pub enum SourceMutation<D = Box<crate::workflow_file::WorkflowFileDocument>> {
         name: crate::runtime::subagent::SubagentName,
         authored: Option<super::super::config::NamedAgentProfileDocument>,
     },
+    /// Copy or move a resource between User and the addressed Workspace.
+    /// The expected revision belongs to the source resource document.
+    ResourceTransfer {
+        from: SourceScope,
+        operation: TransferOperation,
+        resource: ResourceTransfer,
+    },
     /// One whole-file edit of exactly `<scope>/.agents/workflows/<id>.yaml`
     /// (Issue #491). The expected revision is that file's.
     Workflow {
@@ -387,6 +397,7 @@ pub enum SettingsError {
     /// A Workflow candidate the native parser or compiler rejected, with its
     /// bounded diagnostic. Nothing was staged.
     InvalidWorkflow(Box<super::super::workflow_authoring::WorkflowDiagnostic>),
+    TransferRejected(TransferRejection),
     Io,
     Committed,
 }
@@ -1372,6 +1383,13 @@ impl UserConfigManager {
             SourceMutation::Workflow { id, .. } => {
                 super::super::workflow_authoring::file_path(self, target, id)
             }
+            SourceMutation::ResourceTransfer {
+                from,
+                operation,
+                resource,
+            } => {
+                return self.transfer_resource(target, *from, *operation, resource, expected);
+            }
         };
         // The physical source of this transaction, created when missing and
         // confirmed durable by `publish_locked`. A target redirected since
@@ -1494,6 +1512,7 @@ impl UserConfigManager {
                         scope,
                     )?
                 }
+                SourceMutation::ResourceTransfer { .. } => unreachable!(),
             };
             committed_revision = revision(candidate.as_deref());
             self.publish_locked(

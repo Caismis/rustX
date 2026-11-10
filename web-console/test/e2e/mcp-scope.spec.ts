@@ -2,7 +2,7 @@ import {test,expect} from '@playwright/test';
 import {openResourceModule,openSettingsPage} from './shell-actions';
 import {captureEvidence} from './screenshot';
 const fixture=`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT??5174}/test/fixtures/settings.html?scenario=mcp-scope`;
-test('MCP keeps its resource scope separate from Settings and identifies inherited definitions',async({page})=>{
+test('MCP keeps its resource scope separate from Settings and opens global definitions for editing',async({page})=>{
  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(fixture);
  const mcp=await openResourceModule(page,'mcp','Global');
@@ -21,8 +21,9 @@ test('MCP keeps its resource scope separate from Settings and identifies inherit
  await openResourceModule(page,'mcp');
  await expect(mcp.getByRole('tab',{name:'Workspace',exact:true})).toHaveAttribute('aria-selected','true');
  await inherited.getByRole('button',{name:'MCP exa',exact:true}).click();
- await expect(mcp.getByLabel('URL',{exact:true})).toBeDisabled();
- await expect(mcp.getByRole('button',{name:'Override',exact:true})).toBeEnabled();
+ await expect(mcp.getByLabel('URL',{exact:true})).toBeEnabled();
+ await expect(mcp.getByLabel('URL',{exact:true})).toHaveValue('https://mcp.exa.ai/mcp');
+ await expect(mcp.getByRole('button',{name:'Override',exact:true})).toHaveCount(0);
  await expect(mcp.getByRole('button',{name:'Save',exact:true})).toBeDisabled();
  await captureEvidence(mcp,'mcp-inherited-workspace');
  expect(errors).toEqual([]);

@@ -327,3 +327,7 @@
   .chooser { min-width: 0; }
   .table .optionalColumn { display: none; }
 }
+
+.scopeGroup {
+  margin-top: 24px;
+}

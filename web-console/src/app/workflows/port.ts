@@ -6,6 +6,7 @@ import type { AppServerClient } from '../../client/app-server';
 import { isOutcomeUncertain, RequestNotDispatched, RpcFailure } from '../../client/errors';
 import type { WorkspaceAuthorityObservation } from '../../workspaces/authority';
 import { sameEndpoint } from '../../workspaces/endpoint';
+import { bindResourceTransfer, type TransferResource } from '../../workspaces/resource-transfer';
 import { WorkspaceHostError, type ProductHostWorkspaces, type WorkflowCommit, type WorkflowHostOperation, type WorkflowHostResult } from '../../workspaces/host';
 
 /** The source scope a Workflow file is physically owned by. The User scope
@@ -87,6 +88,7 @@ export interface WorkflowScopePort {
   readonly endpoint: string;
   readonly scope: WorkflowScope;
   list(): Promise<WorkflowLibrary>;
+  transferResource?: TransferResource;
   read(id: string): Promise<WorkflowSource>;
   /** Bounded registered Model/Profile choices from this exact source scope.
    * A continuation is bound to the first page's native source revision. */
@@ -193,6 +195,7 @@ export function createWorkflowPort({ client, host, hostAuthority, scope, expecte
     const { workspaceId } = scope;
     return {
       endpoint, scope,
+      transferResource: bindResourceTransfer(client, host, hostAuthority, workspaceId),
       list: () => read(async () => (await viaHost(workspaceId, { kind: 'list' })).library),
       read: id => read(async () => (await viaHost(workspaceId, { kind: 'read', id })).source),
       modelChoices: (query, expected_revision) => read(async () => (await viaHost(workspaceId, { kind: 'model_choices', query, expected_revision })).choices),
