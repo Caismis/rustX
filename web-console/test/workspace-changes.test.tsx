@@ -180,7 +180,7 @@ it('coding view and child scopes do not request or show top-level change records
   } finally {server.client.disconnect();}
 });
 
-it('a file preview fetches only while visible and shows the full path and diff; review copies the complete diff',async()=>{
+it('a visible preview copies the admitted diff with the full path and truncation notice; full review copies it separately',async()=>{
   const {server,source}=await sourceFixture();
   const path='/workspace/A/'+ 'very-long-directory/'.repeat(12)+'配置.json';
   const changed={...summary,files:[{...summary.files[0],path,display:'配置.json'}]};
@@ -198,13 +198,65 @@ it('a file preview fetches only while visible and shows the full path and diff; 
     expect(ui.container.querySelector('[data-changes-preview-path]')?.textContent).toBe(path);
     expect(ui.queryByText('配置.json:1')).toBeNull();
     expect(ui.container.querySelector('[data-diff-line="add"]:last-child')?.textContent).toBe('80+line 79');
-    expect(ui.queryByRole('button',{name:'Copy'})).toBeNull();
+    fireEvent.click(ui.getByRole('button',{name:'Copy'}));
+    const expected = '配置.json:1\n- old\n' + Array.from({length:80},(_,i)=>`+ line ${i}`).join('\n');
+    await waitFor(()=>expect(writeText).toHaveBeenCalledWith(expected));
+    expect(ui.container.querySelector('[data-changes-hover-preview]')).toBeTruthy();
+    expect(ui.getByRole('button',{name:'Copied'})).toBeTruthy();
+    expect(server.requests.filter(row=>row.request.method==='conversation/changeDiff')).toHaveLength(1);
     expect(ui.getByText('Only the first part of this comparison is shown.')).toBeTruthy();
     ui.rerender(<ChangeComparison request={request} index={0}/>);
     fireEvent.click(ui.getByRole('button',{name:'Copy'}));
-    await waitFor(()=>expect(writeText).toHaveBeenCalledOnce());
-    expect(writeText.mock.calls[0][0]).toContain('line 79');
+    await waitFor(()=>expect(writeText).toHaveBeenCalledTimes(2));
+    expect(writeText.mock.calls[1][0]).toBe(expected);
     expect(ui.getByText('Only the first part of this comparison is shown.')).toBeTruthy();
+  } finally {
+    if(original)Object.defineProperty(navigator,'clipboard',original);else Reflect.deleteProperty(navigator,'clipboard');
+    server.client.disconnect();
+  }
+});
+
+it.each([
+  null,
+  {hunks:[],binary:true,oversized:false,truncated:false},
+  {hunks:[],binary:false,oversized:true,truncated:false},
+  {hunks:[],binary:false,oversized:false,truncated:false},
+  {hunks:[{old_start:1,new_start:1,old_text:'',new_text:''}],binary:false,oversized:false,truncated:false},
+])('disables preview Copy when no admitted textual content is available (%j)',async comparison=>{
+  const {server,source}=await sourceFixture();
+  server.handlers.set('conversation/changeDiff',()=>({type:'workspace_change_diff',comparison}));
+  try {
+    const request={client:server.client,target:source.target,attemptId:'attempt-1',summary,index:0,owned:source.owned};
+    const ui=render(<ChangeComparison request={request} index={0} preview/>);
+    expect((ui.getByRole('button',{name:'Copy'}) as HTMLButtonElement).disabled).toBe(true);
+    await server.waitFor('conversation/changeDiff',1);
+    await waitFor(()=>expect(ui.queryByRole('status')).toBeNull());
+    expect((ui.getByRole('button',{name:'Copy'}) as HTMLButtonElement).disabled).toBe(true);
+  } finally {server.client.disconnect();}
+});
+
+it('preview Copy resets across file reads and never reports a refused or stale write as copied',async()=>{
+  const {server,source}=await sourceFixture();
+  const writeText=vi.fn();
+  let finish!:()=>void;
+  writeText.mockImplementationOnce(()=>Promise.reject(Error('denied'))).mockImplementationOnce(()=>new Promise<void>(resolve=>{finish=resolve;}));
+  const original=Object.getOwnPropertyDescriptor(navigator,'clipboard');
+  Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText}});
+  server.handlers.set('conversation/changeDiff',request=>({type:'workspace_change_diff',comparison:{hunks:[{old_start:1,new_start:1,old_text:'old\n',new_text:request.method==='conversation/changeDiff'?`file ${request.params.index}\n`:''}],binary:false,oversized:false,truncated:false}}));
+  try {
+    const request={client:server.client,target:source.target,attemptId:'attempt-1',summary,index:0,owned:source.owned};
+    const ui=render(<ChangeComparison request={request} index={0} preview/>);
+    await waitFor(()=>expect(ui.container.querySelector('[data-diff-line="add"]')?.textContent).toBe('1+file 0'));
+    fireEvent.click(ui.getByRole('button',{name:'Copy'}));
+    await act(async()=>{});
+    expect(ui.queryByRole('button',{name:'Copied'})).toBeNull();
+    fireEvent.click(ui.getByRole('button',{name:'Copy'}));
+    ui.rerender(<ChangeComparison request={request} index={1} preview/>);
+    await waitFor(()=>expect(ui.container.querySelector('[data-diff-line="add"]')?.textContent).toBe('1+file 1'));
+    await act(async()=>finish());
+    expect(ui.queryByRole('button',{name:'Copied'})).toBeNull();
+    expect(ui.getByRole('button',{name:'Copy'})).toBeTruthy();
+    expect(server.requests.filter(row=>row.request.method==='conversation/changeDiff')).toHaveLength(2);
   } finally {
     if(original)Object.defineProperty(navigator,'clipboard',original);else Reflect.deleteProperty(navigator,'clipboard');
     server.client.disconnect();

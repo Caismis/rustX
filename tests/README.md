@@ -351,7 +351,7 @@ fixtures and helpers, CI, manifests and all Rust.
 Chromium and one Playwright worker per runner; they differ only in the
 selection the plan passes to `browser-prepare`:
 
-- **FULL** — every test Playwright discovers, in two shards. The coverage
+- **FULL** — every test Playwright discovers, in three shards. The coverage
   gate fails unless all of them ran exactly once.
 - **FAST** — one shard of the `@smoke` tests (startup and admission, the
   development launcher with the real Web carrier, App Server and Host,
@@ -504,8 +504,8 @@ summarizes them and the lane check below verifies them against Cargo:
   boundaries, plus Desktop adapter and TUI Save coverage. FAST selects it
   for Web, TUI and the native supervisor changes. Linux Host tests run
   in `web-client`.
-- **Browser and Web client** — five jobs. `browser-prepare` builds once from
-  the checked-out source: `cargo build --bins --example
+- **Browser and Web client** — preparation, Web client, selected shard jobs
+  and reporting. `browser-prepare` builds once from the checked-out source: `cargo build --bins --example
   document_artifact_fixture` and the only production Web build (`pnpm
   build`: Vite, then `provenance.ts --artifact` over the new `dist/`), both
   run by `web-console/scripts/browser-artifact.ts pack`. It records them
@@ -514,8 +514,8 @@ summarizes them and the lane check below verifies them against Cargo:
   compiler matched, the Cargo command, Node version and ABI, pnpm,
   Playwright, and checksums of the Cargo and pnpm manifests and lockfiles —
   and a checksum and mode per file, and takes Playwright's own `--list`
-  inventory of the suite. It assigns whole spec files to the two shards,
-  heaviest first onto the lighter shard, by their measured seconds in
+  inventory of the suite. It assigns whole spec files to the selected shards
+  (three for FULL), heaviest first onto the lightest shard, by their measured seconds in
   `web-console/test/e2e/shard-weights.json` (a file without a measurement
   weighs its test count at the measured mean); Playwright's own `--shard`
   splits by test count, which put 1,298 s on one shard and 397 s on the other
@@ -523,12 +523,18 @@ summarizes them and the lane check below verifies them against Cargo:
   reports with `node scripts/browser-shards.ts weights <report.json>...`;
   each file's weight is its mean wall span (until the next test starts, so
   fixture time outside a test's reported duration counts) over the runs
-  given. Runner speed varies, so several runs balance better than one.
+  given. The current weights use both complete shard reports from run
+  42743604185 (commit `277b889ac6b97f9e3801a645f78eb3052abbca0d`):
+  all 766 cases across 151 files, including its nine visual failures.
+  Runner speed varies, so several runs balance better than one.
+  FULL uses three shards within the unchanged 45-minute job budget: in run
+  42775024217, two shards left no safe headroom and shard 2 was cancelled at
+  the job deadline. FAST keeps its one- or two-shard selection.
   Weights only steer balance: coverage is verified independently of them. Node native addons are not shared: `pnpm install`
   rebuilds them from the lockfile in every job. `web-client` (launcher
   `typecheck`/`test`, Web `typecheck`, `pnpm exec vitest run` with the
   `*.measurement.tsx` counters excluded, `check:i18n`, `check:provenance`)
-  and the two `browser-shard` jobs install those inputs only after
+  and the selected `browser-shard` jobs install those inputs only after
   `browser-artifact.ts install` verifies the identity against their own
   checkout and runner and every checksum, into a checkout holding no build
   output; any mismatch fails, and nothing is rebuilt in its place. Each
@@ -670,7 +676,8 @@ cancelled run is diagnostic evidence, not a timing baseline.
   test bodies. `browser-report` prints a per-shard table (tests, wall time,
   summed test time) in its step summary, and the critical path is
   `browser-prepare` plus the slower shard plus `browser-report`. Runner
-  minutes are the sum over all five jobs.
+  minutes are the sum over preparation, Web client, all selected shards and
+  reporting.
 
 ## Prerequisites
 

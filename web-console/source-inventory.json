@@ -3804,7 +3804,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "eda41494bea5e09e93b8f2454a028ec03c303fb2f7171a328cf1a0983a67c71b"
+      "local_sha256": "62a24439659760f574106ade3e4e670d24dc2c12e091fe5d725f38874c54f9bf"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",

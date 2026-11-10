@@ -284,17 +284,62 @@ pub(crate) async fn watch_recheck() {
     }
     let returned = bounded(capacity.acquire_many(31)).await.unwrap();
     drop(returned);
+    // A native event for this unchanged child proves the same directory
+    // observer handles a new mutation after the file observer has settled.
+    // Hold I/O so its identity check must publish a pathless resync hint.
+    // Observe the event before its paths are discarded, so an earlier queued
+    // resync cannot stand in for post-retirement native observation.
+    let (held, locked) = tokio::sync::oneshot::channel();
+    let (release, unlocked) = std::sync::mpsc::channel();
+    let native = fixture.manager.environment.clone();
+    let source = directory.clone();
+    let lock = tokio::task::spawn_blocking(move || {
+        native.with_paths(&[source.to_str().unwrap()], |_| {
+            held.send(()).unwrap();
+            unlocked.recv().unwrap();
+            Ok(())
+        })
+    });
+    bounded(locked).await.unwrap();
+    let published =
+        crate::app_server::filesystem::observe_native_change(directory.clone(), next.clone());
     std::fs::write(&next, b"still observed").unwrap();
+    bounded(published).await.unwrap();
     loop {
         if let NotificationMethod::FsChanged(change) =
             bounded(connection.next_notification()).await.notification
         {
             assert!(!change.retired);
-            if change.watch_id == "directory" && change.changed_paths.contains(&next) {
+            if change.watch_id == "directory"
+                && change.resync_required
+                && change.changed_paths.is_empty()
+            {
                 break;
             }
         }
     }
+    release.send(()).unwrap();
+    bounded(lock).await.unwrap().unwrap();
+    let MethodResult::FileChunk { chunk } = call(
+        &connection,
+        4,
+        Method::FsReadFile {
+            path: next.display().to_string(),
+            offset: 0,
+            max_bytes: 64,
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("read observed change")
+    };
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(chunk.data_base64)
+            .unwrap(),
+        b"still observed"
+    );
     let (scheduled, recheck) = tokio::sync::oneshot::channel();
     crate::app_server::filesystem::observe_recheck(directory.clone(), scheduled);
     let (held, locked) = tokio::sync::oneshot::channel();
@@ -327,7 +372,7 @@ pub(crate) async fn watch_recheck() {
     bounded(checking).await.unwrap();
     call(
         &connection,
-        4,
+        5,
         Method::FsUnwatch {
             watch_id: "directory".into(),
         },
