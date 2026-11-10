@@ -1,0 +1,177 @@
+{
+  "accepted": true,
+  "started_utc": "2026-10-27T09:15:39.755751+00:00",
+  "errors": [],
+  "commands": [
+    {
+      "label": "formal",
+      "argv": [
+        "python3",
+        "audit-complete.py",
+        "--root",
+        ".",
+        "--raw-only",
+        "--stage",
+        "all",
+        "--baseline-identity",
+        "baseline-build/identity.json",
+        "--candidate-identity",
+        "candidate-complete-build/identity.json",
+        "--freeze",
+        "reference-pins/deepseek-final-source-identity.json",
+        "--expected-harness-revision",
+        "d22ce66c5a1cda895cac382ce2c350f345933876",
+        "--expect-rust-sha256",
+        "775b6426d1ce59e1f80e746000d52527e876917f117361841ce120b183d042bb",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-pi-flow-portable-verification/archive-complete-audit.json"
+      ],
+      "cwd": "/home/capi/.cache/rustx-pr485-pi-flow-portable-verification/raw",
+      "start_utc": "2026-10-27T09:15:44.917924+00:00",
+      "end_utc": "2026-10-27T09:15:55.707678+00:00",
+      "exit": 0,
+      "stdout_sha256": "3008da8a8285a85a11a95117adcd92dee18c544b296dda3416c743dabb88bc67",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "diagnostic",
+      "argv": [
+        "python3",
+        "audit-diagnostics.py",
+        "--root",
+        ".",
+        "--raw-only",
+        "--baseline-identity",
+        "baseline-build/identity.json",
+        "--candidate-identity",
+        "candidate-complete-build/identity.json",
+        "--formal-audit",
+        "complete-all-audit.json",
+        "--expect-rust-sha256",
+        "775b6426d1ce59e1f80e746000d52527e876917f117361841ce120b183d042bb",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-pi-flow-portable-verification/diagnostic-raw-audit.json"
+      ],
+      "cwd": "/home/capi/.cache/rustx-pr485-pi-flow-portable-verification/raw",
+      "start_utc": "2026-10-27T09:15:55.707881+00:00",
+      "end_utc": "2026-10-27T09:15:59.466586+00:00",
+      "exit": 0,
+      "stdout_sha256": "9bf505238e9ea52c42c37803a35353e68abfd0dbac298bc581864713a83b8ad9",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "verification_script_sha256": "a688939e3b2f3e473f8ccd4e0ded1658b318a1f13ba7317794f199667a9d1de3",
+  "actual_host_binaries_reverified": false,
+  "actual_host_sources_reverified": false,
+  "external_verification_directory": "/home/capi/.cache/rustx-pr485-pi-flow-portable-verification",
+  "archive": "raw.tar.xz",
+  "archive_sha256": "eef4c601144965e23fc32b303be67bbccdc7b0197b332d62deba9933840b49ec",
+  "archive_bytes": 24024636,
+  "summary_sha256": "9496c74c15f573170b92a4fc77edf2acb442dc87d8bfacaf1f4edd9df3d7d250",
+  "available_bytes_before": 963603898368,
+  "manifest_sha256": "99eb50b72ea06e1cf66b56ac8a487ff24bebcd5a3b6ce14f24ec3d6afbbb4a23",
+  "verified_payload_files": 2604,
+  "verified_payload_bytes": 2529562492,
+  "all_payload_stream_hashes_match": true,
+  "no_extra_members": true,
+  "manifest_matches_external_summary": true,
+  "exploratory_phase_integrity": {
+    "baseline": {
+      "head": "f5cf22a8fbd2b1f0b3abc7fc2082a586f1126e20",
+      "production_tree": "09ca4b97e5f0c71f97dd53e2df87a28c4dffc3aa",
+      "sha256": "8d033129f343660821b5fd7cef957a424e6d769c55948011f2798c6e2f3a0cb7"
+    },
+    "stage_layout_sha256": "79d1d05eef16cef3a4983bf08b0d6e2740892e127c54bc9447f216bb515650da",
+    "screen_products": 24,
+    "diagnostic_products": 18,
+    "scope": "This root only: all raw formal, exploratory and diagnostic runs remain separate. Prior-round reports establish baseline provenance only; no old samples or checks validate this candidate."
+  },
+  "formal_numerics_and_admissions_identical": {
+    "direct": {
+      "equal_fields": [
+        "derived_products",
+        "valid_comparisons",
+        "checked_requests",
+        "groups",
+        "comparisons",
+        "product_inventory",
+        "products",
+        "manifests",
+        "table"
+      ],
+      "products": 120,
+      "comparisons": 60,
+      "checked_requests": 1410
+    },
+    "final": {
+      "equal_fields": [
+        "derived_products",
+        "valid_comparisons",
+        "checked_requests",
+        "groups",
+        "comparisons",
+        "product_inventory",
+        "products",
+        "manifests",
+        "table"
+      ],
+      "products": 120,
+      "comparisons": 60,
+      "checked_requests": 1410
+    },
+    "three-engine": {
+      "equal_fields": [
+        "derived_products",
+        "valid_comparisons",
+        "checked_requests",
+        "groups",
+        "comparisons",
+        "rows",
+        "admissions",
+        "records_sha256",
+        "freeze_sha256",
+        "supplementary_products",
+        "supplementary_table",
+        "manifest_sha256"
+      ],
+      "products": 36,
+      "comparisons": 12,
+      "checked_requests": 414
+    }
+  },
+  "diagnostic_numerics_and_identity_records_identical": {
+    "equal_fields": [
+      "identities",
+      "profiles",
+      "columns",
+      "sql",
+      "wal",
+      "column_comparison",
+      "profile_comparison",
+      "sql_comparison",
+      "wal_comparison",
+      "baseline_archive",
+      "producer_windows"
+    ],
+    "counts": {
+      "profiles": 4,
+      "columns": 4,
+      "sql": 2,
+      "wal": 8
+    },
+    "recorded_build_and_formal_hashes_equal": true,
+    "allowed_path_differences": "Relocated build receipt and formal audit file paths only."
+  },
+  "raw_only_audits_accepted": true,
+  "formal_products": 276,
+  "strict_source_report_sha256": "902e748b08ff085dc4d1edcd7a38eea181bde0b5542a8972bbd3e459472eb98f",
+  "strict_diagnostic_report_sha256": "ef16eec3ceb1b67003e9425585eb60e334cd3edd930015e9ab20151a9301d663",
+  "portable_report_sha256": {
+    "formal": "4505e8ffedb7ad621d95670a139ba834caf56eb2ca1e8da4c0e28e7f0d988a0b",
+    "diagnostic": "0b892e99ff9a17577b1489693aa32b945067f855afedfa175cfff88dfba199a8"
+  },
+  "all_payload_extracted_hashes_match": true,
+  "post_audit_raw_inventory_and_hashes_unchanged": true,
+  "finished_utc": "2026-10-27T09:16:01.236559+00:00",
+  "scope": "Archive integrity and retained evidence arithmetic only. No products, builds, tests, profiler sampling or native SDK invoked; no native session decompression. Raw-only auditors do not follow historical executable/Git paths or claim actual host identity verification. Preserved strict-report claims remain prior evidence, not fresh actual-file verification."
+}

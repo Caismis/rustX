@@ -161,7 +161,8 @@ fn compaction_tool_lifecycle_at_cut_never_reads_later_completion() {
                     deliveries: Vec::new(),
                     truncation: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             },
         ))
         .unwrap();

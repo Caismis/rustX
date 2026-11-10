@@ -4,34 +4,31 @@
 //! including Stored (provider-side storage, `previous_response_id`) and
 //! Stateless (`store: false`, preserved output items) continuation.
 //!
-//! The request and the response stream are handled through the SDK's BYOT
-//! facility as raw JSON: preserved stateless items must survive losslessly
-//! (including opaque encrypted reasoning content), so they are never
-//! round-tripped through typed SDK structs that would drop unknown fields.
+//! Request views borrow validated native output items. The response stream
+//! stays raw JSON so encrypted state and unknown fields survive losslessly.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use async_openai::Client;
-use async_openai::config::OpenAIConfig;
 use async_openai::error::OpenAIError;
 use futures_util::StreamExt;
+use serde::Serialize;
 
 use crate::message::types::AssistantContentBlock;
 use crate::message::types::ContentBlockIndex;
 use crate::model::adapter::block_index::BlockAllocator;
-use crate::model::adapter::openai::client::build_client;
+use crate::model::adapter::openai::client::OpenAiTransport;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{normalize_error, stream_retry_disposition};
 use crate::model::adapter::proposal::{accept_tool_call, resolve_tool_identity};
 use crate::model::adapter::traits::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
-use crate::model::adapter::validation::{ValidatedTools, validate_request};
+use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
 use crate::model::catalog::ResponsesStorageMode;
 use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
-use crate::model::invocation::finalize_provider_request;
 use crate::model::projected::ModelMessageView;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
 use crate::runtime::cancellation::CancellationSignal;
@@ -45,8 +42,7 @@ use crate::runtime::identity::ToolCallId;
 /// ([`ModelCompat`](crate::model::catalog::ModelCompat)), so one adapter
 /// serves every Responses model of its provider.
 pub struct OpenAiResponsesAdapter {
-    client: Client<OpenAIConfig>,
-    http_client: reqwest::Client,
+    client: OpenAiTransport,
 }
 
 impl std::fmt::Debug for OpenAiResponsesAdapter {
@@ -61,10 +57,8 @@ impl OpenAiResponsesAdapter {
     #[must_use]
     pub fn new(config: OpenAiAdapterConfig) -> Self {
         let (api_key, api_base, http_client) = config.into_parts();
-        let http_client = http_client.unwrap_or_default();
         Self {
-            client: build_client(&api_key, &api_base, Some(http_client.clone())),
-            http_client,
+            client: OpenAiTransport::new(&api_key, &api_base, http_client),
         }
     }
 }
@@ -75,33 +69,29 @@ impl ModelAdapter for OpenAiResponsesAdapter {
     }
 
     fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelStream {
-        #[cfg(feature = "issue-387-profile")]
-        let _profile =
-            crate::model::adapter::profile::RequestScope::new(self.protocol(), "dispatch");
-        let validated = match validate_request(&request, self.protocol()) {
-            Ok(validated) => validated,
-            Err(error) => return model_stream_of_failure(error),
-        };
-        let storage_mode = request.invocation.compat.responses_storage;
-        let translated = match translate_request(&request, &validated, storage_mode) {
-            Ok(translated) => translated,
-            Err(error) => return model_stream_of_failure(error),
-        };
-        let client = if let Some(limit) = request.response_byte_limit {
-            self.client
-                .clone()
-                .with_http_service(super::client::NoRetryService::bounded(
-                    self.http_client.clone(),
-                    limit,
-                ))
-        } else {
-            self.client.clone()
-        };
-        let normalizer = ResponsesNormalizer::new(validated, storage_mode);
+        match prepare_request(request, self.protocol()) {
+            Ok(prepared) => self.stream_prepared(prepared, cancellation),
+            Err(error) => model_stream_of_failure(error),
+        }
+    }
+
+    fn stream_prepared(
+        &self,
+        request: PreparedModelRequest,
+        cancellation: CancellationSignal,
+    ) -> ModelStream {
+        let PreparedModelRequest {
+            input, body, tools, ..
+        } = request;
+        if input.protocol() != self.protocol() {
+            return model_stream_of_failure(invalid_request("prepared request protocol mismatch"));
+        }
+        let normalizer = ResponsesNormalizer::new(tools, input.invocation.compat.responses_storage);
         Box::pin(futures_util::stream::unfold(
             ResponsesPhase::Preparing {
-                client,
-                request: crate::model::adapter::provider_request(translated),
+                client: self.client.clone(),
+                request: body,
+                response_byte_limit: input.response_byte_limit,
                 normalizer,
                 cancellation,
             },
@@ -115,6 +105,7 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelStreamItem,
         ResponsesPhase::Preparing {
             client,
             request,
+            response_byte_limit,
             normalizer,
             cancellation,
         } => {
@@ -134,6 +125,7 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelStreamItem,
                 ResponsesPhase::Opening {
                     client,
                     request,
+                    response_byte_limit,
                     normalizer,
                     cancellation,
                 },
@@ -142,12 +134,12 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelStreamItem,
         ResponsesPhase::Opening {
             client,
             request,
+            response_byte_limit,
             mut normalizer,
             cancellation,
         } => {
-            let api = client.responses();
             let outcome = tokio::select! {
-                outcome = api.create_stream_byot(&request) => outcome,
+                outcome = client.stream("/responses", request, response_byte_limit) => outcome,
                 () = cancellation.cancelled() => {
                     return Some((
                         ModelStreamItem::Event(ModelEvent::Failed {
@@ -287,14 +279,16 @@ fn cancelled_error() -> ModelError {
 
 enum ResponsesPhase {
     Preparing {
-        client: Client<OpenAIConfig>,
-        request: crate::model::adapter::ProviderRequest,
+        client: OpenAiTransport,
+        request: bytes::Bytes,
+        response_byte_limit: Option<usize>,
         normalizer: ResponsesNormalizer,
         cancellation: CancellationSignal,
     },
     Opening {
-        client: Client<OpenAIConfig>,
-        request: crate::model::adapter::ProviderRequest,
+        client: OpenAiTransport,
+        request: bytes::Bytes,
+        response_byte_limit: Option<usize>,
         normalizer: ResponsesNormalizer,
         cancellation: CancellationSignal,
     },
@@ -341,7 +335,7 @@ struct ToolAssembly {
 /// Normalizes Responses stream events into canonical events.
 #[derive(Debug)]
 struct ResponsesNormalizer {
-    tools: ValidatedTools,
+    tools: std::sync::Arc<ValidatedTools>,
     storage_mode: ResponsesStorageMode,
     blocks: BlockAllocator<ResponsesBlockKey>,
     tool_calls: BTreeMap<u32, ToolAssembly>,
@@ -356,7 +350,7 @@ struct ResponsesNormalizer {
 }
 
 impl ResponsesNormalizer {
-    fn new(tools: ValidatedTools, storage_mode: ResponsesStorageMode) -> Self {
+    fn new(tools: std::sync::Arc<ValidatedTools>, storage_mode: ResponsesStorageMode) -> Self {
         Self {
             tools,
             storage_mode,
@@ -1132,7 +1126,9 @@ impl ResponsesNormalizer {
                     .and_then(serde_json::Value::as_array)
                     .cloned()
                     .unwrap_or_default();
-                OpenAiResponsesContinuation::Stateless { items }
+                OpenAiResponsesContinuation::Stateless {
+                    items: items.into(),
+                }
             }
         };
         let block_index = self.blocks.peek_next();
@@ -1265,211 +1261,225 @@ fn parse_usage(usage: &serde_json::Value) -> Option<ModelUsage> {
     )
 }
 
-/// Translates a provider-neutral request into a raw Responses request JSON value.
-pub(crate) fn translate_request(
-    request: &ModelRequest,
+#[derive(Serialize)]
+pub(crate) struct WireRequest<'a> {
+    model: &'a str,
+    input: Vec<WireInput<'a>>,
+    stream: bool,
+    store: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include: Option<[&'static str; 1]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_response_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    instructions: &'a str,
+    max_output_tokens: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<WireTool<'a>>,
+    #[serde(flatten)]
+    params: Cow<'a, crate::model::invocation::RequestParams>,
+}
+
+#[derive(Serialize)]
+struct WireTool<'a> {
+    r#type: &'static str,
+    name: &'a str,
+    description: &'a str,
+    parameters: &'a serde_json::Value,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum WireInput<'a> {
+    Message {
+        r#type: &'static str,
+        role: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<&'static str>,
+        content: Vec<WirePart<'a>>,
+    },
+    Call {
+        r#type: &'static str,
+        call_id: serde_json::Value,
+        name: &'a str,
+        arguments: String,
+    },
+    Result {
+        r#type: &'static str,
+        call_id: serde_json::Value,
+        output: WireOutput<'a>,
+    },
+    Native(NativeInput<'a>),
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+struct NativeInput<'a> {
+    item: &'a serde_json::Value,
+    // Only the correlation string participates in the label pass. The
+    // validated opaque replay unit itself is never cloned or changed.
+    #[serde(skip)]
+    call_id: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum WireOutput<'a> {
+    Text(String),
+    Content(Vec<WirePart<'a>>),
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum WirePart<'a> {
+    OutputText {
+        r#type: &'static str,
+        text: Cow<'a, str>,
+        annotations: [(); 0],
+    },
+    Text {
+        r#type: &'static str,
+        text: Cow<'a, str>,
+    },
+    Refusal {
+        r#type: &'static str,
+        refusal: &'a str,
+    },
+    Image(async_openai::types::responses::InputContent),
+}
+
+impl<'a> WireInput<'a> {
+    fn native(item: &'a serde_json::Value) -> Self {
+        let call_id = (item["type"] == "function_call").then(|| item["call_id"].clone());
+        Self::Native(NativeInput { item, call_id })
+    }
+
+    fn message(role: &'static str, content: Vec<WirePart<'a>>) -> Self {
+        Self::Message {
+            r#type: "message",
+            role,
+            id: None,
+            status: (role == "assistant").then_some("completed"),
+            content,
+        }
+    }
+}
+
+pub(crate) fn translate_request<'a>(
+    request: &'a ModelRequest,
     tools: &ValidatedTools,
     storage_mode: ResponsesStorageMode,
-) -> Result<serde_json::Value, ModelError> {
+) -> Result<WireRequest<'a>, ModelError> {
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
-    let continuation_variant = match &request.continuation {
-        Some(crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(variant)) => {
-            Some(variant)
-        }
-        _ => None,
-    };
-    match (storage_mode, continuation_variant) {
-        (ResponsesStorageMode::Stored, Some(OpenAiResponsesContinuation::Stateless { .. })) => {
-            return Err(invalid_request(
-                "configured Responses storage mode is Stored but the continuation \
-                 variant is Stateless",
-            ));
-        }
-        (ResponsesStorageMode::Stateless, Some(OpenAiResponsesContinuation::Stored { .. })) => {
-            return Err(invalid_request(
-                "configured Responses storage mode is Stateless but the continuation \
-                 variant is Stored",
-            ));
-        }
-        _ => {}
-    }
-
-    let (input_items, instructions, previous_response_id) =
-        translate_inputs(request, continuation_variant)?;
-
-    // Every runtime-owned structural field is written first; no reasoning
-    // field is ever synthesized here, so the selected Model Profile's
-    // configured parameters are exactly what reaches the wire.
-    let mut request_value = {
-        #[cfg(feature = "issue-387-profile")]
-        let _profile = crate::model::adapter::profile::phase(
-            crate::model::adapter::profile::Phase::TypedToValue,
-        );
-        serde_json::json!({
-        "model": request.model(),
-        "input": input_items,
-        "stream": true,
-        "store": storage_mode == ResponsesStorageMode::Stored,
-        })
-    };
-    if storage_mode == ResponsesStorageMode::Stateless {
-        // Opaque encrypted reasoning must be requested for stateless replay.
-        request_value["include"] = serde_json::json!(["reasoning.encrypted_content"]);
-    }
-    if let Some(previous_response_id) = previous_response_id {
-        request_value["previous_response_id"] = previous_response_id.into();
-    }
-    if !instructions.is_empty() {
-        request_value["instructions"] = instructions.join("\n\n").into();
-    }
-    request_value["max_output_tokens"] = request.max_output_tokens().into();
-    if !request.tools.is_empty() {
-        request_value["tools"] = serde_json::json!(translate_tools(&request.tools));
-    }
-    let _ = tools;
-    // The effective opaque request parameters are overlaid last, after every
-    // runtime-owned continuation/input/tool/output field is present.
-    crate::model::adapter::correlation::encode(&mut request_value, request)
-        .map_err(|error| invalid_request(&error))?;
-    #[cfg(feature = "issue-387-profile")]
-    let _profile =
-        crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
-    let value = finalize_provider_request(
-        request_value,
-        request.request_params(),
-        ModelProtocol::OpenAiResponses,
-    )?;
-    crate::model::adapter::structured::finalize_request(value, request)
-}
-
-/// Translated canonical context: input items, instructions, and the optional
-/// stored previous response id.
-type TranslatedInputs = (Vec<serde_json::Value>, Vec<String>, Option<String>);
-
-/// Translates the canonical context into Responses input items and
-/// instructions according to the continuation variant.
-fn translate_inputs(
-    request: &ModelRequest,
-    continuation_variant: Option<&OpenAiResponsesContinuation>,
-) -> Result<TranslatedInputs, ModelError> {
-    #[cfg(feature = "issue-387-profile")]
-    let _profile = crate::model::adapter::profile::phase(
-        crate::model::adapter::profile::Phase::TranslateMessages,
-    );
-    let mut input_items: Vec<serde_json::Value> = Vec::new();
-    let mut replayed_messages = Vec::new();
-    let instructions: Vec<String> = if request.effective_system_prompt.is_empty() {
-        Vec::new()
-    } else {
-        vec![request.effective_system_prompt.clone()]
-    };
-    let mut previous_response_id: Option<String> = None;
-    let blocks = match continuation_variant {
-        None => request.messages.clone(),
-        Some(OpenAiResponsesContinuation::Stored {
-            previous_response_id: stored_id,
-        }) => {
-            previous_response_id = Some(stored_id.clone());
-            // Only canonical context after the continuation boundary is sent;
-            // the provider-stored conversation supplies everything before it.
-            tail_after_boundary(request)?
-        }
-        Some(OpenAiResponsesContinuation::Stateless { items }) => {
-            let boundary = request
-                .continuation_boundary()
-                .map_err(|error| invalid_request(&error))?
-                .ok_or_else(|| invalid_request("stateless continuation lacks accepted output"))?;
-            #[cfg(feature = "issue-387-profile")]
-            crate::model::adapter::profile::item(boundary);
-            let ModelMessageView::Assistant(assistant) = request.messages[boundary].view() else {
-                return Err(invalid_request(
-                    "native continuation boundary is not Assistant output",
-                ));
-            };
-            if retained_stateless_output(assistant, request.invocation.replay_origin().as_ref())?
-                .as_ref()
-                != Some(items)
-            {
-                return Err(invalid_request(
-                    "stateless continuation lacks its complete accepted output unit",
-                ));
-            }
-            // Stateless output contains no earlier input. Replay the full
-            // history; translate_assistant_inputs substitutes each owned native
-            // output bundle exactly once, including the accepted boundary.
-            request.messages.clone()
-        }
-    };
+    let mut input = Vec::new();
+    let (first, previous_response_id) =
+        continuation_input(request, tools.continuation_boundary, storage_mode)?;
     let origin = request.invocation.replay_origin();
-    let start = request.messages.len() - blocks.len();
-    for (index, block) in (start..).zip(&blocks) {
+    let mut replayed = Vec::new();
+    for (index, block) in request.messages.iter().enumerate().skip(first) {
         #[cfg(feature = "issue-387-profile")]
         crate::model::adapter::profile::item(index);
+        let before = input.len();
         match block.view() {
             ModelMessageView::User(user) => {
-                input_items.push(translate_user_input(user, &request.images)?);
+                input.push(translate_user_input(user, &request.images)?);
             }
             ModelMessageView::Assistant(assistant) => {
-                let (message, items) = translate_assistant_inputs(assistant, origin.as_ref())?;
-                if let Some(message) = message {
-                    replayed_messages.push((input_items.len(), index));
-                    input_items.push(message);
-                }
-                input_items.extend(items);
+                translate_assistant_inputs(assistant, origin.as_ref(), &mut input)?;
             }
-            ModelMessageView::Tool(tool_call_id, result) => {
-                input_items.push(translate_tool_result(
-                    tool_call_id,
-                    result,
-                    &request.images,
-                )?);
+            ModelMessageView::Tool(call, result) => {
+                input.push(translate_tool_result(call, result, &request.images)?);
             }
-            ModelMessageView::RequestOnly(context) if context.is_assistant() => {
-                replayed_messages.push((input_items.len(), index));
-                input_items.push(replayed_assistant_message(vec![replayed_output_text(
-                    &context.render(),
-                )]));
+            ModelMessageView::RequestOnly(carryover) => {
+                let (role, kind) = if carryover.is_assistant() {
+                    ("assistant", "output_text")
+                } else {
+                    ("user", "input_text")
+                };
+                input.push(WireInput::message(
+                    role,
+                    vec![if carryover.is_assistant() {
+                        replayed_output_text(Cow::Owned(carryover.render()))
+                    } else {
+                        WirePart::Text {
+                            r#type: kind,
+                            text: Cow::Owned(carryover.render()),
+                        }
+                    }],
+                ));
             }
-            ModelMessageView::RequestOnly(context) => input_items.push(serde_json::json!({
-                "type": "message",
-                "role": "user",
-                "content": [{
-                    "type": "input_text",
-                    "text": context.render(),
-                }]
-            })),
+        }
+        if matches!(
+            input.get(before),
+            Some(WireInput::Message {
+                role: "assistant",
+                ..
+            })
+        ) {
+            replayed.push((before, index));
         }
     }
-    assign_replayed_message_ids(&mut input_items, replayed_messages);
-    Ok((input_items, instructions, previous_response_id))
+    assign_replayed_message_ids(&mut input, replayed);
+    let labels = crate::model::adapter::correlation::transmitted_labels(
+        request,
+        tools.continuation_boundary,
+    )
+    .map_err(|error| invalid_request(&error))?;
+    crate::model::adapter::correlation::encode_fields(&labels, |field| {
+        for item in &mut input {
+            #[cfg(feature = "issue-387-profile")]
+            crate::model::adapter::profile::wire_item();
+            match item {
+                WireInput::Result { call_id, .. } => field(false, call_id),
+                WireInput::Call { call_id, .. }
+                | WireInput::Native(NativeInput {
+                    call_id: Some(call_id),
+                    ..
+                }) => field(true, call_id),
+                _ => {}
+            }
+        }
+    })
+    .map_err(invalid_request)?;
+    let params = crate::model::adapter::structured::request_params(request)?;
+    Ok(WireRequest {
+        model: request.model(),
+        input,
+        stream: true,
+        store: storage_mode == ResponsesStorageMode::Stored,
+        include: (storage_mode == ResponsesStorageMode::Stateless)
+            .then_some(["reasoning.encrypted_content"]),
+        previous_response_id,
+        instructions: &request.effective_system_prompt,
+        max_output_tokens: request.max_output_tokens(),
+        tools: translate_tools(&request.tools),
+        params,
+    })
 }
 
-fn replayed_output_text(text: &str) -> serde_json::Value {
-    serde_json::json!({"type": "output_text", "text": text, "annotations": []})
+fn replayed_output_text(text: Cow<'_, str>) -> WirePart<'_> {
+    WirePart::OutputText {
+        r#type: "output_text",
+        text,
+        annotations: [],
+    }
 }
 
-fn replayed_assistant_message(content: Vec<serde_json::Value>) -> serde_json::Value {
-    let mut message = serde_json::json!({
-        "type": "message",
-        "role": "assistant",
-        "status": "completed",
-    });
-    message["content"] = serde_json::Value::Array(content);
-    message
-}
-
-fn assign_replayed_message_ids(input: &mut [serde_json::Value], replayed: Vec<(usize, usize)>) {
+fn assign_replayed_message_ids(input: &mut [WireInput<'_>], replayed: Vec<(usize, usize)>) {
     if replayed.is_empty() {
         return;
     }
-    // Only synthesized messages receive IDs. Reserve every retained item ID,
-    // including items that come after a synthesized message in the request.
-    let mut occupied: BTreeSet<_> = input
+    let mut occupied = input
         .iter()
-        .filter_map(|item| item["id"].as_str().map(str::to_owned))
-        .collect();
+        .filter_map(|item| match item {
+            WireInput::Native(native) => native.item["id"].as_str().map(str::to_owned),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
     for (position, coordinate) in replayed {
         let base = format!("msg_rustx_{coordinate}");
         let mut id = base.clone();
@@ -1479,109 +1489,171 @@ fn assign_replayed_message_ids(input: &mut [serde_json::Value], replayed: Vec<(u
             }
             id = format!("{base}_{suffix}");
         }
-        input[position]["id"] = id.into();
+        if let WireInput::Message { id: target, .. } = &mut input[position] {
+            *target = Some(id);
+        }
     }
 }
 
-/// Input after the actual accepted output explicitly bound to native continuation.
-fn tail_after_boundary(
-    request: &ModelRequest,
-) -> Result<crate::model::SelectedModelInput, ModelError> {
-    let boundary = request
-        .continuation_boundary()
-        .map_err(|error| invalid_request(&error))?
-        .ok_or_else(|| invalid_request("Responses continuation lacks accepted-output boundary"))?;
-    Ok(request.messages.range(boundary + 1..request.messages.len()))
-}
-
-fn translate_user_input(
-    user: &[crate::message::types::UserContentBlock],
+fn translate_user_input<'a>(
+    user: &'a [crate::message::types::UserContentBlock],
     images: &crate::model::images::ResolvedImages,
-) -> Result<serde_json::Value, ModelError> {
-    let mut content = Vec::new();
+) -> Result<WireInput<'a>, ModelError> {
+    let mut content = Vec::with_capacity(user.len());
     for block in user {
         match block {
             crate::message::types::UserContentBlock::Text(text) => {
-                content.push(serde_json::json!({
-                    "type": "input_text",
-                    "text": text.text,
-                }));
+                content.push(WirePart::Text {
+                    r#type: "input_text",
+                    text: Cow::Borrowed(&text.text),
+                });
             }
             crate::message::types::UserContentBlock::Image(image) => {
-                content.push(
-                    serde_json::to_value(responses_image_part(image, images)?)
-                        .map_err(|error| invalid_request(&error.to_string()))?,
-                );
+                content.push(WirePart::Image(responses_image_part(image, images)?));
             }
-            crate::message::types::UserContentBlock::UploadedFile(_)
-            | crate::message::types::UserContentBlock::File(_) => {
+            _ => {
                 return Err(unsupported(
                     "OpenAI Responses cannot represent canonical file references",
                 ));
             }
         }
     }
-    Ok(serde_json::json!({
-        "type": "message",
-        "role": "user",
-        "content": content,
-    }))
+    Ok(WireInput::message("user", content))
 }
 
-type TranslatedAssistant = (Option<serde_json::Value>, Vec<serde_json::Value>);
+fn continuation_input(
+    request: &ModelRequest,
+    boundary: Option<usize>,
+    storage_mode: ResponsesStorageMode,
+) -> Result<(usize, Option<&str>), ModelError> {
+    let Some(ProviderContinuationState::OpenAiResponses(state)) = &request.continuation else {
+        return Ok((0, None));
+    };
+    let boundary = boundary
+        .ok_or_else(|| invalid_request("Responses continuation lacks accepted-output boundary"))?;
+    let previous_response_id = match (storage_mode, state) {
+        (
+            ResponsesStorageMode::Stored,
+            OpenAiResponsesContinuation::Stored {
+                previous_response_id: id,
+            },
+        ) => Some(id.as_str()),
+        (ResponsesStorageMode::Stateless, OpenAiResponsesContinuation::Stateless { items }) => {
+            let ModelMessageView::Assistant(assistant) = request.messages[boundary].view() else {
+                return Err(invalid_request(
+                    "native continuation boundary is not Assistant output",
+                ));
+            };
+            if retained_stateless_output(assistant, request.invocation.replay_origin().as_ref())?
+                != Some(items.as_slice())
+            {
+                return Err(invalid_request(
+                    "stateless continuation lacks its complete accepted output unit",
+                ));
+            }
+            // Stateless native output is not the earlier input history. Replay
+            // the full context, substituting each exact owned output once.
+            return Ok((0, None));
+        }
+        (ResponsesStorageMode::Stored, _) => {
+            return Err(invalid_request(
+                "configured Responses storage mode is Stored but the continuation variant is Stateless",
+            ));
+        }
+        (ResponsesStorageMode::Stateless, _) => {
+            return Err(invalid_request(
+                "configured Responses storage mode is Stateless but the continuation variant is Stored",
+            ));
+        }
+    };
+    Ok((boundary + 1, previous_response_id))
+}
 
-fn translate_assistant_inputs(
-    assistant: &[crate::message::types::AssistantContentBlock],
+fn translate_tool_result<'a>(
+    call: &ToolCallId,
+    result: &crate::tools::types::ToolExecutionResult,
+    images: &crate::model::images::ResolvedImages,
+) -> Result<WireInput<'a>, ModelError> {
+    let parts = result.image_projection().map_err(unsupported)?;
+    let output = if parts
+        .iter()
+        .any(|part| matches!(part, crate::tools::types::ModelToolResultPart::Image(_)))
+    {
+        WireOutput::Content(
+            parts
+                .into_iter()
+                .map(|part| match part {
+                    crate::tools::types::ModelToolResultPart::Text(text) => Ok(WirePart::Text {
+                        r#type: "input_text",
+                        text: Cow::Owned(text),
+                    }),
+                    crate::tools::types::ModelToolResultPart::Image(image) => {
+                        responses_image_part(&image, images).map(WirePart::Image)
+                    }
+                })
+                .collect::<Result<_, _>>()?,
+        )
+    } else {
+        WireOutput::Text(result.model_facing_projection().as_text())
+    };
+    Ok(WireInput::Result {
+        r#type: "function_call_output",
+        call_id: call.as_str().into(),
+        output,
+    })
+}
+
+fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<WireTool<'_>> {
+    tools
+        .iter()
+        .map(|tool| WireTool {
+            r#type: "function",
+            name: &tool.name,
+            description: &tool.description,
+            parameters: &tool.input_schema,
+        })
+        .collect()
+}
+
+fn translate_assistant_inputs<'a>(
+    assistant: &'a [AssistantContentBlock],
     origin: Option<&crate::model::replay::ReplayOrigin>,
-) -> Result<TranslatedAssistant, ModelError> {
+    input: &mut Vec<WireInput<'a>>,
+) -> Result<(), ModelError> {
     if let Some(items) = retained_stateless_output(assistant, origin)? {
-        // The native bundle already contains the accepted text/calls. Replaying
-        // those typed views again would duplicate the prior generation.
-        return Ok((None, items));
+        input.extend(items.iter().map(WireInput::native));
+        return Ok(());
     }
-    let mut message_content = Vec::new();
-    let mut tool_calls = Vec::new();
-    for content in assistant {
-        #[cfg(feature = "issue-387-profile")]
-        crate::model::adapter::profile::block();
-        match content {
+    let mut content = Vec::new();
+    let mut calls = Vec::new();
+    for block in assistant {
+        match block {
             AssistantContentBlock::Text(text) => {
-                message_content.push(replayed_output_text(&text.text));
+                content.push(replayed_output_text(Cow::Borrowed(&text.text)));
             }
-            AssistantContentBlock::Refusal(refusal) => {
-                message_content.push(serde_json::json!({
-                    "type": "refusal",
-                    "refusal": refusal.text,
-                }));
-            }
+            AssistantContentBlock::Refusal(refusal) => content.push(WirePart::Refusal {
+                r#type: "refusal",
+                refusal: &refusal.text,
+            }),
             AssistantContentBlock::Reasoning(reasoning) => {
-                // Complete native Responses output was validated and returned
-                // above. Other history (Chat reasoning, foreign thinking, or
-                // summaries from stored responses) has no native replay unit.
-                // Like pi's cross-model conversion, carry its readable text as
-                // ordinary assistant output. Never invent a reasoning item or
-                // serialize opaque foreign state / stored response pointers.
                 if let Some(text) = reasoning
                     .text
                     .as_deref()
                     .filter(|text| !text.trim().is_empty())
                 {
-                    message_content.push(replayed_output_text(text));
+                    content.push(replayed_output_text(Cow::Borrowed(text)));
                 }
             }
-            AssistantContentBlock::ToolCall(call) => {
-                let arguments = serde_json::to_string(&call.arguments).map_err(|e| {
+            AssistantContentBlock::ToolCall(call) => calls.push(WireInput::Call {
+                r#type: "function_call",
+                call_id: call.id.as_str().into(),
+                name: &call.name,
+                arguments: serde_json::to_string(&call.arguments).map_err(|error| {
                     unsupported(format!(
-                        "tool call arguments are not JSON-serializable: {e}"
+                        "tool call arguments are not JSON-serializable: {error}"
                     ))
-                })?;
-                tool_calls.push(serde_json::json!({
-                    "type": "function_call",
-                    "call_id": call.id,
-                    "name": call.name,
-                    "arguments": arguments,
-                }));
-            }
+                })?,
+            }),
             AssistantContentBlock::Image(_) => {
                 return Err(unsupported(
                     "OpenAI Responses cannot represent generated image references",
@@ -1589,39 +1661,43 @@ fn translate_assistant_inputs(
             }
         }
     }
-    let message =
-        (!message_content.is_empty()).then(|| replayed_assistant_message(message_content));
-    Ok((message, tool_calls))
+    if !content.is_empty() {
+        input.push(WireInput::message("assistant", content));
+    }
+    input.extend(calls);
+    Ok(())
 }
 
-fn retained_stateless_output(
-    assistant: &[AssistantContentBlock],
+fn retained_stateless_output<'a>(
+    assistant: &'a [AssistantContentBlock],
     origin: Option<&crate::model::replay::ReplayOrigin>,
-) -> Result<Option<Vec<serde_json::Value>>, ModelError> {
-    let units = assistant
-        .iter()
-        .filter_map(|block| match block {
-            AssistantContentBlock::Reasoning(reasoning) if reasoning.belongs_to(origin) => {
-                match &reasoning.provider_state {
-                    Some(ProviderContinuationState::OpenAiResponses(
-                        OpenAiResponsesContinuation::Stateless { items },
-                    )) => Some(items),
-                    _ => None,
-                }
+) -> Result<Option<&'a [serde_json::Value]>, ModelError> {
+    let mut units = assistant.iter().filter_map(|block| match block {
+        AssistantContentBlock::Reasoning(reasoning) if reasoning.belongs_to(origin) => {
+            match &reasoning.provider_state {
+                Some(ProviderContinuationState::OpenAiResponses(
+                    OpenAiResponsesContinuation::Stateless { items },
+                )) => Some(items),
+                _ => None,
             }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if units.is_empty() {
+        }
+        _ => None,
+    });
+    let Some(items) = units.next() else {
         return Ok(None);
-    }
-    if units.len() != 1 {
+    };
+    if units.next().is_some() {
         return Err(unsupported(
             "Assistant carries multiple ambiguous stateless output bundles",
         ));
     }
-    let mut native_visible = Vec::new();
-    for item in units[0] {
+
+    // Compare visible fields in order without building owned JSON projections.
+    let mut visible = assistant
+        .iter()
+        .filter(|block| !matches!(block, AssistantContentBlock::Reasoning(_)));
+    let mut agrees = true;
+    for item in items.iter() {
         match item["type"].as_str() {
             Some("reasoning")
                 if item["encrypted_content"]
@@ -1632,17 +1708,19 @@ fn retained_stateless_output(
                     .as_array()
                     .ok_or_else(|| unsupported("native output message lacks complete content"))?;
                 for part in content {
-                    match part["type"].as_str() {
-                        Some("output_text") if part["text"].is_string() => native_visible
-                            .push(serde_json::json!({"type":"text", "text":part["text"]})),
-                        Some("refusal") if part["refusal"].is_string() => native_visible
-                            .push(serde_json::json!({"type":"refusal", "text":part["refusal"]})),
+                    agrees &= match part["type"].as_str() {
+                        Some("output_text") if part["text"].is_string() => {
+                            matches!(visible.next(), Some(AssistantContentBlock::Text(text)) if part["text"] == text.text)
+                        }
+                        Some("refusal") if part["refusal"].is_string() => {
+                            matches!(visible.next(), Some(AssistantContentBlock::Refusal(refusal)) if part["refusal"] == refusal.text)
+                        }
                         _ => {
                             return Err(unsupported(
                                 "native output contains unsupported or incomplete readable content",
                             ));
                         }
-                    }
+                    };
                 }
             }
             Some("function_call") if item["call_id"].is_string() && item["name"].is_string() => {
@@ -1651,7 +1729,8 @@ fn retained_stateless_output(
                 })?;
                 let arguments: serde_json::Value = serde_json::from_str(arguments)
                     .map_err(|_| unsupported("native function output has invalid arguments"))?;
-                native_visible.push(serde_json::json!({"type":"call", "id":item["call_id"], "name":item["name"], "arguments":arguments}));
+                agrees &= matches!(visible.next(), Some(AssistantContentBlock::ToolCall(call))
+                    if item["call_id"] == call.id.as_str() && item["name"] == call.name && arguments == call.arguments);
             }
             _ => {
                 return Err(unsupported(
@@ -1660,22 +1739,20 @@ fn retained_stateless_output(
             }
         }
     }
-    let mut visible = Vec::new();
-    for block in assistant {
-        match block {
-            AssistantContentBlock::Text(text) => visible.push(serde_json::json!({"type":"text", "text":text.text})),
-            AssistantContentBlock::Refusal(refusal) => visible.push(serde_json::json!({"type":"refusal", "text":refusal.text})),
-            AssistantContentBlock::ToolCall(call) => visible.push(serde_json::json!({"type":"call", "id":call.id, "name":call.name, "arguments":call.arguments})),
-            AssistantContentBlock::Reasoning(_) => {},
-            AssistantContentBlock::Image(_) => return Err(unsupported("native replay cannot absorb a changed image representation")),
-        }
+    if assistant
+        .iter()
+        .any(|block| matches!(block, AssistantContentBlock::Image(_)))
+    {
+        return Err(unsupported(
+            "native replay cannot absorb a changed image representation",
+        ));
     }
-    if visible != native_visible {
+    if !agrees || visible.next().is_some() {
         return Err(unsupported(
             "typed Assistant content disagrees with preserved native output bundle",
         ));
     }
-    Ok(Some(units[0].clone()))
+    Ok(Some(items.as_slice()))
 }
 
 /// Encode one request-owned PNG using the SDK input image representation.
@@ -1688,66 +1765,6 @@ fn responses_image_part(
         image_url: Some(super::image_data_url(image, images).map_err(|error| unsupported(&error))?),
         ..Default::default()
     }))
-}
-
-/// Translates the canonical model-facing tool-result projection into the
-/// Responses function-call-output shape. Projection policy, status rendering,
-/// and aggregate bounding are owned by the Tool Plane.
-fn translate_tool_result(
-    tool_call_id: &crate::runtime::identity::ToolCallId,
-    result: &crate::tools::types::ToolExecutionResult,
-    images: &crate::model::images::ResolvedImages,
-) -> Result<serde_json::Value, ModelError> {
-    use async_openai::types::responses::{
-        FunctionCallOutput, FunctionCallOutputItemParam, InputContent, InputTextContent,
-    };
-    let parts = result.image_projection().map_err(unsupported)?;
-    let output = if parts
-        .iter()
-        .any(|part| matches!(part, crate::tools::types::ModelToolResultPart::Image(_)))
-    {
-        FunctionCallOutput::Content(
-            parts
-                .into_iter()
-                .map(|part| match part {
-                    crate::tools::types::ModelToolResultPart::Text(text) => {
-                        Ok(InputContent::InputText(InputTextContent { text }))
-                    }
-                    crate::tools::types::ModelToolResultPart::Image(image) => {
-                        responses_image_part(&image, images)
-                    }
-                })
-                .collect::<Result<Vec<_>, ModelError>>()?,
-        )
-    } else {
-        FunctionCallOutput::Text(result.model_facing_projection().as_text())
-    };
-    let item = FunctionCallOutputItemParam {
-        call_id: tool_call_id.as_str().to_owned(),
-        output,
-        id: None,
-        status: None,
-    };
-    // Item supplies the protocol discriminator around the SDK-owned output.
-    serde_json::to_value(async_openai::types::responses::Item::FunctionCallOutput(
-        item,
-    ))
-    .map_err(|error| invalid_request(&error.to_string()))
-}
-
-/// Only model-facing tool fields are sent; runtime semantics stay behind.
-fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<serde_json::Value> {
-    tools
-        .iter()
-        .map(|tool| {
-            serde_json::json!({
-                "type": "function",
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.input_schema,
-            })
-        })
-        .collect()
 }
 
 fn str_field<'a>(value: &'a serde_json::Value, field: &str) -> Option<&'a str> {
@@ -1950,12 +1967,13 @@ mod tests {
                 }
             }
         });
-        let encoded = translate_tools(&[ModelToolDefinition {
+        let encoded = serde_json::to_value(translate_tools(&[ModelToolDefinition {
             id: crate::runtime::identity::ToolId::new("tool-ask-user"),
             name: "ask_user".to_owned(),
             description: "structured questionnaire".to_owned(),
-            input_schema: schema.clone(),
-        }]);
+            input_schema: schema.clone().into(),
+        }]))
+        .unwrap();
         assert_eq!(encoded[0]["type"], "function");
         assert_eq!(encoded[0]["name"], "ask_user");
         assert_eq!(encoded[0]["parameters"], schema);
@@ -1984,7 +2002,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         };
         let encoded = translate_tool_result(
             &message.tool_call_id,
@@ -1992,6 +2011,7 @@ mod tests {
             &crate::model::images::ResolvedImages::new(),
         )
         .expect("translate cancelled result");
+        let encoded = serde_json::to_value(encoded).unwrap();
         assert_eq!(
             encoded["output"].as_str().expect("text output"),
             "Tool call was cancelled (reason: user_requested). Execution had already started and cancellation was confirmed before normal completion. Partial side effects may have occurred before the execution was stopped."
@@ -2034,7 +2054,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             };
             let encoded = translate_tool_result(
                 &message.tool_call_id,
@@ -2042,6 +2063,7 @@ mod tests {
                 &crate::model::images::ResolvedImages::new(),
             )
             .expect("translate status result");
+            let encoded = serde_json::to_value(encoded).unwrap();
             let output = encoded["output"].as_str().expect("text output");
             assert_eq!(
                 output,
@@ -2079,7 +2101,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         };
         let encoded = translate_tool_result(
             &message.tool_call_id,
@@ -2087,6 +2110,7 @@ mod tests {
             &crate::model::images::ResolvedImages::new(),
         )
         .expect("translate failed tool result");
+        let encoded = serde_json::to_value(encoded).unwrap();
         let projection = message.result.model_facing_projection();
         assert_eq!(encoded["call_id"], "call-failed");
         assert_eq!(

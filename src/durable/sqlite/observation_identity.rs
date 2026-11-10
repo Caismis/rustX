@@ -24,7 +24,7 @@ pub(super) fn capture(
     ordinal: u64,
     attempt: &crate::runtime::identity::AttemptId,
 ) -> Result<(), ConversationStoreError> {
-    super::content::index_structural_value(
+    crate::durable::sqlite::content::index_structural_value(
         connection,
         "inherited_attempt_identity",
         &key(kind, ordinal),
@@ -39,9 +39,9 @@ pub(super) fn inherited(
     ordinal: u64,
 ) -> Result<AttemptIdentitySource, ConversationStoreError> {
     let encoded_bytes: u64 = connection.query_row(
-        "SELECT readable_end FROM content_frontiers WHERE source_kind='inherited_attempt_identity' AND source_id=?1 AND block_index=0 AND representation='canonical_json_v1' AND revision=1",
+        "SELECT readable_end FROM content_frontiers WHERE source_kind='inherited_attempt_identity' AND source_id=?1 AND block_index=0 AND representation='j' AND revision=1",
         [key(kind,ordinal)], |row| row.get(0),
-    ).map_err(|_| storage("original inherited owner field unavailable"))?;
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,"original inherited owner field unavailable"))?;
     Ok(AttemptIdentitySource::Inherited {
         kind,
         ordinal,
@@ -72,14 +72,14 @@ pub(super) fn response_owner(
     let turn: Option<u64> = connection.query_row(
         "SELECT ordinal FROM inherited_turn_provenance INDEXED BY inherited_turn_identity_idx WHERE json_extract(payload,'$.id.conversation_id')=?1 AND json_extract(payload,'$.id.attempt_id')=?2",
         params![conversation.as_str(),attempt.as_str()], |row| row.get(0),
-    ).optional().map_err(|error|storage(error.to_string()))?;
+    ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if let Some(ordinal) = turn {
         return inherited(connection, Kind::Turn, ordinal);
     }
     let ordinal: u64 = connection.query_row(
         "SELECT ordinal FROM inherited_response_provenance INDEXED BY inherited_response_owner_idx WHERE json_extract(payload,'$.origin.conversation_id')=?1 AND json_extract(payload,'$.origin.attempt_id')=?2 ORDER BY ordinal LIMIT 1",
         params![conversation.as_str(),attempt.as_str()], |row| row.get(0),
-    ).map_err(|_|storage("original response owner unavailable"))?;
+    ).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"original response owner unavailable"))?;
     inherited(connection, Kind::Response, ordinal)
 }
 pub(super) fn read(
@@ -105,7 +105,7 @@ pub(super) fn read(
             "original inherited owner outside cut".into(),
         ));
     }
-    super::content::structural_field_read(
+    crate::durable::sqlite::content::structural_field_read(
         connection,
         "inherited_attempt_identity",
         &key(kind, ordinal),

@@ -183,7 +183,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::Notify;
 
-use crate::durable::inbox::InboundDraft;
+use crate::durable::InboundDraft;
 use crate::events::{
     BackgroundTerminalState, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope,
     RuntimeEventSink,

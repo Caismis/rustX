@@ -1,7 +1,8 @@
 //! Subscribers: consumed cursors into the one bounded replay ring plus wakeups.
+use super::SharedSnapshot;
 use super::{
     Arc, Notify, RuntimeClientCursor, RuntimeClientError, RuntimeClientProjection,
-    RuntimeClientProtocolEvent, RuntimeClientSnapshot, Subscriber, SubscriberPoll,
+    RuntimeClientProtocolEvent, Subscriber, SubscriberPoll,
 };
 
 impl Drop for Subscriber {
@@ -108,11 +109,14 @@ impl RuntimeClientProjection {
                 earliest_serviceable: earliest,
             };
         }
-        let Some((cursor, event)) = self
-            .replay
-            .iter()
-            .find(|(cursor, _)| *cursor > consumed)
-            .map(|(cursor, event)| (*cursor, event.clone()))
+        // Published cursors advance by one and eviction removes only a
+        // prefix. A following subscriber is usually at the far end of the ring.
+        let wanted = consumed.get().checked_add(1);
+        let Some((cursor, event)) = wanted
+            .and_then(|wanted| wanted.checked_sub(self.replay.front()?.0.get()))
+            .and_then(|offset| usize::try_from(offset).ok())
+            .and_then(|index| self.replay.get(index))
+            .filter(|(cursor, _)| Some(cursor.get()) == wanted)
         else {
             // Unreachable while `consumed < self.cursor` and
             // `consumed >= earliest_serviceable`; treated as lag rather
@@ -122,8 +126,11 @@ impl RuntimeClientProjection {
                 earliest_serviceable: earliest,
             };
         };
-        subscriber.consumed = cursor;
-        SubscriberPoll::Event(RuntimeClientProtocolEvent { cursor, event })
+        subscriber.consumed = *cursor;
+        SubscriberPoll::Event(RuntimeClientProtocolEvent {
+            cursor: *cursor,
+            event: event.clone(),
+        })
     }
 
     /// Removes one registered subscriber (attachment detach, re-subscribe,
@@ -155,12 +162,12 @@ impl RuntimeClientProjection {
     /// Inspect the actual working owner in source-prefix-gap regression tests.
     /// `snapshot()` and `snapshot_ref()` intentionally expose published state.
     #[cfg(test)]
-    pub(crate) fn working_snapshot_for_test(&self) -> &RuntimeClientSnapshot {
+    pub(crate) fn working_snapshot_for_test(&self) -> &SharedSnapshot {
         &self.snapshot
     }
 
     /// The current snapshot read model reference (host/tests).
-    pub(crate) fn snapshot_ref(&self) -> &RuntimeClientSnapshot {
+    pub(crate) fn snapshot_ref(&self) -> &SharedSnapshot {
         self.published_seed
             .as_ref()
             .map_or(&self.snapshot, |seed| &seed.snapshot)
@@ -168,9 +175,7 @@ impl RuntimeClientProjection {
 
     /// The current snapshot read model reference, failing explicitly once
     /// the observation stream is exhausted.
-    pub(crate) fn snapshot_ref_checked(
-        &self,
-    ) -> Result<&RuntimeClientSnapshot, RuntimeClientError> {
+    pub(crate) fn snapshot_ref_checked(&self) -> Result<&SharedSnapshot, RuntimeClientError> {
         if self.exhausted {
             return Err(RuntimeClientError::ProjectionExhausted);
         }

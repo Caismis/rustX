@@ -59,7 +59,8 @@ pub(crate) struct Publication {
 }
 /// Pending proves the callback took no bytes; Discarded advances the queue.
 pub(crate) enum Acceptance<T> {
-    Accepted(String, T),
+    /// A replacement record, or the caller's original when absent.
+    Accepted(Option<String>, T),
     Pending,
     Discarded,
     Failed(io::Error),
@@ -260,20 +261,18 @@ impl Publication {
         let current = slot
             .as_mut()
             .filter(|current| current.id == self.registration.id);
-        let selected = match (&self.kind, current.as_ref()) {
-            (Kind::Receipt { .. }, Some(current)) if current.state == State::PendingReceipt => {
-                record
-            }
-            (Kind::Receipt { superseded }, _) => superseded,
+        let replacement = match (&self.kind, current.as_ref()) {
+            (Kind::Receipt { .. }, Some(current)) if current.state == State::PendingReceipt => None,
+            (Kind::Receipt { superseded }, _) => Some(superseded.as_str()),
             (Kind::Event { .. } | Kind::Auxiliary { .. }, Some(current))
                 if current.state == State::Following =>
             {
-                record
+                None
             }
-            (Kind::Resync, Some(current)) if current.state == State::RecoveryRequired => record,
+            (Kind::Resync, Some(current)) if current.state == State::RecoveryRequired => None,
             _ => return Acceptance::Discarded,
         };
-        match accept(selected) {
+        match accept(replacement.unwrap_or(record)) {
             Poll::Pending => Acceptance::Pending,
             Poll::Ready(Err(error)) => Acceptance::Failed(error),
             Poll::Ready(Ok(value)) => {
@@ -287,7 +286,7 @@ impl Publication {
                     }
                 }
                 self.registration.slot.1.notify_waiters();
-                Acceptance::Accepted(selected.to_owned(), value)
+                Acceptance::Accepted(replacement.map(str::to_owned), value)
             }
         }
     }

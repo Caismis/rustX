@@ -8,8 +8,10 @@ use crate::durable::auxiliary::{
     AuxiliarySettlementCommit, AuxiliaryWriteFailure, auxiliary_settlement_envelope,
 };
 use crate::events::types::RuntimeEvent;
+use crate::model::adapter::validation::{PreparedModelRequest, prepare_request_with_limit};
 use crate::model::auxiliary::{
-    AuxiliaryCallOutcome, AuxiliaryRequestEvidence, AuxiliaryUsageCompleteness,
+    AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryRequestEvidence,
+    AuxiliaryUsageCompleteness,
 };
 use crate::model::{
     AuxiliaryCallStart, ModelError, ModelErrorKind, ModelRequest, ModelRequestOwner,
@@ -26,7 +28,7 @@ struct Execution {
     resources: Arc<super::executor::ExecutionResources>,
     client: AuxiliaryWriterClient,
     start: Arc<AuxiliaryCallStart>,
-    request: ModelRequest,
+    prepared: Option<PreparedModelRequest>,
     request_id: crate::runtime::identity::RequestId,
     ordinal: u32,
     dispatch_check: Option<Arc<dyn super::executor::AuxiliaryDispatchCheck>>,
@@ -74,6 +76,7 @@ pub(super) fn execute(
     let FrozenCall {
         start,
         request,
+        provider_body_limit,
         invocation,
         timeout,
         resource_revision,
@@ -91,7 +94,7 @@ pub(super) fn execute(
         resources,
         client,
         start: Arc::new(start),
-        request,
+        prepared: None,
         request_id: record.request_id.clone(),
         ordinal: 0,
         dispatch_check,
@@ -113,7 +116,7 @@ pub(super) fn execute(
         required_failure: None,
     };
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        handle.block_on(execution.run())
+        handle.block_on(execution.run(request, provider_body_limit))
     }));
     match run {
         Ok(Ok(())) => {}
@@ -156,8 +159,13 @@ pub(super) fn execute(
 
 impl Execution {
     #[allow(clippy::too_many_lines)] // Frozen preflight, confirmed starts and the one-shot dispatch form one progression.
-    async fn run(&mut self) -> Result<(), ContextError> {
-        let request = &self.request;
+    async fn run(
+        &mut self,
+        request: ModelRequest,
+        provider_body_limit: Option<usize>,
+    ) -> Result<(), ContextError> {
+        let authority = &self.record.scope.authority;
+        authority.check(&self.record.cancellation)?;
         if !self.timeout.is_positive()
             || request.model().is_empty()
             || request.model().len() > crate::model::AUXILIARY_REQUEST_MODEL_BYTES_MAX
@@ -184,21 +192,15 @@ impl Execution {
                 "invalid auxiliary frozen ownership or continuation/tool authority",
             ));
         }
-        crate::model::adapter::validation::validate_request(
-            request,
-            self.invocation.adapter().protocol(),
-        )
-        .map_err(|error| not_started(&error.message))?;
-        super::output::validate_prepared(request).map_err(|error| not_started(&error.message))?;
+        super::output::validate_prepared(&request).map_err(|error| not_started(&error.message))?;
         if request.response_schema.is_some() {
             use crate::context::tokens::{DefaultTokenEstimator, TokenEstimator};
-            let input = DefaultTokenEstimator.estimate_frozen_request(request);
+            let input = DefaultTokenEstimator.estimate_frozen_request(&request);
             let image_tokens = crate::model::media::image_cost_input(&request.messages, |id| {
-                request.images.get(id).and_then(|bytes| {
-                    crate::model::images::measure_png(bytes)
-                        .ok()
-                        .map(crate::model::images::ImageMeasurement::input_tokens)
-                })
+                request
+                    .images
+                    .get(id)
+                    .and_then(crate::model::images::FrozenImage::input_tokens)
             });
             if input
                 .saturating_add(image_tokens)
@@ -210,6 +212,34 @@ impl Execution {
                 ));
             }
         }
+        // Only the admitted worker owns the transport body, through settlement.
+        // Recheck scope authority after synchronous preparation, before CallStart.
+        authority.check(&self.record.cancellation)?;
+        let prepared = prepare_request_with_limit(
+            request,
+            self.invocation.adapter().protocol(),
+            provider_body_limit,
+        );
+        authority.check(&self.record.cancellation)?;
+        self.prepared = Some(prepared.map_err(|error| {
+            let public_submission = matches!(
+                self.start.business_source,
+                AuxiliaryBusinessSource::Submission { .. }
+            );
+            if provider_body_limit.is_some() && error.kind == ModelErrorKind::ContextWindowExceeded
+            {
+                let message = if public_submission {
+                    "auxiliary provider request exceeds 64 MiB".into()
+                } else {
+                    error.message
+                };
+                ContextError::new(ContextErrorKind::CannotFit, message)
+            } else if public_submission {
+                not_started("auxiliary history cannot be translated for the selected model")
+            } else {
+                not_started(&error.message)
+            }
+        })?);
         let intent = self.title_source.as_ref().map_or_else(
             || RequiredWrite::CallStart(self.start.clone(), self.resources.clock.now()),
             |source| {
@@ -314,7 +344,11 @@ impl Execution {
         let now = self.resources.monotonic.now_millis();
         // Structured consumers receive only the validated final value. Ordinary
         // text consumers retain their attempt-scoped provisional text stream.
-        let streaming_consumer = if self.request.response_schema.is_none() {
+        let prepared = self
+            .prepared
+            .as_ref()
+            .expect("admitted request was prepared");
+        let streaming_consumer = if prepared.input().response_schema.is_none() {
             self.record.consumer()
         } else {
             None
@@ -329,7 +363,7 @@ impl Execution {
         )
         .with_visible_limit(self.record.output_limit())
         .with_consumer(streaming_consumer);
-        if let Some(schema) = &self.request.response_schema {
+        if let Some(schema) = &prepared.input().response_schema {
             fold.limit_text_bytes(schema.max_output_bytes());
         }
         self.fold = Some(fold);
@@ -338,12 +372,10 @@ impl Execution {
         }
         // This is the only adapter entry for this RequestId. A panic or lost
         // acknowledgement unwinds to settlement; the consumed grant is permanent.
-        let stream = self.invocation.adapter().stream(
-            // Selected input retains immutable roots; captured image bytes are
-            // copied exactly. No retry reselects history or rereads live media.
-            self.request.clone(),
-            self.record.cancellation.child(),
-        );
+        let stream = self
+            .invocation
+            .adapter()
+            .stream_prepared(prepared.clone(), self.record.cancellation.child());
         let observed = poll_stream_owned(
             stream,
             self.fold.as_mut().expect("request fold"),
@@ -719,10 +751,14 @@ impl Execution {
                 .as_ref()
                 .map(|output| output.reasoning.clone())
                 .unwrap_or_default();
+            let prepared = self
+                .prepared
+                .as_ref()
+                .expect("settled request was prepared");
             return Ok(ConfirmedExecution {
                 output: sealed
                     .output
-                    .and_then(|output| super::output::accept_output(&self.request, output)),
+                    .and_then(|output| super::output::accept_output(prepared.input(), output)),
                 reasoning,
                 settlement,
                 usage: self.record.scope.authority.usage_report(),

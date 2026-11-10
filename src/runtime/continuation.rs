@@ -7,6 +7,8 @@
 //! only. Model adapters (M2) are responsible for converting between provider
 //! SDK state and this boundary.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 /// A continuation belongs to an actual accepted output, never a last-Assistant heuristic.
@@ -53,9 +55,9 @@ impl AcceptedOutputContinuationSource {
             native_state,
             assistant: crate::model::projected::CanonicalMessageRef::of(conversation, output),
             covered_input_fingerprint: previous_input.semantic_fingerprint(),
-            accepted_output_fingerprint: crate::model::types::semantic_messages_fingerprint(&[
-                crate::model::ModelInputMessage::Canonical(output.clone()),
-            ]),
+            accepted_output_fingerprint: crate::model::types::semantic_view_fingerprint(
+                &crate::model::projected::ModelMessageView::from(output),
+            ),
         })
     }
 }
@@ -102,7 +104,7 @@ pub enum OpenAiResponsesContinuation {
         /// Ordered output/reasoning items from the previous response that
         /// must be passed back on the next request, including opaque
         /// encrypted reasoning content.
-        items: Vec<serde_json::Value>,
+        items: Arc<Vec<serde_json::Value>>,
     },
 }
 
@@ -110,7 +112,7 @@ pub enum OpenAiResponsesContinuation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AnthropicContinuation {
     /// Opaque provider state preserved verbatim by the adapter.
-    pub opaque: serde_json::Value,
+    pub opaque: Arc<serde_json::Value>,
 }
 
 #[cfg(test)]
@@ -146,7 +148,8 @@ mod tests {
                         "encrypted_content": "opaque-encrypted-reasoning"
                     }),
                     serde_json::json!({"type": "output_text", "text": "hello"}),
-                ],
+                ]
+                .into(),
             });
         let json = serde_json::to_string(&value).expect("serialize state");
         assert!(json.contains("\"stateless\""));
@@ -156,6 +159,30 @@ mod tests {
         assert_eq!(decoded, value);
     }
 
+    #[test]
+    fn stateless_clones_share_opaque_payload_and_serialize_identically() {
+        let items = std::sync::Arc::new(vec![serde_json::json!({
+            "type": "reasoning", "encrypted_content": "opaque".repeat(65_536),
+            "future": {"nested":[1, "exact"]}
+        })]);
+        let state =
+            ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
+                items: items.clone(),
+            });
+        let ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
+            items: retry,
+        }) = state.clone()
+        else {
+            unreachable!()
+        };
+        assert!(std::sync::Arc::ptr_eq(&items, &retry));
+        let original = serde_json::json!({"openai_responses": {"stateless": {"items": &*items}}});
+        assert_eq!(
+            serde_json::to_vec(&state).unwrap(),
+            serde_json::to_vec(&original).unwrap()
+        );
+    }
+
     /// Anthropic continuation state preserves opaque provider data verbatim.
     #[test]
     fn anthropic_continuation_preserves_opaque_state() {
@@ -163,7 +190,8 @@ mod tests {
             opaque: serde_json::json!({
                 "signature": "opaque-anthropic-signature",
                 "internal": { "cursor": 7 },
-            }),
+            })
+            .into(),
         });
         let json = serde_json::to_string(&value).expect("serialize state");
         let decoded: ProviderContinuationState =

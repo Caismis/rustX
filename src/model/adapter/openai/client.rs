@@ -1,81 +1,75 @@
-//! `OpenAI` HTTP transport with automatic retry bypassed.
-//!
-//! `async-openai`'s default executor wraps the plain `ReqwestService` in
-//! `OpenAIRetryLayer`, which retries 429/5xx/connection failures with
-//! exponential backoff. Runtime policy owns retries in rustX, so the adapters
-//! never use that default executor. This module installs a custom
-//! [`NoRetryService`] that executes exactly one `reqwest` request per call,
-//! performs no retry, and normalizes HTTP failures (including `Retry-After`)
-//! into a runtime-owned [`HttpFailure`] value before any SDK error mapping.
+//! `OpenAI` request transport. An encoded request body is moved into one HTTP
+//! attempt. Response bytes stay with the polling stream and are bounded before
+//! parsing where the invocation declares a budget.
 
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-use async_openai::Client;
-use async_openai::config::OpenAIConfig;
-use async_openai::error::OpenAIError;
-use async_openai::middleware::HttpRequestFactory;
+use async_openai::config::{Config, OpenAIConfig};
+use async_openai::error::{OpenAIError, StreamError};
+use eventsource_stream::Eventsource;
+use futures_util::StreamExt;
 use reqwest::{Response, StatusCode};
 
-/// A tower service that executes one plain `reqwest` request.
-///
-/// Deliberately contains no retry middleware: a single `call` performs a
-/// single HTTP attempt. `ReqwestService` from the SDK is intentionally not
-/// reused here so the no-retry transport (including error normalization and
-/// `Retry-After` extraction) is fully rustX-owned and visible in this file.
 #[derive(Clone)]
-pub(crate) struct NoRetryService {
+pub(crate) struct OpenAiTransport {
     client: reqwest::Client,
-    response_byte_limit: Option<usize>,
+    config: OpenAIConfig,
 }
 
-impl NoRetryService {
-    pub(crate) fn bounded(client: reqwest::Client, limit: usize) -> Self {
+impl OpenAiTransport {
+    pub(crate) fn new(api_key: &str, api_base: &str, client: Option<reqwest::Client>) -> Self {
         Self {
-            client,
-            response_byte_limit: Some(limit),
+            client: client.unwrap_or_else(super::super::transport::default_client),
+            config: OpenAIConfig::new()
+                .with_api_key(api_key)
+                .with_api_base(api_base),
         }
     }
 
-    pub(crate) fn new(client: reqwest::Client) -> Self {
-        Self {
-            client,
-            response_byte_limit: None,
+    async fn send(&self, path: &str, body: bytes::Bytes) -> Result<Response, OpenAIError> {
+        self.client
+            .post(self.config.url(path))
+            .headers(self.config.headers())
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .send()
+            .await
+            .map_err(|error| OpenAIError::Boxed(Box::new(error)))
+    }
+
+    pub(crate) async fn stream(
+        &self,
+        path: &str,
+        body: bytes::Bytes,
+        response_byte_limit: Option<usize>,
+    ) -> Result<async_openai::types::stream::StreamResponse<serde_json::Value>, OpenAIError> {
+        let response = self.send(path, body).await?;
+        let response = if let Some(limit) = response_byte_limit {
+            super::super::response_budget::bounded(response, limit)
+        } else {
+            response
+        };
+        if !response.status().is_success() {
+            return Err(OpenAIError::Boxed(Box::new(
+                HttpFailure::from_response(response).await,
+            )));
         }
-    }
-}
-
-impl tower::Service<HttpRequestFactory> for NoRetryService {
-    type Response = Response;
-    type Error = tower::BoxError;
-    type Future = Pin<Box<dyn Future<Output = Result<Response, Self::Error>> + Send>>;
-
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, request: HttpRequestFactory) -> Self::Future {
-        let client = self.client.clone();
-        let limit = self.response_byte_limit;
-        Box::pin(async move {
-            let request = request.build().await.map_err(tower::BoxError::from)?;
-            let response = client
-                .execute(request)
-                .await
-                .map_err(tower::BoxError::from)?;
-            let response = if let Some(limit) = limit {
-                super::super::response_budget::bounded(response, limit)
-            } else {
-                response
-            };
-            if !response.status().is_success() {
-                return Err(tower::BoxError::from(
-                    HttpFailure::from_response(response).await,
-                ));
-            }
-            Ok(response)
-        })
+        let events = Box::pin(response.bytes_stream().eventsource());
+        Ok(Box::pin(futures_util::stream::unfold(
+            events,
+            |mut events| async move {
+                loop {
+                    let item = match events.next().await? {
+                        Ok(event) if event.data == "[DONE]" => return None,
+                        Ok(event) if event.event == "keepalive" => continue,
+                        Ok(event) => serde_json::from_str(&event.data)
+                            .map_err(|error| OpenAIError::JSONDeserialize(error, event.data)),
+                        Err(error) => Err(OpenAIError::StreamError(Box::new(
+                            StreamError::EventStream(error.to_string()),
+                        ))),
+                    };
+                    return Some((item, events));
+                }
+            },
+        )))
     }
 }
 
@@ -177,19 +171,6 @@ fn provider_code_value(value: &serde_json::Value) -> Option<String> {
     }
 }
 
-/// Builds an SDK client whose transport is the rustX-owned no-retry service.
-pub(crate) fn build_client(
-    api_key: &str,
-    api_base: &str,
-    http_client: Option<reqwest::Client>,
-) -> Client<OpenAIConfig> {
-    let service = NoRetryService::new(http_client.unwrap_or_default());
-    let openai_config = OpenAIConfig::new()
-        .with_api_key(api_key.to_owned())
-        .with_api_base(api_base.to_owned());
-    Client::with_config(openai_config).with_http_service(service)
-}
-
 /// Recovers a captured [`HttpFailure`] from an SDK error.
 pub(crate) fn http_failure_of(error: &OpenAIError) -> Option<&HttpFailure> {
     match error {
@@ -203,6 +184,52 @@ mod tests {
     use super::{HttpFailure, parse_error_body, parse_retry_after};
     use crate::model::error::{ModelErrorKind, ModelRetryDisposition};
     use reqwest::StatusCode;
+
+    #[tokio::test]
+    async fn default_transport_reuses_connection_without_sharing_binding_headers() {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut requests = Vec::new();
+                // Both bindings must use this one persistent connection.
+                for _ in 0..2 {
+                    let mut headers = Vec::new();
+                    loop {
+                        let mut line = String::new();
+                        assert!(reader.read_line(&mut line).await.unwrap() > 0);
+                        if line == "\r\n" { break; }
+                        headers.push(line);
+                    }
+                    let length = headers.iter().find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    }).unwrap_or(0);
+                    reader.read_exact(&mut vec![0; length]).await.unwrap();
+                    requests.push(headers);
+                    reader.get_mut().write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}").await.unwrap();
+                }
+                requests
+            });
+            for (path, key) in [("left", "fixture-left"), ("right", "fixture-right")] {
+                let client = super::OpenAiTransport::new(key, &format!("{base}/{path}"), None);
+                assert_eq!(client.send("/chat/completions", bytes::Bytes::from_static(b"{}")).await.unwrap().bytes().await.unwrap().as_ref(), b"{}");
+            }
+            let requests = server.await.unwrap();
+            for (headers, (path, key)) in requests.iter().zip([("left", "fixture-left"), ("right", "fixture-right")]) {
+                assert!(headers[0].starts_with(&format!("POST /{path}/chat/completions ")));
+                let authorization = headers.iter().find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("authorization").then(|| value.trim())
+                });
+                assert_eq!(authorization, Some(format!("Bearer {key}").as_str()));
+            }
+        }).await.expect("two bindings must reuse the credential-free HTTP pool");
+    }
 
     /// `Retry-After` seconds convert to milliseconds.
     #[test]

@@ -1,0 +1,51 @@
+{
+  "accepted": true,
+  "errors": [],
+  "started_utc": "2026-10-27T10:48:23.362721+00:00",
+  "verification_script_sha256": "2f0af31d44cf740f3d66a3b36b0f75d4613201b293d8a20fd05fbb4cf48d0f3b",
+  "actual_host_binaries_reverified": false,
+  "actual_host_sources_reverified": false,
+  "commands": [
+    {
+      "argv": [
+        "python3",
+        "audit-live-large-regression.py",
+        "--root",
+        ".",
+        "--raw-only",
+        "--formal-audit",
+        "../direct-raw-audit.json",
+        "--output",
+        "../live-large-regression-raw-audit.json"
+      ],
+      "cwd": "/home/capi/.cache/rustx-pr485-owner-reuse-portable-verification/raw",
+      "start_utc": "2026-10-27T10:48:24.553878+00:00",
+      "end_utc": "2026-10-27T10:48:27.182483+00:00",
+      "exit": 0,
+      "stdout_sha256": "ea4230bb8595837fff15743478a85d79704725bb30d50d21e58683c37b8746d2",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "formal_products": 120,
+  "separate_supplemental_products": 14,
+  "new_pi_products": 0,
+  "new_deepseek_products": 0,
+  "complete_supplemental_comparison": {
+    "products": 14,
+    "comparisons": 7,
+    "checked_requests": 672,
+    "all_metrics_adverse_missing_and_initial_formal_records_equal": true,
+    "allowed_differences": "Explicit raw-only mode, created timestamp and fresh formal report path/hash/mode only."
+  },
+  "base_receipt_sha256": "2a5d44a14e3c0aab2fbf39e27afb5168397f94fb3f957ee0de7d48ce0b68a1e9",
+  "archive_sha256": "dcee5a053499af6e65f32c2523272f5bc1ca2f55d0262399cbdde68d4986516c",
+  "manifest_sha256": "b852faf71fa5103d6839c24faeba40afa0e721fd2a16aa8410e0113e7594bdd0",
+  "strict_supplement_sha256": "0c89498a77e617d448e3a7b032d86387b5271e2fa47c1024015d4ae5c81ab4f2",
+  "raw_supplement_sha256": "dac1991b97aa410ac1be787394b3c4c356d5c934ff8de7a93e1421020885119b",
+  "fresh_formal_sha256": "e24d6937471cf60b46972ebc1e78124c63c1e53011c01f910071adc7443ff7f3",
+  "verified_payload_files": 1134,
+  "verified_payload_bytes": 1645384310,
+  "before_and_after_complete_raw_inventory_and_hashes_match": true,
+  "finished_utc": "2026-10-27T10:48:28.307959+00:00",
+  "scope": "Independent retained-arithmetic replay of the separate post-hoc seven-pair Rust supplement after accepted base archive replay; no pooling, fresh historical host identity verification or parity claim."
+}

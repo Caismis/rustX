@@ -3,6 +3,7 @@ use super::{
     Connection, ConversationStoreError, HEADER_ENCODED_MAX, TraceCanonicalSummary, TraceFieldKind,
     TraceFieldSource, TraceToolProposalSummary, encode, params, storage,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::message::types::{
     AssistantContentBlock as A, ContextKind, InboundKind, MessageBlock, UserContentBlock as U,
 };
@@ -27,13 +28,18 @@ fn binding(
         block_index: crate::message::types::ContentBlockIndex::new(block),
     };
     let raw = if component == Component::Payload && field == TraceFieldKind::Arguments {
-        super::super::content::descriptor(connection, conversation, &source, Rep::RawJsonUtf8)?
+        crate::durable::sqlite::content::descriptor(
+            connection,
+            conversation,
+            &source,
+            Rep::RawJsonUtf8,
+        )?
     } else {
         None
     };
     let reference = match raw {
         Some(reference) => reference,
-        None => super::super::content::descriptor(
+        None => crate::durable::sqlite::content::descriptor(
             connection,
             conversation,
             &source,
@@ -46,7 +52,7 @@ fn binding(
         binding: crate::observation::cut::ContentBinding {
             path: Vec::new(),
             source_path: Some(path.iter().map(|part| (*part).into()).collect()),
-            content_ref: reference,
+            content_ref: reference.into(),
             deferred: true,
         },
     })
@@ -271,7 +277,7 @@ pub(in crate::durable::sqlite) fn index_proposals(
             let index =
                 u32::try_from(index).map_err(|_| storage("native proposal block exhausted"))?;
             let summary = proposal_from(connection, conversation, position, index, ordinal, call)?;
-            connection.execute("UPDATE canonical_tool_calls SET observation_trace_proposal=?3,observation_tool_identity_digest=?4 WHERE observation_ledger=?1 AND block_index=?2",params![position,index,encode(&summary)?,super::inspection::tool_identity_digest(&call.tool_id).as_slice()]).map_err(|error|storage(error.to_string()))?;
+            connection.execute("UPDATE canonical_tool_calls SET observation_trace_proposal=?3,observation_tool_identity_digest=?4 WHERE observation_ledger=?1 AND block_index=?2",params![position,index,encode(&summary)?,super::inspection::tool_identity_digest(&call.tool_id).as_slice()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             ordinal += 1;
         }
     }
@@ -373,7 +379,11 @@ fn seal_canonical(
     position: u64,
     summary: &mut TraceCanonicalSummary,
 ) -> Result<(), ConversationStoreError> {
-    while crate::observation::bounded::bounded_bytes(summary, HEADER_ENCODED_MAX).is_none() {
+    let bytes = loop {
+        if let Some(bytes) = crate::observation::bounded::bounded_bytes(summary, HEADER_ENCODED_MAX)
+        {
+            break bytes;
+        }
         summary.truncated = true;
         if let Some(call) = summary.calls.pop() {
             let frontier = summary
@@ -392,13 +402,13 @@ fn seal_canonical(
             continue;
         }
         return Err(storage("native canonical Trace descriptor cannot fit"));
-    }
+    };
     connection
-        .execute(
+        .execute_cached(
             "UPDATE message_ledger SET observation_trace_summary=?2 WHERE position=?1",
-            params![position, encode(summary)?],
+            params![position, bytes],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 

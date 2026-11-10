@@ -1,0 +1,28 @@
+Reader audit: candidate E Original versus forced Indexed inside the same release-test binary.
+Recommendation: E should not be accepted unchanged. The dense fixture has stable material read regressions; reject it in this iteration. A future point-lookup candidate would need separate validation and measurement before retention.
+Fixtures: small = 1059 bytes, 78 geometry nodes, 32 properties; dense = 16383 bytes, 1256 geometry nodes, 621 properties. Each cell has 224 reads (7 alternating-order pairs x 32 reads).
+
+Median reader latency (Original / Indexed), ratio and range of seven paired median ratios:
+near_16k_dense reopened field          1032.9 /    108.9 us  ratio  9.48  paired [9.25,9.68]  adverse 7/7
+near_16k_dense reopened page32         7162.8 /   1854.5 us  ratio  3.86  paired [3.84,3.89]  adverse 7/7
+near_16k_dense reopened range257       1068.3 /    124.2 us  ratio  8.60  paired [8.40,8.75]  adverse 7/7
+near_16k_dense reopened root_preview   6811.5 /   1688.3 us  ratio  4.03  paired [4.01,4.05]  adverse 7/7
+near_16k_dense warm     field           940.4 /     40.3 us  ratio 23.33  paired [23.13,23.51]  adverse 7/7
+near_16k_dense warm     page32         7056.7 /   1726.4 us  ratio  4.09  paired [4.04,4.14]  adverse 7/7
+near_16k_dense warm     range257        972.3 /     52.4 us  ratio 18.54  paired [18.40,18.68]  adverse 7/7
+near_16k_dense warm     root_preview   6695.3 /   1549.1 us  ratio  4.32  paired [4.30,4.35]  adverse 7/7
+small          reopened field           152.4 /     97.5 us  ratio  1.56  paired [1.51,1.63]  adverse 7/7
+small          reopened page32          641.4 /   1484.6 us  ratio  0.43  paired [0.43,0.43]  adverse 0/7
+small          reopened range257        164.2 /    102.7 us  ratio  1.60  paired [1.57,1.64]  adverse 7/7
+small          reopened root_preview    664.4 /   1450.6 us  ratio  0.46  paired [0.45,0.46]  adverse 0/7
+small          warm     field            73.1 /     25.1 us  ratio  2.91  paired [2.84,2.94]  adverse 7/7
+small          warm     page32          547.1 /   1373.1 us  ratio  0.40  paired [0.40,0.40]  adverse 0/7
+small          warm     range257         81.2 /     31.6 us  ratio  2.57  paired [2.56,2.59]  adverse 7/7
+small          warm     root_preview    556.0 /   1329.9 us  ratio  0.42  paired [0.42,0.42]  adverse 0/7
+
+Dense absolute median penalty is about 0.90–0.94 ms for field/range and 5.12–5.33 ms for page32/root preview. Worst Original single observation is warm dense page32 at 8.036 ms; corresponding group p95 is 7.105 ms. All eight dense cells are worse in all seven paired groups. Worst paired median ratio is warm dense field 23.51x.
+Small page32/root preview improve to 0.40–0.46x Indexed; small single field/range regress by about 48–62 us. Thus the representation is not uniformly bad, but the current per-field full metadata traversal scales poorly with schema density.
+A future point-lookup candidate could remove repeated whole-tree expansion/path encoding; no implementation is authorized or started here. It cannot eliminate the per-operation parse and complete validation cost, so single-field/range parity remains uncertain; preserve all validation and measure again.
+CPU uses 100 Hz /proc process ticks: many individual fast reads report 0, so per-read CPU is not precise. No full-product performance conclusion is supported by this representation diagnostic. Other limitations: cfg(test) instrumentation, empty native history, first 32 properties, warm OS page cache, open/close/destruction excluded.
+Sources: candidate-e-reader.json; exact derived statistics and pair values: reader-audit.json. No source changes or product runs were performed by this audit.
+Input SHA256: a6e05c21aced6c4e62f0353b2a61da9f423899fd9c30d6953b84f18e317aa9b9; validated 224 batches / 7168 reads with complete pair ordering and no duplicate sample identities.

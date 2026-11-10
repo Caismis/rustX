@@ -27,14 +27,23 @@ fn t09_t12_t19_pending_layout_cleanup_failure_cannot_refuse_native_adoption() {
         let store = store();
         store.initialize(&[]).unwrap();
         let accepted = store
-            .accept_inbound(draft("original accepted body🙂"))
+            .accept_inbound(draft(&"original accepted body🙂".repeat(4000)))
             .unwrap();
         let before = accepted.read_cut.clone();
-        let original = store
-            .pending_value_read(&before, accepted.sequence.get(), 0, 65_536)
-            .unwrap();
+        // Populate both the inline first chunk and overflow table so either
+        // injected DELETE failure exercises a real retained source row.
+        let mut bytes = Vec::new();
+        let mut offset = 0;
+        loop {
+            let chunk = store
+                .pending_value_read(&before, accepted.sequence.get(), offset, 65_536)
+                .unwrap();
+            bytes.extend_from_slice(&chunk.bytes);
+            let Some(next) = chunk.next_offset else { break };
+            offset = next;
+        }
         let original: UserMessageBlock = crate::observation::bounded::decode_domain_value(
-            serde_json::from_slice(&original.bytes).unwrap(),
+            serde_json::from_slice(&bytes).unwrap(),
         )
         .unwrap();
         assert_eq!(original, accepted.message);
@@ -101,7 +110,7 @@ fn t09_t12_t19_pending_layout_cleanup_failure_cannot_refuse_native_adoption() {
     }
 }
 
-pub(super) fn assert_stale_pending_layout_is_unreachable(
+pub(in crate::durable::sqlite) fn assert_stale_pending_layout_is_unreachable(
     store: &SqliteConversationStore,
     before: &crate::durable::reading::ConversationReadCut,
     after: &crate::durable::reading::ConversationReadCut,
@@ -147,7 +156,7 @@ pub(super) fn assert_stale_pending_layout_is_unreachable(
     ));
 }
 
-pub(super) fn original_event_result_ranges(
+pub(in crate::durable::sqlite) fn original_event_result_ranges(
     store: &SqliteConversationStore,
     sequence: u64,
 ) -> Vec<u8> {
@@ -173,7 +182,7 @@ pub(super) fn original_event_result_ranges(
     bytes
 }
 
-pub(super) fn original_tool_before_result()
+pub(in crate::durable::sqlite) fn original_tool_before_result()
 -> (SqliteConversationStore, AttemptId, MessageBlock, ToolCall) {
     let store = store();
     store.initialize(&[]).unwrap();
@@ -206,7 +215,7 @@ pub(super) fn original_tool_before_result()
     (store, attempt, proposal, call)
 }
 
-pub(super) fn original_success_tool_result() -> ToolExecutionResult {
+pub(in crate::durable::sqlite) fn original_success_tool_result() -> ToolExecutionResult {
     use crate::tools::types::ToolResultContent;
     ToolExecutionResult {
         status: ToolExecutionStatus::Success,
@@ -228,7 +237,7 @@ pub(super) fn original_success_tool_result() -> ToolExecutionResult {
     }
 }
 
-pub(super) fn commit_original_tool_result(
+pub(in crate::durable::sqlite) fn commit_original_tool_result(
     store: &SqliteConversationStore,
     attempt: &AttemptId,
     proposal: &MessageBlock,
@@ -243,7 +252,7 @@ pub(super) fn commit_original_tool_result(
         ),
         tool_call_id: call.id.clone(),
         tool_id: call.tool_id.clone(),
-        result: result.clone(),
+        result: result.clone().into(),
     });
     let (committed, receipt) = store
         .append_canonical_with_event(
@@ -279,7 +288,7 @@ fn t08_t12_t19_successful_tool_j_before_c_keeps_original_content_and_available_s
             RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: call.id.clone(),
                 tool_id: call.tool_id.clone(),
-                result: result.clone(),
+                result: result.clone().into(),
             },
         ))
         .unwrap();
@@ -355,11 +364,11 @@ fn t08_t12_t19_request_metadata_requires_the_original_message_producer_path() {
         id: ToolId::new("metadata-tool"),
         name: "Original".into(),
         description: "Original schema".into(),
-        input_schema: opaque.clone(),
+        input_schema: opaque.clone().into(),
     }];
     let mut deferred = snapshot.tool_definitions[0].clone();
     deferred.id = ToolId::new("metadata-unsafe-original");
-    deferred.input_schema["integer"] = serde_json::json!(u64::MAX);
+    std::sync::Arc::make_mut(&mut deferred.input_schema)["integer"] = serde_json::json!(u64::MAX);
     snapshot.tool_definitions.push(deferred);
     freeze_test_input(&store, &mut snapshot, &[]);
     let started = store
@@ -425,7 +434,7 @@ fn t08_t12_t19_request_metadata_requires_the_original_message_producer_path() {
     );
 }
 
-pub(super) fn assert_deferred_original_schema(
+pub(in crate::durable::sqlite) fn assert_deferred_original_schema(
     store: &SqliteConversationStore,
     sequence: u64,
     original: &serde_json::Value,
@@ -607,7 +616,7 @@ fn t08_t14_t19_giant_final_member_identity_is_deferred_until_original_terminal()
     assert_eq!(store.load_messages(&[id]).unwrap().len(), 1);
 }
 
-pub(super) fn member_original_identity(
+pub(in crate::durable::sqlite) fn member_original_identity(
     store: &SqliteConversationStore,
     reference: &crate::observation::content::ContentRef,
 ) -> String {
@@ -632,7 +641,7 @@ pub(super) fn member_original_identity(
         .to_owned()
 }
 
-pub(super) fn member_completed_lineage(original: &str) -> LineageSeed {
+pub(in crate::durable::sqlite) fn member_completed_lineage(original: &str) -> LineageSeed {
     use crate::durable::reading::{
         ConversationTurnId, InheritedTurnOutcome, TurnExecution, TurnReadingProvenance,
     };
@@ -805,7 +814,7 @@ fn t14_t19_unowned_assistant_journal_has_no_fabricated_member_owner() {
     );
 }
 
-pub(super) fn member_source_page(
+pub(in crate::durable::sqlite) fn member_source_page(
     store: &SqliteConversationStore,
     cut: &crate::durable::observation::ObservationReadCut,
 ) -> crate::observation::transcript::RuntimeClientTranscriptPage {
@@ -1064,7 +1073,7 @@ fn t10_t14_t19_terminal_witness_enrichment_failure_preserves_original_failed_can
     }
 }
 
-pub(super) fn assert_faulted_terminal_originals(
+pub(in crate::durable::sqlite) fn assert_faulted_terminal_originals(
     store: &SqliteConversationStore,
     terminal: &RuntimeEventEnvelope,
     outcome: &RuntimeEvent,
@@ -1112,7 +1121,10 @@ pub(super) fn assert_faulted_terminal_originals(
     assert_eq!(store.observation_read_cut().unwrap(), cut);
 }
 
-pub(super) fn assert_unfaulted_event_fallback(store: &SqliteConversationStore, after: u64) {
+pub(in crate::durable::sqlite) fn assert_unfaulted_event_fallback(
+    store: &SqliteConversationStore,
+    after: u64,
+) {
     store
         .lock()
         .unwrap()
@@ -1139,17 +1151,16 @@ pub(super) fn assert_unfaulted_event_fallback(store: &SqliteConversationStore, a
     );
     assert!(!next.observation.as_ref().unwrap().source_unavailable);
     let present:bool=store.lock().unwrap().query_row(
-        "SELECT observation_json IS NOT NULL AND length(observation_json)<=16384 AND observation_unavailable=0 FROM events WHERE sequence=?1",[next.sequence],|row|row.get(0),
+        "SELECT observation_witness IS NOT NULL AND length(observation_witness)<=16384 AND observation_unavailable=0 FROM events WHERE sequence=?1",[next.sequence],|row|row.get(0),
     ).unwrap();
     assert!(present);
 }
 
 #[test]
-fn t10_t14_t19_bounded_event_fallback_failure_keeps_original_terminal_and_lifecycle() {
+fn t10_t14_t19_event_witness_failure_keeps_original_terminal_and_lifecycle() {
     use crate::events::types::AttemptFailure;
     use crate::runtime::types::{CancellationReason, RuntimeError};
     for (column, condition) in [
-        ("observation_json", "1=1"),
         ("observation_unavailable", "NEW.observation_unavailable=0"),
         ("observation_transcript", "1=1"),
         ("observation_witness", "1=1"),
@@ -1200,24 +1211,12 @@ fn t10_t14_t19_bounded_event_fallback_failure_keeps_original_terminal_and_lifecy
                 &outcome,
                 column == "observation_witness",
             );
-            if column == "observation_json" {
-                let missing: bool = store
-                    .lock()
-                    .unwrap()
-                    .query_row(
-                        "SELECT observation_json IS NULL FROM events WHERE sequence=?1",
-                        [terminal.sequence],
-                        |row| row.get(0),
-                    )
-                    .unwrap();
-                assert!(missing);
-            }
             assert_unfaulted_event_fallback(&store, terminal.sequence);
         }
     }
 }
 
-pub(super) fn derived_enrichment_proposal() -> (MessageBlock, ToolCall) {
+pub(in crate::durable::sqlite) fn derived_enrichment_proposal() -> (MessageBlock, ToolCall) {
     let call = ToolCall {
         id: ToolCallId::new("derived-tool-call"),
         tool_id: ToolId::new("derived-tool"),
@@ -1233,7 +1232,7 @@ pub(super) fn derived_enrichment_proposal() -> (MessageBlock, ToolCall) {
     )
 }
 
-pub(super) fn assert_derived_source_unavailable(
+pub(in crate::durable::sqlite) fn assert_derived_source_unavailable(
     store: &SqliteConversationStore,
     event: &RuntimeEventEnvelope,
 ) {
@@ -1259,7 +1258,7 @@ pub(super) fn assert_derived_source_unavailable(
     assert!(unavailable);
 }
 
-pub(super) fn assert_native_proposal_owner(
+pub(in crate::durable::sqlite) fn assert_native_proposal_owner(
     store: &SqliteConversationStore,
     proposal: &MessageBlock,
     call: &ToolCall,
@@ -1279,7 +1278,7 @@ pub(super) fn assert_native_proposal_owner(
     assert_eq!(native_sequence, sequence);
 }
 
-pub(super) fn assert_unfaulted_original_tool_failure(
+pub(in crate::durable::sqlite) fn assert_unfaulted_original_tool_failure(
     store: &SqliteConversationStore,
     attempt: &AttemptId,
     call: &ToolCall,

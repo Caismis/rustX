@@ -1,7 +1,13 @@
 //! Native-transaction descriptor indexes with bounded physical observation reads.
 
+use crate::durable::sqlite::statements::FixedStatements;
 #[cfg(test)]
-mod tests;
+use index::record_descriptor_work;
+#[cfg(test)]
+pub(super) use index::{descriptor_work, take_publication_capture_work};
+use rusqlite::Transaction;
+#[cfg(test)]
+pub(super) mod tests;
 
 pub(super) mod index;
 mod store;
@@ -30,11 +36,12 @@ pub(super) fn cut(
         inherited_through: super::canonical::transcript::inherited_transcript_through(connection)?,
     })
 }
-pub(super) fn validate(
+
+fn validate_actual(
     connection: &Connection,
     conversation: &ConversationId,
     expected: &ObservationReadCut,
-) -> Result<(), ConversationStoreError> {
+) -> Result<ObservationReadCut, ConversationStoreError> {
     let actual = cut(connection, conversation)?;
     if expected.read.ledger_through != expected.ledger_through
         || expected.read.surface_revision != expected.surface_revision
@@ -48,7 +55,27 @@ pub(super) fn validate(
         return Err(ConversationStoreError::ObservationCutExpired);
     }
     validate_canonical_provenance(connection, expected)?;
-    Ok(())
+    Ok(actual)
+}
+
+/// Facts from the actual native head, authenticated for one borrowed transaction.
+/// This is deliberately not a transferable cut or a connection-wide cache. The
+/// consumers are read-only; the guard also rejects an intervening write/upgrade,
+/// including a write subsequently rolled back to a savepoint.
+pub(super) struct ValidatedCut<'read, 'connection> {
+    transaction: &'read Transaction<'connection>,
+    expected: &'read ObservationReadCut,
+    actual: ObservationReadCut,
+    changes: u64,
+    states: (rusqlite::TransactionState, rusqlite::TransactionState),
+}
+
+pub(super) fn validate(
+    connection: &Connection,
+    conversation: &ConversationId,
+    expected: &ObservationReadCut,
+) -> Result<(), ConversationStoreError> {
+    validate_actual(connection, conversation, expected).map(|_| ())
 }
 fn validate_canonical_provenance(
     connection: &Connection,
@@ -57,9 +84,9 @@ fn validate_canonical_provenance(
     if expected.ledger_through == 0 {
         return Ok(());
     }
-    let (journal,transcript): (Option<u64>,Option<u64>)=connection.prepare_cached("SELECT h.journal_position,l.native_transcript FROM message_ledger l LEFT JOIN observation_headers h ON h.ledger_position=l.position WHERE l.position=?1").map_err(|error|storage(error.to_string()))?.query_row([expected.ledger_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?.ok_or_else(||storage("native canonical source position missing"))?;
+    let (journal,transcript): (Option<u64>,Option<u64>)=connection.prepare_cached("SELECT h.journal_position,l.native_transcript FROM message_ledger l LEFT JOIN observation_headers h ON h.ledger_position=l.position WHERE l.position=?1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row([expected.ledger_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.ok_or_else(||storage("native canonical source position missing"))?;
     let journal = journal.ok_or_else(|| storage("native canonical cut provenance unavailable"))?;
-    let append:Option<u64>=connection.prepare_cached("SELECT first_append_revision FROM message_ledger INDEXED BY message_ledger_append_position_idx WHERE first_append_revision IS NOT NULL AND position<=?1 ORDER BY position DESC LIMIT 1").map_err(|error|storage(error.to_string()))?.query_row([expected.ledger_through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let append:Option<u64>=connection.prepare_cached("SELECT first_append_revision FROM message_ledger INDEXED BY message_ledger_append_position_idx WHERE first_append_revision IS NOT NULL AND position<=?1 ORDER BY position DESC LIMIT 1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row([expected.ledger_through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if journal > expected.read.journal
         || transcript.is_some_and(|position| position > expected.read.transcript)
         || append.is_some_and(|revision| revision > expected.surface_revision.get())
@@ -104,12 +131,12 @@ fn has_text_preview(message: &MessageBlock) -> bool {
 }
 fn identity(connection: &Connection) -> Result<ConversationId, ConversationStoreError> {
     let id: String = connection
-        .query_row(
+        .query_row_cached(
             "SELECT conversation_id FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     ConversationId::parse(id).map_err(storage)
 }
 fn message_locator(
@@ -167,13 +194,13 @@ pub(super) fn messages(
             "message header offset beyond native frontier".into(),
         ));
     }
-    let mut statement=connection.prepare_cached("SELECT h.header_json FROM observation_headers h WHERE h.ledger_position>?1 AND h.ledger_position<=?2 AND h.reference_kind='message' ORDER BY h.ledger_position LIMIT ?3").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT h.header_json FROM observation_headers h WHERE h.ledger_position>?1 AND h.ledger_position<=?2 AND h.reference_kind='message' ORDER BY h.ledger_position LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
             params![seq_to_i64(offset)?, seq_to_i64(total)?, limit],
             |row| row.get::<_, Vec<u8>>(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut headers = Vec::new();
     for row in rows {
         let bytes = row.map_err(|error| storage(error.to_string()))?;
@@ -206,20 +233,75 @@ pub(super) fn messages(
         next_offset: (next < total).then_some(next),
     })
 }
-pub(super) fn transcript(
+/// Exact source identity retained after ordinary descriptor and Tool validation.
+/// Tool bytes come from their existing bounded encoding, never a second pass.
+pub(super) const TRANSCRIPT_ROW_PROOF_BYTES: usize = 786_432;
+
+pub(super) struct TranscriptRowProof {
+    cursor: u64,
+    kind: String,
+    identity: String,
+    ledger: Option<u64>,
+    journal: u64,
+    bytes: Vec<u8>,
+    tools: Option<super::observation_tools::PageProof>,
+    admitted_tools: usize,
+    descriptor: std::sync::Arc<TranscriptDescriptor>,
+}
+
+/// Only the descriptor metadata is retained here. The body already belongs to
+/// the prepared row; retaining another decoded message would duplicate it.
+pub(super) struct TranscriptDescriptor {
+    header: TranscriptHeader,
+    tool_locator: Option<crate::observation::content::CanonicalContentLocator>,
+    retained_bytes: usize,
+}
+
+pub(super) struct TranscriptDescriptorSource<'a> {
+    pub cursor: u64,
+    pub kind: &'a str,
+    pub identity: &'a str,
+    pub ledger: Option<u64>,
+    pub journal: u64,
+    pub bytes: &'a [u8],
+}
+
+pub(super) fn transcript_validated(
+    validated: &ValidatedCut<'_, '_>,
+    requested: usize,
+    owner: &super::observation_response::Owner,
+) -> Result<(TranscriptHeaderPage, Vec<TranscriptRowProof>), ConversationStoreError> {
+    let mut proofs = Vec::new();
+    let page = transcript_at(
+        validated.connection()?,
+        &validated.expected().read.conversation_id,
+        validated.expected(),
+        None,
+        requested,
+        Some((validated, owner, &mut proofs)),
+    )?;
+    Ok((page, proofs))
+}
+
+#[allow(clippy::too_many_lines)] // One bounded scan keeps descriptor, Tool and reusable-row proofs in native error order.
+fn transcript_at(
     connection: &Connection,
     conversation: &ConversationId,
     at: &ObservationReadCut,
     before: Option<crate::durable::TranscriptCursor>,
     requested: usize,
+    mut reuse: Option<(
+        &ValidatedCut<'_, '_>,
+        &super::observation_response::Owner,
+        &mut Vec<TranscriptRowProof>,
+    )>,
 ) -> Result<TranscriptHeaderPage, ConversationStoreError> {
-    validate(connection, conversation, at)?;
     let limit = limit(requested)?;
     let before = before.map_or(
         at.read.transcript.saturating_add(1),
         crate::durable::TranscriptCursor::get,
     );
-    let mut statement=connection.prepare_cached("SELECT t.position,t.reference_kind,CASE WHEN t.reference_kind='message' THEN COALESCE(json_extract(h.header_json,'$.identity'),'ledger:'||h.ledger_position) ELSE COALESCE(json_extract(h.header_json,'$.reference_id'),'transcript:'||t.position) END,h.header_json,h.ledger_position,h.journal_position FROM transcript_order t LEFT JOIN observation_headers h INDEXED BY observation_headers_transcript_idx ON h.transcript_position=t.position AND h.reference_kind=t.reference_kind WHERE t.position<?1 AND t.position<=?2 ORDER BY t.position DESC LIMIT ?3").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT t.position,t.reference_kind,CASE WHEN t.reference_kind='message' THEN COALESCE(json_extract(h.header_json,'$.identity'),'ledger:'||h.ledger_position) ELSE COALESCE(json_extract(h.header_json,'$.reference_id'),'transcript:'||t.position) END,h.header_json,h.ledger_position,h.journal_position FROM transcript_order t LEFT JOIN observation_headers h ON h.transcript_position=t.position AND h.reference_kind=t.reference_kind WHERE t.position<?1 AND t.position<=?2 ORDER BY t.position DESC LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
             params![
@@ -238,8 +320,9 @@ pub(super) fn transcript(
                 ))
             },
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut headers = Vec::new();
+    let mut retained_proof_bytes = 0;
     let mut more = false;
     for row in rows {
         let (position, kind, id, bytes, ledger, journal) =
@@ -265,7 +348,35 @@ pub(super) fn transcript(
         let cursor =
             crate::durable::TranscriptCursor::new(nonnegative(position, "transcript header")?);
         let mut tool_locator = None;
-        let mut header = if kind == "message" {
+        let mut tool_proof = None;
+        let mut reusable = false;
+        let cached = reuse
+            .as_ref()
+            .map(|(_, owner, _)| {
+                owner.transcript_descriptor(&TranscriptDescriptorSource {
+                    cursor: cursor.get(),
+                    kind: &kind,
+                    identity: &id,
+                    ledger,
+                    journal,
+                    bytes: &bytes,
+                })
+            })
+            .transpose()?
+            .flatten();
+        let mut descriptor = None;
+        let mut header = if let Some((prior, body)) = cached {
+            #[cfg(test)]
+            record_descriptor_work(true);
+            let mut header = prior.header.clone();
+            header.display = Some(body.undecorated_value());
+            tool_locator.clone_from(&prior.tool_locator);
+            descriptor = Some(prior);
+            reusable = true;
+            header
+        } else if kind == "message" {
+            #[cfg(test)]
+            record_descriptor_work(false);
             let message: MessageHeader =
                 serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
             if message.ledger_position != ledger {
@@ -276,16 +387,68 @@ pub(super) fn transcript(
             if message.role == "assistant" && message.tool_call_count > 0 {
                 tool_locator.clone_from(&message.locator);
             }
-            transcript_message_header(cursor, kind, id, message)
+            reusable = message.display.is_some();
+            transcript_message_header(cursor, kind.clone(), id.clone(), message)
         } else {
+            #[cfg(test)]
+            record_descriptor_work(false);
             serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?
         };
         header.cursor = cursor;
         if let Some(display) = &mut header.display {
             display.cursor = cursor.into();
         }
+        if reusable && reuse.is_some() && descriptor.is_none() {
+            // Move the body aside while cloning only the small descriptor
+            // metadata. The current Tool page is enriched after this point.
+            let display = header.display.take();
+            // Charge the retained metadata to the same bounded proof cache.
+            // This body-free length is measured only when a new descriptor
+            // owner is created; unchanged reads reuse its certificate.
+            let retained_bytes =
+                super::observation_codec::public_length(&(&header, &tool_locator), usize::MAX)?;
+            descriptor = Some(std::sync::Arc::new(TranscriptDescriptor {
+                header: header.clone(),
+                tool_locator: tool_locator.clone(),
+                retained_bytes,
+            }));
+            header.display = display;
+        }
         if let Some(locator) = tool_locator {
-            enrich_transcript_tools(connection, conversation, at, &locator, &mut header)?;
+            let tools = if let Some((validated, _, _)) = &reuse {
+                let (tools, proof) =
+                    super::observation_tools::page_validated(validated, &locator, 0, 32)?;
+                tool_proof = Some(proof);
+                tools
+            } else {
+                super::observation_tools::page(connection, conversation, at, &locator, 0, 32)?
+            };
+            enrich_transcript_tools(&mut header, &tools)?;
+        }
+        if reusable && let Some((_, _, proofs)) = &mut reuse {
+            // Current-cut collection revisions participate in the existing
+            // header budget. Reuse only the actually admitted Tool prefix;
+            // metadata itself is still produced freshly for the current cut.
+            let admitted_tools = header.tool_calls.len();
+            if let Some(proof) = &mut tool_proof {
+                proof.retain_prefix(admitted_tools);
+            }
+            let proof = TranscriptRowProof {
+                cursor: cursor.get(),
+                kind,
+                identity: id,
+                ledger,
+                journal,
+                bytes,
+                tools: tool_proof,
+                admitted_tools,
+                descriptor: descriptor.expect("display row retains descriptor metadata"),
+            };
+            let retained_bytes = proof.retained_bytes();
+            if retained_proof_bytes + retained_bytes <= TRANSCRIPT_ROW_PROOF_BYTES {
+                retained_proof_bytes += retained_bytes;
+                proofs.push(proof);
+            }
         }
         headers.push(header);
     }
@@ -300,18 +463,25 @@ pub(super) fn transcript(
         next_cursor,
     })
 }
-fn enrich_transcript_tools(
+
+pub(super) fn transcript(
     connection: &Connection,
     conversation: &ConversationId,
     at: &ObservationReadCut,
-    locator: &crate::observation::content::CanonicalContentLocator,
+    before: Option<crate::durable::TranscriptCursor>,
+    requested: usize,
+) -> Result<TranscriptHeaderPage, ConversationStoreError> {
+    validate(connection, conversation, at)?;
+    transcript_at(connection, conversation, at, before, requested, None)
+}
+fn enrich_transcript_tools(
     header: &mut TranscriptHeader,
+    tools: &crate::durable::observation::NativeToolObservationPage,
 ) -> Result<(), ConversationStoreError> {
-    let tools = super::observation_tools::page(connection, conversation, at, locator, 0, 32)?;
     if header.message.is_some() {
-        crate::observation::tool::enrich_transcript_header(header, &tools)
+        crate::observation::tool::enrich_transcript_header(header, tools)
     } else {
-        crate::observation::tool::enrich_loaded_transcript_header(header, &tools)
+        crate::observation::tool::enrich_loaded_transcript_header(header, tools)
     }
     .map_err(|error| storage(format!("{error:?}")))
 }
@@ -369,8 +539,8 @@ fn transcript_message_header(
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
     super::schema::shape::verify_unique_columns(
         connection,
-        "observation_block_headers",
-        &["message_id", "block_index"],
+        "observation_headers",
+        &["transcript_position"],
     )?;
     super::schema::shape::verify_unique_columns(
         connection,
@@ -383,27 +553,31 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let blocks: String = connection
         .query_row(
             "SELECT sql FROM sqlite_schema WHERE type='table' AND name='observation_block_headers'",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
-    let events: String = connection
-        .query_row(
-            "SELECT sql FROM sqlite_schema WHERE type='table' AND name='events'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| storage(error.to_string()))?;
-    if !blocks.contains("CHECK(length(header_json)<=16384)")
-        || !blocks.contains("WITHOUT ROWID")
-        || !events.contains("CHECK(observation_json IS NULL OR length(observation_json)<=16384)")
-    {
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?; // Compact database pages keep medium BLOB headers local in rowid leaves.
+    let clustered : bool = connection . query_row ( "SELECT wr FROM pragma_table_list WHERE schema='main' AND name='observation_block_headers' AND type='table'" , [ ] , | row | row . get ( 0 ) , ) . map_err ( | error | crate::durable::sqlite::sqlite_error(&error, error . to_string ( ) ) ) ? ;
+    if !blocks.contains("CHECK(length(header_json)<=16384)") || clustered {
         return Err(ConversationStoreError::IncompatibleSchema(
             "invalid finite native observation metadata layout".into(),
+        ));
+    }
+    let columns: bool = connection.query_row(
+        "SELECT count(*)=4 AND sum(name='ledger_position' AND type='INTEGER' AND [notnull]=1 AND pk=1 AND cid=0)=1 AND sum(name='block_index' AND type='INTEGER' AND [notnull]=1 AND pk=2 AND cid=1)=1 AND sum(name='header_json' AND type='BLOB' AND [notnull]=1 AND pk=0 AND cid=2)=1 AND sum(name='message_id' AND type='TEXT' AND [notnull]=1 AND pk=0 AND cid=3)=1 FROM pragma_table_info('observation_block_headers')",
+        [], |row| row.get(0),
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let parent: bool = connection.query_row(
+        "SELECT count(*)=2 AND count(DISTINCT id)=1 AND sum(seq=0 AND [from]='ledger_position' AND [table]='message_ledger' AND [to]='position')=1 AND sum(seq=1 AND [from]='message_id' AND [table]='message_ledger' AND [to]='message_id')=1 FROM pragma_foreign_key_list('observation_block_headers')",
+        [], |row| row.get(0),
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    if !columns || !parent {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "canonical block headers require one bound native Ledger coordinate".into(),
         ));
     }
     super::schema::shape::verify_unique_columns(
@@ -417,8 +591,7 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
-    // ROWID indirection and metadata-first layout keep numeric header reads
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?; // ROWID indirection and metadata-first layout keep numeric header reads
     // independent of enormous retained original identity keys.
     if !sql.contains("CHECK(length(header_json)<=16384)")
         || sql.contains("WITHOUT ROWID")
@@ -435,7 +608,7 @@ pub(super) fn message(
     connection: &Connection,
     message_id: &crate::runtime::identity::MessageId,
 ) -> Result<Option<MessageHeader>, ConversationStoreError> {
-    let bytes:Option<Vec<u8>>=connection.query_row("SELECT h.header_json FROM message_ledger m JOIN observation_headers h ON h.reference_kind='message' AND h.reference_id=m.message_id WHERE m.message_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let bytes:Option<Vec<u8>>=connection.query_row_cached("SELECT h.header_json FROM message_ledger m JOIN observation_headers h ON h.reference_kind='message' AND h.reference_id=m.message_id WHERE m.message_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     bytes
         .map(|bytes| {
             if bytes.len() > HEADER_ENCODED_MAX {
@@ -445,34 +618,34 @@ pub(super) fn message(
         })
         .transpose()
 }
-fn block(
+fn block_bytes(
     connection: &Connection,
     message: &MessageBlock,
     index: usize,
     kind: &str,
-    body: &impl serde::Serialize,
+    value: Option<serde_json::Value>,
     field: &[&str],
-) -> Result<(), ConversationStoreError> {
+) -> Result<(Vec<u8>, u64), ConversationStoreError> {
     use crate::observation::content::{ContentRepresentation as Rep, ContentSource};
     let conversation = identity(connection)?;
     let block_index = crate::message::types::ContentBlockIndex::new(
         u32::try_from(index).map_err(|_| storage("canonical block index exhausted"))?,
     );
+    #[cfg(test)]
+    crate::durable::sqlite::content::record_canonical_lookup();
     let position = connection
-        .query_row(
+        .query_row_cached(
             "SELECT position FROM message_ledger WHERE message_id=?1",
             [message.id().as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let locator = message_locator(message.id(), position);
     let source = ContentSource::CanonicalMessageBlock {
         component: crate::observation::content::CanonicalContentComponent::Payload,
         locator: locator.clone(),
         block_index,
     };
-    let value = bounded_bytes(body, 1024)
-        .map(|bytes| serde_json::from_slice(&bytes).expect("native canonical block encoding"));
     let mut content = Vec::new();
     for representation in [
         Rep::Utf8Text,
@@ -480,9 +653,13 @@ fn block(
         Rep::CanonicalJsonV1,
         Rep::BinaryBytes,
     ] {
-        if let Some(reference) =
-            super::content::descriptor(connection, &conversation, &source, representation)?
-        {
+        if let Some(reference) = crate::durable::sqlite::content::canonical_descriptor_at_position(
+            connection,
+            &conversation,
+            &source,
+            representation,
+            position,
+        )? {
             let mut path = vec!["value".into()];
             if representation == Rep::BinaryBytes {
                 path.push("binary".into());
@@ -492,7 +669,7 @@ fn block(
             content.push(crate::observation::cut::ContentBinding {
                 source_path: None,
                 path,
-                content_ref: reference,
+                content_ref: reference.into(),
                 deferred: value.is_none() || representation == Rep::BinaryBytes,
             });
         }
@@ -503,16 +680,17 @@ fn block(
             locator,
             block_index,
         };
-        if let Some(reference) = super::content::descriptor(
+        if let Some(reference) = crate::durable::sqlite::content::canonical_descriptor_at_position(
             connection,
             &conversation,
             &metadata_source,
             Rep::CanonicalJsonV1,
+            position,
         )? {
             content.push(crate::observation::cut::ContentBinding {
                 source_path: None,
                 path: vec!["value".into()],
-                content_ref: reference,
+                content_ref: reference.into(),
                 deferred: true,
             });
         }
@@ -526,7 +704,33 @@ fn block(
     };
     let bytes = bounded_bytes(&header, HEADER_ENCODED_MAX)
         .ok_or_else(|| storage("canonical block identity exceeds finite descriptor budget"))?;
-    connection.execute("INSERT INTO observation_block_headers(message_id,block_index,header_json,ledger_position) VALUES(?1,?2,?3,(SELECT position FROM message_ledger WHERE message_id=?1)) ON CONFLICT(message_id,block_index) DO UPDATE SET header_json=excluded.header_json",params![message.id().as_str(),block_index.get(),bytes]).map_err(|error|storage(error.to_string()))?;
+    Ok((bytes, position))
+}
+
+fn block(
+    connection: &Connection,
+    message: &MessageBlock,
+    index: usize,
+    kind: &str,
+    body: &impl serde::Serialize,
+    field: &[&str],
+) -> Result<(), ConversationStoreError> {
+    #[cfg(test)]
+    PUBLICATION_CAPTURE_WORK.with(|work| {
+        let (messages, blocks, reused) = work.get();
+        work.set((messages, blocks + 1, reused));
+    });
+    let value = bounded_bytes(body, 1024)
+        .map(|bytes| serde_json::from_slice(&bytes).expect("native canonical block encoding"));
+    let (bytes, position) = block_bytes(connection, message, index, kind, value, field)?;
+    // This exact capture resolved the native owner. The next block resolves
+    // again: an INSERT trigger may have invalidated that earlier evidence.
+    // MessageId remains binding evidence, not a second access coordinate. A
+    // trigger cannot replace the native owner between capture and insertion.
+    let changed=connection.execute_cached("INSERT INTO observation_block_headers(ledger_position,block_index,header_json,message_id) VALUES(?1,?2,?3,?4) ON CONFLICT(ledger_position,block_index) DO UPDATE SET header_json=excluded.header_json WHERE observation_block_headers.message_id=excluded.message_id",params![position,index,bytes,message.id().as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    if changed != 1 {
+        return Err(storage("canonical block identity differs"));
+    }
     Ok(())
 }
 pub(super) fn blocks(
@@ -559,13 +763,13 @@ pub(super) fn blocks_by_locator(
 ) -> Result<crate::durable::observation::MessageBlockHeaderPage, ConversationStoreError> {
     validate(connection, conversation, at)?;
     let limit = limit(requested)?;
-    let position = super::content::canonical_position(connection, locator)?;
+    let position = crate::durable::sqlite::content::canonical_position(connection, locator)?;
     if position > at.ledger_through {
         return Err(ConversationStoreError::InvalidReference(
             "canonical block source beyond captured cut".into(),
         ));
     }
-    let bytes:Vec<u8>=connection.query_row("SELECT h.header_json FROM observation_headers h WHERE h.reference_kind='message' AND h.ledger_position=?1",[position],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row("SELECT h.header_json FROM observation_headers h WHERE h.reference_kind='message' AND h.ledger_position=?1",[position],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("oversized canonical observation header"));
     }
@@ -576,12 +780,12 @@ pub(super) fn blocks_by_locator(
             "canonical block offset beyond captured source".into(),
         ));
     }
-    let mut statement=connection.prepare_cached("SELECT h.header_json FROM observation_block_headers h WHERE h.ledger_position=?1 AND h.block_index>=?2 ORDER BY h.block_index LIMIT ?3").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT h.header_json FROM observation_block_headers h WHERE h.ledger_position=?1 AND h.block_index>=?2 ORDER BY h.block_index LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(params![position, seq_to_i64(offset)?, limit], |row| {
             row.get::<_, Vec<u8>>(0)
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut headers = Vec::new();
     for row in rows {
         let bytes = row.map_err(|error| storage(error.to_string()))?;
@@ -682,9 +886,16 @@ fn latest_event(
         )
     } else {
         (
-            "SELECT sequence,observation_json,observation_witness FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')=?1 AND sequence<=?2 AND sequence<?3 ORDER BY sequence DESC LIMIT 1",
+            concat!(
+                "SELECT sequence,observation_json,observation_witness FROM events INDEXED BY events_kind_idx WHERE ",
+                crate::durable::sqlite::event_kind_key::sql!(
+                    "json_extract(event_json,'$.event.type')"
+                ),
+                "=?1",
+                " AND sequence<=?2 AND sequence<?3 ORDER BY sequence DESC LIMIT 1"
+            ),
             vec![
-                rusqlite::types::Value::Text(kind.into()),
+                super::event_kind_key::parameter(kind),
                 rusqlite::types::Value::Integer(seq_to_i64(through)?),
                 rusqlite::types::Value::Integer(bound),
             ],
@@ -699,7 +910,7 @@ fn latest_event(
             ))
         })
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     row.map(|(sequence, bytes, witness)| {
         let witness = witness
             .map(|bytes| {
@@ -766,7 +977,7 @@ fn tool_owner(
     position: u64,
     offset: u64,
 ) -> Result<MessageHeader, ConversationStoreError> {
-    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers WHERE reference_kind='message' AND ledger_position=?1 AND journal_position<=?2",params![position,at.read.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers WHERE reference_kind='message' AND ledger_position=?1 AND journal_position<=?2",params![position,at.read.journal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("oversized canonical Tool owner header"));
     }
@@ -785,24 +996,37 @@ fn tool_owner(
     Ok(assistant)
 }
 
-pub(super) fn tools_by_locator(
+pub(super) fn tools_by_locator_validated(
+    validated: &ValidatedCut<'_, '_>,
+    locator: &crate::observation::content::CanonicalContentLocator,
+    offset: u64,
+    requested: usize,
+) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError> {
+    tools_by_locator_at(
+        validated.connection()?,
+        validated.expected(),
+        locator,
+        offset,
+        requested,
+    )
+}
+
+fn tools_by_locator_at(
     connection: &Connection,
-    conversation: &ConversationId,
     at: &ObservationReadCut,
     locator: &crate::observation::content::CanonicalContentLocator,
     offset: u64,
     requested: usize,
 ) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError> {
-    validate(connection, conversation, at)?;
     let limit = limit(requested)?;
-    let position = super::content::canonical_position(connection, locator)?;
+    let position = crate::durable::sqlite::content::canonical_position(connection, locator)?;
     if position > at.ledger_through {
         return Err(ConversationStoreError::InvalidReference(
             "canonical Tool source beyond captured cut".into(),
         ));
     }
     let assistant = tool_owner(connection, at, position, offset)?;
-    let mut statement=connection.prepare_cached("SELECT c.block_index,c.observation_call_id,c.observation_tool_id,b.header_json,h.header_json FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_observation_idx JOIN observation_block_headers b ON b.ledger_position=c.observation_ledger AND b.block_index=c.block_index LEFT JOIN observation_headers h ON h.ledger_position=c.result_ledger_position AND h.transcript_position<=?5 AND h.ledger_position<=?3 AND h.journal_position<=?6 WHERE c.observation_ledger=?1 AND c.block_index>=?2 ORDER BY c.block_index LIMIT ?4").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT c.block_index,c.observation_call_id,c.observation_tool_id,b.header_json,h.header_json FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_observation_idx JOIN observation_block_headers b ON b.ledger_position=c.observation_ledger AND b.block_index=c.block_index LEFT JOIN observation_headers h ON h.ledger_position=c.result_ledger_position AND h.transcript_position<=?5 AND h.ledger_position<=?3 AND h.journal_position<=?6 WHERE c.observation_ledger=?1 AND c.block_index>=?2 ORDER BY c.block_index LIMIT ?4").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
             params![
@@ -823,7 +1047,7 @@ pub(super) fn tools_by_locator(
                 ))
             },
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut headers = Vec::new();
     let mut more = false;
     let mut remaining = 786_432usize - 1024;
@@ -884,6 +1108,18 @@ pub(super) fn tools_by_locator(
     })
 }
 
+pub(super) fn tools_by_locator(
+    connection: &Connection,
+    conversation: &ConversationId,
+    at: &ObservationReadCut,
+    locator: &crate::observation::content::CanonicalContentLocator,
+    offset: u64,
+    requested: usize,
+) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError> {
+    validate(connection, conversation, at)?;
+    tools_by_locator_at(connection, at, locator, offset, requested)
+}
+
 pub(super) fn window(
     connection: &Connection,
     conversation: &ConversationId,
@@ -933,7 +1169,7 @@ pub(super) fn window(
                 [seq_to_i64(first.cursor.get())?],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         page.next_cursor = older.then_some(first.cursor);
     }
     let newer_cursor = if let Some(last) = page.headers.last() {
@@ -946,7 +1182,7 @@ pub(super) fn window(
                 ],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         newer.then_some(last.cursor)
     } else {
         None
@@ -973,7 +1209,7 @@ pub(super) fn pending_page(
         return Err(ConversationStoreError::ObservationCutExpired);
     }
     let total = at.pending_total;
-    let mut statement=connection.prepare("SELECT p.sequence,p.revision,p.observation_header,p.observation_transcript FROM pending_inbound p WHERE p.sequence>?1 AND p.sequence<=?2 ORDER BY p.sequence LIMIT ?3").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT p.sequence,p.revision,p.observation_header,p.observation_transcript FROM pending_inbound p WHERE p.sequence>?1 AND p.sequence<=?2 ORDER BY p.sequence LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
             params![after.unwrap_or(0), at.pending_through, page_limit],
@@ -986,7 +1222,7 @@ pub(super) fn pending_page(
                 ))
             },
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut headers = Vec::with_capacity(page_limit);
     for row in rows {
         let (sequence, revision, bytes, transcript_cursor) =
@@ -1004,7 +1240,7 @@ pub(super) fn pending_page(
         });
     }
     let next_sequence = if let Some(last) = headers.last() {
-        let more:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM pending_inbound p WHERE p.sequence>?1 AND p.sequence<=?2)",params![last.sequence,at.pending_through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let more:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM pending_inbound p WHERE p.sequence>?1 AND p.sequence<=?2)",params![last.sequence,at.pending_through],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         more.then_some(last.sequence)
     } else {
         None
@@ -1036,8 +1272,8 @@ pub(super) fn pending_value(
     if !at.reconstructible_from(&actual) {
         return Err(ConversationStoreError::ObservationCutExpired);
     }
-    let retained:Option<(u64,u64)>=connection.query_row("SELECT p.revision,f.readable_end FROM pending_inbound p JOIN content_frontiers f ON f.source_kind='pending' AND f.source_id=CAST(p.sequence AS TEXT) AND f.block_index=0 AND f.representation='canonical_json_v1' AND f.revision=p.revision+1 WHERE p.sequence=?1 AND p.sequence<=?2",params![sequence,at.pending_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
-    let (_, readable_end) = retained
+    let retained:Option<(u64,u64)>=connection.query_row("SELECT p.revision,f.readable_end FROM pending_inbound p JOIN content_frontiers f ON f.source_kind='pending' AND f.source_id=CAST(p.sequence AS TEXT) AND f.block_index=0 AND f.representation='j' AND f.revision=p.revision+1 WHERE p.sequence=?1 AND p.sequence<=?2",params![sequence,at.pending_through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let (revision, readable_end) = retained
         .ok_or_else(|| ConversationStoreError::InvalidReference("pending source expired".into()))?;
     if offset > readable_end {
         return Err(ConversationStoreError::InvalidContentRange);
@@ -1046,7 +1282,15 @@ pub(super) fn pending_value(
         .checked_add(u64::from(max_bytes))
         .ok_or(ConversationStoreError::InvalidContentRange)?
         .min(readable_end);
-    let bytes = super::content::pending_range_bytes(connection, sequence, offset, end_offset)?;
+    let bytes = crate::durable::sqlite::content::pending_range_bytes(
+        connection,
+        sequence,
+        revision
+            .checked_add(1)
+            .ok_or_else(|| storage("pending revision exhausted"))?,
+        offset,
+        end_offset,
+    )?;
     Ok(crate::durable::observation::ObservationValueChunk {
         bytes,
         end_offset,
@@ -1064,7 +1308,7 @@ pub(super) fn tool_occurrence(
     cut: &ObservationReadCut,
 ) -> Result<Option<crate::message::types::ToolCallOccurrenceRef>, ConversationStoreError> {
     validate(connection, conversation, cut)?;
-    let value: Option<(String,u32)> = connection.query_row("SELECT c.assistant_message_id,c.block_index FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_scope_idx CROSS JOIN message_ledger l ON l.message_id=c.assistant_message_id WHERE c.attempt_id=?1 AND c.call_id=?2 AND c.commit_sequence<=?3 AND l.position<=?4 ORDER BY c.commit_sequence DESC LIMIT 1",params![attempt.as_str(),call.as_str(),seq_to_i64(cut.read.journal)?,seq_to_i64(cut.ledger_through)?],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let value: Option<(String,u32)> = connection.query_row("SELECT c.assistant_message_id,c.block_index FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_scope_idx CROSS JOIN message_ledger l ON l.message_id=c.assistant_message_id WHERE c.attempt_id=?1 AND c.call_id=?2 AND c.commit_sequence<=?3 AND l.position<=?4 ORDER BY c.commit_sequence DESC LIMIT 1",params![attempt.as_str(),call.as_str(),seq_to_i64(cut.read.journal)?,seq_to_i64(cut.ledger_through)?],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(value.map(|(message, index)| {
         crate::message::types::ToolCallOccurrenceRef::new(
             crate::runtime::identity::MessageId::new(message),
@@ -1085,7 +1329,7 @@ pub(super) fn tool_occurrence_receipt(
         | RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
         | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. } => tool_call_id,
         RuntimeEvent::ToolMessageCommitted { message_id, .. } => {
-            let value:Option<(u64,u32,u64)>=connection.query_row("SELECT observation_ledger,block_index,observation_tool_ordinal FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1)",[message_id.as_str()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(|error|storage(error.to_string()))?;
+            let value:Option<(u64,u32,u64)>=connection.query_row("SELECT observation_ledger,block_index,observation_tool_ordinal FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1)",[message_id.as_str()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             return Ok(value.map(|(ledger_position, index, tool_ordinal)| {
                 crate::events::types::ToolObservationOccurrence {
                     tool_ordinal,
@@ -1103,7 +1347,7 @@ pub(super) fn tool_occurrence_receipt(
         "SELECT l.position,c.block_index,c.observation_tool_ordinal FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_scope_idx CROSS JOIN message_ledger l ON l.message_id=c.assistant_message_id WHERE c.attempt_id=?1 AND c.call_id=?2 AND c.commit_sequence<=?3 ORDER BY c.commit_sequence DESC LIMIT 1",
         params![attempt.as_str(), call.as_str(), seq_to_i64(event.sequence)?],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    ).optional().map_err(|error| storage(error.to_string()))?;
+    ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(value.map(|(ledger_position, index, tool_ordinal)| {
         crate::events::types::ToolObservationOccurrence {
             tool_ordinal,
@@ -1127,23 +1371,23 @@ pub(super) fn surface_boundaries(
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if through.get() > actual {
         return Err(ConversationStoreError::InvalidReference(
             "Surface boundary revision is newer than native head".into(),
         ));
     }
-    let hole:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM message_ledger INDEXED BY message_ledger_boundary_holes_idx WHERE ordinary_user=1 AND boundary_indexed=0 AND first_append_revision IS NOT NULL AND first_append_revision<=?1)",[through.get()],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let hole:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM message_ledger INDEXED BY message_ledger_boundary_holes_idx WHERE ordinary_user=1 AND boundary_indexed=0 AND first_append_revision IS NOT NULL AND first_append_revision<=?1)",[through.get()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if hole {
         return Err(storage("native Surface boundary source layout incomplete"));
     }
-    let total:u64=connection.query_row("SELECT COALESCE((SELECT ordinal+1 FROM surface_observation_boundaries WHERE surface_revision<=?1 ORDER BY surface_revision DESC LIMIT 1),0)",[seq_to_i64(through.get())?],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let total:u64=connection.query_row("SELECT COALESCE((SELECT ordinal+1 FROM surface_observation_boundaries WHERE surface_revision<=?1 ORDER BY surface_revision DESC LIMIT 1),0)",[seq_to_i64(through.get())?],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if offset > total {
         return Err(ConversationStoreError::InvalidReference(
             "Surface boundary offset beyond native frontier".into(),
         ));
     }
-    let mut statement=connection.prepare("SELECT b.surface_revision,h.header_json,b.ordinal FROM surface_observation_boundaries b CROSS JOIN observation_headers h ON h.ledger_position=b.ledger_position WHERE b.ordinal>=?1 AND b.ordinal<?2 AND h.reference_kind='message' ORDER BY b.ordinal LIMIT ?3").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare("SELECT b.surface_revision,h.header_json,b.ordinal FROM surface_observation_boundaries b CROSS JOIN observation_headers h ON h.ledger_position=b.ledger_position WHERE b.ordinal>=?1 AND b.ordinal<?2 AND h.reference_kind='message' ORDER BY b.ordinal LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(params![offset, total, limit], |row| {
             Ok((
@@ -1152,7 +1396,7 @@ pub(super) fn surface_boundaries(
                 row.get::<_, u64>(2)?,
             ))
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut boundaries = Vec::new();
     for row in rows {
         let (revision, bytes, ordinal) = row.map_err(|error| storage(error.to_string()))?;
@@ -1191,7 +1435,7 @@ pub(super) fn publication_settlement_head(
     ConversationStoreError,
 > {
     validate(connection, conversation, at)?;
-    let mut statement = connection.prepare_cached("SELECT t.position,h.header_json,h.journal_position FROM transcript_order t INDEXED BY transcript_order_audit_position_idx LEFT JOIN observation_headers h ON h.reference_kind=t.reference_kind AND h.reference_id=t.reference_id WHERE t.reference_kind='publication_audit' AND t.position<=?1 ORDER BY t.position DESC LIMIT 32").map_err(|error| storage(error.to_string()))?;
+    let mut statement = connection.prepare_cached("SELECT t.position,h.header_json,h.journal_position FROM transcript_order t INDEXED BY transcript_order_audit_position_idx LEFT JOIN observation_headers h ON h.reference_kind=t.reference_kind AND h.reference_id=t.reference_id WHERE t.reference_kind='publication_audit' AND t.position<=?1 ORDER BY t.position DESC LIMIT 32").map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map([seq_to_i64(at.read.transcript)?], |row| {
             Ok((
@@ -1200,7 +1444,7 @@ pub(super) fn publication_settlement_head(
                 row.get::<_, Option<u64>>(2)?,
             ))
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut records = Vec::with_capacity(HEADER_PAGE_MAX);
     for row in rows {
         let (position, bytes, journal) = row.map_err(|error| storage(error.to_string()))?;
@@ -1235,7 +1479,7 @@ pub(super) fn audit_blocks(
     if transcript > at.read.transcript {
         return Err(storage("audit position exceeds native cut"));
     }
-    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers INDEXED BY observation_headers_transcript_idx WHERE transcript_position=?1 AND reference_kind='publication_audit' AND journal_position<=?2",params![transcript,at.read.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers WHERE transcript_position=?1 AND reference_kind='publication_audit' AND journal_position<=?2",params![transcript,at.read.journal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let header: TranscriptHeader =
         serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
     let total = header
@@ -1246,12 +1490,12 @@ pub(super) fn audit_blocks(
     if offset > total {
         return Err(storage("audit block offset exceeds source"));
     }
-    let mut statement=connection.prepare_cached("SELECT header_json FROM audit_observation_blocks WHERE transcript_position=?1 AND ordinal>=?2 ORDER BY ordinal LIMIT ?3").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT header_json FROM audit_observation_blocks WHERE transcript_position=?1 AND ordinal>=?2 ORDER BY ordinal LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(params![transcript, offset, limit], |row| {
             row.get::<_, Vec<u8>>(0)
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let headers = rows
         .map(|row| {
             let bytes = row.map_err(|error| storage(error.to_string()))?;
@@ -1285,3 +1529,107 @@ pub(super) fn audit_summary(
         block_count: audit.content.len() as u64,
     }
 }
+
+impl<'read, 'connection> ValidatedCut<'read, 'connection> {
+    pub(super) fn new(
+        transaction: &'read Transaction<'connection>,
+        conversation: &ConversationId,
+        expected: &'read ObservationReadCut,
+    ) -> Result<Self, ConversationStoreError> {
+        let actual = validate_actual(transaction, conversation, expected)?;
+        Ok(Self {
+            transaction,
+            expected,
+            actual,
+            changes: transaction.total_changes(),
+            states: Self::states(transaction)?,
+        })
+    }
+    fn states(
+        connection: &Connection,
+    ) -> Result<(rusqlite::TransactionState, rusqlite::TransactionState), ConversationStoreError>
+    {
+        Ok((
+            connection
+                .transaction_state(Some("main"))
+                .map_err(|error| storage(error.to_string()))?,
+            connection
+                .transaction_state(Some("temp"))
+                .map_err(|error| storage(error.to_string()))?,
+        ))
+    }
+    pub(super) fn connection(&self) -> Result<&Connection, ConversationStoreError> {
+        let states = Self::states(self.transaction)?;
+        if self.transaction.is_autocommit()
+            || self.transaction.total_changes() != self.changes
+            || states.0 != self.states.0
+            || (states.1 != self.states.1
+                && !(self.states.1 == rusqlite::TransactionState::None
+                    && states.1 == rusqlite::TransactionState::Read))
+        {
+            return Err(storage("validated observation transaction changed"));
+        }
+        Ok(self.transaction)
+    }
+    pub(super) fn expected(&self) -> &ObservationReadCut {
+        self.expected
+    }
+    pub(super) fn actual(&self) -> &ObservationReadCut {
+        &self.actual
+    }
+}
+
+impl PartialEq for TranscriptRowProof {
+    fn eq(&self, other: &Self) -> bool {
+        self.matches_descriptor(&TranscriptDescriptorSource {
+            cursor: other.cursor,
+            kind: &other.kind,
+            identity: &other.identity,
+            ledger: other.ledger,
+            journal: other.journal,
+            bytes: &other.bytes,
+        }) && self.tools == other.tools
+            && self.admitted_tools == other.admitted_tools
+    }
+}
+
+impl TranscriptRowProof {
+    pub(super) fn matches_descriptor(&self, source: &TranscriptDescriptorSource<'_>) -> bool {
+        self.cursor == source.cursor
+            && self.kind == source.kind
+            && self.identity == source.identity
+            && self.ledger == source.ledger
+            && self.journal == source.journal
+            && self.bytes == source.bytes
+    }
+    pub(super) fn descriptor(&self) -> std::sync::Arc<TranscriptDescriptor> {
+        self.descriptor.clone()
+    }
+    pub(super) fn cursor(&self) -> u64 {
+        self.cursor
+    }
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.bytes.len()
+            + self.descriptor.retained_bytes
+            + self.kind.len()
+            + self.identity.len()
+            + self
+                .tools
+                .as_ref()
+                .map_or(0, super::observation_tools::PageProof::retained_bytes)
+    }
+}
+
+#[cfg(test)]
+#[path = "observation_source_read_tests.rs"]
+mod source_read_tests;
+
+mod publication_header;
+
+pub(super) use index::{
+    PublicationHeader, index_message, index_publication_message, message_header_bytes,
+};
+pub(super) use store::response_identity_fields;
+
+#[cfg(test)]
+thread_local! { static PUBLICATION_CAPTURE_WORK: std::cell::Cell<(usize, usize, usize)> = const { std::cell::Cell::new((0,0,0)) }; }

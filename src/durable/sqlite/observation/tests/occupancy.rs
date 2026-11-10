@@ -28,7 +28,8 @@ pub(super) fn occupancy_original_snapshot(store: &SqliteConversationStore) -> Re
         id: ToolId::new("original-tool"),
         name: "originalTool".into(),
         description: "native original schema".repeat(80_000),
-        input_schema: serde_json::json!({"n":u64::MAX,"zero":-0.0,"string":"水".repeat(400_000)}),
+        input_schema: serde_json::json!({"n":u64::MAX,"zero":-0.0,"string":"水".repeat(400_000)})
+            .into(),
     }];
     snapshot
 }
@@ -151,7 +152,7 @@ fn t14_t19_request_tool_fingerprints_preserve_native_partial_eq() {
         observation_request_summary::tools_digest(&right)
     );
     let different = vec![tool(
-        serde_json::json!({"zero":0,"ordered":{"a":1,"b":2},"large":"original"}),
+        serde_json::json!({"zero":0,"ordered":{"a":1,"b":2},"large":"original"}).into(),
     )];
     assert_ne!(left, different);
     assert_ne!(
@@ -167,7 +168,7 @@ fn t14_t19_request_tool_fingerprints_preserve_native_partial_eq() {
                 serde_json::json!({"nested": [ordinal, null, "original"]}),
             );
         }
-        vec![tool(serde_json::Value::Object(values))]
+        vec![tool(serde_json::Value::Object(values).into())]
     };
     let forward = object(false);
     let reverse = object(true);
@@ -196,8 +197,12 @@ fn t14_t19_request_tool_fingerprints_preserve_native_partial_eq() {
             observation_request_summary::tools_digest(&changed)
         );
     }
-    let first = vec![tool(serde_json::json!({"large":"a".repeat(2_100_000)}))];
-    let second = vec![tool(serde_json::json!({"large":"a".repeat(2_099_999)+"b"}))];
+    let first = vec![tool(
+        serde_json::json!({"large":"a".repeat(2_100_000)}).into(),
+    )];
+    let second = vec![tool(
+        serde_json::json!({"large":"a".repeat(2_099_999)+"b"}).into(),
+    )];
     assert_ne!(first, second);
     assert_ne!(
         observation_request_summary::tools_digest(&first),
@@ -764,7 +769,6 @@ fn occupancy_compaction_lookup_work_is_bounded_across_history_growth() {
     store.initialize(std::slice::from_ref(&message)).unwrap();
     let mut first_cut = 0;
     let mut baseline = Vec::new();
-    let mut negative_baseline = Vec::new();
     for index in 1..=256 {
         let cut = store.compaction_resource_cut().unwrap();
         let candidate = CheckpointCandidate {
@@ -828,28 +832,18 @@ fn occupancy_compaction_lookup_work_is_bounded_across_history_growth() {
                 );
             }
 
-            // Negative control: omitting the middle index equality returns the
-            // same row but scans/sorts growing history, even at a fixed old cut.
-            let (sequence, unbounded) = occupancy_sql_steps(&store, || {
+            // The partial index refuses a query without its mandatory predicate.
+            assert!(
                 store
                     .lock()
                     .unwrap()
-                    .query_row(
+                    .prepare(
                         "SELECT sequence FROM events INDEXED BY events_context_reading_idx
-                     WHERE json_extract(event_json,'$.event.type')='compaction_completed'
-                       AND sequence<=?1 ORDER BY sequence DESC LIMIT 1",
-                        [through],
-                        |row| row.get::<_, u64>(0),
+                 WHERE json_extract(event_json,'$.event.type')='compaction_completed'
+                   AND sequence<=?1 ORDER BY sequence DESC LIMIT 1"
                     )
-                    .unwrap()
-            });
-            assert_eq!(sequence, through);
-            if index == 1 {
-                negative_baseline.push(unbounded);
-            }
-            if index == 256 {
-                assert!(unbounded > negative_baseline[case] * 16);
-            }
+                    .is_err()
+            );
         }
     }
 }

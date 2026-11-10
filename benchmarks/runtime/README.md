@@ -25,10 +25,22 @@ in the new evidence directory. Set the same Cargo/Rust environment for every
 revision. The revision controllers reject identical executable hashes before
 starting either product or provider.
 
+Current workload version 3 supplies the same model-facing Agent Status time,
+`2026-10-19 00:00:00`, to both engines. Rust uses the supported composition-owned
+`AgentStatusClock`; Pi authors that exact reminder through its native entry API.
+Runtime event time, deadlines, provider pacing and performance clocks remain real.
+Request comparison preserves time text exactly; only transport argument spelling
+and the one fixture workspace path are normalized. Old archives remain unchanged:
+their timestamp-normalized equality does not prove identical model-facing input.
+The live consumer oracle retains and independently checks every observed assistant
+and tool-output version, including cancelled prefixes and replacement/resync paths.
+Rust distinguishes checkpoint terminal sightings from explicit settlement events.
+
 The provider is the same Python HTTP/SSE implementation and scenario for both
 engines. Pi uses its production `openAICompletionsApi()` with actual Durable
-SQLite, not its faux provider. Each paired run compares complete core requests
-and separately records the intentionally different native tool schemas.
+SQLite, not its faux provider. Each paired run compares the ordered
+conversation and request options. It records the native leading system
+prompt and tool schemas separately after each product's own oracle check.
 Neither full request equality nor product/durability equivalence is claimed.
 
 `measure_canonical_append` separately measures 32 canonical acceptances after
@@ -74,6 +86,8 @@ compression after formal samples finish. `profile-footprints.py` separately samp
 logical/allocated bytes from the external controller; it is never a formal timing
 run and does not claim a true peak. The reports under `docs/issue-481`
 separate baseline, Source-only, canonical incremental and combined comparisons.
+
+For the additional real native SDK reference, see [DeepSeek Harness](deepseek-reference.md). Its idle completion differs from Rust/Pi durable settlement; the rotating three-engine report therefore keeps absolute native costs and does not claim equal-durability speedups. The [write/compute reduction report](../../docs/pi-durable-cost-model/2026-10-27-write-compute-reduction.md) contains current measured results; the [D/E continuation](../../docs/pi-durable-cost-model/2026-10-27-continuation.md) retains historical comparisons and rejected trials.
 
 The remaining documentation describes the **historical issue 480 harness**.
 Its `run.py` expects the old measurement executable and must not be used with
@@ -246,3 +260,32 @@ it is not an exclusive runtime profile or an allocation count.
 
 Fresh structural-stage results and binary identities: [Source metadata reuse](../../docs/issue-481/source-metadata.md).
 The next isolated stage is [append certificate measurements](../../docs/issue-481/append-certificate-results.md), including warm/cold regressions and complete lifecycle counters.
+
+## Native App Server capacity probe
+
+`app-server-capacity.py` uses the authenticated WebSocket API and the existing
+local provider to measure the native server PID, separately from driver/provider
+processes. It requires the Python `websockets` package (measured with 10.4).
+
+```sh
+python3 benchmarks/runtime/app-server-capacity.py \
+  --binary target/release/rustx --output /tmp/rustx-capacity \
+  --sessions 128 --history 8 --widths 1 4 8 --rounds 16
+```
+
+The output directory must not exist. The probe currently pins CPUs 2,8 and uses four
+Tokio workers. It explicitly raises resident capacity to the requested session
+count; the production default is unchanged. It respects one controller per session,
+32 attachments per physical connection and six ordinary/two control request lanes.
+It covers metadata-only/loading/subscription/history, simultaneous attempts,
+cancellation, a paused receiver, detach and three reload/unload cycles. Native
+content and full provider histories must match before completion is accepted.
+
+The first provider wave per width is deliberately held for active-memory sampling;
+exclude it from latency/throughput. CPU/write windows include all rounds, while
+nonheld burst service windows exclude driver setup gaps. This small deterministic
+workload is not a production capacity or P99 guarantee and runs no external tools
+or containers. Optional `--cpu-profiler /path/to/libprofiler.so.0` profiles only the
+last active-width window; those products are diagnostic, not ordinary timings.
+
+[Resource/capacity results and limitations](../../docs/pi-durable-cost-model/2026-11-03-resources-capacity.md).

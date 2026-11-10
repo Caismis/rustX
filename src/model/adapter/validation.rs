@@ -21,6 +21,7 @@ use crate::runtime::identity::ToolId;
 #[derive(Debug, Clone, Default)]
 pub struct ValidatedTools {
     by_name: BTreeMap<String, ToolId>,
+    pub(super) continuation_boundary: Option<usize>,
 }
 
 impl ValidatedTools {
@@ -119,8 +120,11 @@ pub fn validate_request(
     }
     // Wire coverage/correlation is part of deterministic adapter admission,
     // including accepted stored calls absent from this request's explicit input.
-    super::correlation::request_labels(request).map_err(invalid_request)?;
-    validate_tools(request)
+    let boundary = request.continuation_boundary().map_err(invalid_request)?;
+    super::correlation::request_labels_at(request, boundary).map_err(invalid_request)?;
+    let mut tools = validate_tools(request)?;
+    tools.continuation_boundary = boundary;
+    Ok(tools)
 }
 
 #[cfg(test)]
@@ -129,8 +133,121 @@ thread_local! { static PREFLIGHTS: std::cell::Cell<usize> = const { std::cell::C
 pub(crate) fn take_preflights() -> usize {
     PREFLIGHTS.with(|v| v.replace(0))
 }
+/// One immutable request and its transport bytes. Only the adapter boundary
+/// constructs this value; cloning a logical retry shares both allocations.
+#[derive(Clone)]
+pub struct PreparedModelRequest {
+    pub(super) input: std::sync::Arc<ModelRequest>,
+    pub(super) body: bytes::Bytes,
+    pub(super) tools: std::sync::Arc<ValidatedTools>,
+    #[cfg(test)]
+    body_lifetime: std::sync::Weak<()>,
+}
+
+impl PreparedModelRequest {
+    pub(crate) fn input(&self) -> &ModelRequest {
+        &self.input
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ownership_probe(&self) -> PreparedOwnershipProbe {
+        PreparedOwnershipProbe {
+            body: (self.body.as_ptr() as usize, self.body.len()),
+            body_lifetime: self.body_lifetime.clone(),
+            input: std::sync::Arc::downgrade(&self.input),
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct PreparedOwnershipProbe {
+    pub body: (usize, usize),
+    pub body_lifetime: std::sync::Weak<()>,
+    pub input: std::sync::Weak<ModelRequest>,
+}
+
+#[cfg(test)]
+fn track_body_lifetime(body: Vec<u8>) -> (bytes::Bytes, std::sync::Weak<()>) {
+    struct TrackedBody {
+        bytes: Vec<u8>,
+        _lifetime: std::sync::Arc<()>,
+    }
+    impl AsRef<[u8]> for TrackedBody {
+        fn as_ref(&self) -> &[u8] {
+            &self.bytes
+        }
+    }
+    let lifetime = std::sync::Arc::new(());
+    let probe = std::sync::Arc::downgrade(&lifetime);
+    let bytes = bytes::Bytes::from_owner(TrackedBody {
+        bytes: body,
+        _lifetime: lifetime,
+    });
+    (bytes, probe)
+}
+
+#[cfg(test)]
+thread_local! {
+    static PREPARATION_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_preparation_work() -> (usize, usize) {
+    PREPARATION_WORK.with(|work| work.replace((0, 0)))
+}
+
+pub(crate) fn prepare_request(
+    request: ModelRequest,
+    protocol: ModelProtocol,
+) -> Result<PreparedModelRequest, ModelError> {
+    prepare_request_with_limit(request, protocol, None)
+}
+
+pub(crate) fn prepare_request_with_limit(
+    request: ModelRequest,
+    protocol: ModelProtocol,
+    body_limit: Option<usize>,
+) -> Result<PreparedModelRequest, ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _request = super::profile::RequestScope::new(protocol, "prepare");
+    #[cfg(test)]
+    PREFLIGHTS.with(|v| v.set(v.get() + 1));
+    let tools = validate_request(&request, protocol)?;
+    let wire = translate_prepared(&request, &tools)?;
+    #[cfg(feature = "issue-387-profile")]
+    let _encoding = super::profile::phase(super::profile::Phase::HttpEncode);
+    #[cfg(test)]
+    PREPARATION_WORK.with(|work| work.update(|(translated, encoded)| (translated, encoded + 1)));
+    let body = match body_limit {
+        Some(limit) => crate::bounded_json::encode_capped_bytes(&wire, limit),
+        None => serde_json::to_vec(&wire),
+    }
+    .map_err(|error| {
+        if error.is_io() {
+            let mut error =
+                invalid_request("translated provider request exceeds byte budget".into());
+            error.kind = ModelErrorKind::ContextWindowExceeded;
+            error
+        } else {
+            invalid_request(format!("failed to encode provider request: {error}"))
+        }
+    })?;
+    #[cfg(test)]
+    let (body, body_lifetime) = track_body_lifetime(body);
+    #[cfg(not(test))]
+    let body = body.into();
+    Ok(PreparedModelRequest {
+        input: std::sync::Arc::new(request),
+        body,
+        tools: std::sync::Arc::new(tools),
+        #[cfg(test)]
+        body_lifetime,
+    })
+}
+
 /// Adapter-owned preflight, including opaque native replay, without dispatch.
 /// No SDK or wire values escape the adapter boundary.
+#[cfg(test)]
 pub(crate) fn validate_prepared_request(request: &ModelRequest) -> Result<(), ModelError> {
     prepared_wire_request(request).map(|_| ())
 }
@@ -150,23 +267,43 @@ pub(crate) fn validate_bounded_prepared_request(
     })
 }
 
-fn prepared_wire_request(request: &ModelRequest) -> Result<serde_json::Value, ModelError> {
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum PreparedWireRequest<'a> {
+    Chat(super::openai::chat_completions::WireRequest<'a>),
+    Responses(super::openai::responses::WireRequest<'a>),
+    Anthropic(super::anthropic::mapping::WireRequest<'a>),
+}
+
+fn prepared_wire_request(request: &ModelRequest) -> Result<PreparedWireRequest<'_>, ModelError> {
     #[cfg(test)]
     PREFLIGHTS.with(|v| v.set(v.get() + 1));
     #[cfg(feature = "issue-387-profile")]
     let _request = super::profile::RequestScope::new(request.protocol(), "preflight");
     let tools = validate_request(request, request.protocol())?;
+    translate_prepared(request, &tools)
+}
+
+fn translate_prepared<'a>(
+    request: &'a ModelRequest,
+    tools: &ValidatedTools,
+) -> Result<PreparedWireRequest<'a>, ModelError> {
+    #[cfg(test)]
+    PREPARATION_WORK.with(|work| work.update(|(translated, encoded)| (translated + 1, encoded)));
     match request.protocol() {
         ModelProtocol::OpenAiChatCompletions => {
             super::openai::chat_completions::translate_request(request)
+                .map(PreparedWireRequest::Chat)
         }
         ModelProtocol::OpenAiResponses => super::openai::responses::translate_request(
             request,
-            &tools,
+            tools,
             request.invocation.compat.responses_storage,
-        ),
+        )
+        .map(PreparedWireRequest::Responses),
         ModelProtocol::AnthropicMessages => {
-            super::anthropic::mapping::translate_request(request, &tools)
+            super::anthropic::mapping::translate_request(request, tools)
+                .map(PreparedWireRequest::Anthropic)
         }
     }
 }
@@ -246,7 +383,10 @@ fn validate_tools(request: &ModelRequest) -> Result<ValidatedTools, ModelError> 
             )));
         }
     }
-    Ok(ValidatedTools { by_name })
+    Ok(ValidatedTools {
+        by_name,
+        continuation_boundary: None,
+    })
 }
 
 fn invalid_request(message: String) -> ModelError {
@@ -306,7 +446,8 @@ mod tests {
                 )]
                 .into_iter()
                 .collect();
-                let mut wire = super::prepared_wire_request(&request).unwrap();
+                let mut wire =
+                    serde_json::to_value(super::prepared_wire_request(&request).unwrap()).unwrap();
                 assert!(
                     crate::model::adapter::correlation::observed_correlations(&mut wire, protocol)
                         .is_empty()
@@ -333,6 +474,137 @@ mod tests {
                     ),
                 }
             }
+        }
+    }
+
+    #[test]
+    fn provider_translation_reuses_one_image_proof_for_repeated_occurrences() {
+        use crate::message::content::ImageReference;
+        use crate::message::types::{MessageBlock, UserContentBlock};
+        use crate::model::images::{FrozenImage, take_decodes};
+        use crate::model::{ModelInputMessage, catalog::Modality};
+        use crate::runtime::identity::ArtifactId;
+
+        for protocol in [
+            ModelProtocol::OpenAiChatCompletions,
+            ModelProtocol::OpenAiResponses,
+            ModelProtocol::AnthropicMessages,
+        ] {
+            let mut request =
+                crate::scripted_suites::common::simple_request(protocol, "test", "input");
+            request
+                .invocation
+                .capabilities
+                .input_modalities
+                .insert(Modality::Image);
+            let id = ArtifactId::new("repeat");
+            let block = UserContentBlock::Image(ImageReference {
+                artifact_id: id.clone(),
+                alt: None,
+            });
+            let ModelInputMessage::Canonical(MessageBlock::User(user)) = &mut request.messages[0]
+            else {
+                panic!("fixture starts with User input");
+            };
+            user.content.extend([block.clone(), block]);
+            let mut bytes = Vec::new();
+            png::Encoder::new(&mut bytes, 1, 1)
+                .write_header()
+                .unwrap()
+                .write_image_data(&[0])
+                .unwrap();
+            take_decodes();
+            let image = FrozenImage::new(bytes).unwrap();
+            request.images.insert(id.clone(), image.clone());
+            let prepared = super::prepare_request(request, protocol).unwrap();
+            assert_eq!(prepared.input().images[&id].as_ptr(), image.as_ptr());
+            let body = std::str::from_utf8(&prepared.body).unwrap();
+            assert_eq!(
+                body.matches("iVBORw0KGgo").count(),
+                2,
+                "both occurrences are transported"
+            );
+            assert_eq!(take_decodes(), 1);
+        }
+    }
+
+    #[test]
+    fn prepared_retry_shares_input_and_one_encoded_body() {
+        for protocol in [
+            ModelProtocol::OpenAiChatCompletions,
+            ModelProtocol::OpenAiResponses,
+            ModelProtocol::AnthropicMessages,
+        ] {
+            super::take_preparation_work();
+            let request = crate::scripted_suites::common::simple_request(protocol, "test", "input");
+            let prepared = super::prepare_request(request, protocol).unwrap();
+            let retry = prepared.clone();
+            assert!(std::sync::Arc::ptr_eq(&prepared.input, &retry.input));
+            assert_eq!(prepared.body.as_ptr(), retry.body.as_ptr());
+            let input = std::sync::Arc::downgrade(&prepared.input);
+            drop(prepared);
+            assert!(input.upgrade().is_some());
+            drop(retry);
+            assert!(input.upgrade().is_none());
+            assert_eq!(super::take_preparation_work(), (1, 1));
+        }
+    }
+
+    #[test]
+    fn openai_borrowed_wire_matches_legacy_request_shape_for_large_frozen_input() {
+        use crate::model::catalog::{ChatMaxTokensField, ChatStreamUsage, ResponsesStorageMode};
+        use serde_json::json;
+
+        for protocol in [
+            ModelProtocol::OpenAiChatCompletions,
+            ModelProtocol::OpenAiResponses,
+        ] {
+            let text = "Unicode 🦀 text with JSON punctuation \n".repeat(256);
+            let mut request =
+                crate::scripted_suites::common::simple_request(protocol, "fixture", &text);
+            let message = request.messages[0].clone();
+            request.messages.extend(std::iter::repeat_n(message, 127));
+            request.effective_system_prompt = "system".into();
+            request.invocation.compat.chat_max_tokens_field = ChatMaxTokensField::MaxTokens;
+            request.invocation.compat.chat_stream_usage = ChatStreamUsage::Supported;
+            request.invocation.compat.responses_storage = ResponsesStorageMode::Stateless;
+            request.invocation.request_params.insert(
+                "metadata".into(),
+                json!({"native": {"escaped": text, "nullable":null}}),
+            );
+            let mut definition = tool("lookup", "tool-lookup");
+            definition.input_schema = json!({"type":"object", "$comment":text}).into();
+            request.tools.push(definition);
+            // The legacy Chat SDK message array and the legacy Responses
+            // item tree used these different structural shapes.
+            let legacy = if protocol == ModelProtocol::OpenAiChatCompletions {
+                let mut messages = vec![json!({"role":"system", "content":"system"})];
+                messages.extend(std::iter::repeat_n(
+                    json!({"role":"user", "content":[{"type":"text","text":text}]}),
+                    128,
+                ));
+                json!({"model":"fixture", "messages":messages, "stream":true,
+                    "stream_options":{"include_usage":true}, "max_tokens":request.max_output_tokens(),
+                    "tools":[{"type":"function", "function":{"name":"lookup",
+                        "description":"d", "parameters":request.tools[0].input_schema}}]})
+            } else {
+                let item = json!({"type":"message","role":"user","content":[{"type":"input_text","text":text}]});
+                json!({"model":"fixture", "input":vec![item;128], "stream":true,
+                    "instructions":"system", "store":false, "include":["reasoning.encrypted_content"],
+                    "max_output_tokens":request.max_output_tokens(), "tools":[{"type":"function",
+                        "name":"lookup","description":"d","parameters":request.tools[0].input_schema}]})
+            };
+            let expected = crate::model::invocation::finalize_provider_request(
+                legacy,
+                request.request_params(),
+                protocol,
+            )
+            .unwrap();
+            let prepared = super::prepare_request(request, protocol).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&prepared.body).unwrap(),
+                expected
+            );
         }
     }
 
@@ -374,7 +646,7 @@ mod tests {
                         MessageId::new("assistant"),
                         ContentBlockIndex::new(0),
                     ),
-                    result: crate::scripted_suites::support::fake::success_result(&hostile),
+                    result: crate::scripted_suites::support::fake::success_result(&hostile).into(),
                 })
                 .into(),
             );
@@ -438,7 +710,8 @@ mod tests {
                             MessageId::new("assistant"),
                             ContentBlockIndex::new(block),
                         ),
-                        result: crate::scripted_suites::support::fake::success_result("result"),
+                        result: crate::scripted_suites::support::fake::success_result("result")
+                            .into(),
                     })
                     .into(),
                 );
@@ -504,7 +777,7 @@ mod tests {
                     OpenAiResponsesContinuation::Stateless {
                         items: vec![
                             serde_json::json!({"type":"reasoning", "id":"rs-real", "encrypted_content":"exact-encrypted-state"}),
-                        ],
+                        ].into(),
                     },
                 ),
                 None,
@@ -516,7 +789,7 @@ mod tests {
                     OpenAiResponsesContinuation::Stateless {
                         items: vec![
                             serde_json::json!({"type":"reasoning", "id":"rs-incomplete", "summary":[]}),
-                        ],
+                        ].into(),
                     },
                 ),
                 None,
@@ -525,7 +798,7 @@ mod tests {
             (
                 ModelProtocol::AnthropicMessages,
                 ProviderContinuationState::Anthropic(AnthropicContinuation {
-                    opaque: serde_json::json!({"type":"thinking", "thinking":"original thinking", "signature":"real-native-signature"}),
+                    opaque: serde_json::json!({"type":"thinking", "thinking":"original thinking", "signature":"real-native-signature"}).into(),
                 }),
                 Some("original thinking"),
                 true,
@@ -595,7 +868,7 @@ mod tests {
             id: ToolId::new(id),
             name: name.to_owned(),
             description: "d".to_owned(),
-            input_schema: serde_json::json!({"type": "object"}),
+            input_schema: serde_json::json!({"type": "object"}).into(),
         }
     }
 
@@ -614,7 +887,7 @@ mod tests {
                 previous_response_id: "resp_1".to_owned(),
             }),
             ProviderContinuationState::Anthropic(AnthropicContinuation {
-                opaque: serde_json::json!({}),
+                opaque: serde_json::json!({}).into(),
             }),
         ] {
             let mut r = request();
@@ -631,7 +904,7 @@ mod tests {
         let mut r = request();
         r.continuation = Some(ProviderContinuationState::Anthropic(
             AnthropicContinuation {
-                opaque: serde_json::json!({"signature": "s"}),
+                opaque: serde_json::json!({"signature": "s"}).into(),
             },
         ));
         let error = validate_request(&r, ModelProtocol::OpenAiResponses).expect_err("must fail");
@@ -643,7 +916,9 @@ mod tests {
         let mut r = request();
         r.invocation.protocol = ModelProtocol::AnthropicMessages;
         r.continuation = Some(ProviderContinuationState::OpenAiResponses(
-            OpenAiResponsesContinuation::Stateless { items: Vec::new() },
+            OpenAiResponsesContinuation::Stateless {
+                items: Vec::new().into(),
+            },
         ));
         let error = validate_request(&r, ModelProtocol::AnthropicMessages).expect_err("must fail");
         assert_eq!(error.kind, ModelErrorKind::InvalidRequest);

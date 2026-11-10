@@ -100,7 +100,7 @@ fn t14_t15_t20_pending_native_receipt_refills_head_without_a_body_mirror() {
     let mut accepted = Vec::new();
     for index in 0..73 {
         let item = store
-            .accept_inbound(crate::durable::inbox::InboundDraft {
+            .accept_inbound(crate::durable::InboundDraft {
                 message_id: None,
                 source: crate::message::types::UserSource::Human,
                 kind: crate::message::types::InboundKind::Message,
@@ -130,12 +130,12 @@ fn t14_t15_t20_pending_native_receipt_refills_head_without_a_body_mirror() {
     }
     let first = &accepted[0];
     let removed = store
-        .remove_pending(&crate::durable::inbox::PendingInboundRef {
+        .remove_pending(&crate::durable::PendingInboundRef {
             sequence: first.sequence,
             revision: 0,
         })
         .unwrap();
-    let crate::durable::inbox::PendingMutationOutcome::Applied {
+    let crate::durable::PendingMutationOutcome::Applied {
         pending_observation: Some(receipt),
         ..
     } = removed
@@ -187,7 +187,7 @@ fn t14_t20_goal_receipt_owns_pending_and_journal_atomically() {
     let accepted = store
         .accept_goal_round(
             &goal.reference,
-            crate::durable::inbox::InboundDraft {
+            crate::durable::InboundDraft {
                 message_id: None,
                 source: crate::message::types::UserSource::Runtime,
                 kind: crate::message::types::InboundKind::GoalContinuation(goal.reference.clone()),

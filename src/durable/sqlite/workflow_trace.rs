@@ -34,40 +34,40 @@ pub(super) fn page(
     // Only bounded original identity fields are read; a generic J body is never hydrated.
     let run: Option<String> = connection.query_row(
         "SELECT CASE WHEN octet_length(json_extract(event_json,'$.event.run_id'))<=8192 THEN json_extract(event_json,'$.event.run_id') END FROM events WHERE sequence=?1 AND json_extract(event_json,'$.event.type')='workflow_started'",
-        [start], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?.flatten();
+        [start], |row| row.get(0)).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
     let run = run.ok_or_else(invalid)?;
-    let (workflow_id,call_id):(String,Option<String>)=connection.query_row("SELECT json_extract(event_json,'$.event.workflow_id'),json_extract(event_json,'$.event.tool_call_id') FROM events WHERE sequence=?1",[start],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|storage(error.to_string()))?;
+    let (workflow_id,call_id):(String,Option<String>)=connection.query_row("SELECT json_extract(event_json,'$.event.workflow_id'),json_extract(event_json,'$.event.tool_call_id') FROM events WHERE sequence=?1",[start],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let run_id: crate::runtime::workflow::WorkflowRunId =
         serde_json::from_str(&run).map_err(|error| storage(error.to_string()))?;
     let mut parents = Vec::new();
     if let (Some(attempt), Some(call)) = (run_id.origin.attempt_id(), call_id) {
-        let mut query=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_tool_call_scope_kind_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_id=?2 AND json_extract(event_json,'$.event.type')='tool_execution_started' AND sequence<=?3 LIMIT 2").map_err(|error|storage(error.to_string()))?;
+        let mut query=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_tool_call_scope_kind_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_id=?2 AND json_extract(event_json,'$.event.type')='tool_execution_started' AND sequence<=?3 LIMIT 2").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         parents = query
             .query_map(params![call, attempt.as_str(), start], |row| {
                 row.get::<_, u64>(0)
             })
-            .map_err(|error| storage(error.to_string()))?
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(error.to_string()))?;
     }
     let parent_sequence = (parents.len() == 1).then(|| parents[0]);
     let end: Option<u64> = connection.query_row(
         "SELECT min(sequence) FROM events INDEXED BY events_run_id_kind_idx WHERE json_extract(event_json,'$.event.run_id')=?1 AND json_extract(event_json,'$.event.type') IN ('workflow_completed','workflow_failed','workflow_cancelled') AND sequence>?2 AND sequence<=?3",
-        params![run,start,cut.read.journal], |row| row.get(0)).map_err(|error|storage(error.to_string()))?;
+        params![run,start,cut.read.journal], |row| row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let through = end.unwrap_or(cut.read.journal);
     let total: u64 = connection
         .query_row(RUN_TOTAL_SQL, params![start, through, run], |row| {
             row.get(0)
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let revision: Option<u64> = connection
         .query_row(RUN_REVISION_SQL, params![start, through, run], |row| {
             row.get(0)
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut statement = connection
         .prepare_cached(RUN_NODES_SQL)
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let starts = statement
         .query_map(params![start, through, run, limit as u64, offset], |row| {
             Ok((
@@ -76,7 +76,7 @@ pub(super) fn page(
                 row.get::<_, Option<String>>(2)?,
             ))
         })
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| storage(error.to_string()))?;
     let mut nodes = Vec::with_capacity(starts.len());
@@ -127,7 +127,7 @@ fn node(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let started_at = timestamp
         .parse::<chrono::DateTime<chrono::Utc>>()
         .map_err(|error| storage(error.to_string()))?;
@@ -190,7 +190,7 @@ fn io(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(row.map(|(sequence, kind, preview, length)| Io {
         kind,
         preview,

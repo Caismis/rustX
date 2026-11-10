@@ -1,5 +1,5 @@
 import { assign, raise, setup, type ActorRefFrom } from 'xstate';
-import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v77';
+import type { AttachmentTarget, RuntimeClientSessionDeletionResult } from '../../../../protocol/app-server/v78';
 import { emptyFacts, sameClaim, type Admission, type Attached, type LifecycleFacts, type Observation, type SessionLifecyclePort } from './port';
 
 type Kind = 'open' | 'release' | 'switch' | 'delete' | 'recover' | 'inspect';
@@ -15,7 +15,7 @@ export interface Command {
 }
 interface Operation {
   token: number; generation: number; revision: number; command: Command;
-  previous?: LifecycleFacts; node?: string; conversation?: string; target?: AttachmentTarget; stage: 'preparing' | 'request' | 'sent';
+  previous?: LifecycleFacts; node?: string; conversation?: string; target?: AttachmentTarget; stage: 'preparing' | 'request' | 'sent' | 'acknowledged';
 }
 export interface LifecycleInput {
   id: string; readonly authority: object; generation: number; connected: boolean; port: SessionLifecyclePort;
@@ -226,12 +226,15 @@ export const sessionLifecycleMachine = setup({
       const observation = valid && intentCurrent(c, op) && c.facts.nodeId === op.node ? Object.freeze({ generation: c.generation, target, nodeId: op.node!, intentRevision: op.revision }) : undefined;
       // A fresh native claim establishes current ownership; historical transport
       // uncertainty remains in the client diagnostic owner.
-      return { unresolved: valid ? undefined : c.unresolved, attachmentResult: observation ? result : undefined, facts: { ...c.facts, target, attachmentNodeId: op.node, attachmentObservation: observation, attachment: 'attached' as const }, residency: { conversation: result.target.conversation_id, generation: c.generation } };
+      return { active: valid ? { ...op, stage: 'acknowledged' as const } : op, unresolved: valid ? undefined : c.unresolved, attachmentResult: observation ? result : undefined, facts: { ...c.facts, target, attachmentNodeId: op.node, attachmentObservation: observation, attachment: 'attached' as const }, residency: { conversation: result.target.conversation_id, generation: c.generation } };
     }),
     settle: assign(({ context: c, event }) => {
       if (event.type !== 'SETTLED' || !c.active) return {};
       if (c.active.generation !== c.generation) {
-        if (!event.outcome.ok && c.port.classify(event.outcome.error) === 'uncertain') return { unresolved: { kind: c.active.command.kind, error: event.outcome.error }, facts: { ...c.facts, attachmentIntent: 'released' } };
+        // An acknowledged Attach has a known native outcome. Losing its
+        // subsequent read/subscription cannot turn that fact into an unknown
+        // mutation or revoke a later transport's retained attachment intent.
+        if (!event.outcome.ok && c.active.stage !== 'acknowledged' && c.port.classify(event.outcome.error) === 'uncertain') return { unresolved: { kind: c.active.command.kind, error: event.outcome.error }, facts: { ...c.facts, attachmentIntent: 'released' } };
         if (!event.outcome.ok && c.active.command.kind === 'delete' && c.port.classify(event.outcome.error) === 'unsent') return { facts: { ...c.facts, deleting: false } };
         return {};
       }

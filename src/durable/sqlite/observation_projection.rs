@@ -2,6 +2,7 @@
 use super::{Connection, ConversationStoreError, OptionalExtension, Transaction, params, storage};
 use crate::context::checkpoint::{CheckpointCandidate, ProjectionActivation};
 use crate::durable::projection::ProjectionCheckpoint;
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::observation::head::RuntimeClientProjectionHeadView;
 use sha2::{Digest, Sha256};
 const MAX: usize = 16_384;
@@ -108,11 +109,11 @@ pub(super) fn index_activation(
         let value = view(transaction, candidate, activation)?;
         let bytes = crate::observation::bounded::bounded_bytes(&value, MAX)
             .ok_or_else(|| storage("projection display header exceeds bound"))?;
-        let native:Option<String>=transaction.query_row("SELECT CASE WHEN typeof(activation_digest)='text' AND octet_length(activation_digest)=64 THEN activation_digest END FROM projection_activations WHERE activation=?1",[activation.activation.0],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let native:Option<String>=transaction.query_row("SELECT CASE WHEN typeof(activation_digest)='text' AND octet_length(activation_digest)=64 THEN activation_digest END FROM projection_activations WHERE activation=?1",[activation.activation.0],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let native =
             native.ok_or_else(|| storage("projection activation integrity unavailable"))?;
         let integrity = witness(fingerprint, &native, &bytes);
-        transaction.execute("UPDATE projection_activations SET observation_header=?1,observation_header_witness=?2 WHERE activation=?3",params![bytes,integrity.as_slice(),activation.activation.0]).map_err(|error|storage(error.to_string()))?;
+        transaction.execute("UPDATE projection_activations SET observation_header=?1,observation_header_witness=?2 WHERE activation=?3",params![bytes,integrity.as_slice(),activation.activation.0]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         Ok(())
     })?;
     Ok(())
@@ -126,7 +127,15 @@ pub(super) fn read(
     };
     read_id(connection, id).map(Some)
 }
-pub(super) fn read_id(
+pub(super) fn pending_completion(
+    connection: &Connection,
+    event: &crate::events::types::RuntimeEventEnvelope,
+) -> Result<RuntimeClientProjectionHeadView, ConversationStoreError> {
+    let id = super::projection::pending_completion_head_id(connection, event)?;
+    read_id(connection, id)
+}
+
+pub(crate) fn read_id(
     connection: &Connection,
     id: u64,
 ) -> Result<RuntimeClientProjectionHeadView, ConversationStoreError> {
@@ -140,7 +149,7 @@ pub(super) fn read_id(
         u64,
         Option<String>,
     );
-    let row:Row=connection.query_row("SELECT CASE WHEN typeof(a.observation_header)='blob' AND length(a.observation_header)<=16384 THEN a.observation_header END,CASE WHEN typeof(a.observation_header_witness)='blob' AND length(a.observation_header_witness)=32 THEN a.observation_header_witness END,CASE WHEN typeof(c.candidate_fingerprint)='text' AND octet_length(c.candidate_fingerprint)=64 AND c.candidate_fingerprint NOT GLOB '*[^0-9a-f]*' THEN c.candidate_fingerprint END,CASE WHEN typeof(a.activation_digest)='text' AND octet_length(a.activation_digest)=64 AND a.activation_digest NOT GLOB '*[^0-9a-f]*' THEN a.activation_digest END,CASE WHEN octet_length(a.checkpoint_id)<=1024 THEN a.checkpoint_id END,a.ledger_frontier,a.visible_journal,CASE WHEN octet_length(a.installation_id)<=1024 THEN a.installation_id END FROM projection_activations a JOIN projection_checkpoints c ON c.checkpoint_id=a.checkpoint_id WHERE a.activation=?1",[id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?))).optional().map_err(|error|storage(error.to_string()))?.ok_or_else(||storage("projection display original row missing"))?;
+    let row:Row=connection.query_row("SELECT CASE WHEN typeof(a.observation_header)='blob' AND length(a.observation_header)<=16384 THEN a.observation_header END,CASE WHEN typeof(a.observation_header_witness)='blob' AND length(a.observation_header_witness)=32 THEN a.observation_header_witness END,CASE WHEN typeof(c.candidate_fingerprint)='text' AND octet_length(c.candidate_fingerprint)=64 AND c.candidate_fingerprint NOT GLOB '*[^0-9a-f]*' THEN c.candidate_fingerprint END,CASE WHEN typeof(a.activation_digest)='text' AND octet_length(a.activation_digest)=64 AND a.activation_digest NOT GLOB '*[^0-9a-f]*' THEN a.activation_digest END,CASE WHEN octet_length(a.checkpoint_id)<=1024 THEN a.checkpoint_id END,a.ledger_frontier,a.visible_journal,CASE WHEN octet_length(a.installation_id)<=1024 THEN a.installation_id END FROM projection_activations a JOIN projection_checkpoints c ON c.checkpoint_id=a.checkpoint_id WHERE a.activation=?1",[id],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.ok_or_else(||storage("projection display original row missing"))?;
     let (bytes, integrity, fingerprint, native, checkpoint, ledger, journal, installation) = row;
     #[cfg(test)]
     READ_WORK.with(|work| {
@@ -195,12 +204,14 @@ pub(super) fn index_provenance(
             match &item.message {
                 CheckpointMessage::Original(reference) => {
                     let position: u64 = transaction
-                        .query_row(
+                        .query_row_cached(
                             "SELECT position FROM message_ledger WHERE message_id=?1",
                             [reference.message_id.as_str()],
                             |row| row.get(0),
                         )
-                        .map_err(|error| storage(error.to_string()))?;
+                        .map_err(|error| {
+                            crate::durable::sqlite::sqlite_error(&error, error.to_string())
+                        })?;
                     let view=TraceInputProvenance::Original {source:None,conversation_id:reference.conversation_id.clone(),content_digest:reference.content_digest.clone(),locator:Some(crate::observation::content::CanonicalContentLocator::ByLedgerPosition{position}),message_id_source:None};
                     let original =
                         super::observation_request::provenance::Raw::Original(reference, &view);

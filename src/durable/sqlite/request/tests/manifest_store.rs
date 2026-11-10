@@ -311,7 +311,8 @@ pub(super) fn selected_tool_batch(id: &str) -> [MessageBlock; 2] {
         ),
         tool_call_id: call.id,
         tool_id: call.tool_id,
-        result: crate::scripted_suites::support::fake::success_result("original exact result"),
+        result: crate::scripted_suites::support::fake::success_result("original exact result")
+            .into(),
     });
     [assistant, result]
 }

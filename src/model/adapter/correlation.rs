@@ -2,30 +2,24 @@
 use crate::model::types::ModelProtocol;
 use serde_json::Value;
 
-/// Apply the same coordinate plan recorded in the frozen request associations.
-/// Native output labels are reserved before generic historical calls are named.
-pub(crate) fn encode(
-    value: &mut Value,
+/// Labels from the exact request plan, excluding Stored output already owned by
+/// the provider. Native labels stay reserved in the complete plan.
+pub(super) fn transmitted_labels(
     request: &crate::model::ModelRequest,
-) -> Result<(), String> {
-    let labels = request_labels(request)?;
-    let stored_boundary = if is_stored(request) {
-        request.continuation_boundary()?
-    } else {
-        None
-    };
-    let labels = labels
+    boundary: Option<usize>,
+) -> Result<Vec<String>, String> {
+    let stored = is_stored(request);
+    Ok(request_labels_at(request, boundary)?
         .into_iter()
-        .filter(|((message, _), _)| stored_boundary != Some(*message as usize))
+        .filter(|((message, _), _)| !stored || boundary != Some(*message as usize))
         .map(|(_, label)| label)
-        .collect::<Vec<_>>();
-    encode_with_labels(value, request.protocol(), &labels).map_err(str::to_owned)
+        .collect())
 }
 
-fn encode_with_labels(
-    value: &mut Value,
-    protocol: ModelProtocol,
+/// Apply the validated request labels directly to typed wire correlation fields.
+pub(super) fn encode_fields(
     labels: &[String],
+    mut visit: impl FnMut(&mut dyn FnMut(bool, &mut Value)),
 ) -> Result<(), &'static str> {
     #[cfg(feature = "issue-387-profile")]
     let _profile = crate::model::adapter::profile::phase(
@@ -37,7 +31,9 @@ fn encode_with_labels(
     // Wire strings cannot identify which of two unresolved occurrences owns
     // a result. Reject before editing the detached wire object, not after an
     // overwritten association has reached the provider or frozen metadata.
-    visit(value, protocol, |call, id| {
+    visit(&mut |call, id| {
+        #[cfg(feature = "issue-387-profile")]
+        crate::model::adapter::profile::wire_field();
         let source = id.as_str().unwrap_or_default();
         if source.is_empty() {
             invalid = Some("empty provider wire correlation ID");
@@ -59,7 +55,9 @@ fn encode_with_labels(
     }
     let mut ordinal = 0;
     let mut pending = std::collections::BTreeMap::new();
-    visit(value, protocol, |call, id| {
+    visit(&mut |call, id| {
+        #[cfg(feature = "issue-387-profile")]
+        crate::model::adapter::profile::wire_field();
         let source = id.as_str().unwrap_or_default().to_owned();
         if call {
             let label = labels[ordinal].clone();
@@ -77,6 +75,13 @@ fn encode_with_labels(
 pub(crate) fn request_labels(
     request: &crate::model::ModelRequest,
 ) -> Result<std::collections::BTreeMap<(u32, u32), String>, String> {
+    request_labels_at(request, request.continuation_boundary()?)
+}
+
+pub(super) fn request_labels_at(
+    request: &crate::model::ModelRequest,
+    boundary: Option<usize>,
+) -> Result<std::collections::BTreeMap<(u32, u32), String>, String> {
     use crate::message::types::AssistantContentBlock;
     use crate::model::projected::ModelMessageView;
     use crate::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
@@ -84,7 +89,6 @@ pub(crate) fn request_labels(
     let _profile = crate::model::adapter::profile::phase(
         crate::model::adapter::profile::Phase::RequestCorrelation,
     );
-    let boundary = request.continuation_boundary()?;
     let stored = is_stored(request);
     let start = if stored {
         boundary.ok_or("stored continuation lacks accepted output")?
@@ -205,12 +209,17 @@ fn wire_labels(raw: &[String], protocol: ModelProtocol) -> Vec<String> {
     labels
 }
 
+#[cfg(test)]
+fn encode_with_labels(
+    value: &mut Value,
+    protocol: ModelProtocol,
+    labels: &[String],
+) -> Result<(), &'static str> {
+    encode_fields(labels, |field| visit(value, protocol, field))
+}
+
+#[cfg(test)]
 fn visit(value: &mut Value, protocol: ModelProtocol, mut field: impl FnMut(bool, &mut Value)) {
-    #[cfg(feature = "issue-387-profile")]
-    let mut field = |call, id: &mut Value| {
-        crate::model::adapter::profile::wire_field();
-        field(call, id);
-    };
     match protocol {
         ModelProtocol::OpenAiChatCompletions => {
             if let Some(messages) = value["messages"].as_array_mut() {
@@ -235,11 +244,7 @@ fn visit(value: &mut Value, protocol: ModelProtocol, mut field: impl FnMut(bool,
                     crate::model::adapter::profile::wire_item();
                     if let Some(blocks) = message["content"].as_array_mut() {
                         for block in blocks {
-                            match block["type"].as_str() {
-                                Some("tool_use") => field(true, &mut block["id"]),
-                                Some("tool_result") => field(false, &mut block["tool_use_id"]),
-                                _ => {}
-                            }
+                            visit_anthropic_block(block, &mut field);
                         }
                     }
                 }
@@ -258,6 +263,14 @@ fn visit(value: &mut Value, protocol: ModelProtocol, mut field: impl FnMut(bool,
                 }
             }
         }
+    }
+}
+
+pub(super) fn visit_anthropic_block(block: &mut Value, mut field: impl FnMut(bool, &mut Value)) {
+    match block["type"].as_str() {
+        Some("tool_use") => field(true, &mut block["id"]),
+        Some("tool_result") => field(false, &mut block["tool_use_id"]),
+        _ => {}
     }
 }
 #[cfg(test)]

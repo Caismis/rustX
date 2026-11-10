@@ -97,7 +97,8 @@ fn work(connection: &Connection, sql: &str, values: &[rusqlite::types::Value], i
         "{plan}"
     );
     assert!(
-        plan.contains("sequence>?") && plan.contains("sequence<?"),
+        (plan.contains("sequence>?") && plan.contains("sequence<?"))
+            || (plan.contains("rowid>?") && plan.contains("rowid<?")),
         "{plan}"
     );
     assert!(
@@ -252,7 +253,7 @@ fn absent_visit_facts_and_run_headers_ignore_unrelated_later_history() {
             instance: instance.clone(),
         },
     );
-    let mut baseline = None;
+    let mut populated_costs = None;
     for later in 0..=4096 {
         if [0, 128, 1024, 4096].contains(&later) {
             cut.read.journal = sequence;
@@ -270,14 +271,12 @@ fn absent_visit_facts_and_run_headers_ignore_unrelated_later_history() {
                 ));
             }
             assert!(costs.iter().all(|cost| *cost < 200), "{costs:?}");
-            // An empty tail can terminate at EOF; a populated tail adds one
-            // instruction to reject its first different index key. Growing
-            // that tail must add no further work.
-            for (initial, current) in baseline.get_or_insert(costs.clone()).iter().zip(&costs) {
-                assert!(
-                    (*current - *initial).abs() <= 1,
-                    "{later} later runs: {costs:?}"
-                );
+            // Empty indexes at the searched key can take a different seek
+            // path. The absolute cap applies in both cases. Once the tail is
+            // populated, growing it must execute exactly the same work.
+            if later > 0 {
+                let expected = populated_costs.get_or_insert_with(|| costs.clone());
+                assert_eq!(&costs, expected, "{later} later runs");
             }
             let page = page(&connection, &cut, 1, 0, 32).unwrap();
             assert_eq!(page.total, 1);

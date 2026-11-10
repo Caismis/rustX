@@ -43,7 +43,7 @@ pub(super) fn request_span_fixture() -> (SqliteConversationStore, RequestSnapsho
         id: ToolId::new("original-span-tool"),
         name: "Original frozen tool".into(),
         description: "Frozen original description".into(),
-        input_schema: schema,
+        input_schema: schema.into(),
     }];
     snapshot.effective_system_prompt = "original prompt水\n".repeat(6_000);
     freeze_test_input(&store, &mut snapshot, &[]);
@@ -246,7 +246,7 @@ fn t08_t14_t15_t19_original_span_headers_match_every_legacy_field_and_advancing_
         assert_eq!(
             observation_request::field_from(
                 &connection,
-                "request_observation_fields",
+                "request_source_roots",
                 &sequence.to_string(),
                 path
             )

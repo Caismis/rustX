@@ -87,7 +87,7 @@ fn append(store: &dyn ConversationStore, kind: E, seconds: i64) {
     let envelope = event(store, kind, seconds);
     match &envelope.event {
         E::BackgroundExecutionCommitted { .. } => {
-            crate::durable::inbox::ConversationInboundCapability::commit_background_ownership(
+            crate::durable::ConversationInboundCapability::commit_background_ownership(
                 store, envelope,
             )
             .unwrap();
@@ -214,7 +214,8 @@ fn prepared_request(
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": { "command": { "type": "string" } },
-            }),
+            })
+            .into(),
         }],
         CapabilityRevision::new(1),
         ContextGeneration {
@@ -292,7 +293,7 @@ fn request_with_private_continuation(store: &dyn ConversationStore) -> RequestSn
     completion(store, &prior, None, None, 2);
     let native = crate::runtime::continuation::ProviderContinuationState::Anthropic(
         crate::runtime::continuation::AnthropicContinuation {
-            opaque: serde_json::json!({"type":"thinking", "thinking":"retained native thinking", "signature":PROVIDER_CONTINUATION}),
+            opaque: serde_json::json!({"type":"thinking", "thinking":"retained native thinking", "signature":PROVIDER_CONTINUATION}).into(),
         },
     );
     let output = MessageBlock::Assistant(AssistantMessageBlock {
@@ -468,7 +469,7 @@ fn settle_tool_call(
                 ),
                 tool_call_id: call.id.clone(),
                 tool_id: call.tool_id.clone(),
-                result,
+                result: result.into(),
             }),
             event(
                 store,
@@ -1199,7 +1200,8 @@ fn parallel_tool_completion_keeps_exact_call_order_and_certainty() {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             },
             at,
         );
@@ -1691,6 +1693,254 @@ fn lifecycle_refresh_is_bounded_and_repeats_no_historical_input() {
             .refresh(&vec![position; TRACE_RECORD_LIMIT + 1], Some(&snapshot))
             .is_err()
     );
+}
+
+#[test]
+fn trace_page_native_proof_matches_structural_admission_at_budget_boundaries() {
+    use crate::observation::{preflight, structural_json};
+
+    let store = store("conv_37581a87-e638-7e20-bd27-e83b5101bc09");
+    start(&store);
+    request(&store, 0);
+    let original = TraceProjection::new(&store)
+        .unwrap()
+        .page(None, 32)
+        .unwrap();
+    assert!(!original.records.is_empty());
+    let limit = crate::observation::bounded::CHECKPOINT_TARGET_BYTES
+        - crate::observation::bounded::CHECKPOINT_ITEM_BYTES;
+    assert_eq!(
+        preflight::bounded_safe_integer_fit(&original, limit),
+        Some(true)
+    );
+    let schema = structural_json::root::<TracePage>();
+    let required = |page: &TracePage, structural: bool| {
+        if structural {
+            preflight::required_budget(
+                &structural_json::Encoded {
+                    value: page,
+                    schema: &schema,
+                    root: &schema,
+                },
+                usize::MAX,
+            )
+        } else {
+            preflight::required_budget(page, usize::MAX)
+        }
+        .unwrap()
+    };
+    let compare = |page: &TracePage| {
+        let mut bytes = Vec::new();
+        structural_json::to_writer(&mut bytes, page).unwrap();
+        let expected = preflight::with_structural_admission_only(|| ensure_page_bound(page));
+        let actual = ensure_page_bound(page);
+        assert_eq!(actual, expected, "identical admission and capacity errors");
+        if actual.is_ok() {
+            assert!(
+                bytes.len() <= limit,
+                "successful proof bounds actual wire bytes"
+            );
+        }
+        let mut after = Vec::new();
+        structural_json::to_writer(&mut after, page).unwrap();
+        assert_eq!(
+            after, bytes,
+            "admission preserves complete structural bytes"
+        );
+        let decoded: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            decoded["read_cut"]["revision"],
+            page.read_cut.as_ref().unwrap().revision.to_string()
+        );
+        assert_eq!(
+            decoded["next_cursor"],
+            serde_json::to_value(&page.next_cursor).unwrap()
+        );
+        actual
+    };
+    compare(&original).unwrap();
+    // The native proof is conservative. Exercise both its boundary and the
+    // original structural admission boundary, rather than equating either
+    // admission budget with the smaller actual JSON byte count.
+    for structural in [false, true] {
+        for delta in [-1_isize, 0, 1] {
+            let mut page = original.clone();
+            page.next_cursor = Some(TraceCursor("trace:\0\n\"\\水🙂".into()));
+            let target = limit.checked_add_signed(delta).unwrap();
+            let padding = target.checked_sub(required(&page, structural)).unwrap();
+            page.next_cursor
+                .as_mut()
+                .unwrap()
+                .0
+                .push_str(&"x".repeat(padding));
+            assert_eq!(required(&page, structural), target);
+            let result = compare(&page);
+            if structural {
+                assert_eq!(result.is_ok(), delta <= 0);
+            } else {
+                assert_eq!(
+                    preflight::bounded_safe_integer_fit(&page, limit),
+                    Some(delta <= 0)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn trace_page_bound_native_admission_preserves_full_width_cuts_and_escaped_capacity() {
+    let store = store("conv_fa8cedb3-e605-7a9c-a144-4eb6059d9270");
+    start(&store);
+    request(&store, 0);
+    let mut page = TraceProjection::new(&store)
+        .unwrap()
+        .page(None, 32)
+        .unwrap();
+    let cut = page.read_cut.as_mut().unwrap();
+    cut.revision = u64::MAX;
+    cut.through = u64::MAX;
+    ensure_page_bound(&page).unwrap();
+    let mut bytes = Vec::new();
+    crate::observation::structural_json::to_writer(&mut bytes, &page).unwrap();
+    let decoded: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(decoded["read_cut"]["revision"], u64::MAX.to_string());
+    assert_eq!(decoded["read_cut"]["through"], u64::MAX.to_string());
+    let limit = crate::observation::bounded::CHECKPOINT_TARGET_BYTES
+        - crate::observation::bounded::CHECKPOINT_ITEM_BYTES;
+    assert!(bytes.len() <= limit);
+
+    page.next_cursor = Some(TraceCursor("\0".repeat(limit / 6 + 1)));
+    assert!(matches!(
+        ensure_page_bound(&page),
+        Err(crate::durable::ConversationStoreError::ObservationCapacityExceeded)
+    ));
+}
+
+#[test]
+fn trace_refresh_page_examines_missing_and_duplicate_interests_without_publication() {
+    let store = store("conv_c58ff1b4-cc51-781e-9651-d57205b2bc7a");
+    start(&store);
+    request(&store, 0);
+    let source = store.observation_read_cut().unwrap();
+    let projection = TraceProjection::at_cut(&store, &source).unwrap();
+    let mut page = projection.page(None, 32).unwrap();
+    let position = record_of(&page, TraceKind::Request).position.clone();
+    let mut interests = vec![position.clone(); TRACE_REFRESH_LIMIT];
+    interests[1] = TraceCursor("trace:1000000".into());
+    let snapshot = quiet_snapshot(&store);
+    let refreshed = projection
+        .refresh_page(&mut page, &interests, Some(&snapshot))
+        .unwrap();
+    assert_eq!(refreshed, interests.len());
+    assert_eq!(page.updates.len(), interests.len() - 1);
+    assert!(page.updates.iter().all(|update| update.id == position.0));
+    assert_eq!(store.observation_read_cut().unwrap(), source);
+    ensure_page_bound(&page).unwrap();
+
+    interests[9] = TraceCursor("invalid-cursor".into());
+    let mut page = projection.page(None, 32).unwrap();
+    assert!(
+        projection
+            .refresh_page(&mut page, &interests, Some(&snapshot))
+            .is_err(),
+        "a later lookup failure must not be hidden as prefix success"
+    );
+    assert!(
+        projection
+            .refresh_page(
+                &mut page,
+                &vec![position; TRACE_REFRESH_LIMIT + 1],
+                Some(&snapshot)
+            )
+            .is_err()
+    );
+    assert_eq!(store.observation_read_cut().unwrap(), source);
+}
+
+#[test]
+fn trace_refresh_page_returns_a_complete_prefix_at_the_original_byte_bound() {
+    let store = store("conv_6b217f81-4fbc-744d-ac6b-cb8a025c435c");
+    start(&store);
+    request_with_identity(
+        &store,
+        0,
+        None,
+        RequestIdentity {
+            attempt_id: AttemptId::new("\0".repeat(512)),
+            turn: TurnId::new("\0".repeat(512)),
+            retry_number: 0,
+        },
+    );
+    let source = store.observation_read_cut().unwrap();
+    let projection = TraceProjection::at_cut(&store, &source).unwrap();
+    let original = projection.page(None, 32).unwrap();
+    let position = record_of(&original, TraceKind::Request).position.clone();
+    let interests = vec![position; TRACE_REFRESH_LIMIT];
+    let snapshot = quiet_snapshot(&store);
+    let mut offset = 0;
+    let mut replies = 0;
+    while offset < interests.len() {
+        let mut page = original.clone();
+        let refreshed = projection
+            .refresh_page(&mut page, &interests[offset..], Some(&snapshot))
+            .unwrap();
+        assert!(refreshed > 0);
+        assert!(refreshed <= interests.len() - offset);
+        assert_eq!(page.updates.len(), refreshed);
+        assert!(page.updates.iter().all(|update| {
+            update.location.attempt_id.as_ref().unwrap().as_str() == "\0".repeat(512)
+        }));
+        ensure_page_bound(&page).unwrap();
+        offset += refreshed;
+        replies += 1;
+    }
+    assert!(
+        replies > 1,
+        "escaped native identities must exercise actual bounded prefix paging"
+    );
+    assert_eq!(offset, TRACE_REFRESH_LIMIT);
+    assert_eq!(store.observation_read_cut().unwrap(), source);
+}
+
+#[test]
+fn trace_refresh_page_keeps_every_interest_at_its_captured_cut_after_later_terminal() {
+    let store = store("conv_643280a1-d980-7f84-8f5c-72378e2a847c");
+    start(&store);
+    let request = request(&store, 0);
+    let source = store.observation_read_cut().unwrap();
+    let old = TraceProjection::at_cut(&store, &source).unwrap();
+    let original = old.page(None, 32).unwrap();
+    let record = record_of(&original, TraceKind::Request);
+    let interests = vec![record.position.clone(); TRACE_REFRESH_LIMIT];
+    let snapshot = quiet_snapshot(&store);
+    completion(&store, &request, None, None, 3);
+    let current = store.observation_read_cut().unwrap();
+    assert_ne!(current, source);
+
+    let mut page = original.clone();
+    assert_eq!(
+        old.refresh_page(&mut page, &interests, Some(&snapshot))
+            .unwrap(),
+        TRACE_REFRESH_LIMIT
+    );
+    assert_eq!(page.read_cut, original.read_cut);
+    assert_eq!(page.updates.len(), TRACE_REFRESH_LIMIT);
+    assert!(
+        page.updates
+            .iter()
+            .all(|update| update.state == record.state && update.timing == record.timing)
+    );
+
+    let fresh = TraceProjection::at_cut(&store, &current).unwrap();
+    let mut page = fresh.page(None, 32).unwrap();
+    assert_eq!(
+        fresh
+            .refresh_page(&mut page, &interests, Some(&snapshot))
+            .unwrap(),
+        TRACE_REFRESH_LIMIT
+    );
+    assert!(page.updates.iter().all(|update| update.state == TraceState::Completed && update.timing.ended_at.is_some()));
+    assert_eq!(store.observation_read_cut().unwrap(), current);
 }
 
 // ---------------------------------------------------------------------------
@@ -2265,7 +2515,7 @@ fn identity_bounds_make_canonical_trace_details_explicitly_partial() {
                 id: ToolId::new(&identity),
                 name: "historical".into(),
                 description: "frozen".into(),
-                input_schema: serde_json::json!({}),
+                input_schema: serde_json::json!({}).into(),
             }]),
         );
         let call = bash_call("bounded-call");
@@ -4108,7 +4358,8 @@ fn shared_predecessor_compares_complete_prompt_and_tool_definitions() {
         let mut first = prepared_request(&store, 0, None, identity_of("1", 0));
         first.effective_system_prompt = prefix.clone();
         first.tool_definitions[0].description = "t".repeat(TRACE_DETAIL_TEXT_BYTES + 1);
-        first.tool_definitions[0].input_schema = serde_json::json!({"value": "s".repeat(8192)});
+        first.tool_definitions[0].input_schema =
+            serde_json::json!({"value": "s".repeat(8192)}).into();
         let first = commit_request(&store, first, &[]);
         completion(&store, &first, None, None, 4);
         let mut second = prepared_request(&store, 1, None, identity_of("1", 1));
@@ -4116,7 +4367,7 @@ fn shared_predecessor_compares_complete_prompt_and_tool_definitions() {
             format!("{prefix}{}", if prompt_changed { "different" } else { "" });
         second.tool_definitions.clone_from(&first.tool_definitions);
         if tools_changed {
-            second.tool_definitions[0].input_schema["value"] =
+            std::sync::Arc::make_mut(&mut second.tool_definitions[0].input_schema)["value"] =
                 serde_json::json!(format!("{}different", "s".repeat(8192)));
         }
         let second = commit_request(&store, second, &[]);

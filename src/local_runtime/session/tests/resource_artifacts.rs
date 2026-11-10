@@ -47,7 +47,7 @@ fn verify_resource_lineage(uri: &str) {
     let MessageBlock::Tool(tool) = &mut history[2] else {
         panic!()
     };
-    tool.result = result;
+    tool.result = result.into();
     let source_store = store_for(&catalog, &session, &conversation);
     for message in &history {
         source_store.append_canonical(message).unwrap();

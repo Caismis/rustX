@@ -1,0 +1,126 @@
+{
+  "dormant_dirty_subscription_hydrates_without_a_checkpoint-red.log": {
+    "bytes": 213,
+    "sha256": "7102fb8b9bd30ffd3137e7708f81e3b2b22c1809319ffee69a021efa3f16d41b"
+  },
+  "shutdown-app-green.log": {
+    "bytes": 44703,
+    "sha256": "25453267dcfd31caf8ada1818569eefa677e23863e6842f401434565bf109a5c"
+  },
+  "shutdown-child-build.stderr": {
+    "bytes": 119,
+    "sha256": "85abbce186798d64e4e00135e516df996dc3d6334d0bfdeff1f121d52f5dc1d7"
+  },
+  "shutdown-child-build.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "shutdown-fmt.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "shutdown-frozen-green.log": {
+    "bytes": 219,
+    "sha256": "ac33c1761d7464da4ae5a21001f639e4574706700cb03ad48442b4ccf2db50aa"
+  },
+  "shutdown-green-build.stderr": {
+    "bytes": 119,
+    "sha256": "fef87a135d78e4c882d364269bcbb1bf4c148a45de39a344ad8e0a690bf0f3d2"
+  },
+  "shutdown-green-build.stdout": {
+    "bytes": 458832,
+    "sha256": "5af83e60c85926ae2b334dcac68fa39dcf6ac645239eb6e3b2520fae3cdf8ce7"
+  },
+  "shutdown-green-executable.json": {
+    "bytes": 267,
+    "sha256": "5752319946e4482a1b5a6ecbb8b4d7d9bcf05823058a2d6c0434e74e0e776d67"
+  },
+  "shutdown-host-green.log": {
+    "bytes": 13402,
+    "sha256": "968df016041ebd23ab02d1409be7ce58581b3319c1ba7dde2ef827dd7db0b89c"
+  },
+  "shutdown-projection-green.log": {
+    "bytes": 9530,
+    "sha256": "563bd55d61cfa887b1edbac4bebaf489f8ec0a79611bc9ddba8c6d0ee49c6e8c"
+  },
+  "shutdown-published-cut-red.log": {
+    "bytes": 629,
+    "sha256": "07d4342ae48b699c0b1b313ba5f51ce2f3a709d98f2b8c4e13165c59b00970f2"
+  },
+  "shutdown-published-red-executable.json": {
+    "bytes": 210,
+    "sha256": "f353565d4ec375ec4edb11a03fdac59ebf04bcc2e0c5a119a12c072a24a97f42"
+  },
+  "shutdown-red-build-2.stderr": {
+    "bytes": 119,
+    "sha256": "8e797d222b7add26ea27ee9e21adcec40d045a22a73da82adfd2dacd5954bb89"
+  },
+  "shutdown-red-build-2.stdout": {
+    "bytes": 458832,
+    "sha256": "59247ccaf0796716371c51fb3eec3d96fa1832809bee9007d5096cc4f2f0eccd"
+  },
+  "shutdown-red-build-3.stderr": {
+    "bytes": 119,
+    "sha256": "90ab22a03747dc6b24eba98a52967e52fffe06961fb22fe35e3c5066673af05e"
+  },
+  "shutdown-red-build-3.stdout": {
+    "bytes": 458832,
+    "sha256": "1f95924a998bc983d84f61bef3d479d95994bd70887cbcf8d3e515ea2aaed376"
+  },
+  "shutdown-red-build-4.stderr": {
+    "bytes": 119,
+    "sha256": "29fa4d1b30866e8ba6aabb2e8d5d321a48dd7a746420dfdf7c7e67ce6ffb2a93"
+  },
+  "shutdown-red-build-4.stdout": {
+    "bytes": 458832,
+    "sha256": "fe8e01ef0fe8dd7d1c01d3334e41fea51fb821ae3f646d42d9e4444708432129"
+  },
+  "shutdown-red-build.stderr": {
+    "bytes": 124,
+    "sha256": "f0029a886727350849033e1f1fdd1f36cf5e2530759c11175655d849daf0ee91"
+  },
+  "shutdown-red-build.stdout": {
+    "bytes": 461154,
+    "sha256": "491e679b1d24bb4e64fa54f7f95d010e42fd848e3e183b3aefd3200ca1452535"
+  },
+  "shutdown-red-executable.json": {
+    "bytes": 264,
+    "sha256": "27cebe64090358ac2b5b650d47f155acd1f8e177cccee6730295b97d76de9554"
+  },
+  "shutdown-red-source.patch": {
+    "bytes": 5968,
+    "sha256": "44346ddbeed8c6ceca9f890bc2e47b9bd7bcde40bbcc5feb6ebead9c65b1df8a"
+  },
+  "shutdown-review-plan.md": {
+    "bytes": 1467,
+    "sha256": "3d0b219a92eec86ae8844e76b00c88fe132deeda5e36365fbff0ad7853c4301b"
+  },
+  "shutdown-test-list.txt": {
+    "bytes": 430768,
+    "sha256": "a7d04892bae4acea63c73447ab535b09f54d359cc33184c00e932e6566732490"
+  },
+  "shutdown-usage-bearing-red-executable.json": {
+    "bytes": 206,
+    "sha256": "4e04943e2feabe5e3457f1b59ff4de3048b9dd370a7ed01f015a9ee83b208d85"
+  },
+  "shutdown-usage-bearing-red-source.patch": {
+    "bytes": 6521,
+    "sha256": "e41f4aec477b58a8f807362da4c8afe4c567a38403e13696a55bf809860b5db1"
+  },
+  "shutdown-usage-bearing-red.log": {
+    "bytes": 10138,
+    "sha256": "965f8ff615c1334be60363a3982c57e2e5fd75282ffcc37490aa349d3fbf5fb9"
+  },
+  "shutdown-validated-source.patch": {
+    "bytes": 12932,
+    "sha256": "26e4bc787203df515d00ab9c587e96dde39c9269a7fba02dfeeaff31343aa966"
+  },
+  "shutdown-validation.json": {
+    "bytes": 61819,
+    "sha256": "914505cd92e64381774dbe66fa1bb1594403822317b9674ecdfc437cd81019fe"
+  },
+  "shutdown-whitespace.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

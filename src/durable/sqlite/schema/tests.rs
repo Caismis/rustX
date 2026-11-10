@@ -42,9 +42,9 @@ fn wal_management_head_is_one_snapshot_while_another_writer_commits() {
 }
 
 #[test]
-fn a_version_32_profile_store_is_refused_without_migration() {
+fn a_version_100_stream_layout_is_refused_without_migration() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("profile-v33.sqlite");
+    let path = directory.path().join("stream-layout-v100.sqlite");
     let id = ConversationId::new("conv_bb2149cf-1f8d-7c3c-8c60-73f4acb0a518");
     {
         let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
@@ -53,7 +53,7 @@ fn a_version_32_profile_store_is_refused_without_migration() {
             .lock()
             .unwrap()
             .execute(
-                "UPDATE rustx_store SET schema_version = 32 WHERE id = 1",
+                "UPDATE rustx_store SET schema_version = 100 WHERE id = 1",
                 [],
             )
             .unwrap();
@@ -65,7 +65,7 @@ fn a_version_32_profile_store_is_refused_without_migration() {
         assert!(matches!(
             result,
             Err(ConversationStoreError::SchemaVersionMismatch {
-                stored: 32,
+                stored: 100,
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
@@ -79,7 +79,7 @@ fn a_version_32_profile_store_is_refused_without_migration() {
         )
         .unwrap();
     assert_eq!(
-        stored, 32,
+        stored, 100,
         "neither runtime nor management opening migrates"
     );
 }
@@ -152,9 +152,16 @@ fn incompatible_schema_fails_without_migration_or_repair() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("incompatible.sqlite");
     let connection = rusqlite::Connection::open(&path).unwrap();
+    let future_version = SQLITE_SCHEMA_VERSION + 1;
     connection
         .execute_batch(
-            "CREATE TABLE rustx_store (id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, conversation_id TEXT NOT NULL, next_inbound_sequence INTEGER NOT NULL, next_event_sequence INTEGER NOT NULL); INSERT INTO rustx_store VALUES (1, 99, 'conv-1', 0, 0);",
+            "CREATE TABLE rustx_store (id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, conversation_id TEXT NOT NULL, next_inbound_sequence INTEGER NOT NULL, next_event_sequence INTEGER NOT NULL);",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO rustx_store VALUES (1, ?1, 'conv-1', 0, 0)",
+            [future_version],
         )
         .unwrap();
     drop(connection);
@@ -164,9 +171,9 @@ fn incompatible_schema_fails_without_migration_or_repair() {
             &path
         ),
         Err(ConversationStoreError::SchemaVersionMismatch {
-            stored: 99,
+            stored,
             expected: SQLITE_SCHEMA_VERSION
-        })
+        }) if stored == future_version
     ));
 }
 
@@ -271,7 +278,7 @@ fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 86);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 106);
 
     // And the refusal is not ceremony: had the gate admitted the file,
     // these are the rows the typed decoder would have had to interpret,
@@ -336,7 +343,7 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 86);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 106);
 
     // And the refusal is not ceremony: the envelope framing is unchanged,
     // and the row the gate refused really is undecodable under the current
@@ -354,12 +361,109 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
 }
 
 #[test]
+fn schema_101_event_indexes_are_refused_without_rewriting_the_store() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("event-indexes-v101.sqlite");
+    let id = ConversationId::generate();
+    {
+        let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+        let connection = store.conn.lock().unwrap();
+        let broad_trace_index_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='events_trace_kind_idx')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!broad_trace_index_exists);
+        connection.execute_batch(
+            "UPDATE rustx_store SET schema_version=101 WHERE id=1;
+             DROP INDEX events_auxiliary_call_id_kind_idx;
+             CREATE INDEX events_auxiliary_call_id_kind_idx
+               ON events(json_extract(event_json,'$.event.call_id'),json_extract(event_json,'$.event.type'));
+             CREATE INDEX events_trace_kind_idx ON events(observation_kind) WHERE observation_kind IS NOT NULL;",
+        ).unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+    for opened in [
+        SqliteConversationStore::open(id.clone(), &path),
+        SqliteConversationStore::open_existing(id, &path),
+    ] {
+        assert!(matches!(
+            opened,
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 101,
+                expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
+fn schema_102_text_kind_indexes_are_refused_without_rewriting_the_store() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("event-indexes-v102.sqlite");
+    let id = ConversationId::generate();
+    {
+        let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+        let connection = store.conn.lock().unwrap();
+        connection.execute_batch(
+            "DROP INDEX events_kind_idx;
+             CREATE INDEX events_kind_idx ON events(json_extract(event_json, '$.event.type'));
+             DROP INDEX events_primary_trace_kind_idx;
+             CREATE INDEX events_primary_trace_kind_idx ON events(observation_kind) WHERE observation_trace_fact_required=1;
+             UPDATE rustx_store SET schema_version=102 WHERE id=1;",
+        ).unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+    for opened in [
+        SqliteConversationStore::open(id.clone(), &path),
+        SqliteConversationStore::open_existing(id, &path),
+    ] {
+        assert!(matches!(
+            opened,
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 102,
+                expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
+fn file_writer_uses_normal_wal_with_two_kib_pages() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = SqliteConversationStore::open(
+        ConversationId::generate(),
+        &directory.path().join("wal-policy.sqlite"),
+    )
+    .unwrap();
+    let connection = store.conn.lock().unwrap();
+    let journal: String = connection
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap();
+    let version: String = connection
+        .query_row("SELECT sqlite_version()", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(journal, "wal");
+    for (sql, expected) in [
+        ("PRAGMA synchronous", 1),
+        ("PRAGMA page_size", 2048),
+        ("PRAGMA wal_autocheckpoint", 1000),
+    ] {
+        let actual: i64 = connection.query_row(sql, [], |row| row.get(0)).unwrap();
+        assert_eq!(actual, expected, "{sql}");
+    }
+    eprintln!("SQLite {version} WAL/NORMAL, 2048-byte pages, 1000-frame autocheckpoint");
+}
+
+#[test]
 fn trace_schema_indexes_are_required_and_queries_use_them() {
     use crate::durable::presentation::{FactQuery, FactScope};
-    let store = SqliteConversationStore::in_memory(ConversationId::new(
-        "conv_ab18a567-5190-73a5-8156-2e8693be6392",
-    ))
-    .unwrap();
+    let id = ConversationId::new("conv_ab18a567-5190-73a5-8156-2e8693be6392");
+    let store = SqliteConversationStore::in_memory(id).unwrap();
     let connection = store.conn.lock().unwrap();
     verify_schema_shape(&connection).unwrap();
     let scopes = [
@@ -374,6 +478,10 @@ fn trace_schema_indexes_are_required_and_queries_use_them() {
             "events_step_kind_idx",
         ),
         (FactScope::Request("r".into()), "events_request_id_kind_idx"),
+        (
+            FactScope::Compaction(crate::runtime::identity::CompactionOperationId::new("o")),
+            "events_compaction_operation_kind_idx",
+        ),
         (FactScope::Message("m".into()), "events_message_id_kind_idx"),
         (FactScope::ContextReading, "events_context_reading_idx"),
         (
@@ -431,7 +539,7 @@ fn trace_schema_indexes_are_required_and_queries_use_them() {
             }
         }
     }
-    for (name, expression) in PRESENTATION_INDEXES {
+    for (name, definition) in PRESENTATION_INDEXES {
         connection
             .execute_batch(&format!("DROP INDEX {name}"))
             .unwrap();
@@ -448,7 +556,7 @@ fn trace_schema_indexes_are_required_and_queries_use_them() {
         );
         connection
             .execute_batch(&format!(
-                "DROP INDEX {name}; CREATE INDEX {name} ON events({expression})"
+                "DROP INDEX {name}; CREATE INDEX {name} ON events{definition}"
             ))
             .unwrap();
         verify_schema_shape(&connection).unwrap();
@@ -510,11 +618,65 @@ fn preceding_schema_is_rejected_before_event_deserialization() {
 }
 
 #[test]
+fn message_keyed_block_layout_is_rejected_without_rewriting_either_open_path() {
+    for version in [105, SQLITE_SCHEMA_VERSION] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("message-keyed-blocks.sqlite");
+        let id = ConversationId::generate();
+        {
+            let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+            let connection = store.lock().unwrap();
+            connection.execute_batch(
+                "DROP TABLE observation_block_headers;
+                 CREATE TABLE observation_block_headers (
+                    ledger_position INTEGER NOT NULL REFERENCES message_ledger(position),
+                    block_index INTEGER NOT NULL CHECK(block_index>=0),
+                    header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
+                    message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
+                    PRIMARY KEY(ledger_position,block_index),UNIQUE(message_id,block_index)
+                 );
+                 CREATE INDEX observation_block_ledger_kind_idx ON observation_block_headers(ledger_position,json_extract(header_json,'$.kind'),block_index);
+                 CREATE INDEX observation_block_kind_idx ON observation_block_headers(message_id,json_extract(header_json,'$.kind'),block_index);",
+            ).unwrap();
+            connection
+                .execute(
+                    "UPDATE rustx_store SET schema_version=?1 WHERE id=1",
+                    [version],
+                )
+                .unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        for existing_only in [false, true] {
+            let result = if existing_only {
+                SqliteConversationStore::open_existing(id.clone(), &path)
+            } else {
+                SqliteConversationStore::open(id.clone(), &path)
+            };
+            if version == 105 {
+                assert!(matches!(
+                    result,
+                    Err(ConversationStoreError::SchemaVersionMismatch {
+                        stored: 105,
+                        expected: SQLITE_SCHEMA_VERSION,
+                    })
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ConversationStoreError::IncompatibleSchema(_))
+                ));
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+        }
+    }
+}
+
+#[test]
 fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite() {
     use crate::runtime::identity::AuxiliaryCallId;
     use crate::runtime::workflow::read_model::WorkflowWait;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 86);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 106);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-wait.sqlite");
@@ -571,7 +733,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
 fn workflow_node_io_and_indexes_require_current_schema_without_rewrite() {
     use crate::runtime::workflow::read_model::WorkflowNodeKind;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 86);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 106);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-node-io.sqlite");

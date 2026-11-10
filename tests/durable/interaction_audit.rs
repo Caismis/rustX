@@ -458,30 +458,36 @@ fn commit_generation_with_request(
         request_id: request_id.clone(),
         message_id: message_id.clone(),
     };
-    store.open_publication_stream(&start).expect("open");
+
     store
-        .stage_publication_frames(&[frame(
+        .stage_publication_frames(
             &start,
-            0,
-            PublicationPayload::ProposedToolCallStarted {
-                block_index: ContentBlockIndex::new(0),
-                call: ToolCallStart {
-                    id: generation.call.id.clone(),
-                    tool_id: generation.call.tool_id.clone(),
-                    name: generation.call.name.clone(),
+            &[frame(
+                &start,
+                0,
+                PublicationPayload::ProposedToolCallStarted {
+                    block_index: ContentBlockIndex::new(0),
+                    call: ToolCallStart {
+                        id: generation.call.id.clone(),
+                        tool_id: generation.call.tool_id.clone(),
+                        name: generation.call.name.clone(),
+                    },
                 },
-            },
-        )])
+            )],
+        )
         .expect("proposal start");
     store
-        .stage_publication_frames(&[frame(
+        .stage_publication_frames(
             &start,
-            1,
-            PublicationPayload::ProposedToolCallCompleted {
-                block_index: ContentBlockIndex::new(0),
-                call: generation.call.clone(),
-            },
-        )])
+            &[frame(
+                &start,
+                1,
+                PublicationPayload::ProposedToolCallCompleted {
+                    block_index: ContentBlockIndex::new(0),
+                    call: generation.call.clone(),
+                },
+            )],
+        )
         .expect("proposal complete");
     store
         .append_event(generation.envelope(
@@ -506,7 +512,7 @@ fn commit_generation_with_request(
         .expect("provider outcome");
     store
         .commit_publication_terminal(
-            &start.stream_id,
+            &start,
             &[frame(&start, 2, PublicationPayload::TerminalOnly)],
         )
         .expect("publication terminal");
@@ -809,7 +815,9 @@ fn a_durable_approval_and_a_crash_before_tool_start_executes_nothing() {
         .expect("canonical")
         .into_iter()
         .find_map(|message| match message {
-            MessageBlock::Tool(tool) if tool.tool_call_id == call_id() => Some(tool.result.status),
+            MessageBlock::Tool(tool) if tool.tool_call_id == call_id() => {
+                Some(std::sync::Arc::unwrap_or_clone(tool.result).status)
+            }
             _ => None,
         })
         .expect("the approved call received its canonical result slot");
@@ -1837,7 +1845,7 @@ fn transcript_tool_occurrences_do_not_alias_across_attempts_and_reopen() {
                         id: id.clone(),
                         tool_call_id: generation.call.id.clone(),
                         tool_id: generation.call.tool_id.clone(),
-                        result,
+                        result: result.into(),
                     }),
                     generation.envelope(
                         &format!("{id}-committed"),

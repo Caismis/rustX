@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useSelector } from '@xstate/react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { SourceMutation, SourceSettings } from '../../protocol/app-server/v77';
+import type { SourceMutation, SourceSettings } from '../../protocol/app-server/v78';
 import { ModelsPage } from '../src/app/settings/models/ModelsPage';
 import { AgentEditor } from '../src/app/resources/subagents/AgentEditor';
 import { McpEditor } from '../src/app/resources/mcp/McpEditor';

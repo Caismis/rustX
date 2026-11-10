@@ -30,7 +30,7 @@ arguments (including `init` declarations). Streams and exit status are forwarded
 All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
 
 Foreground Workflow Tool cards expose expandable native execution details under
-App Server protocol v50. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
+App Server protocol v76. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses
 use the root HITL queue and children expose authoritative subagent status. See the
 [native projection contract](../docs/workflow-run-projection.md).
@@ -137,7 +137,7 @@ pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/so
 Every initialized trusted connection can use committed-delivery APIs (see `/files`).
 The same token file may contain an opaque capability or a host-issued HS256 JWT.
 
-Both modes use App Server protocol v77. `--config` and `--runtime-root` bind the owned
+Both modes use App Server protocol v78. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
 paths are absolute server paths. The TUI never parses authored configuration or
@@ -237,7 +237,7 @@ or adopts it.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v77)
+  -> initialize (App Server protocol v78)
   -> thread/start or choose a durable Session
   -> resolve the exact Session/node; begin thread/resume and editable connecting
        -> first explicit Send records session/submissionIntent

@@ -29,7 +29,7 @@ async fn granted_connection(
             .await
         });
         let offered = format!(
-            "rustx.app-server.v77, {}",
+            "rustx.app-server.v78, {}",
             driver::credential_offer(driver::TOKEN)
         );
         (driver::websocket_offering(&url, &offered).await, server)
@@ -91,7 +91,7 @@ async fn t08_t11_t12_t14_t19_numeric_delivery_carrier_keeps_real_stdio_and_webso
                     status: crate::tools::types::ToolExecutionStatus::Success,
                     content: vec![crate::tools::types::ToolResultContent::Text(crate::message::content::TextBlock { text: "original result 水🙂".repeat(30_000) })],
                     duration_ms: 1, exit_code: None, artifacts: vec![], deliveries: vec![file.clone(); 9], truncation: None, workflow: None, managed_output: None,
-                },
+                }.into(),
             });
             assert!(original_id.as_str().len() > 256 && original_id.as_str().len() <= 4096);
             assert!(serde_json::to_vec(&original).unwrap().len() < crate::context::resources::ResourceLimits::default().record_bytes);

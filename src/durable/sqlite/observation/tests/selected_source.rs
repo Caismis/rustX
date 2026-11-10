@@ -280,7 +280,8 @@ pub(super) fn selected_delivery_fixture(
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     })
 }
 #[test]
@@ -319,7 +320,9 @@ fn t08_t12_t14_t19_selected_delivery_uses_numeric_giant_c_without_body_reads() {
     store
         .lock()
         .unwrap()
-        .execute_batch("DELETE FROM content_segments WHERE source_kind='canonical_file_delivery';")
+        .execute_batch(
+            "UPDATE content_frontiers SET bytes=NULL WHERE source_kind='canonical_file_delivery';",
+        )
         .unwrap();
     assert!(matches!(
         store.observation_file_delivery(&locator, 0),
@@ -330,7 +333,7 @@ fn t08_t12_t14_t19_selected_delivery_uses_numeric_giant_c_without_body_reads() {
 fn t10_t14_t19_selected_delivery_auxiliary_failure_preserves_original_successful_c() {
     let store = store();
     let message = selected_delivery_fixture(&store, "selected-file-fault");
-    store.lock().unwrap().execute_batch("CREATE TRIGGER selected_delivery_fault BEFORE INSERT ON content_segments WHEN NEW.source_kind='canonical_file_delivery' BEGIN SELECT RAISE(FAIL,'optional delivery span'); END;").unwrap();
+    store.lock().unwrap().execute_batch("CREATE TRIGGER selected_delivery_fault BEFORE INSERT ON content_frontiers WHEN NEW.source_kind='canonical_file_delivery' BEGIN SELECT RAISE(FAIL,'optional delivery span'); END;").unwrap();
     store.append_canonical(&message).unwrap();
     assert_eq!(store.load_canonical().unwrap()[1], message);
     let locator =
@@ -462,7 +465,7 @@ fn t08_t12_t14_t19_escaped_delivery_metadata_advances_beyond_inline_budget() {
     let MessageBlock::Tool(tool) = &mut message else {
         unreachable!()
     };
-    tool.result.deliveries = vec![original_file.clone()];
+    std::sync::Arc::make_mut(&mut tool.result).deliveries = vec![original_file.clone()];
     store.append_canonical(&message).unwrap();
     let cut = occupancy_origin_cut(&store);
     let source = cut.source_cut.as_ref().unwrap();
@@ -553,7 +556,9 @@ fn t08_t12_t14_t19_original_nine_deliveries_advance_and_select_last_index() {
     let MessageBlock::Tool(tool) = &mut message else {
         unreachable!()
     };
-    tool.result.deliveries.clone_from(&files);
+    std::sync::Arc::make_mut(&mut tool.result)
+        .deliveries
+        .clone_from(&files);
     store.append_canonical(&message).unwrap();
     let cut = occupancy_origin_cut(&store);
     let source = cut.source_cut.as_ref().unwrap();

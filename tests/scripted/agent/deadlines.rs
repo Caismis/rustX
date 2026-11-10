@@ -164,7 +164,7 @@ fn continuation() -> ModelEvent {
     ModelEvent::ContinuationState {
         block_index: ContentBlockIndex::new(0),
         state: ProviderContinuationState::Anthropic(AnthropicContinuation {
-            opaque: serde_json::json!({"signature": "sig-135"}),
+            opaque: serde_json::json!({"signature": "sig-135"}).into(),
         }),
     }
 }
@@ -254,6 +254,7 @@ async fn runtime_with_manual_clock(
             model_timeout_policy: policy,
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(rustx::context::SystemClock),
                 policy: SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,

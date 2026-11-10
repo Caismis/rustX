@@ -1,0 +1,589 @@
+{
+  "scope": "One structural product per side/history. WAL ownership authenticated at commit images; main-file pages matched to WAL versions. WAL frame payload includes 24-byte headers and 2 KiB pages. Syscall payload, process write_bytes, retained layout and device writes are different units. No headline timing or significance claim. The hot-verification-close window is not the hot-only window or full initialized lifecycle.",
+  "inputs": {
+    "baseline-write-ledger.json": "1514e23bc80579347d50d24e84058aeea0a0d7782e6da46cf81a2eb160b43509",
+    "candidate-write-ledger.json": "97089a8b29e3aa2e4914800fb585749ff9220ec42534b629b50bbfd5d56623d0"
+  },
+  "rows": [
+    {
+      "history": 8,
+      "hot_turns": 32,
+      "commits": {
+        "inbound_acceptance": 32,
+        "inbound_adoption": 32,
+        "attempt_turn_start": 32,
+        "request_start": 32,
+        "final_settlement": 32
+      },
+      "sides": {
+        "before": {
+          "wal_frames": 7119,
+          "wal_bytes": 14750792,
+          "main_bytes": 3584000,
+          "wal_plus_main_kib_per_turn": 559.533447265625,
+          "wal_epochs": 7,
+          "main_syncs": 7,
+          "wal_syncs": 14,
+          "target_index_wal_frames": 152,
+          "target_index_wal_plus_main_kib_per_turn": 11.798828125,
+          "hot_process_write_kib_per_turn": 593.0,
+          "process_mib_through_final_close": 23.8125,
+          "hot_verification_close_process_write_kib_per_turn": 612.75,
+          "group_ledger": {
+            "other btrees / page 1": {
+              "wal_frames": 601,
+              "main_bytes": 204800,
+              "retained_page_growth": 18,
+              "net_logical_column_bytes": 18441
+            },
+            "canonical and transcript rows": {
+              "wal_frames": 1892,
+              "main_bytes": 823296,
+              "retained_page_growth": 142,
+              "net_logical_column_bytes": 168656
+            },
+            "content frontiers and segment layout": {
+              "wal_frames": 682,
+              "main_bytes": 225280,
+              "retained_page_growth": 25,
+              "net_logical_column_bytes": 37774
+            },
+            "events and native/observation indexes": {
+              "wal_frames": 2459,
+              "main_bytes": 1167360,
+              "retained_page_growth": 306,
+              "net_logical_column_bytes": 467224
+            },
+            "request owner/snapshot/model": {
+              "wal_frames": 648,
+              "main_bytes": 393216,
+              "retained_page_growth": 80,
+              "net_logical_column_bytes": 111326
+            },
+            "request Trace catalog": {
+              "wal_frames": 286,
+              "main_bytes": 196608,
+              "retained_page_growth": 17,
+              "net_logical_column_bytes": 12126
+            },
+            "request manifest and Source": {
+              "wal_frames": 551,
+              "main_bytes": 573440,
+              "retained_page_growth": 180,
+              "net_logical_column_bytes": 288810
+            }
+          },
+          "native_nodes": 285,
+          "source_nodes": 285,
+          "event_count": 256,
+          "request_catalogs": 32,
+          "definition_rows": 224
+        },
+        "after": {
+          "wal_frames": 6969,
+          "wal_bytes": 14439992,
+          "main_bytes": 3530752,
+          "wal_plus_main_kib_per_turn": 548.423583984375,
+          "wal_epochs": 7,
+          "main_syncs": 7,
+          "wal_syncs": 14,
+          "target_index_wal_frames": 0,
+          "target_index_wal_plus_main_kib_per_turn": 0.0,
+          "hot_process_write_kib_per_turn": 579.75,
+          "process_mib_through_final_close": 23.2578125,
+          "hot_verification_close_process_write_kib_per_turn": 597.625,
+          "group_ledger": {
+            "other btrees / page 1": {
+              "wal_frames": 601,
+              "main_bytes": 204800,
+              "retained_page_growth": 18,
+              "net_logical_column_bytes": 18441
+            },
+            "canonical and transcript rows": {
+              "wal_frames": 1740,
+              "main_bytes": 743424,
+              "retained_page_growth": 136,
+              "net_logical_column_bytes": 168656
+            },
+            "content frontiers and segment layout": {
+              "wal_frames": 682,
+              "main_bytes": 227328,
+              "retained_page_growth": 25,
+              "net_logical_column_bytes": 37790
+            },
+            "events and native/observation indexes": {
+              "wal_frames": 2459,
+              "main_bytes": 1173504,
+              "retained_page_growth": 306,
+              "net_logical_column_bytes": 467273
+            },
+            "request owner/snapshot/model": {
+              "wal_frames": 648,
+              "main_bytes": 401408,
+              "retained_page_growth": 80,
+              "net_logical_column_bytes": 111206
+            },
+            "request Trace catalog": {
+              "wal_frames": 286,
+              "main_bytes": 196608,
+              "retained_page_growth": 17,
+              "net_logical_column_bytes": 12126
+            },
+            "request manifest and Source": {
+              "wal_frames": 553,
+              "main_bytes": 583680,
+              "retained_page_growth": 180,
+              "net_logical_column_bytes": 288810
+            }
+          },
+          "native_nodes": 285,
+          "source_nodes": 285,
+          "event_count": 256,
+          "request_catalogs": 32,
+          "definition_rows": 224
+        }
+      },
+      "paired_percent": {
+        "wal_plus_main_kib_per_turn": -1.9855583853910064,
+        "hot_process_write_kib_per_turn": -2.2344013490725123,
+        "process_mib_through_final_close": -2.329396325459321,
+        "hot_verification_close_process_write_kib_per_turn": -2.46838025295798
+      }
+    },
+    {
+      "history": 32,
+      "hot_turns": 32,
+      "commits": {
+        "inbound_acceptance": 32,
+        "inbound_adoption": 32,
+        "attempt_turn_start": 32,
+        "request_start": 32,
+        "final_settlement": 32
+      },
+      "sides": {
+        "before": {
+          "wal_frames": 7641,
+          "wal_bytes": 15832408,
+          "main_bytes": 4610048,
+          "wal_plus_main_kib_per_turn": 623.854248046875,
+          "wal_epochs": 8,
+          "main_syncs": 8,
+          "wal_syncs": 16,
+          "target_index_wal_frames": 195,
+          "target_index_wal_plus_main_kib_per_turn": 16.830322265625,
+          "hot_process_write_kib_per_turn": 680.875,
+          "process_mib_through_final_close": 39.92578125,
+          "hot_verification_close_process_write_kib_per_turn": 695.5,
+          "group_ledger": {
+            "other btrees / page 1": {
+              "wal_frames": 650,
+              "main_bytes": 294912,
+              "retained_page_growth": 16,
+              "net_logical_column_bytes": 18481
+            },
+            "canonical and transcript rows": {
+              "wal_frames": 2015,
+              "main_bytes": 1097728,
+              "retained_page_growth": 134,
+              "net_logical_column_bytes": 169133
+            },
+            "content frontiers and segment layout": {
+              "wal_frames": 761,
+              "main_bytes": 382976,
+              "retained_page_growth": 24,
+              "net_logical_column_bytes": 37925
+            },
+            "events and native/observation indexes": {
+              "wal_frames": 2596,
+              "main_bytes": 1396736,
+              "retained_page_growth": 302,
+              "net_logical_column_bytes": 469926
+            },
+            "request owner/snapshot/model": {
+              "wal_frames": 686,
+              "main_bytes": 479232,
+              "retained_page_growth": 75,
+              "net_logical_column_bytes": 111268
+            },
+            "request Trace catalog": {
+              "wal_frames": 322,
+              "main_bytes": 266240,
+              "retained_page_growth": 16,
+              "net_logical_column_bytes": 12160
+            },
+            "request manifest and Source": {
+              "wal_frames": 611,
+              "main_bytes": 692224,
+              "retained_page_growth": 186,
+              "net_logical_column_bytes": 302493
+            }
+          },
+          "native_nodes": 319,
+          "source_nodes": 319,
+          "event_count": 256,
+          "request_catalogs": 32,
+          "definition_rows": 224
+        },
+        "after": {
+          "wal_frames": 7461,
+          "wal_bytes": 15459416,
+          "main_bytes": 3946496,
+          "wal_plus_main_kib_per_turn": 592.221435546875,
+          "wal_epochs": 7,
+          "main_syncs": 7,
+          "wal_syncs": 14,
+          "target_index_wal_frames": 0,
+          "target_index_wal_plus_main_kib_per_turn": 0.0,
+          "hot_process_write_kib_per_turn": 639.125,
+          "process_mib_through_final_close": 38.5625,
+          "hot_verification_close_process_write_kib_per_turn": 663.875,
+          "group_ledger": {
+            "other btrees / page 1": {
+              "wal_frames": 651,
+              "main_bytes": 262144,
+              "retained_page_growth": 16,
+              "net_logical_column_bytes": 18481
+            },
+            "canonical and transcript rows": {
+              "wal_frames": 1820,
+              "main_bytes": 817152,
+              "retained_page_growth": 130,
+              "net_logical_column_bytes": 169133
+            },
+            "content frontiers and segment layout": {
+              "wal_frames": 748,
+              "main_bytes": 327680,
+              "retained_page_growth": 25,
+              "net_logical_column_bytes": 37915
+            },
+            "events and native/observation indexes": {
+              "wal_frames": 2596,
+              "main_bytes": 1239040,
+              "retained_page_growth": 302,
+              "net_logical_column_bytes": 469908
+            },
+            "request owner/snapshot/model": {
+              "wal_frames": 686,
+              "main_bytes": 440320,
+              "retained_page_growth": 75,
+              "net_logical_column_bytes": 111423
+            },
+            "request Trace catalog": {
+              "wal_frames": 322,
+              "main_bytes": 241664,
+              "retained_page_growth": 16,
+              "net_logical_column_bytes": 12160
+            },
+            "request manifest and Source": {
+              "wal_frames": 638,
+              "main_bytes": 618496,
+              "retained_page_growth": 186,
+              "net_logical_column_bytes": 302493
+            }
+          },
+          "native_nodes": 319,
+          "source_nodes": 319,
+          "event_count": 256,
+          "request_catalogs": 32,
+          "definition_rows": 224
+        }
+      },
+      "paired_percent": {
+        "wal_plus_main_kib_per_turn": -5.070545339561939,
+        "hot_process_write_kib_per_turn": -6.131815678355057,
+        "process_mib_through_final_close": -3.4145386948439493,
+        "hot_verification_close_process_write_kib_per_turn": -4.547088425593094
+      }
+    },
+    {
+      "history": 64,
+      "hot_turns": 32,
+      "commits": {
+        "inbound_acceptance": 32,
+        "inbound_adoption": 32,
+        "attempt_turn_start": 32,
+        "request_start": 32,
+        "final_settlement": 32
+      },
+      "sides": {
+        "before": {
+          "wal_frames": 7902,
+          "wal_bytes": 16373168,
+          "main_bytes": 4407296,
+          "wal_plus_main_kib_per_turn": 634.16943359375,
+          "wal_epochs": 7,
+          "main_syncs": 7,
+          "wal_syncs": 14,
+          "target_index_wal_frames": 231,
+          "target_index_wal_plus_main_kib_per_turn": 19.231689453125,
+          "hot_process_write_kib_per_turn": 698.75,
+          "process_mib_through_final_close": 62.20703125,
+          "hot_verification_close_process_write_kib_per_turn": 727.25,
+          "group_ledger": {
+            "other btrees / page 1": {
+              "wal_frames": 679,
+              "main_bytes": 292864,
+              "retained_page_growth": 15,
+              "net_logical_column_bytes": 18496
+            },
+            "canonical and transcript rows": {
+              "wal_frames": 2108,
+              "main_bytes": 1024000,
+              "retained_page_growth": 142,
+              "net_logical_column_bytes": 169629
+            },
+            "content frontiers and segment layout": {
+              "wal_frames": 802,
+              "main_bytes": 389120,
+              "retained_page_growth": 23,
+              "net_logical_column_bytes": 38038
+            },
+            "events and native/observation indexes": {
+              "wal_frames": 2623,
+              "main_bytes": 1312768,
+              "retained_page_growth": 309,
+              "net_logical_column_bytes": 470399
+            },
+            "request owner/snapshot/model": {
+              "wal_frames": 705,
+              "main_bytes": 464896,
+              "retained_page_growth": 74,
+              "net_logical_column_bytes": 111339
+            },
+            "request Trace catalog": {
+              "wal_frames": 317,
+              "main_bytes": 239616,
+              "retained_page_growth": 16,
+              "net_logical_column_bytes": 12160
+            },
+            "request manifest and Source": {
+              "wal_frames": 668,
+              "main_bytes": 684032,
+              "retained_page_growth": 190,
+              "net_logical_column_bytes": 307617
+            }
+          },
+          "native_nodes": 351,
+          "source_nodes": 351,
+          "event_count": 256,
+          "request_catalogs": 32,
+          "definition_rows": 224
+        },
+        "after": {
+          "wal_frames": 7653,
+          "wal_bytes": 15857272,
+          "main_bytes": 4915200,
+          "wal_plus_main_kib_per_turn": 633.925537109375,
+          "wal_epochs": 8,
+          "main_syncs": 8,
+          "wal_syncs": 16,
+          "target_index_wal_frames": 0,
+          "target_index_wal_plus_main_kib_per_turn": 0.0,
+          "hot_process_write_kib_per_turn": 701.375,
+          "process_mib_through_final_close": 60.01953125,
+          "hot_verification_close_process_write_kib_per_turn": 715.125,
+          "group_ledger": {
+            "other btrees / page 1": {
+              "wal_frames": 679,
+              "main_bytes": 333824,
+              "retained_page_growth": 15,
+              "net_logical_column_bytes": 18496
+            },
+            "canonical and transcript rows": {
+              "wal_frames": 1877,
+              "main_bytes": 1005568,
+              "retained_page_growth": 138,
+              "net_logical_column_bytes": 169628
+            },
+            "content frontiers and segment layout": {
+              "wal_frames": 792,
+              "main_bytes": 466944,
+              "retained_page_growth": 23,
+              "net_logical_column_bytes": 37996
+            },
+            "events and native/observation indexes": {
+              "wal_frames": 2623,
+              "main_bytes": 1529856,
+              "retained_page_growth": 309,
+              "net_logical_column_bytes": 470368
+            },
+            "request owner/snapshot/model": {
+              "wal_frames": 705,
+              "main_bytes": 526336,
+              "retained_page_growth": 74,
+              "net_logical_column_bytes": 111574
+            },
+            "request Trace catalog": {
+              "wal_frames": 317,
+              "main_bytes": 272384,
+              "retained_page_growth": 16,
+              "net_logical_column_bytes": 12160
+            },
+            "request manifest and Source": {
+              "wal_frames": 660,
+              "main_bytes": 780288,
+              "retained_page_growth": 190,
+              "net_logical_column_bytes": 307617
+            }
+          },
+          "native_nodes": 351,
+          "source_nodes": 351,
+          "event_count": 256,
+          "request_catalogs": 32,
+          "definition_rows": 224
+        }
+      },
+      "paired_percent": {
+        "wal_plus_main_kib_per_turn": -0.03845919898612937,
+        "hot_process_write_kib_per_turn": 0.3756708407871123,
+        "process_mib_through_final_close": -3.516483516483515,
+        "hot_verification_close_process_write_kib_per_turn": -1.6672396012375357
+      }
+    },
+    {
+      "history": 96,
+      "hot_turns": 32,
+      "commits": {
+        "inbound_acceptance": 32,
+        "inbound_adoption": 32,
+        "attempt_turn_start": 32,
+        "request_start": 32,
+        "final_settlement": 32
+      },
+      "sides": {
+        "before": {
+          "wal_frames": 8489,
+          "wal_bytes": 17589496,
+          "main_bytes": 6168576,
+          "wal_plus_main_kib_per_turn": 725.038818359375,
+          "wal_epochs": 9,
+          "main_syncs": 9,
+          "wal_syncs": 18,
+          "target_index_wal_frames": 269,
+          "target_index_wal_plus_main_kib_per_turn": 24.447021484375,
+          "hot_process_write_kib_per_turn": 819.875,
+          "process_mib_through_final_close": 87.234375,
+          "hot_verification_close_process_write_kib_per_turn": 832.0,
+          "group_ledger": {
+            "other btrees / page 1": {
+              "wal_frames": 800,
+              "main_bytes": 454656,
+              "retained_page_growth": 20,
+              "net_logical_column_bytes": 18706
+            },
+            "canonical and transcript rows": {
+              "wal_frames": 2272,
+              "main_bytes": 1449984,
+              "retained_page_growth": 150,
+              "net_logical_column_bytes": 170290
+            },
+            "content frontiers and segment layout": {
+              "wal_frames": 789,
+              "main_bytes": 559104,
+              "retained_page_growth": 23,
+              "net_logical_column_bytes": 38175
+            },
+            "events and native/observation indexes": {
+              "wal_frames": 2785,
+              "main_bytes": 1804288,
+              "retained_page_growth": 309,
+              "net_logical_column_bytes": 472507
+            },
+            "request owner/snapshot/model": {
+              "wal_frames": 773,
+              "main_bytes": 643072,
+              "retained_page_growth": 78,
+              "net_logical_column_bytes": 111952
+            },
+            "request Trace catalog": {
+              "wal_frames": 352,
+              "main_bytes": 325632,
+              "retained_page_growth": 15,
+              "net_logical_column_bytes": 12212
+            },
+            "request manifest and Source": {
+              "wal_frames": 718,
+              "main_bytes": 931840,
+              "retained_page_growth": 198,
+              "net_logical_column_bytes": 317453
+            }
+          },
+          "native_nodes": 352,
+          "source_nodes": 352,
+          "event_count": 256,
+          "request_catalogs": 32,
+          "definition_rows": 224
+        },
+        "after": {
+          "wal_frames": 8176,
+          "wal_bytes": 16940896,
+          "main_bytes": 5349376,
+          "wal_plus_main_kib_per_turn": 680.2451171875,
+          "wal_epochs": 7,
+          "main_syncs": 8,
+          "wal_syncs": 15,
+          "target_index_wal_frames": 0,
+          "target_index_wal_plus_main_kib_per_turn": 0.0,
+          "hot_process_write_kib_per_turn": 763.125,
+          "process_mib_through_final_close": 84.55078125,
+          "hot_verification_close_process_write_kib_per_turn": 797.75,
+          "group_ledger": {
+            "other btrees / page 1": {
+              "wal_frames": 800,
+              "main_bytes": 413696,
+              "retained_page_growth": 20,
+              "net_logical_column_bytes": 18706
+            },
+            "canonical and transcript rows": {
+              "wal_frames": 2003,
+              "main_bytes": 1099776,
+              "retained_page_growth": 144,
+              "net_logical_column_bytes": 170289
+            },
+            "content frontiers and segment layout": {
+              "wal_frames": 777,
+              "main_bytes": 512000,
+              "retained_page_growth": 23,
+              "net_logical_column_bytes": 38185
+            },
+            "events and native/observation indexes": {
+              "wal_frames": 2785,
+              "main_bytes": 1626112,
+              "retained_page_growth": 309,
+              "net_logical_column_bytes": 472512
+            },
+            "request owner/snapshot/model": {
+              "wal_frames": 773,
+              "main_bytes": 548864,
+              "retained_page_growth": 78,
+              "net_logical_column_bytes": 111797
+            },
+            "request Trace catalog": {
+              "wal_frames": 352,
+              "main_bytes": 294912,
+              "retained_page_growth": 15,
+              "net_logical_column_bytes": 12212
+            },
+            "request manifest and Source": {
+              "wal_frames": 686,
+              "main_bytes": 854016,
+              "retained_page_growth": 199,
+              "net_logical_column_bytes": 317453
+            }
+          },
+          "native_nodes": 352,
+          "source_nodes": 352,
+          "event_count": 256,
+          "request_catalogs": 32,
+          "definition_rows": 224
+        }
+      },
+      "paired_percent": {
+        "wal_plus_main_kib_per_turn": -6.178110749054044,
+        "hot_process_write_kib_per_turn": -6.92178685775271,
+        "process_mib_through_final_close": -3.0763030628694232,
+        "hot_verification_close_process_write_kib_per_turn": -4.116586538461542
+      }
+    }
+  ]
+}

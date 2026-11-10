@@ -215,7 +215,7 @@ async fn synthesized_assistant_messages_follow_the_schema_and_do_not_relabel_nat
                     text: None,
                     provider_state: Some(ProviderContinuationState::OpenAiResponses(
                         OpenAiResponsesContinuation::Stateless {
-                            items: vec![native.clone()],
+                            items: vec![native.clone()].into(),
                         },
                     )),
                 }),
@@ -908,7 +908,7 @@ async fn stateless_continuation_replays_items_without_duplication() {
                     "status": "completed",
                     "content": [{"type": "output_text", "text": "Previous answer.", "annotations": []}],
                 }),
-            ],
+            ].into(),
         },
     ));
     let prefix = simple_request(
@@ -1153,7 +1153,7 @@ async fn storage_mode_continuation_contradiction_is_rejected() {
         (
             ResponsesStorageMode::Stored,
             ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
-                items: Vec::new(),
+                items: Vec::new().into(),
             }),
         ),
         (
@@ -1289,7 +1289,7 @@ async fn reasoning_without_responses_replay_state_is_readable_history() {
         (
             Some("Visible reasoning text."),
             Some(ProviderContinuationState::Anthropic(AnthropicContinuation {
-                opaque: serde_json::json!({"type":"thinking", "thinking":"Visible reasoning text.", "signature":"foreign-signature"}),
+                opaque: serde_json::json!({"type":"thinking", "thinking":"Visible reasoning text.", "signature":"foreign-signature"}).into(),
             })),
         ),
         (
@@ -1303,7 +1303,7 @@ async fn reasoning_without_responses_replay_state_is_readable_history() {
         (
             None,
             Some(ProviderContinuationState::Anthropic(AnthropicContinuation {
-                opaque: serde_json::json!({"type":"redacted_thinking", "data":"foreign-encrypted-state"}),
+                opaque: serde_json::json!({"type":"redacted_thinking", "data":"foreign-encrypted-state"}).into(),
             })),
         ),
         (Some(" \n\t"), None),
@@ -1373,7 +1373,7 @@ async fn reasoning_with_provider_state_replays_items_verbatim() {
                         text: None,
                         provider_state: Some(ProviderContinuationState::OpenAiResponses(
                             OpenAiResponsesContinuation::Stateless {
-                                items: preserved.clone(),
+                                items: preserved.clone().into(),
                             },
                         )),
                     },
@@ -1434,7 +1434,7 @@ async fn complete_stateless_output_replays_text_and_calls_once_and_rejects_edits
                         text: None,
                         provider_state: Some(ProviderContinuationState::OpenAiResponses(
                             OpenAiResponsesContinuation::Stateless {
-                                items: native.clone(),
+                                items: native.clone().into(),
                             },
                         )),
                     }),
@@ -1471,7 +1471,8 @@ async fn complete_stateless_output_replays_text_and_calls_once_and_rejects_edits
                 deliveries: Vec::new(),
                 truncation: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })),
     );
     let events = collect_events(&adapter(&server), request.clone()).await;
@@ -1593,7 +1594,8 @@ async fn continuation_tail_preserves_tool_then_users_order() {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })),
         rustx::model::ModelInputMessage::Canonical(user("A")),
         rustx::model::ModelInputMessage::Canonical(user("B")),

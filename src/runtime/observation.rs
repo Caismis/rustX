@@ -183,7 +183,7 @@ pub(crate) enum ConversationObservation {
         frame: PublicationFrame,
     },
     /// Complete finite pending head from its native transaction.
-    PendingReceipt(Arc<crate::durable::inbox::PendingObservationReceipt>),
+    PendingReceipt(Arc<crate::durable::PendingObservationReceipt>),
     /// Test fixture for a native enqueue.
     #[cfg(test)]
     InboundEnqueued(InboundItem),
@@ -584,12 +584,12 @@ pub(crate) trait PublicationProjectionCommit: Send + Sync {
     ) -> NativeReceiptInstallation;
     fn native_goal(
         &self,
-        receipt: &crate::durable::inbox::GoalObservationReceipt,
+        receipt: &crate::durable::GoalObservationReceipt,
     ) -> NativeReceiptInstallation;
     fn native_audit(&self, attempt: &AttemptId, receipt: &crate::durable::PublicationAuditReceipt);
     fn native_pending(
         &self,
-        receipt: Option<&crate::durable::inbox::PendingObservationReceipt>,
+        receipt: Option<&crate::durable::PendingObservationReceipt>,
         cut: &crate::durable::reading::ConversationReadCut,
     );
     fn opened(&self, attempt: &AttemptId, start: &PublicationStreamStart);
@@ -837,7 +837,7 @@ impl ObservationFanout {
 
     pub(crate) fn native_pending(
         &self,
-        receipt: Option<&Arc<crate::durable::inbox::PendingObservationReceipt>>,
+        receipt: Option<&Arc<crate::durable::PendingObservationReceipt>>,
         cut: &crate::durable::reading::ConversationReadCut,
     ) {
         if let Some(projection) = self.publication_projection.get() {
@@ -853,7 +853,7 @@ impl ObservationFanout {
 
     pub(crate) fn native_goal(
         &self,
-        receipt: &crate::durable::inbox::GoalObservationReceipt,
+        receipt: &crate::durable::GoalObservationReceipt,
     ) -> NativeReceiptInstallation {
         if let Some(projection) = self.publication_projection.get() {
             projection.native_goal(receipt)
@@ -965,7 +965,7 @@ struct PendingState {
     /// The reliable lane: ordered, non-lossy semantic/lifecycle
     /// observations.
     reliable: VecDeque<ConversationObservation>,
-    pending_head: Option<Arc<crate::durable::inbox::PendingObservationReceipt>>,
+    pending_head: Option<Arc<crate::durable::PendingObservationReceipt>>,
     /// The disposable subagent-activity lane: the latest unpublished
     /// activity snapshot of each subagent that reported one, keyed by
     /// subagent identity.
@@ -2908,7 +2908,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             },
         });
         assert_eq!(queue.queued(), 1, "the settlement evicted the live report");

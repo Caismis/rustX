@@ -26,7 +26,9 @@ use crate::observation::status::AgentStatusView;
 
 use crate::observation::capability_source::CapabilityView;
 
-use super::snapshot::{RuntimeClientAgent, RuntimeClientContextView, RuntimeClientJob};
+use crate::runtime_client::snapshot::{
+    RuntimeClientAgent, RuntimeClientContextView, RuntimeClientJob,
+};
 
 use crate::observation::resource_source::RuntimeClientResourcesView;
 
@@ -50,6 +52,8 @@ use crate::tools::types::{ToolExecutionResult, ToolProgress};
 ///
 /// The stable `type` discriminator is the protocol contract; unknown
 /// fields are rejected.
+// Large infrequent payloads are boxed so every scalar replay fact does not
+// reserve their inline storage. Ownership and the serialized fields stay exact.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
@@ -83,8 +87,10 @@ pub enum RuntimeClientEvent {
     /// when durable facts change, never for publication text/argument suffixes.
     ReadDomainsUpdated {
         projection_head: Option<crate::observation::head::RuntimeClientProjectionHeadView>,
-        transcript: crate::observation::transcript::RuntimeClientTranscriptPage,
-        trace: crate::observation::trace::TracePage,
+        transcript: Box<crate::observation::transcript::RuntimeClientTranscriptPage>,
+        /// A supplied native Trace head replaces the loaded cache. None leaves
+        /// its issued cut/pins intact; native facts advertise independent Trace reads.
+        trace: Option<Box<crate::observation::trace::TracePage>>,
         occupancy: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
         todos: Option<crate::tools::todo::TodoSnapshot>,
     },
@@ -152,8 +158,8 @@ pub enum RuntimeClientEvent {
         head: Vec<crate::observation::interaction::RuntimeClientInteractionHeader>,
     },
     InteractionPending {
-        /// The complete routed interaction projection.
-        interaction: crate::observation::interaction::RuntimeClientInteractionHeader,
+        /// The complete routed interaction projection, kept off the scalar replay envelope.
+        interaction: Box<crate::observation::interaction::RuntimeClientInteractionHeader>,
     },
     /// A native interaction was removed from the live pending projection.
     InteractionSettled {
@@ -197,7 +203,7 @@ pub enum RuntimeClientEvent {
     /// A context compaction operation began.
     ContextCompactionStarted {
         /// Authoritative context state at this lifecycle boundary.
-        context: RuntimeClientContextView,
+        context: Box<RuntimeClientContextView>,
         /// The owning attempt for automatic compaction; absent for manual
         /// idle maintenance.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,7 +212,7 @@ pub enum RuntimeClientEvent {
     /// A context compaction operation failed before a semantic commit.
     ContextCompactionFailed {
         /// Authoritative context state at this lifecycle boundary.
-        context: RuntimeClientContextView,
+        context: Box<RuntimeClientContextView>,
         /// The owning attempt for automatic compaction; absent for manual
         /// idle maintenance.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -226,7 +232,7 @@ pub enum RuntimeClientEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         attempt_id: Option<AttemptId>,
         /// The context diagnostics after this committed compaction.
-        context: RuntimeClientContextView,
+        context: Box<RuntimeClientContextView>,
     },
 
     /// Assembly of a canonical Assistant message began.
@@ -266,7 +272,7 @@ pub enum RuntimeClientEvent {
         /// The tool-call content block that completed.
         block_index: ContentBlockIndex,
         /// The fully assembled tool call.
-        call: super::snapshot::RuntimeClientToolCall,
+        call: Box<super::snapshot::RuntimeClientToolCall>,
         arguments_ref: Option<crate::observation::content::ContentRef>,
     },
 
@@ -364,7 +370,7 @@ pub enum RuntimeClientEvent {
         /// The canonical tool identity.
         tool_id: Option<ToolId>,
         /// The normalized execution result.
-        result: ToolExecutionResult,
+        result: Box<ToolExecutionResult>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         result_source: Option<crate::observation::tool::JournalFieldRef>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -380,8 +386,9 @@ pub enum RuntimeClientEvent {
     /// read-only.
     MessageDescriptorCommitted {
         attempt_id: Option<AttemptId>,
-        descriptor: crate::observation::transcript::RuntimeClientMessageDescriptor,
-        head: Vec<crate::observation::transcript::RuntimeClientMessageDescriptor>,
+        descriptor: std::sync::Arc<crate::observation::transcript::RuntimeClientMessageDescriptor>,
+        #[schemars(with = "Vec<crate::observation::transcript::RuntimeClientMessageDescriptor>")]
+        head: super::snapshot::RuntimeClientMessageDescriptorHead,
         transcript_cursor: Option<RuntimeClientTranscriptCursor>,
         evicted_message_id: Option<MessageId>,
     },
@@ -420,7 +427,7 @@ pub enum RuntimeClientEvent {
         turn: u32,
         /// The structured status view (sections plus the canonical derived
         /// rendering).
-        status: AgentStatusView,
+        status: Box<AgentStatusView>,
         /// The composition this admission pushed out of the bounded window,
         /// when the window was already full.
         ///

@@ -732,7 +732,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             })])
             .into_iter()
             .map(Into::into)
@@ -788,7 +789,8 @@ mod tests {
                             truncation: None,
                             workflow: None,
                             managed_output: None,
-                        },
+                        }
+                        .into(),
                     })])
                     .into_iter()
                     .map(Into::into)
@@ -838,7 +840,8 @@ mod tests {
                         truncation: None,
                         workflow: None,
                         managed_output: None,
-                    },
+                    }
+                    .into(),
                 })])
                 .into_iter()
                 .map(Into::into)

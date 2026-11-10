@@ -6,15 +6,19 @@ use crate::durable::observation::{
     TraceFactQuery, TraceFactScope, TraceRequestContextPage, TraceRequestPredecessorHeader,
     TraceTerminalClass, TraceTerminalHeader, TraceToolProposalSummary,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::observation::trace::{TraceFieldKind, TraceFieldSource};
 mod canonical;
 mod event;
 mod inspection;
 mod request;
+mod storage;
 pub(super) use canonical::{index_canonical, index_proposals};
+pub(super) use event::{
+    Prepared, index_event, prepare_event, prepare_request_core, request_core, settle_fields,
+};
 #[cfg(test)]
 pub(super) use event::{accepted_compare_work, accepted_identity_equal};
-pub(super) use event::{index_event, request_core, settle_fields};
 pub(super) use inspection::{adoption_page, capture_definitions, index_catalog, tool_definition};
 pub(super) use request::{context, index_context, predecessor, retry_failure};
 
@@ -122,6 +126,12 @@ impl TraceFactKind {
 #[cfg(test)]
 thread_local! { static READ_WORK:std::cell::Cell<(usize,usize)>=const {std::cell::Cell::new((0,0))}; }
 #[cfg(test)]
+thread_local! { static HEADER_QUERIES:std::cell::Cell<usize>=const {std::cell::Cell::new(0)}; }
+#[cfg(test)]
+pub(super) fn take_header_queries() -> usize {
+    HEADER_QUERIES.with(|count| count.replace(0))
+}
+#[cfg(test)]
 pub(super) fn read_work() -> (usize, usize) {
     READ_WORK.with(|work| work.replace((0, 0)))
 }
@@ -140,6 +150,17 @@ fn encode(value: &impl serde::Serialize) -> Result<Vec<u8>, ConversationStoreErr
     crate::observation::bounded::bounded_bytes(value, HEADER_ENCODED_MAX)
         .ok_or_else(|| storage("native Trace header exceeds bound"))
 }
+pub(super) fn encode_fact(value: &TraceFactHeader) -> Result<Vec<u8>, ConversationStoreError> {
+    storage::encode(value)
+}
+pub(super) fn decode_fact(bytes: &[u8]) -> Result<TraceFactHeader, ConversationStoreError> {
+    #[cfg(test)]
+    READ_WORK.with(|work| {
+        let (rows, total) = work.get();
+        work.set((rows + 1, total + bytes.len()));
+    });
+    storage::decode(bytes)
+}
 type HeaderRow = (
     Option<Vec<u8>>,
     Option<String>,
@@ -147,6 +168,41 @@ type HeaderRow = (
     Option<u64>,
     Option<String>,
 );
+
+fn header_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HeaderRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+    ))
+}
+
+fn decode_header(row: HeaderRow, sequence: u64) -> Result<TraceFactHeader, ConversationStoreError> {
+    let (bytes, kind, time, owner, source_owner) = row;
+    let source_owner = source_owner
+        .map(|value| {
+            serde_json::from_value::<crate::durable::observation::RequestOwnerKind>(
+                serde_json::Value::String(value),
+            )
+            .map_err(|_| storage("original request owner is corrupt"))
+        })
+        .transpose()?;
+    let header =
+        decode_fact(&bytes.ok_or_else(|| storage("native Trace fact header unavailable"))?)?;
+    if header.sequence != sequence
+        || Some(header.kind.as_str()) != kind.as_deref()
+        || header.timestamp.to_rfc3339() != time
+        || header.owner_anchor != owner
+        || header.owner != source_owner
+    {
+        return Err(storage(
+            "native Trace fact header disagrees with original J",
+        ));
+    }
+    Ok(header)
+}
 
 pub(super) fn header(
     connection: &Connection,
@@ -158,32 +214,66 @@ pub(super) fn header(
             "Trace source beyond original J cut".into(),
         ));
     }
-    let row:Option<HeaderRow>=connection.prepare_cached("SELECT observation_trace_fact,observation_kind,event_timestamp,observation_trace_owner,(SELECT owner_kind FROM request_owners WHERE start_sequence=e.sequence OR terminal_sequence=e.sequence) FROM events e WHERE sequence=?1").map_err(|error|storage(error.to_string()))?.query_row(
-        [sequence],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).optional().map_err(|error|storage(error.to_string()))?;
-    let (bytes, kind, time, owner, source_owner) = row.ok_or_else(|| {
-        ConversationStoreError::InvalidReference("original Trace J absent".into())
-    })?;
-    let header: TraceFactHeader =
-        decode(&bytes.ok_or_else(|| storage("native Trace fact header unavailable"))?)?;
-    let source_owner = source_owner
-        .map(|value| {
-            serde_json::from_value::<crate::durable::observation::RequestOwnerKind>(
-                serde_json::Value::String(value),
-            )
-            .map_err(|_| storage("original request owner is corrupt"))
-        })
-        .transpose()?;
-    if header.sequence != sequence
-        || Some(header.kind.as_str()) != kind.as_deref()
-        || header.timestamp.to_rfc3339() != time
-        || header.owner_anchor != owner
-        || header.owner.as_ref() != source_owner.as_ref()
-    {
-        return Err(storage(
-            "native Trace fact header disagrees with original J",
-        ));
+    #[cfg(test)]
+    HEADER_QUERIES.with(|count| count.set(count.get() + 1));
+    let row = connection.prepare_cached("SELECT observation_trace_fact,observation_kind,event_timestamp,observation_trace_owner,(SELECT owner_kind FROM request_owners WHERE start_sequence=e.sequence OR terminal_sequence=e.sequence) FROM events e WHERE sequence=?1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row(
+        [sequence],header_row).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    decode_header(
+        row.ok_or_else(|| {
+            ConversationStoreError::InvalidReference("original Trace J absent".into())
+        })?,
+        sequence,
+    )
+}
+
+/// Candidate seeks and truncation have already fixed at most 32 rows. Only
+/// these rows' independent headers are fetched, in the same validation order
+/// as individual `header()` calls; unrelated damaged bodies are never read.
+fn headers(
+    connection: &Connection,
+    sequences: &[u64],
+    ascending: bool,
+) -> Result<Vec<TraceFactHeader>, ConversationStoreError> {
+    if sequences.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(header)
+    let sql = if ascending {
+        "SELECT observation_trace_fact,observation_kind,event_timestamp,observation_trace_owner,(SELECT owner_kind FROM request_owners WHERE start_sequence=e.sequence OR terminal_sequence=e.sequence),sequence FROM events e WHERE sequence IN(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32) ORDER BY sequence ASC"
+    } else {
+        "SELECT observation_trace_fact,observation_kind,event_timestamp,observation_trace_owner,(SELECT owner_kind FROM request_owners WHERE start_sequence=e.sequence OR terminal_sequence=e.sequence),sequence FROM events e WHERE sequence IN(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32) ORDER BY sequence DESC"
+    };
+    let keys: [Option<u64>; 32] = std::array::from_fn(|index| sequences.get(index).copied());
+    #[cfg(test)]
+    HEADER_QUERIES.with(|count| count.set(count.get() + 1));
+    let mut statement = connection
+        .prepare_cached(sql)
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    let mut rows = statement
+        .query(rusqlite::params_from_iter(keys))
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    let mut result = Vec::with_capacity(sequences.len());
+    for &sequence in sequences {
+        let row = rows
+            .next()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
+            .ok_or_else(|| {
+                ConversationStoreError::InvalidReference("original Trace J absent".into())
+            })?;
+        if row
+            .get::<_, u64>(5)
+            .map_err(|error| storage(error.to_string()))?
+            != sequence
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "original Trace J absent".into(),
+            ));
+        }
+        result.push(decode_header(
+            header_row(row).map_err(|error| storage(error.to_string()))?,
+            sequence,
+        )?);
+    }
+    Ok(result)
 }
 pub(super) fn facts(
     connection: &Connection,
@@ -197,7 +287,7 @@ pub(super) fn facts(
     }
     let through = cut.read.journal;
     if matches!(query.scope, TraceFactScope::All | TraceFactScope::Agent) {
-        let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_trace_holes_idx WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL AND sequence>?1 AND sequence<=?2 AND sequence<?3)",params![query.after,through,query.before.unwrap_or(through.saturating_add(1))],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (1,3,5,7) AND sequence>?1 AND sequence<=?2 AND sequence<?3)",params![query.after,through,query.before.unwrap_or(through.saturating_add(1))],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if missing {
             return Err(storage("native Trace fact header unavailable"));
         }
@@ -214,7 +304,7 @@ pub(super) fn facts(
                     "Trace owner is not an original anchor".into(),
                 ));
             }
-            let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_trace_holes_idx WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL AND sequence>=?1 AND sequence<=?2)",params![anchor_sequence,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+            let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (1,3,5,7) AND sequence>=?1 AND sequence<=?2)",params![anchor_sequence,through],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             if missing {
                 return Err(storage("native Trace owner relationship unavailable"));
             }
@@ -228,39 +318,49 @@ pub(super) fn facts(
     // headers. No original body and no growing multi-kind sort is read.
     let mut sequences = Vec::with_capacity(query.limit * query.kinds.len());
     for kind in &query.kinds {
+        if matches!(query.scope, TraceFactScope::Agent)
+            && !matches!(
+                kind,
+                TraceFactKind::ModelRequestStarted
+                    | TraceFactKind::ModelRequestCompleted
+                    | TraceFactKind::ModelRequestFailed
+            )
+        {
+            continue;
+        }
         let (index, predicate) = match query.scope {
             TraceFactScope::Owner { .. } => {
                 ("events_trace_owner_idx", "observation_trace_owner=?5")
             }
-            TraceFactScope::Agent => (
-                "events_primary_trace_kind_idx",
-                "observation_trace_fact_required=1 AND observation_kind IN ('model_request_started','model_request_completed','model_request_failed')",
-            ),
-            TraceFactScope::All => (
+            TraceFactScope::Agent | TraceFactScope::All => (
                 "events_primary_trace_kind_idx",
                 "observation_trace_fact_required=1",
             ),
         };
+        let (kind_column, kind_value) = if owner.is_some() {
+            (
+                "observation_kind",
+                rusqlite::types::Value::Text(kind.as_str().into()),
+            )
+        } else {
+            (
+                super::event_kind_key::OBSERVATION,
+                super::event_kind_key::parameter(kind.as_str()),
+            )
+        };
         let sql = format!(
-            "SELECT sequence FROM events INDEXED BY {index} WHERE observation_kind=?1 AND sequence<?2 AND sequence>?3 AND sequence<=?4 AND {predicate} ORDER BY sequence {} LIMIT ?6",
+            "SELECT sequence FROM events INDEXED BY {index} WHERE {kind_column}=?1 AND sequence<?2 AND sequence>?3 AND sequence<=?4 AND {predicate} ORDER BY sequence {} LIMIT ?6",
             if query.ascending { "ASC" } else { "DESC" }
         );
         let mut statement = connection
             .prepare_cached(&sql)
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let rows = statement
             .query_map(
-                params![
-                    kind.as_str(),
-                    before,
-                    query.after,
-                    through,
-                    owner,
-                    query.limit
-                ],
+                params![kind_value, before, query.after, through, owner, query.limit],
                 |row| row.get::<_, u64>(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         for row in rows {
             sequences.push(row.map_err(|error| storage(error.to_string()))?);
         }
@@ -271,10 +371,7 @@ pub(super) fn facts(
         sequences.reverse();
     }
     sequences.truncate(query.limit);
-    sequences
-        .into_iter()
-        .map(|sequence| header(connection, sequence, through))
-        .collect()
+    headers(connection, &sequences, query.ascending)
 }
 pub(super) fn summary(
     connection: &Connection,
@@ -282,7 +379,7 @@ pub(super) fn summary(
     through: u64,
 ) -> Result<Option<RequestReadSummary>, ConversationStoreError> {
     super::observation_request::validate_start(connection, start, through)?;
-    let row:Option<Option<Vec<u8>>>=connection.query_row("SELECT observation_summary FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[start],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let row:Option<Option<Vec<u8>>>=connection.query_row("SELECT observation_summary FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[start],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     row.map(|bytes| decode(&bytes.ok_or_else(|| storage("native request summary unavailable"))?))
         .transpose()
 }
@@ -298,13 +395,13 @@ pub(super) fn canonical(
     }
     canonical_fields_ready(connection, cut, position)?;
     let bytes: Option<Option<Vec<u8>>> = connection
-        .query_row(
+        .query_row_cached(
             "SELECT observation_trace_summary FROM message_ledger WHERE position=?1",
             [position],
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut summary: TraceCanonicalSummary = decode(
         &bytes
             .flatten()
@@ -327,7 +424,7 @@ fn canonical_fields_ready(
     cut: &ObservationReadCut,
     position: u64,
 ) -> Result<(), ConversationStoreError> {
-    let committed:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_assistant_ledger_idx WHERE observation_assistant_ledger=?1 AND observation_assistant_ledger IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![position,cut.read.journal],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let committed:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_assistant_ledger_idx WHERE observation_assistant_ledger=?1 AND observation_assistant_ledger IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![position,cut.read.journal],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if let Some(committed) = committed
         && header(connection, committed, cut.read.journal)?.canonical_fields_ready == Some(false)
     {
@@ -345,13 +442,13 @@ pub(super) fn tool_result(
             "Trace occurrence beyond C cut".into(),
         ));
     }
-    let ordinal:u64=connection.query_row("SELECT observation_tool_ordinal FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 AND block_index=?2",params![occurrence.ledger_position,occurrence.block_index.get()],|row|row.get(0)).map_err(|_|storage("native Trace occurrence unavailable"))?;
+    let ordinal:u64=connection.query_row("SELECT observation_tool_ordinal FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 AND block_index=?2",params![occurrence.ledger_position,occurrence.block_index.get()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"native Trace occurrence unavailable"))?;
     if ordinal != occurrence.tool_ordinal {
         return Err(ConversationStoreError::InvalidReference(
             "Trace occurrence differs from native C".into(),
         ));
     }
-    let position:Option<u64>=connection.query_row("SELECT result_ledger_position FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 AND block_index=?2",params![occurrence.ledger_position,occurrence.block_index.get()],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let position:Option<u64>=connection.query_row("SELECT result_ledger_position FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 AND block_index=?2",params![occurrence.ledger_position,occurrence.block_index.get()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     position
         .filter(|position| *position <= cut.ledger_through)
         .map(|position| canonical(connection, cut, position))
@@ -368,7 +465,7 @@ pub(super) fn proposal(
         ));
     }
     canonical_fields_ready(connection, cut, occurrence.ledger_position)?;
-    let (ordinal,bytes):(u64,Option<Vec<u8>>)=connection.query_row("SELECT observation_tool_ordinal,observation_trace_proposal FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 AND block_index=?2",params![occurrence.ledger_position,occurrence.block_index.get()],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|_|storage("native Trace proposal occurrence unavailable"))?;
+    let (ordinal,bytes):(u64,Option<Vec<u8>>)=connection.query_row("SELECT observation_tool_ordinal,observation_trace_proposal FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 AND block_index=?2",params![occurrence.ledger_position,occurrence.block_index.get()],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"native Trace proposal occurrence unavailable"))?;
     if ordinal != occurrence.tool_ordinal {
         return Err(ConversationStoreError::InvalidReference(
             "Trace proposal occurrence differs from native C".into(),
@@ -421,11 +518,8 @@ pub(super) fn required(event: &crate::events::types::RuntimeEventEnvelope) -> bo
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
     for sql in [
         "CREATE INDEX publication_streams_message_settlement_idx ON publication_streams(message_id,settlement)",
-        "CREATE INDEX events_execution_owner_idx ON events(observation_execution_owner,sequence) WHERE observation_execution IS NOT NULL",
-        "CREATE INDEX events_execution_holes_idx ON events(sequence) WHERE observation_execution_required=1 AND observation_execution IS NULL",
-        "CREATE INDEX events_trace_kind_idx ON events(observation_kind,sequence) WHERE observation_kind IS NOT NULL",
-        "CREATE INDEX events_trace_owner_idx ON events(observation_trace_owner,observation_kind,sequence) WHERE observation_trace_owner IS NOT NULL",
-        "CREATE INDEX events_trace_holes_idx ON events(sequence) WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL",
+        "CREATE INDEX events_execution_owner_idx ON events(observation_execution_owner) WHERE observation_execution IS NOT NULL",
+        "CREATE INDEX events_trace_owner_idx ON events(observation_trace_owner,observation_kind) WHERE observation_trace_owner IS NOT NULL",
         "CREATE UNIQUE INDEX request_trace_retry_idx ON request_snapshots(observation_step_anchor,observation_retry_number) WHERE observation_step_anchor IS NOT NULL",
         "CREATE UNIQUE INDEX state_observation_children_idx ON state_observation_fields(source_id,parent_path,ordinal)",
         "CREATE INDEX request_trace_catalog_identity_idx ON request_trace_catalogs(provisional_message_id,source_sequence)",
@@ -446,7 +540,7 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         if actual.as_deref() != Some(sql) {
             return Err(ConversationStoreError::IncompatibleSchema(
                 "invalid native Trace index".into(),
@@ -466,7 +560,7 @@ fn verify_header_layout(connection: &Connection) -> Result<(), ConversationStore
     for (table, proof) in [
         (
             "events",
-            "CHECK(observation_trace_fact IS NULL OR length(observation_trace_fact)<=16384)",
+            "CHECK(observation_trace_fact IS NULL OR length(observation_trace_fact)<=49152)",
         ),
         (
             "message_ledger",
@@ -511,7 +605,7 @@ fn verify_header_layout(connection: &Connection) -> Result<(), ConversationStore
             "CAST(observation_source_id AS INTEGER)=started_sequence",
         ),
         (
-            "request_observation_fields",
+            "request_source_roots",
             "REFERENCES request_snapshots(observation_source_id)",
         ),
     ] {
@@ -521,7 +615,7 @@ fn verify_header_layout(connection: &Connection) -> Result<(), ConversationStore
                 [table],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         if !sql.contains(proof) {
             return Err(ConversationStoreError::IncompatibleSchema(
                 "invalid native Trace header layout".into(),

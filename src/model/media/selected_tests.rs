@@ -180,10 +180,9 @@ fn selected_media_deltas_equal_legacy_upload_image_semantics_and_keep_exact_froz
     for enabled in [false, true] {
         let snapshot = MediaSnapshot {
             uploads: uploads.resolve(&original).unwrap(),
-            images: [(id.clone(), png())].into(),
+            images: [(id.clone(), crate::model::images::FrozenImage::new(png()).unwrap())].into(),
             enabled: Some(enabled),
             conversation: Some(scope.clone()),
-            ..Default::default()
         };
         let mut expected = original.clone();
         legacy_materialize(&snapshot, &mut expected);
@@ -300,7 +299,7 @@ fn tool_image(index: usize, id: &ArtifactId) -> ModelInputMessage {
             ContentBlockIndex::new(0),
         ),
         tool_id: ToolId::new("image-tool"),
-        result,
+        result: result.into(),
     }))
 }
 
@@ -350,7 +349,7 @@ fn borrowed_resource_capture_equals_rendered_oracle_for_occurrences_views_and_er
             expected
         );
         for (id, bytes) in &actual.images {
-            assert_eq!(*bytes, artifacts.read_bounded(id).unwrap());
+            assert_eq!(bytes.as_bytes(), artifacts.read_bounded(id).unwrap());
         }
         assert!(
             !actual.images.contains_key(&corrupt),

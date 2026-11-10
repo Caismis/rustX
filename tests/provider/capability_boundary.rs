@@ -97,7 +97,8 @@ fn history_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         }),
         MessageBlock::User(UserMessageBlock {
             id: MessageId::new("msg-u2"),
@@ -305,7 +306,7 @@ async fn chat_omit_ignores_unavailable_reasoning() {
                     provider_state: Some(
                         rustx::runtime::continuation::ProviderContinuationState::Anthropic(
                             rustx::runtime::continuation::AnthropicContinuation {
-                                opaque: serde_json::json!({"signature": "opaque"}),
+                                opaque: serde_json::json!({"signature": "opaque"}).into(),
                             },
                         ),
                     ),
@@ -594,7 +595,7 @@ async fn file_tool_results_are_unsupported() {
             | ModelInputMessage::Derived(_) => None,
         })
         .expect("tool message expected");
-    tool_message.result.content = vec![ToolResultContent::File(
+    std::sync::Arc::make_mut(&mut tool_message.result).content = vec![ToolResultContent::File(
         rustx::message::content::FileReference {
             artifact_id: ArtifactId::new("artifact-file-1"),
             name: Some("report.pdf".to_owned()),
@@ -629,9 +630,10 @@ async fn anthropic_resolved_user_image_and_unsupported_placements() {
         .capabilities
         .input_modalities
         .insert(Modality::Image);
-    request
-        .images
-        .insert(ArtifactId::new("artifact-img-1"), bytes.clone());
+    request.images.insert(
+        ArtifactId::new("artifact-img-1"),
+        rustx::model::images::FrozenImage::new(bytes.clone()).unwrap(),
+    );
     let events = crate::common::collect_events(&adapter, request.clone()).await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
     let body: serde_json::Value = serde_json::from_str(&server.request_body(0)).unwrap();
@@ -661,9 +663,10 @@ async fn anthropic_resolved_user_image_and_unsupported_placements() {
             })],
         }));
     let mut corrupt = request.clone();
-    corrupt
-        .images
-        .insert(ArtifactId::new("artifact-img-1"), b"invalid".to_vec());
+    corrupt.images.insert(
+        ArtifactId::new("artifact-img-1"),
+        serde_json::from_value(serde_json::json!(b"invalid")).unwrap(),
+    );
     let mut unresolved = request;
     unresolved.images.clear();
     for invalid in [text, assistant, corrupt, unresolved] {
@@ -727,7 +730,10 @@ async fn all_protocols_transport_user_and_ordered_tool_images() {
             .capabilities
             .input_modalities
             .insert(Modality::Image);
-        request.images.insert(image.artifact_id.clone(), bytes);
+        request.images.insert(
+            image.artifact_id.clone(),
+            rustx::model::images::FrozenImage::new(bytes).unwrap(),
+        );
         if let ModelInputMessage::Canonical(MessageBlock::User(user)) = &mut request.messages[0] {
             user.content.push(UserContentBlock::Image(image.clone()));
         }
@@ -743,7 +749,7 @@ async fn all_protocols_transport_user_and_ordered_tool_images() {
                 .push(AssistantContentBlock::ToolCall(call));
         }
         if let ModelInputMessage::Canonical(MessageBlock::Tool(tool)) = &mut request.messages[2] {
-            tool.result.content = vec![
+            std::sync::Arc::make_mut(&mut tool.result).content = vec![
                 ToolResultContent::Text(TextBlock { text: "A".into() }),
                 ToolResultContent::Image(image.clone()),
                 ToolResultContent::Text(TextBlock { text: "B".into() }),
@@ -849,10 +855,9 @@ async fn all_protocols_transport_user_and_ordered_tool_images() {
         let mut missing = request.clone();
         missing.images.clear();
         let mut corrupt = request.clone();
-        corrupt
-            .images
-            .values_mut()
-            .for_each(|bytes| *bytes = b"bad PNG".to_vec());
+        corrupt.images.values_mut().for_each(|bytes| {
+            *bytes = serde_json::from_value(serde_json::json!(b"bad PNG")).unwrap();
+        });
         let mut oversized = request.clone();
         oversized
             .messages
@@ -921,17 +926,25 @@ async fn measure_auxiliary_maximum_media_concurrent_adapter_copies() {
             artifact_id: id.clone(),
             alt: None,
         }));
-        request.images.insert(id, bytes.clone());
+        request.images.insert(
+            id,
+            rustx::model::images::FrozenImage::new(bytes.clone()).unwrap(),
+        );
     }
-    let retained = request.images.values().map(Vec::capacity).sum::<usize>();
-    let mut peak_copies = 0;
+    let retained = request
+        .images
+        .values()
+        .map(|image| image.len())
+        .sum::<usize>();
     let mut held_rss = Vec::new();
     for phase in 0..3 {
         let mut calls = Vec::new();
         let mut cancellations = Vec::new();
         for _ in 0..3 {
             let frozen = request.clone();
-            peak_copies += frozen.images.values().map(Vec::capacity).sum::<usize>();
+            for (id, image) in &frozen.images {
+                assert_eq!(image.as_ptr(), request.images[id].as_ptr());
+            }
             let adapter = adapter.clone();
             let cancellation = rustx::runtime::CancellationSignal::new();
             cancellations.push(cancellation.clone());
@@ -979,14 +992,12 @@ async fn measure_auxiliary_maximum_media_concurrent_adapter_copies() {
     let request_bytes = server.request_body(0).len();
     assert_eq!(server.attempt_count(), 9);
     assert_eq!(retained, 4 * 1024 * 1024);
-    assert_eq!(peak_copies, 9 * retained);
     let process = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
     let rss: Vec<_> = process
         .lines()
         .filter(|line| line.starts_with("VmRSS:") || line.starts_with("VmHWM:"))
         .collect();
     println!(
-        "media_bytes_per_frozen_request={retained} concurrent_request_image_bytes={} encoded_http_request_bytes={request_bytes} cumulative_clone_bytes={peak_copies} held_phase_rss_including_fixture={held_rss:?} final_rss_including_fixture={rss:?}",
-        3 * retained
+        "media_bytes_per_frozen_request={retained} concurrent_unique_image_bytes={retained} encoded_http_request_bytes={request_bytes} cumulative_clone_bytes=0 held_phase_rss_including_fixture={held_rss:?} final_rss_including_fixture={rss:?}"
     );
 }

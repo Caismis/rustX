@@ -1,0 +1,90 @@
+[
+  {
+    "family": "fixed",
+    "pair": 0,
+    "all_subscribed_empty": {
+      "before": 337.10546875,
+      "after": 339.86328125,
+      "delta_mib": 2.7578125,
+      "percent": 0.8180859569635801
+    },
+    "seeded_history_8": {
+      "before": 657.43359375,
+      "after": 667.48046875,
+      "delta_mib": 10.046875,
+      "percent": 1.5281961700029114
+    },
+    "all_unloaded": {
+      "before": 738.35546875,
+      "after": 694.33203125,
+      "delta_mib": -44.0234375,
+      "percent": -5.962363571916051
+    }
+  },
+  {
+    "family": "fixed",
+    "pair": 1,
+    "all_subscribed_empty": {
+      "before": 338.40234375,
+      "after": 339.90625,
+      "delta_mib": 1.50390625,
+      "percent": 0.44441366254574
+    },
+    "seeded_history_8": {
+      "before": 653.80078125,
+      "after": 667.6640625,
+      "delta_mib": 13.86328125,
+      "percent": 2.1204136867953616
+    },
+    "all_unloaded": {
+      "before": 735.50390625,
+      "after": 751.9296875,
+      "delta_mib": 16.42578125,
+      "percent": 2.233269070418346
+    }
+  },
+  {
+    "family": "rotating",
+    "pair": 0,
+    "all_subscribed_empty": {
+      "before": 334.46484375,
+      "after": 338.66796875,
+      "delta_mib": 4.203125,
+      "percent": 1.2566716886817795
+    },
+    "seeded_history_8": {
+      "before": 656.92578125,
+      "after": 669.48046875,
+      "delta_mib": 12.5546875,
+      "percent": 1.9111272320764927
+    },
+    "all_unloaded": {
+      "before": 720.609375,
+      "after": 757.76953125,
+      "delta_mib": 37.16015625,
+      "percent": 5.156768360111885
+    }
+  },
+  {
+    "family": "rotating",
+    "pair": 1,
+    "all_subscribed_empty": {
+      "before": 341.23046875,
+      "after": 339.55078125,
+      "delta_mib": -1.6796875,
+      "percent": -0.4922442905386068
+    },
+    "seeded_history_8": {
+      "before": 664.78125,
+      "after": 663.484375,
+      "delta_mib": -1.296875,
+      "percent": -0.19508296902176467
+    },
+    "all_unloaded": {
+      "before": 752.734375,
+      "after": 757.61328125,
+      "delta_mib": 4.87890625,
+      "percent": 0.6481577581733264
+    }
+  }
+]

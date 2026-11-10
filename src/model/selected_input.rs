@@ -1220,6 +1220,26 @@ impl<'a> Iterator for ModelManifestIter<'a> {
         self.remaining -= 1;
         Some(value)
     }
+    fn nth(&mut self, mut n: usize) -> Option<Self::Item> {
+        if n >= self.remaining {
+            self.remaining = 0;
+            return None;
+        }
+        self.remaining -= n;
+        while n != 0 {
+            let node = self.pending.pop().expect("remaining model input");
+            if node.count <= n {
+                n -= node.count;
+            } else if let InputNodeKind::Branch { left, right } = &node.kind {
+                if self.reverse {
+                    self.pending.extend([left.as_ref(), right.as_ref()]);
+                } else {
+                    self.pending.extend([right.as_ref(), left.as_ref()]);
+                }
+            }
+        }
+        self.next()
+    }
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.remaining, Some(self.remaining))
     }

@@ -372,12 +372,37 @@ pub fn is_reserved_property(name: &str) -> bool {
 /// deterministic root-property decoration, and
 /// [`SchemaError::ReservedProperty`] for reserved property collisions.
 pub fn validate_canonical_schema(schema: &serde_json::Value) -> Result<(), SchemaError> {
+    compile_canonical_schema(schema).map(drop)
+}
+
+#[cfg(test)]
+thread_local! {
+    static VALIDATOR_COMPILATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn take_validator_compilations() -> usize {
+    VALIDATOR_COMPILATIONS.with(|count| count.replace(0))
+}
+
+fn compile_validator(
+    schema: &serde_json::Value,
+) -> Result<Validator, jsonschema::ValidationError<'static>> {
+    #[cfg(test)]
+    VALIDATOR_COMPILATIONS.with(|count| count.update(|count| count + 1));
+    Validator::new(schema)
+}
+
+pub(super) fn compile_canonical_schema(
+    schema: &serde_json::Value,
+) -> Result<Validator, SchemaError> {
     let object = schema.as_object().ok_or_else(|| {
         SchemaError::NotRootObjectSchema(
             "the canonical tool input schema must be a root object schema".to_owned(),
         )
     })?;
-    Validator::new(schema).map_err(|error| SchemaError::InvalidSchema(error.to_string()))?;
+    let validator =
+        compile_validator(schema).map_err(|error| SchemaError::InvalidSchema(error.to_string()))?;
     if object.get("type").and_then(serde_json::Value::as_str) != Some("object") {
         return Err(SchemaError::NotRootObjectSchema(
             "the canonical tool input schema must declare \"type\": \"object\"".to_owned(),
@@ -393,7 +418,7 @@ pub fn validate_canonical_schema(schema: &serde_json::Value) -> Result<(), Schem
             }
         }
     }
-    Ok(())
+    Ok(validator)
 }
 
 /// Validates the policy-dependent `execution_mode` reservation and the
@@ -490,6 +515,16 @@ pub fn validate_execution_metadata_contract(
     Ok(())
 }
 
+#[cfg(test)]
+thread_local! {
+    static MODEL_DEFINITION_COMPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn take_model_definition_compiles() -> usize {
+    MODEL_DEFINITION_COMPILES.replace(0)
+}
+
 /// Compiles the canonical definition into the provider-neutral model-facing
 /// definition used by one model request.
 ///
@@ -506,11 +541,13 @@ pub fn validate_execution_metadata_contract(
 pub fn compile_model_definition(
     definition: &ToolDefinition,
 ) -> Result<ModelToolDefinition, SchemaError> {
+    #[cfg(test)]
+    MODEL_DEFINITION_COMPILES.set(MODEL_DEFINITION_COMPILES.get() + 1);
     validate_execution_metadata_contract(definition.execution_policy, &definition.input_schema)?;
     let mut input_schema = definition.input_schema.clone();
     let mut description = definition.description.clone();
     if definition.execution_policy == ToolExecutionPolicy::ModelSelectable {
-        decorate_execution_mode(&mut input_schema);
+        decorate_execution_mode(std::sync::Arc::make_mut(&mut input_schema));
         description = with_execution_mode_reminder(&description);
     }
     Ok(ModelToolDefinition {
@@ -786,7 +823,14 @@ pub fn validate_business_arguments(
     arguments: &serde_json::Value,
 ) -> Result<(), SchemaError> {
     let validator =
-        Validator::new(schema).expect("canonical schemas are validated at registration");
+        compile_validator(schema).expect("canonical schemas are validated at registration");
+    validate_compiled_arguments(&validator, arguments)
+}
+
+pub(super) fn validate_compiled_arguments(
+    validator: &Validator,
+    arguments: &serde_json::Value,
+) -> Result<(), SchemaError> {
     let mut errors = Vec::new();
     for error in validator.iter_errors(arguments) {
         errors.push(error.to_string());
@@ -800,6 +844,44 @@ pub fn validate_business_arguments(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn all_supported_drafts_still_validate_schema_and_business_arguments() {
+        for draft in [
+            "http://json-schema.org/draft-04/schema#",
+            "http://json-schema.org/draft-06/schema#",
+            "http://json-schema.org/draft-07/schema#",
+            "https://json-schema.org/draft/2019-09/schema",
+            "https://json-schema.org/draft/2020-12/schema",
+        ] {
+            let mut schema = serde_json::json!({
+                "$schema": draft, "type": "object",
+                "definitions": {"count": {"type": "integer", "minimum": 1}},
+                "properties": {"count": {"$ref": "#/definitions/count"}},
+                "required": ["count"], "additionalProperties": false,
+            });
+            super::validate_canonical_schema(&schema).unwrap();
+            assert!(
+                super::validate_business_arguments(&schema, &serde_json::json!({"count": 2}))
+                    .is_ok()
+            );
+            for invalid in [
+                serde_json::json!({}),
+                serde_json::json!({"count": 0}),
+                serde_json::json!({"count": "2"}),
+                serde_json::json!({"count": 2, "extra": true}),
+            ] {
+                assert!(
+                    super::validate_business_arguments(&schema, &invalid).is_err(),
+                    "{draft}: {invalid}"
+                );
+            }
+            schema["required"] = serde_json::json!(7);
+            assert!(
+                super::validate_canonical_schema(&schema).is_err(),
+                "{draft}"
+            );
+        }
+    }
     use super::{
         EXECUTION_MODE_DESCRIPTION_REMINDER, EXECUTION_MODE_FIELD, compile_model_definition,
         resolve_invocation_metadata, validate_business_arguments, validate_canonical_schema,
@@ -817,7 +899,7 @@ mod tests {
             id: ToolId::new("tool-x"),
             name: "x".to_owned(),
             description: String::new(),
-            input_schema: schema,
+            input_schema: schema.into(),
             execution_policy: policy,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
             approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
@@ -915,7 +997,8 @@ mod tests {
         let selectable = definition(ToolExecutionPolicy::ModelSelectable, original.clone());
         let compiled = compile_model_definition(&selectable).expect("compile");
         assert_ne!(
-            compiled.input_schema, original,
+            compiled.input_schema.as_ref(),
+            &original,
             "the compiled model-selectable schema is decorated"
         );
         assert_ne!(
@@ -928,11 +1011,13 @@ mod tests {
         ))
         .expect("compile");
         assert_eq!(
-            compiled.input_schema, original,
+            compiled.input_schema.as_ref(),
+            &original,
             "the foreground schema is compiled verbatim"
         );
         assert_eq!(
-            selectable.input_schema, original,
+            selectable.input_schema.as_ref(),
+            &original,
             "the canonical schema is never mutated"
         );
     }
@@ -1020,7 +1105,7 @@ mod tests {
                 validate_execution_metadata_contract(policy, schema).expect("fixed policy");
                 let compiled = compile_model_definition(&definition(policy, schema.clone()))
                     .expect("fixed policy compiles verbatim");
-                assert_eq!(&compiled.input_schema, schema);
+                assert_eq!(compiled.input_schema.as_ref(), schema);
             }
         }
     }
@@ -1184,7 +1269,8 @@ mod tests {
                         panic!("root {keyword:?} stays legal under {policy:?}: {error}")
                     });
                 assert_eq!(
-                    &compiled.input_schema, schema,
+                    compiled.input_schema.as_ref(),
+                    schema,
                     "root {keyword:?} is compiled verbatim under {policy:?}"
                 );
             }
@@ -1356,7 +1442,8 @@ mod tests {
                         panic!("references stay legal under {policy:?}: {error}")
                     });
                 assert_eq!(
-                    &compiled.input_schema, schema,
+                    compiled.input_schema.as_ref(),
+                    schema,
                     "a referencing schema is compiled verbatim under {policy:?}"
                 );
             }

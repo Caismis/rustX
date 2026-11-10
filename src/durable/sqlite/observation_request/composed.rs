@@ -3,6 +3,7 @@
 //! allowlisted encoded bytes and authenticated field geometry.
 use super::{Connection, ConversationStoreError, params, storage};
 use crate::durable::sqlite::manifest;
+use crate::durable::sqlite::statements::FixedStatements;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 mod fragments;
@@ -13,10 +14,28 @@ mod nodes;
 #[cfg(feature = "issue-387-profile")]
 mod profile;
 mod read;
+mod record;
+mod scalar;
 mod schema;
+#[cfg(test)]
+mod test_records;
+#[cfg(test)]
+pub(in crate::durable::sqlite) use test_records::*;
 #[cfg(test)]
 mod schema_tests;
 mod weights;
+mod width_table;
+/// Install fixed connection workspace before any owner records schema cookies.
+/// Captures change only rows, so ordinary spill never invalidates read proofs.
+pub(in crate::durable::sqlite) fn install_workspace(
+    connection: &Connection,
+) -> Result<(), ConversationStoreError> {
+    connection
+        .execute_batch("CREATE TEMP TABLE request_source_fact_spool(key TEXT PRIMARY KEY,value BLOB NOT NULL) WITHOUT ROWID")
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("install request capture workspace: {error}")))
+}
+#[cfg(test)]
+pub(in crate::durable::sqlite) use fragments::spool::exercise_workspace_spill;
 #[cfg(test)]
 mod width_tests;
 pub(super) use read::{coordinates, field, page, range};
@@ -36,10 +55,20 @@ pub(crate) struct Work {
     pub new_leaves: usize,
     pub new_nodes: usize,
     pub new_fragment_bytes: usize,
+    pub scalar_encodes: usize,
+    pub scalar_captures: usize,
+    pub scalar_reuses: usize,
     pub header_decodes: usize,
+    pub template_loads: usize,
+    pub template_decodes: usize,
+    pub template_reuses: usize,
+    pub node_decodes: usize,
+    pub node_reuses: usize,
+    pub leaf_width_calls: usize,
+    pub width_hole_encodes: usize,
 }
 #[cfg(test)]
-thread_local! {static WORK:std::cell::Cell<Work>=const{std::cell::Cell::new(Work{index_pages:0,index_bytes:0,max_index_page:0,native_nodes:0,source_nodes:0,source_metadata_bytes:0,max_source_metadata:0,new_leaves:0,new_nodes:0,new_fragment_bytes:0,header_decodes:0})};}
+thread_local! {static WORK:std::cell::Cell<Work>=const{std::cell::Cell::new(Work{index_pages:0,index_bytes:0,max_index_page:0,native_nodes:0,source_nodes:0,source_metadata_bytes:0,max_source_metadata:0,new_leaves:0,new_nodes:0,new_fragment_bytes:0,scalar_encodes:0,scalar_captures:0,scalar_reuses:0,header_decodes:0,template_loads:0,template_decodes:0,template_reuses:0,node_decodes:0,node_reuses:0,leaf_width_calls:0,width_hole_encodes:0})};}
 #[cfg(test)]
 pub(in crate::durable::sqlite) fn take_work() -> Work {
     WORK.with(|work| work.replace(Work::default()))
@@ -66,6 +95,7 @@ fn record_index(bytes: usize) {
 }
 const SAFE: u64 = 9_007_199_254_740_991;
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Fragment {
     bytes: index::Reference,
     fields: index::Reference,
@@ -74,6 +104,7 @@ struct Fragment {
     max_key_path: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Template {
     prefix: Fragment,
     suffix: Fragment,
@@ -84,13 +115,16 @@ struct Template {
     nodes: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Leaf {
     /// Width classes reference deduplicated template metadata, never body copies.
+    #[serde(deserialize_with = "record::variants")]
     variants: Vec<u8>,
+    #[serde(deserialize_with = "record::templates")]
     templates: Vec<index::Hash>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 enum Content {
     Leaf {
         leaf: Leaf,
@@ -103,11 +137,12 @@ enum Content {
     },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Augmentation {
     native: manifest::NodeRef,
     /// Sum of static bytes at each occurrence width; actual J/rank digits are
     /// generated at read time. Branch crossing a rank width descends its children.
-    widths: Vec<u64>,
+    widths: width_table::WidthTable,
     max_path: u64,
     max_key_path: u64,
     content: Content,
@@ -120,20 +155,39 @@ enum RootKind {
     Scalar,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Root {
     kind: RootKind,
     sequence: u64,
     native: Option<manifest::NodeRef>,
     source_hash: Option<index::Hash>,
     scalar: Fragment,
+    prefix: Option<Fragment>,
+    children: u64,
+    nodes: u64,
     messages_start: u64,
     messages_end: u64,
     length: u64,
 }
+impl Root {
+    fn prefix_length(&self) -> u64 {
+        self.prefix.as_ref().map_or(0, |prefix| prefix.length)
+    }
+    fn base_length(&self) -> Result<u64, ConversationStoreError> {
+        add(self.prefix_length(), self.scalar.length)
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+// Ordinary fields retain navigation geometry only. Bounded display previews
+// are derived from authenticated byte chunks when inspection requests them.
 struct Fact {
+    // The F key and C parent/ordinal key own these producer-only coordinates.
+    #[serde(skip)]
     path: Vec<String>,
+    #[serde(skip)]
     parent: Option<Vec<String>>,
+    #[serde(skip)]
     ordinal: Option<u64>,
     start: u64,
     end: u64,
@@ -141,7 +195,6 @@ struct Fact {
     nodes: u64,
     object: bool,
     container: bool,
-    header: String,
     key: Option<u64>,
     name: Option<String>,
 }
@@ -160,7 +213,7 @@ fn add(a: u64, b: u64) -> Result<u64, ConversationStoreError> {
 fn invalid() -> ConversationStoreError {
     ConversationStoreError::InvalidReference("request field is unavailable".into())
 }
-fn root_witness(root: &[u8]) -> index::Hash {
+fn root_checksum(root: &[u8]) -> index::Hash {
     let mut sha = Sha256::new();
     sha.update(b"rustx-composed-request-source-v1\0");
     sha.update(root);
@@ -173,65 +226,53 @@ pub(super) fn index_selection(
     input: &crate::model::SelectedModelInput,
     snapshot: &crate::model::RequestSnapshot,
     selection: &manifest::Selection,
+    configuration: &super::super::native_request::FreshConfiguration,
 ) -> Result<(), ConversationStoreError> {
     #[cfg(feature = "issue-387-profile")]
     let mut profile = profile::Request::new(sequence, selection.root.map_or(0, |root| root.count));
     #[cfg(test)]
     let _measurement =
         measurement::Measurement::new(crate::agent::execution::attribution::SourceScope::Request);
-    let source_hash = {
+    let captured_root = {
         #[cfg(feature = "issue-387-profile")]
         let _profile = profile::Timer::new(profile::Phase::Capture);
         #[cfg(test)]
         let _timer = crate::agent::execution::attribution::Timer::new(
             crate::agent::execution::attribution::Phase::SourceCapture,
         );
-        nodes::capture(connection, sequence, scope, input, snapshot, selection)?
+        nodes::capture(connection, scope, input, snapshot, selection)?
     };
-    let (scalar, messages_start, messages_end) = {
+    let source_hash = captured_root.as_ref().map(|node| node.digest);
+    let captured = {
         #[cfg(feature = "issue-387-profile")]
         let _profile = profile::Timer::new(profile::Phase::Scalar);
         #[cfg(test)]
         let _timer = crate::agent::execution::attribution::Timer::new(
             crate::agent::execution::attribution::Phase::SourceScalar,
         );
-        let value = crate::observation::trace::frozen_request_detail(
-            snapshot,
-            std::iter::empty::<u8>().collect::<Vec<_>>(),
-        );
-        let source =
-            crate::runtime::read_layout::SeekableObservationSource::new(&value).map_err(storage)?;
-        fragments::scalar(connection, &source)?
+        scalar::capture(connection, snapshot, configuration)?
     };
-    {
-        #[cfg(feature = "issue-387-profile")]
-        let _profile = profile::Timer::new(profile::Phase::Paths);
-        #[cfg(test)]
-        let _timer = crate::agent::execution::attribution::Timer::new(
-            crate::agent::execution::attribution::Phase::SourcePaths,
-        );
-        if let (Some(native), Some(digest)) = (selection.root, source_hash) {
-            nodes::validate_paths(connection, native, digest, 0)?;
-        }
-    }
     let messages_length = {
         #[cfg(feature = "issue-387-profile")]
-        let _profile = profile::Timer::new(profile::Phase::Length);
+        let _profile = profile::Timer::new(profile::Phase::Geometry);
         #[cfg(test)]
         let _timer = crate::agent::execution::attribution::Timer::new(
-            crate::agent::execution::attribution::Phase::SourceLength,
+            crate::agent::execution::attribution::Phase::SourceGeometry,
         );
-        match (selection.root, source_hash) {
-            (Some(native), Some(digest)) => {
-                add(nodes::length(connection, native, digest, 0, sequence)?, 2)?
+        match (selection.root, captured_root) {
+            (Some(native), Some(captured)) => {
+                // Scalar capture writes can trigger changes to the root. Check
+                // actual storage now, then share the path/width traversal.
+                // All path errors still precede deferred length errors.
+                let node = captured.into_node(connection, native)?;
+                add(nodes::geometry(connection, &node, 0, sequence)?, 2)?
             }
             (None, None) => 2,
             _ => return Err(storage("composed selected root unavailable")),
         }
     };
     let length = add(
-        scalar
-            .length
+        add(captured.prefix.length, captured.suffix.length)?
             .checked_sub(2)
             .ok_or_else(|| storage("scalar messages geometry unavailable"))?,
         messages_length,
@@ -241,28 +282,28 @@ pub(super) fn index_selection(
         sequence,
         native: selection.root,
         source_hash,
-        scalar,
-        messages_start,
-        messages_end,
+        scalar: captured.suffix,
+        prefix: Some(captured.prefix),
+        children: captured.children,
+        nodes: captured.nodes,
+        messages_start: captured.messages_start,
+        messages_end: captured.messages_end,
         length,
     };
-    let bytes = bounded(&root, 16_384)?;
-    let witness = root_witness(&bytes);
+    let bytes = record::encode(&root, 16_384)?;
+    let checksum = root_checksum(&bytes);
     connection
-        .execute(
-            "INSERT INTO request_source_roots(source_id,metadata,witness) VALUES(?1,?2,?3)",
-            params![sequence.to_string(), bytes, witness.as_slice()],
+        .execute_cached(
+            "INSERT INTO request_source_roots(source_id,metadata,checksum) VALUES(?1,?2,?3)",
+            params![sequence.to_string(), bytes, checksum.as_slice()],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     connection
-        .execute(
-            "INSERT INTO content_frontiers VALUES('trace_request',?1,0,'canonical_json_v1',1,?2)",
+        .execute_cached(
+            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('trace_request',?1,0,'j',1,?2)",
             params![sequence.to_string(), length],
         )
-        .map_err(|error| storage(error.to_string()))?;
-    // A separate original-R scalar seat prevents rehashing a corrupt optional
-    // root from being accepted as the original capture on subsequent reads.
-    connection.execute("INSERT INTO request_observation_fields(source_id,path_json,parent_path,ordinal,start,end,children,header_kind,header_json,shape_witness) VALUES(?1,'[]',NULL,NULL,0,?2,0,'inline',x'6e756c6c',?3)",params![sequence.to_string(),length,witness.as_slice()]).map_err(|error|storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     #[cfg(feature = "issue-387-profile")]
     profile.layout_completed();
     Ok(())
@@ -270,9 +311,9 @@ pub(super) fn index_selection(
 type RootRow = (
     Option<Vec<u8>>,
     Option<Vec<u8>>,
-    Option<Vec<u8>>,
     Option<u64>,
     Option<Vec<u8>>,
+    u64,
     u64,
 );
 fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStoreError> {
@@ -280,20 +321,30 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
     if sequence == 0 || sequence.to_string() != id {
         return Err(invalid());
     }
-    let row: RootRow = connection.prepare_cached("SELECT CASE WHEN typeof(r.metadata)='blob' AND length(r.metadata)<=16384 THEN r.metadata END,CASE WHEN typeof(r.witness)='blob' AND length(r.witness)=32 THEN r.witness END,CASE WHEN typeof(f.shape_witness)='blob' AND length(f.shape_witness)=32 THEN f.shape_witness END,s.input_root,CASE WHEN typeof(s.input_root_digest)='blob' AND length(s.input_root_digest)=32 THEN s.input_root_digest END,s.input_count FROM request_source_roots r JOIN request_observation_fields f ON f.source_id=r.source_id AND f.path_json='[]' JOIN request_snapshots s ON s.observation_source_id=r.source_id WHERE r.source_id=?1").map_err(|error|storage(error.to_string()))?.query_row([id], |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).map_err(|error|storage(error.to_string()))?;
+    let row: RootRow = connection.prepare_cached("SELECT CASE WHEN typeof(r.metadata)='blob' AND length(r.metadata)<=16384 THEN r.metadata END,CASE WHEN typeof(r.checksum)='blob' AND length(r.checksum)=32 THEN r.checksum END,s.input_root,CASE WHEN typeof(s.input_root_digest)='blob' AND length(s.input_root_digest)=32 THEN s.input_root_digest END,s.input_count,f.readable_end FROM request_source_roots r JOIN request_snapshots s ON s.observation_source_id=r.source_id JOIN content_frontiers f ON f.source_kind='trace_request' AND f.source_id=r.source_id AND f.block_index=0 AND f.representation='j' AND f.revision=1 WHERE r.source_id=?1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row([id], |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let bytes = row
         .0
         .ok_or_else(|| storage("composed request root unavailable"))?;
     #[cfg(test)]
     record_metadata(bytes.len());
-    let digest = root_witness(&bytes);
-    if row.1.as_deref() != Some(digest.as_slice()) || row.2.as_deref() != Some(digest.as_slice()) {
-        return Err(storage("original composed request witness differs"));
+    let digest = root_checksum(&bytes);
+    if row.1.as_deref() != Some(digest.as_slice()) {
+        return Err(storage("composed request root checksum differs"));
     }
-    let root: Root =
-        serde_json::from_slice(&bytes).map_err(|_| storage("composed request root malformed"))?;
+    let root: Root = record::decode(&bytes)?;
+    let base_length = root.base_length()?;
     if root.sequence != sequence
         || root.length > SAFE
+        || root.length != row.5
+        || base_length > root.length
+        || root.kind != RootKind::Request
+            && (root.length != root.scalar.length
+                || root.prefix.is_some()
+                || root.children != 0
+                || root.nodes != 0
+                || root.messages_start != 0
+                || root.messages_end != 0
+                || root.source_hash.is_some())
         || root.native.is_some_and(|node| {
             node.count == 0
                 || node.count > manifest::MAX_ITEMS
@@ -301,12 +352,17 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
                 || node.height > manifest::MAX_HEIGHT
         })
         || root.kind == RootKind::Request
-            && (root.messages_start >= root.messages_end
+            && (root.prefix.is_none()
+                || root.prefix_length() == 0
+                || root.children != crate::observation::trace::frozen::REQUEST_FIELD_COUNT
+                || !(1..=33).contains(&root.nodes)
+                || root.messages_start < root.prefix_length()
+                || root.messages_start >= root.messages_end
                 || root.messages_end - root.messages_start != 2)
-        || root.messages_end > root.scalar.length
-        || root.native.map(|node| node.id) != row.3
-        || root.native.map_or(0, |node| node.count) != row.5
-        || root.native.as_ref().map(|node| node.digest.as_slice()) != row.4.as_deref()
+        || root.messages_end > base_length
+        || root.native.map(|node| node.id) != row.2
+        || root.native.map_or(0, |node| node.count) != row.4
+        || root.native.as_ref().map(|node| node.digest.as_slice()) != row.3.as_deref()
         || root.kind == RootKind::Request && root.native.is_some() != root.source_hash.is_some()
     {
         return Err(storage("original composed request identity differs"));
@@ -323,7 +379,7 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
     let source =
         crate::runtime::read_layout::SeekableObservationSource::new(value).map_err(storage)?;
     let scalar = fragments::whole(connection, &source)?;
-    let native=connection.query_row("SELECT s.input_root,s.input_root_digest,s.input_count,n.height FROM request_snapshots s LEFT JOIN native_input_nodes n ON n.id=s.input_root WHERE s.observation_source_id=?1",[sequence.to_string()],|row|{let id:Option<u64>=row.get(0)?;let digest:Option<Vec<u8>>=row.get(1)?;let count:u64=row.get(2)?;let height:Option<u8>=row.get(3)?;Ok((id,digest,count,height))}).map_err(|error|storage(error.to_string()))?;
+    let native=connection.query_row("SELECT s.input_root,s.input_root_digest,s.input_count,n.height FROM request_snapshots s LEFT JOIN native_input_nodes n ON n.id=s.input_root WHERE s.observation_source_id=?1",[sequence.to_string()],|row|{let id:Option<u64>=row.get(0)?;let digest:Option<Vec<u8>>=row.get(1)?;let count:u64=row.get(2)?;let height:Option<u8>=row.get(3)?;Ok((id,digest,count,height))}).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let native = match native {
         (Some(id), Some(digest), count, Some(height)) => Some(manifest::NodeRef {
             id,
@@ -343,30 +399,32 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
         source_hash: None,
         length: scalar.length,
         scalar,
+        prefix: None,
+        children: 0,
+        nodes: 0,
         messages_start: 0,
         messages_end: 0,
     };
-    let bytes = bounded(&root, 16384)?;
-    let witness = root_witness(&bytes);
+    let bytes = record::encode(&root, 16384)?;
+    let checksum = root_checksum(&bytes);
     connection
         .execute(
             "DELETE FROM request_source_roots WHERE source_id=?1",
             [sequence.to_string()],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     connection
-        .execute(
-            "INSERT INTO request_source_roots(source_id,metadata,witness) VALUES(?1,?2,?3)",
-            params![sequence.to_string(), bytes, witness.as_slice()],
+        .execute_cached(
+            "INSERT INTO request_source_roots(source_id,metadata,checksum) VALUES(?1,?2,?3)",
+            params![sequence.to_string(), bytes, checksum.as_slice()],
         )
-        .map_err(|error| storage(error.to_string()))?;
-    connection.execute("INSERT INTO request_observation_fields(source_id,path_json,parent_path,ordinal,start,end,children,header_kind,header_json,shape_witness) VALUES(?1,'[]',NULL,NULL,0,?2,0,'inline',x'6e756c6c',?3)",params![sequence.to_string(),root.length,witness.as_slice()]).map_err(|error|storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     connection
-        .execute(
-            "INSERT INTO content_frontiers VALUES('trace_request',?1,0,'canonical_json_v1',1,?2)",
+        .execute_cached(
+            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('trace_request',?1,0,'j',1,?2)",
             params![sequence.to_string(), root.length],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
 

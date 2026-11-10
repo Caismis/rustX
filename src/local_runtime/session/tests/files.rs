@@ -90,7 +90,7 @@ async fn managed_images_materialize_exact_clone_fork_branch_cuts() {
         panic!()
     };
     tool.tool_id = call.tool_id;
-    tool.result = result;
+    tool.result = result.into();
     let source_store = store_for(&catalog, &session, &conversation);
     for message in &history {
         source_store.append_canonical(message).unwrap();
@@ -107,12 +107,14 @@ async fn managed_images_materialize_exact_clone_fork_branch_cuts() {
     let MessageBlock::Tool(tool) = &mut missing.canonical[2] else {
         panic!()
     };
-    tool.result.content.push(ToolResultContent::Image(
-        crate::message::content::ImageReference {
-            artifact_id: crate::runtime::ArtifactId::new("artifact_999"),
-            alt: None,
-        },
-    ));
+    std::sync::Arc::make_mut(&mut tool.result)
+        .content
+        .push(ToolResultContent::Image(
+            crate::message::content::ImageReference {
+                artifact_id: crate::runtime::ArtifactId::new("artifact_999"),
+                alt: None,
+            },
+        ));
     assert!(catalog.prepare_clone_session(&state(), &missing).is_err());
     assert_eq!(
         fs::read_dir(&catalog.root).unwrap().count(),
@@ -189,7 +191,7 @@ async fn managed_images_materialize_exact_clone_fork_branch_cuts() {
         })
         .unwrap();
         assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved.values().next().unwrap(), &bytes);
+        assert_eq!(resolved.values().next().unwrap().as_bytes(), bytes);
         assert_eq!(resolved.keys().next().unwrap().as_str(), "artifact_1");
         assert_eq!(
             ArtifactStore::archive_lengths(owner.root(), || Ok(()))
@@ -246,7 +248,7 @@ async fn session_file_history_copies_preserve_original_scope_and_deleted_source_
     let MessageBlock::Tool(tool) = &mut history[2] else {
         panic!()
     };
-    tool.result.deliveries = vec![reference.clone()];
+    std::sync::Arc::make_mut(&mut tool.result).deliveries = vec![reference.clone()];
     let store = store_for(&catalog, &session, &conversation);
     for message in &history {
         store.append_canonical(message).unwrap();

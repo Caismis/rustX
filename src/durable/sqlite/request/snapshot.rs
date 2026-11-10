@@ -4,14 +4,20 @@ use super::validate_request_start_metadata;
 use crate::durable::ConversationStoreError;
 use crate::durable::sqlite::canonical::ledger::load_message;
 use crate::durable::sqlite::journal::validate_event_identity;
-use crate::durable::sqlite::request::contribution::validate_carryover_snapshot;
-use crate::durable::sqlite::{
-    decode, manifest, seq_to_i64, sequence_from_i64, sqlite_error, storage,
+use crate::durable::sqlite::native_request;
+use crate::durable::sqlite::publication::{
+    read_publication_stream, require_publication_stream, validate_publication_generation,
 };
+use crate::durable::sqlite::request::contribution::validate_carryover_snapshot;
+use crate::durable::sqlite::statements::FixedStatements;
+#[cfg(test)]
+use crate::durable::sqlite::storage;
+use crate::durable::sqlite::{decode, manifest, seq_to_i64, sequence_from_i64, sqlite_error};
 use crate::events::EVENT_SCHEMA_VERSION;
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::model::snapshot::RequestSnapshot;
 use crate::model::types::ModelRequest;
+use crate::publication::{PublicationStreamRecord, PublicationStreamStart};
 use crate::runtime::AttemptId;
 use crate::runtime::TurnId;
 use crate::runtime::identity::{ConversationId, RequestId};
@@ -19,6 +25,7 @@ use rusqlite::OptionalExtension;
 use rusqlite::{Connection, Transaction, params};
 use sha2::Digest;
 use sha2::Sha256;
+use std::sync::Arc;
 
 #[cfg(test)]
 thread_local! {
@@ -115,6 +122,39 @@ pub(in crate::durable::sqlite) fn load_request_snapshot(
     load_request_snapshot_bounded(connection, conversation, request_id, 64 * 1024 * 1024)
 }
 
+fn load_snapshot_start(
+    connection: &Connection,
+    request_id: &RequestId,
+    started_sequence: Option<i64>,
+) -> Result<(u64, String), ConversationStoreError> {
+    let started_sequence = started_sequence.ok_or_else(|| {
+        ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} has no durable start sequence"
+        ))
+    })?;
+    let sequence = sequence_from_i64(started_sequence)?;
+    let event_json: String = connection
+        .query_row_cached(
+            "SELECT event_json FROM events WHERE sequence=?1",
+            [started_sequence],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("request start event lookup: {error}"),
+            )
+        })?
+        .ok_or_else(|| {
+            ConversationStoreError::InvalidReference(format!(
+                "request snapshot {request_id} start event is unavailable"
+            ))
+        })?;
+    Ok((sequence, event_json))
+}
+
+#[allow(clippy::too_many_lines)] // One bounded native request read verifies its complete stored identity.
 pub(in crate::durable::sqlite) fn load_request_snapshot_bounded(
     connection: &Connection,
     conversation: &ConversationId,
@@ -129,9 +169,41 @@ pub(in crate::durable::sqlite) fn load_request_snapshot_bounded(
         let (queries, bytes) = work.get();
         work.set((queries + 1, bytes));
     });
-    let (stored_canonical_frontier, json, started_sequence, digest, native_oversized): (i64, Option<String>, Option<i64>, String, bool) = connection
-        .query_row("SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=?2 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END,octet_length(snapshot_json)>67108864 FROM request_snapshots WHERE request_id=?1", params![request_id.as_str(),metadata_limit], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, read_manifest_digest(row, 3)?,row.get(4)?)))
-        .optional().map_err(|error| sqlite_error(&error, format!("request snapshot lookup: {error}")))?
+    let size = native_request::MATERIALIZED_BYTES_SQL;
+    let sql = format!(
+        "SELECT canonical_frontier,CASE WHEN ({size})<=?2 THEN snapshot_json END,started_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END,({size})>67108864 FROM request_snapshots WHERE request_id=?1"
+    );
+    let (stored_canonical_frontier, json, started_sequence, digest, native_oversized): (
+        i64,
+        Option<String>,
+        Option<i64>,
+        String,
+        bool,
+    ) = connection
+        .query_row(
+            &sql,
+            params![
+                request_id.as_str(),
+                metadata_limit,
+                native_request::NORMALIZATION_OVERHEAD
+            ],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    read_manifest_digest(row, 3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("request snapshot lookup: {error}"),
+            )
+        })?
         .ok_or_else(|| ConversationStoreError::RequestNotFound(request_id.clone()))?;
     let json = json.ok_or_else(|| {
         if native_oversized {
@@ -149,41 +221,23 @@ pub(in crate::durable::sqlite) fn load_request_snapshot_bounded(
         let (queries, bytes) = work.get();
         work.set((queries, bytes + json.len()));
     });
-    // Normalization retained the two-byte empty input array. Charge the
-    // actual flat sequence in its place before hydrating any selected leaf.
-    let input_budget = max_bytes
-        .checked_sub(json.len().saturating_sub(2))
-        .ok_or_else(|| {
-            crate::context::resources::bound(
-                "historical frozen request exceeds materialization bound",
-            )
-        })?;
     let root = read_stored_snapshot_root(connection, request_id)?;
     if stored_snapshot_digest(&json, root) != digest {
         return Err(ConversationStoreError::InvalidReference(
             "frozen request manifest integrity mismatch".into(),
         ));
     }
-    let started_sequence = started_sequence.ok_or_else(|| {
-        ConversationStoreError::InvalidReference(format!(
-            "request snapshot {request_id} has no durable start sequence"
-        ))
-    })?;
-    let sequence = sequence_from_i64(started_sequence)?;
-    let event_json: String = connection
-        .query_row(
-            "SELECT event_json FROM events WHERE sequence=?1",
-            [started_sequence],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|error| sqlite_error(&error, format!("request start event lookup: {error}")))?
+    let (sequence, event_json) = load_snapshot_start(connection, request_id, started_sequence)?;
+    let (mut snapshot, metadata_bytes) = native_request::full(connection, &json, max_bytes)?;
+    // Replace the normalized two-byte input array with the flat selected input,
+    // charging the fully reconstructed metadata, including shared configuration.
+    let input_budget = max_bytes
+        .checked_sub(metadata_bytes.saturating_sub(2))
         .ok_or_else(|| {
-            ConversationStoreError::InvalidReference(format!(
-                "request snapshot {request_id} start event is unavailable"
-            ))
+            crate::context::resources::bound(
+                "historical frozen request exceeds materialization bound",
+            )
         })?;
-    let mut snapshot: RequestSnapshot = decode(&json, "request snapshot")?;
     validate_snapshot_identity(&snapshot)?;
     if stored_canonical_frontier != seq_to_i64(snapshot.canonical_frontier.0)? {
         return Err(ConversationStoreError::InvalidReference(format!(
@@ -348,7 +402,7 @@ pub(in crate::durable::sqlite) fn find_request_start_event(
 /// Full request disclosure must explicitly load the separately bound native root.
 #[derive(Debug)]
 pub(in crate::durable::sqlite) struct StoredRequestMetadata(
-    pub(in crate::durable::sqlite) RequestSnapshot,
+    pub(in crate::durable::sqlite) Arc<RequestSnapshot>,
 );
 
 impl std::ops::Deref for StoredRequestMetadata {
@@ -390,18 +444,19 @@ pub(in crate::durable::sqlite) fn read_manifest_digest(
     Ok(digest)
 }
 
-pub(in crate::durable::sqlite) fn read_request_snapshot_tx(
-    transaction: &Transaction<'_>,
+pub(in crate::durable::sqlite) fn read_request_snapshot_with_validation(
+    validation: &mut native_request::Validation<'_, '_>,
     request_id: &RequestId,
 ) -> Result<Option<RequestSnapshotRow>, ConversationStoreError> {
+    let transaction = validation.transaction();
     #[cfg(test)]
     REQUEST_SNAPSHOT_READ_WORK.with(|work| {
         let (queries, bytes) = work.get();
         work.set((queries + 1, bytes));
     });
     let row: Option<StoredSnapshotRow> = transaction
-        .query_row(
-            "SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=67108864 THEN snapshot_json END,started_sequence,completed_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END
+        .query_row_cached(
+            "SELECT canonical_frontier,CASE WHEN octet_length(snapshot_json)<=67108954 THEN snapshot_json END,started_sequence,completed_sequence,CASE WHEN typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64 THEN manifest_digest ELSE '' END
              FROM request_snapshots WHERE request_id=?1",
             [request_id.as_str()],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, read_manifest_digest(row, 4)?)),
@@ -428,7 +483,7 @@ pub(in crate::durable::sqlite) fn read_request_snapshot_tx(
             "frozen request manifest integrity mismatch".into(),
         ));
     }
-    let snapshot: RequestSnapshot = decode(&json, "request snapshot")?;
+    let snapshot = validation.metadata(&json)?;
     validate_snapshot_identity(&snapshot)?;
     if !snapshot.input.is_empty() {
         return Err(ConversationStoreError::InvalidReference(
@@ -452,6 +507,67 @@ pub(in crate::durable::sqlite) fn read_request_snapshot_tx(
     )))
 }
 
+pub(in crate::durable::sqlite) fn read_request_snapshot_tx(
+    transaction: &Transaction<'_>,
+    request_id: &RequestId,
+) -> Result<Option<RequestSnapshotRow>, ConversationStoreError> {
+    read_request_snapshot_with_validation(
+        &mut native_request::Validation::new(transaction),
+        request_id,
+    )
+}
+
+pub(in crate::durable::sqlite) fn require_started_request_with_validation(
+    validation: &mut native_request::Validation<'_, '_>,
+    conversation_id: &ConversationId,
+    request_id: &RequestId,
+) -> Result<StartedRequestRow, ConversationStoreError> {
+    let transaction = validation.transaction();
+    let Some(row) = read_request_snapshot_with_validation(validation, request_id)? else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {request_id} does not exist"
+        )));
+    };
+    validate_started_request_row_tx(transaction, conversation_id, request_id, row)
+}
+
+/// First durable output owns stream admission. A request with no durable output
+/// needs no separate stream-opening transaction or recovery-only empty row.
+/// Existing streams must retain the exact generation supplied by their owner.
+pub(in crate::durable::sqlite) fn ensure_publication_stream_tx(
+    requests: &mut native_request::Validation<'_, '_>,
+    conversation_id: &ConversationId,
+    start: &PublicationStreamStart,
+) -> Result<PublicationStreamRecord, ConversationStoreError> {
+    let transaction = requests.transaction();
+    if let Some(existing) = read_publication_stream(transaction, &start.stream_id)? {
+        if existing.start != *start {
+            return Err(ConversationStoreError::PublicationViolation(format!(
+                "publication stream {} does not identify the exact Request Snapshot generation",
+                start.stream_id
+            )));
+        }
+        return Ok(existing);
+    }
+    let (snapshot, _, _) =
+        require_started_request_with_validation(requests, conversation_id, &start.request_id)?;
+    validate_publication_generation(&snapshot, start)?;
+    transaction.execute_cached(
+        "INSERT INTO publication_streams(stream_id,attempt_id,turn_id,request_id,message_id,next_frame_sequence,terminal_sequence,settlement) VALUES(?1,?2,?3,?4,?5,0,NULL,NULL)",
+        params![start.stream_id.as_str(), start.attempt_id.as_str(), start.turn_id.as_str(), start.request_id.as_str(), start.message_id.as_str()],
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("admit publication stream: {error}")))?;
+    let inserted = require_publication_stream(transaction, &start.stream_id)?;
+    if inserted.start != *start
+        || inserted.terminal_sequence.is_some()
+        || inserted.settlement.is_some()
+    {
+        return Err(ConversationStoreError::PublicationViolation(
+            "publication admission changed the request generation or settlement".into(),
+        ));
+    }
+    Ok(inserted)
+}
+
 /// Proves that a Request Snapshot has exactly one durable request-start fact
 /// and that the fact's envelope identifies the same conversation, attempt,
 /// turn, request, and model.
@@ -460,12 +576,11 @@ pub(in crate::durable::sqlite) fn require_started_request_tx(
     conversation_id: &ConversationId,
     request_id: &RequestId,
 ) -> Result<StartedRequestRow, ConversationStoreError> {
-    let Some(row) = read_request_snapshot_tx(transaction, request_id)? else {
-        return Err(ConversationStoreError::InvalidReference(format!(
-            "request snapshot {request_id} does not exist"
-        )));
-    };
-    validate_started_request_row_tx(transaction, conversation_id, request_id, row)
+    require_started_request_with_validation(
+        &mut native_request::Validation::new(transaction),
+        conversation_id,
+        request_id,
+    )
 }
 
 pub(in crate::durable::sqlite) fn verified_started_request_tx(
@@ -500,7 +615,7 @@ pub(in crate::durable::sqlite) fn verified_started_request_tx(
         )));
     }
     validate_request_start_metadata(&snapshot, &started)?;
-    Ok((snapshot.0, started))
+    Ok((Arc::unwrap_or_clone(snapshot.0), started))
 }
 
 /// Reuses a row decoded in this same transaction, preserving all original start
@@ -655,6 +770,7 @@ pub(in crate::durable::sqlite) fn read_stored_snapshot_root(
     }
 }
 
+#[cfg(test)]
 pub(in crate::durable::sqlite) fn encode_snapshot(
     snapshot: &RequestSnapshot,
 ) -> Result<String, ConversationStoreError> {

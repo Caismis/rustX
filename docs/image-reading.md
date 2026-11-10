@@ -78,9 +78,11 @@ select an older artifact again. Text-only requests project every image to text.
 
 Context accounting uses that same request projection. Each retained image adds
 `1024 + ceil(width * height / 256)` input tokens to the normal neutral text and
-structure estimate, per occurrence. Dimensions are derived from complete bounded
-validation of the immutable managed PNG, so SQLite replay derives the same fact
-without storing base64 or a provider-specific token table. This deliberately
+structure estimate, per occurrence. Complete bounded validation attaches the
+dimensions that determine the token charge to the immutable encoded PNG owner.
+Projection, request freezing, context accounting and provider translation share
+that owner. Durable reconstruction restores the encoded bytes and validates them
+on first use. The decoded pixels are released after validation. This deliberately
 conservative fit estimate is not provider billing. Text projections incur only
 their text cost. Soft-limit, post-compaction fit and recent-history estimates use
 the same estimator. Observed provider prefixes include projected content identity,

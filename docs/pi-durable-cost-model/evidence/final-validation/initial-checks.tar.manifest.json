@@ -1,0 +1,22 @@
+{
+  "final-debug-dependency-cache-cleanup.json": {
+    "bytes": 340,
+    "sha256": "c3c82434cf99476170fda50f2fe9eed3c538dab4b9080cc5f97ff5c3b64bbf3b"
+  },
+  "pi-final-harness-negative.log": {
+    "bytes": 136,
+    "sha256": "762546e3a0117371fbe8a8250c5fad41c9f43771fc507f5a694c2e89a2aa5acb"
+  },
+  "pi-final-pi-oracle-negative.log": {
+    "bytes": 643,
+    "sha256": "f2997781479bc7ecfd9ae2815d86f03e8a7bb48dbc4c30b5c2963346ac1efa7e"
+  },
+  "pi-full-39139189917-boundary-failure.log": {
+    "bytes": 89406,
+    "sha256": "ebc974e89f642ccc7925a1df72ce1325afab17adca1aea1c5ca0442fe7907d3b"
+  },
+  "pi-root-point-query-check.log": {
+    "bytes": 220,
+    "sha256": "455a91aa36c09b820ae37760ca75c41b756b1ed8ebf331f3e044bdfc11d4acc1"
+  }
+}

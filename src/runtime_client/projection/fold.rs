@@ -7,6 +7,7 @@ use super::InboundDrainView;
 use super::MessageBlock;
 #[cfg(test)]
 use super::RuntimeEvent;
+use super::shared_attempt;
 #[cfg(test)]
 use super::views::inbound_item_view;
 use super::{
@@ -37,9 +38,17 @@ impl RuntimeClientProjection {
             ConversationObservation::Workflow(cuts) => {
                 for source in cuts {
                     let header = source.header();
-                    self.domain_revisions.insert("workflows", header.revision.0);
-                    self.source_frontiers
-                        .retain(|domain, _| !domain.starts_with("workflows."));
+                    self.domain_revisions
+                        .insert("workflows".into(), header.revision.0);
+                    let removed: Vec<_> = self
+                        .source_frontiers
+                        .keys()
+                        .filter(|domain| domain.starts_with("workflows."))
+                        .cloned()
+                        .collect();
+                    for domain in removed {
+                        self.source_frontiers.remove(&domain);
+                    }
                     self.install_source_frontiers(source.frontiers());
                     let value = Arc::new(super::super::domain::SourceValue::new(Arc::new(source)));
                     let source = Arc::new(super::super::domain::DomainSource::Workflow(value));
@@ -50,7 +59,7 @@ impl RuntimeClientProjection {
                 Vec::new()
             }
             ConversationObservation::GoalChanged(view) => {
-                self.snapshot.goal = Some(view.clone());
+                self.snapshot.goal = (Some(view.clone())).into();
                 vec![RuntimeClientEvent::GoalChanged { view }]
             }
             ConversationObservation::PendingReceipt(_) => {
@@ -82,7 +91,7 @@ impl RuntimeClientProjection {
                         settled.managed_output = None;
                     }
                 });
-                let Some(attempt) = &mut self.snapshot.attempt else {
+                let Some(attempt) = self.snapshot.attempt.as_mut() else {
                     return Vec::new();
                 };
                 self.foreground_content.retain(|known| {
@@ -209,7 +218,7 @@ impl RuntimeClientProjection {
                         attempt_id,
                         &tool.tool_call_id,
                         Some(&tool.occurrence),
-                        tool.result.clone(),
+                        &tool.result,
                     ) == ForegroundSettlement::Applied
                 {
                     events.push(RuntimeClientEvent::ToolExecutionSettled {
@@ -222,7 +231,7 @@ impl RuntimeClientProjection {
                         metadata_ref: settled_witness.and_then(|(_, reference)| reference),
                         tool_call_id: crate::observation::tool::inline_call_id(&tool.tool_call_id),
                         tool_id: crate::observation::tool::inline_tool_id(&tool.tool_id),
-                        result: tool.result.clone(),
+                        result: Box::new(tool.result.as_ref().clone()),
                     });
                 }
                 if matches!(block, MessageBlock::Assistant(_))
@@ -230,13 +239,12 @@ impl RuntimeClientProjection {
                         .publication_start
                         .as_ref()
                         .is_some_and(|start| &start.message_id == block.id())
-                    && let Some(attempt) = &mut self.snapshot.attempt
+                    && let Some(attempt) = self.snapshot.attempt.as_mut()
                 {
-                    attempt.in_flight = None;
+                    attempt.in_flight = super::shared_snapshot::CowDomain::default();
                     self.publication_start = None;
                     self.live_frontiers.clear();
-                }
-                // The task list is derived from canonical results, exactly
+                } // The task list is derived from canonical results, exactly
                 // as the runtime's own list is: a committed `todo` result
                 // *is* the list moving. A result whose payload does not
                 // decode is left out rather than allowed to replace a good
@@ -266,16 +274,9 @@ impl RuntimeClientProjection {
                 if let Some(header) = &header {
                     if let Some(position) = header.ledger_position {
                         if let MessageBlock::Assistant(assistant) = &block {
-                            self.canonical_foreground =
-                                Some(crate::observation::cut::CanonicalForegroundReadCut {
-                                    locator:
-                                        crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
-                                            position,
-                                        },
-                                    total: header.tool_call_count,
-                                });
+                            self . canonical_foreground = Some ( crate :: observation :: cut :: CanonicalForegroundReadCut { locator : crate :: observation :: content :: CanonicalContentLocator :: ByLedgerPosition { position , } , total : header . tool_call_count , } ) ;
                             self.native_tool_occurrences.clear();
-                            if let Some(attempt) = &self.snapshot.attempt {
+                            if let Some(attempt) = self.snapshot.attempt.as_ref() {
                                 for slot in &attempt.foreground {
                                     if slot.message_id.as_ref() != Some(&assistant.id) {
                                         continue;
@@ -286,7 +287,7 @@ impl RuntimeClientProjection {
                                         ),
                                     ) = assistant.content.get(slot.block_index.get() as usize)
                                     {
-                                        self.native_tool_occurrences.insert(call.id.clone(),crate::observation::tool::RuntimeClientToolOccurrence {locator:crate::observation::content::CanonicalContentLocator::ByLedgerPosition {position},block_index:slot.block_index});
+                                        self . native_tool_occurrences . insert ( call . id . clone ( ) , crate :: observation :: tool :: RuntimeClientToolOccurrence { locator : crate :: observation :: content :: CanonicalContentLocator :: ByLedgerPosition { position } , block_index : slot . block_index } ) ;
                                     }
                                 }
                             }
@@ -298,14 +299,8 @@ impl RuntimeClientProjection {
                                 .filter(|slot| slot.message_id.as_ref() == Some(block.id()))
                             {
                                 let previous_locator = slot.occurrence.locator.clone();
-                                slot.occurrence.locator =
-                                    crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
-                                        position,
-                                    };
-                                slot.metadata_ref=self.content_metadata.get(&("canonical_block_metadata",format!("ledger:{position}"),slot.block_index.get(),crate::observation::content::ContentRepresentation::CanonicalJsonV1.key())).map(Arc::as_ref).cloned().or_else(||header.content.iter().find_map(|binding|match &binding.content_ref.source {
-                                    crate::observation::content::ContentSource::CanonicalMessageBlock {component:crate::observation::content::CanonicalContentComponent::BlockMetadata,block_index,..} if *block_index==slot.block_index=>Some(binding.content_ref.clone()),
-                                    _=>None,
-                                }));
+                                slot . occurrence . locator = crate :: observation :: content :: CanonicalContentLocator :: ByLedgerPosition { position , } ;
+                                slot . metadata_ref = self . content_metadata . get ( & ( "cb" , format ! ( "ledger:{position}" ) , slot . block_index . get ( ) , crate :: observation :: content :: ContentRepresentation :: CanonicalJsonV1 . key ( ) ) ) . map ( Arc :: as_ref ) . cloned ( ) . or_else ( | | header . content . iter ( ) . find_map ( | binding | match & binding . content_ref . source { crate :: observation :: content :: ContentSource :: CanonicalMessageBlock { component : crate :: observation :: content :: CanonicalContentComponent :: BlockMetadata , block_index , .. } if * block_index == slot . block_index => Some ( binding . content_ref . as_ref ( ) . clone ( ) ) , _ => None , } ) ) ;
                                 events.push(RuntimeClientEvent::ToolOccurrenceRebound {
                                     attempt_id: attempt
                                         .attempt_id
@@ -319,17 +314,21 @@ impl RuntimeClientProjection {
                         }
                     }
                     self.head_bindings
-                        .insert(block.id().clone(), header.content.clone());
+                        .insert(block.id().clone(), header.content.clone().into());
                 }
-
-                let descriptor = header.as_ref().and_then(
-                    crate::observation::transcript::RuntimeClientMessageDescriptor::from_header,
-                );
+                let descriptor = header
+                    .as_ref()
+                    .and_then(
+                        crate::observation::transcript::RuntimeClientMessageDescriptor::from_header,
+                    )
+                    .map(Arc::new);
                 let descriptor_only = header
                     .as_ref()
                     .is_some_and(|header| header.display.is_none());
                 if let Some(descriptor) = descriptor.as_ref() {
-                    self.snapshot.message_descriptors.push(descriptor.clone());
+                    self.snapshot
+                        .message_descriptors
+                        .push_back(Arc::clone(descriptor));
                     if self.snapshot.message_descriptors.len()
                         > super::super::checkpoint::CHECKPOINT_NATIVE_HEAD_ITEMS
                     {
@@ -365,7 +364,7 @@ impl RuntimeClientProjection {
                         events.push(RuntimeClientEvent::MessageDescriptorCommitted {
                             attempt_id,
                             descriptor,
-                            head: self.snapshot.message_descriptors.clone(),
+                            head: self.snapshot.message_descriptors.owned(),
                             transcript_cursor,
                             evicted_message_id,
                         });
@@ -375,7 +374,7 @@ impl RuntimeClientProjection {
                         events.push(RuntimeClientEvent::MessageDescriptorCommitted {
                             attempt_id: attempt_id.clone(),
                             descriptor,
-                            head: self.snapshot.message_descriptors.clone(),
+                            head: self.snapshot.message_descriptors.owned(),
                             transcript_cursor,
                             evicted_message_id: evicted_message_id.clone(),
                         });
@@ -388,8 +387,7 @@ impl RuntimeClientProjection {
                     });
                 }
                 events
-            }
-            // The three publication observations replace what used to be
+            } // The three publication observations replace what used to be
             // per-delta Event Journal facts (Issue #108). The client-facing
             // vocabulary is unchanged: a frame folds into exactly the
             // streaming event a delta used to publish, and every one of them
@@ -418,7 +416,8 @@ impl RuntimeClientProjection {
                     .in_flight = Some(InFlightAssistantMessage {
                     message_id: start.message_id.clone(),
                     blocks: Vec::new(),
-                });
+                })
+                .into();
                 vec![RuntimeClientEvent::AssistantMessageStarted {
                     attempt_id,
                     message_id: start.message_id,
@@ -426,12 +425,10 @@ impl RuntimeClientProjection {
             }
             ConversationObservation::Publication { attempt_id, frame } => {
                 self.fold_publication_frame(&attempt_id, &frame)
-            }
-            // An audit is a derived transcript item, but it is not a
+            } // An audit is a derived transcript item, but it is not a
             // canonical Message Ledger message and never becomes an
             // in-flight message. It only closes the in-flight read model of a
             // stream that will never be canonically accepted.
-
             // A composed status joins the bounded window in composition
             // order. It replaces nothing: an earlier composition is a
             // historical fact of this conversation and stays exactly where
@@ -459,7 +456,7 @@ impl RuntimeClientProjection {
                 vec![RuntimeClientEvent::AgentStatusComposed {
                     attempt_id: view.attempt_id.clone(),
                     turn: view.turn,
-                    status: view,
+                    status: Box::new(view),
                     evicted_status_message_id,
                     evicted_status_locator,
                 }]
@@ -540,14 +537,14 @@ impl RuntimeClientProjection {
                 vec![RuntimeClientEvent::PendingHeadChanged {
                     owner: owner.into(),
                     cut,
-                    head: self.snapshot.pending_interactions.clone(),
+                    head: self.snapshot.pending_interactions.owned(),
                 }]
             }
             ConversationObservation::InteractionPending { interaction, audit } => {
                 let header = interaction;
                 upsert_interaction(&mut self.snapshot.pending_interactions, header.clone());
                 let mut events = vec![RuntimeClientEvent::InteractionPending {
-                    interaction: header,
+                    interaction: Box::new(header),
                 }];
                 if let Some((audit, transcript_cursor)) = audit {
                     let audit_view =
@@ -642,7 +639,7 @@ impl RuntimeClientProjection {
                             .find(|slot| Some(&slot.occurrence) == occurrence.as_ref())
                     })
                     .and_then(|slot| slot.metadata_ref.clone());
-                if let Some(attempt) = &mut self.snapshot.attempt
+                if let Some(attempt) = self.snapshot.attempt.as_mut()
                     && attempt.attempt_id.as_ref() == Some(&attempt_id)
                     && let Some(slot) = attempt
                         .foreground
@@ -674,8 +671,7 @@ impl RuntimeClientProjection {
                     crate::events::types::SubagentOwnershipKind::Normal
                 ) {
                     return Vec::new();
-                }
-                // The registry owns both identities and lifecycle. One receipt
+                } // The registry owns both identities and lifecycle. One receipt
                 // installs this complete pair; disposable activity may only
                 // enrich this published owner state afterward.
                 let view = agent_view(&agent, &snapshot);
@@ -756,7 +752,7 @@ impl RuntimeClientProjection {
                 let capabilities = source.header();
                 self.capability_head = source.prepared_head();
                 self.install_source_frontiers(source.frontiers());
-                self.snapshot.capabilities.clone_from(&capabilities);
+                self.snapshot.capabilities = Arc::new(capabilities.clone());
                 vec![RuntimeClientEvent::CapabilityUpdated { capabilities }]
             }
             ConversationObservation::Resources {
@@ -798,10 +794,10 @@ impl RuntimeClientProjection {
                 let plugins = snapshot.root_profile().map(|profile| {
                     super::super::settings::EffectivePlugins::project(&profile.extensions)
                 });
-                self.snapshot.effective_plugins.clone_from(&plugins);
-                self.snapshot.capabilities.clone_from(&capabilities);
-                self.snapshot.resources.clone_from(&resources);
-                self.snapshot.model = model.as_deref().cloned();
+                self.snapshot.effective_plugins.replace_from(&plugins);
+                self.snapshot.capabilities = Arc::new(capabilities.clone());
+                self.snapshot.resources.replace_from(&resources);
+                self.snapshot.model = (model.as_deref().cloned()).into();
                 self.snapshot.model_status = Some(model_status);
                 self.snapshot.effective_approval_mode = approval_mode;
                 vec![RuntimeClientEvent::ResourceGenerationUpdated {
@@ -840,7 +836,7 @@ impl RuntimeClientProjection {
                     .attempt
                     .take()
                     .filter(|current| current.attempt_id.as_ref() == Some(&attempt_id));
-                self.snapshot.attempt = Some(RuntimeClientAttempt {
+                self.snapshot.attempt = (Some(RuntimeClientAttempt {
                     attempt_id: Some(attempt_id),
                     attempt_id_source: None,
                     phase: retained
@@ -850,18 +846,22 @@ impl RuntimeClientProjection {
                         }),
                     turn: 0,
                     last_usage: None,
-                    in_flight: retained
-                        .as_ref()
-                        .and_then(|current| current.in_flight.clone()),
-                    foreground: retained.map_or_else(Vec::new, |current| current.foreground),
+                    in_flight: retained.as_ref().and_then(|current| {
+                        current
+                            .in_flight
+                            .as_ref()
+                            .map(shared_attempt::SharedInFlight::owned)
+                    }),
+                    foreground: retained
+                        .map_or_else(Vec::new, |current| current.foreground.owned()),
                     model: model.inline().map(Box::new),
                     execution_settings: Some(super::super::settings::AdmittedSettings {
                         read_image_active: Some(read_image_active),
                         resource_revision,
                         approval_mode,
                     }),
-                });
-                // Admission changes frozen attempt/model authority before
+                }))
+                .into(); // Admission changes frozen attempt/model authority before
                 // execution starts. Publish that complete state at its own cut.
                 if let Some(staged) = &mut self.staged_publication {
                     staged.2 = true;
@@ -892,13 +892,13 @@ impl RuntimeClientProjection {
             ConversationObservation::SessionModelChanged { model, capability } => {
                 let capability =
                     capability.expect("model observation capability prepared outside Projection");
-                self.snapshot.capabilities = capability.header();
+                self.snapshot.capabilities = Arc::new(capability.header());
                 self.capability_head = capability.prepared_head();
                 self.install_source_frontiers(capability.frontiers());
                 let model_status = model.status();
                 let model = model.inline().map(Box::new);
                 self.install_model_frontier(model.is_some());
-                self.snapshot.model = model.as_deref().cloned();
+                self.snapshot.model = (model.as_deref().cloned()).into();
                 self.snapshot.model_status = Some(model_status);
                 vec![
                     RuntimeClientEvent::SessionModelChanged {
@@ -906,7 +906,7 @@ impl RuntimeClientProjection {
                         model_status,
                     },
                     RuntimeClientEvent::CapabilityUpdated {
-                        capabilities: self.snapshot.capabilities.clone(),
+                        capabilities: self.snapshot.capabilities.as_ref().clone(),
                     },
                 ]
             }
@@ -925,10 +925,11 @@ impl RuntimeClientProjection {
                 diagnostic,
             } => {
                 self.snapshot.durability_failure =
-                    Some(super::super::snapshot::RuntimeDurabilityFailure {
+                    (Some(super::super::snapshot::RuntimeDurabilityFailure {
                         operation: operation.clone(),
                         diagnostic: diagnostic.clone(),
-                    });
+                    }))
+                    .into();
                 vec![RuntimeClientEvent::RuntimeDurabilityFailed {
                     operation,
                     diagnostic,
@@ -1156,7 +1157,7 @@ impl RuntimeClientProjection {
             attempt_id: attempt_id.clone(),
             message_id,
             block_index,
-            call: super::super::snapshot::RuntimeClientToolCall {
+            call: Box::new(super::super::snapshot::RuntimeClientToolCall {
                 id: crate::observation::tool::inline_call_id(&call.id),
                 tool_id: crate::observation::tool::inline_tool_id(&call.tool_id),
                 name: inline_label(&call.name),
@@ -1165,7 +1166,7 @@ impl RuntimeClientProjection {
                         !value.is_null() || canonical_length.is_none_or(|length| length == 4)
                     }),
                 metadata_ref,
-            },
+            }),
         }]
     }
 

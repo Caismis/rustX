@@ -24,27 +24,11 @@ pub(crate) mod proposal;
 pub(crate) mod retry;
 pub(crate) mod structured;
 pub mod traits;
+mod transport;
 pub mod validation;
 
 pub use traits::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
-
-#[cfg(feature = "issue-387-profile")]
-pub(crate) type ProviderRequest = profile::Payload;
-#[cfg(not(feature = "issue-387-profile"))]
-pub(crate) type ProviderRequest = serde_json::Value;
-
-/// Preserves the exact final provider value; profiling observes its real serializer.
-pub(crate) fn provider_request(value: serde_json::Value) -> ProviderRequest {
-    #[cfg(feature = "issue-387-profile")]
-    {
-        profile::Payload::from(value)
-    }
-    #[cfg(not(feature = "issue-387-profile"))]
-    {
-        value
-    }
-}
 
 pub(crate) mod response_budget;

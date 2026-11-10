@@ -2,24 +2,35 @@ use super::{
     Connection, ConversationStoreError, Fact, Fragment, Leaf, Template, bounded, index, params,
     storage, weights,
 };
+#[cfg(test)]
+use crate::runtime::read_layout::FieldPreviewPolicy;
 use crate::runtime::read_layout::{
-    FieldPreviewPolicy, ObservationByteReader, SeekableObservationSource,
+    FieldMetadata, ObservationByteReader, SeekableObservationSource,
 };
-use base64::Engine as _;
 const CHUNK: u64 = 8192;
 #[path = "fact_spool.rs"]
-mod spool;
+pub(super) mod spool;
 use spool::FactSpool;
+#[path = "part_capture.rs"]
+mod part_capture;
+use part_capture::Capture;
 #[cfg(test)]
 #[path = "child_reference_tests.rs"]
 mod child_reference_tests;
+#[cfg(test)]
+#[path = "fragment_split_tests.rs"]
+mod fragment_split_tests;
 #[cfg(test)]
 #[path = "metadata_tests.rs"]
 mod metadata_tests;
 #[cfg(test)]
 #[path = "reader_tests.rs"]
 mod reader_tests;
-fn geometry(
+#[cfg(test)]
+#[path = "template_capture_tests.rs"]
+mod template_capture_tests;
+#[cfg(test)]
+pub(super) fn geometry(
     source: &SeekableObservationSource,
     path: &[String],
 ) -> Result<(u64, u64, u64), ConversationStoreError> {
@@ -91,7 +102,6 @@ fn persist_key_fact(
             nodes: 1,
             object: false,
             container: false,
-            header: base64::engine::general_purpose::STANDARD.encode(b"\"\""),
             key: None,
             name: None,
         },
@@ -104,100 +114,64 @@ fn capture_facts(
     reader: &ObservationByteReader<'_>,
     start: u64,
     end: u64,
+    mut inspect: impl FnMut(&FieldMetadata<'_>) -> Result<(), ConversationStoreError>,
 ) -> Result<(u64, u64), ConversationStoreError> {
     let mut failure = None;
-    let mut max_path = 0_u64;
-    let mut max_key_path = 0_u64;
-    let result = source.visit_field_metadata(start, end, |field, value| {
-        let result = (|| {
-            let path = field.path;
-            let key_span = field.key_span;
-            let field_start = field.start;
-            let field_end = field.end;
-            max_path = max_path.max(field.encoded_path.len() as u64);
-            let header = crate::observation::bounded::bounded_bytes(value, 16384)
-                .unwrap_or_else(|| b"null".to_vec());
-            let span = field_end - field_start;
-            let nodes = if span > 16384 {
-                33
-            } else if field.recursive_nodes <= 32 {
-                // The full preview just validated this complete bounded subtree.
-                field.recursive_nodes
-            } else {
-                // A truncated preview does not validate the entire subtree's
-                // serde depth/numeric limits. Preserve that bounded validation.
-                super::super::original_node_count(&source_bytes(reader, field_start, field_end)?)?
-            };
-            let fact = Fact {
-                path: path.to_vec(),
-                parent: field.parent.map(|(path, _, _)| path.to_vec()),
-                ordinal: field.parent.map(|(_, _, ordinal)| ordinal),
-                start: field_start - start,
-                end: field_end - start,
-                children: field.children,
-                nodes,
-                object: field.object,
-                container: field.container,
-                header: base64::engine::general_purpose::STANDARD.encode(header),
-                key: None,
-                name: key_span
-                    .filter(|(start, end)| end - start <= 256)
-                    .map(|_| {
-                        field
-                            .key
-                            .map(str::to_owned)
-                            .ok_or_else(|| storage("original field key unavailable"))
-                    })
-                    .transpose()?,
-            };
-            let fact = if path.last().is_some_and(|part| part.starts_with('@')) {
-                Fact {
-                    key: Some(
-                        key_span
-                            .map(|(start, end)| end - start)
-                            .ok_or_else(|| storage("original aliased key span unavailable"))?,
-                    ),
-                    ..fact
-                }
-            } else {
-                fact
-            };
-            persist_encoded_fact(
-                spool,
-                &fact,
-                field.encoded_path,
-                field.parent.map(|(_, encoded, ordinal)| (encoded, ordinal)),
-            )?;
-            if let Some((key_start, key_end)) = key_span
-                && path.last().is_some_and(|part| part.starts_with('@'))
-            {
-                max_key_path = max_key_path.max(persist_key_fact(
-                    spool,
-                    path,
-                    key_start - start,
-                    key_end - start,
-                )?);
+    let mut capture = Capture::default();
+    let result = source.visit_field_geometry(|field| {
+        let result = inspect(&field).and_then(|()| {
+            if field.start < start || field.end > end {
+                return Ok(());
             }
-            Ok(())
-        })();
+            capture.field(spool, reader, &field, start)
+        });
         result.map_err(|error| {
             failure = Some(error);
             "composed fact capture failed"
         })
     });
     result.map_err(|error| failure.unwrap_or_else(|| storage(error)))?;
-    Ok((max_path, max_key_path))
+    Ok((capture.max_path, capture.max_key_path))
 }
-fn persist_part(
+
+pub(super) fn persist_part(
     connection: &Connection,
     source: &SeekableObservationSource,
     reader: &ObservationByteReader<'_>,
     start: u64,
     end: u64,
 ) -> Result<Fragment, ConversationStoreError> {
+    persist_part_inspecting(connection, source, reader, start, end, |_| Ok(()))
+}
+pub(super) fn persist_part_inspecting(
+    connection: &Connection,
+    source: &SeekableObservationSource,
+    reader: &ObservationByteReader<'_>,
+    start: u64,
+    end: u64,
+    inspect: impl FnMut(&FieldMetadata<'_>) -> Result<(), ConversationStoreError>,
+) -> Result<Fragment, ConversationStoreError> {
     let mut spool = FactSpool::new(connection);
-    let (max_path, max_key_path) = capture_facts(&mut spool, source, reader, start, end)?;
-    let fields = spool.finish()?;
+    let (max_path, max_key_path) = capture_facts(&mut spool, source, reader, start, end, inspect)?;
+    finish_part(
+        connection,
+        reader,
+        start,
+        end,
+        spool.finish()?,
+        max_path,
+        max_key_path,
+    )
+}
+fn finish_part(
+    connection: &Connection,
+    reader: &ObservationByteReader<'_>,
+    start: u64,
+    end: u64,
+    fields: index::Reference,
+    max_path: u64,
+    max_key_path: u64,
+) -> Result<Fragment, ConversationStoreError> {
     let mut builder = index::Builder::new(connection);
     let mut offset = start;
     while offset < end {
@@ -250,7 +224,7 @@ fn persist_encoded_fact(
             "request field locator exceeds bound".into(),
         ));
     }
-    let bytes = bounded(fact, 40960)?;
+    let bytes = super::record::encode(fact, 40960)?;
     let field = format!("F{encoded}");
     spool.push(field, bytes)?;
     if let Some((parent, ordinal)) = parent {
@@ -262,6 +236,7 @@ fn persist_encoded_fact(
     }
     Ok(())
 }
+#[cfg(test)]
 pub(super) fn scalar(
     connection: &Connection,
     source: &SeekableObservationSource,
@@ -360,12 +335,76 @@ fn template_node_count(
         Ok(33)
     }
 }
+/// The replaced field is top-level, so preorder finishes every prefix subtree
+/// before its header. Finish that spool before starting the suffix: both use
+/// the fixed bounded TEMP workspace, never two simultaneously spilled owners.
+fn persist_provenance_parts(
+    connection: &Connection,
+    source: &SeekableObservationSource,
+    reader: &ObservationByteReader<'_>,
+    total: u64,
+    include_prefix: bool,
+) -> Result<(Option<Fragment>, Fragment), ConversationStoreError> {
+    let mut prefix_spool = include_prefix.then(|| FactSpool::new(connection));
+    let mut prefix_capture = Capture::default();
+    let mut prefix = None;
+    let mut suffix_spool = FactSpool::new(connection);
+    let mut suffix_capture = Capture::default();
+    let mut hole_end = None;
+    let mut failure = None;
+    let result = source.visit_field_geometry(|field| {
+        let result = (|| {
+            if field.path.is_empty() {
+                return Ok(());
+            }
+            if field.path == ["provenance_source"] {
+                if hole_end.is_some() {
+                    return Err(storage("composed producer hole repeats"));
+                }
+                if let Some(spool) = prefix_spool.take() {
+                    prefix = Some(finish_part(
+                        connection,
+                        reader,
+                        0,
+                        field.start,
+                        spool.finish()?,
+                        prefix_capture.max_path,
+                        prefix_capture.max_key_path,
+                    )?);
+                }
+                hole_end = Some(field.end);
+            } else if let Some(start) = hole_end {
+                if field.start >= start {
+                    suffix_capture.field(&mut suffix_spool, reader, &field, start)?;
+                }
+            } else if let Some(spool) = prefix_spool.as_mut() {
+                prefix_capture.field(spool, reader, &field, 0)?;
+            }
+            Ok(())
+        })();
+        result.map_err(|error| {
+            failure = Some(error);
+            "composed fact capture failed"
+        })
+    });
+    result.map_err(|error| failure.unwrap_or_else(|| storage(error)))?;
+    let start = hole_end.ok_or_else(|| storage("composed producer field unavailable"))?;
+    let suffix = finish_part(
+        connection,
+        reader,
+        start,
+        total,
+        suffix_spool.finish()?,
+        suffix_capture.max_path,
+        suffix_capture.max_key_path,
+    )?;
+    Ok((prefix, suffix))
+}
 fn capture_suffix(
     connection: &Connection,
     value: &serde_json::Value,
 ) -> Result<Fragment, ConversationStoreError> {
     let source = SeekableObservationSource::new(value).map_err(storage)?;
-    let (_, end, _) = geometry(&source, &["provenance_source".into()])?;
     let total = source
         .read(&[], 0, 1)
         .map_err(|error| storage(error.to_string()))?
@@ -373,14 +412,48 @@ fn capture_suffix(
     let reader = source
         .byte_reader()
         .map_err(|error| storage(error.to_string()))?;
-    persist_part(connection, &source, &reader, end, total)
+    persist_provenance_parts(connection, &source, &reader, total, false).map(|(_, suffix)| suffix)
+}
+/// These values live only until the newly built leaf is consumed. They are
+/// never retained in the selected-input owner or across requests.
+pub(super) struct CapturedLeaf {
+    pub(super) leaf: Leaf,
+    pub(super) templates: Vec<CapturedTemplate>,
+}
+pub(super) struct CapturedTemplate {
+    template: Template,
+    encoded: Vec<u8>,
+}
+fn store_templates(
+    connection: &Connection,
+    templates: Vec<Template>,
+    variants: Vec<u8>,
+) -> Result<CapturedLeaf, ConversationStoreError> {
+    let mut captured = CapturedLeaf {
+        leaf: Leaf {
+            variants,
+            templates: Vec::with_capacity(templates.len()),
+        },
+        templates: Vec::with_capacity(templates.len()),
+    };
+    for template in templates {
+        let encoded = super::record::encode(&template, 65536)?;
+        captured
+            .leaf
+            .templates
+            .push(index::store_blob(connection, &encoded)?);
+        captured
+            .templates
+            .push(CapturedTemplate { template, encoded });
+    }
+    Ok(captured)
 }
 pub(super) fn capture(
     connection: &Connection,
     scope: &crate::runtime::identity::ConversationId,
     message: &crate::model::ModelInputMessage,
     frozen: &crate::model::projected::FrozenModelInput,
-) -> Result<Leaf, ConversationStoreError> {
+) -> Result<CapturedLeaf, ConversationStoreError> {
     let (mut view, header) = super::super::input_view(connection, scope, message, frozen)?;
     let provenance_bytes =
         super::super::provenance::Raw::frozen(frozen, &view.provenance).encoded_bytes()?;
@@ -393,7 +466,6 @@ pub(super) fn capture(
         frozen,
     })
     .map_err(storage)?;
-    let (hole_start, hole_end, _) = geometry(&source, &["provenance_source".into()])?;
     let total = source
         .read(&[], 0, 1)
         .map_err(|error| storage(error.to_string()))?
@@ -401,8 +473,8 @@ pub(super) fn capture(
     let reader = source
         .byte_reader()
         .map_err(|error| storage(error.to_string()))?;
-    let prefix = persist_part(connection, &source, &reader, 0, hole_start)?;
-    let suffix = persist_part(connection, &source, &reader, hole_end, total)?;
+    let (prefix, suffix) = persist_provenance_parts(connection, &source, &reader, total, true)?;
+    let prefix = prefix.ok_or_else(|| storage("composed producer prefix unavailable"))?;
     let (header_prefix, header_suffix) = header_parts(&minimum)?;
     let template = Template {
         prefix,
@@ -426,16 +498,10 @@ pub(super) fn capture(
             template.header_suffix.clone(),
         )
     {
-        return Ok(Leaf {
-            variants: vec![0; weights::CLASSES],
-            templates: vec![store_template(connection, &template)?],
-        });
+        return store_templates(connection, vec![template], vec![0; weights::CLASSES]);
     }
     let mut templates = vec![template];
-    let mut leaf = Leaf {
-        variants: vec![0],
-        templates: Vec::new(),
-    };
+    let mut variants = vec![0];
     for class in 1..weights::CLASSES {
         let (sequence, rank) = weights::representative(class)?;
         view.provenance_source = Some(super::super::provenance_source(
@@ -448,7 +514,7 @@ pub(super) fn capture(
         if let Some(index) = templates.iter().position(|template| {
             template.header_prefix == parts.0 && template.header_suffix == parts.1
         }) {
-            leaf.variants
+            variants
                 .push(u8::try_from(index).map_err(|_| storage("native variant count invalid"))?);
             continue;
         }
@@ -457,7 +523,7 @@ pub(super) fn capture(
         } else {
             templates[0].suffix.clone()
         };
-        leaf.variants.push(
+        variants.push(
             u8::try_from(templates.len()).map_err(|_| storage("native variant count invalid"))?,
         );
         templates.push(Template {
@@ -470,10 +536,7 @@ pub(super) fn capture(
             nodes: 33,
         });
     }
-    for template in templates {
-        leaf.templates.push(store_template(connection, &template)?);
-    }
-    Ok(leaf)
+    store_templates(connection, templates, variants)
 }
 pub(super) fn fact(
     connection: &Connection,
@@ -481,9 +544,7 @@ pub(super) fn fact(
     path: &[String],
 ) -> Result<Option<Fact>, ConversationStoreError> {
     index::get(connection, &fragment.fields, &field_key(path)?)?
-        .map(|bytes| {
-            serde_json::from_slice(&bytes).map_err(|_| storage("fragment field metadata malformed"))
-        })
+        .map(|bytes| super::record::decode(&bytes))
         .transpose()
 }
 pub(super) fn child(
@@ -526,10 +587,15 @@ pub(super) fn bytes(
         usize::try_from(end - start).map_err(|_| storage("fragment byte range exceeds bound"))?,
     );
     let mut offset = start;
-    while offset < end {
+    if start == end {
+        return Ok(output);
+    }
+    let keys = (start / CHUNK..=(end - 1) / CHUNK)
+        .map(|chunk| chunk_key(chunk * CHUNK))
+        .collect::<Vec<_>>();
+    for bytes in index::get_many(connection, &fragment.bytes, &keys)? {
         let chunk_start = offset / CHUNK * CHUNK;
-        let bytes = index::get(connection, &fragment.bytes, &chunk_key(chunk_start))?
-            .ok_or_else(|| storage("original fragment segment unavailable"))?;
+        let bytes = bytes.ok_or_else(|| storage("original fragment segment unavailable"))?;
         let expected = (fragment.length - chunk_start).min(CHUNK);
         if bytes.len() as u64 != expected {
             return Err(storage("original fragment segment length differs"));
@@ -546,19 +612,55 @@ pub(super) fn bytes(
     Ok(output)
 }
 
+#[cfg(test)]
 pub(super) fn store_template(
     connection: &Connection,
     template: &Template,
 ) -> Result<index::Hash, ConversationStoreError> {
-    index::store_blob(connection, &bounded(template, 65536)?)
+    index::store_blob(connection, &super::record::encode(template, 65536)?)
 }
 pub(super) fn load_template(
     connection: &Connection,
     digest: index::Hash,
 ) -> Result<Template, ConversationStoreError> {
-    let bytes = index::load_blob(connection, digest)?;
-    let template: Template = serde_json::from_slice(&bytes)
-        .map_err(|_| storage("composed message template malformed"))?;
+    load_template_reusing(connection, digest, None)
+}
+pub(super) fn load_template_reusing(
+    connection: &Connection,
+    digest: index::Hash,
+    captured: Option<CapturedTemplate>,
+) -> Result<Template, ConversationStoreError> {
+    #[cfg(test)]
+    super::WORK.with(|work| {
+        let mut value = work.get();
+        value.template_loads += 1;
+        work.set(value);
+    });
+    let (bytes, reused) = index::load_blob_reusing(
+        connection,
+        digest,
+        captured.as_ref().map(|value| value.encoded.as_slice()),
+    )?;
+    let template: Template = match captured {
+        Some(captured) if reused => {
+            #[cfg(test)]
+            super::WORK.with(|work| {
+                let mut value = work.get();
+                value.template_reuses += 1;
+                work.set(value);
+            });
+            captured.template
+        }
+        _ => {
+            #[cfg(test)]
+            super::WORK.with(|work| {
+                let mut value = work.get();
+                value.template_decodes += 1;
+                work.set(value);
+            });
+            super::record::decode(&bytes)?
+        }
+    };
     if template.header_prefix.len() + template.header_suffix.len() > 16384
         || template.children > 64
         || template.prefix.length > super::SAFE

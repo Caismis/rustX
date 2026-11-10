@@ -1,0 +1,9 @@
+{
+  "head": "86bf61a3050dbf85818386d7242d141c59785439",
+  "helpers": {
+    "run-native-resume.py": "6c6ae0a600e75adcad2c4e586c46a7ef3ece52d6f15e71a4c0c3a68395e773f0",
+    "audit-native.py": "4ca1c4c1b3ce1fba7d45058736f1b608ff40299a9b44d2dadae4ca57a3bbeced",
+    "run-deep-wait.py": "3f56527c3ae97829d491b8da2775d7b1b829944bdc03392ea13f60670c3f6980"
+  },
+  "reason": "Native supplements stopped before any product due to expanded compiler preflight. Resume once quiet, never rerun completed products."
+}

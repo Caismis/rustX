@@ -34,7 +34,7 @@ impl CanonicalMessageRef {
     /// Verify the exact immutable dependency, including provenance metadata.
     #[must_use]
     pub fn matches(&self, message: &MessageBlock) -> bool {
-        Self::of(&self.conversation_id, message) == *self
+        self.message_id == *message.id() && Self::of(&self.conversation_id, message) == *self
     }
 }
 pub(crate) struct DigestWriter<'a>(pub(crate) &'a mut sha2::Sha256);
@@ -106,7 +106,7 @@ impl From<&MessageBlock> for ProjectedMessage {
             MessageBlock::Tool(m) => Self::Tool {
                 tool_call_id: m.tool_call_id.clone(),
                 tool_id: m.tool_id.clone(),
-                result: m.result.clone(),
+                result: m.result.as_ref().clone(),
             },
         }
     }

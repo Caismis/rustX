@@ -4,6 +4,7 @@ use super::{Connection, ConversationStoreError, OptionalExtension, params, stora
 use crate::durable::observation::{
     ObservationReadCut, ObservationValueChunk, RequestObservationField, RequestObservationPage,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 const TABLE: &str = "state_observation_fields";
 fn kind(domain: &str) -> Result<&'static str, ConversationStoreError> {
     match domain {
@@ -27,19 +28,19 @@ pub(super) fn goal(
             "DELETE FROM state_observation_fields WHERE source_id LIKE 'goal/%'",
             [],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     connection
         .execute(
             "DELETE FROM content_segments WHERE source_kind='observation_goal'",
             [],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     connection
         .execute(
             "DELETE FROM content_frontiers WHERE source_kind='observation_goal'",
             [],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let id = goal_key(&value.reference);
     super::observation_request::index_state(
         connection,
@@ -54,7 +55,7 @@ pub(super) fn goal(
             "UPDATE goal_state SET observation_source_id=?1 WHERE singleton=1",
             [&id],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 pub(super) fn message(
@@ -65,17 +66,17 @@ pub(super) fn message(
         return Ok(());
     };
     let ledger: u64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT position FROM message_ledger WHERE message_id=?1",
             [message.id().as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let id = format!("todos/{ledger}");
     let summary = todo_summary(value, ledger)?;
     let header = crate::observation::bounded::bounded_bytes(&summary, 16_384)
         .ok_or_else(|| storage("native Todo header exceeds bound"))?;
-    connection.execute("INSERT INTO state_observation_sources(domain,source_id,ledger_position,todo_header) VALUES('todos',?1,?2,?3)",params![id,ledger,header]).map_err(|error|storage(error.to_string()))?;
+    connection.execute("INSERT INTO state_observation_sources(domain,source_id,ledger_position,todo_header) VALUES('todos',?1,?2,?3)",params![id,ledger,header]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     super::observation_request::index_state(
         connection,
         "observation_todo",
@@ -157,10 +158,10 @@ pub(super) fn todo_head(
     first: u64,
     last: u64,
 ) -> Result<Option<crate::durable::NativeTodoObservation>, ConversationStoreError> {
-    let bytes: Option<Option<Vec<u8>>> = connection.query_row(
+    let bytes: Option<Option<Vec<u8>>> = connection.query_row_cached(
         "SELECT s.todo_header FROM message_ledger m INDEXED BY message_ledger_todo_idx LEFT JOIN state_observation_sources s ON s.domain='todos' AND s.ledger_position=m.position WHERE m.native_todo=1 AND m.position>=?1 AND m.position<=?2 ORDER BY m.position DESC LIMIT 1",
         params![first,last], |row| row.get(0),
-    ).optional().map_err(|error| storage(error.to_string()))?;
+    ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     match bytes {
         None => Ok(None),
         Some(None) => Err(storage("native Todo observation header unavailable")),
@@ -181,7 +182,7 @@ pub(super) fn event(
             | RuntimeEvent::CompactionFailed { .. }
             | RuntimeEvent::CompactionCompleted { .. }
     ) {
-        connection.execute("INSERT INTO state_observation_sources(domain,source_id,journal_sequence) VALUES('context',?1,?2)",params![format!("context/{}",event.sequence),event.sequence]).map_err(|error|storage(error.to_string()))?;
+        connection.execute("INSERT INTO state_observation_sources(domain,source_id,journal_sequence) VALUES('context',?1,?2)",params![format!("context/{}",event.sequence),event.sequence]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     }
     match &event.event {
         RuntimeEvent::Goal {
@@ -193,7 +194,7 @@ pub(super) fn event(
                     "UPDATE goal_state SET observation_sequence=?1 WHERE singleton=1",
                     [event.sequence],
                 )
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         }
         RuntimeEvent::CompactionStarted { .. } => {
             super::observation_request::index_state(

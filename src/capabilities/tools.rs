@@ -147,7 +147,10 @@ impl AvailableToolCatalog {
 
     /// Creates an available catalog in deterministic registration order.
     #[must_use]
-    pub(crate) fn new(registrations: Vec<ToolRegistration>) -> Self {
+    pub(crate) fn new(mut registrations: Vec<ToolRegistration>) -> Self {
+        for registration in &mut registrations {
+            registration.bind_schema();
+        }
         Self {
             tools: registrations
                 .iter()
@@ -486,7 +489,8 @@ mod tests {
             input_schema: serde_json::json!({
                 "type": "object",
                 "additionalProperties": false
-            }),
+            })
+            .into(),
             execution_policy: crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
             approval_policy: crate::tools::types::ToolApprovalPolicy::Never,

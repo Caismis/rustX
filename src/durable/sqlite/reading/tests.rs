@@ -213,7 +213,7 @@ pub(super) fn adopt(
     text: &str,
     attempt: Option<&str>,
 ) {
-    use crate::durable::inbox::InboundDraft;
+    use crate::durable::InboundDraft;
     let accepted = store
         .accept_inbound(InboundDraft {
             message_id: None,
@@ -612,7 +612,7 @@ fn turn_locations_appear_once_native_work_commits() {
 
 #[test]
 fn pending_edits_and_removals_advance_the_mutation_epoch_without_moving_turns() {
-    use crate::durable::inbox::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
+    use crate::durable::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
     use crate::message::types::{InboundKind, UserContentBlock, UserSource};
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     start(&store, "a");
@@ -792,7 +792,7 @@ fn distant_source_message_is_one_bounded_window_at_its_native_cursor() {
 
 #[test]
 fn message_windows_reject_foreign_future_and_mutated_cuts() {
-    use crate::durable::inbox::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
+    use crate::durable::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     store
         .initialize_lineage(&LineageSeed::history(vec![message("source", "retained")]))
@@ -1035,11 +1035,25 @@ fn historical_opening_prompt_lookup_ignores_unrelated_future_turns() {
                     .unwrap();
                 assert_eq!(rows.len(), usize::from(!expected.is_empty()));
                 bounded.push(query.get_status(StatementStatus::VmStep));
-                let old = format!("SELECT m.value FROM events e INDEXED BY events_kind_idx,json_each(e.event_json,'$.event.message_ids') m
+                let old = format!(
+                    concat!(
+                        "SELECT m.value FROM events e INDEXED BY events_kind_idx,json_each(e.event_json,'$.event.message_ids') m
                     JOIN message_ledger l ON l.message_id=m.value
-                    WHERE json_extract(e.event_json,'$.event.type')='inbound_turn_adopted' AND e.sequence<=?3
-                    AND e.sequence>(SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx WHERE sequence<?2 AND json_extract(event_json,'$.event.type')='attempt_started')
-                    AND (e.attempt_id=?1 OR (e.attempt_id IS NULL AND e.sequence<?2)) AND {} ORDER BY e.sequence,CAST(m.key AS INTEGER)", crate::durable::sqlite::reading::OPENING_PROMPT_FILTER);
+                    WHERE ",
+                        crate::durable::sqlite::event_kind_key::sql!(
+                            "json_extract(e.event_json,'$.event.type')"
+                        ),
+                        "=x'0001'",
+                        " AND e.sequence<=?3
+                    AND e.sequence>(SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx WHERE sequence<?2 AND ",
+                        crate::durable::sqlite::event_kind_key::sql!(
+                            "json_extract(event_json,'$.event.type')"
+                        ),
+                        "=x'0002'",
+                        ")\n                    AND (e.attempt_id=?1 OR (e.attempt_id IS NULL AND e.sequence<?2)) AND {} ORDER BY e.sequence,CAST(m.key AS INTEGER)"
+                    ),
+                    crate::durable::sqlite::reading::OPENING_PROMPT_FILTER
+                );
                 let mut legacy = connection.prepare(&old).unwrap();
                 let legacy_rows = legacy
                     .query_map(
@@ -1161,7 +1175,7 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
     let id = ConversationId::generate();
     {
         let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
-        assert_eq!(crate::durable::sqlite::SQLITE_SCHEMA_VERSION, 86);
+        assert_eq!(crate::durable::sqlite::SQLITE_SCHEMA_VERSION, 106);
         store.lock().unwrap().execute_batch("ALTER TABLE bootstrap_identity DROP COLUMN inherited_transcript_through; UPDATE rustx_store SET schema_version=56 WHERE id=1").unwrap();
     }
     assert!(matches!(

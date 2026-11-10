@@ -236,8 +236,7 @@ impl ModelRequest {
     }
 
     pub(crate) fn semantic_input_fingerprint_with_messages(&self, messages: &str) -> String {
-        use sha2::{Digest, Sha256};
-        let bytes = serde_json::to_vec(&(
+        fingerprint_metadata(&(
             messages,
             &self.images,
             &self.effective_system_prompt,
@@ -246,9 +245,16 @@ impl ModelRequest {
             &self.continuation,
             &self.response_schema,
         ))
-        .expect("semantic input serializes");
-        format!("{:x}", Sha256::digest(bytes))
     }
+}
+
+// The tuple is already in durable fingerprint order. Serialize directly into
+// the digest, including opaque values whose key order is part of the bytes.
+pub(super) fn fingerprint_metadata(fields: &impl Serialize) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    serde_json::to_writer(&mut digest, fields).expect("semantic input serializes");
+    format!("{:x}", digest.finalize())
 }
 
 /// Ordered semantic content identity, independent of canonical/projected/request occurrence IDs.
@@ -267,6 +273,22 @@ pub fn semantic_messages_fingerprint<'a>(
 }
 
 pub(crate) fn append_semantic_message(digest: &mut sha2::Sha256, message: &ModelInputMessage) {
+    append_semantic_view(digest, &message.view());
+}
+
+pub(crate) fn semantic_view_fingerprint(
+    view: &crate::model::projected::ModelMessageView<'_>,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    append_semantic_view(&mut digest, view);
+    format!("{:x}", digest.finalize())
+}
+
+fn append_semantic_view(
+    digest: &mut sha2::Sha256,
+    view: &crate::model::projected::ModelMessageView<'_>,
+) {
     use sha2::Digest;
     struct SemanticWriter<'a>(&'a mut sha2::Sha256);
     impl std::io::Write for SemanticWriter<'_> {
@@ -280,39 +302,192 @@ pub(crate) fn append_semantic_message(digest: &mut sha2::Sha256, message: &Model
             Ok(())
         }
     }
-    let value = match message.view() {
-        crate::model::projected::ModelMessageView::User(content) => {
-            serde_json::json!({"role":"user", "content":content})
-        }
-        crate::model::projected::ModelMessageView::Assistant(content) => {
-            serde_json::json!({"role":"assistant", "content":content})
-        }
-        crate::model::projected::ModelMessageView::Tool(call_id, result) => {
-            match result.model_visible_content() {
-                Ok(crate::tools::types::ModelToolResultContent::Parts(parts)) => {
-                    serde_json::json!({"role":"tool", "call_id":call_id, "parts":parts})
+    serde_json::to_writer(SemanticWriter(&mut *digest), &SemanticView(view))
+        .expect("semantic input serializes");
+    digest.update([0]);
+}
+
+// Match the insertion order of the original json! objects. preserve_order is
+// explicit in Cargo.toml because this byte representation is durable evidence.
+struct SemanticView<'a>(&'a crate::model::projected::ModelMessageView<'a>);
+
+impl Serialize for SemanticView<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use crate::model::projected::ModelMessageView;
+        use crate::tools::types::ModelToolResultContent;
+        use serde::ser::SerializeMap;
+
+        let mut object = serializer.serialize_map(None)?;
+        match self.0 {
+            ModelMessageView::User(content) => {
+                object.serialize_entry("role", &"user")?;
+                object.serialize_entry("content", content)?;
+            }
+            ModelMessageView::Assistant(content) => {
+                object.serialize_entry("role", &"assistant")?;
+                object.serialize_entry("content", content)?;
+            }
+            ModelMessageView::Tool(call_id, result) => {
+                object.serialize_entry("role", &"tool")?;
+                object.serialize_entry("call_id", call_id)?;
+                match result.model_visible_content() {
+                    Ok(ModelToolResultContent::Parts(parts)) => {
+                        object.serialize_entry("parts", &parts)?;
+                    }
+                    Ok(ModelToolResultContent::Text(text)) => {
+                        object.serialize_entry("text", &text)?;
+                        object.serialize_entry("media", &[(); 0])?;
+                    }
+                    Err(_) => object.serialize_entry("unsupported_content", &true)?,
                 }
-                Ok(crate::tools::types::ModelToolResultContent::Text(text)) => {
-                    // Text-only identities remain unchanged; both consumers
-                    // use the same normalized bounded Tool semantic content.
-                    serde_json::json!({"role":"tool", "call_id":call_id, "text":text, "media":[]})
-                }
-                Err(_) => {
-                    serde_json::json!({"role":"tool", "call_id":call_id, "unsupported_content":true})
+            }
+            ModelMessageView::RequestOnly(context) => {
+                let role = if context.is_assistant() {
+                    "assistant"
+                } else {
+                    "user"
+                };
+                object.serialize_entry("role", &role)?;
+                match context {
+                    super::input::RequestOnlyModelContext::AuxiliaryQuestion { text }
+                    | super::input::RequestOnlyModelContext::AuxiliaryAnswer { text } => {
+                        object.serialize_entry("text", text)?;
+                    }
+                    super::input::RequestOnlyModelContext::UnresolvedOutputCarryover(carryover) => {
+                        object.serialize_entry("text", &carryover.render())?;
+                    }
                 }
             }
         }
-        crate::model::projected::ModelMessageView::RequestOnly(context) => {
-            serde_json::json!({"role": if context.is_assistant() { "assistant" } else { "user" }, "text":context.render()})
-        }
-    };
-    serde_json::to_writer(SemanticWriter(&mut *digest), &value).expect("semantic input serializes");
-    digest.update([0]);
+        object.end()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{ModelProtocol, ModelUsage, UsageDetails};
+    #[test]
+    fn borrowed_fingerprint_bytes_match_the_original_value_representation() {
+        use crate::message::content::{FileReference, ImageReference, TextBlock, UploadedFileRef};
+        use crate::message::types::{AssistantContentBlock, ReasoningBlock, UserContentBlock};
+        use crate::model::input::RequestOnlyModelContext;
+        use crate::model::projected::ModelMessageView;
+        use crate::runtime::continuation::{
+            OpenAiResponsesContinuation, ProviderContinuationState,
+        };
+        use crate::runtime::identity::{ArtifactId, ToolCallId, ToolId};
+        use crate::tools::types::{
+            ModelToolResultContent, ToolCall, ToolExecutionResult, ToolResultContent,
+        };
+        use serde_json::json;
+
+        let image = ImageReference {
+            artifact_id: ArtifactId::new("art-image"),
+            alt: Some("水\n\"".into()),
+        };
+        let file = FileReference {
+            artifact_id: ArtifactId::new("art-file"),
+            name: Some("doc".into()),
+            mime_type: Some("text/plain".into()),
+            description: Some("details".into()),
+        };
+        let user = [
+            UserContentBlock::UploadedFile(UploadedFileRef {
+                batch_id: "batch".into(),
+                name: "file.txt".into(),
+            }),
+            UserContentBlock::Text(TextBlock {
+                text: "hi\n\u{1b}水".into(),
+            }),
+            UserContentBlock::Image(image.clone()),
+            UserContentBlock::File(file.clone()),
+        ];
+        let assistant = [
+            AssistantContentBlock::Reasoning(ReasoningBlock {
+                origin: None,
+                text: Some("reason".into()),
+                provider_state: Some(ProviderContinuationState::OpenAiResponses(
+                    OpenAiResponsesContinuation::Stateless {
+                        items: std::sync::Arc::new(vec![json!({"z": [-0.0, 1.25], "a": "\t"})]),
+                    },
+                )),
+            }),
+            AssistantContentBlock::ToolCall(ToolCall {
+                id: ToolCallId::new("call-id"),
+                tool_id: ToolId::new("tool-id"),
+                name: "tool".into(),
+                arguments: json!({"z": 9_007_199_254_740_993_u64, "a": [true, 1e-12]}),
+            }),
+            AssistantContentBlock::Image(image.clone()),
+        ];
+        let temporary = RequestOnlyModelContext::AuxiliaryAnswer {
+            text: "reply\n水".into(),
+        };
+        for (view, expected) in [
+            (
+                ModelMessageView::User(&user),
+                json!({"role": "user", "content": user}),
+            ),
+            (
+                ModelMessageView::Assistant(&assistant),
+                json!({"role": "assistant", "content": assistant}),
+            ),
+            (
+                ModelMessageView::RequestOnly(&temporary),
+                json!({"role": "assistant", "text": temporary.render()}),
+            ),
+        ] {
+            assert_eq!(
+                serde_json::to_vec(&super::SemanticView(&view)).unwrap(),
+                serde_json::to_vec(&expected).unwrap()
+            );
+        }
+
+        let id = ToolCallId::new("call-id");
+        for content in [
+            vec![ToolResultContent::Json {
+                value: json!({"z": 1, "a": 2}),
+            }],
+            vec![ToolResultContent::Image(image)],
+            vec![ToolResultContent::File(file)],
+        ] {
+            let result: ToolExecutionResult = serde_json::from_value(json!({
+                "status": {"type": "success"}, "content": content, "duration_ms": 0
+            }))
+            .unwrap();
+            let expected = match result.model_visible_content() {
+                Ok(ModelToolResultContent::Parts(parts)) => {
+                    json!({"role": "tool", "call_id": id, "parts": parts})
+                }
+                Ok(ModelToolResultContent::Text(text)) => {
+                    json!({"role": "tool", "call_id": id, "text": text, "media": []})
+                }
+                Err(_) => json!({"role": "tool", "call_id": id, "unsupported_content": true}),
+            };
+            let view = ModelMessageView::Tool(&id, &result);
+            assert_eq!(
+                serde_json::to_vec(&super::SemanticView(&view)).unwrap(),
+                serde_json::to_vec(&expected).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn streaming_metadata_digest_matches_the_original_buffered_digest() {
+        use serde_json::json;
+        use sha2::Digest;
+
+        let metadata = (
+            "messages",
+            json!({"z": "水\n", "a": [1.25, 9_007_199_254_740_993_u64]}),
+        );
+        let before = sha2::Sha256::digest(serde_json::to_vec(&metadata).unwrap());
+        assert_eq!(
+            super::fingerprint_metadata(&metadata),
+            format!("{before:x}")
+        );
+    }
+
     /// Protocol discriminators are stable strings, never Rust debug output.
     #[test]
     fn protocol_discriminators_are_stable() {
@@ -348,5 +523,91 @@ mod tests {
         let json = serde_json::to_string(&usage).expect("serialize usage");
         let decoded: ModelUsage = serde_json::from_str(&json).expect("deserialize usage");
         assert_eq!(decoded, usage);
+    }
+}
+
+#[cfg(test)]
+mod continuation_work_tests {
+    use super::*;
+    use crate::message::types::{
+        AssistantContentBlock, AssistantMessageBlock, MessageBlock, ReasoningBlock,
+    };
+    use crate::model::projected::CanonicalMessageRef;
+    use crate::model::selected_input::take_hash_work;
+    use crate::runtime::continuation::{
+        AcceptedOutputContinuationSource, AnthropicContinuation, ProviderContinuationState,
+    };
+    use crate::runtime::identity::{ConversationId, MessageId, RequestId};
+
+    #[test]
+    fn continuation_hashes_only_identity_candidates_and_checks_the_prefix() {
+        let mut request = crate::scripted_suites::common::simple_request(
+            ModelProtocol::AnthropicMessages,
+            "fixture",
+            "prefix",
+        );
+        let state = ProviderContinuationState::Anthropic(AnthropicContinuation {
+            opaque: serde_json::json!({"type":"redacted_thinking","data":"a".repeat(8192)}).into(),
+        });
+        let output = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("accepted"),
+            content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                origin: None,
+                text: None,
+                provider_state: Some(state.clone()),
+            })],
+        });
+        let scope = ConversationId::generate();
+        let source = AcceptedOutputContinuationSource::from_accepted_output(
+            RequestId::new("previous"),
+            &scope,
+            &request.messages,
+            &output,
+        )
+        .unwrap();
+        request.continuation = Some(state);
+        request.continuation_source = Some(source);
+        request
+            .messages
+            .push(ModelInputMessage::Canonical(output.clone()));
+        for index in 0..64 {
+            let MessageBlock::Assistant(mut unrelated) = output.clone() else {
+                unreachable!()
+            };
+            unrelated.id = MessageId::new(format!("unrelated-{index}"));
+            request
+                .messages
+                .push(ModelInputMessage::Canonical(MessageBlock::Assistant(
+                    unrelated,
+                )));
+        }
+        take_hash_work();
+        assert_eq!(request.continuation_boundary().unwrap(), Some(1));
+        let (original, semantic) = take_hash_work();
+        assert_eq!(original, serde_json::to_vec(&output).unwrap().len());
+        assert!(semantic > 8192);
+        let mut changed = request.clone();
+        changed.messages[0] = crate::scripted_suites::common::simple_request(
+            ModelProtocol::AnthropicMessages,
+            "fixture",
+            "changed prefix",
+        )
+        .messages[0]
+            .clone();
+        assert!(changed.continuation_boundary().is_err());
+        request
+            .messages
+            .push(ModelInputMessage::Canonical(output.clone()));
+        assert!(
+            request
+                .continuation_boundary()
+                .unwrap_err()
+                .contains("ambiguous")
+        );
+        let MessageBlock::Assistant(mut wrong) = output.clone() else {
+            unreachable!()
+        };
+        wrong.content.clear();
+        assert!(!CanonicalMessageRef::of(&scope, &output).matches(&MessageBlock::Assistant(wrong)));
     }
 }

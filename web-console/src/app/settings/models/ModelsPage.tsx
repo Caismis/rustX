@@ -5,7 +5,7 @@ import { useTranslation } from '../../../locale/react';
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { shallowEqual, useSelector } from '@xstate/react';
 import { Button as AriaButton, GridList, GridListItem } from 'react-aria-components';
-import type { Model, ModelLayer, ProviderView, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v77';
+import type { Model, ModelLayer, ProviderView, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v78';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { Button } from '../../../presentation/primitives/Button';

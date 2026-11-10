@@ -1,0 +1,27 @@
+{
+  "scope": "Calibrate SQLite's existing global policy, without rebuilding reference code.\n\nThese are diagnostic products, not headline timings. The same GNU-allocated\nbaseline CLI receives only a startup soft-limit setting and phase counter reads.\n",
+  "binary": "/home/capi/.cache/rustx-pr485-history-growth-20261109/kind-build/rustx",
+  "binary_sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+  "library_sha256": "f0b6407a3c743c7203b7784f05dd4da768c630092ea16facb9bf6cfbb2fd3262",
+  "elf_symbol_offsets": {
+    "RUSTX_SQLITE_HARD_OFFSET": "00000000078a6130",
+    "RUSTX_SQLITE_MEMORY_OFFSET": "00000000078bd470",
+    "RUSTX_SQLITE_SOFT_OFFSET": "00000000078ff530"
+  },
+  "fixture_sha256": "f0769d75f8f1addca518b2c69e64cf61da75967ff7369c0b529480b621c71845",
+  "policy_mib": [
+    320
+  ],
+  "workloads": [
+    [
+      128,
+      32
+    ],
+    [
+      256,
+      8
+    ]
+  ],
+  "ordinary_allocator": "unchanged GNU allocator",
+  "reason": "192 and 256 MiB leave about 301 MiB of necessary SQLite memory at 256 sessions and raise read calls sharply. Test 320 MiB with room for active pages; do not choose a policy from only the 128-session result."
+}

@@ -1,0 +1,47 @@
+{
+  "scope": "Accepted diagnostic products only. Every consistent native backup hash, SQLite integrity/FK, schema, exact canonical body, order, counts and cancelled-request absence are independently checked. The NOFILE failure remains excluded.",
+  "products": [
+    {
+      "directory": "probe-128-032-000",
+      "backups": 128,
+      "provider_requests": 4355
+    },
+    {
+      "directory": "probe-128-032-192",
+      "backups": 128,
+      "provider_requests": 4355
+    },
+    {
+      "directory": "probe-128-032-256",
+      "backups": 128,
+      "provider_requests": 4355
+    },
+    {
+      "directory": "probe-v2-256-008-000",
+      "backups": 256,
+      "provider_requests": 2307
+    },
+    {
+      "directory": "probe-v2-256-008-192",
+      "backups": 256,
+      "provider_requests": 2307
+    },
+    {
+      "directory": "probe-v2-256-008-256",
+      "backups": 256,
+      "provider_requests": 2307
+    },
+    {
+      "directory": "probe-v3-128-032-320",
+      "backups": 128,
+      "provider_requests": 4355
+    },
+    {
+      "directory": "probe-v3-256-008-320",
+      "backups": 256,
+      "provider_requests": 2307
+    }
+  ],
+  "backup_count": 1536,
+  "request_count": 26648
+}

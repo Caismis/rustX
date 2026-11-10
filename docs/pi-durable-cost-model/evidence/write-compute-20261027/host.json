@@ -1,0 +1,10 @@
+{
+  "platform": "Linux-6.8.0-147-generic-x86_64-with-glibc2.39",
+  "cpu": "Intel(R) Core(TM) i9-14900K",
+  "clock_ticks": 100,
+  "node": "v24.19.0",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "filesystem": "ext4   /dev/nvme0n1p2",
+  "load_observation": "2.06 1.94 1.66 6/11182 3812381",
+  "scope": "Host metadata sampled while ordinary candidate build was running; no claim of exclusive host scheduling."
+}

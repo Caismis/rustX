@@ -1,5 +1,5 @@
 //! Indexed format-shape checks: opening a Store never walks all request bodies.
-use super::{Connection, ConversationStoreError, OptionalExtension, storage};
+use super::{Connection, ConversationStoreError, OptionalExtension};
 
 const NAME: &str = "events_invalid_request_owner_idx";
 // json_quote preserves JSON objects and safely quotes scalar owner corruption.
@@ -29,9 +29,12 @@ fn definition() -> String {
 }
 
 pub(super) fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
-    connection
-        .execute_batch(&definition())
-        .map_err(|error| storage(format!("create request owner shape index: {error}")))
+    connection.execute_batch(&definition()).map_err(|error| {
+        crate::durable::sqlite::sqlite_error(
+            &error,
+            format!("create request owner shape index: {error}"),
+        )
+    })
 }
 
 fn query() -> String {
@@ -49,7 +52,7 @@ pub(super) fn verify(connection: &Connection) -> Result<(), ConversationStoreErr
     let definition: Option<Option<String>> = connection.query_row(
         "SELECT CASE WHEN octet_length(sql)<=8192 THEN sql END FROM sqlite_schema WHERE type='index' AND name=?1",
         [NAME], |row| row.get(0),
-    ).optional().map_err(|error| storage(format!("request owner index schema: {error}")))?;
+    ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("request owner index schema: {error}")))?;
     let Some(definition) = definition.flatten() else {
         return Err(ConversationStoreError::IncompatibleSchema(
             "missing request owner shape index".into(),
@@ -62,7 +65,12 @@ pub(super) fn verify(connection: &Connection) -> Result<(), ConversationStoreErr
     }
     let invalid: bool = connection
         .query_row(&query(), [], |row| row.get(0))
-        .map_err(|error| storage(format!("request owner shape lookup: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("request owner shape lookup: {error}"),
+            )
+        })?;
     if invalid {
         return Err(ConversationStoreError::IncompatibleSchema(
             "request facts require explicit typed ownership".into(),

@@ -9,7 +9,7 @@ import { refreshTrace } from '../src/client/trace';
 import { useWorkflowNodes } from '../src/app/trajectory/useWorkflowNodes';
 import { translator } from '../src/locale/translation';
 import { workflowTraceFixture } from './workflow-trace-fixture';
-import type { CheckpointPage } from '../../protocol/app-server/v77';
+import type { CheckpointPage } from '../../protocol/app-server/v78';
 
 afterEach(() => {
   cleanup();

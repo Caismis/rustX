@@ -55,7 +55,8 @@ fn snapshot_transcript_excludes_later_tool_results() {
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     };
     let cut = crate::durable::TranscriptSnapshotCut {
         bootstrap_through: store.load_transcript_page(None, 1).unwrap().entries[0]
@@ -112,7 +113,8 @@ fn canonical_tool_results_validate_exact_ownership_and_roll_back() {
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     };
     let mut missing = valid.clone();
     missing.occurrence.assistant_message_id = MessageId::new("missing");
@@ -266,7 +268,8 @@ fn transcript_tool_lineage_seed_keeps_retired_reused_call_occurrences() {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     };
     let canonical = vec![assistant("a"), result("ra", "a", "old-result")];
@@ -387,7 +390,8 @@ fn agent_transcript_tools_resolve_native_results_across_page_boundaries() {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             }))
             .unwrap();
     }

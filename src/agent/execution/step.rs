@@ -13,7 +13,9 @@ use super::{
     MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN, MAX_TRANSIENT_MODEL_RETRIES_PER_LOGICAL_STEP,
 };
 use crate::context::AcceptedContext;
+use crate::events::types::RuntimeEventEnvelope;
 use crate::events::types::{AttemptFailure, RuntimeEvent};
+use crate::message::types::{AssistantContentBlock, ContentBlockIndex, ToolCallOccurrenceRef};
 use crate::model::assembly::ModelEventAssembler;
 use crate::model::error::ModelErrorKind;
 use crate::model::snapshot::RequestIdentity;
@@ -146,10 +148,10 @@ impl<'a> AgentExecution<'a> {
     }
 
     async fn run_owned(mut self) -> SettledExecution<'a> {
-        self.emit(RuntimeEvent::AttemptStarted {
+        let mut pending_attempt = Some(self.event_envelope(RuntimeEvent::AttemptStarted {
             attempt_id: self.request.attempt_id.clone(),
-        });
-        let terminal = if let Err(error) = self.state.start() {
+        }));
+        let mut terminal = if let Err(error) = self.state.start() {
             Terminal::Failed {
                 failure: AttemptFailure::Runtime { error },
             }
@@ -198,11 +200,10 @@ impl<'a> AgentExecution<'a> {
                     terminal = Some(Self::interaction_failure_terminal());
                     break;
                 }
-                terminal = self.run_turn().await;
+                terminal = self.run_turn(pending_attempt.take()).await;
                 if terminal.is_none() && self.cancellation.interaction_failed() {
                     terminal = Some(Self::interaction_failure_terminal());
-                }
-                // TEST-ONLY continuation boundary: the previous turn is
+                } // TEST-ONLY continuation boundary: the previous turn is
                 // structurally complete (every tool result and every
                 // mailbox drain/append of that turn is done) and the
                 // loop is about to check cancellation again before the
@@ -221,7 +222,19 @@ impl<'a> AgentExecution<'a> {
                 }
             }
             terminal.expect("the attempt must settle")
-        };
+        }; // A pre-cancelled or uninitializable attempt never begins a turn, but
+        // still records its own admission before the terminal. Normal first
+        // turns consume this candidate in the fixed two-event transaction.
+        if let Some(attempt) = pending_attempt {
+            self.emit_envelope(attempt);
+            if let Some(message) = self.durable_failure.clone() {
+                terminal = Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::DurableStore { message },
+                    },
+                };
+            }
+        }
         self.settle(&terminal);
         SettledExecution {
             execution: self,
@@ -238,8 +251,8 @@ impl<'a> AgentExecution<'a> {
     /// rejection, a durable failure — leaves the stream open here and it
     /// terminalizes as an audit. Canonical acceptance and audit
     /// terminalization can therefore never both happen for one stream.
-    async fn run_turn(&mut self) -> Option<Terminal> {
-        let terminal = self.run_turn_body().await;
+    async fn run_turn(&mut self, attempt: Option<RuntimeEventEnvelope>) -> Option<Terminal> {
+        let terminal = self.run_turn_body(attempt).await;
         if !self.publication_settlement_failed
             && let Err(error) = self.settle_publication_audit()
         {
@@ -296,7 +309,7 @@ impl<'a> AgentExecution<'a> {
     /// Executes one turn: one model request, its tool calls, and their
     /// results. Returns the terminal outcome when the attempt settled.
     #[allow(clippy::too_many_lines)] // one explicit logical-step retry state machine
-    async fn run_turn_body(&mut self) -> Option<Terminal> {
+    async fn run_turn_body(&mut self, attempt: Option<RuntimeEventEnvelope>) -> Option<Terminal> {
         self.turn += 1;
         // A new logical primary step gets one fresh assembly generation. Every
         // actual request of that step — initial, transient retry, or
@@ -308,7 +321,24 @@ impl<'a> AgentExecution<'a> {
         // cross this boundary.
         self.logical_step = LogicalStep::begin(self.workflow_output_feedback.take());
         self.context_runtime.engine.clear_media();
-        self.emit(RuntimeEvent::TurnStarted);
+        // The semantic corrective-generation budget and any unresolved
+        // corrective hint are semantic state of the step that just ended, so
+        // neither may cross this boundary.
+        if let Some(attempt) = attempt {
+            match self
+                .store
+                .commit_attempt_first_turn(attempt, self.event_envelope(RuntimeEvent::TurnStarted))
+            {
+                Ok(events) => {
+                    for event in events {
+                        self.record_persisted_event(event);
+                    }
+                }
+                Err(error) => self.record_event_failure(&error),
+            }
+        } else {
+            self.emit(RuntimeEvent::TurnStarted);
+        }
         if let Some(message) = self.durable_failure.clone() {
             return Some(Terminal::Failed {
                 failure: AttemptFailure::Runtime {
@@ -475,7 +505,7 @@ impl<'a> AgentExecution<'a> {
     /// continuation retention, message commit, tool execution, and the
     /// turn-completion event. Returns the terminal outcome when the attempt
     /// settled.
-    #[allow(clippy::too_many_lines)] // One P -> U -> C ordering, one place.
+    #[allow(clippy::too_many_lines)] // One model completion and owner settlement path.
     async fn complete_turn(
         &mut self,
         assistant_message_id: MessageId,
@@ -535,23 +565,22 @@ impl<'a> AgentExecution<'a> {
         // validated and retained the event's terminal fact.
         let finish_reason = turn_assembly.finish_reason.clone();
         let generation = self.settle_generation_evidence();
-        self.emit(RuntimeEvent::ModelRequestCompleted {
+        let completion = self.event_envelope(RuntimeEvent::ModelRequestCompleted {
             owner,
             request_id,
             finish_reason: finish_reason.clone(),
             usage: reported_usage.clone(),
             generation,
         });
-        if let Some(terminal) = self.durable_failure_terminal_from_state() {
-            return Some(terminal);
-        }
-        // U: P is durable and provider completion is structurally accepted,
-        // so the remaining publication payload and the publication terminal
-        // marker commit in one transaction — and only then is the final
-        // buffered payload released. This is the intentional tail-latency
-        // cost of correct ordering; with nothing buffered, a terminal-only
-        // frame commits and no visible text waits.
-        if let Err(error) = self.commit_publication_terminal() {
+        self.publication
+            .as_mut()
+            .expect("completed request owns publication")
+            .provider_completion = Some(completion);
+        // Workflow output belongs to its separate owner. Preserve its prepared
+        // provider/publication facts before invoking that owner's transaction.
+        if self.workflow_output.is_some()
+            && let Err(error) = self.commit_publication_terminal()
+        {
             return Some(Terminal::Failed {
                 failure: AttemptFailure::Runtime { error },
             });
@@ -605,6 +634,7 @@ impl<'a> AgentExecution<'a> {
                     crate::runtime::workflow::WorkflowOutputSubmission::Committed => {
                         self.retire_continuation();
                         self.logical_step.model_step = LogicalModelStepState::CanonicalAccepted;
+                        self.logical_step.current_input = None;
                         if let Err(error) = self.state.tools_finished() {
                             return Some(Terminal::Failed {
                                 failure: AttemptFailure::Runtime { error },
@@ -654,23 +684,45 @@ impl<'a> AgentExecution<'a> {
                 });
             }
         };
-        if let Err(error) =
-            self.commit_assistant_message(&assistant_message_id, &turn_assembly.content)
-        {
-            return Some(self.commit_failure_terminal(
-                "the assembled Assistant message cannot be committed",
-                error,
-            ));
+        if !has_tool_calls && self.cancellation.is_cancelled() {
+            return Some(Terminal::Cancelled {
+                reason: self.cancellation.reason(),
+            });
         }
+        let occurrences = if has_tool_calls {
+            turn_assembly
+                .content
+                .iter()
+                .enumerate()
+                .filter(|(_, block)| matches!(block, AssistantContentBlock::ToolCall(_)))
+                .map(|(index, _)| {
+                    ToolCallOccurrenceRef::new(
+                        assistant_message_id.clone(),
+                        ContentBlockIndex::new(
+                            u32::try_from(index).expect("canonical block index"),
+                        ),
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let boundary =
+            match self.commit_assistant_message(&assistant_message_id, turn_assembly.content) {
+                Ok(boundary) => boundary,
+                Err(error) => {
+                    return Some(self.commit_failure_terminal(
+                        "the assembled Assistant message cannot be committed",
+                        error,
+                    ));
+                }
+            };
         // C succeeded: the logical model step is no longer unresolved, even
         // if a later tool/result phase causes the attempt itself to fail.
         self.logical_step.model_step = LogicalModelStepState::CanonicalAccepted;
+        let input = self.logical_step.current_input.take();
         self.continuation_source = if self.pending_continuation.is_some() {
-            let input = self
-                .logical_step
-                .current_input
-                .as_ref()
-                .expect("accepted output has frozen actual request");
+            let input = input.expect("accepted output has frozen actual request");
             let output = self
                 .conversation
                 .ledger()
@@ -678,27 +730,19 @@ impl<'a> AgentExecution<'a> {
                 .expect("accepted Assistant is committed");
             Some(crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
                 input.snapshot.request_id.clone(), &self.request.conversation_id,
-                &input.request.messages, output,
+                &input.request.input().messages, output,
             ).expect("canonical accepted output is Assistant"))
         } else {
             None
         };
         if !has_tool_calls {
-            self.emit(RuntimeEvent::TurnCompleted);
-            if let Some(terminal) = self.durable_failure_terminal_from_state() {
-                return Some(terminal);
-            }
-            // Safe boundary for a completed no-tool turn: the attempt may
-            // settle only when the boundary snapshot observes no eligible
-            // inbound work. A drained batch keeps the attempt running for
-            // one further model turn, so a pending inbound message prevents
-            // a successful Stop from settling before it is observed.
-            return match self.safe_boundary_drain(true) {
-                Ok(true) => None,
-                Ok(false) => Some(Terminal::Completed { finish_reason }),
-                Err(terminal) => Some(terminal),
+            return if boundary.expect("no-tool output commits its native boundary") {
+                None
+            } else {
+                Some(Terminal::Completed { finish_reason })
             };
         }
+
         // The entire tool-result batch is structurally settled exactly once
         // inside `execute_tools` before this point returns: every logical
         // call of the committed batch receives exactly one canonical
@@ -707,29 +751,7 @@ impl<'a> AgentExecution<'a> {
         // cancelled after the structurally complete result batch is
         // committed; no next model turn starts after cancellation.
         let settled = match self
-            .execute_tools(
-                &turn_assembly.tool_calls,
-                turn_assembly
-                    .content
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, block)| {
-                        matches!(
-                            block,
-                            crate::message::types::AssistantContentBlock::ToolCall(_)
-                        )
-                    })
-                    .map(|(index, _)| {
-                        crate::message::types::ToolCallOccurrenceRef::new(
-                            assistant_message_id.clone(),
-                            crate::message::types::ContentBlockIndex::new(
-                                u32::try_from(index).expect("canonical block index"),
-                            ),
-                        )
-                    })
-                    .collect(),
-                preflight,
-            )
+            .execute_tools(turn_assembly.tool_calls, occurrences, preflight)
             .await
         {
             Ok(settled) => settled,
@@ -778,6 +800,7 @@ impl<'a> AgentExecution<'a> {
         ));
         self.retire_continuation();
         self.logical_step.model_step = LogicalModelStepState::CanonicalAccepted;
+        self.logical_step.current_input = None;
         if had_tool_calls {
             let _ = self.state.tools_finished();
         }
@@ -790,6 +813,59 @@ impl<'a> AgentExecution<'a> {
         self.pending_continuation = None;
         self.continuation_source = None;
         self.continuation_owner = None;
+    }
+
+    pub(super) fn install_adopted_boundary(
+        &mut self,
+        adopted: crate::runtime::inbound::AdoptedInbound,
+    ) -> bool {
+        let adoption = adopted.adoption;
+        let canonical_receipts = adopted.canonical_receipts;
+        let adopted = adopted.items;
+        if adopted.is_empty() {
+            return false;
+        }
+        let prepared: Vec<_> = adopted
+            .iter()
+            .map(|item| {
+                self.conversation
+                    .prepare_commit(&crate::durable::canonical_block(item.message()))
+                    .expect("adopted identity was validated under exclusive ownership")
+            })
+            .collect();
+        let fresh = FreshInboundTurn::new(
+            adopted
+                .iter()
+                .map(|item| item.message().id.clone())
+                .collect(),
+        )
+        .expect("nonempty ordered committed identities");
+        for ((commit, _item), receipt) in
+            prepared.into_iter().zip(&adopted).zip(&canonical_receipts)
+        {
+            // Infallible: every adopted identity was validated above under
+            // exclusive ownership of the conversation state.
+            let block = commit.message().clone();
+            self.conversation.install_prepared(commit);
+            if let Some(observer) = self.observer {
+                observer.observe_committed(&self.request.attempt_id, &block, receipt);
+            }
+        }
+        // The adoption fact is published after its canonical messages, with
+        // its exact Journal sequence. Trace projects it as the ledger's User
+        // record, and the observation queue holds its receipt until exactly
+        // this publication releases it.
+        if let (Some(observer), Some(adoption)) = (self.observer, adoption.as_ref()) {
+            observer.observe_event(
+                &self.request.attempt_id,
+                &adoption.event,
+                adoption.sequence,
+                adoption.tool_occurrence.as_ref(),
+                adoption.observation.as_deref(),
+            );
+        }
+        self.pending_fresh_inbound = Some(fresh);
+        true
     }
 
     /// The mailbox-specific safe boundary: exactly one finite inbound
@@ -859,7 +935,7 @@ impl<'a> AgentExecution<'a> {
         // validate stable identities; committed receipts supply the content. A validation failure leaves
         // every item pending and adopts nothing.
         for item in batch.items() {
-            let block = crate::durable::inbox::canonical_block(item.message());
+            let block = crate::durable::canonical_block(item.message());
             match self.conversation.prepare_commit(&block) {
                 Ok(_) => {}
                 Err(error) => {
@@ -880,53 +956,7 @@ impl<'a> AgentExecution<'a> {
             .map_err(|error| {
                 self.durable_failure_terminal("a selected inbound batch cannot be adopted", &error)
             })?;
-        let adoption = adopted.adoption;
-        let canonical_receipts = adopted.canonical_receipts;
-        let adopted = adopted.items;
-        if adopted.is_empty() {
-            return Ok(false);
-        }
-        let prepared: Vec<_> = adopted
-            .iter()
-            .map(|item| {
-                self.conversation
-                    .prepare_commit(&crate::durable::inbox::canonical_block(item.message()))
-                    .expect("adopted identity was validated under exclusive ownership")
-            })
-            .collect();
-        let fresh = FreshInboundTurn::new(
-            adopted
-                .iter()
-                .map(|item| item.message().id.clone())
-                .collect(),
-        )
-        .expect("nonempty ordered committed identities");
-        for ((commit, _item), receipt) in
-            prepared.into_iter().zip(&adopted).zip(&canonical_receipts)
-        {
-            // Infallible: every adopted identity was validated above under
-            // exclusive ownership of the conversation state.
-            let block = commit.message().clone();
-            self.conversation.install_prepared(commit);
-            if let Some(observer) = self.observer {
-                observer.observe_committed(&self.request.attempt_id, &block, receipt);
-            }
-        }
-        // The adoption fact is published after its canonical messages, with
-        // its exact Journal sequence. Trace projects it as the ledger's User
-        // record, and the observation queue holds its receipt until exactly
-        // this publication releases it.
-        if let (Some(observer), Some(adoption)) = (self.observer, adoption.as_ref()) {
-            observer.observe_event(
-                &self.request.attempt_id,
-                &adoption.event,
-                adoption.sequence,
-                adoption.tool_occurrence.as_ref(),
-                adoption.observation.as_deref(),
-            );
-        }
-        self.pending_fresh_inbound = Some(fresh);
-        Ok(true)
+        Ok(self.install_adopted_boundary(adopted))
     }
 }
 

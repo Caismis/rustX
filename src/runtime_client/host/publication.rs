@@ -498,7 +498,7 @@ impl crate::runtime::observation::PublicationProjectionCommit for NativePublicat
     }
     fn native_goal(
         &self,
-        receipt: &crate::durable::inbox::GoalObservationReceipt,
+        receipt: &crate::durable::GoalObservationReceipt,
     ) -> crate::runtime::observation::NativeReceiptInstallation {
         let Some(inner) = self.inner.upgrade() else {
             return crate::runtime::observation::NativeReceiptInstallation::Unavailable;
@@ -550,7 +550,7 @@ impl crate::runtime::observation::PublicationProjectionCommit for NativePublicat
     }
     fn native_pending(
         &self,
-        receipt: Option<&crate::durable::inbox::PendingObservationReceipt>,
+        receipt: Option<&crate::durable::PendingObservationReceipt>,
         _cut: &crate::durable::reading::ConversationReadCut,
     ) {
         let Some(inner) = self.inner.upgrade() else {

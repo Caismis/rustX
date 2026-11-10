@@ -860,7 +860,7 @@ impl SqliteConversationStore {
         &self,
         id: &ScheduledWorkflowStartId,
     ) -> Result<(), ConversationStoreError> {
-        use crate::durable::inbox::ConversationInteractionAudit;
+        use crate::durable::ConversationInteractionAudit;
         let requests = {
             let c = self.lock()?;
             let mut query=c.prepare("SELECT r.event_json FROM events r WHERE r.event_id GLOB ?1 AND NOT EXISTS(SELECT 1 FROM events s WHERE s.event_id=replace(r.event_id,'interaction-requested-event:','interaction-settled-event:')) ORDER BY r.sequence LIMIT 100").map_err(sql)?;

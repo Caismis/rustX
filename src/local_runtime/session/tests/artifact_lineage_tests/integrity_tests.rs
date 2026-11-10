@@ -108,7 +108,7 @@ fn source_without_optional_binary_index(
     }
     let frontiers: u64 = connection
         .query_row(
-            "SELECT count(*) FROM content_frontiers WHERE representation='binary_bytes'",
+            "SELECT count(*) FROM content_frontiers WHERE representation='b'",
             [],
             |row| row.get(0),
         )

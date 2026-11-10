@@ -2147,6 +2147,7 @@ fn conversation_runtime_over_model(
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: rustx::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: rustx::runtime::ConversationContextConfig {
+                status_clock: std::sync::Arc::new(rustx::context::SystemClock),
                 policy: rustx::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -2769,7 +2770,7 @@ async fn goal84_recovery_authorizes_pending_human_but_does_not_infer_continuatio
         store.initialize(&[]).unwrap();
         let human = inbound("recovered-human", "Keep working until tests pass");
         let accepted = store
-            .accept_inbound(rustx::durable::inbox::InboundDraft {
+            .accept_inbound(rustx::durable::InboundDraft {
                 message_id: Some(human.id),
                 source: human.source,
                 kind: human.kind,
@@ -3840,7 +3841,7 @@ async fn goal351_trace_still_identifies_the_exact_native_goal_tools() {
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .unwrap()
         .0;
-    let rustx::runtime_client::RuntimeClientResult::TracePage { page } = host
+    let rustx::runtime_client::RuntimeClientResult::TracePage { page, .. } = host
         .weak_inner()
         .upgrade()
         .unwrap()

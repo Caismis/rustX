@@ -1,0 +1,30 @@
+{
+  "recorded_utc": "2026-10-27T00:28:43.227541+00:00",
+  "criterion": "Correctness and useful target gains without consistent material wider-cost regression; numerical materiality cutoff was not predeclared. Engineering judgment, not global nonregression.",
+  "D": {
+    "decision": "retain targeted joint change",
+    "source": "e8d6380fa6ea0724b752970473d093c629cb8a63",
+    "src_tree": "d6d193e07b16db0ab9b1ce646a254a1c1674c80e",
+    "evidence": [
+      "direct-d-recomputed.json",
+      "d-retention-audit.json",
+      "d-retention-audit-notes.txt"
+    ],
+    "reason": "Useful no-live short-small and live short-large CPU/wall improvements. Keep adverse live short-small pair 0, cold/stream/tool costs and sampled memory increases; writes essentially unchanged. No isolated attribution to either change."
+  },
+  "E": {
+    "decision": "reject and revert",
+    "measured_source": "a39f343b54a46c8e5527dad88842cb8a6d46691b",
+    "reason": "Dense 16,383-byte scalar has 7/7 read regressions in all eight diagnostic cells; warm page32 ~7.06ms vs1.73ms and single field ~0.94ms vs0.04ms. Runtime writes improve, but no-live short-small wall/turn CPU rise in all three pairs. Saving eager indexes moves substantial cost into inspection. No E gains are claimed for delivered D.",
+    "evidence": [
+      "candidate-e-reader.json",
+      "reader-audit.json",
+      "reader-audit-notes.txt",
+      "candidate-e-direct/recomputed.json"
+    ],
+    "revert_commit": "6e1ca189abfa9879fe87d2e4ecd053530434a491",
+    "full_tree_matches_D": true
+  },
+  "final_ordinary_binary": "/home/capi/.cache/rustx-pr485-next/candidate-d-build/conformance",
+  "final_sha256": "8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233"
+}

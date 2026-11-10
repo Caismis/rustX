@@ -1,0 +1,74 @@
+[
+  {
+    "mode": "no-live-subscriber",
+    "case": "short-small",
+    "proved": 409,
+    "deferred": 0
+  },
+  {
+    "mode": "no-live-subscriber",
+    "case": "short-large",
+    "proved": 969,
+    "deferred": 0
+  },
+  {
+    "mode": "no-live-subscriber",
+    "case": "stream",
+    "proved": 34,
+    "deferred": 0
+  },
+  {
+    "mode": "no-live-subscriber",
+    "case": "large",
+    "proved": 19,
+    "deferred": 0
+  },
+  {
+    "mode": "no-live-subscriber",
+    "case": "tool",
+    "proved": 26,
+    "deferred": 0
+  },
+  {
+    "mode": "no-live-subscriber",
+    "case": "cancel",
+    "proved": 21,
+    "deferred": 0
+  },
+  {
+    "mode": "live-subscriber",
+    "case": "short-small",
+    "proved": 464,
+    "deferred": 0
+  },
+  {
+    "mode": "live-subscriber",
+    "case": "short-large",
+    "proved": 1081,
+    "deferred": 0
+  },
+  {
+    "mode": "live-subscriber",
+    "case": "stream",
+    "proved": 37,
+    "deferred": 0
+  },
+  {
+    "mode": "live-subscriber",
+    "case": "large",
+    "proved": 23,
+    "deferred": 0
+  },
+  {
+    "mode": "live-subscriber",
+    "case": "tool",
+    "proved": 29,
+    "deferred": 0
+  },
+  {
+    "mode": "live-subscriber",
+    "case": "cancel",
+    "proved": 23,
+    "deferred": 0
+  }
+]

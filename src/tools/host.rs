@@ -153,7 +153,7 @@ pub(crate) fn register(
                         definition.name,
                         definition.description
                     ),
-                    input_schema: definition.input_schema.clone(),
+                    input_schema: definition.input_schema.clone().into(),
                     execution_policy: super::ToolExecutionPolicy::ForegroundOnly,
                     concurrency_policy: super::ToolConcurrencyPolicy::Parallel,
                     approval_policy: super::ToolApprovalPolicy::Never,

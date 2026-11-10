@@ -26,14 +26,8 @@ pub(crate) fn to_writer<T: serde::Serialize + ?Sized>(
         serde_json::to_writer(&mut buffered, value).map_err(std::io::Error::other)?;
         buffered.flush()?;
     }
-    let mut reader = std::io::BufReader::with_capacity(
-        65_536,
-        layout
-            .file
-            .as_ref()
-            .ok_or_else(|| error("source sealed"))?
-            .try_clone()?,
-    );
+    layout.bytes.seal();
+    let mut reader = std::io::BufReader::with_capacity(65_536, layout.open_bytes().map_err(error)?);
     #[cfg(test)]
     WORK.with(|work| {
         let (read, key, page, _) = work.get();

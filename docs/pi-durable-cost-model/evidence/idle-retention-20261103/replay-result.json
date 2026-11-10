@@ -1,0 +1,31 @@
+{
+  "accepted": true,
+  "archives": [
+    {
+      "name": "trial.tar.xz",
+      "bytes": 65899704,
+      "sha256": "a7d3ddb1f8af1824613d5a8825a8e1139727f43d7e9462dd4b8a9e3a9cabcb1f"
+    },
+    {
+      "name": "final.tar.xz",
+      "bytes": 45544328,
+      "sha256": "655d58667bf05661d6f7e7104118f679aa3032f47ef4404d0be863fe08af5316"
+    }
+  ],
+  "verified_members": 12097,
+  "native_products_reparsed": 28,
+  "native_consistent_images": 3584,
+  "functional_products": 16,
+  "heap_profiles": 10,
+  "controlled_allocator_products": 2,
+  "tests": {
+    "ok": 3256,
+    "ignored": 3
+  },
+  "new_pi_deepseek_products": 0,
+  "archived_tables_sha256": "b97a9f449c36a5221e16fc80a11bfe4d8a7d2371b3abed88c2c09ff97d0fc5ce",
+  "tables_sha256": "7e87fe116d22e1217e58f024dad1fb724746cde568d4b6c8d9d37b76069c4f7c",
+  "tables_export": "Raw archived table reproduction is byte exact; publication normalizes terminal newlines to exactly one.",
+  "tables_reproduced": true,
+  "scope": "Authenticates every archive/member and reparses native PID counters, complete wire histories, consistent SQLite images/integrity/FKs/cancellation, cache rotations and Source reads, functional reopen checks, sampled heap denominators, allocator-return counters, source/check/build maps, host records and all tables. Executes only archived Python arithmetic/audits: no product, compiler, git, symbolizer or network. Deliberately excluded binaries/libraries are covered by the stored prearchive byte proofs, not freshly verified."
+}

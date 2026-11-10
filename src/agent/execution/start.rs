@@ -17,7 +17,8 @@ use crate::context::tokens::ProviderObservedInput;
 use crate::durable::{ModelTurnStartCommit, ModelTurnStartCommitDisposition};
 use crate::events::types::AttemptFailure;
 use crate::message::types::MessageBlock;
-use crate::model::types::{ModelRequest, ModelUsage};
+use crate::model::adapter::validation::PreparedModelRequest;
+use crate::model::types::ModelUsage;
 use crate::runtime::identity::{AttemptId, MessageId};
 use crate::runtime::types::RuntimeError;
 use chrono::Utc;
@@ -30,7 +31,7 @@ pub(super) struct StartedModelTurn {
     #[cfg(feature = "issue-387-profile")]
     pub(super) adapter_input_profile: crate::model::adapter::profile::InputLayout,
     pub(super) request_start_ms: Option<u64>,
-    pub(super) request: ModelRequest,
+    pub(super) request: PreparedModelRequest,
     pub(super) message_id: MessageId,
 }
 
@@ -272,7 +273,7 @@ impl AgentExecution<'_> {
         let accepts_prepared = {
             #[cfg(test)]
             let _profile = attribution::Timer::new(attribution::Phase::CommitEvidence);
-            start_commit.accepts_prepared(&prepared.snapshot, &prepared.request)
+            start_commit.accepts_prepared(&prepared.snapshot, prepared.request.input())
         };
         if !accepts_prepared {
             self.durable_failure_kind = Some(DurableFailureKind::RequestStart);

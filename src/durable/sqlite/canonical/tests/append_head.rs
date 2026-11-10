@@ -415,3 +415,45 @@ fn append_certificate_does_not_certify_trigger_replacement() {
     assert!(store.append_canonical(&user_message("c", "C")).is_err());
     assert_eq!(append_validation::take_work(), (2, 0));
 }
+
+#[test]
+fn read_only_rollback_preserves_committed_append_proof_but_write_rollback_fences_it() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    store
+        .append_canonical(&user_message("before-read", "A"))
+        .unwrap();
+    append_validation::take_work();
+    for i in 0..3 {
+        {
+            let connection = store.lock().unwrap();
+            let transaction = connection.unchecked_transaction().unwrap();
+            let count: u64 = transaction
+                .query_row("SELECT count(*) FROM message_ledger", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, i + 1);
+            // Native readers drop their read transaction, which runs ROLLBACK.
+        }
+        store
+            .append_canonical(&user_message(&format!("after-read-{i}"), "B"))
+            .unwrap();
+    }
+    assert_eq!(append_validation::take_work(), (0, 3));
+    {
+        let connection = store.lock().unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        let mut batch = append_validation::Batch::begin(&store.conn.append_validation);
+        batch
+            .append(&transaction, &user_message("not-committed", "ghost"), None)
+            .unwrap();
+        transaction.rollback().unwrap();
+        // Even an accidental publication after rollback cannot seat the batch.
+        batch.committed(&connection);
+    }
+    append_validation::take_work();
+    store
+        .append_canonical(&user_message("after-write-rollback", "C"))
+        .unwrap();
+    assert_eq!(append_validation::take_work(), (1, 0));
+    assert_eq!(store.load_head().unwrap().active_message_ids.len(), 5);
+}

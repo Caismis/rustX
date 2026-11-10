@@ -37,12 +37,13 @@ fn tool_fixture_in(
         id: ToolId::new("tool-bash"),
         name: "original frozen tool".into(),
         description: "original schema description".into(),
-        input_schema: serde_json::json!({"type":"object","properties":{"command":{"type":"string"}}}),
+        input_schema:
+            serde_json::json!({"type":"object","properties":{"command":{"type":"string"}}}).into(),
     };
     if giant {
         definition.description = "original description水🙂".repeat(20_000);
         definition.input_schema =
-            serde_json::json!({"original":"schema\n水🙂".repeat(20_000),"exact":u64::MAX});
+            serde_json::json!({"original":"schema\n水🙂".repeat(20_000),"exact":u64::MAX}).into();
     }
     let frozen = request_with_tools(store.as_ref(), 0, Some(vec![definition]));
     let mut call = bash_call("original-inspection-call");
@@ -223,7 +224,7 @@ fn selected_content_bytes(
             .unwrap();
         let (rows, read) = SqliteConversationStore::content_read_work();
         assert!(rows <= 2 && read <= 65_536);
-        assert_eq!(chunk.content_ref, binding.content_ref);
+        assert_eq!(chunk.content_ref, (binding.content_ref).as_ref().clone());
         assert_eq!(chunk.offset, offset);
         assert_eq!(chunk.readable_end, binding.content_ref.readable_end);
         let part = base64::engine::general_purpose::STANDARD
@@ -331,12 +332,12 @@ fn original_text_block(
     let metadata = item
         .content
         .iter()
-        .find(|binding| binding.path == ["value"])
+        .find(|binding| binding.path.as_ref() == ["value"])
         .unwrap();
     let payload = item
         .content
         .iter()
-        .find(|binding| binding.path == ["value", "text"])
+        .find(|binding| binding.path.as_ref() == ["value", "text"])
         .unwrap();
     assert_eq!(
         payload.content_ref.representation,
@@ -496,7 +497,7 @@ fn t08_t14_t19_tool_inspection_keeps_c_without_j_and_old_cut_after_terminal() {
             occurrence: ToolCallOccurrenceRef::new(proposal, ContentBlockIndex::new(0)),
             tool_call_id: call.id.clone(),
             tool_id: call.tool_id.clone(),
-            result: result.clone(),
+            result: result.clone().into(),
         }))
         .unwrap();
     let after = TraceProjection::new(store.as_ref())
@@ -536,7 +537,7 @@ fn t08_t14_t19_tool_inspection_keeps_c_without_j_and_old_cut_after_terminal() {
         E::ToolExecutionCompleted {
             tool_call_id: call.id,
             tool_id: call.tool_id,
-            result: result.clone(),
+            result: result.clone().into(),
         },
         5,
     );

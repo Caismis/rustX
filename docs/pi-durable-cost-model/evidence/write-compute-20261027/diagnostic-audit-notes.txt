@@ -1,0 +1,104 @@
+Independent D diagnostic audit, 2026-10-27
+
+Command:
+python3 /home/capi/.cache/rustx-pr485-cost-reduction/audit-diagnostics.py
+Exit: 0. Output: diagnostic-audit.json, diagnostic-audit.stdout, diagnostic-audit.stderr.
+Only existing files were read/recomputed. No product, benchmark, build, test,
+profiler, strace or compression was started. Producer analysis modules were
+not imported and original data/summary files were not modified.
+
+Identity
+- Actual retained D binary rehashed to
+  8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233.
+  The earlier candidate-d-build/identity.json binds that hash to clean ordinary
+  optimized root compilation at e8d6380fa6ea0724b752970473d093c629cb8a63.
+  Baseline HEAD 694db002c96ed93c610280c14467cbac1f8a1a73 has no src/Cargo
+  difference from that production revision. All plan input hashes match.
+- All eight profile/control manifests identify this exact binary hash.
+- Both Pi samples and current checkout identify
+  90d863f7c1183b965f099855715d6e88c7b8a52c. Tracked files have no changes.
+  One existing untracked file is packages/ai/tsconfig.benchmark.json; do not
+  describe the entire checkout as status-empty. Pi adapter asserts the revision
+  before importing source APIs, including native SQLite, under --conditions=source.
+- Caveat: run-wal.py resumes existing directories on accepted=true alone;
+  wal-identity.json is a single post-run binary hash/revision record, not a
+  per-product freeze. CPU manifests also record profiler library paths without
+  byte hashes. The actual current D/build receipts support these diagnostics,
+  but these scripts alone do not provide formal-run-grade immutable dependency
+  provenance. Preserve those limitations if reusing/archiving the raw data.
+
+Admission and phases
+- Eight profile/control products accepted, four WAL products accepted, two
+  Rust/Pi comparisons retained; one failed initial Pi product retained.
+- Small cases: 8 seeded + 32 measured = 40 matched/settled provider requests.
+  Large cases: 64 seeded + 32 measured = 96 matched/settled provider requests.
+  Provider requests equal captured wire requests; all provider states settled,
+  provider/product exit 0, oracle='passed', complete lifecycle endpoint present.
+- Persisted/reopened request structures and late snapshots match in all twelve
+  successful products. This checks existing oracle records and their evidence,
+  not an independent reimplementation of every native semantic oracle.
+- Cross-engine checked 40/96 requests: every coreSemanticEqual=true, every
+  fullSemanticRequestEqual=false. Tool sets/definitions differ. Neither full
+  request equality nor equal CPU work is established by the comparisons.
+- Rust profiling starts a new raw file named by the boundary after stopping
+  the prior file (profiling/bridge.c:30-36). Thus before_measured_turns.cpu is
+  the 32 measured-turn interval ending at after_turns. It includes product
+  threads, driver sampling/footprints and boundary overhead, excludes later
+  late-snapshot/verification/close/reopen intervals, and excludes the sibling
+  provider process. Profile command timestamps are sequential.
+
+CPU: independently parsed raw native header and sample counts, checked raw SHA,
+collapsed-stack sum and cumulative total, and recalculated selected inclusive
+counts from collapsed stacks. Requested interval is 4000 us in all four.
+
+case                denominator   encode   checkpoint capture   request layouts   SQLite prepare
+no-live small            253         44          22                  47                39
+no-live large            269         53          29                  53                43
+live small               374         80          44                  41                77
+live large               503        103          60                  69               104
+
+These are inclusive samples; overlapping stacks cannot be added as disjoint
+cost. Requested sampling period times sample count is not measured wall time
+or a predicted optimization gain. CPU raw hashes are in diagnostic-audit.json.
+
+WAL: independently reconstructed completed strace calls and boundaries, checked
+32-byte WAL headers declare 4096-byte pages, and paired every 24-byte frame
+header with its successful 4096-byte body by offset/count. No merged frame
+write, short write, missing body, or unfinished WAL write crossing a measured
+boundary was observed. All producer summary fields match, including per-
+transaction frame counts, row-count deltas and endpoint page-owner aggregates.
+
+case                commit markers   frames     frame bytes   WAL header writes   WAL pwrite bytes
+D short-small              512        10722      44174640           10               44174960
+Pi short-small             160         1683       6933960            2                6934024
+D short-large              512        11748      48401760           12               48402144
+Pi short-large             160         1688       6954560            2                6954624
+
+Each interval is 32 turns: D averages 16 write-commit markers/turn, Pi 5.
+Frame bytes count 24+4096 per frame; the last column also adds 32-byte WAL
+headers. Neither quantity is device I/O, fsync count or total process writes:
+database/checkpoint/other-file writes are not included. Read-only SQL commits
+cannot be counted from WAL markers. Commit-marker presence is not proof of
+power-loss durability or of a particular named semantic transaction.
+
+Endpoint dbstat ownership has zero explicit mixed owners, but D small has 2
+unmapped frames and D large 1; Pi has zero unmapped. Even single endpoint owners
+cannot exclude intermediate page reuse. Net row counts cannot recover temporary
+inserts/deletes, SQL statement counts or JSON bytes encoded. Keep these table
+counts as diagnostic attribution, not exact causal or timing attribution.
+
+Failure retention
+wal-records-initial.json contains D small success then Pi small accepted=false.
+wal-d-short-small-pi-initial-failed retains calls.strace, phases.json,
+sample.log, sample.process.json and sample.provider.log. sample.log names
+ERR_MODULE_NOT_FOUND for the relocated adapter's relative
+pi-observer-fixture.mjs import, before provider handshake. No sample.json was
+fabricated. run-wal.py fixes all three local imports with absolute paths; the
+resumed wal-records.json contains Pi small, D large, Pi large success. The old
+failed record was not included in successful medians or WAL summaries.
+
+No numerical mismatch found. Important reporting restrictions are incomplete
+per-WAL-product identity freezes, core-only request equivalence, diagnostic
+instrumentation cost, endpoint-only table ownership, and write-marker versus
+semantic/durability boundaries. Formal comparison must keep its stronger
+identity/admission checks and separate uninstrumented timings.

@@ -5,8 +5,8 @@ use super::{
     ClientInner, ConversationObservation, Ordering, RuntimeClientCursor, RuntimeClientError,
     TranscriptFieldSource,
 };
-use crate::observation::cut::CollectionFrontier;
 use crate::runtime_client::checkpoint::RuntimeClientCheckpoint;
+use std::sync::Arc;
 
 impl ClientInner {
     pub(crate) fn checkpoint_page(
@@ -22,6 +22,13 @@ impl ClientInner {
         self.lock_published_state()
             .projection
             .validate_checkpoint_cut(cut)?;
+        #[cfg(test)]
+        {
+            let hook = self.checkpoint_page_admitted_hook.lock().unwrap().take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
         if super::super::delivery::selection(domain).is_some() {
             return super::super::delivery::page(self.store.as_ref(), cut, domain, offset, limit);
         }
@@ -34,7 +41,6 @@ impl ClientInner {
         if let Some(page) = self.domain_source_page(cut, domain, offset, limit)? {
             return Ok(page);
         }
-
         if (domain == "attempt.in_flight.blocks" || domain == "attempt.foreground")
             && cut.live_publication.is_some()
         {
@@ -448,46 +454,94 @@ impl ClientInner {
         })
     }
 
+    /// Always validate the current store before sharing a resolved display owner.
+    fn materialize_content_binding(
+        &self,
+        binding: &crate::observation::cut::ContentBinding,
+    ) -> Result<Option<crate::observation::content::ContentRef>, RuntimeClientError> {
+        if matches!(
+            binding.content_ref.source,
+            crate::observation::content::ContentSource::LivePublicationPrefix { .. }
+        ) {
+            return Ok(None);
+        }
+        let raw = if matches!(
+            binding.content_ref.source,
+            crate::observation::content::ContentSource::CanonicalMessageBlock { .. }
+        ) && binding
+            .path
+            .last()
+            .is_some_and(|field| field == "arguments")
+        {
+            self.store
+                .content_descriptor(
+                    &binding.content_ref.source,
+                    crate::observation::content::ContentRepresentation::RawJsonUtf8,
+                )
+                .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?
+        } else {
+            None
+        };
+        Ok(Some(match raw {
+            Some(reference) => reference,
+            None => self
+                .store
+                .content_descriptor(
+                    &binding.content_ref.source,
+                    binding.content_ref.representation,
+                )
+                .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?
+                .ok_or(RuntimeClientError::ContentSourceUnavailable)?,
+        }))
+    }
+
     pub(super) fn materialize_content_bindings(
         &self,
         bindings: &mut [crate::observation::cut::ContentBinding],
     ) -> Result<(), RuntimeClientError> {
         for binding in bindings {
-            if matches!(
-                binding.content_ref.source,
-                crate::observation::content::ContentSource::LivePublicationPrefix { .. }
-            ) {
-                continue;
+            if let Some(reference) = self.materialize_content_binding(binding)? {
+                binding.content_ref = reference.into();
             }
-            let raw = if matches!(
-                binding.content_ref.source,
-                crate::observation::content::ContentSource::CanonicalMessageBlock { .. }
-            ) && binding
-                .path
-                .last()
-                .is_some_and(|field| field == "arguments")
-            {
-                self.store
-                    .content_descriptor(
-                        &binding.content_ref.source,
-                        crate::observation::content::ContentRepresentation::RawJsonUtf8,
-                    )
-                    .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?
-            } else {
-                None
-            };
-            binding.content_ref = match raw {
-                Some(reference) => reference,
-                None => self
-                    .store
-                    .content_descriptor(
-                        &binding.content_ref.source,
-                        binding.content_ref.representation,
-                    )
-                    .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?
-                    .ok_or(RuntimeClientError::ContentSourceUnavailable)?,
-            };
         }
+        Ok(())
+    }
+
+    /// A native pending mutation can invalidate physical reads before its
+    /// owner publishes the replacement cut. Other publications do not make
+    /// that same expired epoch readable and must not spend the second attempt.
+    pub(super) fn wait_checkpoint_retry(
+        &self,
+        cut: Option<&crate::durable::observation::ObservationReadCut>,
+        progress: u64,
+        deadline: std::time::Instant,
+    ) -> Result<(), RuntimeClientError> {
+        if let Some(cut) = cut {
+            let actual = self
+                .store
+                .observation_read_cut()
+                .map_err(RuntimeClientError::observation_store_error)?;
+            if actual.read.mutation_revision > cut.read.mutation_revision {
+                loop {
+                    let progress = self.publication_gate.generation();
+                    let published = self.lock_published_state().projection.checkpoint_read_cut();
+                    if published.source_cut.as_ref().is_some_and(|source| {
+                        source.read.mutation_revision >= actual.read.mutation_revision
+                    }) {
+                        return Ok(());
+                    }
+                    if self.pending.is_closed() || std::time::Instant::now() >= deadline {
+                        return Err(RuntimeClientError::ReadCutExpired);
+                    }
+                    #[cfg(test)]
+                    if let Some(hook) = self.checkpoint_source_wait_hook.lock().unwrap().as_mut() {
+                        hook();
+                    }
+                    self.publication_gate.wait_after(progress, deadline);
+                }
+            }
+        }
+        self.publication_gate.wait_after(progress, deadline);
         Ok(())
     }
 
@@ -512,15 +566,33 @@ impl ClientInner {
             if std::time::Instant::now() >= deadline {
                 break;
             }
+            let mut captured_seed = None;
             let result = self
-                .repair_failed_source_for_checkpoint(deadline)
-                .and_then(|()| self.materialize_checkpoint(records, deadline));
+                .hydrate_read_domains_for_checkpoint(deadline)
+                .and_then(|()| {
+                    let seed = {
+                        let state = self.lock_published_state();
+                        #[cfg(test)]
+                        state.projection.probe_snapshot_enter();
+                        state.projection.validate_published_source()?;
+                        state.projection.checkpoint_seed()
+                    };
+                    let result = self.materialize_checkpoint(&seed, records, deadline);
+                    captured_seed = Some(seed);
+                    result
+                });
             match result {
                 Ok(checkpoint) => return Ok(checkpoint),
                 Err(RuntimeClientError::ReadCutExpired) => {
                     last = RuntimeClientError::ReadCutExpired;
                     if attempt + 1 < super::super::checkpoint::CHECKPOINT_ATTEMPTS {
-                        self.publication_gate.wait_after(progress, deadline);
+                        self.wait_checkpoint_retry(
+                            captured_seed
+                                .as_ref()
+                                .and_then(|seed| seed.native_read_cut()),
+                            progress,
+                            deadline,
+                        )?;
                     }
                 }
                 Err(error) => return Err(error),
@@ -529,9 +601,10 @@ impl ClientInner {
         Err(last)
     }
 
+    /// Retry a failed Source read on explicit demand.
     /// Request one read on the existing worker and await its exact fence.
     /// The worker retains/cancels/joins physical Source work during shutdown.
-    pub(super) fn repair_failed_source_for_checkpoint(
+    pub(super) fn hydrate_read_domains_for_checkpoint(
         &self,
         deadline: std::time::Instant,
     ) -> Result<(), RuntimeClientError> {
@@ -546,7 +619,7 @@ impl ClientInner {
             {
                 return Ok(());
             }
-            state.projection.request_failed_read_repair()
+            state.projection.request_failed_read_domains()
         };
         let Some((cut, newly_requested)) = cut else {
             return Ok(());
@@ -556,14 +629,16 @@ impl ClientInner {
                 .push(ConversationObservation::JournalSourceReady);
         }
         #[cfg(test)]
-        if let Some(hook) = self
-            .publication_gate
-            .repair_request_hook
-            .lock()
-            .unwrap()
-            .take()
         {
-            hook();
+            let hook = self
+                .publication_gate
+                .repair_request_hook
+                .lock()
+                .unwrap()
+                .take();
+            if let Some(hook) = hook {
+                hook();
+            }
         }
         loop {
             let progress = self.publication_gate.generation();
@@ -606,33 +681,42 @@ impl ClientInner {
 
     pub(super) fn materialize_checkpoint(
         &self,
+        seed: &crate::runtime_client::projection::CheckpointSeed,
         records: &[crate::observation::trace::TraceCursor],
         deadline: std::time::Instant,
     ) -> Result<super::super::checkpoint::RuntimeClientCheckpoint, RuntimeClientError> {
-        let seed = {
-            let state = self.state.lock().expect("published checkpoint state");
-            #[cfg(test)]
-            state.projection.probe_snapshot_enter();
-            state.projection.validate_published_source()?;
-            state.projection.checkpoint_seed()
-        };
-        let mut checkpoint = seed.checkpoint_candidate()?;
-        self.materialize_content_bindings(&mut checkpoint.content)?;
+        #[cfg(test)]
+        {
+            let hook = self.checkpoint_read_hook.lock().unwrap().take();
+            if let Some(hook) = hook {
+                hook();
+            }
+        }
+        let mut checkpoint = seed.checkpoint_with_read_domains(self.store.as_ref())?;
+        for index in 0..checkpoint.content.len() {
+            let binding = &checkpoint.content[index];
+            if let Some(reference) = self.materialize_content_binding(binding)?
+                && &reference != binding.content_ref.as_ref()
+            {
+                Arc::make_mut(&mut checkpoint.content)[index] =
+                    binding.resolve(&Arc::new(reference));
+            }
+        }
         self.materialize_trace(&mut checkpoint.snapshot, &checkpoint.read_cut, records)?;
         self.materialize_auxiliary_audit_frontier(&mut checkpoint, deadline)?;
         if !records.is_empty() {
-            checkpoint
-                .collections
-                .retain(|frontier| frontier.domain != "trace_updates");
-            checkpoint
-                .collections
-                .push(crate::observation::cut::CollectionFrontier {
+            let collections = Arc::make_mut(&mut checkpoint.collections);
+            collections.retain(|frontier| frontier.domain != "trace_updates");
+            collections.push(
+                crate::observation::cut::CollectionFrontier {
                     domain: "trace_updates".into(),
                     revision: checkpoint.read_cut.through,
                     total: checkpoint.snapshot.trace_updates.len() as u64,
                     loaded: checkpoint.snapshot.trace_updates.len() as u64,
                     next_offset: None,
-                });
+                }
+                .into(),
+            );
         }
         if std::time::Instant::now() >= deadline {
             return Err(RuntimeClientError::ObservationUnavailable {
@@ -674,12 +758,10 @@ impl ClientInner {
                 message: "checkpoint auxiliary audit deadline exhausted".into(),
             });
         }
-        checkpoint
-            .collections
-            .retain(|frontier| frontier.domain != crate::runtime_client::auxiliary::DOMAIN);
-        checkpoint
-            .collections
-            .push(super::checkpoint::CollectionFrontier {
+        let collections = Arc::make_mut(&mut checkpoint.collections);
+        collections.retain(|frontier| frontier.domain != crate::runtime_client::auxiliary::DOMAIN);
+        collections.push(
+            crate::observation::cut::CollectionFrontier {
                 domain: crate::runtime_client::auxiliary::DOMAIN.into(),
                 revision: checkpoint
                     .read_cut
@@ -690,7 +772,9 @@ impl ClientInner {
                 total,
                 loaded: 0,
                 next_offset: (total > 0).then_some(0),
-            });
+            }
+            .into(),
+        );
         Ok(())
     }
 

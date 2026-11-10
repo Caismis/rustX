@@ -178,9 +178,9 @@ export interface PresentationState {
   inbound: InboundDiagnostics;
   /** Runtime-owned live interactions, reconstructed from snapshot/events. */
   pendingInteractions: DisplayInteraction[];
-  publicationSettlements: import("../../../protocol/app-server/v77.ts").RuntimeClientPublicationSettlementRecord[];
-  deferredTranscriptEntries: import("../../../protocol/app-server/v77.ts").CheckpointPageItem[];
-  messageDescriptors: import("../../../protocol/app-server/v77.ts").RuntimeClientMessageDescriptor[];
+  publicationSettlements: import("../../../protocol/app-server/v78.ts").RuntimeClientPublicationSettlementRecord[];
+  deferredTranscriptEntries: import("../../../protocol/app-server/v78.ts").CheckpointPageItem[];
+  messageDescriptors: import("../../../protocol/app-server/v78.ts").RuntimeClientMessageDescriptor[];
   jobs: RuntimeClientJob[];
   agents: RuntimeClientAgent[];
   /**
@@ -202,7 +202,7 @@ export interface PresentationState {
   /** The session's *desired* model configuration. */
   sessionModel: SessionModelView | null;
   /** Availability and deferral published by the native Session model owner. */
-  modelStatus: import("../../../protocol/app-server/v77.ts").RuntimeClientModelStatus | null;
+  modelStatus: import("../../../protocol/app-server/v78.ts").RuntimeClientModelStatus | null;
   /**
    * The attached Agent runtime's frozen native Agent Extension composition.
    *

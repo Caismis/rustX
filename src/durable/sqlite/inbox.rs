@@ -1,15 +1,14 @@
 //! The Pending Inbound Inbox and Goal domain: acceptance, adoption, and exact
 //! pending mutation, each committed in the caller's single transaction.
 
+use crate::durable::sqlite::statements::FixedStatements;
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 use super::AdmissionFaultOperation;
-use super::canonical::canonical_observation_batch;
 use super::canonical::ledger::{
-    append_transcript_reference, ensure_surface_head, load_message_tx, load_transcript_reference,
-    message_exists,
+    append_transcript_reference, load_message_tx, load_transcript_reference, message_exists,
 };
 use super::journal::reference::validate_subagent_terminal_publication;
 use super::journal::{find_event_by_id, persist_event_tx};
@@ -65,14 +64,16 @@ impl InboxStore for SqliteConversationStore {
     ) -> Result<
         (
             crate::goal::GoalResult,
-            Option<Arc<crate::durable::inbox::GoalObservationReceipt>>,
+            Option<Arc<crate::durable::GoalObservationReceipt>>,
         ),
         ConversationStoreError,
     > {
         let mut connection = self.lock()?;
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("Goal transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, format!("Goal transaction: {error}"))
+            })?;
         let previous = read_goal(&tx)?;
         let change = write.change();
         let result = crate::goal::transition(previous.as_ref(), write);
@@ -84,6 +85,7 @@ impl InboxStore for SqliteConversationStore {
                 return Err(storage("fault injected: Goal journal commit"));
             }
             let event = persist_event_tx(
+                &self.conn.event_guard,
                 &tx,
                 &self.conversation_id,
                 crate::goal::journal_envelope(
@@ -97,13 +99,14 @@ impl InboxStore for SqliteConversationStore {
                 ),
             )?
             .event;
-            receipt = Some(Arc::new(crate::durable::inbox::GoalObservationReceipt {
+            receipt = Some(Arc::new(crate::durable::GoalObservationReceipt {
                 view: crate::observation::goal::RuntimeClientGoalView::from_native(Some(goal)),
                 native: event.observation,
                 pending: None,
             }));
-            tx.commit()
-                .map_err(|error| storage(format!("Goal commit: {error}")))?;
+            tx.commit().map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, format!("Goal commit: {error}"))
+            })?;
         }
         Ok((result, receipt))
     }
@@ -115,7 +118,12 @@ impl InboxStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("Goal admission transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("Goal admission transaction: {error}"),
+                )
+            })?;
         let Some(mut goal) = read_goal(&tx)? else {
             return Ok(None);
         };
@@ -126,10 +134,12 @@ impl InboxStore for SqliteConversationStore {
             return Ok(None);
         }
         let pending: bool = tx
-            .query_row("SELECT EXISTS(SELECT 1 FROM pending_inbound)", [], |row| {
+            .query_row_cached("SELECT EXISTS(SELECT 1 FROM pending_inbound)", [], |row| {
                 row.get(0)
             })
-            .map_err(|error| storage(format!("Goal pending probe: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, format!("Goal pending probe: {error}"))
+            })?;
         if pending {
             return Ok(None);
         }
@@ -155,6 +165,7 @@ impl InboxStore for SqliteConversationStore {
         goal.last_round_message_id = Some(accepted.message_id.clone());
         save_goal(&tx, &goal)?;
         let event = persist_event_tx(
+            &self.conn.event_guard,
             &tx,
             &self.conversation_id,
             crate::goal::journal_envelope(
@@ -173,14 +184,15 @@ impl InboxStore for SqliteConversationStore {
             return Err(storage("fault injected: Goal accept commit"));
         }
         refresh_pending_receipt(&tx, &self.conversation_id, &mut accepted)?;
-        accepted.goal_observation = Some(Arc::new(crate::durable::inbox::GoalObservationReceipt {
+        accepted.goal_observation = Some(Arc::new(crate::durable::GoalObservationReceipt {
             view: crate::observation::goal::RuntimeClientGoalView::from_native(Some(&goal)),
             native: event.observation,
             pending: accepted.pending_observation.clone(),
         }));
         process_death::reach("before:accept_goal_round");
-        tx.commit()
-            .map_err(|error| storage(format!("Goal admission commit: {error}")))?;
+        tx.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("Goal admission commit: {error}"))
+        })?;
         process_death::reach("after:accept_goal_round");
         Ok(Some(accepted))
     }
@@ -192,16 +204,18 @@ impl InboxStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("accept transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, format!("accept transaction: {error}"))
+            })?;
         let accepted = accept_inbound_tx(self, &transaction, draft)?;
         #[cfg(test)]
         if Self::consume(&self.fail_accept_remaining) {
             return Err(storage("fault injected: accept commit"));
         }
         process_death::reach("before:accept_inbound");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("accept commit: {error}")))?;
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("accept commit: {error}"))
+        })?;
         process_death::reach("after:accept_inbound");
         Ok(accepted)
     }
@@ -214,7 +228,12 @@ impl InboxStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("accept/event transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("accept/event transaction: {error}"),
+                )
+            })?;
         // Issue #192: this generic compound transition owns exactly the
         // detached background terminal domain. A normal subagent terminal
         // fact has its own semantically closed authority
@@ -255,9 +274,12 @@ impl InboxStore for SqliteConversationStore {
                     "correlated inbound terminal fact conflicts with the stored fact".to_owned(),
                 ));
             }
-            transaction
-                .commit()
-                .map_err(|error| storage(format!("accept/event retry commit: {error}")))?;
+            transaction.commit().map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("accept/event retry commit: {error}"),
+                )
+            })?;
             return Ok((accepted, existing));
         }
         #[cfg(test)]
@@ -269,16 +291,21 @@ impl InboxStore for SqliteConversationStore {
             return Err(storage("fault injected: accept/event journal commit"));
         }
         process_death::reach_event("before:event", &event.event);
-        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let mut persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
         refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
         if let Some(native) = &mut persisted.event.observation {
             Arc::make_mut(native)
                 .pending
                 .clone_from(&accepted.pending_observation);
         }
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("accept/event commit: {error}")))?;
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("accept/event commit: {error}"))
+        })?;
         process_death::reach_event("after:event", &persisted.event.event);
         Ok((accepted, persisted.event))
     }
@@ -300,7 +327,12 @@ impl InboxStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("subagent terminal transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("subagent terminal transaction: {error}"),
+                )
+            })?;
         // The transition is semantically closed (Issue #192): every input
         // is validated against the durable ownership fact and the canonical
         // identities before anything is accepted, so no semantically
@@ -348,9 +380,12 @@ impl InboxStore for SqliteConversationStore {
                     "correlated inbound terminal fact conflicts with the stored fact".to_owned(),
                 ));
             }
-            transaction
-                .commit()
-                .map_err(|error| storage(format!("subagent terminal retry commit: {error}")))?;
+            transaction.commit().map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("subagent terminal retry commit: {error}"),
+                )
+            })?;
             return Ok((notice, accepted, existing));
         }
         #[cfg(test)]
@@ -362,16 +397,24 @@ impl InboxStore for SqliteConversationStore {
             return Err(storage("fault injected: subagent terminal journal commit"));
         }
         process_death::reach_event("before:event", &event.event);
-        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let mut persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
         refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
         if let Some(native) = &mut persisted.event.observation {
             Arc::make_mut(native)
                 .pending
                 .clone_from(&accepted.pending_observation);
         }
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("subagent terminal commit: {error}")))?;
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("subagent terminal commit: {error}"),
+            )
+        })?;
         process_death::reach_event("after:event", &persisted.event.event);
         Ok((notice, accepted, persisted.event))
     }
@@ -395,89 +438,22 @@ impl InboxStore for SqliteConversationStore {
             items,
         }))
     }
-    #[allow(clippy::too_many_lines)] // One atomic native adoption transaction.
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
         attempt_id: Option<crate::runtime::identity::AttemptId>,
-    ) -> Result<crate::durable::inbox::AdoptedBatch, ConversationStoreError> {
+    ) -> Result<crate::durable::AdoptedBatch, ConversationStoreError> {
         let mut connection = self.lock()?;
         let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("adopt transaction: {error}")))?;
-        #[cfg(test)]
-        if let Some(probe) = self
-            .pending_adoption_transaction_probe
-            .lock()
-            .unwrap()
-            .take()
-        {
-            probe();
-        }
-        ensure_surface_head(&transaction)?;
-
-        let mut items = load_pending_until(&transaction, watermark)?;
-        if attempt_id.is_some() {
-            items.retain(|item| item.message.kind != InboundKind::QueuedMessage);
-        }
-        for item in &items {
-            let block = crate::durable::inbox::canonical_block(&item.message);
-            let cursor = validation.append(&transaction, &block, Some(&item.message_id))?;
-            if cursor != item.transcript_cursor {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "adopted inbound {} changed its transcript cursor from {:?} to {:?}",
-                    item.message_id, item.transcript_cursor, cursor
-                )));
-            }
-        }
-        for item in &items {
-            transaction
-                .execute(
-                    "DELETE FROM pending_inbound WHERE sequence = ?1",
-                    [seq_to_i64(item.sequence.get())?],
-                )
-                .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
-        }
-        for item in &items {
-            // The removed native pending row fences these derived bytes even
-            // if cleanup fails; their deletion cannot refuse adoption.
-            let _ = optional_display_layout(&transaction, || {
-                content::clear_pending(&transaction, &item.sequence.get().to_string())
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, format!("adopt transaction: {error}"))
             })?;
-        }
-        if !items.is_empty() {
-            transaction.execute("UPDATE rustx_store SET pending_observation_count=pending_observation_count-?1,reading_mutation_revision=reading_mutation_revision+1 WHERE id=1",[items.len() as u64]).map_err(|error|storage(error.to_string()))?;
-        }
-        let mut adoption = None;
-        if !items.is_empty() {
-            let fact = crate::durable::inbox::inbound_adoption_event(
-                &self.conversation_id,
-                attempt_id,
-                items.iter().map(|item| item.message_id.clone()).collect(),
-            );
-            adoption = Some(persist_event_tx(&transaction, &self.conversation_id, fact)?.event);
-        }
-        #[cfg(test)]
-        if self.consume_admission_fault(AdmissionFaultOperation::AdoptPendingBatch)
-            || Self::consume(&self.fail_adopt_remaining)
-        {
-            return Err(storage("fault injected: adopt commit"));
-        }
-        let read_cut = reading::cut(&transaction, &self.conversation_id)?;
-        let canonical_receipts = canonical_observation_batch(
-            &transaction,
-            &self.conversation_id,
-            &items
-                .iter()
-                .map(|item| (&item.message_id, item.transcript_cursor))
-                .collect::<Vec<_>>(),
-            adoption
-                .as_ref()
-                .map(|event| (event.sequence, event.sequence)),
-        )?;
-        if let Some(event) = &mut adoption {
-            event.observation = canonical_receipts.first().and_then(|receipt| {
+        let mut adopted =
+            self.adopt_pending_tx(&transaction, &mut validation, watermark, attempt_id)?;
+        if let Some(event) = &mut adopted.adoption {
+            event.observation = adopted.canonical_receipts.first().and_then(|receipt| {
                 observation_receipt::canonical(
                     &transaction,
                     &self.conversation_id,
@@ -486,38 +462,25 @@ impl InboxStore for SqliteConversationStore {
                 )
             });
         }
-        let pending_observation = observation_receipt::pending(
-            &transaction,
-            &self.conversation_id,
-            None,
-            None,
-            Some((watermark.get(), items.len() as u64)),
-        );
         process_death::reach("before:adopt_pending_batch");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("adopt commit: {error}")))?;
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("adopt commit: {error}"))
+        })?;
         validation.committed(&connection);
         process_death::reach("after:adopt_pending_batch");
-        Ok(crate::durable::inbox::AdoptedBatch {
-            pending_observation,
-            canonical_receipts,
-            read_cut,
-            items,
-            adoption,
-        })
+        Ok(adopted)
     }
     fn edit_pending(
         &self,
-        expected: &crate::durable::inbox::PendingInboundRef,
+        expected: &crate::durable::PendingInboundRef,
         text: &str,
-    ) -> Result<crate::durable::inbox::PendingMutationOutcome, ConversationStoreError> {
+    ) -> Result<crate::durable::PendingMutationOutcome, ConversationStoreError> {
         self.mutate_pending(expected, Some(text))
     }
     fn remove_pending(
         &self,
-        expected: &crate::durable::inbox::PendingInboundRef,
-    ) -> Result<crate::durable::inbox::PendingMutationOutcome, ConversationStoreError> {
+        expected: &crate::durable::PendingInboundRef,
+    ) -> Result<crate::durable::PendingMutationOutcome, ConversationStoreError> {
         self.mutate_pending(expected, None)
     }
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
@@ -532,12 +495,17 @@ impl InboxStore for SqliteConversationStore {
         // accepted into this conversation.
         let connection = self.lock()?;
         let watermark: i64 = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT next_inbound_sequence FROM rustx_store WHERE id = 1",
                 [],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(format!("read inbound acceptance watermark: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("read inbound acceptance watermark: {error}"),
+                )
+            })?;
         Ok(watermark > 0)
     }
 }
@@ -545,7 +513,7 @@ impl InboxStore for SqliteConversationStore {
 pub(super) fn rewrite_pending_body(
     transaction: &Transaction<'_>,
     item: &mut PendingInboundItem,
-    expected: &crate::durable::inbox::PendingInboundRef,
+    expected: &crate::durable::PendingInboundRef,
     text: &str,
 ) -> Result<(), ConversationStoreError> {
     item.message.content = vec![UserContentBlock::Text(crate::message::content::TextBlock {
@@ -565,7 +533,9 @@ pub(super) fn rewrite_pending_body(
                 seq_to_i64(expected.sequence.get())?
             ],
         )
-        .map_err(|error| storage(format!("pending edit: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("pending edit: {error}"))
+        })?;
     let _ = optional_display_layout(transaction, || {
         content::index_pending(
             transaction,
@@ -607,7 +577,9 @@ pub(super) fn read_goal(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(format!("read Goal: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("read Goal: {error}"))
+        })?;
     json.map(|json| {
         serde_json::from_str(&json).map_err(|error| storage(format!("decode Goal: {error}")))
     })
@@ -621,7 +593,7 @@ pub(super) fn save_goal(
     let header = crate::observation::goal::RuntimeClientGoalView::from_native(Some(goal));
     let bytes = crate::observation::bounded::bounded_bytes(&header, 16384);
     tx.execute("INSERT INTO goal_state(singleton, snapshot_json,observation_header) VALUES(1, ?1,?2) ON CONFLICT(singleton) DO UPDATE SET snapshot_json = excluded.snapshot_json,observation_header=excluded.observation_header,observation_source_id=NULL,observation_sequence=NULL",
-        params![encode(goal, "Goal")?,bytes]).map_err(|error| storage(format!("write Goal: {error}")))?;
+        params![encode(goal, "Goal")?,bytes]).map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("write Goal: {error}")))?;
     let _ = optional_display_layout(tx, || observation_state::goal(tx, goal))?;
     Ok(())
 }
@@ -675,13 +647,15 @@ pub(super) fn accept_scheduled_inbound_tx(
 
     if let Some(correlation) = draft.correlation.as_deref() {
         let existing: Option<(i64, String)> = transaction
-            .query_row(
+            .query_row_cached(
                 "SELECT sequence, message_id FROM inbound_correlation WHERE correlation = ?1",
                 [correlation],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
-            .map_err(|error| storage(format!("correlation probe: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, format!("correlation probe: {error}"))
+            })?;
         if let Some((sequence, message_id)) = existing {
             let message =
                 load_correlated_user_message(transaction, &MessageId::new(message_id.clone()))?;
@@ -730,12 +704,14 @@ pub(super) fn accept_scheduled_inbound_tx(
         }
     }
     let current: i64 = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT next_inbound_sequence FROM rustx_store WHERE id = 1",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("read inbound sequence: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("read inbound sequence: {error}"))
+        })?;
     let next = current
         .checked_add(1)
         .ok_or(ConversationStoreError::SequenceExhausted)?;
@@ -756,24 +732,26 @@ pub(super) fn accept_scheduled_inbound_tx(
     };
     let json = encode(&message, "inbound")?;
     transaction
-        .execute(
+        .execute_cached(
             "INSERT INTO pending_inbound(sequence,message_id,message_json,correlation) VALUES(?1,?2,?3,?4)",
             params![next, message_id.as_str(), json, draft.correlation.as_deref()],
         )
         .map_err(|error| map_insert_error(&error, &message_id))?;
     transaction
-        .execute(
+        .execute_cached(
             "UPDATE rustx_store SET next_inbound_sequence = ?1,pending_observation_count=pending_observation_count+1 WHERE id = 1",
             [next],
         )
-        .map_err(|error| storage(format!("update inbound sequence: {error}")))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("update inbound sequence: {error}")))?;
     if let Some(correlation) = draft.correlation.as_deref() {
         transaction
-            .execute(
+            .execute_cached(
                 "INSERT INTO inbound_correlation(correlation,sequence,message_id) VALUES(?1,?2,?3)",
                 params![correlation, next, message_id.as_str()],
             )
-            .map_err(|error| storage(format!("insert correlation: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, format!("insert correlation: {error}"))
+            })?;
     }
     let _ = optional_display_layout(transaction, || {
         content::index_pending(transaction, &message, sequence, 0)?;
@@ -822,12 +800,17 @@ pub(super) fn pending_message_exists(
     message_id: &MessageId,
 ) -> Result<bool, ConversationStoreError> {
     connection
-        .query_row(
+        .query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM pending_inbound WHERE message_id=?1)",
             [message_id.as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("pending message identity probe: {error}")))
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("pending message identity probe: {error}"),
+            )
+        })
 }
 
 pub(super) fn load_correlated_user_message(
@@ -841,7 +824,12 @@ pub(super) fn load_correlated_user_message(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(format!("correlated pending lookup: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("correlated pending lookup: {error}"),
+            )
+        })?;
     if let Some(json) = pending_json {
         let message: UserMessageBlock = decode(&json, "correlated pending message")?;
         if message.id != *message_id {
@@ -869,14 +857,16 @@ pub(super) fn load_pending_rows(
     connection: &Connection,
 ) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
     let mut statement = connection
-        .prepare(
+        .prepare_cached(
             "SELECT p.sequence,p.message_id,p.message_json,p.correlation,t.position,p.revision
              FROM pending_inbound p
              LEFT JOIN transcript_order t
                ON t.reference_kind='message' AND t.reference_id=p.message_id
              ORDER BY p.sequence",
         )
-        .map_err(|error| storage(format!("load pending: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("load pending: {error}"))
+        })?;
     let rows = statement
         .query_map([], |row| {
             let sequence: i64 = row.get(0)?;
@@ -911,7 +901,9 @@ pub(super) fn load_pending_rows(
                 correlation: row.get(3)?,
             })
         })
-        .map_err(|error| storage(format!("pending query: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("pending query: {error}"))
+        })?;
     let items: Vec<PendingInboundItem> = rows
         .map(|row| row.map_err(|error| storage(format!("pending row: {error}"))))
         .collect::<Result<_, _>>()?;
@@ -938,7 +930,7 @@ pub(super) fn load_pending_exact(
     sequence: InboundSequence,
 ) -> Result<Option<PendingInboundItem>, ConversationStoreError> {
     type PendingIdentityRow = (String, String, Option<String>, Option<u64>, u64);
-    let row:Option<PendingIdentityRow>=connection.query_row("SELECT p.message_id,p.message_json,p.correlation,t.position,p.revision FROM pending_inbound p LEFT JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=p.message_id WHERE p.sequence=?1",[sequence.get()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let row:Option<PendingIdentityRow>=connection.query_row("SELECT p.message_id,p.message_json,p.correlation,t.position,p.revision FROM pending_inbound p LEFT JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=p.message_id WHERE p.sequence=?1",[sequence.get()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     row.map(|(id, json, correlation, cursor, revision)| {
         let message: UserMessageBlock =
             serde_json::from_str(&json).map_err(|error| storage(error.to_string()))?;
@@ -974,14 +966,16 @@ pub(super) fn load_pending_until(
 impl SqliteConversationStore {
     pub(super) fn mutate_pending(
         &self,
-        expected: &crate::durable::inbox::PendingInboundRef,
+        expected: &crate::durable::PendingInboundRef,
         text: Option<&str>,
-    ) -> Result<crate::durable::inbox::PendingMutationOutcome, ConversationStoreError> {
-        use crate::durable::inbox::PendingMutationOutcome as Outcome;
+    ) -> Result<crate::durable::PendingMutationOutcome, ConversationStoreError> {
+        use crate::durable::PendingMutationOutcome as Outcome;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("pending mutation: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, format!("pending mutation: {error}"))
+            })?;
         #[cfg(test)]
         if let Some(probe) = self
             .pending_mutation_transaction_probe
@@ -998,7 +992,7 @@ impl SqliteConversationStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let Some(revision) = revision else {
             return Ok(Outcome::NotPending);
         };
@@ -1037,17 +1031,19 @@ impl SqliteConversationStore {
                     "DELETE FROM pending_inbound WHERE sequence=?1",
                     [seq_to_i64(expected.sequence.get())?],
                 )
-                .map_err(|error| storage(format!("pending remove: {error}")))?;
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(&error, format!("pending remove: {error}"))
+                })?;
             let _ = optional_display_layout(&transaction, || {
-                transaction.execute("DELETE FROM observation_headers WHERE reference_kind='message' AND reference_id=?1",[item.message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
+                transaction.execute("DELETE FROM observation_headers WHERE reference_kind='message' AND reference_id=?1",[item.message_id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
                 Ok(())
             })?;
             transaction.execute("DELETE FROM transcript_order WHERE reference_kind='message' AND reference_id=?1", [item.message_id.as_str()])
-                .map_err(|error| storage(format!("pending transcript remove: {error}")))?;
-            transaction.execute("UPDATE rustx_store SET retained_transcript_count=retained_transcript_count-1,pending_observation_count=pending_observation_count-1 WHERE id=1", []).map_err(|error|storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("pending transcript remove: {error}")))?;
+            transaction.execute("UPDATE rustx_store SET retained_transcript_count=retained_transcript_count-1,pending_observation_count=pending_observation_count-1 WHERE id=1", []).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         }
         transaction.execute("UPDATE rustx_store SET reading_mutation_revision=reading_mutation_revision+1 WHERE id=1", [])
-            .map_err(|error| storage(format!("reading mutation: {error}")))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("reading mutation: {error}")))?;
         let read_cut = reading::cut(&transaction, &self.conversation_id)?;
         let pending_observation = observation_receipt::pending(
             &transaction,
@@ -1057,9 +1053,12 @@ impl SqliteConversationStore {
                 .then_some((expected.sequence.get(), item.transcript_cursor)),
             None,
         );
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("pending mutation commit: {error}")))?;
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("pending mutation commit: {error}"),
+            )
+        })?;
         Ok(Outcome::Applied {
             read_cut,
             pending_observation,

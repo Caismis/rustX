@@ -9,12 +9,12 @@ use std::sync::Arc;
 
 mod event_probe;
 mod indexed_fact;
-mod inspection;
-mod member;
+pub(in crate::durable::sqlite) mod inspection;
+pub(in crate::durable::sqlite) mod member;
 mod occupancy;
 mod occupancy_origin;
 mod owner;
-mod projection;
+pub(in crate::durable::sqlite) mod projection;
 mod scale;
 mod selected_source;
 mod statistics;
@@ -39,7 +39,7 @@ fn t10_t19_t20_readiness_layout_failure_never_refuses_native_journal_commit() {
         event
     };
     store.append_event(make("first")).unwrap();
-    store.lock().unwrap().execute_batch("CREATE TRIGGER readiness_layout_failure BEFORE INSERT ON event_observation_readiness WHEN NEW.sequence=2 BEGIN SELECT RAISE(FAIL,'derived readiness failure'); END;").unwrap();
+    store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER readiness_layout_failure BEFORE INSERT ON event_observation_readiness WHEN NEW.sequence=2 BEGIN SELECT RAISE(FAIL,'derived readiness failure'); END;").unwrap();
     let second = store.append_event(make("second")).unwrap();
     assert_eq!(second.sequence, 2, "original native Journal committed");
     assert!(second.observation.as_ref().unwrap().source_unavailable);
@@ -70,9 +70,10 @@ fn t10_t19_t20_readiness_layout_failure_never_refuses_native_journal_commit() {
             .unwrap()
             .native_direct
     );
-    assert!(
-        store.observe_journal(Arc::new(Observer)).is_err(),
-        "failed repair remains unavailable"
+    assert_eq!(
+        store.observe_journal(Arc::new(Observer)).unwrap(),
+        2,
+        "a new runtime epoch adopts committed history without rebuilding old TEMP rows"
     );
     store
         .lock()
@@ -104,8 +105,8 @@ fn t10_t19_t20_readiness_repair_preserves_independent_auxiliary_failure() {
     let id = ConversationId::new("conv_09276f12-ed32-741a-8cd5-91c38800ef71");
     let store = SqliteConversationStore::in_memory(id.clone()).unwrap();
     store.lock().unwrap().execute_batch(
-        "CREATE TRIGGER readiness_failure BEFORE INSERT ON event_observation_readiness BEGIN SELECT RAISE(FAIL,'readiness failure'); END;
-         CREATE TRIGGER fallback_failure BEFORE UPDATE OF observation_json ON events BEGIN SELECT RAISE(FAIL,'independent fallback failure'); END;",
+        "CREATE TEMP TRIGGER readiness_failure BEFORE INSERT ON event_observation_readiness BEGIN SELECT RAISE(FAIL,'readiness failure'); END;
+         CREATE TRIGGER inline_source_failure BEFORE UPDATE OF observation_source ON events BEGIN SELECT RAISE(FAIL,'independent event source failure'); END;",
     ).unwrap();
     let mut event = envelope(
         &id,
@@ -124,15 +125,23 @@ fn t10_t19_t20_readiness_repair_preserves_independent_auxiliary_failure() {
         ).unwrap()
     };
     assert_eq!(flags(&store), (true, true));
-    assert!(store.observe_journal(Arc::new(Observer)).is_err());
+    // The event-local field source can fail without leaving a Trace hole.
+    // Its finite own witness is independently retained by index_optional.
+    assert!(observation_trace::header(&store.lock().unwrap(), 1, 1).is_ok());
+    assert_eq!(store.observe_journal(Arc::new(Observer)).unwrap(), 1);
     store
         .lock()
         .unwrap()
-        .execute_batch("DROP TRIGGER readiness_failure; DROP TRIGGER fallback_failure;")
+        .execute_batch("DROP TRIGGER readiness_failure; DROP TRIGGER inline_source_failure;")
         .unwrap();
     assert_eq!(store.observe_journal(Arc::new(Observer)).unwrap(), 1);
     assert_eq!(store.observation_ready_frontier(0, 1).unwrap(), 1);
-    assert_eq!(flags(&store), (false, true));
+    assert_eq!(
+        flags(&store),
+        (true, true),
+        "epoch adoption does not rewrite old native evidence"
+    );
+    assert!(store.event_value_read(1, 1, &[], 0, 32).is_err());
     assert!(
         store
             .observation_event_witness(1, 1)
@@ -174,7 +183,7 @@ fn t10_t19_t20_transcript_readiness_failure_preserves_native_canonical_commit() 
     let id = ConversationId::new("conv_2be184c1-ab11-725b-82c3-81daea936182");
     let store = SqliteConversationStore::in_memory(id).unwrap();
     store.initialize(&[]).unwrap();
-    store.lock().unwrap().execute_batch("CREATE TRIGGER transcript_readiness_failure BEFORE INSERT ON transcript_observation_readiness WHEN NEW.position=1 BEGIN SELECT RAISE(FAIL,'derived transcript readiness failure'); END;").unwrap();
+    store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER transcript_readiness_failure BEFORE INSERT ON transcript_observation_readiness WHEN NEW.position=1 BEGIN SELECT RAISE(FAIL,'derived transcript readiness failure'); END;").unwrap();
     let first = store
         .append_canonical(&user_message("first", "canonical authority"))
         .unwrap();
@@ -201,7 +210,7 @@ fn t10_t19_t20_transcript_readiness_failure_preserves_native_canonical_commit() 
         store.observation_transcript_ready_frontier(0, 2).unwrap(),
         0
     );
-    assert!(store.observe_journal(Arc::new(Observer)).is_err());
+    assert_eq!(store.observe_journal(Arc::new(Observer)).unwrap(), 0);
     store
         .lock()
         .unwrap()
@@ -246,11 +255,8 @@ fn t10_t15_t20_trace_count_hole_is_unavailable_without_refusing_native_commit() 
     assert!(store.observation_trace_total(2).is_err());
     assert_eq!(store.observation_trace_total(1).unwrap(), 1);
     let connection = store.lock().unwrap();
-    let plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT sequence FROM events INDEXED BY events_observation_trace_holes_idx WHERE observation_trace_required=1 AND observation_trace_total IS NULL AND sequence<=2",[],|row|row.get(3)).unwrap();
-    assert!(
-        plan.contains("events_observation_trace_holes_idx"),
-        "{plan}"
-    );
+    let plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT sequence FROM events INDEXED BY events_aggregate_holes_idx WHERE observation_aggregate_holes>0 AND observation_aggregate_holes IN (2,3,6,7) AND sequence<=2",[],|row|row.get(3)).unwrap();
+    assert!(plan.contains("events_aggregate_holes_idx"), "{plan}");
 }
 
 #[test]
@@ -290,15 +296,35 @@ fn t12_t19_native_failure_receipt_and_range_preserve_public_normalization() {
             },
         ))
         .unwrap();
-    let headers = store
-        .latest_observation_events(2, &["attempt_failed".into()], None, 32)
+    store
+        .lock()
+        .unwrap()
+        .authorizer(Some(|context: rusqlite::hooks::AuthContext<'_>| {
+            if matches!(
+                context.action,
+                rusqlite::hooks::AuthAction::Read {
+                    table_name: "events",
+                    column_name: "event_id" | "event_json"
+                }
+            ) {
+                rusqlite::hooks::Authorization::Deny
+            } else {
+                rusqlite::hooks::Authorization::Allow
+            }
+        }))
         .unwrap();
-    assert_eq!(headers.len(), 1);
-    assert_eq!(headers[0].sequence, 2);
+    let witness = store.observation_event_witness(2, 2).unwrap().unwrap();
+    store
+        .lock()
+        .unwrap()
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
+    assert_eq!(witness.sequence, 2);
     assert!(
-        headers[0].event_id.is_none(),
+        witness.event_id.is_none(),
         "metadata seek never hydrates an enormous original Event ID"
     );
+    assert!(serde_json::to_vec(&witness).unwrap().len() <= 16_384);
     let receipt = event.observation.as_ref().unwrap();
     assert!(receipt.failure_deferred);
     assert_eq!(receipt.failure_sequence, Some(2));
@@ -374,9 +400,6 @@ fn t14_t19_t20_transcript_ready_prefix_fences_prior_terminal_without_position_mi
     assert!(store.mark_observation_transcript_ready(75).is_err());
     assert!(store.mark_canonical_transcript_ready(1, 74).is_err());
     let connection = store.lock().unwrap();
-    let plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT MIN(position) FROM transcript_observation_readiness WHERE ready=0 AND position>0 AND position<=74",[],|row|row.get(3)).unwrap();
-    assert!(
-        plan.contains("transcript_observation_readiness_holes_idx"),
-        "{plan}"
-    );
+    let plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT MIN(position) FROM transcript_observation_readiness WHERE position>0 AND position<=74",[],|row|row.get(3)).unwrap();
+    assert!(plan.contains("USING INTEGER PRIMARY KEY"), "{plan}");
 }

@@ -1,12 +1,14 @@
 //! Exact read cuts, frontiers and content bindings that identify one bounded
 //! native observation. A cut is immutable once captured.
-use super::content::ContentRef;
+use super::metadata::{MetadataFragment, ReadCutMap};
+use crate::observation::content::ContentRef;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LivePublicationReadCut {
-    pub source: super::content::ContentSource,
+    pub source: crate::observation::content::ContentSource,
     #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub revision: u64,
     #[schemars(range(max = 9_007_199_254_740_991_u64))]
@@ -17,10 +19,11 @@ pub struct LivePublicationReadCut {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CanonicalForegroundReadCut {
-    pub locator: super::content::CanonicalContentLocator,
+    pub locator: crate::observation::content::CanonicalContentLocator,
     #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub total: u64,
 }
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CheckpointReadCut {
@@ -32,18 +35,25 @@ pub struct CheckpointReadCut {
     pub through: u64,
     /// Immutable durable descriptor frontier captured with this display cut.
     pub source_cut: Option<crate::durable::observation::ObservationReadCut>,
-    pub domain_revisions: std::collections::BTreeMap<String, u64>,
+    #[schemars(with = "std::collections::BTreeMap<String, u64>")]
+    pub domain_revisions: MetadataFragment<ReadCutMap<u64>>,
+    #[schemars(
+        with = "std::collections::BTreeMap<String, crate::runtime::identity::ObservationCollectionCut>"
+    )]
     pub collection_cuts:
-        std::collections::BTreeMap<String, crate::runtime::identity::ObservationCollectionCut>,
+        MetadataFragment<ReadCutMap<crate::runtime::identity::ObservationCollectionCut>>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContentBinding {
+    // Display positions vary across captures; native byte evidence is immutable
+    // and shared with the source-owned metadata root.
     /// Projection-owned structural selection inside `CanonicalJsonV1` bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_path: Option<Vec<String>>,
     pub path: Vec<String>,
-    pub content_ref: ContentRef,
+    #[schemars(with = "ContentRef")]
+    pub content_ref: Arc<ContentRef>,
     pub deferred: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

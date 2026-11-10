@@ -291,7 +291,8 @@ fn source_history() -> Vec<MessageBlock> {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         }),
         user("source-user-c", "C"),
     ]
@@ -373,3 +374,28 @@ mod archive_tests;
 
 mod artifact_lineage_tests;
 pub(crate) mod deletion_tests;
+
+#[test]
+fn activity_reuse_checks_changed_bytes_and_keeps_uncommitted_state_out() {
+    let (_directory, mut catalog, _) = open_catalog();
+    let id = first_session(&catalog);
+    let time = chrono::DateTime::parse_from_rfc3339("2100-01-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let original = std::fs::read(&catalog.path).unwrap();
+    let generation = catalog.document.generation;
+    std::fs::write(&catalog.path, b"{broken").unwrap();
+    assert!(catalog.publish_activity(&id, time).is_err());
+    assert_eq!(catalog.document.generation, generation);
+    std::fs::write(&catalog.path, &original).unwrap();
+    catalog.arm_write_fault_before_rename();
+    assert!(catalog.publish_activity(&id, time).is_err());
+    assert_eq!(catalog.document.generation, generation);
+    assert_eq!(std::fs::read(&catalog.path).unwrap(), original);
+    assert!(catalog.publish_activity(&id, time).unwrap());
+    assert_eq!(catalog.summary(&id).unwrap().updated_at, time);
+    let reopened = SessionCatalog::read_under_guard(&catalog.product)
+        .unwrap()
+        .unwrap();
+    assert_eq!(reopened.summary(&id).unwrap().updated_at, time);
+}

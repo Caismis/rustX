@@ -678,7 +678,8 @@ mod tests {
                 deliveries: Vec::new(),
                 truncation: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     }
     fn target(item: u32, block: u32) -> CheckpointCallCoordinate {
@@ -872,10 +873,11 @@ mod tests {
         };
         for native in [
             ProviderContinuationState::Anthropic(AnthropicContinuation {
-                opaque: serde_json::json!({"signature":"signed"}),
+                opaque: serde_json::json!({"signature":"signed"}).into(),
             }),
             ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
-                items: vec![serde_json::json!({"type":"reasoning","encrypted_content":"opaque"})],
+                items: vec![serde_json::json!({"type":"reasoning","encrypted_content":"opaque"})]
+                    .into(),
             }),
         ] {
             let source = MessageBlock::Assistant(AssistantMessageBlock {

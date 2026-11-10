@@ -80,7 +80,7 @@ fn t08_t15_t20_scoped_byte_reader_preserves_every_probe_with_one_file_and_no_ind
 #[test]
 fn t08_t12_t20_scoped_byte_reader_checks_bounds_and_keeps_physical_errors_and_source_lifetime() {
     let (source, original) = source();
-    let directory = source.layout.directory.path().to_owned();
+    let directory = source.layout.directory.as_ref().unwrap().path().to_owned();
     let reader = source.byte_reader().unwrap();
     READ_WORK.with(|work| work.set((0, 0)));
     let length = u64::try_from(original.len()).unwrap();

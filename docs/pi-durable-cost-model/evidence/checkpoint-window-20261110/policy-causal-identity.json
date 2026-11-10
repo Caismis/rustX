@@ -1,0 +1,19 @@
+{
+  "scope": "Single unchanged baseline ELF, GNU allocator, four balanced diagnostic 64-history pairs. Only startup checkpoint selection differs. First-statement trace disables itself before the policy query; no retained per-statement hook. Provider does not inherit LD_PRELOAD. Not ordinary headline timing.",
+  "binary": "/home/capi/.cache/rustx-pr485-history-growth-20261109/kind-build/conformance",
+  "binary_sha256": "a682bdcf9cff9c049b150565ae0c83c701993d1f2f7bea920e5cb0702dbfaa80",
+  "helper_sha256": "95910f5788471166f2e5d97102427087b970fc07f7f587bcf796928db06f2112",
+  "header_sha256": "962b7bcb1e148bab6fce4af7657501271121c8ed7a6a234e0ccb3155bcc99b23",
+  "elf_offsets": {
+    "RUSTX_CHECKPOINT_TRACE_OFFSET": "000000000842f1e0",
+    "RUSTX_CHECKPOINT_WAL_OFFSET": "0000000008431c90",
+    "RUSTX_CHECKPOINT_EXEC_OFFSET": "0000000008516da0",
+    "RUSTX_CHECKPOINT_EXTENSION_OFFSET": "000000000857bcb0"
+  },
+  "affinity": [
+    2,
+    4,
+    6,
+    10
+  ]
+}

@@ -1260,7 +1260,7 @@ async fn previous_thinking_replays_from_opaque_state() {
                         text: Some("Previous chain.".to_owned()),
                         provider_state: Some(ProviderContinuationState::Anthropic(
                             AnthropicContinuation {
-                                opaque: opaque.clone(),
+                                opaque: opaque.clone().into(),
                             },
                         )),
                     },
@@ -1341,7 +1341,8 @@ async fn tool_results_merge_into_one_user_message() {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     };
     request
@@ -1392,7 +1393,7 @@ async fn continuation_contradiction_with_boundary_is_rejected() {
                         text: None,
                         provider_state: Some(ProviderContinuationState::Anthropic(
                             AnthropicContinuation {
-                                opaque: serde_json::json!({"signature": "sig-a"}),
+                                opaque: serde_json::json!({"signature": "sig-a"}).into(),
                             },
                         )),
                     },
@@ -1402,7 +1403,7 @@ async fn continuation_contradiction_with_boundary_is_rejected() {
     );
     request.continuation = Some(ProviderContinuationState::Anthropic(
         AnthropicContinuation {
-            opaque: serde_json::json!({"signature": "sig-b"}),
+            opaque: serde_json::json!({"signature": "sig-b"}).into(),
         },
     ));
     let events = collect_events(&adapter(&server), request).await;
@@ -1435,7 +1436,9 @@ async fn incomplete_or_changed_native_thinking_never_dispatches() {
                         origin: request.invocation.replay_origin(),
                         text: Some("edited plaintext".into()),
                         provider_state: Some(ProviderContinuationState::Anthropic(
-                            AnthropicContinuation { opaque },
+                            AnthropicContinuation {
+                                opaque: opaque.into(),
+                            },
                         )),
                     })],
                 },
@@ -1493,7 +1496,7 @@ async fn redacted_thinking_preserves_opaque_data() {
     );
     let state = anthropic_state_of(&events[1]);
     assert_eq!(
-        state.opaque,
+        *state.opaque,
         serde_json::json!({
             "type": "redacted_thinking",
             "data": "opaque-redacted-provider-data",
@@ -1533,7 +1536,7 @@ async fn redacted_thinking_replays_losslessly() {
                         text: None,
                         provider_state: Some(ProviderContinuationState::Anthropic(
                             AnthropicContinuation {
-                                opaque: opaque.clone(),
+                                opaque: opaque.clone().into(),
                             },
                         )),
                     },
@@ -1757,7 +1760,8 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })),
         rustx::model::ModelInputMessage::Canonical(user("msg-a", "A")),
         rustx::model::ModelInputMessage::Canonical(user("msg-b", "B")),

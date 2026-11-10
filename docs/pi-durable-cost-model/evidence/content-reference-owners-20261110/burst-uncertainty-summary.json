@@ -1,0 +1,374 @@
+{
+  "question": "Original four burst pairs had P50 +9.43%, three slower; test whether the adverse direction persists in four prespecified additional balanced pairs. Preserve every original and additional result. Single cold first turn per product; CPU endpoints have 10 ms granularity. No statistical-significance claim.",
+  "rows": [
+    {
+      "group": "ordinary",
+      "rep": 0,
+      "side": "before",
+      "p50_ms": 35.435,
+      "accepted_ms": 10.665,
+      "after_accepted_ms": 24.77,
+      "cpu_ms_per_turn": 40.0,
+      "notifications": 9,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "ordinary",
+      "rep": 0,
+      "side": "after",
+      "p50_ms": 38.085,
+      "accepted_ms": 11.423,
+      "after_accepted_ms": 26.662,
+      "cpu_ms_per_turn": 30.0,
+      "notifications": 9,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "ordinary",
+      "rep": 1,
+      "side": "before",
+      "p50_ms": 36.521,
+      "accepted_ms": 13.213,
+      "after_accepted_ms": 23.308,
+      "cpu_ms_per_turn": 30.0,
+      "notifications": 9,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "ordinary",
+      "rep": 1,
+      "side": "after",
+      "p50_ms": 33.348,
+      "accepted_ms": 8.873,
+      "after_accepted_ms": 24.475,
+      "cpu_ms_per_turn": 40.0,
+      "notifications": 9,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "ordinary",
+      "rep": 2,
+      "side": "before",
+      "p50_ms": 90.273,
+      "accepted_ms": 51.287,
+      "after_accepted_ms": 38.986,
+      "cpu_ms_per_turn": 50.0,
+      "notifications": 9,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "ordinary",
+      "rep": 2,
+      "side": "after",
+      "p50_ms": 100.548,
+      "accepted_ms": 75.239,
+      "after_accepted_ms": 25.309,
+      "cpu_ms_per_turn": 30.0,
+      "notifications": 10,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "ordinary",
+      "rep": 3,
+      "side": "before",
+      "p50_ms": 34.628,
+      "accepted_ms": 11.827,
+      "after_accepted_ms": 22.801,
+      "cpu_ms_per_turn": 40.0,
+      "notifications": 9,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "ordinary",
+      "rep": 3,
+      "side": "after",
+      "p50_ms": 42.235,
+      "accepted_ms": 11.985,
+      "after_accepted_ms": 30.25,
+      "cpu_ms_per_turn": 50.0,
+      "notifications": 10,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "burst-uncertainty",
+      "rep": 4,
+      "side": "before",
+      "p50_ms": 30.328,
+      "accepted_ms": 9.462,
+      "after_accepted_ms": 20.866,
+      "cpu_ms_per_turn": 30.0,
+      "notifications": 9,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "burst-uncertainty",
+      "rep": 4,
+      "side": "after",
+      "p50_ms": 33.996,
+      "accepted_ms": 9.327,
+      "after_accepted_ms": 24.669,
+      "cpu_ms_per_turn": 40.0,
+      "notifications": 9,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "burst-uncertainty",
+      "rep": 5,
+      "side": "before",
+      "p50_ms": 35.441,
+      "accepted_ms": 9.674,
+      "after_accepted_ms": 25.767,
+      "cpu_ms_per_turn": 30.0,
+      "notifications": 11,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "burst-uncertainty",
+      "rep": 5,
+      "side": "after",
+      "p50_ms": 38.156,
+      "accepted_ms": 9.388,
+      "after_accepted_ms": 28.768,
+      "cpu_ms_per_turn": 40.0,
+      "notifications": 9,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "burst-uncertainty",
+      "rep": 6,
+      "side": "before",
+      "p50_ms": 31.781,
+      "accepted_ms": 9.961,
+      "after_accepted_ms": 21.82,
+      "cpu_ms_per_turn": 30.0,
+      "notifications": 9,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "burst-uncertainty",
+      "rep": 6,
+      "side": "after",
+      "p50_ms": 36.466,
+      "accepted_ms": 9.956,
+      "after_accepted_ms": 26.51,
+      "cpu_ms_per_turn": 30.0,
+      "notifications": 10,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "burst-uncertainty",
+      "rep": 7,
+      "side": "before",
+      "p50_ms": 37.361,
+      "accepted_ms": 10.186,
+      "after_accepted_ms": 27.175,
+      "cpu_ms_per_turn": 30.0,
+      "notifications": 9,
+      "write_kib_per_turn": 592.0
+    },
+    {
+      "group": "burst-uncertainty",
+      "rep": 7,
+      "side": "after",
+      "p50_ms": 33.879,
+      "accepted_ms": 9.58,
+      "after_accepted_ms": 24.299,
+      "cpu_ms_per_turn": 30.0,
+      "notifications": 9,
+      "write_kib_per_turn": 592.0
+    }
+  ],
+  "summary": {
+    "original_four": {
+      "p50_ms": {
+        "before_median": 35.978,
+        "after_median": 40.16,
+        "paired_percent": [
+          7.478481727105963,
+          -8.688152022124262,
+          11.382140839453664,
+          21.96777174540834
+        ],
+        "median_paired_percent": 9.430311283279813
+      },
+      "accepted_ms": {
+        "before_median": 12.52,
+        "after_median": 11.704,
+        "paired_percent": [
+          7.107360525082053,
+          -32.84643911299478,
+          46.70189326729972,
+          1.3359262703982369
+        ],
+        "median_paired_percent": 4.221643397740145
+      },
+      "after_accepted_ms": {
+        "before_median": 24.039,
+        "after_median": 25.985500000000002,
+        "paired_percent": [
+          7.638272103350825,
+          5.006864595846927,
+          -35.08182424460062,
+          32.66961975351959
+        ],
+        "median_paired_percent": 6.3225683495988765
+      },
+      "cpu_ms_per_turn": {
+        "before_median": 40.0,
+        "after_median": 35.0,
+        "paired_percent": [
+          -25.0,
+          33.33333333333333,
+          -40.0,
+          25.0
+        ],
+        "median_paired_percent": 0.0
+      },
+      "write_kib_per_turn": {
+        "before_median": 592.0,
+        "after_median": 592.0,
+        "paired_percent": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median_paired_percent": 0.0
+      }
+    },
+    "additional_four": {
+      "p50_ms": {
+        "before_median": 33.611000000000004,
+        "after_median": 35.231,
+        "paired_percent": [
+          12.094434186230556,
+          7.6606190570243395,
+          14.741512224284959,
+          -9.319879018227564
+        ],
+        "median_paired_percent": 9.877526621627448
+      },
+      "accepted_ms": {
+        "before_median": 9.817499999999999,
+        "after_median": 9.484,
+        "paired_percent": [
+          -1.426759670259985,
+          -2.956377920198466,
+          -0.05019576347757034,
+          -5.949342234439426
+        ],
+        "median_paired_percent": -2.1915687952292258
+      },
+      "after_accepted_ms": {
+        "before_median": 23.7935,
+        "after_median": 25.5895,
+        "paired_percent": [
+          18.225821911243177,
+          11.646679861838791,
+          21.494042163153075,
+          -10.583256669733215
+        ],
+        "median_paired_percent": 14.936250886540984
+      },
+      "cpu_ms_per_turn": {
+        "before_median": 30.0,
+        "after_median": 35.0,
+        "paired_percent": [
+          33.33333333333333,
+          33.33333333333333,
+          0.0,
+          0.0
+        ],
+        "median_paired_percent": 16.666666666666664
+      },
+      "write_kib_per_turn": {
+        "before_median": 592.0,
+        "after_median": 592.0,
+        "paired_percent": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median_paired_percent": 0.0
+      }
+    },
+    "all_eight": {
+      "p50_ms": {
+        "before_median": 35.438,
+        "after_median": 37.2755,
+        "paired_percent": [
+          7.478481727105963,
+          -8.688152022124262,
+          11.382140839453664,
+          21.96777174540834,
+          12.094434186230556,
+          7.6606190570243395,
+          14.741512224284959,
+          -9.319879018227564
+        ],
+        "median_paired_percent": 9.521379948239002
+      },
+      "accepted_ms": {
+        "before_median": 10.4255,
+        "after_median": 9.768,
+        "paired_percent": [
+          7.107360525082053,
+          -32.84643911299478,
+          46.70189326729972,
+          1.3359262703982369,
+          -1.426759670259985,
+          -2.956377920198466,
+          -0.05019576347757034,
+          -5.949342234439426
+        ],
+        "median_paired_percent": -0.7384777168687776
+      },
+      "after_accepted_ms": {
+        "before_median": 24.039,
+        "after_median": 25.9095,
+        "paired_percent": [
+          7.638272103350825,
+          5.006864595846927,
+          -35.08182424460062,
+          32.66961975351959,
+          18.225821911243177,
+          11.646679861838791,
+          21.494042163153075,
+          -10.583256669733215
+        ],
+        "median_paired_percent": 9.642475982594808
+      },
+      "cpu_ms_per_turn": {
+        "before_median": 30.0,
+        "after_median": 35.0,
+        "paired_percent": [
+          -25.0,
+          33.33333333333333,
+          -40.0,
+          25.0,
+          33.33333333333333,
+          33.33333333333333,
+          0.0,
+          0.0
+        ],
+        "median_paired_percent": 12.5
+      },
+      "write_kib_per_turn": {
+        "before_median": 592.0,
+        "after_median": 592.0,
+        "paired_percent": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "median_paired_percent": 0.0
+      }
+    }
+  }
+}

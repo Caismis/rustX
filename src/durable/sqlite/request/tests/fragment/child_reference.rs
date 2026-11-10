@@ -59,8 +59,7 @@ pub(super) fn replace_captured_child(
 }
 
 #[test]
-fn t08_t12_t19_original_child_references_reject_page_tamper_and_recapture_without_the_original_seat()
- {
+fn t08_t12_t19_page_integrity_is_not_independent_capture_authentication() {
     let store = fragment_fixture();
     let snapshot = shape_snapshot(&store, 1);
     let sequence = store
@@ -79,15 +78,19 @@ fn t08_t12_t19_original_child_references_reject_page_tamper_and_recapture_withou
             .unwrap();
         let original: (Vec<u8>, Vec<u8>) = connection
             .query_row(
-                "SELECT metadata,witness FROM request_source_roots WHERE source_id=?1",
+                "SELECT metadata,checksum FROM request_source_roots WHERE source_id=?1",
                 [sequence.to_string()],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        let mut metadata: serde_json::Value = serde_json::from_slice(&original.0).unwrap();
+        let mut metadata: serde_json::Value =
+            observation_request::composed::inspect_root_record(&original.0);
+        // The original first child (contributions, ordinal 0) now belongs
+        // to the per-request prefix. Keep corrupting the same captured child
+        // and rewriting its entire hash chain, rather than changing the oracle.
         let (leaf_hash, leaf_bytes) = replace_captured_child(
             &connection,
-            &mut metadata["scalar"]["fields"],
+            &mut metadata["prefix"]["fields"],
             "C[]:00000000000000000000",
         );
         connection
@@ -109,32 +112,27 @@ fn t08_t12_t19_original_child_references_reject_page_tamper_and_recapture_withou
             )
             .unwrap();
         assert!(observation_request::page_at(&connection, sequence, sequence, &[], 0, 1).is_ok());
-        let bytes = serde_json::to_vec(&metadata).unwrap();
+        let bytes = observation_request::composed::encode_test_root_record(metadata);
         let mut digest = <sha2::Sha256 as sha2::Digest>::new();
         sha2::Digest::update(&mut digest, b"rustx-composed-request-source-v1\0");
         sha2::Digest::update(&mut digest, &bytes);
         let digest = sha2::Digest::finalize(digest);
         connection
             .execute(
-                "UPDATE request_source_roots SET metadata=?2,witness=?3 WHERE source_id=?1",
+                "UPDATE request_source_roots SET metadata=?2,checksum=?3 WHERE source_id=?1",
                 params![sequence.to_string(), bytes, digest.as_slice()],
             )
             .unwrap();
-        let seat: Vec<u8> = connection
-            .query_row(
-                "SELECT shape_witness FROM request_observation_fields WHERE source_id=?1",
-                [sequence.to_string()],
-                |row| row.get(0),
-            )
-            .unwrap();
+        // A coherently rewritten optional graph is no longer authenticated
+        // against an independent original-capture seat. This is the explicit
+        // revised contract; it cannot change the native request or history.
+        let rewritten =
+            observation_request::page_at(&connection, sequence, sequence, &[], 0, 1).unwrap();
+        assert_eq!(rewritten.fields[0].path, ["request_id"]);
         assert_eq!(
-            seat, original.1,
-            "the original capture seat is never retagged"
+            rewritten.fields[0].value,
+            serde_json::json!(snapshot.request_id.as_str())
         );
-        assert!(matches!(
-            observation_request::page_at(&connection, sequence, sequence, &[], 0, 1),
-            Err(ConversationStoreError::Storage(_))
-        ));
         connection
             .execute_batch(
                 "ROLLBACK TO original_child_corruption; RELEASE original_child_corruption",

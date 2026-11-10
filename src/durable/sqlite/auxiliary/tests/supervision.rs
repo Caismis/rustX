@@ -880,7 +880,7 @@ fn arm_optional_layout_failure(
     connection
         .execute_batch(
             "CREATE TEMP TRIGGER auxiliary_optional_layout_failure
-             BEFORE UPDATE OF observation_json ON events
+             BEFORE UPDATE OF observation_source ON events
              WHEN auxiliary_optional_layout_probe()=1
              BEGIN
                  SELECT RAISE(FAIL, 'auxiliary optional layout failure');

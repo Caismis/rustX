@@ -1,7 +1,7 @@
 use super::*;
+use crate::durable::ConversationInboundCapability;
 use crate::durable::JournalStore;
 use crate::durable::ObservationStore;
-use crate::durable::inbox::ConversationInboundCapability;
 use crate::runtime::ToolCallId;
 
 #[tokio::test]

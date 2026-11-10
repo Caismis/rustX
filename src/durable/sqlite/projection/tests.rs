@@ -1993,7 +1993,7 @@ fn n1_header_work_is_bounded_by_the_historical_page_not_future_timeline() {
         "one page has only constant frontier/header work"
     );
     let plan:String = store.lock().unwrap().query_row(
-        "EXPLAIN QUERY PLAN SELECT event_json FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='compaction_completed' AND sequence<=2 ORDER BY sequence DESC LIMIT 1",[],|r|r.get(3),
+        concat!("EXPLAIN QUERY PLAN SELECT event_json FROM events INDEXED BY events_kind_idx WHERE ",crate::durable::sqlite::event_kind_key::sql!("json_extract(event_json,'$.event.type')"),"='compaction_completed'"," AND sequence<=2 ORDER BY sequence DESC LIMIT 1"),[],|r|r.get(3),
     ).unwrap();
     assert!(plan.contains("SEARCH") && plan.contains("events_kind_idx"));
 }
@@ -3338,7 +3338,8 @@ fn auxiliary_history_excludes_the_incomplete_tool_batch_at_the_exact_cached_or_c
                     MessageId::new("pending-assistant"),
                     ContentBlockIndex::new(0),
                 ),
-                result: crate::scripted_suites::support::fake::success_result("First complete"),
+                result: crate::scripted_suites::support::fake::success_result("First complete")
+                    .into(),
             }))
             .unwrap();
         // Even a later committed inbound is outside the eligible prefix while
@@ -3377,7 +3378,8 @@ fn auxiliary_history_excludes_the_incomplete_tool_batch_at_the_exact_cached_or_c
                     MessageId::new("pending-assistant"),
                     ContentBlockIndex::new(1),
                 ),
-                result: crate::scripted_suites::support::fake::success_result("Tool complete"),
+                result: crate::scripted_suites::support::fake::success_result("Tool complete")
+                    .into(),
             }))
             .unwrap();
         let (after, cut) = store.auxiliary_history().unwrap();

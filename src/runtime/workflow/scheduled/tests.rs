@@ -216,7 +216,7 @@ chat_reasoning_replay = "omit"
         id: ToolId::new("tool-check"),
         name: "check".into(),
         description: input.tool_description.into(),
-        input_schema: empty,
+        input_schema: empty.into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
         approval_policy: ToolApprovalPolicy::Never,

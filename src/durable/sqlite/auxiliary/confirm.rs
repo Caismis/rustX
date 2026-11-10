@@ -8,7 +8,7 @@ use super::{
     call_started_event_id, event_at_connection, has_call_journal_fact_tx,
     has_call_settlement_journal_tx, has_request_terminal_journal_tx, journal_prefix,
     request_audit_at_tx, request_row_tx, request_start_matches, request_started_event_id,
-    same_terminal_envelope, settlement_ids, storage, validate_call_start_input,
+    same_terminal_envelope, settlement_ids, validate_call_start_input,
     validate_request_start_input, validate_settlement_pair, validate_terminal_envelope_shape,
 };
 
@@ -19,9 +19,12 @@ impl SqliteConversationStore {
     ) -> Result<AuxiliaryCommitConfirmation<AuxiliaryCallStartCommit>, ConversationStoreError> {
         validate_call_start_input(expected)?;
         let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| storage(format!("confirm auxiliary Call start: {error}")))?;
+        let transaction = connection.transaction().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("confirm auxiliary Call start: {error}"),
+            )
+        })?;
         let Some(call) = call_row_query(&transaction, &expected.call_id)? else {
             if has_call_journal_fact_tx(&transaction, &expected.call_id)? {
                 return Err(ConversationStoreError::InvalidReference(format!(
@@ -73,9 +76,12 @@ impl SqliteConversationStore {
     {
         validate_request_start_input(expected)?;
         let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| storage(format!("confirm auxiliary request start: {error}")))?;
+        let transaction = connection.transaction().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("confirm auxiliary request start: {error}"),
+            )
+        })?;
         let Some(request) = request_row_tx(&transaction, &expected.request_id)? else {
             if crate::durable::sqlite::request::snapshot::has_request_journal_fact_tx(
                 &transaction,
@@ -133,9 +139,12 @@ impl SqliteConversationStore {
         validate_settlement_pair(&self.conversation_id, request_terminal, call_settled, false)?;
         let (request_id, call_id) = settlement_ids(request_terminal, call_settled)?;
         let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| storage(format!("confirm auxiliary settlement: {error}")))?;
+        let transaction = connection.transaction().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("confirm auxiliary settlement: {error}"),
+            )
+        })?;
         let request = request_row_tx(&transaction, &request_id)?;
         let call = call_row_tx(&transaction, &call_id)?;
         match (
@@ -225,9 +234,12 @@ impl SqliteConversationStore {
             ));
         }
         let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction()
-            .map_err(|error| storage(format!("confirm auxiliary Call settlement: {error}")))?;
+        let transaction = connection.transaction().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("confirm auxiliary Call settlement: {error}"),
+            )
+        })?;
         let Some(call) = call_row_tx(&transaction, call_id)? else {
             if has_call_journal_fact_tx(&transaction, call_id)? {
                 return Err(ConversationStoreError::InvalidReference(format!(

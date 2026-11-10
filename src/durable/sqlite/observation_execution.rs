@@ -6,9 +6,11 @@ use crate::durable::observation::{
 };
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use crate::runtime::identity::{AttemptId, RequestId};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::Digest;
-#[derive(Default, Serialize, Deserialize)]
+mod storage;
+pub(super) type Captured = super::append_facts::Captured<AttemptExecutionSummary>;
+#[derive(Default, Serialize)]
 struct ExecutionLayout {
     owner_anchor: u64,
     summary: AttemptExecutionSummary,
@@ -21,51 +23,96 @@ struct ExecutionLayout {
     generation_ms: u64,
     output_tokens: u64,
 }
-fn encode(value: &impl Serialize) -> Result<Vec<u8>, ConversationStoreError> {
-    crate::observation::bounded::bounded_bytes(
-        value,
-        crate::durable::observation::HEADER_ENCODED_MAX,
-    )
-    .ok_or_else(|| storage("native execution header exceeds bound"))
-}
+#[derive(Default)]
+pub(super) struct FoldCache(super::append_facts::FoldCache<ExecutionLayout>);
 fn layout(
     connection: &Connection,
     attempt: &AttemptId,
     through: u64,
 ) -> Result<ExecutionLayout, ConversationStoreError> {
-    let bytes:Option<Vec<u8>>=connection.query_row("SELECT observation_execution FROM events INDEXED BY events_observation_execution_idx WHERE observation_execution IS NOT NULL AND attempt_id=?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![attempt.as_str(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
-    bytes.map_or_else(
-        || Ok(ExecutionLayout::default()),
-        |bytes| decode_layout(&bytes),
-    )
+    layout_cached(connection, attempt, through, None)
+}
+fn layout_cached(
+    connection: &Connection,
+    attempt: &AttemptId,
+    through: u64,
+    cache: Option<&FoldCache>,
+) -> Result<ExecutionLayout, ConversationStoreError> {
+    let value = connection
+        .prepare_cached(super::event_heads::EXECUTION)
+        .and_then(|mut statement| {
+            statement.query_row(params![attempt.as_str(), through], |row| {
+                super::append_facts::read_fold(row, cache.map(|cache| &cache.0), decode_layout)
+            })
+        })
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
+        .transpose()?
+        .flatten();
+    Ok(value.unwrap_or_default())
 }
 pub(super) fn summary_at_sequence(
     connection: &Connection,
     sequence: u64,
 ) -> Result<Option<AttemptExecutionSummary>, ConversationStoreError> {
+    summary_at_sequence_prepared(connection, sequence, None)
+}
+pub(super) fn summary_at_sequence_prepared(
+    connection: &Connection,
+    sequence: u64,
+    prepared: Option<&Captured>,
+) -> Result<Option<AttemptExecutionSummary>, ConversationStoreError> {
     let bytes: Option<Vec<u8>> = connection
-        .query_row(
-            "SELECT observation_execution FROM events WHERE sequence=?1",
-            [sequence],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT observation_execution FROM events WHERE sequence=?1")
+        .and_then(|mut statement| statement.query_row([sequence], |row| row.get(0)))
         .optional()
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .flatten();
     bytes
-        .map(|bytes| {
-            decode_layout(&bytes)
-                .map(|layout| layout.summary)
-                .map_err(|error| storage(error.to_string()))
-        })
+        .map(|bytes| decode_summary(&bytes, prepared))
         .transpose()
 }
+pub(super) fn decode_summary(
+    bytes: &[u8],
+    prepared: Option<&Captured>,
+) -> Result<AttemptExecutionSummary, ConversationStoreError> {
+    if let Some(value) = prepared.and_then(|capture| capture.reuse(bytes)) {
+        return Ok(value);
+    }
+    decode_layout(bytes).map(|layout| layout.summary)
+}
+
 pub(super) fn summary(
     connection: &Connection,
     attempt: &AttemptId,
     through: u64,
 ) -> Result<AttemptExecutionSummary, ConversationStoreError> {
-    Ok(layout(connection, attempt, through)?.summary)
+    summary_prepared(connection, attempt, through, None)
+}
+pub(super) fn summary_prepared(
+    connection: &Connection,
+    attempt: &AttemptId,
+    through: u64,
+    prepared: Option<&Captured>,
+) -> Result<AttemptExecutionSummary, ConversationStoreError> {
+    let Some(prepared) = prepared else {
+        return Ok(layout(connection, attempt, through)?.summary);
+    };
+    let bytes: Option<Vec<u8>> = connection
+        .prepare_cached(super::event_heads::EXECUTION)
+        .and_then(|mut statement| {
+            statement.query_row(params![attempt.as_str(), through], |row| row.get(0))
+        })
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    bytes.map_or_else(
+        || Ok(AttemptExecutionSummary::default()),
+        |bytes| {
+            prepared
+                .reuse(&bytes)
+                .map_or_else(|| decode_layout(&bytes).map(|layout| layout.summary), Ok)
+        },
+    )
 }
 pub(super) fn required(event: &RuntimeEventEnvelope) -> bool {
     if event.attempt_id.is_none() {
@@ -100,21 +147,89 @@ fn selected_layout(
     sequence: u64,
     through: u64,
 ) -> Result<ExecutionLayout, ConversationStoreError> {
+    Ok(selected_layout_with_proof(connection, sequence, through)?.0)
+}
+/// The original selected layout defines the current-prefix hole interval;
+/// the latest owner layout may be a different row and must also be watched.
+pub(super) fn summary_selected_with_proof(
+    connection: &Connection,
+    sequence: u64,
+    through: u64,
+) -> Result<(AttemptExecutionSummary, u64, u64), ConversationStoreError> {
+    let (layout, anchor, latest) = selected_layout_with_proof(connection, sequence, through)?;
+    Ok((layout.summary, anchor, latest))
+}
+fn selected_layout_with_proof(
+    connection: &Connection,
+    sequence: u64,
+    through: u64,
+) -> Result<(ExecutionLayout, u64, u64), ConversationStoreError> {
     let selected = layout_at(connection, sequence)?;
-    let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_execution_holes_idx WHERE observation_execution_required=1 AND observation_execution IS NULL AND sequence>=?1 AND sequence<=?2)",params![selected.owner_anchor,through],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+    let missing:bool=connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_owner_holes_idx WHERE observation_owner_holes>0 AND observation_owner_holes IN (1,3,5,7) AND sequence>=?1 AND sequence<=?2)").and_then(|mut statement| statement.query_row(params![selected.owner_anchor,through],|row|row.get(0))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if missing {
         return Err(storage("native execution header evidence unavailable"));
     }
-    let latest:u64=connection.query_row("SELECT sequence FROM events INDEXED BY events_execution_owner_idx WHERE observation_execution_owner=?1 AND observation_execution IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![selected.owner_anchor,through],|row|row.get(0)).map_err(|_|storage("native execution owner header unavailable"))?;
-    layout_at(connection, latest)
+    let latest:u64=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_execution_owner_idx WHERE observation_execution_owner=?1 AND observation_execution IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![selected.owner_anchor,through],|row|row.get(0))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"native execution owner header unavailable"))?;
+    let anchor = selected.owner_anchor;
+    let layout = if latest == sequence {
+        selected
+    } else {
+        layout_at(connection, latest)?
+    };
+    Ok((layout, anchor, latest))
+}
+pub(super) struct Prepared {
+    pub(super) capture: Captured,
+    pub(super) owner: u64,
+    model: Option<PreparedModel>,
+}
+struct PreparedModel {
+    ordinal: u64,
+    request_encoded_bytes: u64,
+    hash: Vec<u8>,
+    encoded_bytes: u64,
+}
+impl Prepared {
+    pub(super) fn insert_dependencies(
+        &self,
+        connection: &Connection,
+        event: &RuntimeEventEnvelope,
+    ) -> Result<(), ConversationStoreError> {
+        if let Some(model) = &self.model {
+            insert_model(connection, event, self.owner, &self.capture.value, model)?;
+        }
+        Ok(())
+    }
 }
 #[allow(clippy::too_many_lines)] // One exhaustive mapping of execution facts.
 pub(super) fn event(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
-) -> Result<(), ConversationStoreError> {
+) -> Result<Option<Captured>, ConversationStoreError> {
+    let Some(prepared) = prepare(connection, event, false)? else {
+        return Ok(None);
+    };
+    connection.prepare_cached("UPDATE events SET observation_execution=?2,observation_execution_owner=?3 WHERE sequence=?1").and_then(|mut statement| statement.execute(params![event.sequence, prepared.capture.bytes, prepared.owner]))
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    Ok(Some(prepared.capture))
+}
+#[allow(clippy::too_many_lines)] // One finite execution transition and its exact FK child parameters.
+pub(super) fn prepare(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    pending: bool,
+) -> Result<Option<Prepared>, ConversationStoreError> {
+    prepare_cached(connection, event, pending, None)
+}
+#[allow(clippy::too_many_lines)]
+pub(super) fn prepare_cached(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    pending: bool,
+    cache: Option<&FoldCache>,
+) -> Result<Option<Prepared>, ConversationStoreError> {
     let Some(attempt) = &event.attempt_id else {
-        return Ok(());
+        return Ok(None);
     };
     if !matches!(
         event.event,
@@ -138,12 +253,13 @@ pub(super) fn event(
             ..
         }
     ) {
-        return Ok(());
+        return Ok(None);
     }
-    let mut state = layout(connection, attempt, event.sequence.saturating_sub(1))?;
+    let mut state = layout_cached(connection, attempt, event.sequence.saturating_sub(1), cache)?;
     if state.owner_anchor == 0 {
         state.owner_anchor = event.sequence;
     }
+    let mut model_insert = None;
     match &event.event {
         RuntimeEvent::AttemptStarted { .. } => {
             state.summary.started_at = Some(event.timestamp);
@@ -151,7 +267,17 @@ pub(super) fn event(
         RuntimeEvent::ModelRequestStarted {
             request_id, model, ..
         } => {
-            request_started(connection, event, attempt, request_id, model, &mut state)?;
+            model_insert =
+                request_started(connection, event, attempt, request_id, model, &mut state)?;
+            if !pending && let Some(model) = model_insert.take() {
+                insert_model(
+                    connection,
+                    event,
+                    state.owner_anchor,
+                    &state.summary,
+                    &model,
+                )?;
+            }
         }
         RuntimeEvent::ModelRequestCompleted {
             request_id,
@@ -178,16 +304,15 @@ pub(super) fn event(
             state.summary.closing_message_id =
                 (message_id.as_str().len() <= 256).then(|| message_id.clone());
             state.summary.closing_ledger_position = connection
-                .query_row(
-                    "SELECT position FROM message_ledger WHERE message_id=?1",
-                    [message_id.as_str()],
-                    |row| row.get(0),
-                )
+                .prepare_cached("SELECT position FROM message_ledger WHERE message_id=?1")
+                .and_then(|mut statement| {
+                    statement.query_row([message_id.as_str()], |row| row.get(0))
+                })
                 .optional()
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
             state.summary.closing_identity_sequence = Some(event.sequence);
             let _ = super::optional_display_layout(connection, || {
-                super::content::index_utf8_field(
+                crate::durable::sqlite::content::index_utf8_field(
                     connection,
                     "response_identity",
                     &format!("journal:{}", event.sequence),
@@ -217,35 +342,45 @@ pub(super) fn event(
         }
         _ => {}
     }
-    seal_execution(connection, event.sequence, &mut state)
+    let mut prepared = seal_execution_cached(state, cache)?;
+    prepared.model = model_insert;
+    Ok(Some(prepared))
 }
-fn seal_execution(
-    connection: &Connection,
-    sequence: u64,
-    state: &mut ExecutionLayout,
-) -> Result<(), ConversationStoreError> {
+fn seal_execution_cached(
+    mut state: ExecutionLayout,
+    cache: Option<&FoldCache>,
+) -> Result<Prepared, ConversationStoreError> {
     state.summary.models_next_offset = ((state.summary.models.len() as u64)
         < state.summary.models_total)
         .then_some(state.summary.models.len() as u64);
-    finish_timing(state);
-    while crate::observation::bounded::bounded_bytes(
-        state,
-        crate::durable::observation::HEADER_ENCODED_MAX,
-    )
-    .is_none()
-    {
+    finish_timing(&mut state);
+    let bytes = loop {
+        if let Some(bytes) = storage::encode(&state) {
+            break bytes;
+        }
         if state.summary.models.pop().is_none() {
             return Err(storage("native execution essentials exceed header bound"));
         }
         state.summary.models_next_offset = Some(state.summary.models.len() as u64);
-    }
-    connection
-        .execute(
-            "UPDATE events SET observation_execution=?2,observation_execution_owner=?3 WHERE sequence=?1",
-            params![sequence, encode(state)?,state.owner_anchor],
-        )
-        .map_err(|error| storage(error.to_string()))?;
-    Ok(())
+    };
+    let owner = state.owner_anchor;
+    let value = if let Some(cache) = cache {
+        let summary = state.summary.clone();
+        if let Some(timing) = &mut state.summary.timing {
+            timing.output_tokens_per_second = timing
+                .output_tokens_per_second
+                .filter(|value| value.is_finite());
+        }
+        cache.0.remember(&bytes, state);
+        summary
+    } else {
+        state.summary
+    };
+    Ok(Prepared {
+        model: None,
+        owner,
+        capture: Captured { bytes, value },
+    })
 }
 fn attempt_failed(
     connection: &Connection,
@@ -255,7 +390,11 @@ fn attempt_failed(
 ) -> Result<(), ConversationStoreError> {
     let normalized = BorrowedFailure(error);
     summary.failure_readable_end = super::optional_display_layout(connection, || {
-        super::content::index_attempt_failure(connection, event.sequence, &normalized)
+        crate::durable::sqlite::content::index_attempt_failure(
+            connection,
+            event.sequence,
+            &normalized,
+        )
     })?
     .unwrap_or(0);
     let (failure, deferred) = crate::observation::failure::finite_attempt_failure(error);
@@ -271,7 +410,7 @@ fn request_started(
     request_id: &RequestId,
     model: &str,
     state: &mut ExecutionLayout,
-) -> Result<(), ConversationStoreError> {
+) -> Result<Option<PreparedModel>, ConversationStoreError> {
     state.summary.requests = state
         .summary
         .requests
@@ -289,19 +428,21 @@ fn request_started(
     });
     let model_hash: Vec<u8> = sha2::Sha256::digest(model.as_bytes()).to_vec();
     let known: bool = connection
-        .query_row(
+        .prepare_cached(
             "SELECT EXISTS(SELECT 1 FROM observation_models WHERE attempt_id=?1 AND model_hash=?2)",
-            params![attempt.as_str(), model_hash],
-            |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .and_then(|mut statement| {
+            statement.query_row(params![attempt.as_str(), model_hash], |row| row.get(0))
+        })
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if !known {
         let ordinal = state.summary.models_total;
         let end = super::optional_display_layout(connection, || {
-            super::content::index_model_name(connection, event.sequence, model)
+            crate::durable::sqlite::content::index_model_name(connection, event.sequence, model)
         })?
         .unwrap_or(0);
-        connection.execute("INSERT INTO observation_models(attempt_id,ordinal,first_sequence,request_alias,request_encoded_bytes,model_hash,encoded_bytes,owner_anchor) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",params![attempt.as_str(),ordinal,event.sequence,state.summary.last_request_id.as_ref().map(RequestId::as_str),super::observation_request_summary::serialized_bytes(&request_id.as_str())?,model_hash,end,state.owner_anchor]).map_err(|error|storage(error.to_string()))?;
+        let request_encoded_bytes =
+            super::observation_request_summary::serialized_bytes(&request_id.as_str())?;
         state.summary.models_total += 1;
         if ordinal == state.summary.models.len() as u64
             && ordinal < HEADER_PAGE_MAX as u64
@@ -313,8 +454,27 @@ fn request_started(
                 state.summary.models.pop();
             }
         }
+        return Ok(Some(PreparedModel {
+            ordinal,
+            request_encoded_bytes,
+            hash: model_hash,
+            encoded_bytes: end,
+        }));
     }
-
+    Ok(None)
+}
+fn insert_model(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+    owner: u64,
+    summary: &AttemptExecutionSummary,
+    model: &PreparedModel,
+) -> Result<(), ConversationStoreError> {
+    let attempt = event
+        .attempt_id
+        .as_ref()
+        .ok_or_else(|| storage("native model owner unavailable"))?;
+    connection.prepare_cached("INSERT INTO observation_models(attempt_id,ordinal,first_sequence,request_alias,request_encoded_bytes,model_hash,encoded_bytes,owner_anchor) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)").and_then(|mut statement| statement.execute(params![attempt.as_str(),model.ordinal,event.sequence,summary.last_request_id.as_ref().map(RequestId::as_str),model.request_encoded_bytes,model.hash,model.encoded_bytes,owner])).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
 fn request_settled(
@@ -330,7 +490,7 @@ fn request_settled(
         state.summary.reports += 1;
         crate::durable::response::add_usage(&mut state.summary.usage, usage);
     }
-    let start:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_request_id_kind_idx WHERE json_extract(event_json,'$.event.request_id')=?1 AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![request_id.as_str(),event.sequence],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let start:Option<u64>=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_request_id_kind_idx WHERE json_extract(event_json,'$.event.request_id')=?1 AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![request_id.as_str(),event.sequence],|row|row.get(0))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if state.first_request_sequence.is_some() && state.first_request_sequence == start {
         state.first_ttft = generation.and_then(
             crate::model::generation_evidence::GenerationEvidence::time_to_first_output_ms,
@@ -394,7 +554,7 @@ pub(super) fn models(
     if offset > summary.models_total {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    let mut statement=connection.prepare("SELECT ordinal,request_alias,request_encoded_bytes,first_sequence,encoded_bytes FROM observation_models WHERE attempt_id=?1 AND ordinal>=?2 AND ordinal<?3 AND first_sequence<=?4 ORDER BY ordinal LIMIT ?5").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare("SELECT ordinal,request_alias,request_encoded_bytes,first_sequence,encoded_bytes FROM observation_models WHERE attempt_id=?1 AND ordinal>=?2 AND ordinal<?3 AND first_sequence<=?4 ORDER BY ordinal LIMIT ?5").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
             params![
@@ -414,7 +574,7 @@ pub(super) fn models(
                 ))
             },
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut names = Vec::with_capacity(limit);
     for row in rows {
         let (ordinal, request_id, request_encoded_bytes, source_sequence, encoded_bytes) =
@@ -426,7 +586,7 @@ pub(super) fn models(
         let value = if (2..=1024).contains(&encoded_bytes) {
             Some(
                 serde_json::from_slice(
-                    &super::content::model_name_range(
+                    &crate::durable::sqlite::content::model_name_range(
                         connection,
                         source_sequence,
                         0,
@@ -475,7 +635,7 @@ pub(super) fn model_value(
         return Err(ConversationStoreError::InvalidContentRange);
     }
     let total = summary(connection, attempt, through)?.models_total;
-    let source:Option<(u64,u64)>=connection.query_row("SELECT first_sequence,encoded_bytes FROM observation_models WHERE attempt_id=?1 AND ordinal=?2 AND ordinal<?3 AND first_sequence<=?4",params![attempt.as_str(),ordinal,total,through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let source:Option<(u64,u64)>=connection.prepare_cached("SELECT first_sequence,encoded_bytes FROM observation_models WHERE attempt_id=?1 AND ordinal=?2 AND ordinal<?3 AND first_sequence<=?4").and_then(|mut statement| statement.query_row(params![attempt.as_str(),ordinal,total,through],|row|Ok((row.get(0)?,row.get(1)?)))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let (request, end) = source.ok_or_else(|| {
         ConversationStoreError::InvalidReference("model name source unavailable".into())
     })?;
@@ -489,7 +649,7 @@ pub(super) fn model_value(
         .checked_add(u64::from(max_bytes))
         .ok_or(ConversationStoreError::InvalidContentRange)?
         .min(end);
-    super::content::model_name_range(connection, request, offset, next)
+    crate::durable::sqlite::content::model_name_range(connection, request, offset, next)
 }
 
 pub(super) fn models_at(
@@ -507,7 +667,7 @@ pub(super) fn models_at(
     if offset > summary.models_total {
         return Err(ConversationStoreError::InvalidContentRange);
     }
-    let mut statement=connection.prepare("SELECT ordinal,request_alias,request_encoded_bytes,first_sequence,encoded_bytes FROM observation_models WHERE owner_anchor=?1 AND ordinal>=?2 AND ordinal<?3 AND first_sequence<=?4 ORDER BY ordinal LIMIT ?5").map_err(|error|storage(error.to_string()))?;
+    let mut statement=connection.prepare("SELECT ordinal,request_alias,request_encoded_bytes,first_sequence,encoded_bytes FROM observation_models WHERE owner_anchor=?1 AND ordinal>=?2 AND ordinal<?3 AND first_sequence<=?4 ORDER BY ordinal LIMIT ?5").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
             params![
@@ -527,7 +687,7 @@ pub(super) fn models_at(
                 ))
             },
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut names = Vec::with_capacity(limit);
     for row in rows {
         let (ordinal, request_id, request_encoded_bytes, source_sequence, encoded_bytes) =
@@ -539,7 +699,7 @@ pub(super) fn models_at(
         let value = if (2..=1024).contains(&encoded_bytes) {
             Some(
                 serde_json::from_slice(
-                    &super::content::model_name_range(
+                    &crate::durable::sqlite::content::model_name_range(
                         connection,
                         source_sequence,
                         0,
@@ -589,7 +749,7 @@ pub(super) fn model_value_at(
     }
     let state = selected_layout(connection, sequence, through)?;
     let total = state.summary.models_total;
-    let source:Option<(u64,u64)>=connection.query_row("SELECT first_sequence,encoded_bytes FROM observation_models WHERE owner_anchor=?1 AND ordinal=?2 AND ordinal<?3 AND first_sequence<=?4",params![state.owner_anchor,ordinal,total,through],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|storage(error.to_string()))?;
+    let source:Option<(u64,u64)>=connection.prepare_cached("SELECT first_sequence,encoded_bytes FROM observation_models WHERE owner_anchor=?1 AND ordinal=?2 AND ordinal<?3 AND first_sequence<=?4").and_then(|mut statement| statement.query_row(params![state.owner_anchor,ordinal,total,through],|row|Ok((row.get(0)?,row.get(1)?)))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let (request, end) = source.ok_or_else(|| {
         ConversationStoreError::InvalidReference("model name source unavailable".into())
     })?;
@@ -603,7 +763,7 @@ pub(super) fn model_value_at(
         .checked_add(u64::from(max_bytes))
         .ok_or(ConversationStoreError::InvalidContentRange)?
         .min(end);
-    super::content::model_name_range(connection, request, offset, next)
+    crate::durable::sqlite::content::model_name_range(connection, request, offset, next)
 }
 
 struct BorrowedFailure<'a>(&'a crate::events::types::AttemptFailure);
@@ -670,7 +830,7 @@ pub(super) fn failure_value(
         .checked_add(u64::from(max_bytes))
         .ok_or(ConversationStoreError::InvalidContentRange)?
         .min(summary.failure_readable_end);
-    super::content::attempt_failure_range(connection, event, offset, end)
+    crate::durable::sqlite::content::attempt_failure_range(connection, event, offset, end)
 }
 
 pub(super) fn failure_at(
@@ -699,7 +859,7 @@ pub(super) fn failure_at(
         .checked_add(u64::from(max_bytes))
         .ok_or(ConversationStoreError::InvalidContentRange)?
         .min(summary.failure_readable_end);
-    super::content::attempt_failure_range(connection, event, offset, end)
+    crate::durable::sqlite::content::attempt_failure_range(connection, event, offset, end)
 }
 
 pub(super) fn finite_finish_reason(
@@ -758,18 +918,12 @@ fn layout_at(
     sequence: u64,
 ) -> Result<ExecutionLayout, ConversationStoreError> {
     let bytes: Option<Vec<u8>> = connection
-        .query_row(
-            "SELECT observation_execution FROM events WHERE sequence=?1",
-            [sequence],
-            |row| row.get(0),
-        )
-        .map_err(|error| storage(error.to_string()))?;
+        .prepare_cached("SELECT observation_execution FROM events WHERE sequence=?1")
+        .and_then(|mut statement| statement.query_row([sequence], |row| row.get(0)))
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     decode_layout(&bytes.ok_or_else(|| storage("native execution header unavailable"))?)
 }
 
 fn decode_layout(bytes: &[u8]) -> Result<ExecutionLayout, ConversationStoreError> {
-    if bytes.len() > crate::durable::observation::HEADER_ENCODED_MAX {
-        return Err(storage("native execution header exceeds bound"));
-    }
-    serde_json::from_slice(bytes).map_err(|_| storage("native execution header corrupt"))
+    storage::decode(bytes)
 }

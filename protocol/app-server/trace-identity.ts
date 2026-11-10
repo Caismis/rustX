@@ -1,6 +1,14 @@
-import type {TraceFieldSource,TraceLocation,RuntimeClientToolOccurrence} from './v77.ts';
+import type {TraceFieldSource,TraceLocation,RuntimeClientToolOccurrence} from './v78.ts';
 import {attemptIdentitySourceKey} from './attempt-identity.ts';
 import {canonicalLocatorKey,contentRefKey} from './content-identity.ts';
+
+const inlineAttempts = new WeakMap<object,{id:string;key:string}>();
+const inlineSteps = new WeakMap<object,{id:string;key:string}>();
+function inlineIdentity(cache:WeakMap<object,{id:string;key:string}>,owner:object,id:string) {
+ const previous=cache.get(owner);
+ if(previous?.id===id)return previous.key;
+ const key=JSON.stringify(['inline',id]);cache.set(owner,{id,key});return key;
+}
 
 /** Source selectors remain closed identity evidence; loading bytes never replaces them. */
 export function traceFieldKey(source:TraceFieldSource):string {
@@ -11,11 +19,11 @@ export function traceFieldKey(source:TraceFieldSource):string {
 }
 /** The Trace cache supplies conversation isolation; a missing owner does not group rows. */
 export function traceAttemptKey(location:Pick<TraceLocation,'attempt_id'|'attempt_id_source'>):string|undefined {
- if(location.attempt_id!=null)return JSON.stringify(['inline',location.attempt_id]);
+ if(location.attempt_id!=null)return inlineIdentity(inlineAttempts,location,location.attempt_id);
  if(location.attempt_id_source)return JSON.stringify(['source',attemptIdentitySourceKey(location.attempt_id_source)]);
 }
 export function traceStepKey(location:TraceLocation):string|undefined {
- if(location.step_id!=null)return JSON.stringify(['inline',location.step_id]);
+ if(location.step_id!=null)return inlineIdentity(inlineSteps,location,location.step_id);
  if(location.step_id_source)return JSON.stringify(['source',traceFieldKey(location.step_id_source)]);
 }
 export function sameTraceOwner(left:TraceLocation,right:TraceLocation):boolean {
@@ -28,7 +36,7 @@ export function traceOccurrenceKey(occurrence:RuntimeClientToolOccurrence):strin
  return JSON.stringify([canonicalLocatorKey(occurrence.locator),occurrence.block_index]);
 }
 
-export function traceFields(record:import('./v77.ts').TraceRecord):TraceFieldSource[] {
+export function traceFields(record:import('./v78.ts').TraceRecord):TraceFieldSource[] {
  const request=record.request;
  const fields=[...record.fields,record.location.step_id_source,...(record.tool?.fields??[]),
   ...record.calls.flatMap(call=>call.fields),request?.request_id_source,request?.assistant_message_id_source,request?.model_source,
@@ -37,14 +45,14 @@ export function traceFields(record:import('./v77.ts').TraceRecord):TraceFieldSou
 }
 
 /** Only canonical Message metadata proves an accepted Message locator. */
-export function traceCanonicalLocator(record:import('./v77.ts').TraceRecord) {
+export function traceCanonicalLocator(record:import('./v78.ts').TraceRecord) {
  for(const field of record.fields){
   if(field.field!=='message_id'||field.type!=='content')continue;
   const source=field.binding.content_ref.source;
   if(source.type==='canonical_message_block'&&source.component==='message_metadata')return source.locator;
  }
 }
-export function traceRequestAccepts(request:import('./v77.ts').TraceRecord,assistant:import('./v77.ts').TraceRecord):boolean {
+export function traceRequestAccepts(request:import('./v78.ts').TraceRecord,assistant:import('./v78.ts').TraceRecord):boolean {
  if(!request.request||assistant.kind!=='assistant')return false;
  const accepted=request.request.accepted_message_locator,canonical=traceCanonicalLocator(assistant);
  if(accepted&&canonical)return canonicalLocatorKey(accepted)===canonicalLocatorKey(canonical);

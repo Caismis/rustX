@@ -10,8 +10,7 @@
 //! - **maximum latency** — the oldest buffered payload owns one absolute
 //!   deadline, measured through an injected [`MonotonicClock`]; later
 //!   payloads never reset or extend that deadline;
-//! - **structural boundary** — a tool-call proposal start or completion is
-//!   released as its own observable transition;
+//! - **frame count** — 128 nonmergeable payloads bound buffered metadata;
 //! - **stream terminal** — the publication terminal transaction always flushes
 //!   whatever remains.
 //!
@@ -34,10 +33,12 @@ use super::frame::{PublicationFrame, PublicationPayload};
 /// The value is a publication-plane policy, not a provider property: it is
 /// large enough that ordinary token-sized deltas coalesce into few durable
 /// writes and small enough that a long block still streams visibly.
-pub const DEFAULT_PUBLICATION_MAX_BYTES: usize = 256;
+pub const DEFAULT_PUBLICATION_MAX_BYTES: usize = 65_536;
 
 /// The default publication latency threshold in milliseconds.
-pub const DEFAULT_PUBLICATION_MAX_LATENCY_MILLIS: u64 = 50;
+pub const DEFAULT_PUBLICATION_MAX_LATENCY_MILLIS: u64 = 100;
+
+const MAX_PENDING_FRAMES: usize = 128;
 
 /// The bounded deterministic flush policy of one publication stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,8 +112,9 @@ impl PublicationCoalescer {
     /// Buffers one committed-for-release payload, returning whether the
     /// bounded policy requires a flush now.
     ///
-    /// A structural boundary always requires a flush, so a tool-call proposal
-    /// start or completion is never withheld behind an unrelated byte budget.
+    /// Structural transitions retain distinct ordered frames but share the
+    /// same timer and pressure budget as text. One oversized incoming payload
+    /// can exceed the budget and is flushed immediately.
     pub fn push(&mut self, payload: PublicationPayload) -> bool {
         let structural = payload.is_structural_boundary();
         if self.oldest_pending_deadline_millis.is_none() {
@@ -134,7 +136,7 @@ impl PublicationCoalescer {
         if let Some(payload) = unmerged {
             self.pending.push(payload);
         }
-        structural || self.pending_bytes >= self.policy.max_bytes
+        self.pending_bytes >= self.policy.max_bytes || self.pending.len() >= MAX_PENDING_FRAMES
     }
 
     /// Whether buffered payload has waited at least the latency threshold.
@@ -412,10 +414,9 @@ mod tests {
         assert_eq!(task.await.expect("deadline waiter"), 50);
     }
 
-    /// A tool-call proposal start is a structural boundary: it forces a flush
-    /// and is never merged into the surrounding text.
+    /// A tool-call proposal keeps its own frame without forcing a transaction.
     #[test]
-    fn structural_boundary_forces_its_own_frame() {
+    fn structural_boundary_retains_its_frame_without_forcing_flush() {
         let clock = Arc::new(ManualMonotonicClock::new());
         let mut coalescer = coalescer(
             CoalescePolicy {
@@ -425,14 +426,16 @@ mod tests {
             &clock,
         );
         assert!(!coalescer.push(text("before")));
-        assert!(coalescer.push(PublicationPayload::ProposedToolCallStarted {
-            block_index: ContentBlockIndex::new(1),
-            call: ToolCallStart {
-                id: ToolCallId::new("call-1"),
-                tool_id: ToolId::new("tool-a"),
-                name: "alpha".to_owned(),
-            },
-        }));
+        assert!(
+            !coalescer.push(PublicationPayload::ProposedToolCallStarted {
+                block_index: ContentBlockIndex::new(1),
+                call: ToolCallStart {
+                    id: ToolCallId::new("call-1"),
+                    tool_id: ToolId::new("tool-a"),
+                    name: "alpha".to_owned(),
+                },
+            })
+        );
         let frames = coalescer.take_frames();
         assert_eq!(frames.len(), 2);
         assert!(matches!(
@@ -443,6 +446,57 @@ mod tests {
             frames[1].payload,
             PublicationPayload::ProposedToolCallStarted { .. }
         ));
+    }
+
+    #[test]
+    fn default_timer_and_pressure_bounds_are_distinct() {
+        let clock = Arc::new(ManualMonotonicClock::new());
+        let mut buffer = coalescer(CoalescePolicy::default(), &clock);
+        assert!(!buffer.push(text(&"x".repeat(256))));
+        clock.advance(99);
+        assert!(!buffer.latency_elapsed());
+        assert!(!buffer.push(text("tail")));
+        clock.advance(1);
+        assert!(buffer.latency_elapsed());
+        let frames = buffer.take_frames();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].sequence, 0);
+        assert_eq!(frames[0].payload, text(&format!("{}tail", "x".repeat(256))));
+        assert!(buffer.push(text(&"y".repeat(super::DEFAULT_PUBLICATION_MAX_BYTES))));
+        assert!(
+            !buffer.latency_elapsed(),
+            "pressure is an explicit cadence exception"
+        );
+        assert_eq!(buffer.take_frames()[0].sequence, 1);
+        for index in 0..super::MAX_PENDING_FRAMES {
+            let flush = buffer.push(PublicationPayload::TextSuffix {
+                block_index: ContentBlockIndex::new(u32::try_from(index).unwrap()),
+                suffix: String::new(),
+            });
+            assert_eq!(flush, index + 1 == super::MAX_PENDING_FRAMES);
+        }
+        assert_eq!(buffer.take_frames().len(), super::MAX_PENDING_FRAMES);
+        assert!(buffer.latency_wait().is_none());
+    }
+
+    #[test]
+    fn oversized_tool_payload_forces_pressure_without_truncation() {
+        let clock = Arc::new(ManualMonotonicClock::new());
+        let mut buffer = coalescer(CoalescePolicy::default(), &clock);
+        let call = crate::tools::types::ToolCall {
+            id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-a"),
+            name: "alpha".to_owned(),
+            arguments: serde_json::json!({"payload": "x".repeat(70_000)}),
+        };
+        let payload = PublicationPayload::ProposedToolCallCompleted {
+            block_index: ContentBlockIndex::new(0),
+            call,
+        };
+        assert!(buffer.push(payload.clone()));
+        assert_eq!(buffer.take_frames()[0].payload, payload);
+        assert!(buffer.is_empty());
+        assert!(buffer.latency_wait().is_none());
     }
 
     /// The terminal transaction always has a frame: buffered payload when

@@ -26,7 +26,9 @@ pub(in crate::durable::sqlite) fn read(
             ))
         })
         .optional()
-        .map_err(|error| storage(format!("first Human source: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("first Human source: {error}"))
+        })?;
     let Some((
         position,
         message_id,

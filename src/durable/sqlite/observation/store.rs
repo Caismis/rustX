@@ -2,6 +2,7 @@
 
 use crate::durable::sqlite::canonical::ordinary_user_by_id;
 use crate::durable::sqlite::canonical::transcript::TRANSCRIPT_ATTEMPTS_SQL;
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::durable::sqlite::{
     SqliteConversationStore, content, observation, observation_delivery, observation_event,
     observation_execution, observation_identity, observation_members, observation_occupancy,
@@ -9,6 +10,7 @@ use crate::durable::sqlite::{
     observation_statistics, observation_trace, observation_turn, provenance, reading, seq_to_i64,
     storage,
 };
+use crate::durable::sqlite::{observation_checkpoint, observation_response};
 use crate::durable::{ConversationStoreError, ObservationStore, TranscriptCursor};
 use crate::runtime::identity::{AttemptId, MessageId, RequestId};
 use rusqlite::OptionalExtension;
@@ -44,7 +46,7 @@ impl ObservationStore for SqliteConversationStore {
     {
         self.read_at_cut(cut, |transaction| {
             observation_request::validate_start(transaction, source_sequence, cut.read.journal)?;
-            let position:Option<u64>=transaction.query_row("SELECT observation_accepted_ledger FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?.flatten();
+            let position:Option<u64>=transaction.query_row("SELECT observation_accepted_ledger FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
             Ok(position
                 .filter(|position| *position <= cut.ledger_through)
                 .map(|position| {
@@ -220,7 +222,7 @@ impl ObservationStore for SqliteConversationStore {
         through: u64,
     ) -> Result<Option<RequestId>, ConversationStoreError> {
         let connection = self.lock()?;
-        let previous:Option<String>=connection.query_row("SELECT previous_request_id FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?.ok_or_else(||ConversationStoreError::InvalidReference("request outside native read cut".into()))?;
+        let previous:Option<String>=connection.query_row("SELECT previous_request_id FROM request_snapshots WHERE request_id=?1 AND started_sequence<=?2",params![request.as_str(),through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.ok_or_else(||ConversationStoreError::InvalidReference("request outside native read cut".into()))?;
         Ok(previous.map(RequestId::new))
     }
     fn request_outcome_header(
@@ -260,7 +262,7 @@ impl ObservationStore for SqliteConversationStore {
         through: u64,
     ) -> Result<Option<RequestId>, ConversationStoreError> {
         let connection = self.lock()?;
-        let request:Option<String>=connection.query_row("SELECT request_id FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1 AND started_sequence<=?2",params![sequence,through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        let request:Option<String>=connection.query_row("SELECT request_id FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1 AND started_sequence<=?2",params![sequence,through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         Ok(request.map(RequestId::new))
     }
     fn request_summary_header(
@@ -356,7 +358,7 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let chunk = observation_execution::failure_value(
             &transaction,
             attempt,
@@ -366,9 +368,31 @@ impl ObservationStore for SqliteConversationStore {
         )?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(chunk)
     }
+    fn reclaim_idle_cache(&self) -> Result<bool, ConversationStoreError> {
+        self.conn.reclaim_idle_cache(std::time::Instant::now())
+    }
+
+    fn observation_response_page(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        selections: &[crate::durable::observation::ResponsePageSelection],
+    ) -> Result<crate::durable::observation::ResponsePage, ConversationStoreError> {
+        let connection = self.lock()?;
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        observation_response::read(
+            &transaction,
+            &self.conn.response,
+            &self.conversation_id,
+            cut,
+            selections,
+        )
+    }
+
     fn response_identity_source(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
@@ -382,29 +406,29 @@ impl ObservationStore for SqliteConversationStore {
                 "response source beyond native transcript cut".into(),
             ));
         }
-        let missing:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_sequence_idx WHERE observation_members_required=1 AND observation_members IS NULL AND sequence<=?1)",[cut.read.journal],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let missing:bool=connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_owner_holes_idx WHERE observation_owner_holes>0 AND observation_owner_holes IN (4,5,6,7) AND sequence<=?1)",[cut.read.journal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if missing {
             return Err(storage("native response owner header unavailable"));
         }
-        let position:Option<u64>=connection.query_row("SELECT position FROM message_ledger INDEXED BY message_ledger_native_transcript_idx WHERE native_transcript=?1 AND native_transcript IS NOT NULL AND position<=?2",params![transcript_cursor,cut.ledger_through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        let position:Option<u64>=connection.query_row("SELECT position FROM message_ledger INDEXED BY message_ledger_native_transcript_idx WHERE native_transcript=?1 AND native_transcript IS NOT NULL AND position<=?2",params![transcript_cursor,cut.ledger_through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let Some(mut position) = position else {
-            let sequence:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_transcript_idx WHERE observation_transcript=?1 AND observation_transcript IS NOT NULL AND sequence<=?2 AND observation_members IS NOT NULL",params![transcript_cursor,cut.read.journal],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+            let sequence:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_transcript_idx WHERE observation_transcript=?1 AND observation_transcript IS NOT NULL AND sequence<=?2 AND observation_members IS NOT NULL",params![transcript_cursor,cut.read.journal],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             return Ok(sequence.map(|sequence| {
                 crate::durable::observation::ResponseIdentitySource::Attempt { sequence }
             }));
         };
-        let proposal:Option<u64>=connection.query_row("SELECT observation_ledger FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=?1 AND result_ledger_position IS NOT NULL",[position],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        let proposal:Option<u64>=connection.query_row("SELECT observation_ledger FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=?1 AND result_ledger_position IS NOT NULL",[position],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if let Some(proposal) = proposal {
             position = proposal;
         }
-        let anchor: Option<Option<u64>> = connection.query_row("SELECT observation_member_anchor FROM events INDEXED BY events_observation_assistant_ledger_idx WHERE observation_assistant_ledger=?1 AND observation_assistant_ledger IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![position,cut.read.journal],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        let anchor: Option<Option<u64>> = connection.query_row("SELECT observation_member_anchor FROM events INDEXED BY events_observation_assistant_ledger_idx WHERE observation_assistant_ledger=?1 AND observation_assistant_ledger IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![position,cut.read.journal],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if let Some(anchor) = anchor.flatten() {
-            let sequence:u64=connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_member_anchor_idx WHERE observation_member_anchor=?1 AND observation_members IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![anchor,cut.read.journal],|row|row.get(0)).map_err(|_|storage("native response member header unavailable"))?;
+            let sequence:u64=connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_member_anchor_idx WHERE observation_member_anchor=?1 AND observation_members IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![anchor,cut.read.journal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"native response member header unavailable"))?;
             return Ok(Some(
                 crate::durable::observation::ResponseIdentitySource::Attempt { sequence },
             ));
         }
-        let ordinal:Option<u64>=connection.query_row("SELECT ordinal FROM inherited_response_provenance WHERE closing_ledger_position=?1",[position],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        let ordinal:Option<u64>=connection.query_row("SELECT ordinal FROM inherited_response_provenance WHERE closing_ledger_position=?1",[position],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         Ok(ordinal.map(
             |ordinal| crate::durable::observation::ResponseIdentitySource::Inherited { ordinal },
         ))
@@ -417,7 +441,7 @@ impl ObservationStore for SqliteConversationStore {
     {
         let connection = self.lock()?;
         observation::validate(&connection, &self.conversation_id, cut)?;
-        let bytes:Option<Vec<u8>>=connection.query_row("SELECT display_provenance FROM inherited_response_provenance WHERE ordinal=?1 AND closing_ledger_position<=?2",params![ordinal,cut.ledger_through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        let bytes:Option<Vec<u8>>=connection.query_row("SELECT display_provenance FROM inherited_response_provenance WHERE ordinal=?1 AND closing_ledger_position<=?2",params![ordinal,cut.ledger_through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         bytes
             .map(|bytes| serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string())))
             .transpose()
@@ -604,11 +628,11 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let page = observation_execution::models(&transaction, attempt, through, offset, limit)?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(page)
     }
     fn observation_model_value_read(
@@ -622,7 +646,7 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let chunk = observation_execution::model_value(
             &transaction,
             attempt,
@@ -633,7 +657,7 @@ impl ObservationStore for SqliteConversationStore {
         )?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(chunk)
     }
     fn observation_request_retry_locator_at(
@@ -644,7 +668,7 @@ impl ObservationStore for SqliteConversationStore {
     {
         let connection = self.lock()?;
         observation_request::validate_start(&connection, source_sequence, through)?;
-        let position:Option<u64>=connection.query_row("SELECT retry_ledger_position FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let position:Option<u64>=connection.query_row("SELECT retry_ledger_position FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         Ok(position.map(|position| {
             crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
         }))
@@ -656,11 +680,11 @@ impl ObservationStore for SqliteConversationStore {
     ) -> Result<Option<MessageId>, ConversationStoreError> {
         let connection = self.lock()?;
         observation_request::validate_start(&connection, source_sequence, through)?;
-        let position:Option<u64>=connection.query_row("SELECT retry_ledger_position FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let position:Option<u64>=connection.query_row("SELECT retry_ledger_position FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence=?1",[source_sequence],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let Some(position) = position else {
             return Ok(None);
         };
-        let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers INDEXED BY observation_headers_ledger_idx WHERE ledger_position=?1 AND reference_kind='message'",[position],|row|row.get(0)).map_err(|_|storage("native retry message header unavailable"))?;
+        let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers INDEXED BY observation_headers_ledger_idx WHERE ledger_position=?1 AND reference_kind='message'",[position],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"native retry message header unavailable"))?;
         let header: crate::durable::observation::MessageHeader = serde_json::from_slice(&bytes)
             .map_err(|_| storage("native retry message header corrupt"))?;
         Ok(header.identity)
@@ -677,7 +701,7 @@ impl ObservationStore for SqliteConversationStore {
                 [request_id.as_str()],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(position.map(|position| {
             crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
         }))
@@ -693,7 +717,7 @@ impl ObservationStore for SqliteConversationStore {
                 [request_id.as_str()],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         Ok(id.map(MessageId::new))
     }
     fn observation_member_counts(
@@ -797,7 +821,7 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let result = observation::pending_page(
             &transaction,
             &self.conversation_id,
@@ -807,7 +831,7 @@ impl ObservationStore for SqliteConversationStore {
         )?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(result)
     }
     fn pending_value_read(
@@ -820,7 +844,7 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let result = observation::pending_value(
             &transaction,
             &self.conversation_id,
@@ -831,7 +855,7 @@ impl ObservationStore for SqliteConversationStore {
         )?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(result)
     }
     fn read_window_headers(
@@ -842,11 +866,11 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let result = observation::window(&transaction, &self.conversation_id, at, limit)?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(result)
     }
     fn event_transcript_cursor_at_sequence(
@@ -861,7 +885,7 @@ impl ObservationStore for SqliteConversationStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(error.to_string()))?
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
             .flatten();
         Ok(cursor.map(TranscriptCursor::new))
     }
@@ -891,7 +915,14 @@ impl ObservationStore for SqliteConversationStore {
         limit: usize,
     ) -> Result<crate::durable::observation::RequestObservationPage, ConversationStoreError> {
         let connection = self.lock()?;
-        observation_event::page(&connection, sequence, through, path, offset, limit)
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        let page = observation_event::page(&transaction, sequence, through, path, offset, limit)?;
+        transaction
+            .commit()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        Ok(page)
     }
     fn event_value_read(
         &self,
@@ -902,7 +933,15 @@ impl ObservationStore for SqliteConversationStore {
         max_bytes: u32,
     ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
         let connection = self.lock()?;
-        observation_event::read(&connection, sequence, through, path, offset, max_bytes)
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        let chunk =
+            observation_event::read(&transaction, sequence, through, path, offset, max_bytes)?;
+        transaction
+            .commit()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        Ok(chunk)
     }
     fn latest_observation_events(
         &self,
@@ -935,7 +974,7 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let result = observation::tools(
             &transaction,
             &self.conversation_id,
@@ -946,7 +985,7 @@ impl ObservationStore for SqliteConversationStore {
         )?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(result)
     }
     fn tool_association_headers_by_locator(
@@ -985,23 +1024,49 @@ impl ObservationStore for SqliteConversationStore {
                     )
                     .optional()
                     .map(|value| value.unwrap_or(false))
-                    .map_err(|error| storage(error.to_string()))
+                    .map_err(|error| {
+                        crate::durable::sqlite::sqlite_error(&error, error.to_string())
+                    })
             }
         }
     }
+    fn observation_checkpoint_head(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        through: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::CheckpointHead, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        let head = observation_checkpoint::read(
+            &transaction,
+            &self.conn.response,
+            &self.conversation_id,
+            cut,
+            through,
+            limit,
+        )?;
+        transaction
+            .commit()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        Ok(head)
+    }
+
     fn message_ledger_position(
         &self,
         message_id: &MessageId,
     ) -> Result<Option<u64>, ConversationStoreError> {
         let connection = self.lock()?;
         connection
-            .query_row(
+            .query_row_cached(
                 "SELECT position FROM message_ledger WHERE message_id=?1",
                 [message_id.as_str()],
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(error.to_string()))
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))
     }
     fn message_header(
         &self,
@@ -1020,7 +1085,7 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let result = observation::blocks(
             &transaction,
             &self.conversation_id,
@@ -1031,7 +1096,7 @@ impl ObservationStore for SqliteConversationStore {
         )?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(result)
     }
     fn message_block_header_page_by_locator(
@@ -1064,7 +1129,7 @@ impl ObservationStore for SqliteConversationStore {
                 "tool trace source beyond captured cut".into(),
             ));
         }
-        connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND sequence<=?3 ORDER BY sequence DESC LIMIT 1",params![ledger_position,block_index.get(),seq_to_i64(cut.read.journal)?],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))
+        connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND sequence<=?3 ORDER BY sequence DESC LIMIT 1",params![ledger_position,block_index.get(),seq_to_i64(cut.read.journal)?],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))
     }
     fn observation_read_cut(
         &self,
@@ -1072,11 +1137,11 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let result = observation::cut(&transaction, &self.conversation_id)?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(result)
     }
     fn message_header_page(
@@ -1088,12 +1153,12 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let result =
             observation::messages(&transaction, &self.conversation_id, cut, offset, limit)?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(result)
     }
     fn transcript_header_page(
@@ -1105,12 +1170,12 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let result =
             observation::transcript(&transaction, &self.conversation_id, cut, before, limit)?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(result)
     }
     fn transcript_attempts(
@@ -1125,14 +1190,14 @@ impl ObservationStore for SqliteConversationStore {
         }
         let mut statement = connection
             .prepare_cached(TRANSCRIPT_ATTEMPTS_SQL)
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let mut attempts = std::collections::BTreeSet::new();
         for message in messages {
             let rows = statement
                 .query_map(params![message.as_str(), seq_to_i64(through)?], |row| {
                     row.get::<_, String>(0)
                 })
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
             for row in rows {
                 attempts.insert(AttemptId::new(
                     row.map_err(|error| storage(error.to_string()))?,
@@ -1231,7 +1296,7 @@ impl ObservationStore for SqliteConversationStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         match bytes {
             None => Ok(crate::observation::goal::RuntimeClientGoalView { current: None }),
             Some(None) => Err(storage("native Goal display header unavailable")),
@@ -1290,15 +1355,15 @@ impl ObservationStore for SqliteConversationStore {
         {
             let mut connection = self.lock()?;
             let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .map_err(|error| storage(error.to_string()))?;
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
             observation_readiness::mark(&transaction, first, last)?;
             transaction
                 .commit()
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         }
         // Never wake under the storage or observer-registration lock, and never
-        // before the tiny derived layout transaction physically commits.
+        // before the connection-local TEMP transaction commits.
         let observer = self
             .journal_observer
             .lock()
@@ -1310,6 +1375,84 @@ impl ObservationStore for SqliteConversationStore {
         }
         Ok(())
     }
+    fn mark_native_observation_ready(
+        &self,
+        batch: &crate::durable::observation::NativeObservationBatch,
+    ) -> Result<(), ConversationStoreError> {
+        use crate::durable::observation::NativeObservationTransition;
+        if batch
+            .journal_range
+            .is_some_and(|(first, last)| first == 0 || first > last)
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "invalid observation readiness range".into(),
+            ));
+        }
+        let cursors = match &batch.transition {
+            NativeObservationTransition::Single(witness)
+            | NativeObservationTransition::Adoption(witness)
+            | NativeObservationTransition::Compaction(witness) => [witness.transcript_cursor, None],
+            NativeObservationTransition::WorkflowTerminal { terminal, output } => {
+                [terminal.transcript_cursor, output.transcript_cursor]
+            }
+            NativeObservationTransition::ModelTurnSettlement { boundary, .. } => {
+                use crate::durable::observation::ModelTurnObservationBoundary;
+                match boundary {
+                    Some(ModelTurnObservationBoundary::Completed { turn, attempt }) => {
+                        [turn.transcript_cursor, attempt.transcript_cursor]
+                    }
+                    Some(ModelTurnObservationBoundary::Adopted { turn, adoption, .. }) => {
+                        [turn.transcript_cursor, adoption.transcript_cursor]
+                    }
+                    None => [None, None],
+                }
+            }
+            NativeObservationTransition::AttemptFirstTurn { .. }
+            | NativeObservationTransition::RequestStart { .. }
+            | NativeObservationTransition::ToolResults { .. } => [None, None],
+        };
+        if batch.canonical.is_none()
+            && batch.journal_range.is_none()
+            && cursors.iter().all(Option::is_none)
+        {
+            return Ok(());
+        }
+        {
+            let mut connection = self.lock()?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+            if let Some(canonical) = &batch.canonical {
+                observation_readiness::mark_canonical(
+                    &transaction,
+                    canonical.first_position,
+                    canonical.last_position,
+                )?;
+            }
+            for cursor in cursors.into_iter().flatten() {
+                observation_readiness::mark_transcript(&transaction, cursor.get())?;
+            }
+            if let Some((first, last)) = batch.journal_range {
+                observation_readiness::mark_direct(&transaction, first, last)?;
+            }
+            transaction
+                .commit()
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        }
+        // The complete installed batch becomes readable together. Wake once,
+        // outside both locks, after its one TEMP release transaction commits.
+        let observer = self
+            .journal_observer
+            .lock()
+            .expect("Journal observer lock")
+            .as_ref()
+            .map(|(observer, _)| Arc::clone(observer));
+        if let Some(observer) = observer {
+            observer.ready(batch.journal_range.map_or(0, |(_, last)| last));
+        }
+        Ok(())
+    }
+
     fn mark_observation_direct(&self, first: u64, last: u64) -> Result<(), ConversationStoreError> {
         if first == 0 || first > last {
             return Err(ConversationStoreError::InvalidReference(
@@ -1319,15 +1462,15 @@ impl ObservationStore for SqliteConversationStore {
         {
             let mut connection = self.lock()?;
             let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .map_err(|error| storage(error.to_string()))?;
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
             observation_readiness::mark_direct(&transaction, first, last)?;
             transaction
                 .commit()
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         }
         // Never wake under the storage or observer-registration lock, and never
-        // before the tiny derived layout transaction physically commits.
+        // before the connection-local TEMP transaction commits.
         let observer = self
             .journal_observer
             .lock()
@@ -1351,12 +1494,12 @@ impl ObservationStore for SqliteConversationStore {
         {
             let mut connection = self.lock()?;
             let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .map_err(|error| storage(error.to_string()))?;
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
             observation_readiness::mark_transcript(&transaction, cursor)?;
             transaction
                 .commit()
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         }
         let observer = self
             .journal_observer
@@ -1377,12 +1520,12 @@ impl ObservationStore for SqliteConversationStore {
         {
             let mut connection = self.lock()?;
             let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .map_err(|error| storage(error.to_string()))?;
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
             observation_readiness::mark_canonical(&transaction, first_ledger, last_ledger)?;
             transaction
                 .commit()
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         }
         let observer = self
             .journal_observer
@@ -1409,13 +1552,13 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let read_cut = observation::cut(&transaction, &self.conversation_id)?;
         let prefix =
             observation_readiness::transcript_frontier(&transaction, 0, read_cut.read.transcript)?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(crate::durable::observation::TranscriptSourceReady { prefix, read_cut })
     }
     fn live_block_header_page(
@@ -1461,7 +1604,7 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let result = content::descriptor_at(
             &transaction,
             &self.conversation_id,
@@ -1471,7 +1614,7 @@ impl ObservationStore for SqliteConversationStore {
         )?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(result)
     }
     fn content_descriptor(
@@ -1482,12 +1625,12 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let result =
             content::descriptor(&transaction, &self.conversation_id, source, representation)?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(result)
     }
     fn content_read(
@@ -1499,7 +1642,7 @@ impl ObservationStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let result = content::read(
             &transaction,
             &self.conversation_id,
@@ -1509,7 +1652,7 @@ impl ObservationStore for SqliteConversationStore {
         )?;
         transaction
             .commit()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(result)
     }
 }
@@ -1568,7 +1711,7 @@ pub(in crate::durable::sqlite) fn response_identity_key(
                     params![ordinal,cut.ledger_through],
                     |row| row.get(0),
                 )
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             if !exists {
                 return Err(ConversationStoreError::InvalidReference(
                     "inherited response identity unavailable".into(),

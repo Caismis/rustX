@@ -83,7 +83,11 @@ pub(super) fn native_actor_transition(observation: &ConversationObservation) -> 
         | ConversationObservation::Workflow(_)
         | ConversationObservation::PendingHead { .. }
         | ConversationObservation::InteractionPending { .. }
-        | ConversationObservation::InteractionSettled { .. } => true,
+        | ConversationObservation::InteractionSettled { .. }
+        // Native drain already owns this finite state transition. Publish it
+        // before return, so projection close cannot discard a queued shutdown.
+        // Preparation is CPU-only and never re-enters the coordinator.
+        | ConversationObservation::Shutdown => true,
         #[cfg(test)]
         ConversationObservation::InteractionRemoved { .. } => true,
         ConversationObservation::CollectionProof {

@@ -5,6 +5,7 @@ export interface RequestTiming {
   bytes?: number;
   error?: string;
   historyAt?: string;
+  traceBefore?: string | null;
   resultType?: string;
   sessionId?: string;
   nodeId?: string;
@@ -37,6 +38,18 @@ export function supersededHistoryReads(rpc: readonly RequestTiming[]): RequestTi
     && history.sessionId && history.nodeId && completed(history)
     && following.some(attach => attach.sessionId === history.sessionId && attach.nodeId === history.nodeId
       && history.start < attach.end && attach.start < history.end));
+}
+
+/** A standalone head read can expire during a native publication. Count it as
+ * recovered only after a later successful head read on the exact same claim.
+ * Pagination, corruption and unrecovered expiry remain verification failures. */
+export function supersededTraceReads(rpc: readonly RequestTiming[]): RequestTiming[] {
+  const repaired = rpc.filter((row): row is CompletedTiming => completed(row)
+    && row.method === 'session/trace' && row.traceBefore === null
+    && row.error === undefined && row.resultType === 'trace' && !!row.target);
+  return rpc.filter(row => row.method === 'session/trace' && row.traceBefore === null
+    && row.error === 'read_cut_expired' && !!row.target && completed(row)
+    && repaired.some(later => later.target === row.target && row.end <= later.start));
 }
 
 /** Strong status reads can fail while native status capture is busy. Require

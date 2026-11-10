@@ -1,0 +1,141 @@
+DeepSeek Harness 对 rustX 后续优化的可验证启发（只读研究笔记）
+
+范围与身份
+  DeepSeek: /home/capi/.cache/rustx-pr485-next/deepseek-checkout
+    pinned revision 687f282e8625c6b8d11ff58211a90524be2e4317，原生完整 sdk profile。
+  rustX: /home/capi/.codex/worktrees/pr485-pi-performance/rustX
+    D = e8d6380fa，publication 字节计数 + 整批 readiness transaction 合并。
+    当前文件为候选 E = 0d0134ebb788cc2a1b9418d1fc53b5cae15957eb + 根代理说明的两行未提交修复；
+    <=16 KiB scalar 延迟字段索引属于 E，尚未据正式测量决定保留。下面明确分开 D 与 E，不能把 E 的代码事实归给 D。
+  本笔记只读源码、既有功能 smoke 的 JSON；未跑产品、构建、压缩或性能实验。
+  路径与行号以下分别相对上述 DeepSeek/rustX 根目录；标 D 的行号来自 git show e8d6380fa:路径。
+
+一、代码事实：DeepSeek 的“只变化时追加”有哪些准确边界
+
+1. request/header 并非无条件只在变化时追加。
+  packages/core/agent-loop/src/agent.ts:615-651 的 buildRequest：
+  - 每个 loop 实例第一次 requestHeaderLogged=false 时必追加；无历史为 reason=initial，有历史为 reason=resume（635-642）。
+  - 后续 config/adapterDefaults/tools 不等则 reason=change（643-648）。
+  - 即使内容相等，startsRequestSeries 或 surface.contentGeneration 改变也追加 reason=series（625、632-634、649-650）。
+  - 只有同一 loop、无 series 边界且 header 相同的通常后续请求才跳过这条日志。
+  工具增删还会生成绑定 headerSeq 的 developer/message（652-665）；不能丢失历史工具定义再靠“当前工具表”重建旧请求。
+
+2. request/context 确实只在四个比较字段变化时追加。
+  packages/core/agent-loop/src/agent.ts:669-683：provider、model、contextWindow、systemPromptUpdate；首次无 previousContext 也追加。
+  system prompt 本文不塞在 request/header：它通过 system/message 进入消息表面，随后和用户/助手历史一起 derive。
+
+3. 省掉日志写入不等于省掉每步所有 header 成本。
+  packages/core/session/src/request-header.ts:21-29 canonicalHeader；43-51 headerEquals：逐字段比较配置，按顺序比较工具。
+  同文件:32-35 的 sameSchema 每次对两边 schema 执行 JSON.stringify；稳定的工具集合仍承担比较/序列化工作。
+  packages/core/agent-loop/src/agent.ts:583-595 仍 clone/freeze request proposal 并执行 waterfall。
+  packages/core/agent-loop/src/agent.ts:686-702 仍冻结 header，derive messages，再组装 request。
+
+4. 增量投影与历史重建有明确边界。
+  packages/core/session/src/index.ts:899-940：header/context fold 各有已消费位置，仅折叠新增事件。
+  同文件:943-956：工具历史也增量折叠。
+  同文件:959-1004：消息纯尾部增长只投影新节点；contentGeneration 改变时重建。
+  每次返回 [...derived]（1004），所以仍有 O(history) 的新数组复制；不是请求组装与历史长度无关。
+  packages/core/session/src/request-header.ts:54-68 支持按历史前缀取最新 header。
+  packages/core/agent-loop/tests/request-reconstruction.spec.ts:1-5、84-124 是已有源码测试的重建/稳定性约束；本次只阅读，没有运行它。
+  这证明其设计意图是“历史日志 + 当时配置 + 有序消息表面可重建请求语义”，不是让旧请求使用当前配置。
+  它本身不等于 rustX 的任意原始字节范围、字段 Fact、proof/hash 与独立 read-cut 契约。
+
+二、既有 smoke 的观察计数（不是性能归因实验）
+
+源文件：deepseek-sdk-smoke-03/0-short-large/result.json
+  完整路径 /home/capi/.cache/rustx-pr485-next/deepseek-sdk-smoke-03/0-short-large/result.json
+  SHA256 e56c2c16d287d8f8220e8745da7778dbc3a15d543a79cce3b7f9633179c1784c
+  64 seed + 32 measured = 96 轮；这里只计 persisted_before_reopen[1:]，排除 session 文件头和验证续轮。
+  原生事件总数 776：
+    permission/preset 1；sandbox/mode 1；approval/policy 1；
+    agent/inbox/spliced 192；turn/start 96；step/start 96；
+    system/message 1；user/message 97；request/header 1；request/context 1；
+    session/title 1；assistant/message 96；step/end 96；turn/end 96。
+  初始 3 条权限/沙箱/审批配置之后：
+    第一轮 13 events：inbox-splice、turn/start、inbox-splice、step/start、system/message、
+      user/message x2、request/header、request/context、session/title、assistant/message、step/end、turn/end。
+    后 95 轮每轮恰好 8 events：inbox-splice、turn/start、inbox-splice、step/start、
+      user/message、assistant/message、step/end、turn/end。
+  恢复 + 单独验证续轮再加 10 events；其中 session/end-seed 1、request/header(reason=resume) 1，request/context 0。
+  因此“96 轮只有一个 header/context”适用于首次进程生命周期；包含恢复后 header 总数为 2，不是 1。
+
+体积口径：以下为对 retained JSON 对象做 ensure_ascii=False、紧凑 separators=(',', ':') 后 UTF-8 字节数；
+  event 体积包含一个换行。这是可复算的逻辑 JSON 体积，不是独立解压出的原文件逐字节证明，也不是 /proc 写入量。
+  96 轮所有事件合计 241,702 bytes。
+  唯一 request/header event 19,797 bytes；其中 header 对象 19,703，25 个 native tools 数组 19,621。
+  唯一 request/context event 133 bytes；data 68，值为 benchmark/chat-model/contextWindow=128000。
+  唯一 system/message event 2,845 bytes。
+  96 个 assistant/message 合计 125,932 bytes；192 个 inbox/spliced 合计 37,527；97 个 user/message 合计 23,257。
+  首次关闭时 session.v4.jsonl.zstd footprint logical=101,514 bytes、allocated=106,496。
+  但 provider wire 每个请求仍有完整工具定义：首尾 tools 数组均 20,396 bytes；首/末完整 body 23,959 / 32,699 bytes。
+  因此配置日志去重减少的是持久事件重复；并未免除每次 provider 请求中的工具序列化/传输或增长的消息历史。
+  工具定义不同，禁止把这些字节直接当成 rustX 当前可省字节，更不能据此换算成时间收益。
+
+流式观察源：deepseek-sdk-smoke-03/0-stream/result.json
+  SHA256 e4be68d67078b4a5e2d6d66ae5ffc5bce9b62cbb7ca8fc88730ef2d2b5923edb
+  首次生命周期同样 16 events（初始配置 3 + 首轮 13），不是 128 条顶层 token event。
+  单个 assistant/message.stream 有 5 条 compact records，其中一个 text-chunks 保存 128 段文本。
+  packages/llm/llm/src/assistant-stream.ts:99-127 将同块连续 delta 收为 texts 与 dt 数组。
+  packages/core/agent-loop/src/assistant-stream.ts:59-70 仍逐 delta clone/assembly/live emit，111-113 提供最终 compact stream；
+  packages/core/agent-loop/src/agent.ts:529-545 将 message + usage + stream 一次追加至最终 assistant/message。
+  packages/sdk/server/src/server.ts:103-118 只转发 session.event/status；此次 SDK 对外没有逐 token partial text 通知。
+  原生内部确有流式事件处理，但本次 SDK reference 的外部 observer 工作量不等于 rustX/Pi live-subscriber。
+
+三、持久性成本仍存在，不能把 SDK idle 当作等价已落盘
+
+  packages/core/session/src/index.ts:761-825：append 同步 snapshot/validate/deepFreeze 与发布；持久插件异步缓冲。
+  packages/session/session-persistence-jsonl/src/storage.ts:36、274-313：200 ms 上限，live event 再 structuredClone，批量 drain。
+  packages/session/session-persistence-jsonl/src/index.ts:1388-1391、1411-1438：batch 编码/Zstd，再 open、writeFile、sync、close；不是只写内存。
+  packages/session/session-checkpoint-policy/src/index.ts:29-36、63-81：模型 dispatch 之前、顶层工具 dispatch 之前、pre-step await flush；
+    后续边界会覆盖前轮结果，但 SDK idle 不是 final flush/fsync acknowledgement。
+  所以本观察不能支持“去掉一条 header 就解释了整个三引擎时延差”，也不能拿 idle latency 做相同持久性速度比。
+
+四、与 rustX scalar 捕获 / 字段索引的具体差异
+
+  D（e8d6380fa，当前正式 D/B 测量的 D）代码事实：
+  - src/durable/sqlite/observation_request/composed.rs:194-207 每次 request 构造 frozen_request_detail(messages=[])、
+    SeekableObservationSource，再 fragments::scalar；无“与上次同配置则跳过 scalar capture”分支。
+  - 同 revision 的 composed/fragments.rs:265-281 定位 messages/长度，再 persist_part；191-226 在 capture_facts 之后保存原始分块 bytes。
+  - 同文件:101-189（capture_facts）生成字段边界、预览、子节点数、键路径；237-261 保存 F 的完整 Fact 和 C 的 child path。
+  - composed/index.rs:29-51 编码并 SHA256 页面、INSERT OR IGNORE；已有内容寻址去重仍须先构建/哈希候选页，不等同“没做 capture”。
+
+  E（0d0134ebb + 根代理两行修复，尚未正式测量决定保留）代码事实：
+  - src/durable/sqlite/observation_request/composed.rs:197-210 仍逐请求构造 scalar source，但改走 scalar::capture。
+  - composed/scalar.rs:8、87-109：<=16,384 bytes 留 Original；超过该界仍走 fragments::scalar 全字段索引。
+  - composed/scalar.rs:40-66、69-84：Original 仍校验原始 node/numeric/depth、unique path、field path；持久化 authenticated bytes。
+    因而“延迟字段索引”不是零扫描/零校验，也不是丢弃原始请求。
+  - composed/scalar.rs:130-145、148-210：明确 Reader 请求时验证原始页、构建 bounded Source、按字段导出 Fact/preview。
+    保存热路径成本换到实际 inspection 读侧，必须检查读侧代价。
+  - 当前 composed.rs:245-267 每个请求仍持久化 Root metadata/checksum 和 content_frontier。
+
+  两版共享的历史/功能约束：
+  - src/runtime_client/trace/frozen.rs:28-76、125-151：scalar 混合每请求 identity（request_id/attempt/step/retry/assistant id）、
+    当前 model/options/context window、effective_system_prompt、完整 tool definitions 与 contributions；并非只有固定 header。
+  - composed/nodes.rs:173-185、187-217：历史输入节点已有按 native id/hash 重用，只捕获新 leaf/branch；
+    不能把 rustX 描述成“每轮重新保存全部历史文本”。
+  - src/durable/sqlite.rs:6083-6124：这类展示/read-layout 索引是在 request transaction 的 optional_display_layout 内产生；
+    original request history 的事实与后续展示能力都要保留，不能简单删除捕获。
+  - E 的 scalar_tests.rs:111-154、158 起已有 exact bytes / Fact / child / keyspan / 16 KiB 边界 / malformed admission 测试；
+    reader_tests.rs:52-100 有大 scalar 原字节与字段等价断言。本次未运行测试。
+
+五、未来推断：1-2 个可证伪方向，不是已证明的收益
+
+方向 A：把稳定的配置与工具定义作为不可变共享片段，并让每次 RequestSnapshot/Source 绑定其当时的片段。
+  启发来自 DeepSeek header epoch，而不是省略旧请求记录。每请求 identity/contributions/selected-input 仍独立保存；
+  配置/工具/系统提示改变、resume、retry、compaction 的边界都必须绑定准确的旧版本。
+  优先复用现有 authenticated page/template/root 机制；先测 SourceScalar 中构造/校验/哈希各占多少，而不是引入新缓存后再猜效果。
+  可验证结果：相同工具配置 8/64 history 下，逐请求 capture byte visits / encoded Fact bytes / hash bytes / SQL 次数是否下降；
+  交替改变同名工具 schema、系统提示、模型参数、retry/compaction 后，live 和 reopen 的全部历史请求、原始字节页、字段路径/顺序仍一致。
+  只按 tool name 或可变 registry identity 缓存不够；重复配置碰巧有相同 JSON 也不能替代历史 immutable binding。
+  风险：片段拼接需维持既有精确编码与字段几何，可能增加 Reader 路由与哈希校验成本；未测前不能承诺收益。
+
+方向 B：先独立验证 E 的 bounded Original / 延迟 Fact 构造这一已提出方案，再决定是否保留或扩大。
+  DeepSeek 的事实日志与按需 fold 支持“原始事实先完整保存、派生视图消费时建立”的设计方向；它不直接证明 rustX 的 E 更快。
+  分开量化写侧 SourceScalar / turn CPU / writes 和读侧 field/child/key-span/bytes pagination：未读、读一次、重复随机字段读取；
+  覆盖 <16 KiB、恰好边界、>16 KiB、密集小字段、长字符串，以及无观察/late snapshot/live-subscriber 三种使用方式。
+  不修改历史请求重建、原始值与字节、损坏页拒绝、事务 rollback/reopen 契约；如果只移动成本却显著恶化正常读侧，就不能据写侧数字宣布整体胜出。
+
+结论边界
+  已证实的模式是：变化驱动的 header/context 日志、按尾部增量投影、assistant stream 的紧凑最终事实；
+  已观测的是上述事件数量和逻辑体积；尚未证明其分别贡献了多少毫秒。
+  header 一直不变只是减少重复持久事实的证据，不是它成为三引擎时延主因的证据。

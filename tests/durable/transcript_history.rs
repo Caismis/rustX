@@ -133,7 +133,8 @@ fn tool_result(message_id: &str, call_id: &str, body: &str) -> MessageBlock {
                     locator: "/tmp/rx-0000000000000001/r-0000000000000001.txt".into(),
                 },
             )),
-        },
+        }
+        .into(),
     })
 }
 
@@ -291,9 +292,6 @@ fn open_publication(
         request_id: request_id.clone(),
         message_id,
     };
-    store
-        .open_publication_stream(&start)
-        .expect("open publication");
     (request_id, start)
 }
 
@@ -790,10 +788,10 @@ fn requirement_08_incomplete_publication_is_distinct_from_canonical_assistant() 
     store.initialize(&[]).expect("initialize");
     let (_request_id, start) = open_publication(&store, "incomplete");
     store
-        .stage_publication_frames(&[text_frame(&start, 0, "partial")])
+        .stage_publication_frames(&start, &[text_frame(&start, 0, "partial")])
         .expect("stage");
     let audit = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("incomplete audit");
     assert_eq!(audit.0.kind, PublicationAuditKind::Incomplete);
     store
@@ -832,15 +830,15 @@ fn requirement_09_unaccepted_and_incomplete_publications_stay_distinct() {
 
     let (_request_id, incomplete) = open_publication(&store, "incomplete-2");
     store
-        .stage_publication_frames(&[text_frame(&incomplete, 0, "partial")])
+        .stage_publication_frames(&incomplete, &[text_frame(&incomplete, 0, "partial")])
         .expect("stage incomplete");
     store
-        .terminalize_publication_audit(&incomplete.stream_id, fixed_time())
+        .terminalize_publication_audit(&incomplete, fixed_time())
         .expect("incomplete audit");
 
     let (request_id, unaccepted) = open_publication(&store, "unaccepted");
     store
-        .stage_publication_frames(&[text_frame(&unaccepted, 0, "complete")])
+        .stage_publication_frames(&unaccepted, &[text_frame(&unaccepted, 0, "complete")])
         .expect("stage unaccepted");
     store
         .append_event(envelope(
@@ -863,12 +861,12 @@ fn requirement_09_unaccepted_and_incomplete_publications_stay_distinct() {
         .expect("provider outcome");
     store
         .commit_publication_terminal(
-            &unaccepted.stream_id,
+            &unaccepted,
             &[frame(&unaccepted, 1, PublicationPayload::TerminalOnly)],
         )
         .expect("publication terminal");
     store
-        .terminalize_publication_audit(&unaccepted.stream_id, fixed_time())
+        .terminalize_publication_audit(&unaccepted, fixed_time())
         .expect("unaccepted audit");
 
     let audits = all_entries(&store, 10)
@@ -901,10 +899,10 @@ fn requirement_10_audited_tool_proposal_is_unaccepted_and_unexecuted() {
     store.initialize(&[]).expect("initialize");
     let (_request_id, start) = open_publication(&store, "proposal-audit");
     store
-        .stage_publication_frames(&proposal_frames(&start))
+        .stage_publication_frames(&start, &proposal_frames(&start))
         .expect("proposal frames");
     let audit = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("incomplete proposal audit");
     assert_eq!(audit.0.kind, PublicationAuditKind::Incomplete);
     assert!(matches!(
@@ -1197,11 +1195,8 @@ fn transcript_reference_identity_is_typed_and_collision_free() {
         request_id,
         message_id: publication_message_id,
     };
-    store
-        .open_publication_stream(&start)
-        .expect("PublicationStreamId collision is scoped");
     let (_, publication_cursor) = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("publication audit");
 
     let entries = all_entries(&store, 10);

@@ -22,12 +22,16 @@ pub(in crate::durable::sqlite) fn load_canonical_rows(
 ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
     let mut statement = connection
         .prepare("SELECT message_id,message_json FROM message_ledger ORDER BY position")
-        .map_err(|error| storage(format!("load Ledger: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("load Ledger: {error}"))
+        })?;
     let rows = statement
         .query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        .map_err(|error| storage(format!("load Ledger query: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("load Ledger query: {error}"))
+        })?;
     rows.map(|row| {
         let (stored_id, json) =
             row.map_err(|error| storage(format!("load Ledger row: {error}")))?;
@@ -50,14 +54,19 @@ pub(in crate::durable::sqlite) fn load_transcript_tools(
     assistant: &crate::message::types::AssistantMessageBlock,
 ) -> Result<Vec<crate::durable::TranscriptTool>, ConversationStoreError> {
     let mut tool_calls = Vec::new();
-    let mut statement = connection
-        .prepare(TRANSCRIPT_TOOLS_SQL)
-        .map_err(|error| storage(format!("transcript Tool associations: {error}")))?;
+    let mut statement = connection.prepare(TRANSCRIPT_TOOLS_SQL).map_err(|error| {
+        crate::durable::sqlite::sqlite_error(
+            &error,
+            format!("transcript Tool associations: {error}"),
+        )
+    })?;
     let rows = statement
         .query_map([assistant.id.as_str()], |row| {
             Ok((row.get::<_, u32>(0)?, row.get::<_, Option<String>>(1)?))
         })
-        .map_err(|error| storage(format!("transcript Tool rows: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("transcript Tool rows: {error}"))
+        })?;
     for row in rows {
         let (block_index, result_json) =
             row.map_err(|error| storage(format!("transcript Tool row: {error}")))?;
@@ -78,7 +87,7 @@ pub(in crate::durable::sqlite) fn load_transcript_tools(
                         && tool.tool_call_id == call.id
                         && tool.tool_id == call.tool_id =>
                 {
-                    Ok(tool.result)
+                    Ok(std::sync::Arc::unwrap_or_clone(tool.result))
                 }
                 _ => Err(storage(
                     "canonical Tool occurrence references a foreign result",
@@ -134,7 +143,9 @@ pub(in crate::durable::sqlite) fn load_transcript_page(
              ORDER BY position DESC
              LIMIT ?2",
         )
-        .map_err(|error| storage(format!("transcript page: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("transcript page: {error}"))
+        })?;
     let rows = statement
         .query_map(params![before, fetch_limit], |row| {
             Ok((
@@ -143,7 +154,9 @@ pub(in crate::durable::sqlite) fn load_transcript_page(
                 row.get::<_, String>(2)?,
             ))
         })
-        .map_err(|error| storage(format!("transcript page query: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("transcript page query: {error}"))
+        })?;
     let mut references = rows
         .map(|row| row.map_err(|error| storage(format!("transcript page row: {error}"))))
         .collect::<Result<Vec<_>, _>>()?;
@@ -201,9 +214,19 @@ pub(in crate::durable::sqlite) fn inherited_transcript_through(
 ) -> Result<TranscriptCursor, ConversationStoreError> {
     let position: i64 = connection
         .prepare_cached(INHERITED_TRANSCRIPT_THROUGH_SQL)
-        .map_err(|error| storage(format!("inherited transcript boundary: {error}")))?
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("inherited transcript boundary: {error}"),
+            )
+        })?
         .query_row([], |row| row.get(0))
-        .map_err(|error| storage(format!("inherited transcript boundary: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("inherited transcript boundary: {error}"),
+            )
+        })?;
     Ok(TranscriptCursor::new(nonnegative(
         position,
         "inherited transcript boundary",
@@ -235,7 +258,12 @@ pub(in crate::durable::sqlite) fn load_transcript_item(
                     |row| row.get(0),
                 )
                 .optional()
-                .map_err(|error| storage(format!("transcript Ledger lookup: {error}")))?;
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(
+                        &error,
+                        format!("transcript Ledger lookup: {error}"),
+                    )
+                })?;
             let message = if let Some(json) = ledger_json {
                 decode::<MessageBlock>(&json, "transcript message")?
             } else {
@@ -246,7 +274,12 @@ pub(in crate::durable::sqlite) fn load_transcript_item(
                         |row| row.get(0),
                     )
                     .optional()
-                    .map_err(|error| storage(format!("transcript pending lookup: {error}")))?
+                    .map_err(|error| {
+                        crate::durable::sqlite::sqlite_error(
+                            &error,
+                            format!("transcript pending lookup: {error}"),
+                        )
+                    })?
                     .ok_or_else(|| {
                         ConversationStoreError::InvalidReference(format!(
                             "transcript message reference {reference_id} has no durable owner"
@@ -272,7 +305,12 @@ pub(in crate::durable::sqlite) fn load_transcript_item(
                     |row| row.get(0),
                 )
                 .optional()
-                .map_err(|error| storage(format!("transcript publication audit lookup: {error}")))?
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(
+                        &error,
+                        format!("transcript publication audit lookup: {error}"),
+                    )
+                })?
                 .ok_or_else(|| {
                     ConversationStoreError::InvalidReference(format!(
                         "transcript publication audit reference {reference_id} has no durable audit"
@@ -307,7 +345,12 @@ pub(in crate::durable::sqlite) fn load_transcript_event(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(format!("transcript event lookup: {error}")))?
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("transcript event lookup: {error}"),
+            )
+        })?
         .ok_or_else(|| {
             ConversationStoreError::InvalidReference(format!(
                 "transcript event reference {reference_id} has no durable event"
@@ -397,7 +440,9 @@ pub(in crate::durable::sqlite) fn load_user_message_boundaries_page_internal(
             "SELECT revision,compaction_generation,op_json
              FROM surface_ops WHERE revision <= ?1 ORDER BY revision",
         )
-        .map_err(|error| storage(format!("read Surface history: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("read Surface history: {error}"))
+        })?;
     let rows = statement
         .query_map([seq_to_i64(through.get())?], |row| {
             Ok((
@@ -406,7 +451,12 @@ pub(in crate::durable::sqlite) fn load_user_message_boundaries_page_internal(
                 row.get::<_, String>(2)?,
             ))
         })
-        .map_err(|error| storage(format!("read Surface history query: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("read Surface history query: {error}"),
+            )
+        })?;
     let mut expected_revision = 1_u64;
     for row in rows {
         let (stored_revision, stored_generation, json) =

@@ -271,8 +271,8 @@ async fn text_execution_completes_with_exact_trace() {
     assert_single_terminal(&result.event_history);
     assert_eq!(
         result.publication_frames.len(),
-        1,
-        "the two provider deltas coalesced into one durable publication frame"
+        0,
+        "the complete final output uses its canonical receipt"
     );
     assert!(
         result.publication_audits.is_empty(),
@@ -292,6 +292,10 @@ async fn text_execution_completes_with_exact_trace() {
         panic!("final message must contain text");
     };
     assert_eq!(block.text, "hello world");
+    assert_eq!(
+        result.canonical_notifications,
+        vec![MessageBlock::Assistant(assistant.clone())]
+    );
 }
 
 /// Several deltas across blocks assemble in stream order.
@@ -308,23 +312,11 @@ async fn several_deltas_assemble_in_stream_order() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
 
-    // Different target blocks are never coalesced together, so the released
-    // publication preserves the provider's block ordering exactly.
-    let deltas: Vec<String> = result
-        .publication_frames
-        .iter()
-        .filter_map(|frame| match &frame.payload {
-            rustx::publication::PublicationPayload::TextSuffix {
-                block_index,
-                suffix,
-            } => Some(format!("{}:{suffix}", block_index.get())),
-            _ => None,
-        })
-        .collect();
+    assert!(result.publication_frames.is_empty());
     assert_eq!(
-        deltas,
-        vec!["0:a", "1:b", "0:c"],
-        "publication order preserved"
+        result.canonical_notifications,
+        vec![result.messages().last().unwrap().clone()],
+        "the complete ordered blocks reach the actual canonical notification seam"
     );
     let MessageBlock::Assistant(assistant) = result.messages().last().expect("Assistant message")
     else {
@@ -709,7 +701,7 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
         RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-alpha"),
-            result: success_result("listed"),
+            result: success_result("listed").into(),
         },
         RuntimeEvent::ToolMessageCommitted {
             message_id: MessageId::new("attempt-1-tool-1-0"),
@@ -885,7 +877,8 @@ async fn tool_result_passed_back_verbatim() {
         panic!("second request must contain the tool message");
     };
     assert_eq!(
-        tool_message.result, expected_result,
+        tool_message.result.as_ref(),
+        &expected_result,
         "result passed back verbatim"
     );
     assert_eq!(tool_message.tool_call_id, ToolCallId::new("call-1"));
@@ -1041,7 +1034,8 @@ async fn tool_execution_failure_is_passed_back_and_continues() {
         panic!("continuation must carry the failed tool result");
     };
     assert_eq!(
-        tool_message.result, failed,
+        tool_message.result.as_ref(),
+        &failed,
         "failed result passed back verbatim"
     );
     assert!(
@@ -1565,7 +1559,7 @@ async fn cancellation_never_results_in_completed() {
 #[tokio::test]
 async fn continuation_state_propagates_losslessly() {
     let state = ProviderContinuationState::Anthropic(AnthropicContinuation {
-        opaque: serde_json::json!({"type":"thinking", "thinking":"Thinking.", "signature": "sig-1", "opaque": [1, 2, 3]}),
+        opaque: serde_json::json!({"type":"thinking", "thinking":"Thinking.", "signature": "sig-1", "opaque": [1, 2, 3]}).into(),
     });
     let call = ScriptedCall {
         id: "call-1",
@@ -1639,7 +1633,7 @@ async fn opaque_continuation_is_never_inspected() {
                     "encrypted_content": "opaque-bytes"
                 }),
                 serde_json::json!({"type":"function_call", "id":"fc_1", "call_id":"call-1", "name":"alpha", "arguments":"{}"}),
-            ],
+            ].into(),
         },
     );
     let call = ScriptedCall {
@@ -3394,7 +3388,7 @@ async fn unknown_tool_failure_leaves_pending_inbound_untouched() {
 #[tokio::test]
 async fn continuation_retained_across_inbound_drain() {
     let state = ProviderContinuationState::Anthropic(AnthropicContinuation {
-        opaque: serde_json::json!({"type":"thinking", "thinking":"Thinking.", "signature": "sig-1", "opaque": [1, 2, 3]}),
+        opaque: serde_json::json!({"type":"thinking", "thinking":"Thinking.", "signature": "sig-1", "opaque": [1, 2, 3]}).into(),
     });
     let (release, parked) = model_release();
     let model = fake(vec![

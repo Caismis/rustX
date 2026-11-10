@@ -1,0 +1,846 @@
+{
+  "scope": "One diagnostic product per side, 128 sessions and 32 turns. Unique reachable owner/capacity accounting includes every new payload Box; nested row payloads, private prepared caches, current seeds, IDs, allocator rounding and SQLite remain outside the partial census. External compiler overlap is recorded; do not use these products for CPU, wall-time or PSS claims. Same frozen fixture, 4096 requests per side, all 256 backups independently checked for hashes/schema/integrity/FKs/exact ordered content. All counted hosts disappear after unload.",
+  "rows": [
+    {
+      "depth": 8,
+      "sides": {
+        "baseline": {
+          "input": "/home/capi/.cache/rustx-pr485-replay-layout-20261110/baseline-census-128x32/retained-seeded_history_8.json",
+          "sha256": "c59f7fc135cbbf8381f6f1a4b992ac77a2bca08346c2b263f605f08abc371b5d",
+          "known_requested_bytes": 56113045,
+          "event_envelope_and_vectors_bytes": 17587968,
+          "new_payload_box_bytes": 0,
+          "event_inline_bytes": 552,
+          "allocations": {
+            "binding_fragments": {
+              "owners": 22026,
+              "known_requested_bytes": 2995536
+            },
+            "binding_path_strings": {
+              "owners": 0,
+              "known_requested_bytes": 818215
+            },
+            "binding_path_vectors": {
+              "owners": 42385,
+              "known_requested_bytes": 3795792
+            },
+            "checkpoint_boxes": {
+              "owners": 1024,
+              "known_requested_bytes": 3383296
+            },
+            "collection_cut_roots": {
+              "owners": 128,
+              "known_requested_bytes": 12288
+            },
+            "content_array_owners": {
+              "owners": 5249,
+              "known_requested_bytes": 209960
+            },
+            "content_pointer_vectors": {
+              "owners": 4097,
+              "known_requested_bytes": 401552
+            },
+            "content_ref_owners": {
+              "owners": 4096,
+              "known_requested_bytes": 622592
+            },
+            "descriptor_pointer_vectors": {
+              "owners": 1024,
+              "known_requested_bytes": 49152
+            },
+            "descriptor_rows": {
+              "owners": 1920,
+              "known_requested_bytes": 2027520
+            },
+            "descriptor_strings": {
+              "owners": 0,
+              "known_requested_bytes": 27392
+            },
+            "domain_revision_roots": {
+              "owners": 7168,
+              "known_requested_bytes": 688128
+            },
+            "frontier_array_owners": {
+              "owners": 9214,
+              "known_requested_bytes": 368560
+            },
+            "frontier_domain_strings": {
+              "owners": 0,
+              "known_requested_bytes": 2068422
+            },
+            "frontier_fragments": {
+              "owners": 65278,
+              "known_requested_bytes": 8877808
+            },
+            "frontier_pointer_vectors": {
+              "owners": 8190,
+              "known_requested_bytes": 2164296
+            },
+            "nested_event_vectors": {
+              "owners": 10152,
+              "known_requested_bytes": 11821632
+            },
+            "raw_binding_vectors": {
+              "owners": 4904,
+              "known_requested_bytes": 1460224
+            },
+            "raw_frontier_vectors": {
+              "owners": 3112,
+              "known_requested_bytes": 1213952
+            },
+            "replay_event_arcs": {
+              "owners": 10152,
+              "known_requested_bytes": 5766336
+            },
+            "transcript_binding_heads": {
+              "owners": 3112,
+              "known_requested_bytes": 298752
+            },
+            "transcript_frontier_heads": {
+              "owners": 3112,
+              "known_requested_bytes": 298752
+            },
+            "transcript_head_owners": {
+              "owners": 4008,
+              "known_requested_bytes": 384768
+            },
+            "transcript_page_boxes": {
+              "owners": 2984,
+              "known_requested_bytes": 1360704
+            },
+            "transcript_pointer_vectors": {
+              "owners": 3880,
+              "known_requested_bytes": 192616
+            },
+            "transcript_rows": {
+              "owners": 3850,
+              "known_requested_bytes": 4804800
+            }
+          },
+          "counts": {
+            "collection_cut_logical_entries": 512,
+            "domain_revision_logical_entries": 49920,
+            "event_values": 31568,
+            "other_event_values": 17408,
+            "read_domain_events": 2984,
+            "replacement_checkpoints": 1024,
+            "replay_encoded_charge": 283721266,
+            "replay_records": 10152,
+            "variant_AssistantMessageStarted": 1024,
+            "variant_AttemptSettled": 1024,
+            "variant_AttemptStarted": 1024,
+            "variant_AttemptTurnUpdated": 1024,
+            "variant_CheckpointAdvanced": 1024,
+            "variant_InboundDrained": 1024,
+            "variant_InboundEnqueued": 1024,
+            "variant_MessageCommitted": 2048,
+            "variant_MessageDescriptorCommitted": 2048,
+            "variant_PendingInboundChanged": 2048,
+            "variant_ProjectionTransition": 10152,
+            "variant_ReadDomainsUpdated": 2984,
+            "variant_TraceChanged": 5120
+          }
+        },
+        "candidate": {
+          "input": "/home/capi/.cache/rustx-pr485-replay-layout-20261110/candidate-census-128x32/retained-seeded_history_8.json",
+          "sha256": "63599ca46dfcd065da2b96a2c2a63e236e1401ed37b0dd5a4b2922c603f3976a",
+          "known_requested_bytes": 51333538,
+          "event_envelope_and_vectors_bytes": 12805136,
+          "new_payload_box_bytes": 0,
+          "event_inline_bytes": 400,
+          "allocations": {
+            "binding_fragments": {
+              "owners": 22007,
+              "known_requested_bytes": 2992952
+            },
+            "binding_path_strings": {
+              "owners": 0,
+              "known_requested_bytes": 817588
+            },
+            "binding_path_vectors": {
+              "owners": 42362,
+              "known_requested_bytes": 3793128
+            },
+            "checkpoint_boxes": {
+              "owners": 1024,
+              "known_requested_bytes": 3383296
+            },
+            "collection_cut_roots": {
+              "owners": 128,
+              "known_requested_bytes": 12288
+            },
+            "content_array_owners": {
+              "owners": 5247,
+              "known_requested_bytes": 209880
+            },
+            "content_pointer_vectors": {
+              "owners": 4095,
+              "known_requested_bytes": 401264
+            },
+            "content_ref_owners": {
+              "owners": 4096,
+              "known_requested_bytes": 622592
+            },
+            "descriptor_pointer_vectors": {
+              "owners": 1024,
+              "known_requested_bytes": 49152
+            },
+            "descriptor_rows": {
+              "owners": 1920,
+              "known_requested_bytes": 2027520
+            },
+            "descriptor_strings": {
+              "owners": 0,
+              "known_requested_bytes": 27392
+            },
+            "domain_revision_roots": {
+              "owners": 7168,
+              "known_requested_bytes": 688128
+            },
+            "frontier_array_owners": {
+              "owners": 9216,
+              "known_requested_bytes": 368640
+            },
+            "frontier_domain_strings": {
+              "owners": 0,
+              "known_requested_bytes": 2066910
+            },
+            "frontier_fragments": {
+              "owners": 65280,
+              "known_requested_bytes": 8878080
+            },
+            "frontier_pointer_vectors": {
+              "owners": 8192,
+              "known_requested_bytes": 2164800
+            },
+            "nested_event_vectors": {
+              "owners": 10171,
+              "known_requested_bytes": 8574000
+            },
+            "raw_binding_vectors": {
+              "owners": 4923,
+              "known_requested_bytes": 1465344
+            },
+            "raw_frontier_vectors": {
+              "owners": 3131,
+              "known_requested_bytes": 1214976
+            },
+            "replay_event_arcs": {
+              "owners": 10171,
+              "known_requested_bytes": 4231136
+            },
+            "transcript_binding_heads": {
+              "owners": 3131,
+              "known_requested_bytes": 300576
+            },
+            "transcript_frontier_heads": {
+              "owners": 3131,
+              "known_requested_bytes": 300576
+            },
+            "transcript_head_owners": {
+              "owners": 4027,
+              "known_requested_bytes": 386592
+            },
+            "transcript_page_boxes": {
+              "owners": 3003,
+              "known_requested_bytes": 1369368
+            },
+            "transcript_pointer_vectors": {
+              "owners": 3899,
+              "known_requested_bytes": 192544
+            },
+            "transcript_rows": {
+              "owners": 3842,
+              "known_requested_bytes": 4794816
+            }
+          },
+          "counts": {
+            "collection_cut_logical_entries": 512,
+            "domain_revision_logical_entries": 49920,
+            "event_values": 31606,
+            "other_event_values": 17408,
+            "read_domain_events": 3003,
+            "replacement_checkpoints": 1024,
+            "replay_encoded_charge": 283801058,
+            "replay_records": 10171,
+            "variant_AssistantMessageStarted": 1024,
+            "variant_AttemptSettled": 1024,
+            "variant_AttemptStarted": 1024,
+            "variant_AttemptTurnUpdated": 1024,
+            "variant_CheckpointAdvanced": 1024,
+            "variant_InboundDrained": 1024,
+            "variant_InboundEnqueued": 1024,
+            "variant_MessageCommitted": 2048,
+            "variant_MessageDescriptorCommitted": 2048,
+            "variant_PendingInboundChanged": 2048,
+            "variant_ProjectionTransition": 10171,
+            "variant_ReadDomainsUpdated": 3003,
+            "variant_TraceChanged": 5120
+          }
+        }
+      },
+      "known_requested_delta_bytes": -4779507
+    },
+    {
+      "depth": 16,
+      "sides": {
+        "baseline": {
+          "input": "/home/capi/.cache/rustx-pr485-replay-layout-20261110/baseline-census-128x32/retained-seeded_history_16.json",
+          "sha256": "d3ebd3f80cf1e38e9cc7bd72829a25bcb1f3fb5d9e912f60f860ff143fb7bb35",
+          "known_requested_bytes": 115678979,
+          "event_envelope_and_vectors_bytes": 35152416,
+          "new_payload_box_bytes": 0,
+          "event_inline_bytes": 552,
+          "allocations": {
+            "binding_fragments": {
+              "owners": 54777,
+              "known_requested_bytes": 7449672
+            },
+            "binding_path_strings": {
+              "owners": 0,
+              "known_requested_bytes": 1905007
+            },
+            "binding_path_vectors": {
+              "owners": 100887,
+              "known_requested_bytes": 8870904
+            },
+            "checkpoint_boxes": {
+              "owners": 2048,
+              "known_requested_bytes": 6766592
+            },
+            "collection_cut_roots": {
+              "owners": 128,
+              "known_requested_bytes": 12288
+            },
+            "content_array_owners": {
+              "owners": 10367,
+              "known_requested_bytes": 414680
+            },
+            "content_pointer_vectors": {
+              "owners": 8191,
+              "known_requested_bytes": 925568
+            },
+            "content_ref_owners": {
+              "owners": 8192,
+              "known_requested_bytes": 1245184
+            },
+            "descriptor_pointer_vectors": {
+              "owners": 2048,
+              "known_requested_bytes": 114688
+            },
+            "descriptor_rows": {
+              "owners": 3968,
+              "known_requested_bytes": 4190208
+            },
+            "descriptor_strings": {
+              "owners": 0,
+              "known_requested_bytes": 57088
+            },
+            "domain_revision_roots": {
+              "owners": 14336,
+              "known_requested_bytes": 1376256
+            },
+            "frontier_array_owners": {
+              "owners": 17406,
+              "known_requested_bytes": 696240
+            },
+            "frontier_domain_strings": {
+              "owners": 0,
+              "known_requested_bytes": 4351700
+            },
+            "frontier_fragments": {
+              "owners": 126718,
+              "known_requested_bytes": 17233648
+            },
+            "frontier_pointer_vectors": {
+              "owners": 15358,
+              "known_requested_bytes": 4064840
+            },
+            "nested_event_vectors": {
+              "owners": 20283,
+              "known_requested_bytes": 23631672
+            },
+            "raw_binding_vectors": {
+              "owners": 9915,
+              "known_requested_bytes": 3108352
+            },
+            "raw_frontier_vectors": {
+              "owners": 6075,
+              "known_requested_bytes": 2731008
+            },
+            "replay_event_arcs": {
+              "owners": 20283,
+              "known_requested_bytes": 11520744
+            },
+            "transcript_binding_heads": {
+              "owners": 6075,
+              "known_requested_bytes": 583200
+            },
+            "transcript_frontier_heads": {
+              "owners": 6075,
+              "known_requested_bytes": 583200
+            },
+            "transcript_head_owners": {
+              "owners": 7995,
+              "known_requested_bytes": 767520
+            },
+            "transcript_page_boxes": {
+              "owners": 5947,
+              "known_requested_bytes": 2711832
+            },
+            "transcript_pointer_vectors": {
+              "owners": 7867,
+              "known_requested_bytes": 447784
+            },
+            "transcript_rows": {
+              "owners": 7948,
+              "known_requested_bytes": 9919104
+            }
+          },
+          "counts": {
+            "collection_cut_logical_entries": 512,
+            "domain_revision_logical_entries": 100096,
+            "event_values": 63094,
+            "other_event_values": 34816,
+            "read_domain_events": 5947,
+            "replacement_checkpoints": 2048,
+            "replay_encoded_charge": 501374635,
+            "replay_records": 20283,
+            "variant_AssistantMessageStarted": 2048,
+            "variant_AttemptSettled": 2048,
+            "variant_AttemptStarted": 2048,
+            "variant_AttemptTurnUpdated": 2048,
+            "variant_CheckpointAdvanced": 2048,
+            "variant_InboundDrained": 2048,
+            "variant_InboundEnqueued": 2048,
+            "variant_MessageCommitted": 4096,
+            "variant_MessageDescriptorCommitted": 4096,
+            "variant_PendingInboundChanged": 4096,
+            "variant_ProjectionTransition": 20283,
+            "variant_ReadDomainsUpdated": 5947,
+            "variant_TraceChanged": 10240
+          }
+        },
+        "candidate": {
+          "input": "/home/capi/.cache/rustx-pr485-replay-layout-20261110/candidate-census-128x32/retained-seeded_history_16.json",
+          "sha256": "2efc605c257b138773e06666efeddfb1e1d4af062fb58c9b66ce4787f5780fcc",
+          "known_requested_bytes": 106093850,
+          "event_envelope_and_vectors_bytes": 25571920,
+          "new_payload_box_bytes": 0,
+          "event_inline_bytes": 400,
+          "allocations": {
+            "binding_fragments": {
+              "owners": 54788,
+              "known_requested_bytes": 7451168
+            },
+            "binding_path_strings": {
+              "owners": 0,
+              "known_requested_bytes": 1904148
+            },
+            "binding_path_vectors": {
+              "owners": 100836,
+              "known_requested_bytes": 8866272
+            },
+            "checkpoint_boxes": {
+              "owners": 2048,
+              "known_requested_bytes": 6766592
+            },
+            "collection_cut_roots": {
+              "owners": 128,
+              "known_requested_bytes": 12288
+            },
+            "content_array_owners": {
+              "owners": 10369,
+              "known_requested_bytes": 414760
+            },
+            "content_pointer_vectors": {
+              "owners": 8193,
+              "known_requested_bytes": 925760
+            },
+            "content_ref_owners": {
+              "owners": 8192,
+              "known_requested_bytes": 1245184
+            },
+            "descriptor_pointer_vectors": {
+              "owners": 2048,
+              "known_requested_bytes": 114688
+            },
+            "descriptor_rows": {
+              "owners": 3968,
+              "known_requested_bytes": 4190208
+            },
+            "descriptor_strings": {
+              "owners": 0,
+              "known_requested_bytes": 57088
+            },
+            "domain_revision_roots": {
+              "owners": 14336,
+              "known_requested_bytes": 1376256
+            },
+            "frontier_array_owners": {
+              "owners": 17408,
+              "known_requested_bytes": 696320
+            },
+            "frontier_domain_strings": {
+              "owners": 0,
+              "known_requested_bytes": 4347542
+            },
+            "frontier_fragments": {
+              "owners": 126720,
+              "known_requested_bytes": 17233920
+            },
+            "frontier_pointer_vectors": {
+              "owners": 15360,
+              "known_requested_bytes": 4065344
+            },
+            "nested_event_vectors": {
+              "owners": 20295,
+              "known_requested_bytes": 17129200
+            },
+            "raw_binding_vectors": {
+              "owners": 9927,
+              "known_requested_bytes": 3109888
+            },
+            "raw_frontier_vectors": {
+              "owners": 6087,
+              "known_requested_bytes": 2728448
+            },
+            "replay_event_arcs": {
+              "owners": 20295,
+              "known_requested_bytes": 8442720
+            },
+            "transcript_binding_heads": {
+              "owners": 6087,
+              "known_requested_bytes": 584352
+            },
+            "transcript_frontier_heads": {
+              "owners": 6087,
+              "known_requested_bytes": 584352
+            },
+            "transcript_head_owners": {
+              "owners": 8007,
+              "known_requested_bytes": 768672
+            },
+            "transcript_page_boxes": {
+              "owners": 5959,
+              "known_requested_bytes": 2717304
+            },
+            "transcript_pointer_vectors": {
+              "owners": 7879,
+              "known_requested_bytes": 447264
+            },
+            "transcript_rows": {
+              "owners": 7944,
+              "known_requested_bytes": 9914112
+            }
+          },
+          "counts": {
+            "collection_cut_logical_entries": 512,
+            "domain_revision_logical_entries": 100096,
+            "event_values": 63118,
+            "other_event_values": 34816,
+            "read_domain_events": 5959,
+            "replacement_checkpoints": 2048,
+            "replay_encoded_charge": 501286846,
+            "replay_records": 20295,
+            "variant_AssistantMessageStarted": 2048,
+            "variant_AttemptSettled": 2048,
+            "variant_AttemptStarted": 2048,
+            "variant_AttemptTurnUpdated": 2048,
+            "variant_CheckpointAdvanced": 2048,
+            "variant_InboundDrained": 2048,
+            "variant_InboundEnqueued": 2048,
+            "variant_MessageCommitted": 4096,
+            "variant_MessageDescriptorCommitted": 4096,
+            "variant_PendingInboundChanged": 4096,
+            "variant_ProjectionTransition": 20295,
+            "variant_ReadDomainsUpdated": 5959,
+            "variant_TraceChanged": 10240
+          }
+        }
+      },
+      "known_requested_delta_bytes": -9585129
+    },
+    {
+      "depth": 32,
+      "sides": {
+        "baseline": {
+          "input": "/home/capi/.cache/rustx-pr485-replay-layout-20261110/baseline-census-128x32/retained-seeded_history_32.json",
+          "sha256": "cba8271126e43ea177a206a0835328b9e3293b3280ff0122187c5dbc27a7fcf9",
+          "known_requested_bytes": 234893031,
+          "event_envelope_and_vectors_bytes": 70303712,
+          "new_payload_box_bytes": 0,
+          "event_inline_bytes": 552,
+          "allocations": {
+            "binding_fragments": {
+              "owners": 120262,
+              "known_requested_bytes": 16355632
+            },
+            "binding_path_strings": {
+              "owners": 0,
+              "known_requested_bytes": 4081119
+            },
+            "binding_path_vectors": {
+              "owners": 218033,
+              "known_requested_bytes": 19034352
+            },
+            "checkpoint_boxes": {
+              "owners": 4096,
+              "known_requested_bytes": 13533184
+            },
+            "collection_cut_roots": {
+              "owners": 128,
+              "known_requested_bytes": 12288
+            },
+            "content_array_owners": {
+              "owners": 20601,
+              "known_requested_bytes": 824040
+            },
+            "content_pointer_vectors": {
+              "owners": 16377,
+              "known_requested_bytes": 1973328
+            },
+            "content_ref_owners": {
+              "owners": 16384,
+              "known_requested_bytes": 2490368
+            },
+            "descriptor_pointer_vectors": {
+              "owners": 4096,
+              "known_requested_bytes": 245760
+            },
+            "descriptor_rows": {
+              "owners": 8064,
+              "known_requested_bytes": 8515584
+            },
+            "descriptor_strings": {
+              "owners": 0,
+              "known_requested_bytes": 116480
+            },
+            "domain_revision_roots": {
+              "owners": 28672,
+              "known_requested_bytes": 2752512
+            },
+            "frontier_array_owners": {
+              "owners": 33790,
+              "known_requested_bytes": 1351600
+            },
+            "frontier_domain_strings": {
+              "owners": 0,
+              "known_requested_bytes": 8925816
+            },
+            "frontier_fragments": {
+              "owners": 249598,
+              "known_requested_bytes": 33945328
+            },
+            "frontier_pointer_vectors": {
+              "owners": 29694,
+              "known_requested_bytes": 7865928
+            },
+            "nested_event_vectors": {
+              "owners": 40565,
+              "known_requested_bytes": 47262792
+            },
+            "raw_binding_vectors": {
+              "owners": 19957,
+              "known_requested_bytes": 6414848
+            },
+            "raw_frontier_vectors": {
+              "owners": 12021,
+              "known_requested_bytes": 5775360
+            },
+            "replay_event_arcs": {
+              "owners": 40565,
+              "known_requested_bytes": 23040920
+            },
+            "transcript_binding_heads": {
+              "owners": 12021,
+              "known_requested_bytes": 1154016
+            },
+            "transcript_frontier_heads": {
+              "owners": 12021,
+              "known_requested_bytes": 1154016
+            },
+            "transcript_head_owners": {
+              "owners": 15989,
+              "known_requested_bytes": 1534944
+            },
+            "transcript_page_boxes": {
+              "owners": 11893,
+              "known_requested_bytes": 5423208
+            },
+            "transcript_pointer_vectors": {
+              "owners": 15861,
+              "known_requested_bytes": 959400
+            },
+            "transcript_rows": {
+              "owners": 16146,
+              "known_requested_bytes": 20150208
+            }
+          },
+          "counts": {
+            "collection_cut_logical_entries": 512,
+            "domain_revision_logical_entries": 200448,
+            "event_values": 126186,
+            "other_event_values": 69632,
+            "read_domain_events": 11893,
+            "replacement_checkpoints": 4096,
+            "replay_encoded_charge": 937778113,
+            "replay_records": 40565,
+            "variant_AssistantMessageStarted": 4096,
+            "variant_AttemptSettled": 4096,
+            "variant_AttemptStarted": 4096,
+            "variant_AttemptTurnUpdated": 4096,
+            "variant_CheckpointAdvanced": 4096,
+            "variant_InboundDrained": 4096,
+            "variant_InboundEnqueued": 4096,
+            "variant_MessageCommitted": 8192,
+            "variant_MessageDescriptorCommitted": 8192,
+            "variant_PendingInboundChanged": 8192,
+            "variant_ProjectionTransition": 40565,
+            "variant_ReadDomainsUpdated": 11893,
+            "variant_TraceChanged": 20480
+          }
+        },
+        "candidate": {
+          "input": "/home/capi/.cache/rustx-pr485-replay-layout-20261110/candidate-census-128x32/retained-seeded_history_32.json",
+          "sha256": "6c1712e37b495852e2f6037f52c66679617c91b350b5e23b92f8baa620e37509",
+          "known_requested_bytes": 215830674,
+          "event_envelope_and_vectors_bytes": 51154448,
+          "new_payload_box_bytes": 0,
+          "event_inline_bytes": 400,
+          "allocations": {
+            "binding_fragments": {
+              "owners": 120314,
+              "known_requested_bytes": 16362704
+            },
+            "binding_path_strings": {
+              "owners": 0,
+              "known_requested_bytes": 4085420
+            },
+            "binding_path_vectors": {
+              "owners": 218232,
+              "known_requested_bytes": 19054704
+            },
+            "checkpoint_boxes": {
+              "owners": 4096,
+              "known_requested_bytes": 13533184
+            },
+            "collection_cut_roots": {
+              "owners": 128,
+              "known_requested_bytes": 12288
+            },
+            "content_array_owners": {
+              "owners": 20608,
+              "known_requested_bytes": 824320
+            },
+            "content_pointer_vectors": {
+              "owners": 16384,
+              "known_requested_bytes": 1974176
+            },
+            "content_ref_owners": {
+              "owners": 16384,
+              "known_requested_bytes": 2490368
+            },
+            "descriptor_pointer_vectors": {
+              "owners": 4096,
+              "known_requested_bytes": 245760
+            },
+            "descriptor_rows": {
+              "owners": 8064,
+              "known_requested_bytes": 8515584
+            },
+            "descriptor_strings": {
+              "owners": 0,
+              "known_requested_bytes": 116480
+            },
+            "domain_revision_roots": {
+              "owners": 28672,
+              "known_requested_bytes": 2752512
+            },
+            "frontier_array_owners": {
+              "owners": 33792,
+              "known_requested_bytes": 1351680
+            },
+            "frontier_domain_strings": {
+              "owners": 0,
+              "known_requested_bytes": 8931486
+            },
+            "frontier_fragments": {
+              "owners": 249600,
+              "known_requested_bytes": 33945600
+            },
+            "frontier_pointer_vectors": {
+              "owners": 29696,
+              "known_requested_bytes": 7866432
+            },
+            "nested_event_vectors": {
+              "owners": 40603,
+              "known_requested_bytes": 34263600
+            },
+            "raw_binding_vectors": {
+              "owners": 19995,
+              "known_requested_bytes": 6429696
+            },
+            "raw_frontier_vectors": {
+              "owners": 12059,
+              "known_requested_bytes": 5786112
+            },
+            "replay_event_arcs": {
+              "owners": 40603,
+              "known_requested_bytes": 16890848
+            },
+            "transcript_binding_heads": {
+              "owners": 12059,
+              "known_requested_bytes": 1157664
+            },
+            "transcript_frontier_heads": {
+              "owners": 12059,
+              "known_requested_bytes": 1157664
+            },
+            "transcript_head_owners": {
+              "owners": 16027,
+              "known_requested_bytes": 1538592
+            },
+            "transcript_page_boxes": {
+              "owners": 11931,
+              "known_requested_bytes": 5440536
+            },
+            "transcript_pointer_vectors": {
+              "owners": 15899,
+              "known_requested_bytes": 960544
+            },
+            "transcript_rows": {
+              "owners": 16140,
+              "known_requested_bytes": 20142720
+            }
+          },
+          "counts": {
+            "collection_cut_logical_entries": 512,
+            "domain_revision_logical_entries": 200448,
+            "event_values": 126262,
+            "other_event_values": 69632,
+            "read_domain_events": 11931,
+            "replacement_checkpoints": 4096,
+            "replay_encoded_charge": 938317061,
+            "replay_records": 40603,
+            "variant_AssistantMessageStarted": 4096,
+            "variant_AttemptSettled": 4096,
+            "variant_AttemptStarted": 4096,
+            "variant_AttemptTurnUpdated": 4096,
+            "variant_CheckpointAdvanced": 4096,
+            "variant_InboundDrained": 4096,
+            "variant_InboundEnqueued": 4096,
+            "variant_MessageCommitted": 8192,
+            "variant_MessageDescriptorCommitted": 8192,
+            "variant_PendingInboundChanged": 8192,
+            "variant_ProjectionTransition": 40603,
+            "variant_ReadDomainsUpdated": 11931,
+            "variant_TraceChanged": 20480
+          }
+        }
+      },
+      "known_requested_delta_bytes": -19062357
+    }
+  ],
+  "rejected_status_rewrite": "No AgentStatusComposed or retained status rows in this native fixture. Status row ownership is not its measured growth source."
+}

@@ -1407,7 +1407,7 @@ async fn workflow_program_only_change_records_one_changed_fact() {
         fixture.gates[0].release();
         done.wait().await;
         let requests = fixture.provider.request_bodies();
-        assert!(requests.iter().any(|body| body.contains("Review task B")), "{requests:?}");
+        assert!(requests.iter().any(|body| body.contains("Review task B")), "{requests:?}; events={:?}", runtime.tool_runtime().durable_store().read_events(None, 64));
         assert!(!requests.iter().any(|body| body.contains("Review task A")));
         fixture.close().await;
     })

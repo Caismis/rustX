@@ -173,6 +173,7 @@ impl Peer {
         records: Vec<crate::observation::trace::TraceCursor>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         let id = self.next_id();
+        let expected = records.len();
         let result = self
             .request(RuntimeClientRequest::TracePageGet {
                 id,
@@ -181,7 +182,7 @@ impl Peer {
                 records,
             })
             .await?;
-        let RuntimeClientResult::TracePage { page } = &result else {
+        let RuntimeClientResult::TracePage { page, refreshed } = &result else {
             return Err(failed("unexpected native Trace page response"));
         };
         let cut = page
@@ -189,7 +190,8 @@ impl Peer {
             .as_ref()
             .ok_or_else(|| failed("native Trace page omitted its read evidence"))?;
         self.validate_cut(cut)?;
-        if page.records.len() > 32
+        if *refreshed != expected
+            || page.records.len() > 32
             || page.updates.len() > super::trace::TRACE_RECORD_LIMIT
             || crate::observation::bounded::bounded_bytes(
                 &result,
@@ -418,7 +420,7 @@ impl Peer {
                     {
                         return Err(failed("noncontiguous native event batch"));
                     }
-                    match &event.event {
+                    match event.event.as_ref() {
                         super::event::RuntimeClientEvent::ProjectionTransition {
                             metadata, ..
                         } => self.validate_cut(&metadata.read_cut)?,
@@ -513,7 +515,7 @@ fn historical_selection(cut: &crate::observation::cut::CheckpointReadCut, domain
             || super::trace_observation::canonical_selection(domain)
             || super::trace_observation::context_selection(domain).is_some()
             || super::journal_observation::selection(domain).is_some()
-            || super::delivery::selection(domain).is_some()
+            || crate::runtime_client::delivery::selection(domain).is_some()
             || super::occupancy::selection(domain).is_some()
             || super::attempt_identity::selection(domain).is_some()
             || super::projection_history::selection(domain).is_some())
@@ -755,7 +757,10 @@ impl ClientInner {
                         .refresh_agent(&records, &reading_agent)
                         .map_err(RuntimeClientError::observation_store_error)?;
                     bind_cold_agent_trace(&mut page, &reading_agent)?;
-                    Ok(RuntimeClientResult::TracePage { page })
+                    Ok(RuntimeClientResult::TracePage {
+                        page,
+                        refreshed: records.len(),
+                    })
                 })
                 .await?
             } else {

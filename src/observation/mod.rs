@@ -44,3 +44,5 @@ pub mod trace;
 pub mod transcript;
 pub mod turn;
 pub(crate) mod workflow_source;
+
+pub mod metadata;

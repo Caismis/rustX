@@ -10,11 +10,11 @@ use crate::context::{
 use crate::conversation::ConversationState;
 use crate::durable::AuxiliaryStore;
 use crate::durable::CanonicalStore;
+use crate::durable::InboxStore;
 use crate::durable::JournalStore;
 use crate::durable::ObservationStore;
 use crate::durable::PublicationStore;
 use crate::durable::RequestStore;
-use crate::durable::inbox::InboxStore;
 use crate::events::interaction::{InteractionSettlement, InteractionSubject};
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::content::TextBlock;
@@ -151,7 +151,8 @@ fn checkpoint_model_status_tracks_body_eviction_under_shared_capture_budget() {
             sections: Vec::new(),
             rendered: "s".repeat(12_000),
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     let checkpoint = projection
         .capture_working_seed()
         .checkpoint_candidate()
@@ -194,7 +195,7 @@ fn checkpoint_keeps_goal_control_state_when_history_exhausts_inline_budget() {
         origin: crate::goal::GoalOrigin::RuntimeControl,
         last_round_message_id: None,
     };
-    projection.snapshot.goal =
+    *projection.snapshot.goal =
         Some(crate::observation::goal::RuntimeClientGoalView::from_native(Some(&goal)));
     assert!(
         projection
@@ -220,13 +221,15 @@ fn checkpoint_keeps_goal_control_state_when_history_exhausts_inline_budget() {
             sections: Vec::new(),
             rendered: "s".repeat(12_000),
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     let checkpoint = projection
         .capture_working_seed()
         .checkpoint_candidate()
         .unwrap();
     assert_eq!(
-        checkpoint.snapshot.goal, projection.snapshot.goal,
+        checkpoint.snapshot.goal,
+        projection.snapshot.goal.owned(),
         "history pressure must not erase the current Goal or its CAS controls"
     );
     assert!(
@@ -270,7 +273,8 @@ fn t14_t20_workflow_native_revision_gaps_preserve_complete_replay_and_checkpoint
                 .iter()
                 .any(|(cursor, event)| { *cursor == record.cursor && event == &record.event })
         );
-        let RuntimeClientEvent::ProjectionTransition { events, metadata } = &record.event else {
+        let RuntimeClientEvent::ProjectionTransition { events, metadata } = record.event.as_ref()
+        else {
             panic!("one complete Runtime transition");
         };
         let [
@@ -285,8 +289,8 @@ fn t14_t20_workflow_native_revision_gaps_preserve_complete_replay_and_checkpoint
         folded.snapshot.workflows.clone_from(replacement);
         folded.cursor = record.cursor;
         folded.read_cut.clone_from(&metadata.read_cut);
-        folded.collections.clone_from(&metadata.collections);
-        folded.content.clone_from(&metadata.content);
+        folded.collections = metadata.collections.clone();
+        folded.content = metadata.content.clone();
         assert_eq!(folded, projection.checkpoint_candidate().unwrap());
         projection
             .validate_checkpoint_cut(&initial.read_cut)
@@ -1180,7 +1184,7 @@ impl LiveStatusClient {
                             .iter()
                             .any(|existing| existing.status_message_id == status.status_message_id)
                         {
-                            self.statuses.push(status.clone());
+                            self.statuses.push(status.as_ref().clone());
                         }
                     }
                 }
@@ -1870,7 +1874,7 @@ fn todo_status_section_round_trips_the_wire_shape() {
 fn single_fact(
     event: &crate::runtime_client::types::RuntimeClientProtocolEvent,
 ) -> &RuntimeClientEvent {
-    let RuntimeClientEvent::ProjectionTransition { events, metadata } = &event.event else {
+    let RuntimeClientEvent::ProjectionTransition { events, metadata } = event.event.as_ref() else {
         panic!("complete native transition: {:?}", event.event);
     };
     assert_eq!(metadata.read_cut.revision, event.cursor.get());
@@ -2570,8 +2574,9 @@ fn trace_progress_retains_dependency_revision_but_retires_the_older_journal_cut(
         Ok(super::ReadDomainValues {
             projection_head: None,
             transcript: crate::observation::transcript::RuntimeClientTranscriptPage::default(),
+            transcript_rows: crate::observation::transcript::PreparedTranscriptHead::default(),
             occupancy: None,
-            trace: crate::observation::trace::TracePage::default(),
+            trace: Some(crate::observation::trace::TracePage::default()),
             trace_total: 0,
         }),
         true
@@ -2595,10 +2600,19 @@ fn t14_t19_worker_read_fence_keeps_one_native_cut_before_publication() {
     store
         .mark_observation_direct(first.sequence, first.sequence)
         .unwrap();
-    assert_eq!(
-        projection.checkpoint_candidate().unwrap(),
-        initial,
-        "a trace-only working update does not expose an unencoded published cut"
+    let first_published = projection.checkpoint_candidate().unwrap();
+    assert_eq!(first_published.cursor.get(), initial.cursor.get() + 1);
+    assert_eq!(first_published.read_cut.through, first.sequence);
+    assert_eq!(first_published.snapshot.trace, initial.snapshot.trace);
+    assert!(
+        projection
+            .replay
+            .back()
+            .unwrap()
+            .1
+            .facts()
+            .iter()
+            .any(|fact| { matches!(fact, RuntimeClientEvent::TraceChanged) })
     );
     let old_fence = projection.read_domain_cut().unwrap();
     assert_eq!(old_fence.through, first.sequence);
@@ -2637,13 +2651,16 @@ fn t14_t19_worker_read_fence_keeps_one_native_cut_before_publication() {
         !projection.install_read_domains(&old_fence, Ok(old_read), true),
         "a coherent older worker read still cannot install at a newer native fence"
     );
-    assert_eq!(projection.checkpoint_candidate().unwrap(), initial);
+    let second_published = projection.checkpoint_candidate().unwrap();
+    assert_eq!(second_published.cursor.get(), initial.cursor.get() + 2);
+    assert_eq!(second_published.read_cut.through, second.sequence);
+    assert_eq!(second_published.snapshot.trace, initial.snapshot.trace);
     let read = current.read(&store).unwrap();
     publish_source_fact(&mut projection, |projection| {
         assert!(projection.install_read_domains(&current, Ok(read), true));
     });
     let published = projection.checkpoint_candidate().unwrap();
-    assert_eq!(published.cursor.get(), initial.cursor.get() + 1);
+    assert_eq!(published.cursor.get(), initial.cursor.get() + 3);
     assert_eq!(published.read_cut.through, second.sequence);
     assert_eq!(published.read_cut.source_cut, current.source_cut);
     assert_eq!(
@@ -2657,6 +2674,76 @@ fn t14_t19_worker_read_fence_keeps_one_native_cut_before_publication() {
             .journal,
         second.sequence
     );
+}
+
+#[test]
+fn display_reads_follow_observers_and_explicit_checkpoint_demand() {
+    let mut projection = projection();
+    projection.apply(event_observation(RuntimeEvent::TurnStarted));
+    let cut = projection.read_domain_cut().unwrap();
+    assert!(projection.read_domain_candidate().is_none());
+    let cursor = projection.cursor();
+    let (subscriber, _) = projection.subscribe(cursor).unwrap();
+    assert_eq!(projection.read_domain_candidate(), Some(cut.clone()));
+    projection.remove_subscriber(subscriber);
+    assert!(projection.read_domain_candidate().is_none());
+    assert_eq!(projection.read_domain_cut(), Some(cut.clone()));
+    assert_eq!(projection.request_read_domains(), Some((cut.clone(), true)));
+    assert_eq!(
+        projection.request_read_domains(),
+        Some((cut.clone(), false))
+    );
+    assert_eq!(projection.read_domain_candidate(), Some(cut.clone()));
+    assert_eq!(
+        projection.cursor(),
+        cursor,
+        "demand itself publishes nothing"
+    );
+    let domains = super::ReadDomainValues {
+        projection_head: projection.snapshot.context.projection_head.clone(),
+        transcript: projection.snapshot.transcript.owned(),
+        transcript_rows: projection.transcript_head.clone(),
+        occupancy: projection.snapshot.context.occupancy.clone(),
+        trace: Some(projection.snapshot.trace.owned()),
+        trace_total: 0,
+    };
+    assert!(projection.install_read_domains(&cut, Ok(domains), false));
+    assert!(!projection.read_domains_requested);
+    assert!(projection.read_domain_candidate().is_none());
+    projection.apply(event_observation(RuntimeEvent::TurnStarted));
+    assert!(projection.read_domain_cut().is_some());
+    assert!(
+        projection.read_domain_candidate().is_none(),
+        "a completed request is not a permanent observer"
+    );
+}
+
+#[test]
+fn dormant_display_preserves_serviceable_semantic_replay() {
+    let mut projection = projection();
+    let cursor = projection.cursor();
+    projection.apply(event_observation(RuntimeEvent::AttemptStarted {
+        attempt_id: attempt(),
+    }));
+    projection.apply(event_observation(RuntimeEvent::TurnStarted));
+    projection.apply(event_observation(RuntimeEvent::TurnCompleted));
+    assert!(projection.read_domain_candidate().is_none());
+    let published = projection.cursor();
+    assert!(published > cursor);
+    let (subscriber, _) = projection.subscribe(cursor).unwrap();
+    let mut consumed = cursor;
+    while consumed < published {
+        let super::SubscriberPoll::Event(event) = projection.poll_subscriber(subscriber) else {
+            panic!("every retained semantic event must remain replayable");
+        };
+        assert_eq!(event.cursor.get(), consumed.get() + 1);
+        consumed = event.cursor;
+    }
+    assert_eq!(
+        projection.poll_subscriber(subscriber),
+        super::SubscriberPoll::Pending
+    );
+    assert!(projection.read_domain_candidate().is_some());
 }
 
 #[test]
@@ -2675,11 +2762,11 @@ fn read_failure_requires_successful_source_read_at_the_current_dependency_revisi
     assert!(projection.read_domain_cut().is_none());
     let cursor = projection.cursor();
     assert_eq!(
-        projection.request_failed_read_repair(),
+        projection.request_read_domains(),
         Some((failed.clone(), true))
     );
     assert_eq!(
-        projection.request_failed_read_repair(),
+        projection.request_read_domains(),
         Some((failed.clone(), false))
     );
     assert_eq!(
@@ -2709,9 +2796,10 @@ fn read_failure_requires_successful_source_read_at_the_current_dependency_revisi
     );
     let domains = super::ReadDomainValues {
         projection_head: projection.snapshot.context.projection_head.clone(),
-        transcript: projection.snapshot.transcript.clone(),
+        transcript: projection.snapshot.transcript.owned(),
+        transcript_rows: projection.transcript_head.clone(),
         occupancy: None,
-        trace: crate::observation::trace::TracePage::default(),
+        trace: Some(crate::observation::trace::TracePage::default()),
         trace_total: 0,
     };
     assert!(!projection.install_read_domains(&failed, Ok(domains.clone()), true));
@@ -2748,8 +2836,9 @@ fn durable_read_cut_retires_stale_results_without_overwriting_semantics() {
         Ok(super::ReadDomainValues {
             projection_head: None,
             transcript: crate::observation::transcript::RuntimeClientTranscriptPage::default(),
+            transcript_rows: crate::observation::transcript::PreparedTranscriptHead::default(),
             occupancy: None,
-            trace: crate::observation::trace::TracePage::default(),
+            trace: Some(crate::observation::trace::TracePage::default()),
             trace_total: 0,
         }),
         true
@@ -2840,7 +2929,7 @@ fn t14_t19_audit_receipt_fences_exact_stream_and_preserves_deferred_settlement_h
             .is_none()
     );
     assert!(
-        matches!(&events[0],RuntimeClientEvent::AssistantPublicationDeferredSettled {settlement_head,..} if settlement_head==&projection.snapshot.publication_settlements)
+        matches!(&events[0],RuntimeClientEvent::AssistantPublicationDeferredSettled {settlement_head,..} if settlement_head==projection.snapshot.publication_settlements.value())
     );
     assert_eq!(projection.snapshot.publication_settlements.len(), 2);
     assert_eq!(
@@ -2969,7 +3058,7 @@ fn representative_sequence() -> Vec<ConversationObservation> {
         event_observation(RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: ToolCallId::new("call_1"),
             tool_id: ToolId::new("tool-alpha"),
-            result: success_result(),
+            result: success_result().into(),
         }),
         event_observation(RuntimeEvent::TurnCompleted),
         event_observation(RuntimeEvent::AttemptCompleted {
@@ -3515,7 +3604,7 @@ fn foreground_tool_identity_survives_reversed_completion() {
         RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: ToolCallId::new("call_b"),
             tool_id: ToolId::new("tool-beta"),
-            result: success_result(),
+            result: success_result().into(),
         },
     );
     apply_event(
@@ -3523,7 +3612,7 @@ fn foreground_tool_identity_survives_reversed_completion() {
         RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: ToolCallId::new("call_a"),
             tool_id: ToolId::new("tool-alpha"),
-            result: success_result(),
+            result: success_result().into(),
         },
     );
     let (snapshot, _) = projection.snapshot().expect("snapshot");
@@ -3616,7 +3705,7 @@ fn issue136_foreground_cancellation_phase_round_trips_through_projection() {
         RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: call.id.clone(),
             tool_id: call.tool_id.clone(),
-            result: result.clone(),
+            result: result.clone().into(),
         },
     );
 
@@ -3711,7 +3800,7 @@ fn issue202_outcome_unknown_flows_through_projection_unchanged() {
         RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: call.id.clone(),
             tool_id: call.tool_id.clone(),
-            result: result.clone(),
+            result: result.clone().into(),
         },
     );
 
@@ -3790,7 +3879,7 @@ fn issue136_before_start_commit_preserves_execution_distinction() {
         id: MessageId::new("message-before-start"),
         tool_call_id: call.id.clone(),
         tool_id: call.tool_id.clone(),
-        result: result.clone(),
+        result: result.clone().into(),
     });
     let (_, before_commit) = projection.snapshot().unwrap();
     let (events, _) = store
@@ -3807,7 +3896,7 @@ fn issue136_before_start_commit_preserves_execution_distinction() {
     let facts: Vec<_> = events
         .iter()
         .flat_map(|event| event.event.facts())
-        .collect();
+        .collect::<Vec<_>>();
     assert_eq!(facts.iter().filter(|fact| matches!(fact,
         RuntimeClientEvent::ToolResultCommitted { result: projected, .. } if projected == &result
     )).count(), 1);
@@ -3861,7 +3950,7 @@ fn issue136_live_settlement_is_not_duplicated_by_tool_message_commit() {
         RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: call.id.clone(),
             tool_id: call.tool_id.clone(),
-            result: result.clone(),
+            result: result.clone().into(),
         },
     );
     let (_, before_commit) = projection.snapshot().expect("snapshot before commit");
@@ -3875,7 +3964,7 @@ fn issue136_live_settlement_is_not_duplicated_by_tool_message_commit() {
             id: MessageId::new("message-during-execution"),
             tool_call_id: call.id.clone(),
             tool_id: call.tool_id.clone(),
-            result: result.clone(),
+            result: result.clone().into(),
         }),
         transcript_cursor: Some(crate::durable::TranscriptCursor::new(1)),
     });
@@ -4883,7 +4972,7 @@ fn durable_agent_projection_preserves_identity_across_resume_and_rejects_old_act
             }
             _ => None,
         })
-        .collect();
+        .collect::<Vec<_>>();
     assert_eq!(
         states,
         vec![
@@ -5031,8 +5120,8 @@ fn t14_t20_retained_cut_lookup_uses_exact_metadata_and_bounded_cursor_index() {
             events: Vec::new(),
             metadata: super::super::checkpoint::ProjectionMetadata {
                 read_cut: cut.clone(),
-                collections: Vec::new(),
-                content: Vec::new(),
+                collections: Arc::default(),
+                content: Arc::default(),
             },
         },
         1,
@@ -5101,7 +5190,7 @@ fn t06_t14_oversized_transition_is_one_foldable_checkpoint_and_converges() {
     projection.install_publication(encoded);
     assert_eq!(projection.cursor.get(), initial.cursor.get() + 1);
     let (cursor, event) = projection.replay.back().unwrap();
-    let RuntimeClientEvent::ProjectionTransition { events, metadata } = event else {
+    let RuntimeClientEvent::ProjectionTransition { events, metadata } = event.as_ref() else {
         panic!("one complete native transition");
     };
     let [
@@ -5117,8 +5206,8 @@ fn t06_t14_oversized_transition_is_one_foldable_checkpoint_and_converges() {
     assert_eq!(checkpoint.cursor, *cursor);
     let mut folded = checkpoint.as_ref().clone();
     folded.read_cut.clone_from(&metadata.read_cut);
-    folded.content.clone_from(&metadata.content);
-    folded.collections.clone_from(&metadata.collections);
+    folded.content = metadata.content.clone();
+    folded.collections = metadata.collections.clone();
     assert_eq!(
         folded,
         projection.checkpoint_candidate().unwrap(),
@@ -5445,7 +5534,8 @@ fn native_running_tool_fixture() -> (
     projection.snapshot.attempt.as_mut().unwrap().foreground =
         projection.snapshot.message_descriptors[0]
             .tool_calls
-            .clone();
+            .clone()
+            .into();
     let started = store
         .append_event(source_tool_event(
             &store,
@@ -5531,7 +5621,7 @@ fn t14_t19_prepared_started_witness_preserves_exact_live_progress_and_terminal_f
             RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: call.id,
                 tool_id: call.tool_id,
-                result: success_result(),
+                result: success_result().into(),
             },
             "progress-tool-completed",
         ))
@@ -5724,7 +5814,7 @@ fn t14_t20_no_j_canonical_and_pending_cuts_do_not_authorize_a_held_journal_owner
     let canonical = store.append_canonical(&message).unwrap();
     assert!(canonical.observation.journal_range.is_none());
     let pending = store
-        .accept_inbound(crate::durable::inbox::InboundDraft {
+        .accept_inbound(crate::durable::InboundDraft {
             message_id: None,
             source: crate::message::types::UserSource::Human,
             kind: crate::message::types::InboundKind::Message,
@@ -5955,7 +6045,7 @@ fn t14_t19_complete_canonical_head_omits_only_exact_unchanged_rows() {
     assert_canonical_header_fact(&mut projection, &changed_body, false);
     assert_canonical_header_fact(&mut projection, &earlier, false);
     let mut refined = earlier.clone();
-    refined.content[0].content_ref.readable_end += 1;
+    std::sync::Arc::make_mut(&mut refined.content[0].content_ref).readable_end += 1;
     assert_canonical_header_fact(&mut projection, &refined, false);
     assert_canonical_header_fact(&mut projection, &earlier, false);
     assert!(
@@ -6009,7 +6099,7 @@ fn canonical_capture_case(
                     target: target.clone(),
                     registration_id: "canonical-capture".into(),
                     cursor: *cursor,
-                    event: Box::new(event.clone()),
+                    event: event.clone(),
                 },
             })
         })
@@ -6087,7 +6177,7 @@ fn canonical_tool_result_capture_case() -> serde_json::Value {
             id: MessageId::new("canonical-boundary-result"),
             tool_call_id: call.id,
             tool_id: call.tool_id,
-            result: result.clone(),
+            result: result.clone().into(),
         }))
         .unwrap();
     publish_source_fact(&mut projection, |projection| {
@@ -6364,7 +6454,7 @@ fn t16_pending_adoption_receipt_releases_only_its_matching_mutation_fence() {
         .initialize_descriptor_heads(&store, store.observation_read_cut().unwrap())
         .unwrap();
     let accepted = store
-        .accept_inbound(crate::durable::inbox::InboundDraft {
+        .accept_inbound(crate::durable::InboundDraft {
             message_id: None,
             source: crate::message::types::UserSource::Human,
             kind: crate::message::types::InboundKind::Message,
@@ -6434,7 +6524,7 @@ fn t16_pending_adoption_receipt_releases_only_its_matching_mutation_fence() {
 #[test]
 fn t15_many_small_message_pages_advance_under_both_native_budgets() {
     let mut projection = projection();
-    projection.snapshot.messages = (0..1000)
+    projection.snapshot.messages = ((0..1000)
         .map(|index| {
             MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {
                 id: MessageId::new(format!("message-{index}")),
@@ -6443,7 +6533,8 @@ fn t15_many_small_message_pages_advance_under_both_native_budgets() {
                 )],
             })
         })
-        .collect();
+        .collect::<Vec<_>>())
+    .into();
     let checkpoint = projection.checkpoint_candidate().unwrap();
     assert!(checkpoint.snapshot.messages.len() <= 32);
     assert!(
@@ -6544,7 +6635,7 @@ fn raw_publication_store(
         request_id: snapshot.request_id.clone(),
         message_id: snapshot.provisional_message_id.clone(),
     };
-    store.open_publication_stream(&start).unwrap();
+
     (store, start)
 }
 
@@ -6592,7 +6683,7 @@ fn t19_raw_assembled_arguments_and_observed_live_frontier_are_exact() {
             payload,
         };
         store
-            .stage_publication_frames(std::slice::from_ref(&frame))
+            .stage_publication_frames(&start, std::slice::from_ref(&frame))
             .unwrap();
         frame
     };
@@ -6724,4 +6815,118 @@ fn t14_t20_status_background_never_clones_or_serializes_hidden_job_body() {
         crate::tools::background::BackgroundLifecycle::PublishingTerminal
     );
     assert!(view.rendered.contains("publishing_terminal"));
+}
+
+mod metadata_ownership_tests {
+    use super::*;
+    include!("metadata_ownership_tests.rs");
+}
+
+mod shared_snapshot_tests {
+    use super::*;
+    include!("shared_snapshot_tests.rs");
+}
+
+mod shared_domain_detach_tests {
+    use super::*;
+    include!("shared_domain_detach_tests.rs");
+}
+
+mod incremental_checkpoint_tests {
+    use super::*;
+    include!("incremental_checkpoint_tests.rs");
+}
+
+mod attempt_capture_tests {
+    use super::*;
+    include!("attempt_capture_tests.rs");
+}
+
+mod capability_owner_tests {
+    use super::*;
+    include!("capability_owner_tests.rs");
+}
+
+mod attempt_first_turn_tests {
+    use super::*;
+    include!("attempt_first_turn_tests.rs");
+}
+
+mod model_turn_settlement_tests {
+    use super::*;
+    include!("model_turn_settlement_tests.rs");
+}
+
+#[test]
+fn replay_direct_index_survives_wrapping_and_shares_each_delivered_event() {
+    let mut projection = projection();
+    projection.replay_limit = 4;
+    let (lagging, _) = projection.subscribe(RuntimeClientCursor::new(0)).unwrap();
+    assert!(matches!(
+        projection.poll_subscriber(lagging),
+        SubscriberPoll::Pending
+    ));
+    for cursor in 1..=19 {
+        projection.cursor = RuntimeClientCursor::new(cursor);
+        projection.retain_replay(RuntimeClientEvent::TraceChanged, 1);
+    }
+    assert!(matches!(
+        projection.poll_subscriber(lagging),
+        SubscriberPoll::Lagged { .. }
+    ));
+    let (reader, _) = projection.subscribe(RuntimeClientCursor::new(15)).unwrap();
+    let (follower, _) = projection.subscribe(RuntimeClientCursor::new(18)).unwrap();
+    let mut last = None;
+    for (index, wanted) in (16..=19).enumerate() {
+        let SubscriberPoll::Event(delivered) = projection.poll_subscriber(reader) else {
+            panic!("retained event {wanted}");
+        };
+        assert_eq!(delivered.cursor.get(), wanted);
+        assert!(Arc::ptr_eq(&delivered.event, &projection.replay[index].1));
+        last = Some(delivered);
+    }
+    let SubscriberPoll::Event(tail) = projection.poll_subscriber(follower) else {
+        panic!("following subscriber reads the tail");
+    };
+    let last = last.unwrap();
+    assert!(Arc::ptr_eq(&tail.event, &last.event));
+    assert!(matches!(
+        projection.poll_subscriber(reader),
+        SubscriberPoll::Pending
+    ));
+    assert!(matches!(
+        projection.poll_subscriber(follower),
+        SubscriberPoll::Pending
+    ));
+    let owner = Arc::downgrade(&last.event);
+    for cursor in 20..=23 {
+        projection.cursor = RuntimeClientCursor::new(cursor);
+        projection.retain_replay(RuntimeClientEvent::TraceChanged, 1);
+    }
+    assert_eq!(owner.strong_count(), 2, "only in-flight deliveries remain");
+    drop((last, tail));
+    assert_eq!(owner.strong_count(), 0);
+}
+
+#[test]
+fn replay_direct_index_handles_last_cursor_without_wrapping() {
+    let mut projection = projection();
+    projection.cursor = RuntimeClientCursor::new(u64::MAX);
+    projection.retain_replay(RuntimeClientEvent::TraceChanged, 1);
+    let (subscriber, _) = projection
+        .subscribe(RuntimeClientCursor::new(u64::MAX - 1))
+        .unwrap();
+    let SubscriberPoll::Event(event) = projection.poll_subscriber(subscriber) else {
+        panic!("last event");
+    };
+    assert_eq!(event.cursor.get(), u64::MAX);
+    assert!(matches!(
+        projection.poll_subscriber(subscriber),
+        SubscriberPoll::Pending
+    ));
+    projection.exhausted = true;
+    assert!(matches!(
+        projection.poll_subscriber(subscriber),
+        SubscriberPoll::Exhausted
+    ));
 }

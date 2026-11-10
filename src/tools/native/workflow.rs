@@ -81,7 +81,7 @@ pub(crate) fn definition(program: &WorkflowProgram) -> ToolDefinition {
         id: tool_id(program.id()),
         name: program.id().to_string(),
         description: program.description().to_owned(),
-        input_schema: program.input_schema().clone(),
+        input_schema: program.input_schema().clone().into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
         approval_policy: ToolApprovalPolicy::Never,

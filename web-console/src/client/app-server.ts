@@ -1,5 +1,5 @@
 import {newerThreadStatus, ThreadStatusNotifications} from '../../../protocol/app-server/thread-status';
-import type {ThreadStatusEntry} from '../../../protocol/app-server/v77';
+import type {ThreadStatusEntry} from '../../../protocol/app-server/v78';
 import {credentialSubprotocol} from '../../../protocol/app-server/auth';
 import { ServerCallbacks, type HostToolHandler } from '../../../protocol/app-server/callbacks';
 import { AuxiliaryQuestions } from './auxiliary';
@@ -30,7 +30,7 @@ import type {
   TraceToolLocator, PendingInboundRef, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request1, Response, RuntimeClientSnapshot, RuntimeClientEvent,
   UserInputBlock, UploadReceipt, UploadedFile, SessionModelConfig, RuntimeClientInteractionHeader,
-} from '../../../protocol/app-server/v77';
+} from '../../../protocol/app-server/v78';
 import { transferUpload } from '../../../protocol/app-server/upload';
 import { refreshTranscript, replaceTranscript, type TurnSelection } from './transcript';
 import { RequestPipeline } from './request-pipeline';
@@ -110,7 +110,7 @@ export class AppServerClient {
   private acquiring = new Set<string>();
   private resubscribe = new Set<string>();
   private observationChains = new Map<string, ObservationChain<RuntimeClientEvent>>();
-  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v77').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
+  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v78').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
   private retainAppliedObservations() {
     for(const [id,chain] of this.observationChains) {
       const view=this.state.views[id];
@@ -287,7 +287,7 @@ export class AppServerClient {
         this.resumeSeeds.delete(id);
         const resumable=previous&&previous.target.conversation_id===result.target.conversation_id
           &&previous.target.runtime_incarnation===result.target.runtime_incarnation;
-        let checkpoint:import('../../../protocol/app-server/v77').RuntimeClientCheckpoint;
+        let checkpoint:import('../../../protocol/app-server/v78').RuntimeClientCheckpoint;
         let observed:RuntimeClientSnapshot;
         if(resumable){checkpoint={...previous.checkpoint,cursor:previous.cursor};observed=previous.snapshot;}
         else {
@@ -324,6 +324,12 @@ export class AppServerClient {
         const following = this.observationChains.get(id);
         if (!current() || following?.phase !== 'following') return;
         this.setSession(id, { observationState: following.phase });
+        // Session replay does not include independent Trace repairs.
+        const traceCut=observed.trace.read_cut;
+        if(resumable&&(traceCut?.through!==checkpoint.read_cut.through
+          ||JSON.stringify(traceCut?.source_cut)!==JSON.stringify(checkpoint.read_cut.source_cut))) {
+          this.traces.repairDomain(id);
+        }
         this.reconcile(id); this.settleSubmissions(id);
         // A checkpoint and acknowledged subscription complete attachment. Settings
         // remain scoped to that claim but cannot hold its lifecycle operation open:
@@ -414,7 +420,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v77', credentialSubprotocol(token)]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v78', credentialSubprotocol(token)]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -432,12 +438,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 77, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 78, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 77 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.shared_writable_clients) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v77 with native multi-Session, headless interactions, and shared writable admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 78 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.shared_writable_clients) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v78 with native multi-Session, headless interactions, and shared writable admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -647,7 +653,9 @@ export class AppServerClient {
     if(!observation.current()||!sameTarget(this.state.views[id]?.target,target))throw new Error('Observation view was replaced during publication.');
     const snapshot = foldRuntimeEvent(view.snapshot, event);
     const checkpointAdvanced = transitionFacts(event).some(fact => fact.type === 'checkpoint_advanced');
-    const traceAdvanced = checkpointAdvanced || transitionFacts(event).some(fact => fact.type === 'read_domains_updated');
+    const publishedCut = observationCheckpoint(snapshot,cursor)?.read_cut;
+    const traceAdvanced = (checkpointAdvanced && publishedCut != null && snapshot.trace.read_cut?.revision === publishedCut.revision)
+      || transitionFacts(event).some(fact => fact.type === 'read_domains_updated' && fact.trace != null);
     const trace = traceAdvanced ? refreshTrace(view.trace, snapshot.trace, snapshot.trace_updates, observationCheckpoint(snapshot, cursor)?.read_cut) : undefined;
     this.setSession(id, { snapshot, publicationHeads: publicationHeads(view.publicationHeads, event, snapshot), ...(trace ? { trace: trace.epoch === view.trace?.epoch ? trace : this.traces.supersede(id, trace) } : {}), checkpoint: observationCheckpoint(snapshot, cursor) ?? view.checkpoint, cursor, observationState: 'following',
       history: snapshot.transcript === view.snapshot.transcript ? this.state.views[id].history : refreshTranscript(this.state.views[id].history, snapshot.transcript) });
@@ -659,7 +667,7 @@ export class AppServerClient {
     this.reconcile(id); this.settleSubmissions(id);
     if (snapshot.transcript !== view.snapshot.transcript) void this.reading.refreshTranscriptDomain(id);
     if (checkpointAdvanced) void this.catalog.refreshDisplaySummary(id);
-    if (transitionFacts(event).some(fact=>fact.type==='trace_changed')) void this.traces.refreshDomain(id).catch(() => {});
+    if ((checkpointAdvanced && !traceAdvanced) || transitionFacts(event).some(fact=>fact.type==='trace_changed')) this.traces.repairDomain(id);
   }
 
   /** Bounded native Session, model, settings and content reads. */
@@ -703,7 +711,7 @@ export class AppServerClient {
   loadTraceDetail(id: string, record: string) { return this.traces.loadTraceDetail(id, record); }
   projections(id: string, after?: string) { return this.traces.projections(id, after); }
   projectionDetail(id: string, checkpointId: string, offset?: number) { return this.traces.projectionDetail(id, checkpointId, offset); }
-  projectionDetailReader(detail: import('../../../protocol/app-server/v77').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
+  projectionDetailReader(detail: import('../../../protocol/app-server/v78').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
   private readonly controls = new SessionControls({
     request: (...args) => this.request(...args),
     state: () => this.state,

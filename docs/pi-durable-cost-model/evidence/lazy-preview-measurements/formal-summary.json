@@ -1,0 +1,224 @@
+{
+  "append_mode": null,
+  "append_counter_scope": null,
+  "memory_scope": "all observed lifecycle and operation counters; sampled maxima, not peaks",
+  "scope": "See baseline.md: CPU self plus driver; process-attributed writes, not device writes; sampled memory, not peak; same-pair ratios; no unrelated median subtraction",
+  "medians": {
+    "cancel": {
+      "before": {
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_ms": 266.73,
+        "lifecycle_write_mib": 3.875,
+        "max_sampled_anon_pss_mib": 99.765625,
+        "max_sampled_pss_mib": 154.49609375,
+        "max_sampled_rss_mib": 155.22265625,
+        "mean_turn_ms": 45.235,
+        "turn_cpu_ms_per_turn": 60.0,
+        "turn_write_mib_per_turn": 1.46875
+      },
+      "after": {
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_ms": 268.629,
+        "lifecycle_write_mib": 3.85546875,
+        "max_sampled_anon_pss_mib": 100.03125,
+        "max_sampled_pss_mib": 156.66015625,
+        "max_sampled_rss_mib": 157.38671875,
+        "mean_turn_ms": 44.398,
+        "turn_cpu_ms_per_turn": 60.0,
+        "turn_write_mib_per_turn": 1.4609375
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 1.0,
+        "lifecycle_ms": 0.9932634903516542,
+        "lifecycle_write_mib": 0.9949596774193549,
+        "max_sampled_anon_pss_mib": 1.009005481597494,
+        "max_sampled_pss_mib": 1.014007231169882,
+        "max_sampled_rss_mib": 1.0139416664569545,
+        "mean_turn_ms": 0.9788526216458177,
+        "turn_cpu_ms_per_turn": 0.8571428571428571,
+        "turn_write_mib_per_turn": 0.9946808510638298
+      }
+    },
+    "large": {
+      "before": {
+        "lifecycle_cpu_ms": 390.0,
+        "lifecycle_ms": 439.044,
+        "lifecycle_write_mib": 12.70703125,
+        "max_sampled_anon_pss_mib": 101.921875,
+        "max_sampled_pss_mib": 158.1953125,
+        "max_sampled_rss_mib": 158.921875,
+        "mean_turn_ms": 201.085,
+        "turn_cpu_ms_per_turn": 220.0,
+        "turn_write_mib_per_turn": 10.5
+      },
+      "after": {
+        "lifecycle_cpu_ms": 380.0,
+        "lifecycle_ms": 431.418,
+        "lifecycle_write_mib": 12.65625,
+        "max_sampled_anon_pss_mib": 102.5234375,
+        "max_sampled_pss_mib": 159.01171875,
+        "max_sampled_rss_mib": 159.73828125,
+        "mean_turn_ms": 200.334,
+        "turn_cpu_ms_per_turn": 220.0,
+        "turn_write_mib_per_turn": 10.45703125
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 1.0,
+        "lifecycle_ms": 0.9826304425069015,
+        "lifecycle_write_mib": 0.9960036889025515,
+        "max_sampled_anon_pss_mib": 1.008143197357302,
+        "max_sampled_pss_mib": 1.0059556170612365,
+        "max_sampled_rss_mib": 1.0059283676079898,
+        "mean_turn_ms": 1.0022425163393873,
+        "turn_cpu_ms_per_turn": 1.0454545454545454,
+        "turn_write_mib_per_turn": 0.9959077380952381
+      }
+    },
+    "short-large": {
+      "before": {
+        "lifecycle_cpu_ms": 14330.0,
+        "lifecycle_ms": 11554.106,
+        "lifecycle_write_mib": 255.75390625,
+        "max_sampled_anon_pss_mib": 229.94921875,
+        "max_sampled_pss_mib": 286.296875,
+        "max_sampled_rss_mib": 287.0234375,
+        "mean_turn_ms": 68.3645,
+        "turn_cpu_ms_per_turn": 103.125,
+        "turn_write_mib_per_turn": 2.79541015625
+      },
+      "after": {
+        "lifecycle_cpu_ms": 13980.0,
+        "lifecycle_ms": 11365.614,
+        "lifecycle_write_mib": 252.95703125,
+        "max_sampled_anon_pss_mib": 233.046875,
+        "max_sampled_pss_mib": 289.36328125,
+        "max_sampled_rss_mib": 290.08984375,
+        "mean_turn_ms": 67.812875,
+        "turn_cpu_ms_per_turn": 101.875,
+        "turn_write_mib_per_turn": 2.7406005859375
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 0.9748953974895398,
+        "lifecycle_ms": 0.9791047004523419,
+        "lifecycle_write_mib": 0.9893867204202553,
+        "max_sampled_anon_pss_mib": 1.0134710448978206,
+        "max_sampled_pss_mib": 1.0107105823282214,
+        "max_sampled_rss_mib": 1.0106834698821416,
+        "mean_turn_ms": 0.9963383619828768,
+        "turn_cpu_ms_per_turn": 0.9908814589665653,
+        "turn_write_mib_per_turn": 0.9804366812227074
+      }
+    },
+    "short-small": {
+      "before": {
+        "lifecycle_cpu_ms": 4840.0,
+        "lifecycle_ms": 3774.069,
+        "lifecycle_write_mib": 102.1328125,
+        "max_sampled_anon_pss_mib": 147.08203125,
+        "max_sampled_pss_mib": 203.4609375,
+        "max_sampled_rss_mib": 204.1875,
+        "mean_turn_ms": 65.382,
+        "turn_cpu_ms_per_turn": 98.4375,
+        "turn_write_mib_per_turn": 2.552734375
+      },
+      "after": {
+        "lifecycle_cpu_ms": 4930.0,
+        "lifecycle_ms": 3812.868,
+        "lifecycle_write_mib": 100.85546875,
+        "max_sampled_anon_pss_mib": 148.85546875,
+        "max_sampled_pss_mib": 204.77734375,
+        "max_sampled_rss_mib": 205.50390625,
+        "mean_turn_ms": 64.35065625,
+        "turn_cpu_ms_per_turn": 98.4375,
+        "turn_write_mib_per_turn": 2.5224609375
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 1.0,
+        "lifecycle_ms": 0.9897532378825404,
+        "lifecycle_write_mib": 0.9875688494492044,
+        "max_sampled_anon_pss_mib": 1.0173425756247843,
+        "max_sampled_pss_mib": 1.0006489912004428,
+        "max_sampled_rss_mib": 1.0006466951973372,
+        "mean_turn_ms": 0.9842258763879966,
+        "turn_cpu_ms_per_turn": 0.9932203389830508,
+        "turn_write_mib_per_turn": 0.9881880350054995
+      }
+    },
+    "stream": {
+      "before": {
+        "lifecycle_cpu_ms": 370.0,
+        "lifecycle_ms": 1829.458,
+        "lifecycle_write_mib": 5.2734375,
+        "max_sampled_anon_pss_mib": 101.02734375,
+        "max_sampled_pss_mib": 157.33984375,
+        "max_sampled_rss_mib": 158.06640625,
+        "mean_turn_ms": 1594.91,
+        "turn_cpu_ms_per_turn": 210.0,
+        "turn_write_mib_per_turn": 2.8203125
+      },
+      "after": {
+        "lifecycle_cpu_ms": 380.0,
+        "lifecycle_ms": 1829.023,
+        "lifecycle_write_mib": 5.2421875,
+        "max_sampled_anon_pss_mib": 100.546875,
+        "max_sampled_pss_mib": 156.80859375,
+        "max_sampled_rss_mib": 157.53515625,
+        "mean_turn_ms": 1602.471,
+        "turn_cpu_ms_per_turn": 220.0,
+        "turn_write_mib_per_turn": 2.7890625
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 1.027027027027027,
+        "lifecycle_ms": 0.999762224658888,
+        "lifecycle_write_mib": 0.9940740740740741,
+        "max_sampled_anon_pss_mib": 0.9908765446356392,
+        "max_sampled_pss_mib": 0.9938429454554483,
+        "max_sampled_rss_mib": 0.9938712467564562,
+        "mean_turn_ms": 0.9963676172425543,
+        "turn_cpu_ms_per_turn": 1.0434782608695652,
+        "turn_write_mib_per_turn": 0.9889196675900277
+      }
+    },
+    "tool": {
+      "before": {
+        "lifecycle_cpu_ms": 290.0,
+        "lifecycle_ms": 336.275,
+        "lifecycle_write_mib": 6.6484375,
+        "max_sampled_anon_pss_mib": 101.6875,
+        "max_sampled_pss_mib": 158.2265625,
+        "max_sampled_rss_mib": 158.953125,
+        "mean_turn_ms": 98.255,
+        "turn_cpu_ms_per_turn": 140.0,
+        "turn_write_mib_per_turn": 3.80078125
+      },
+      "after": {
+        "lifecycle_cpu_ms": 280.0,
+        "lifecycle_ms": 330.366,
+        "lifecycle_write_mib": 6.57421875,
+        "max_sampled_anon_pss_mib": 101.22265625,
+        "max_sampled_pss_mib": 157.98046875,
+        "max_sampled_rss_mib": 158.70703125,
+        "mean_turn_ms": 92.856,
+        "turn_cpu_ms_per_turn": 110.0,
+        "turn_write_mib_per_turn": 3.74609375
+      },
+      "after_over_before": {
+        "lifecycle_cpu_ms": 1.0,
+        "lifecycle_ms": 0.9886448533042939,
+        "lifecycle_write_mib": 0.9894117647058823,
+        "max_sampled_anon_pss_mib": 0.9920750382848392,
+        "max_sampled_pss_mib": 0.9956670523646569,
+        "max_sampled_rss_mib": 0.9956868030878568,
+        "mean_turn_ms": 0.9450511424354995,
+        "turn_cpu_ms_per_turn": 0.8571428571428571,
+        "turn_write_mib_per_turn": 0.9856115107913669
+      }
+    }
+  },
+  "full_samples": {
+    "archive": "docs/pi-durable-cost-model/evidence/derived-summaries.tar.xz",
+    "member": "lazy-preview-measurements/formal-summary.json",
+    "sha256": "5366bb29e94a0a6289425f4c5c0779fbfbdf13c6caafdf9101602e6a1810e3ba",
+    "note": "Original full derived summary preserved byte-for-byte; raw measurements remain in their original archives."
+  }
+}

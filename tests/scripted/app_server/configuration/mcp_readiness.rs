@@ -1305,7 +1305,7 @@ async fn failed_initialization_receipt_cannot_follow_retry_and_resurrect_after_u
 async fn durable_recovery_receipt_precedes_later_send_and_bounds_initial_mcp() {
     use crate::app_server::connection::AppServerConnection;
     use crate::app_server::protocol::{Method, MethodResult};
-    use crate::durable::inbox::InboxStore;
+    use crate::durable::InboxStore;
 
     for adopted in [false, true] {
         let late = McpFixture::start().await;

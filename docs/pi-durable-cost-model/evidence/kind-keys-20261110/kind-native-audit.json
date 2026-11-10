@@ -1,0 +1,342 @@
+{
+  "scope": "Two balanced independent pairs each for fixed/rotating four concurrency. 128 named sessions x 8 seed turns, then 256 active turns. Only native server PID counters. CPU includes explicit native-idle retirement reads; per-turn settled time ends at terminal delivery. Compiler monitoring is sampled, not an exclusivity guarantee. Every native backup/hash, integrity/FK, message count and exact content is independently checked.",
+  "rows": [
+    {
+      "family": "fixed",
+      "pair": 0,
+      "side": "before",
+      "sha256": "4c4e329507dc64abaec1d550368d353c5379a997b9b0c02851d87c5bdb13f4b4",
+      "observed_compiler_overlap": true,
+      "directory": "kind-native-v3-fixed-0-before",
+      "active_measured_turns": 256,
+      "cpu_ms_per_turn": 14.4921875,
+      "write_kib_per_turn": 807.390625,
+      "p50_ms": 34.89987549999999,
+      "p95_ms": 52.304729,
+      "retirement_checks": 270,
+      "active_compiler_samples": [
+        {
+          "monotonic_ns": 62667143879078,
+          "loadavg": "3.73 2.34 2.55 9/7228 3327981\n",
+          "compiler_pids": [
+            "3327610"
+          ]
+        },
+        {
+          "monotonic_ns": 62667677232599,
+          "loadavg": "3.73 2.34 2.55 5/7229 3328043\n",
+          "compiler_pids": [
+            "3327610"
+          ]
+        },
+        {
+          "monotonic_ns": 62668220370274,
+          "loadavg": "4.15 2.45 2.58 6/7228 3328098\n",
+          "compiler_pids": [
+            "3327610"
+          ]
+        },
+        {
+          "monotonic_ns": 62668771361201,
+          "loadavg": "4.15 2.45 2.58 3/7228 3328153\n",
+          "compiler_pids": [
+            "3327610"
+          ]
+        },
+        {
+          "monotonic_ns": 62669314823219,
+          "loadavg": "4.15 2.45 2.58 7/7230 3328227\n",
+          "compiler_pids": [
+            "3327610"
+          ]
+        },
+        {
+          "monotonic_ns": 62669847780375,
+          "loadavg": "4.15 2.45 2.58 13/7240 3328312\n",
+          "compiler_pids": [
+            "3327610"
+          ]
+        }
+      ],
+      "empty_server": {
+        "anon_pss_mib": 16.30078125,
+        "pss_mib": 54.091796875
+      },
+      "all_subscribed_empty": {
+        "anon_pss_mib": 337.10546875,
+        "pss_mib": 403.271484375
+      },
+      "seeded_history_8": {
+        "anon_pss_mib": 657.43359375,
+        "pss_mib": 732.287109375
+      },
+      "all_unloaded": {
+        "anon_pss_mib": 738.35546875,
+        "pss_mib": 810.646484375
+      }
+    },
+    {
+      "family": "fixed",
+      "pair": 0,
+      "side": "after",
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "observed_compiler_overlap": false,
+      "directory": "kind-native-v3-fixed-0-after",
+      "active_measured_turns": 256,
+      "cpu_ms_per_turn": 14.6484375,
+      "write_kib_per_turn": 789.1875,
+      "p50_ms": 33.042828,
+      "p95_ms": 50.061021000000004,
+      "retirement_checks": 278,
+      "active_compiler_samples": [],
+      "empty_server": {
+        "anon_pss_mib": 16.30859375,
+        "pss_mib": 53.84375
+      },
+      "all_subscribed_empty": {
+        "anon_pss_mib": 339.86328125,
+        "pss_mib": 405.8369140625
+      },
+      "seeded_history_8": {
+        "anon_pss_mib": 667.48046875,
+        "pss_mib": 741.7041015625
+      },
+      "all_unloaded": {
+        "anon_pss_mib": 694.33203125,
+        "pss_mib": 766.212890625
+      }
+    },
+    {
+      "family": "fixed",
+      "pair": 1,
+      "side": "after",
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "observed_compiler_overlap": false,
+      "directory": "kind-native-v3-fixed-1-after",
+      "active_measured_turns": 256,
+      "cpu_ms_per_turn": 14.8828125,
+      "write_kib_per_turn": 789.234375,
+      "p50_ms": 31.647617,
+      "p95_ms": 49.35494,
+      "retirement_checks": 286,
+      "active_compiler_samples": [],
+      "empty_server": {
+        "anon_pss_mib": 16.30859375,
+        "pss_mib": 54.1572265625
+      },
+      "all_subscribed_empty": {
+        "anon_pss_mib": 339.90625,
+        "pss_mib": 405.869140625
+      },
+      "seeded_history_8": {
+        "anon_pss_mib": 667.6640625,
+        "pss_mib": 741.951171875
+      },
+      "all_unloaded": {
+        "anon_pss_mib": 751.9296875,
+        "pss_mib": 823.904296875
+      }
+    },
+    {
+      "family": "fixed",
+      "pair": 1,
+      "side": "before",
+      "sha256": "4c4e329507dc64abaec1d550368d353c5379a997b9b0c02851d87c5bdb13f4b4",
+      "observed_compiler_overlap": false,
+      "directory": "kind-native-v3-fixed-1-before",
+      "active_measured_turns": 256,
+      "cpu_ms_per_turn": 14.7265625,
+      "write_kib_per_turn": 806.625,
+      "p50_ms": 33.7803,
+      "p95_ms": 46.792913999999996,
+      "retirement_checks": 282,
+      "active_compiler_samples": [],
+      "empty_server": {
+        "anon_pss_mib": 16.265625,
+        "pss_mib": 53.7431640625
+      },
+      "all_subscribed_empty": {
+        "anon_pss_mib": 338.40234375,
+        "pss_mib": 404.443359375
+      },
+      "seeded_history_8": {
+        "anon_pss_mib": 653.80078125,
+        "pss_mib": 728.404296875
+      },
+      "all_unloaded": {
+        "anon_pss_mib": 735.50390625,
+        "pss_mib": 807.669921875
+      }
+    },
+    {
+      "family": "rotating",
+      "pair": 0,
+      "side": "before",
+      "sha256": "4c4e329507dc64abaec1d550368d353c5379a997b9b0c02851d87c5bdb13f4b4",
+      "observed_compiler_overlap": false,
+      "directory": "kind-native-v3-rotating-0-before",
+      "active_measured_turns": 256,
+      "cpu_ms_per_turn": 14.0625,
+      "write_kib_per_turn": 534.375,
+      "p50_ms": 31.2361815,
+      "p95_ms": 46.567908,
+      "retirement_checks": 276,
+      "active_compiler_samples": [],
+      "empty_server": {
+        "anon_pss_mib": 16.28125,
+        "pss_mib": 53.6953125
+      },
+      "all_subscribed_empty": {
+        "anon_pss_mib": 334.46484375,
+        "pss_mib": 399.7548828125
+      },
+      "seeded_history_8": {
+        "anon_pss_mib": 656.92578125,
+        "pss_mib": 730.5908203125
+      },
+      "all_unloaded": {
+        "anon_pss_mib": 720.609375,
+        "pss_mib": 792.150390625
+      }
+    },
+    {
+      "family": "rotating",
+      "pair": 0,
+      "side": "after",
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "observed_compiler_overlap": false,
+      "directory": "kind-native-v3-rotating-0-after",
+      "active_measured_turns": 256,
+      "cpu_ms_per_turn": 13.6328125,
+      "write_kib_per_turn": 530.703125,
+      "p50_ms": 30.5449975,
+      "p95_ms": 41.723231,
+      "retirement_checks": 276,
+      "active_compiler_samples": [],
+      "empty_server": {
+        "anon_pss_mib": 16.33203125,
+        "pss_mib": 54.2431640625
+      },
+      "all_subscribed_empty": {
+        "anon_pss_mib": 338.66796875,
+        "pss_mib": 404.455078125
+      },
+      "seeded_history_8": {
+        "anon_pss_mib": 669.48046875,
+        "pss_mib": 743.705078125
+      },
+      "all_unloaded": {
+        "anon_pss_mib": 757.76953125,
+        "pss_mib": 829.931640625
+      }
+    },
+    {
+      "family": "rotating",
+      "pair": 1,
+      "side": "after",
+      "sha256": "5c27b2671920f687ed520243e285b38fb3f7a15807ddc006905d59ced8f0b699",
+      "observed_compiler_overlap": false,
+      "directory": "kind-native-v3-rotating-1-after",
+      "active_measured_turns": 256,
+      "cpu_ms_per_turn": 13.671875,
+      "write_kib_per_turn": 530.640625,
+      "p50_ms": 29.767264500000003,
+      "p95_ms": 41.970346,
+      "retirement_checks": 275,
+      "active_compiler_samples": [],
+      "empty_server": {
+        "anon_pss_mib": 16.2890625,
+        "pss_mib": 54.5751953125
+      },
+      "all_subscribed_empty": {
+        "anon_pss_mib": 339.55078125,
+        "pss_mib": 405.7744140625
+      },
+      "seeded_history_8": {
+        "anon_pss_mib": 663.484375,
+        "pss_mib": 738.3330078125
+      },
+      "all_unloaded": {
+        "anon_pss_mib": 757.61328125,
+        "pss_mib": 829.9619140625
+      }
+    },
+    {
+      "family": "rotating",
+      "pair": 1,
+      "side": "before",
+      "sha256": "4c4e329507dc64abaec1d550368d353c5379a997b9b0c02851d87c5bdb13f4b4",
+      "observed_compiler_overlap": false,
+      "directory": "kind-native-v3-rotating-1-before",
+      "active_measured_turns": 256,
+      "cpu_ms_per_turn": 13.671875,
+      "write_kib_per_turn": 534.375,
+      "p50_ms": 29.1662775,
+      "p95_ms": 38.084255,
+      "retirement_checks": 269,
+      "active_compiler_samples": [],
+      "empty_server": {
+        "anon_pss_mib": 16.27734375,
+        "pss_mib": 53.87890625
+      },
+      "all_subscribed_empty": {
+        "anon_pss_mib": 341.23046875,
+        "pss_mib": 406.8330078125
+      },
+      "seeded_history_8": {
+        "anon_pss_mib": 664.78125,
+        "pss_mib": 738.9462890625
+      },
+      "all_unloaded": {
+        "anon_pss_mib": 752.734375,
+        "pss_mib": 824.5869140625
+      }
+    }
+  ],
+  "paired": {
+    "fixed": {
+      "values": [
+        {
+          "cpu_ms_per_turn": 1.078167115902965,
+          "write_kib_per_turn": -2.254562343970739,
+          "p50_ms": -5.321071990643615,
+          "p95_ms": -4.28968478165712
+        },
+        {
+          "cpu_ms_per_turn": 1.0610079575596816,
+          "write_kib_per_turn": -2.155973965597396,
+          "p50_ms": -6.313392717056973,
+          "p95_ms": 5.475243537942525
+        }
+      ],
+      "medians": {
+        "cpu_ms_per_turn": 1.0695875367313232,
+        "write_kib_per_turn": -2.2052681547840676,
+        "p50_ms": -5.817232353850294,
+        "p95_ms": 0.5927793781427027
+      }
+    },
+    "rotating": {
+      "values": [
+        {
+          "cpu_ms_per_turn": -3.0555555555555554,
+          "write_kib_per_turn": -0.6871345029239766,
+          "p50_ms": -2.2127672679837636,
+          "p95_ms": -10.403467125901392
+        },
+        {
+          "cpu_ms_per_turn": 0.0,
+          "write_kib_per_turn": -0.6988304093567251,
+          "p50_ms": 2.0605543508252073,
+          "p95_ms": 10.203930732004606
+        }
+      ],
+      "medians": {
+        "cpu_ms_per_turn": -1.5277777777777777,
+        "write_kib_per_turn": -0.6929824561403508,
+        "p50_ms": -0.07610645857927811,
+        "p95_ms": -0.09976819694839278
+      }
+    }
+  }
+}

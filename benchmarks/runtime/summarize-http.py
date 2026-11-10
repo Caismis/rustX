@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import statistics
 import os
-from controller import validate_lifecycle
+from controller import validate_lifecycle, OBSERVER_MODES
 
 
 def counters(point):
@@ -51,6 +51,15 @@ def sample(path):
         'max_sampled_pss_mib':scaled(max((p['pss_kib'] for p in memory if p['pss_kib'] is not None),default=None),1024),
         'max_sampled_anon_pss_mib':scaled(max((p['anon_pss_kib'] for p in memory if p['anon_pss_kib'] is not None),default=None),1024),
         'phases':[]}
+    if s.get('observer_mode') in OBSERVER_MODES[1:]:
+        # The first in-product endpoint follows module/test-harness loading.
+        # Preserve that runtime delta and expose absolute self counters since
+        # exec separately; never hide startup behind an initialized endpoint.
+        start_counters, end_counters = counters(initial), counters(final)
+        result.update(startup_self_cpu_ms=start_counters['cpu_ms'],
+                      through_cleanup_self_cpu_ms=end_counters['cpu_ms'],
+                      startup_process_write_mib=scaled(start_counters['write_bytes'],2**20),
+                      through_cleanup_process_write_mib=scaled(end_counters['write_bytes'],2**20))
     previous=initial
     for current in s['lifecycle'][1:]:
         result['phases'].append({'through':current['phase'],'wall_ms':(current['elapsed_us']-previous['elapsed_us'])/1000,
@@ -68,7 +77,13 @@ def main():
             groups.setdefault('failed',[]).append(str(path));continue
         raw=path.with_name(path.name.replace('.process.json','.json'))
         engine=raw.stem.rsplit('-',1)[1]
-        groups.setdefault(r['case']+'/'+engine,[]).append(sample(raw))
+        mode=r.get('observer_mode','native-workflow')
+        assert mode in OBSERVER_MODES
+        data=json.loads(raw.read_text())
+        if mode!='native-workflow' or 'observer_mode' in data:
+            assert data.get('observer_mode')==mode
+            assert all(turn.get('observer_mode')==mode for turn in data['samples'])
+        groups.setdefault(mode+'/'+r['case']+'/'+engine,[]).append(sample(raw))
     print(json.dumps({'clock_ticks':os.sysconf('SC_CLK_TCK'),'scope':'CPU self user+system ticks; process-attributed writes (not device writes); runtime plus driver; verification phases explicit; evidence output after cleanup excluded; maximum sampled RSS/PSS, not peak; allocation count unavailable','groups':groups},indent=2))
 
 if __name__=='__main__':main()

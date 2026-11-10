@@ -600,8 +600,8 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
         }]
     );
 
-    // Release and resume after C: exactly the remaining delta arrives, so
-    // the client reconstructs "hello world" with no duplicate output.
+    // Resume after the checkpoint cursor. The final canonical notification
+    // replaces the partial prefix; no transient final delta is replayed.
     release_tx.send(true).expect("release");
     let resumed = receive_until(&subscription, |event| {
         event
@@ -623,10 +623,33 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
             _ => None,
         })
         .collect();
+    assert!(
+        deltas.is_empty(),
+        "the final tail uses the canonical notification"
+    );
+    let committed: Vec<_> = resumed
+        .iter()
+        .flat_map(|event| event.event.facts())
+        .filter_map(|fact| match fact {
+            RuntimeClientEvent::MessageCommitted {
+                message: MessageBlock::Assistant(assistant),
+                ..
+            } => Some(assistant),
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        deltas,
-        vec!["world".to_owned()],
-        "no duplicated output after resume"
+        committed.len(),
+        1,
+        "one canonical rebind after the partial checkpoint"
+    );
+    assert_eq!(
+        committed[0].content,
+        vec![rustx::message::types::AssistantContentBlock::Text(
+            rustx::message::content::TextBlock {
+                text: "hello world".into()
+            }
+        )]
     );
 
     let (final_snapshot, _) = host
@@ -1082,7 +1105,7 @@ async fn agent_status_shares_one_composition() {
     );
     assert_eq!(
         snapshot.statuses.as_slice(),
-        std::slice::from_ref(status_view),
+        std::slice::from_ref(status_view.as_ref()),
         "the snapshot window and the live event describe one composition"
     );
 }
@@ -1316,7 +1339,7 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
                 id: ToolId::new("tool-ls"),
                 name: "ls".to_owned(),
                 description: "list files".to_owned(),
-                input_schema: serde_json::json!({"type": "object"}),
+                input_schema: serde_json::json!({"type": "object"}).into(),
                 execution_policy: ToolExecutionPolicy::ForegroundOnly,
                 concurrency_policy: ToolConcurrencyPolicy::Sequential,
                 approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
@@ -1328,7 +1351,7 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
                     id: ToolId::new("tool-ls"),
                     name: "ls".to_owned(),
                     description: "list files".to_owned(),
-                    input_schema: serde_json::json!({"type": "object"}),
+                    input_schema: serde_json::json!({"type": "object"}).into(),
                     execution_policy: ToolExecutionPolicy::ForegroundOnly,
                     concurrency_policy: ToolConcurrencyPolicy::Sequential,
                     approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
@@ -1373,5 +1396,5 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("snapshot");
-    assert_eq!(snapshot.capabilities, capabilities);
+    assert_eq!(snapshot.capabilities.as_ref(), &capabilities);
 }

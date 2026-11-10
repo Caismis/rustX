@@ -13,14 +13,15 @@
 
 use super::super::{common, support};
 
-use std::sync::Arc;
+use std::{fmt::Write as _, sync::Arc};
 
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
 use rustx::message::types::{
-    MessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    AssistantContentBlock, ContentBlockIndex, MessageBlock, ToolMessageBlock, UserContentBlock,
+    UserMessageBlock, UserSource,
 };
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
@@ -293,7 +294,28 @@ async fn parallel_reversed_completion_keeps_canonical_order() {
 async fn sequential_barrier_blocks_later_calls() {
     let call_a = scripted("call-a", "tool-alpha", "alpha", serde_json::json!({}));
     let call_b = scripted("call-b", "tool-beta", "beta", serde_json::json!({}));
-    let model = fake_model(tool_turn_then_stop(&[&call_a, &call_b]));
+    let mut turns = tool_turn_then_stop(&[&call_a, &call_b]);
+    let terminal = turns[0].pop().unwrap();
+    // Numbered lines exercise large blocks without triggering the runtime's
+    // deliberate repeating-output rejection.
+    let mut response_text = String::new();
+    let mut response_reasoning = String::new();
+    for index in 0..768 {
+        write!(response_text, "Observed result {index:04}. ").unwrap();
+        write!(response_reasoning, "Check point {index:04}. ").unwrap();
+    }
+    turns[0].extend([
+        FakeStep::Emit(ModelEvent::TextDelta {
+            block_index: ContentBlockIndex::new(2),
+            text: response_text.clone(),
+        }),
+        FakeStep::Emit(ModelEvent::ReasoningDelta {
+            block_index: ContentBlockIndex::new(3),
+            text: response_reasoning.clone(),
+        }),
+        terminal,
+    ]);
+    let model = fake_model(turns);
     let (tool_a, release_a) = FakeTool::parking(
         common::tool_policies(
             "alpha",
@@ -328,6 +350,7 @@ async fn sequential_barrier_blocks_later_calls() {
         .into_lease_and_coordinator();
     let execution = prepared_execution(&model, lease, &cancellation, &tool_runtime);
     let release_on_unwind = release_a.clone();
+    let parked_store = store.clone();
 
     let controller = tokio::spawn(async move {
         await_started(&mut started_a, "A started").await;
@@ -336,6 +359,18 @@ async fn sequential_barrier_blocks_later_calls() {
             !*started_b.borrow(),
             "B cannot start while the sequential barrier A is pending"
         );
+        let canonical = parked_store
+            .load_canonical()
+            .expect("committed before tool dispatch");
+        assert!(canonical.iter().any(|message| {
+            matches!(message, MessageBlock::Assistant(assistant) if matches!(
+                assistant.content.as_slice(),
+                [AssistantContentBlock::ToolCall(_), AssistantContentBlock::ToolCall(_),
+                 AssistantContentBlock::Text(text), AssistantContentBlock::Reasoning(reasoning)]
+                 if text.text == response_text
+                    && reasoning.text.as_deref() == Some(response_reasoning.as_str())
+            ))
+        }));
         release_a.send_replace(true);
         await_started(&mut started_b, "B started after A's result existed").await;
     });
@@ -346,6 +381,11 @@ async fn sequential_barrier_blocks_later_calls() {
     let result = tokio::time::timeout(std::time::Duration::from_secs(10), execution.run())
         .await
         .expect("run terminates");
+    assert!(
+        matches!(result.outcome, AttemptOutcome::Completed { .. }),
+        "attempt settled before completing both calls: {:?}",
+        result.outcome
+    );
     controller.await.expect("controller task");
     let result = common::durable_agent_result(result, store.as_ref());
     assert_eq!(
@@ -775,7 +815,8 @@ async fn business_schema_violation_is_a_normal_failed_result_slot() {
         "properties": {"path": {"type": "string"}},
         "required": ["path"],
         "additionalProperties": false
-    });
+    })
+    .into();
     tools
         .register(definition, Arc::new(tool))
         .expect("register");

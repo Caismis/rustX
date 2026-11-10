@@ -1,4 +1,5 @@
-import type { Request } from '../../../protocol/app-server/v77';
+import {traceRefreshed} from '../fixture';
+import type { Request } from '../../../protocol/app-server/v78';
 import { checkpoint, type Server } from '../fixture';
 import { nativeTraceFixture } from '../native-trace-fixture';
 import { requestDetail, traceRecord, traceTool } from '../trace-fixture';
@@ -21,7 +22,7 @@ export function traceFollowing(server: Server, historical = false) {
   server.handlers.set('session/traceLocateTool', () => ({ type: 'trace_tool_location', location: { record_id: tool.id, page: { ...page(), records: records.slice(0, 32), next_cursor: null } } }));
   server.handlers.set('session/trace', request => {
     if (request.method !== 'session/trace') throw Error('Trace method');
-    return { type: 'trace', page: page(request.params.before) };
+    return { refreshed: traceRefreshed(request), type: 'trace', page: page(request.params.before) };
   });
   window.traceFollowingFixture = {
     locate: () => server.client.locateToolTrace('A', locator),
@@ -51,7 +52,7 @@ export function liveTrace(server: Server) {
   saved.trace = { records: [record], next_cursor: null };
   saved.attempt = { attempt_id: 'attempt-a', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } };
   server.handlers.set('session/traceDetail', () => ({ type: 'domain_page', page: native.page }));
-  server.handlers.set('session/trace', () => ({ type: 'trace', page: { read_cut: native.page.read_cut, records: [record], next_cursor: null } }));
+  server.handlers.set('session/trace', request => ({refreshed:traceRefreshed(request), type: 'trace', page: { read_cut: native.page.read_cut, records: [record], next_cursor: null } }));
   server.handlers.set('conversation/checkpointPage', request => {
     if (request.method !== 'conversation/checkpointPage') throw Error('page');
     return { type: 'checkpoint_page', page: sources.get(request.params.cut.revision)!.original.page(request.params.cut, request.params.domain, request.params.offset, () => true) };
@@ -75,7 +76,7 @@ export function liveTrace(server: Server) {
     releaseSummary() {
       server.held.delete('session/trace');
       const request = server.requests.find(row => row.request.method === 'session/trace' && !pending.has(row.request))!.request;
-      pending.add(request); server.socket.success(request, { type: 'trace', page: { read_cut: native.page.read_cut, records: [older!], next_cursor: null } });
+      pending.add(request); server.socket.success(request, {refreshed:traceRefreshed(request), type: 'trace', page: { read_cut: native.page.read_cut, records: [older!], next_cursor: null } });
     },
     async run(count: number) {
       for (let index = 0; index < count; index++) {

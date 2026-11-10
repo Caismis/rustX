@@ -954,7 +954,8 @@ mod tests {
             id: ToolId::new(format!("tool-{name}")),
             name: name.to_owned(),
             description: format!("{name} tool"),
-            input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
+            input_schema: serde_json::json!({"type": "object", "additionalProperties": false})
+                .into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::Sequential,
             approval_policy: ToolApprovalPolicy::Never,

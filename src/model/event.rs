@@ -188,7 +188,7 @@ mod tests {
         let event = ModelEvent::ContinuationState {
             block_index: ContentBlockIndex::new(0),
             state: ProviderContinuationState::Anthropic(AnthropicContinuation {
-                opaque: serde_json::json!({"signature": "sig-1"}),
+                opaque: serde_json::json!({"signature": "sig-1"}).into(),
             }),
         };
         let json = serde_json::to_string(&event).expect("serialize event");

@@ -28,10 +28,21 @@ fn references(messages: &mut [MessageBlock], mut visit: impl FnMut(&mut Artifact
                 }
             }
             MessageBlock::Tool(tool) => {
-                for r in &mut tool.result.artifacts {
+                if tool.result.artifacts.is_empty()
+                    && !tool.result.content.iter().any(|block| {
+                        matches!(
+                            block,
+                            ToolResultContent::File(_) | ToolResultContent::Image(_)
+                        )
+                    })
+                {
+                    continue;
+                }
+                let result = std::sync::Arc::make_mut(&mut tool.result);
+                for r in &mut result.artifacts {
                     visit(&mut r.artifact_id);
                 }
-                for block in &mut tool.result.content {
+                for block in &mut result.content {
                     match block {
                         ToolResultContent::File(r) => visit(&mut r.artifact_id),
                         ToolResultContent::Image(r) => visit(&mut r.artifact_id),

@@ -1,5 +1,6 @@
 //! Immutable allowlisted Trace request source encoding at the native request commit.
 //! Reads later use indexed byte ranges; no observation read reconstructs the Surface.
+pub(crate) const REQUEST_FIELD_COUNT: u64 = 23;
 use super::{TraceRequestDetail, TraceRequestMessage, TraceRequestPredecessor, TraceText};
 use crate::model::RequestSnapshot;
 use crate::model::input::ModelInputMessage;
@@ -16,6 +17,16 @@ pub(crate) fn input_message(
 pub(crate) struct RequestInspection<'a, M> {
     pub snapshot: &'a RequestSnapshot,
     pub messages: M,
+    capture: Capture,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Capture {
+    #[cfg(test)]
+    Complete,
+    Prefix,
+    Stable,
+    Binding,
+    StablePrefix,
 }
 impl<M> schemars::JsonSchema for RequestInspection<'_, M> {
     fn schema_name() -> std::borrow::Cow<'static, str> {
@@ -30,13 +41,38 @@ impl<M: serde::Serialize> serde::Serialize for RequestInspection<'_, M> {
         use serde::ser::SerializeStruct as _;
         let snapshot = self.snapshot;
         let options = Options(snapshot);
-        let mut value = serializer.serialize_struct("TraceRequestDetail", 26)?;
-        value.serialize_field("contributions", &Contributions(snapshot))?;
-        value.serialize_field("request_id", &snapshot.request_id)?;
-        value.serialize_field("attempt_id", &snapshot.identity.attempt_id)?;
-        value.serialize_field("step_id", &snapshot.identity.turn)?;
-        value.serialize_field("retry_number", &snapshot.identity.retry_number)?;
-        value.serialize_field("assistant_message_id", &snapshot.provisional_message_id)?;
+        let mut value = serializer.serialize_struct(
+            "TraceRequestDetail",
+            if matches!(self.capture, Capture::Prefix | Capture::StablePrefix) {
+                6
+            } else {
+                usize::try_from(REQUEST_FIELD_COUNT).expect("finite request field count")
+            },
+        )?;
+        // One allowlist and field order for the complete source, its changing
+        // prefix, and the stable prototype. Null placeholders retain the exact
+        // top-level ordinals without encoding any request-specific values.
+        macro_rules! prefix_field {
+            ($name:literal, $field:expr) => {
+                if matches!(
+                    self.capture,
+                    Capture::Stable | Capture::StablePrefix | Capture::Binding
+                ) {
+                    value.serialize_field($name, &None::<u8>)?;
+                } else {
+                    value.serialize_field($name, $field)?;
+                }
+            };
+        }
+        prefix_field!("contributions", &Contributions(snapshot));
+        prefix_field!("request_id", &snapshot.request_id);
+        prefix_field!("attempt_id", &snapshot.identity.attempt_id);
+        prefix_field!("step_id", &snapshot.identity.turn);
+        prefix_field!("retry_number", &snapshot.identity.retry_number);
+        prefix_field!("assistant_message_id", &snapshot.provisional_message_id);
+        if matches!(self.capture, Capture::Prefix | Capture::StablePrefix) {
+            return value.end();
+        }
         value.serialize_field("model", &snapshot.invocation.model)?;
         value.serialize_field(
             "protocol",
@@ -58,16 +94,19 @@ impl<M: serde::Serialize> serde::Serialize for RequestInspection<'_, M> {
         )?;
         value.serialize_field(
             "effective_system_prompt",
-            &BorrowedText {
+            &(self.capture != Capture::Binding).then_some(BorrowedText {
                 text: &snapshot.effective_system_prompt,
                 truncated: false,
-            },
+            }),
         )?;
         value.serialize_field("predecessor", &TraceRequestPredecessor::NotApplicable)?;
         value.serialize_field("previous_system_prompt", &None::<TraceText>)?;
         value.serialize_field("messages", &self.messages)?;
         value.serialize_field("messages_truncated", &true)?;
-        value.serialize_field("tools", &Tools(snapshot))?;
+        value.serialize_field(
+            "tools",
+            &(self.capture != Capture::Binding).then_some(Tools(snapshot)),
+        )?;
         value.serialize_field("tools_truncated", &false)?;
         value.serialize_field("usage", &None::<crate::model::ModelUsage>)?;
         value.serialize_field("failure", &None::<super::TraceRequestFailure>)?;
@@ -159,29 +198,31 @@ impl serde::Serialize for Contributions<'_> {
             message_id: &'a crate::runtime::identity::MessageId,
             producer: &'a crate::runtime::identity::ContextContributorIdentity,
             metadata: &'a crate::message::ContextKind,
-            presentation: Option<super::types::TraceContributionPresentation>,
+            presentation: Option<crate::observation::trace::TraceContributionPresentation>,
         }
         let mut sequence = s.serialize_seq(Some(self.0.contributions.len()))?;
         for record in &self.0.contributions {
             let presentation = match &record.presentation {
                 Some(crate::context::contribution::ContributionPresentation::AgentStatus(
                     status,
-                )) => Some(super::types::TraceContributionPresentation::AgentStatus(
-                    crate::observation::status::prepared_status(
-                        &self.0.identity.attempt_id,
-                        self.0
-                            .identity
-                            .turn
-                            .as_str()
-                            .parse()
-                            .map_err(S::Error::custom)?,
-                        &record.message_id,
-                        &record.opportunities,
-                        record.post_tool_batch_anchor,
-                        status,
-                        None,
+                )) => Some(
+                    crate::observation::trace::TraceContributionPresentation::AgentStatus(
+                        crate::observation::status::prepared_status(
+                            &self.0.identity.attempt_id,
+                            self.0
+                                .identity
+                                .turn
+                                .as_str()
+                                .parse()
+                                .map_err(S::Error::custom)?,
+                            &record.message_id,
+                            &record.opportunities,
+                            record.post_tool_batch_anchor,
+                            status,
+                            None,
+                        ),
                     ),
-                )),
+                ),
                 None => None,
             };
             sequence.serialize_element(&ContributionView {
@@ -194,11 +235,52 @@ impl serde::Serialize for Contributions<'_> {
         sequence.end()
     }
 }
+#[cfg(test)]
 pub(crate) fn request_detail<M>(
     snapshot: &RequestSnapshot,
     messages: M,
 ) -> RequestInspection<'_, M> {
-    RequestInspection { snapshot, messages }
+    RequestInspection {
+        snapshot,
+        messages,
+        capture: Capture::Complete,
+    }
+}
+
+/// The closing brace is omitted when composing the captured prefix with a suffix.
+pub(crate) fn request_prefix(snapshot: &RequestSnapshot) -> RequestInspection<'_, [u8; 0]> {
+    RequestInspection {
+        snapshot,
+        messages: [],
+        capture: Capture::Prefix,
+    }
+}
+/// The fixed placeholder prefix used to verify persisted suffix geometry.
+pub(crate) fn request_stable_prefix(snapshot: &RequestSnapshot) -> RequestInspection<'_, [u8; 0]> {
+    RequestInspection {
+        snapshot,
+        messages: [],
+        capture: Capture::StablePrefix,
+    }
+}
+/// Stable scalar source with the same field ordinals and schema as the full source.
+pub(crate) fn request_stable(snapshot: &RequestSnapshot) -> RequestInspection<'_, [u8; 0]> {
+    RequestInspection {
+        snapshot,
+        messages: [],
+        capture: Capture::Stable,
+    }
+}
+
+/// The independently frozen native configuration already binds the prompt and
+/// tools. The remaining allowlisted scalar fields complete a sharing key; this
+/// representation is never a public Source and never contains configuration bodies.
+pub(crate) fn request_stable_binding(snapshot: &RequestSnapshot) -> RequestInspection<'_, [u8; 0]> {
+    RequestInspection {
+        snapshot,
+        messages: [],
+        capture: Capture::Binding,
+    }
 }
 
 #[derive(serde::Serialize, schemars::JsonSchema)]

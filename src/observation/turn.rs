@@ -44,8 +44,8 @@ pub struct ObservedTurnPage {
 #[serde(deny_unknown_fields)]
 pub struct CompletedResponseView {
     pub closing_message_id: Option<MessageId>,
-    pub closing_locator: super::content::CanonicalContentLocator,
-    pub retry_locator: Option<super::content::CanonicalContentLocator>,
+    pub closing_locator: crate::observation::content::CanonicalContentLocator,
+    pub retry_locator: Option<crate::observation::content::CanonicalContentLocator>,
     pub deferred_fields: Vec<Vec<String>>,
     /// Original execution owner, including for inherited historical responses.
     pub origin: ObservedResponseOrigin,
@@ -115,10 +115,10 @@ pub struct TurnProcessView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub final_message_id: Option<MessageId>,
     /// Exact final canonical identity, present only for a proven completed response.
-    pub final_message_locator: Option<super::content::CanonicalContentLocator>,
+    pub final_message_locator: Option<crate::observation::content::CanonicalContentLocator>,
     pub final_message_id_deferred: bool,
     /// Original canonical metadata retains identities omitted from the inline view.
-    pub final_message_id_source: Option<super::content::ContentRef>,
+    pub final_message_id_source: Option<crate::observation::content::ContentRef>,
     pub message_count: u32,
     pub tool_call_count: u32,
     pub outcome: TurnProcessOutcome,

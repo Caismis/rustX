@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
-import type { AttachmentTarget } from '../../../protocol/app-server/v77';
+import type { AttachmentTarget } from '../../../protocol/app-server/v78';
 import type { wireProbe } from './wire-probe';
 
 /** A dirty editor's save has settled when its button is idle and disabled. */
@@ -114,9 +114,18 @@ export async function confirmSettingsAction(page: Page, label: string) {
 }
 export async function connectRemote(page: Page, endpoint: string, token: string) {
   await openConnectionSettings(page);
-  await page.getByLabel('Connection mode').selectOption('remote');
-  await page.getByLabel('WebSocket endpoint').fill(endpoint);
-  await page.getByLabel('Access token').fill(token);
+  // Re-entering an unchanged value still dispatches a DOM change event. The
+  // connection owner may then start restoration before the explicit Connect
+  // gesture, whose replacement would retire that just-dispatched Attach.
+  const mode = page.getByLabel('Connection mode');
+  if (await mode.inputValue() !== 'remote') await mode.selectOption('remote');
+  const address = page.getByLabel('WebSocket endpoint');
+  const currentAddress = await address.inputValue();
+  let sameAddress = currentAddress === endpoint;
+  try { sameAddress ||= new URL(currentAddress).href === new URL(endpoint).href; } catch { /* An unconfigured field needs the authored endpoint. */ }
+  if (!sameAddress) await address.fill(endpoint);
+  const secret = page.getByLabel('Access token');
+  if (await secret.inputValue() !== token) await secret.fill(token);
   await page.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(page.locator('.connection-status')).toHaveText('Connected');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();

@@ -100,7 +100,7 @@ fn original_source_copy_preserves_exact_bytes_and_extent_without_index_reopens()
 #[test]
 fn original_source_copy_stops_at_original_extent_and_releases_its_file_owner() {
     let (source, expected) = fixture();
-    let directory = source.layout.directory.path().to_owned();
+    let directory = source.layout.directory.as_ref().unwrap().path().to_owned();
     let mut file = std::fs::OpenOptions::new()
         .append(true)
         .open(directory.join("bytes"))
@@ -126,7 +126,15 @@ fn original_source_copy_rejects_premature_eof_without_shortening_the_extent() {
     let original_end = source.layout.written;
     std::fs::OpenOptions::new()
         .write(true)
-        .open(source.layout.directory.path().join("bytes"))
+        .open(
+            source
+                .layout
+                .directory
+                .as_ref()
+                .unwrap()
+                .path()
+                .join("bytes"),
+        )
         .unwrap()
         .set_len(original_end - 1)
         .unwrap();

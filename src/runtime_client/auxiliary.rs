@@ -1,7 +1,6 @@
 //! Bounded auxiliary Call/request audit pages at one captured Journal cut.
 
 use super::checkpoint::CheckpointPage;
-use super::types::{RuntimeClientCursor, RuntimeClientError};
 use crate::durable::ConversationStore;
 use crate::model::auxiliary::{
     AUXILIARY_AUDIT_PAGE_LIMIT_MAX, AUXILIARY_AUDIT_RECORD_ENCODED_MAX, AuxiliaryAuditCut,
@@ -9,6 +8,7 @@ use crate::model::auxiliary::{
 };
 use crate::observation::bounded::{bounded_bytes, structural_value};
 use crate::observation::cut::{CheckpointPageItem, CheckpointReadCut, CollectionFrontier};
+use crate::runtime_client::types::{RuntimeClientCursor, RuntimeClientError};
 
 pub(crate) const DOMAIN: &str = "auxiliary.audit";
 const PROTOCOL_INTEGER_MAX: u64 = 9_007_199_254_740_991;
@@ -299,8 +299,14 @@ mod tests {
             revision: 1,
             through: source.read.journal,
             source_cut: Some(source),
-            domain_revisions: std::collections::BTreeMap::from([("auxiliary".to_owned(), 1)]),
-            collection_cuts: std::collections::BTreeMap::new(),
+            domain_revisions: {
+                let mut domains: crate::observation::metadata::MetadataFragment<
+                    crate::observation::metadata::ReadCutMap<u64>,
+                > = crate::observation::metadata::MetadataFragment::default();
+                domains.insert("auxiliary".into(), 1);
+                domains
+            },
+            collection_cuts: crate::observation::metadata::MetadataFragment::default(),
         }
     }
 

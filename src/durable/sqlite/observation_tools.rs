@@ -7,6 +7,32 @@ use crate::durable::observation::{
 };
 use crate::observation::content::CanonicalContentLocator;
 
+/// Exact inputs already encoded by the native page's mandatory admission pass.
+/// The cut is deliberately separate: the transcript reader records the actual
+/// admitted prefix after applying its current-cut metadata and byte budget.
+#[derive(PartialEq, Eq)]
+pub(super) struct PageProof {
+    message_id: Option<crate::runtime::identity::MessageId>,
+    locator: CanonicalContentLocator,
+    total: u64,
+    offset: u64,
+    next_offset: Option<u64>,
+    headers: Vec<Vec<u8>>,
+}
+impl PageProof {
+    pub(super) fn retain_prefix(&mut self, loaded: usize) {
+        self.headers.truncate(loaded);
+    }
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.headers.iter().map(Vec::len).sum::<usize>()
+            + self.message_id.as_ref().map_or(0, |id| id.as_str().len())
+            + match &self.locator {
+                CanonicalContentLocator::ByMessageId { message_id } => message_id.as_str().len(),
+                CanonicalContentLocator::ByLedgerPosition { .. } => 0,
+            }
+    }
+}
+
 pub(super) fn page(
     connection: &Connection,
     conversation: &ConversationId,
@@ -23,20 +49,69 @@ pub(super) fn page(
         offset,
         limit,
     )?;
-    let ledger = super::content::canonical_position(connection, locator)?;
+    #[cfg(test)]
+    AFTER_ASSOCIATIONS.with(|probe| {
+        if let Some(probe) = probe.borrow_mut().take() {
+            probe();
+        }
+    });
+    page_at(connection, conversation, cut, page, None)
+}
+
+pub(super) fn page_validated(
+    validated: &super::observation::ValidatedCut<'_, '_>,
+    locator: &CanonicalContentLocator,
+    offset: u64,
+    limit: usize,
+) -> Result<(NativeToolObservationPage, PageProof), ConversationStoreError> {
+    let connection = validated.connection()?;
+    let cut = validated.expected();
+    let page = super::observation::tools_by_locator_validated(validated, locator, offset, limit)?;
+    let mut headers = Vec::new();
+    let page = page_at(
+        connection,
+        &cut.read.conversation_id,
+        cut,
+        page,
+        Some(&mut headers),
+    )?;
+    let proof = PageProof {
+        message_id: page.message_id.clone(),
+        locator: page.locator.clone(),
+        total: page.total,
+        offset: page.offset,
+        next_offset: page.next_offset,
+        headers,
+    };
+    Ok((page, proof))
+}
+
+fn page_at(
+    connection: &Connection,
+    conversation: &ConversationId,
+    cut: &ObservationReadCut,
+    page: crate::durable::observation::ToolAssociationHeaderPage,
+    mut proof: Option<&mut Vec<Vec<u8>>>,
+) -> Result<NativeToolObservationPage, ConversationStoreError> {
+    // tools_by_locator_at just resolved this locator in the same read
+    // transaction; no writes occur between that lookup and these native reads.
+    let CanonicalContentLocator::ByLedgerPosition { position: ledger } = &page.locator else {
+        return Err(storage("native Tool page lacks resolved ledger position"));
+    };
+    let ledger = *ledger;
     let mut remaining = 786_432usize - 1024;
     let mut next_offset = page.next_offset;
     let mut headers = Vec::new();
     for mut association in page.headers {
         let block = association.block_index.get();
-        let name = connection.query_row("SELECT observation_name FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 AND block_index=?2",params![ledger,block],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let name = connection.query_row("SELECT observation_name FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 AND block_index=?2",params![ledger,block],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let argument_ref = argument_reference(connection, conversation, ledger, block)?;
         if let Some(reference) = &argument_ref
             && !association
                 .call
                 .content
                 .iter()
-                .any(|binding| binding.content_ref == *reference)
+                .any(|binding| binding.content_ref.as_ref() == reference)
         {
             association
                 .call
@@ -44,13 +119,13 @@ pub(super) fn page(
                 .push(crate::observation::cut::ContentBinding {
                     source_path: None,
                     path: vec!["value".into(), "arguments".into()],
-                    content_ref: reference.clone(),
+                    content_ref: reference.clone().into(),
                     deferred: reference.readable_end > 1024,
                 });
         }
         let header = NativeToolObservationHeader {
             name,
-            arguments_json: arguments(connection, conversation, argument_ref.as_ref())?,
+            arguments_json: arguments(connection, conversation, argument_ref.as_ref(), ledger)?,
             committed_result: association
                 .result
                 .as_ref()
@@ -67,11 +142,16 @@ pub(super) fn page(
             terminal: witness(connection, cut, ledger, block, 2)?,
             association,
         };
+        #[cfg(test)]
+        PAGE_WORK.with(|work| work.set(work.get() + 1));
         let Some(bytes) = crate::observation::bounded::bounded_bytes(&header, remaining) else {
             next_offset = Some(u64::from(block));
             break;
         };
         remaining -= bytes.len();
+        if let Some(proof) = &mut proof {
+            proof.push(bytes);
+        }
         headers.push(header);
     }
     if headers.is_empty() && next_offset.is_some() {
@@ -87,6 +167,21 @@ pub(super) fn page(
         next_offset,
     })
 }
+
+#[cfg(test)]
+thread_local! {
+    static PAGE_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static AFTER_ASSOCIATIONS: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(test)]
+pub(super) fn probe_after_associations(probe: impl FnOnce() + 'static) {
+    AFTER_ASSOCIATIONS.with(|slot| *slot.borrow_mut() = Some(Box::new(probe)));
+}
+/// Mandatory native Tool header encodes, shared by public and proven reads.
+#[cfg(test)]
+pub(super) fn page_work() -> usize {
+    PAGE_WORK.with(|work| work.replace(0))
+}
 fn witness(
     connection: &Connection,
     cut: &ObservationReadCut,
@@ -97,7 +192,7 @@ fn witness(
     let sequence: Option<u64> = connection.query_row(
         "SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_phase IS NOT NULL AND observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=?3 AND sequence<=?4 ORDER BY sequence DESC LIMIT 1",
         params![ledger,block,phase,cut.read.journal], |row| row.get(0),
-    ).optional().map_err(|error| storage(error.to_string()))?;
+    ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     sequence
         .map(|sequence| {
             super::observation_event::witness(connection, sequence, cut.read.journal)?
@@ -136,7 +231,7 @@ fn committed_result(
             [ledger],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let bytes = bytes.ok_or_else(|| storage("native Tool result summary unavailable"))?;
     if bytes.len() > 16_384 {
         return Err(storage("oversized native Tool result summary"));
@@ -166,19 +261,21 @@ fn argument_reference(
         block_index: crate::message::types::ContentBlockIndex::new(block),
         component: CanonicalContentComponent::Payload,
     };
-    let raw = super::content::descriptor(
+    let raw = crate::durable::sqlite::content::canonical_descriptor_at_position(
         connection,
         conversation,
         &source,
         ContentRepresentation::RawJsonUtf8,
+        ledger,
     )?;
     let reference = match raw.filter(|reference| reference.readable_end > 0) {
         Some(raw) => Some(raw),
-        None => super::content::descriptor(
+        None => crate::durable::sqlite::content::canonical_descriptor_at_position(
             connection,
             conversation,
             &source,
             ContentRepresentation::CanonicalJsonV1,
+            ledger,
         )?,
     };
     Ok(reference)
@@ -187,16 +284,19 @@ fn arguments(
     connection: &Connection,
     conversation: &ConversationId,
     reference: Option<&crate::observation::content::ContentRef>,
+    ledger: u64,
 ) -> Result<Option<String>, ConversationStoreError> {
     let Some(reference) = reference.filter(|reference| reference.readable_end <= 1024) else {
         return Ok(None);
     };
-    let chunk = super::content::read(connection, conversation, reference, 0, 1024)?;
-    let bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        chunk.data_base64,
-    )
-    .map_err(|error| storage(error.to_string()))?;
+    let (bytes, _) = crate::durable::sqlite::content::canonical_read_bytes_at_position(
+        connection,
+        conversation,
+        reference,
+        0,
+        1024,
+        ledger,
+    )?;
     String::from_utf8(bytes)
         .map(Some)
         .map_err(|error| storage(error.to_string()))

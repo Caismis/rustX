@@ -1,6 +1,6 @@
 use crate::durable::CanonicalStore;
+use crate::durable::ConversationInboundCapability;
 use crate::durable::JournalStore;
-use crate::durable::inbox::ConversationInboundCapability;
 use crate::runtime::conversation_runtime::test_support::*;
 
 /// The headless full turn: a conversation runtime with zero Runtime
@@ -161,7 +161,8 @@ async fn headless_tool_cycle_with_zero_attachments() {
         id: ToolId::new("tool-echo"),
         name: "echo".to_owned(),
         description: "echoes the call arguments".to_owned(),
-        input_schema: serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}}),
+        input_schema:
+            serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: crate::tools::types::ToolConcurrencyPolicy::default(),
         approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
@@ -483,7 +484,7 @@ async fn recovered_durable_pending_drives_admission_without_a_client_request() {
         .map(Arc::new)
         .expect("durable store");
         store
-            .accept_inbound(crate::durable::inbox::InboundDraft {
+            .accept_inbound(crate::durable::InboundDraft {
                 message_id: None,
                 source: UserSource::Human,
                 kind: InboundKind::Message,
@@ -541,7 +542,7 @@ async fn automatic_compaction_keeps_attempt_pinned_resources_after_external_edit
             id: ToolId::new(id),
             name: name.to_owned(),
             description: description.to_owned(),
-            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}).into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             concurrency_policy: ToolConcurrencyPolicy::default(),
             approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
@@ -765,6 +766,7 @@ async fn admitted_attempt_executes_under_the_frozen_tool_deadline_policy() {
             None,
         ),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,

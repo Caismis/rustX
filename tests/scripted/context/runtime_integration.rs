@@ -454,7 +454,7 @@ async fn run_continuation_case(
 
 fn anthropic_state() -> ProviderContinuationState {
     ProviderContinuationState::Anthropic(AnthropicContinuation {
-        opaque: serde_json::json!({"type":"thinking", "thinking":"native reasoning", "signature": "sig-1"}),
+        opaque: serde_json::json!({"type":"thinking", "thinking":"native reasoning", "signature": "sig-1"}).into(),
     })
 }
 
@@ -473,7 +473,7 @@ fn stateless_state() -> ProviderContinuationState {
                 "encrypted_content": "opaque"
             }),
             serde_json::json!({"type":"function_call", "id":"fc_1", "call_id":"call-1", "name":"alpha", "arguments":"{}"}),
-        ],
+        ].into(),
     })
 }
 
@@ -822,7 +822,7 @@ async fn proactive_compaction_before_the_next_turn() {
         RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-alpha"),
-            result: success_result("ok"),
+            result: success_result("ok").into(),
         },
         RuntimeEvent::ToolMessageCommitted {
             message_id: MessageId::new("attempt-1-tool-1-0"),
@@ -4440,13 +4440,15 @@ async fn mandatory_adapter_preflight_rejects_native_history_without_continuation
         (
             ModelProtocol::AnthropicMessages,
             ProviderContinuationState::Anthropic(AnthropicContinuation {
-                opaque: serde_json::json!({"type":"thinking","thinking":"native", "signature":""}),
+                opaque: serde_json::json!({"type":"thinking","thinking":"native", "signature":""})
+                    .into(),
             }),
         ),
         (
             ModelProtocol::OpenAiResponses,
             ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
-                items: vec![serde_json::json!({"type":"reasoning","id":"native", "summary":[]})],
+                items: vec![serde_json::json!({"type":"reasoning","id":"native", "summary":[]})]
+                    .into(),
             }),
         ),
     ];

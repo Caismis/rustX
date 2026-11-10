@@ -29,27 +29,36 @@ pub(super) struct OpenPublication {
     pub(super) coalescer: PublicationCoalescer,
     /// Whether the publication terminal transaction (U) committed.
     terminal_committed: bool,
+    pub(super) provider_completion: Option<RuntimeEventEnvelope>,
 }
 
 impl AgentExecution<'_> {
-    /// Commits **C**: the assembled Assistant message joins canonical history
-    /// as one compound durable transition with its publication stream.
-    ///
-    /// The transition validates that the exact stream is publication-complete,
-    /// appends the canonical Ledger fact, advances the Surface, records
-    /// `AssistantMessageCommitted`, and clears the stream's publication
-    /// staging — all in one transaction. `ModelRequestCompleted` is
-    /// deliberately not part of it: provider completion remains an external
-    /// execution fact even when canonicalization later fails.
+    /// Accepts ordinary output atomically with its pending provider completion,
+    /// final frames and optional no-tool inbox boundary. Workflow-owned output
+    /// retains its already prepared provider/publication facts across that owner.
     pub(super) fn commit_assistant_message(
         &mut self,
         message_id: &MessageId,
-        content: &[crate::message::types::AssistantContentBlock],
-    ) -> Result<(), CanonicalCommitError> {
+        content: Vec<crate::message::types::AssistantContentBlock>,
+    ) -> Result<Option<bool>, CanonicalCommitError> {
         let block = MessageBlock::Assistant(AssistantMessageBlock {
             id: message_id.clone(),
-            content: content.to_vec(),
+            content,
         });
+        if self
+            .publication
+            .as_ref()
+            .is_some_and(|publication| publication.provider_completion.is_some())
+        {
+            return self.commit_model_output(block);
+        }
+        if self.workflow_output.is_none() {
+            return Err(CanonicalCommitError::Durable(
+                crate::durable::ConversationStoreError::PublicationViolation(
+                    "ordinary model output requires its atomic completion boundary".into(),
+                ),
+            ));
+        }
         let Some(publication) = self.publication.as_ref() else {
             return Err(CanonicalCommitError::Durable(
                 crate::durable::ConversationStoreError::PublicationViolation(format!(
@@ -58,8 +67,9 @@ impl AgentExecution<'_> {
             ));
         };
         let stream_id = publication.start.stream_id.clone();
-        let prepared = self.conversation.prepare_commit(&block)?;
-        let event = Self::canonical_event(&block).expect("an Assistant commit has its event");
+        let prepared = self.conversation.prepare_owned_commit(block)?;
+        let event =
+            Self::canonical_event(prepared.message()).expect("an Assistant commit has its event");
         let (persisted, receipt) = self
             .store
             .commit_canonical_publication(
@@ -71,12 +81,25 @@ impl AgentExecution<'_> {
         // The stream settled canonically: the Ledger is the long-term
         // authority and no audit may ever be created for it.
         self.publication = None;
-        self.conversation.install_prepared(prepared);
-        if let Some(observer) = self.observer {
-            observer.observe_committed(&self.request.attempt_id, &block, &receipt);
-        }
+        self.install_observed_canonical(prepared, &receipt);
         self.record_persisted_event(persisted);
-        Ok(())
+        Ok(None)
+    }
+
+    pub(super) fn install_observed_canonical(
+        &mut self,
+        prepared: crate::conversation::PreparedCanonicalCommit,
+        receipt: &crate::durable::TranscriptCommitReceipt,
+    ) {
+        let id = self.conversation.install_prepared(prepared);
+        if let Some(observer) = self.observer {
+            let installed = self
+                .conversation
+                .ledger()
+                .get(&id)
+                .expect("installed canonical fact");
+            observer.observe_committed(&self.request.attempt_id, installed, receipt);
+        }
     }
 
     /// Commits one complete `ToolResult` batch atomically.
@@ -96,57 +119,60 @@ impl AgentExecution<'_> {
     /// a moving frontier.
     pub(super) fn commit_tool_result_batch(
         &mut self,
-        blocks: &[MessageBlock],
+        blocks: Vec<MessageBlock>,
+        todos: Option<crate::tools::todo::TodoBatch>,
     ) -> Result<Option<TranscriptCursor>, CanonicalCommitError> {
-        let mut prepared = Vec::with_capacity(blocks.len());
-        for block in blocks {
-            prepared.push(self.conversation.prepare_commit(block)?);
-        }
-        let events = blocks
+        let prepared = self.conversation.prepare_owned_batch(blocks)?;
+        let envelopes = prepared
+            .messages()
             .iter()
             .map(|block| {
-                Self::canonical_event(block).ok_or_else(|| {
-                    CanonicalCommitError::Durable(
-                        crate::durable::ConversationStoreError::InvalidReference(
-                            "a ToolResult batch contains a non-tool message".to_owned(),
-                        ),
-                    )
-                })
+                Self::canonical_event(block)
+                    .map(|event| self.event_envelope(event))
+                    .ok_or_else(|| {
+                        CanonicalCommitError::Durable(
+                            crate::durable::ConversationStoreError::InvalidReference(
+                                "a ToolResult batch contains a non-tool message".to_owned(),
+                            ),
+                        )
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let envelopes = events
-            .into_iter()
-            .map(|event| self.event_envelope(event))
-            .collect::<Vec<_>>();
         let (persisted_events, receipts) = self
             .store
-            .append_canonical_batch_with_events(blocks, &envelopes)
+            .append_canonical_batch_with_events(prepared.messages(), &envelopes)
             .map_err(CanonicalCommitError::Durable)?;
         let mut batch_anchor: Option<TranscriptCursor> = None;
-        for ((prepared, block), receipt) in prepared.into_iter().zip(blocks).zip(receipts) {
-            self.conversation.install_prepared(prepared);
-            if let Some(cursor) = receipt.transcript_cursor
-                && batch_anchor.is_none_or(|anchor| cursor > anchor)
-            {
-                batch_anchor = Some(cursor);
+        let mut todo_messages = Vec::new();
+        for (commit, receipt) in prepared.into_commits().zip(receipts) {
+            if todos.is_some() {
+                todo_messages.push(commit.message_id().clone());
             }
-            if let Some(observer) = self.observer {
-                observer.observe_committed(&self.request.attempt_id, block, &receipt);
-            }
+            self.install_observed_canonical(commit, &receipt);
+            batch_anchor = batch_anchor.max(receipt.transcript_cursor);
         }
         for event in persisted_events {
             self.record_persisted_event(event);
         }
+        if let Some(todos) = todos {
+            todos.settle(todo_messages.iter().map(|id| {
+                self.conversation
+                    .ledger()
+                    .get(id)
+                    .expect("committed tool result")
+            }));
+        }
         Ok(batch_anchor)
     }
 
-    /// Opens the publication stream of one model request.
+    /// Starts the in-memory publication owner for one model request.
     ///
     /// The stream is pinned to the exact request generation that started it:
     /// attempt, turn, request, and provisional message identity are frozen
     /// here, so a resource, Skill, or Tool configuration edit that lands
     /// during streaming can never re-associate this stream with a newer
-    /// generation, and recovery classifies it from these identities alone.
+    /// generation. The first durable frame or settlement admits this exact
+    /// generation in its own transaction; opening alone writes nothing.
     pub(super) fn open_publication(&mut self, message_id: &MessageId) {
         let Some(request_id) = self.last_request_id.clone() else {
             self.record_publication_failure(
@@ -161,12 +187,6 @@ impl AgentExecution<'_> {
             request_id,
             message_id: message_id.clone(),
         };
-        if let Err(error) = self.store.open_publication_stream(&start) {
-            self.record_publication_failure(&format!(
-                "the publication stream could not be opened durably: {error}"
-            ));
-            return;
-        }
         let coalescer = PublicationCoalescer::new(
             start.stream_id.clone(),
             message_id.clone(),
@@ -180,6 +200,7 @@ impl AgentExecution<'_> {
             start,
             coalescer,
             terminal_committed: false,
+            provider_completion: None,
         });
     }
 
@@ -188,44 +209,38 @@ impl AgentExecution<'_> {
     ///
     /// Usage and provider continuation state are request bookkeeping, not
     /// released output, so they produce no publication frame.
-    fn publication_payload(event: &ModelEvent) -> Option<PublicationPayload> {
+    fn publication_payload(event: ModelEvent) -> Option<PublicationPayload> {
         match event {
             ModelEvent::TextDelta { block_index, text } => Some(PublicationPayload::TextSuffix {
-                block_index: *block_index,
-                suffix: text.clone(),
+                block_index,
+                suffix: text,
             }),
             ModelEvent::ReasoningDelta { block_index, text } => {
                 Some(PublicationPayload::ReasoningSuffix {
-                    block_index: *block_index,
-                    suffix: text.clone(),
+                    block_index,
+                    suffix: text,
                 })
             }
             ModelEvent::RefusalDelta { block_index, text } => {
                 Some(PublicationPayload::RefusalSuffix {
-                    block_index: *block_index,
-                    suffix: text.clone(),
+                    block_index,
+                    suffix: text,
                 })
             }
             ModelEvent::ToolCallStarted { block_index, call } => {
-                Some(PublicationPayload::ProposedToolCallStarted {
-                    block_index: *block_index,
-                    call: call.clone(),
-                })
+                Some(PublicationPayload::ProposedToolCallStarted { block_index, call })
             }
             ModelEvent::ToolCallArgumentsDelta {
                 block_index,
                 call_id,
                 arguments_delta,
             } => Some(PublicationPayload::ProposedToolCallArgumentsSuffix {
-                block_index: *block_index,
-                call_id: call_id.clone(),
-                suffix: arguments_delta.clone(),
+                block_index,
+                call_id,
+                suffix: arguments_delta,
             }),
             ModelEvent::ToolCallCompleted { block_index, call } => {
-                Some(PublicationPayload::ProposedToolCallCompleted {
-                    block_index: *block_index,
-                    call: call.clone(),
-                })
+                Some(PublicationPayload::ProposedToolCallCompleted { block_index, call })
             }
             ModelEvent::Started
             | ModelEvent::UsageUpdate { .. }
@@ -237,7 +252,7 @@ impl AgentExecution<'_> {
 
     /// Buffers one non-terminal model event into the publication coalescer
     /// and performs the bounded flush the policy requires.
-    pub(super) fn publish_model_event(&mut self, event: &ModelEvent) {
+    pub(super) fn publish_model_event(&mut self, event: ModelEvent) {
         let Some(payload) = Self::publication_payload(event) else {
             return;
         };
@@ -266,7 +281,10 @@ impl AgentExecution<'_> {
         if frames.is_empty() {
             return;
         }
-        let receipts = match self.store.stage_publication_frames(&frames) {
+        let receipts = match self
+            .store
+            .stage_publication_frames(&publication.start, &frames)
+        {
             Ok(receipts) => receipts,
             Err(error) => {
                 self.record_publication_failure(&format!(
@@ -278,23 +296,38 @@ impl AgentExecution<'_> {
         self.release_publication(&frames, &receipts);
     }
 
-    /// Commits **U** — the final publication frame and the publication
-    /// terminal marker in one transaction — and only then releases the final
-    /// buffered payload.
+    /// Prepares Workflow or rejected output: commits pending P, then U, and
+    /// releases its final buffered payload. Ordinary accepted output uses
+    /// the atomic model settlement and publishes its canonical receipt.
     ///
-    /// P must already be durable; the durable store enforces that. When no
+    /// The native U transition requires durable P. When no
     /// visible payload remains, a terminal-only frame still commits and no
     /// visible text is delayed.
     pub(super) fn commit_publication_terminal(&mut self) -> Result<(), RuntimeError> {
+        if let Some(completion) = self
+            .publication
+            .as_mut()
+            .and_then(|publication| publication.provider_completion.take())
+        {
+            match self.store.append_event(completion) {
+                Ok(persisted) => self.record_persisted_event(persisted),
+                Err(error) => {
+                    let message = format!("provider completion could not be committed: {error}");
+                    self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
+                    self.durable_failure = Some(message.clone());
+                    return Err(RuntimeError::DurableStore { message });
+                }
+            }
+        }
         let Some(publication) = self.publication.as_mut() else {
             return Ok(());
         };
         if publication.terminal_committed {
             return Ok(());
         }
-        let stream_id = publication.start.stream_id.clone();
+        let start = publication.start.clone();
         let frames = publication.coalescer.take_terminal_frames();
-        let receipts = match self.store.commit_publication_terminal(&stream_id, &frames) {
+        let receipts = match self.store.commit_publication_terminal(&start, &frames) {
             Ok(receipts) => receipts,
             Err(error) => {
                 let message =
@@ -336,7 +369,14 @@ impl AgentExecution<'_> {
     /// Unaccepted (or the reverse) no matter which control-flow exit reached
     /// it. Canonical acceptance of the stream becomes permanently forbidden.
     pub(super) fn settle_publication_audit(&mut self) -> Result<(), RuntimeError> {
-        // A failed request may have ended before the coalescer's normal byte
+        if self.durable_failure.is_none()
+            && self
+                .publication
+                .as_ref()
+                .is_some_and(|publication| publication.provider_completion.is_some())
+        {
+            self.commit_publication_terminal()?;
+        } // A failed request may have ended before the coalescer's normal byte
         // or latency boundary. Flush that pending payload first so the audit
         // retains every partial text/reasoning/refusal/tool proposal that was
         // already emitted by the provider.
@@ -346,21 +386,18 @@ impl AgentExecution<'_> {
                 return Err(RuntimeError::DurableStore { message });
             }
         }
-        let Some(stream_id) = self
+        let Some(start) = self
             .publication
             .as_ref()
-            .map(|publication| publication.start.stream_id.clone())
+            .map(|publication| publication.start.clone())
         else {
             return Ok(());
         };
-        match self
-            .store
-            .terminalize_publication_audit(&stream_id, Utc::now())
-        {
+        match self.store.terminalize_publication_audit(&start, Utc::now()) {
             Ok((audit, receipt)) => {
                 // Only remove the in-memory owner after the durable
-                // settlement committed. On failure it remains the one
-                // recoverable unsettled stream.
+                // settlement committed. A failed first write leaves no
+                // durable stream; earlier staged output remains recoverable.
                 self.publication.take();
                 if let Some(observer) = self.observer {
                     observer.observe_publication_settled(
@@ -400,7 +437,7 @@ impl AgentExecution<'_> {
         }
     }
 
-    fn canonical_event(block: &MessageBlock) -> Option<RuntimeEvent> {
+    pub(super) fn canonical_event(block: &MessageBlock) -> Option<RuntimeEvent> {
         match block {
             MessageBlock::Assistant(message) => Some(RuntimeEvent::AssistantMessageCommitted {
                 message_id: message.id.clone(),
@@ -458,7 +495,7 @@ impl AgentExecution<'_> {
         }
     }
 
-    pub(super) fn emit(&mut self, event: RuntimeEvent) {
+    pub(super) fn emit_envelope(&mut self, envelope: RuntimeEventEnvelope) {
         debug_assert!(
             !self.terminal_emitted,
             "no runtime events may follow the terminal event"
@@ -466,15 +503,14 @@ impl AgentExecution<'_> {
         if self.durable_failure.is_some() {
             return;
         }
-        match self.store.append_event(self.event_envelope(event)) {
+        match self.store.append_event(envelope) {
             Ok(envelope) => self.record_persisted_event(envelope),
-            Err(error) => {
-                self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
-                self.durable_failure = Some(format!(
-                    "runtime event could not be persisted before publication: {error}"
-                ));
-            }
+            Err(error) => self.record_event_failure(&error),
         }
+    }
+
+    pub(super) fn emit(&mut self, event: RuntimeEvent) {
+        self.emit_envelope(self.event_envelope(event));
     }
 }
 

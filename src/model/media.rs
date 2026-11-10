@@ -18,7 +18,6 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(crate) struct MediaSnapshot {
     uploads: UploadProjection,
     images: super::images::ResolvedImages,
-    costs: BTreeMap<ArtifactId, u64>,
     enabled: Option<bool>,
     conversation: Option<ConversationId>,
 }
@@ -147,10 +146,9 @@ impl MediaSnapshot {
             return Err("media snapshot exceeds image union budget".into());
         }
         snapshot.images.retain(|id, _| required_images.contains(id));
-        snapshot.costs.retain(|id, _| required_images.contains(id));
         for id in required_images {
             check_cancelled(signal)?;
-            if !snapshot.images.contains_key(&id) {
+            if let std::collections::btree_map::Entry::Vacant(image) = snapshot.images.entry(id) {
                 #[cfg(test)]
                 WORK.with(|work| {
                     let mut value = work.get();
@@ -159,12 +157,10 @@ impl MediaSnapshot {
                 });
                 let bytes = artifacts
                     .ok_or("image artifact owner unavailable")?
-                    .read_bounded(&id)
+                    .read_bounded(image.key())
                     .map_err(|e| e.to_string())?;
                 check_cancelled(signal)?;
-                let cost = super::images::measure_png(&bytes)?.input_tokens();
-                snapshot.costs.insert(id.clone(), cost);
-                snapshot.images.insert(id, bytes);
+                image.insert(super::images::FrozenImage::new(bytes)?);
             }
         }
         check_cancelled(signal)?;
@@ -396,7 +392,11 @@ impl MediaSnapshot {
         if self.enabled.is_none() {
             return 0;
         }
-        image_cost_input(messages, |id| self.costs.get(id).copied())
+        image_cost_input(messages, |id| {
+            self.images
+                .get(id)
+                .and_then(super::images::FrozenImage::input_tokens)
+        })
     }
     /// Same provider-neutral content and scoped provenance as actual staging.
     #[cfg(test)]
@@ -535,7 +535,11 @@ impl MediaSnapshot {
         if self.enabled.is_none() {
             return 0;
         }
-        image_cost(messages, |id| self.costs.get(id).copied())
+        image_cost(messages, |id| {
+            self.images
+                .get(id)
+                .and_then(super::images::FrozenImage::input_tokens)
+        })
     }
 }
 fn mark_transformed(
@@ -1101,7 +1105,10 @@ mod tests {
         .unwrap();
         let mut rendered = input.clone();
         snapshot.materialize(&mut rendered).unwrap();
-        assert_eq!(snapshot.selected_images(&rendered).unwrap()[&id], bytes);
+        assert_eq!(
+            snapshot.selected_images(&rendered).unwrap()[&id].as_bytes(),
+            bytes
+        );
         take_work();
         let extended = MediaSnapshot::capture(
             Some(&snapshot),
@@ -1174,7 +1181,7 @@ mod tests {
                         ContentBlockIndex::new(0),
                     ),
                     tool_id: ToolId::new("tool"),
-                    result,
+                    result: result.into(),
                 }))
             })
             .collect();

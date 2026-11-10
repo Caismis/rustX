@@ -1,0 +1,96 @@
+{
+  "archive": "raw.tar.xz",
+  "archive_bytes": 13013056,
+  "archive_sha256": "1bb966160f182424b59cfbd36c7f73540afe3d13653650e4166d0f8c8c723b9f",
+  "compression": "xz preset 0",
+  "created_utc": "2026-10-30T00:59:46.495649+00:00",
+  "excluded_entries": 8,
+  "excluded_reasons": {
+    "compiled conformance artifact": 2,
+    "nonregular file": 6
+  },
+  "format": "rustx-inline-content-raw-evidence-v1",
+  "manifest_bytes": 416251,
+  "manifest_sha256": "a5c0dd506eea8fa8411055bc70f8d0bd7587579b2914ebeca13052556dc984f4",
+  "phases": {
+    "baseline": {
+      "head": "43f56cfccc7d0b8b71dfb3ff0278ab0d2da06d22",
+      "production_tree": "82777e278d8980aafab098e76e1bd7c0aa4e8e7f",
+      "sha256": "fceee9f13a326cdb01472274edf8a186481fde18abd8956b5c4b07c66e2dda2d"
+    },
+    "baseline_schema": 84,
+    "candidate": {
+      "head": "ef63fb2cd35d18fb0223d0729d2ab98191f2838b",
+      "production_tree": "7add77966c0baf0bdcb4cddd8615d9f1f8029859",
+      "sha256": "09dd30e83fc942eb6a630f9fe070f60b5c18523243bd07f63a5ad959fbeec6ee"
+    },
+    "candidate_schema": 85,
+    "diagnostic_products": 20,
+    "formal_products": 120,
+    "new_deepseek_products": 0,
+    "new_pi_products": 0,
+    "scope": "120 fresh Rust formal products only. Twenty isolated diagnostics and every failed/historical attempt remain separate. Fixed prior Pi/DeepSeek is a separately pinned dependency, not new paired products."
+  },
+  "raw_bytes": 1542339492,
+  "raw_files": 1398,
+  "reference_pins": {
+    "archive_manifest_sha256": "99eb50b72ea06e1cf66b56ac8a487ff24bebcd5a3b6ce14f24ec3d6afbbb4a23",
+    "deepseek_products": 12,
+    "pi_products": 60,
+    "policy": "Fixed previously strict-audited products; no new Pi/DSH execution. Ratios use separate batch medians; no cross-batch pairing or randomized concurrency claim. Full raw references remain in the content-hash-pinned previous archive. Portable new reports consume this exact prior audit; re-auditing old raw is a separate archived command, not a fresh product.",
+    "prior_rust_sha256": "775b6426d1ce59e1f80e746000d52527e876917f117361841ce120b183d042bb",
+    "prior_source": "d22ce66c5a1cda895cac382ce2c350f345933876",
+    "reference_archive": "docs/pi-durable-cost-model/evidence/pi-flow-runtime-20261027/raw.tar.xz",
+    "reference_archive_bytes": 24024636,
+    "reference_archive_sha256": "eef4c601144965e23fc32b303be67bbccdc7b0197b332d62deba9933840b49ec",
+    "reference_audit": "previous-complete-all-audit.json",
+    "reference_audit_sha256": "902e748b08ff085dc4d1edcd7a38eea181bde0b5542a8972bbd3e459472eb98f",
+    "references": {
+      "deepseek_node": "v24.19.0",
+      "deepseek_revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "deepseek_tree": "f127f0f96a815eac4dea336a2ae0d9cd0f2aa82d",
+      "pi_revision": "90d863f7c1183b965f099855715d6e88c7b8a52c"
+    }
+  },
+  "replay_commands": {
+    "diagnostic": [
+      "python3",
+      "diagnostic-audit.py",
+      "--root",
+      ".",
+      "--raw-only",
+      "--formal-audit",
+      "../direct-raw-audit.json",
+      "--output",
+      "../diagnostic-raw-audit.json"
+    ],
+    "formal": [
+      "python3",
+      "direct-audit.py",
+      "--root",
+      ".",
+      "--raw-only",
+      "--output",
+      "../direct-raw-audit.json"
+    ],
+    "summary": [
+      "python3",
+      "summarize-results.py",
+      "--root",
+      ".",
+      "--audit",
+      "../direct-raw-audit.json",
+      "--output",
+      "../report-data.json",
+      "--markdown",
+      "../report-tables.md"
+    ]
+  },
+  "stream_verified_all_members": true,
+  "strict_report_sha256": {
+    "diagnostic-audit.json": "b6b7ab40bc142e318962fea666f11e0c498dcf1b4676045bf9370c65b8934f17",
+    "direct-audit.json": "77552f361adc31276358a1d69350611d0996cb92693c3beaacd45ad096204983",
+    "report-data.json": "50ca553238f9e3cb1254c3811a043ffcb2d990e4c1a8567d651c92b02acfafc6",
+    "report-tables.md": "2043570af433237957b9a1ffbd9289c0828352056d947d2ba526de1f81b638c4"
+  }
+}

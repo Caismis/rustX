@@ -318,7 +318,7 @@ fn expected_index_rows(calls: u64, facts: u64) -> [u64; 13] {
         calls,     // auxiliary_calls_started_idx
         calls,     // auxiliary_calls_settled_idx
         calls,     // request_owners_source_idx
-        facts,     // Non-partial Call lookup also indexes null request Call keys.
+        calls * 2, // Call start and settlement carry the top-level call ID.
         facts,     // events_auxiliary_fact_type_idx
         0,         // Primary Trace scope excludes every auxiliary request.
     ]

@@ -327,7 +327,7 @@ async fn t08_t12_content_range_error_is_typed_correlated_and_keeps_connection_fo
             let read = |offset| Method::ConversationContentRead {
                 target: target.clone(),
                 agent_id: None,
-                content_ref: reference.clone(),
+                content_ref: (reference.clone()).as_ref().clone(),
                 offset,
                 max_bytes: 1,
             };
@@ -346,7 +346,7 @@ async fn t08_t12_content_range_error_is_typed_correlated_and_keeps_connection_fo
             let MethodResult::ContentChunk { chunk } = call(&client, 46_783, read(0)).await else {
                 panic!("same connection remains readable");
             };
-            assert_eq!(chunk.content_ref, reference);
+            assert_eq!(chunk.content_ref, reference.as_ref().clone());
             assert_eq!(chunk.next_offset, Some(1));
             assert_eq!(
                 base64::engine::general_purpose::STANDARD
@@ -614,7 +614,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         request.headers_mut().insert(
             "sec-websocket-protocol",
             format!(
-                "rustx.app-server.v77, {}",
+                "rustx.app-server.v78, {}",
                 driver::credential_offer(driver::TOKEN)
             )
             .parse()
@@ -1027,7 +1027,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         request.headers_mut().insert(
             "sec-websocket-protocol",
             format!(
-                "rustx.app-server.v77, {}",
+                "rustx.app-server.v78, {}",
                 driver::credential_offer(driver::TOKEN)
             )
             .parse()
@@ -2410,7 +2410,9 @@ async fn t16_pending_receipt_supersession_and_stale_queue_progression() {
                     registration_id: registration.id.clone(),
                     target: target.clone(),
                     cursor,
-                    event: Box::new(crate::runtime_client::RuntimeClientEvent::TraceChanged),
+                    event: std::sync::Arc::new(
+                        crate::runtime_client::RuntimeClientEvent::TraceChanged,
+                    ),
                 },
             },
             Some(registration.event(cursor)),
@@ -3024,7 +3026,9 @@ async fn t16_pending_physical_pipe_replacement_advances_without_readiness() {
                     registration_id: registration.id.clone(),
                     target: target.clone(),
                     cursor,
-                    event: Box::new(crate::runtime_client::RuntimeClientEvent::TraceChanged),
+                    event: std::sync::Arc::new(
+                        crate::runtime_client::RuntimeClientEvent::TraceChanged,
+                    ),
                 },
             },
             Some(registration.event(cursor)),

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientToolOccurrence {
-    pub locator: super::content::CanonicalContentLocator,
+    pub locator: crate::observation::content::CanonicalContentLocator,
     pub block_index: ContentBlockIndex,
 }
 pub(crate) fn inline_tool_id(id: &ToolId) -> Option<ToolId> {
@@ -47,13 +47,13 @@ pub struct ForegroundToolExecution {
     pub block_index: ContentBlockIndex,
     /// The logical tool-call identity.
     pub call_id: Option<ToolCallId>,
-    pub metadata_ref: Option<super::content::ContentRef>,
+    pub metadata_ref: Option<crate::observation::content::ContentRef>,
     pub assembly_complete: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_source: Option<JournalFieldRef>,
     /// Canonical-only settlement metadata, including before-Start outcomes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result_metadata_ref: Option<super::content::ContentRef>,
+    pub result_metadata_ref: Option<crate::observation::content::ContentRef>,
     /// A committed canonical result is independent of execution-terminal Journal publication.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub committed_result: Option<ToolExecutionResult>,
@@ -111,12 +111,13 @@ pub(crate) fn foreground(
             result.content.iter().find_map(|binding| {
                 matches!(
                     binding.content_ref.source,
-                    super::content::ContentSource::CanonicalMessageBlock {
-                        component: super::content::CanonicalContentComponent::MessageMetadata,
+                    crate::observation::content::ContentSource::CanonicalMessageBlock {
+                        component:
+                            crate::observation::content::CanonicalContentComponent::MessageMetadata,
                         ..
                     }
                 )
-                .then(|| binding.content_ref.clone())
+                .then(|| binding.content_ref.as_ref().clone())
             })
         });
     let arguments = header.arguments_json.clone().unwrap_or_default();
@@ -134,12 +135,13 @@ pub(crate) fn foreground(
         metadata_ref: association.call.content.iter().find_map(|binding| {
             matches!(
                 binding.content_ref.source,
-                super::content::ContentSource::CanonicalMessageBlock {
-                    component: super::content::CanonicalContentComponent::BlockMetadata,
+                crate::observation::content::ContentSource::CanonicalMessageBlock {
+                    component:
+                        crate::observation::content::CanonicalContentComponent::BlockMetadata,
                     ..
                 }
             )
-            .then(|| binding.content_ref.clone())
+            .then(|| binding.content_ref.as_ref().clone())
         }),
         assembly_complete: true,
         committed_result_deferred: header
@@ -163,12 +165,13 @@ pub(crate) fn foreground(
             result.content.iter().find_map(|binding| {
                 matches!(
                     binding.content_ref.source,
-                    super::content::ContentSource::CanonicalMessageBlock {
-                        component: super::content::CanonicalContentComponent::MessageMetadata,
+                    crate::observation::content::ContentSource::CanonicalMessageBlock {
+                        component:
+                            crate::observation::content::CanonicalContentComponent::MessageMetadata,
                         ..
                     }
                 )
-                .then(|| binding.content_ref.clone())
+                .then(|| binding.content_ref.as_ref().clone())
             })
         });
     }
@@ -243,16 +246,18 @@ pub(crate) fn content(
         .content
         .iter()
         .find(|binding| {
-            binding.content_ref.representation == super::content::ContentRepresentation::RawJsonUtf8
+            binding.content_ref.representation
+                == crate::observation::content::ContentRepresentation::RawJsonUtf8
         })
         .or_else(|| {
             header.association.call.content.iter().find(|binding| {
                 binding.content_ref.representation
-                    == super::content::ContentRepresentation::CanonicalJsonV1
+                    == crate::observation::content::ContentRepresentation::CanonicalJsonV1
                     && matches!(
                         binding.content_ref.source,
-                        super::content::ContentSource::CanonicalMessageBlock {
-                            component: super::content::CanonicalContentComponent::Payload,
+                        crate::observation::content::ContentSource::CanonicalMessageBlock {
+                            component:
+                                crate::observation::content::CanonicalContentComponent::Payload,
                             ..
                         }
                     )
@@ -268,7 +273,7 @@ pub(crate) fn content(
         result.push(super::cut::ContentBinding {
             path: vec!["committed_result".into()],
             source_path: Some(vec!["result".into()]),
-            content_ref: reference.clone(),
+            content_ref: reference.clone().into(),
             deferred: view.committed_result_deferred,
         });
     }
@@ -276,8 +281,8 @@ pub(crate) fn content(
         for binding in source.content.iter().filter(|binding| {
             matches!(
                 binding.content_ref.source,
-                super::content::ContentSource::CanonicalMessageBlock {
-                    component: super::content::CanonicalContentComponent::Payload,
+                crate::observation::content::ContentSource::CanonicalMessageBlock {
+                    component: crate::observation::content::CanonicalContentComponent::Payload,
                     ..
                 }
             )
@@ -486,7 +491,8 @@ pub(crate) fn tool_witness_result(
             .get("result")
             .and_then(|result| result.get("status"))
             .and_then(|status| {
-                super::structural_json::decode::<ToolExecutionStatus>(status.clone()).ok()
+                crate::observation::structural_json::decode::<ToolExecutionStatus>(status.clone())
+                    .ok()
             })?
     };
     let result_value = value.get("result");
@@ -507,11 +513,11 @@ pub(crate) fn tool_witness_result(
         deliveries: Vec::new(),
         truncation: result_value
             .and_then(|result| result.get("truncation"))
-            .and_then(|value| super::structural_json::decode(value.clone()).ok()),
+            .and_then(|value| crate::observation::structural_json::decode(value.clone()).ok()),
         workflow: None,
         managed_output: result_value
             .and_then(|result| result.get("managed_output"))
-            .and_then(|value| super::structural_json::decode(value.clone()).ok()),
+            .and_then(|value| crate::observation::structural_json::decode(value.clone()).ok()),
     })
 }
 

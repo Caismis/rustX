@@ -1,29 +1,78 @@
 //! Finite process facts over the original canonical/Journal membership.
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
-fn encode(value: &impl serde::Serialize) -> Result<Vec<u8>, ConversationStoreError> {
-    crate::observation::bounded::bounded_bytes(
-        value,
-        crate::durable::observation::HEADER_ENCODED_MAX,
-    )
-    .ok_or_else(|| storage("native member header exceeds bound"))
+mod storage;
+pub(super) type Captured =
+    super::append_facts::Captured<crate::durable::observation::AttemptMemberCounts>;
+#[cfg(test)]
+thread_local! {
+    static READ_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+#[cfg(test)]
+pub(super) fn take_read_work() -> (usize, usize) {
+    READ_WORK.with(|work| work.replace((0, 0)))
+}
+pub(super) fn encode(
+    value: &crate::durable::observation::AttemptMemberCounts,
+) -> Result<Vec<u8>, ConversationStoreError> {
+    storage::encode(value)
+}
+pub(super) fn decode(
+    bytes: &[u8],
+) -> Result<crate::durable::observation::AttemptMemberCounts, ConversationStoreError> {
+    #[cfg(test)]
+    READ_WORK.with(|work| {
+        let (decoded, reused) = work.get();
+        work.set((decoded + 1, reused));
+    });
+    storage::decode(bytes)
 }
 pub(super) fn members(
     connection: &Connection,
     attempt: &crate::runtime::identity::AttemptId,
     through: u64,
 ) -> Result<crate::durable::observation::AttemptMemberCounts, ConversationStoreError> {
-    let missing: bool = connection.query_row(
+    members_prepared(connection, attempt, through, None)
+}
+pub(super) fn members_prepared(
+    connection: &Connection,
+    attempt: &crate::runtime::identity::AttemptId,
+    through: u64,
+    previous: Option<&Captured>,
+) -> Result<crate::durable::observation::AttemptMemberCounts, ConversationStoreError> {
+    let missing: bool = connection.query_row_cached(
         "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_idx WHERE attempt_id=?1 AND sequence<=?2 AND observation_members_required=1 AND observation_members IS NULL)",
         params![attempt.as_str(), through], |row| row.get(0),
-    ).map_err(|error| storage(error.to_string()))?;
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if missing {
         return Err(storage("native member header unavailable"));
     }
-    let bytes:Option<Vec<u8>>=connection.query_row("SELECT observation_members FROM events INDEXED BY events_observation_members_idx WHERE observation_members IS NOT NULL AND attempt_id=?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![attempt.as_str(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let bytes: Option<Vec<u8>> = connection
+        .query_row_cached(
+            super::event_heads::MEMBERS,
+            params![attempt.as_str(), through],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     bytes.map_or_else(
         || Ok(crate::durable::observation::AttemptMemberCounts::default()),
-        |bytes| serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string())),
+        |bytes| {
+            // The current hole check and head selection remain authoritative.
+            // An earlier append's value proves this exact cell only while its
+            // bytes still match, including after intervening native writes.
+            if let Some(value) = previous.and_then(|capture| capture.reuse(&bytes)) {
+                #[cfg(test)]
+                READ_WORK.with(|work| {
+                    let (decoded, reused) = work.get();
+                    work.set((decoded, reused + 1));
+                });
+                Ok(value)
+            } else {
+                decode(&bytes)
+            }
+        },
     )
 }
 pub(super) fn requires_members(event: &RuntimeEventEnvelope) -> bool {
@@ -51,10 +100,10 @@ fn process_event(
     let mut owner = if let Some(previous) = previous {
         previous
     } else {
-        let started: Option<(u64, String)> = connection.query_row(
+        let started: Option<(u64, String)> = connection.query_row_cached(
             "SELECT sequence,event_timestamp FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id=?1 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",
             params![attempt.as_str(), event.sequence], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional().map_err(|error|storage(error.to_string()))?;
+        ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         crate::durable::observation::MemberProcessHeader {
             conversation_id: event.conversation_id.clone(),
             attempt_id: (attempt.as_str().len() <= 512).then(|| attempt.clone()),
@@ -112,12 +161,17 @@ fn member_identity(
         CanonicalContentComponent, CanonicalContentLocator, ContentRepresentation, ContentSource,
     };
     let position: u64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT position FROM message_ledger WHERE message_id=?1",
             [message.as_str()],
             |row| row.get(0),
         )
-        .map_err(|_| storage("native member canonical identity unavailable"))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                "native member canonical identity unavailable",
+            )
+        })?;
     let locator = CanonicalContentLocator::ByLedgerPosition { position };
     let inline = message.as_str().len() <= 256;
     counts.final_message_id = inline.then(|| message.clone());
@@ -131,7 +185,7 @@ fn member_identity(
             block_index: crate::message::types::ContentBlockIndex::new(0),
         };
         Some(
-            super::content::descriptor(
+            crate::durable::sqlite::content::descriptor(
                 connection,
                 conversation,
                 &source,
@@ -143,17 +197,26 @@ fn member_identity(
     counts.final_message_locator = Some(locator);
     Ok(())
 }
-pub(super) fn member_event(
+pub(super) fn prepare_event(
     connection: &Connection,
     event: &RuntimeEventEnvelope,
-) -> Result<(), ConversationStoreError> {
+    previous: Option<&Captured>,
+) -> Result<
+    Option<super::append_facts::Captured<crate::durable::observation::AttemptMemberCounts>>,
+    ConversationStoreError,
+> {
     if !requires_members(event) {
-        return Ok(());
+        return Ok(None);
     }
     let Some(attempt) = &event.attempt_id else {
-        return Ok(());
+        return Ok(None);
     };
-    let mut counts = members(connection, attempt, event.sequence.saturating_sub(1))?;
+    let mut counts = members_prepared(
+        connection,
+        attempt,
+        event.sequence.saturating_sub(1),
+        previous,
+    )?;
     counts.process = Some(process_event(connection, event, counts.process.take())?);
     if let RuntimeEvent::AttemptCompleted { finish_reason, .. } = &event.event {
         counts.completed_response = counts.final_message_locator.is_some()
@@ -161,22 +224,16 @@ pub(super) fn member_event(
                 finish_reason,
                 crate::model::ModelFinishReason::Stop | crate::model::ModelFinishReason::Refusal
             );
-        return connection
-            .execute(
-                "UPDATE events SET observation_members=?2,observation_member_anchor=?3 WHERE sequence=?1",
-                params![event.sequence, encode(&counts)?, counts.process.as_ref().map(|process| process.owner_anchor)],
-            )
-            .map(|_| ())
-            .map_err(|error| storage(error.to_string()));
+        return Ok(Some(super::append_facts::Captured {
+            bytes: encode(&counts)?,
+            value: counts,
+        }));
     }
     let RuntimeEvent::AssistantMessageCommitted { message_id } = &event.event else {
-        return connection
-            .execute(
-                "UPDATE events SET observation_members=?2,observation_member_anchor=?3 WHERE sequence=?1",
-                params![event.sequence, encode(&counts)?, counts.process.as_ref().map(|process| process.owner_anchor)],
-            )
-            .map(|_| ())
-            .map_err(|error| storage(error.to_string()));
+        return Ok(Some(super::append_facts::Captured {
+            bytes: encode(&counts)?,
+            value: counts,
+        }));
     };
     counts.completed_response = false;
     let header = super::observation::message(connection, message_id)?
@@ -189,7 +246,7 @@ pub(super) fn member_event(
         .tool_call_count
         .checked_add(header.tool_call_count)
         .ok_or_else(|| storage("native process Tool count exhausted"))?;
-    let cursor:Option<u64>=connection.query_row("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let cursor:Option<u64>=connection.query_row_cached("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if let Some(cursor) = cursor {
         counts.first_cursor = Some(
             counts
@@ -200,13 +257,10 @@ pub(super) fn member_event(
         );
     }
     member_identity(connection, &event.conversation_id, &mut counts, message_id)?;
-    connection
-        .execute(
-            "UPDATE events SET observation_members=?2,observation_member_anchor=?3 WHERE sequence=?1",
-            params![event.sequence, encode(&counts)?, counts.process.as_ref().map(|process| process.owner_anchor)],
-        )
-        .map_err(|error| storage(error.to_string()))?;
-    Ok(())
+    Ok(Some(super::append_facts::Captured {
+        bytes: encode(&counts)?,
+        value: counts,
+    }))
 }
 pub(super) fn seed_members(
     connection: &Connection,
@@ -248,7 +302,7 @@ pub(super) fn seed_members(
                 .tool_call_count
                 .checked_add(header.tool_call_count)
                 .ok_or_else(|| storage("native member Tool count exhausted"))?;
-            let cursor:Option<u64>=connection.query_row("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+            let cursor:Option<u64>=connection.query_row_cached("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             if let Some(cursor) = cursor {
                 counts.first_cursor =
                     Some(counts.first_cursor.map_or(
@@ -270,7 +324,7 @@ pub(super) fn seed_members(
                     [],
                     |row| row.get(0),
                 )
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
             member_identity(
                 connection,
                 &crate::runtime::identity::ConversationId::new(conversation),
@@ -284,7 +338,7 @@ pub(super) fn seed_members(
                 "UPDATE inherited_turn_provenance SET observation_members=?2 WHERE ordinal=?1",
                 params![ordinal, encode(&counts)?],
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     }
     Ok(())
 }
@@ -293,14 +347,12 @@ pub(super) fn message_members(
     message_id: &crate::runtime::identity::MessageId,
     through: u64,
 ) -> Result<Option<crate::durable::observation::AttemptMemberCounts>, ConversationStoreError> {
-    let bytes:Option<Option<Vec<u8>>>=connection.query_row("SELECT p.observation_members FROM inherited_message_membership m JOIN inherited_turn_provenance p ON p.ordinal=m.turn_ordinal WHERE m.assistant_message_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let bytes:Option<Option<Vec<u8>>>=connection.query_row("SELECT p.observation_members FROM inherited_message_membership m JOIN inherited_turn_provenance p ON p.ordinal=m.turn_ordinal WHERE m.assistant_message_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if let Some(bytes) = bytes {
         let bytes = bytes.ok_or_else(|| storage("inherited member header unavailable"))?;
-        return serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|error| storage(error.to_string()));
+        return decode(&bytes).map(Some);
     }
-    let attempt:Option<Option<String>>=connection.query_row("SELECT attempt_id FROM events INDEXED BY events_message_id_kind_idx WHERE json_extract(event_json,'$.event.message_id')=?1 AND json_extract(event_json,'$.event.type')='assistant_message_committed' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![message_id.as_str(),through],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let attempt:Option<Option<String>>=connection.query_row("SELECT attempt_id FROM events INDEXED BY events_message_id_kind_idx WHERE json_extract(event_json,'$.event.message_id')=?1 AND json_extract(event_json,'$.event.type')='assistant_message_committed' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![message_id.as_str(),through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     attempt
         .flatten()
         .map(|attempt| {
@@ -324,7 +376,7 @@ pub(super) fn at_sequence(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .flatten();
     decode_members(bytes)
 }
@@ -337,7 +389,7 @@ fn inherited_terminal_at(
     let reference: Option<Option<String>> = connection.query_row(
         "SELECT CASE WHEN typeof(reference_id)='text' AND length(CAST(reference_id AS BLOB))<=16 THEN reference_id END FROM transcript_order WHERE position=?1 AND position<=?2 AND reference_kind='inherited_turn'",
         params![transcript, cut.inherited_through.get()], |row| row.get(0),
-    ).optional().map_err(|error| storage(error.to_string()))?;
+    ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let Some(reference) = reference else {
         return Ok(None);
     };
@@ -373,12 +425,12 @@ pub(super) fn transcript_process(
     let position: Option<u64> = connection.query_row(
         "SELECT position FROM message_ledger INDEXED BY message_ledger_native_transcript_idx WHERE native_transcript=?1 AND native_transcript IS NOT NULL AND position<=?2",
         params![transcript, cut.ledger_through], |row|row.get(0),
-    ).optional().map_err(|error|storage(error.to_string()))?;
+    ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let Some(mut position) = position else {
         if let Some(process) = inherited_terminal_at(connection, cut, transcript)? {
             return Ok(Some(process));
         }
-        let sequence:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_transcript_idx WHERE observation_transcript=?1 AND observation_transcript IS NOT NULL AND sequence<=?2 AND observation_kind IN ('attempt_failed','attempt_cancelled','attempt_timed_out','attempt_limit_exceeded')",params![transcript,cut.read.journal],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        let sequence:Option<u64>=connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_transcript_idx WHERE observation_transcript=?1 AND observation_transcript IS NOT NULL AND sequence<=?2 AND observation_kind IN ('attempt_failed','attempt_cancelled','attempt_timed_out','attempt_limit_exceeded')",params![transcript,cut.read.journal],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         return sequence
             .map(|sequence| {
                 process_view(
@@ -394,10 +446,10 @@ pub(super) fn transcript_process(
     let role: Option<String> = connection.query_row(
         "SELECT json_extract(header_json,'$.role') FROM observation_headers INDEXED BY observation_headers_ledger_idx WHERE ledger_position=?1 AND ledger_position IS NOT NULL AND transcript_position=?2 AND journal_position<=?3",
         params![position, transcript, cut.read.journal], |row|row.get(0),
-    ).optional().map_err(|error|storage(error.to_string()))?;
+    ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let role = role.ok_or_else(|| storage("native member message header unavailable"))?;
     if role == "tool" {
-        let owner:Option<u64>=connection.query_row("SELECT observation_ledger FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=?1 AND result_ledger_position IS NOT NULL",[position],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        let owner:Option<u64>=connection.query_row("SELECT observation_ledger FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=?1 AND result_ledger_position IS NOT NULL",[position],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let Some(owner) = owner else {
             return Err(storage("native Tool member owner unavailable"));
         };
@@ -408,7 +460,7 @@ pub(super) fn transcript_process(
     let inherited: Option<Option<u64>> = connection.query_row(
         "SELECT turn_ordinal FROM inherited_message_membership WHERE assistant_ledger_position=?1",
         [position], |row|row.get(0),
-    ).optional().map_err(|error|storage(error.to_string()))?;
+    ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if transcript <= cut.inherited_through.get() && inherited.is_none() {
         return Err(storage("inherited native member relationship absent"));
     }
@@ -426,18 +478,18 @@ pub(super) fn transcript_process(
                 [ordinal],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         decode_members(bytes)?
     } else {
-        let missing: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_observation_member_holes_sequence_idx WHERE observation_members_required=1 AND observation_members IS NULL AND sequence<=?1)", [cut.read.journal], |row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+        let missing: bool = connection.query_row_cached("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_owner_holes_idx WHERE observation_owner_holes>0 AND observation_owner_holes IN (4,5,6,7) AND sequence<=?1)", [cut.read.journal], |row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if missing {
             return Err(storage("native member header unavailable"));
         }
-        let anchor: Option<Option<u64>> = connection.query_row("SELECT observation_member_anchor FROM events INDEXED BY events_observation_assistant_ledger_idx WHERE observation_assistant_ledger=?1 AND observation_assistant_ledger IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1", params![position,cut.read.journal], |row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        let anchor: Option<Option<u64>> = connection.query_row("SELECT observation_member_anchor FROM events INDEXED BY events_observation_assistant_ledger_idx WHERE observation_assistant_ledger=?1 AND observation_assistant_ledger IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1", params![position,cut.read.journal], |row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let Some(anchor) = anchor.flatten() else {
             return Ok(None);
         };
-        let bytes: Option<Vec<u8>> = connection.query_row("SELECT observation_members FROM events INDEXED BY events_observation_member_anchor_idx WHERE observation_member_anchor=?1 AND observation_members IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1", params![anchor,cut.read.journal], |row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        let bytes: Option<Vec<u8>> = connection.query_row("SELECT observation_members FROM events INDEXED BY events_observation_member_anchor_idx WHERE observation_member_anchor=?1 AND observation_members IS NOT NULL AND sequence<=?2 ORDER BY sequence DESC LIMIT 1", params![anchor,cut.read.journal], |row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         decode_members(bytes)?
     };
     process_view(connection, cut, counts, None)
@@ -446,7 +498,7 @@ fn decode_members(
     bytes: Option<Vec<u8>>,
 ) -> Result<crate::durable::observation::AttemptMemberCounts, ConversationStoreError> {
     let bytes = bytes.ok_or_else(|| storage("native member header unavailable"))?;
-    serde_json::from_slice(&bytes).map_err(|_| storage("native member header corrupt"))
+    decode(&bytes)
 }
 pub(super) fn process_view(
     connection: &Connection,
@@ -454,10 +506,50 @@ pub(super) fn process_view(
     counts: crate::durable::observation::AttemptMemberCounts,
     fallback: Option<crate::durable::TranscriptCursor>,
 ) -> Result<Option<crate::observation::turn::TurnProcessView>, ConversationStoreError> {
+    process_view_with_failure(cut, counts, fallback, |terminal| {
+        Ok(
+            super::observation_execution::summary_at_sequence(connection, terminal)?
+                .ok_or_else(|| storage("native member terminal header unavailable"))?
+                .failure,
+        )
+    })
+}
+
+/// Only the same event's pre-insert builder may supply these immutable facts.
+/// Historical member reads still resolve the terminal from its stored bytes.
+pub(super) fn pending_process_view(
+    cut: &crate::durable::observation::ObservationReadCut,
+    counts: crate::durable::observation::AttemptMemberCounts,
+    cursor: crate::durable::TranscriptCursor,
+    sequence: u64,
+    execution: Option<&super::observation_execution::Captured>,
+) -> Result<Option<crate::observation::turn::TurnProcessView>, ConversationStoreError> {
+    process_view_with_failure(cut, counts, Some(cursor), |terminal| {
+        if terminal != sequence {
+            return Err(storage("native member terminal header unavailable"));
+        }
+        Ok(execution
+            .ok_or_else(|| storage("native member terminal header unavailable"))?
+            .value
+            .failure
+            .clone())
+    })
+}
+
+fn process_view_with_failure(
+    cut: &crate::durable::observation::ObservationReadCut,
+    counts: crate::durable::observation::AttemptMemberCounts,
+    fallback: Option<crate::durable::TranscriptCursor>,
+    failure_at: impl FnOnce(
+        u64,
+    ) -> Result<
+        Option<crate::observation::failure::RuntimeClientAttemptFailure>,
+        ConversationStoreError,
+    >,
+) -> Result<Option<crate::observation::turn::TurnProcessView>, ConversationStoreError> {
     use crate::durable::reading::TurnProcessOutcome;
     let owner = counts
         .process
-        .as_ref()
         .ok_or_else(|| storage("native member owner header unavailable"))?;
     if owner.attempt_id.is_none() && owner.attempt_id_source.is_none() {
         return Err(storage("native member owner identity source unavailable"));
@@ -472,9 +564,7 @@ pub(super) fn process_view(
         (&owner.outcome, owner.native_terminal)
     {
         Some(
-            super::observation_execution::summary_at_sequence(connection, terminal)?
-                .ok_or_else(|| storage("native member terminal header unavailable"))?
-                .failure
+            failure_at(terminal)?
                 .ok_or_else(|| storage("native member failure header unavailable"))?,
         )
     } else {
@@ -482,10 +572,10 @@ pub(super) fn process_view(
     };
     let final_identity = counts.completed_response;
     Ok(Some(crate::observation::turn::TurnProcessView {
-        conversation_id: owner.conversation_id.clone(),
-        attempt_id: owner.attempt_id.clone(),
-        attempt_id_source: owner.attempt_id_source.clone(),
-        event_id: owner.event_id.clone(),
+        conversation_id: owner.conversation_id,
+        attempt_id: owner.attempt_id,
+        attempt_id_source: owner.attempt_id_source,
+        event_id: owner.event_id,
         control_cursor: cursor.into(),
         final_message_id: final_identity.then_some(counts.final_message_id).flatten(),
         final_message_locator: final_identity
@@ -503,7 +593,7 @@ pub(super) fn process_view(
         .map_err(|_| storage("native member count exceeds protocol"))?,
         tool_call_count: u32::try_from(counts.tool_call_count)
             .map_err(|_| storage("native Tool count exceeds protocol"))?,
-        outcome: owner.outcome.clone(),
+        outcome: owner.outcome,
         failure,
         started_at: owner.started_at,
         ended_at: owner.ended_at,
@@ -528,7 +618,7 @@ pub(super) fn inherited_process(
             [ordinal],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let counts = decode_members(bytes)?;
     let owner = counts
         .process

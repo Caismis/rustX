@@ -246,17 +246,19 @@ pub(crate) fn hidden_context_audit_fixture() -> HiddenContextAuditFixture {
         turn_id: snapshot.identity.turn.clone(),
         request_id: snapshot.request_id.clone(),
     };
-    store.open_publication_stream(&start).unwrap();
     store
-        .stage_publication_frames(&[PublicationFrame {
-            stream_id: start.stream_id.clone(),
-            message_id: start.message_id,
-            sequence: 0,
-            payload: PublicationPayload::TextSuffix {
-                block_index: ContentBlockIndex::new(0),
-                suffix: "original audit prefix".into(),
-            },
-        }])
+        .stage_publication_frames(
+            &start,
+            &[PublicationFrame {
+                stream_id: start.stream_id.clone(),
+                message_id: start.message_id.clone(),
+                sequence: 0,
+                payload: PublicationPayload::TextSuffix {
+                    block_index: ContentBlockIndex::new(0),
+                    suffix: "original audit prefix".into(),
+                },
+            }],
+        )
         .unwrap();
     let before = store.observation_read_cut().unwrap();
     let context = store
@@ -266,9 +268,7 @@ pub(crate) fn hidden_context_audit_fixture() -> HiddenContextAuditFixture {
         ))
         .unwrap();
     assert!(context.transcript_cursor.is_none());
-    let (_, audit) = store
-        .terminalize_publication_audit(&start.stream_id, time)
-        .unwrap();
+    let (_, audit) = store.terminalize_publication_audit(&start, time).unwrap();
     assert_eq!(audit.read_cut.ledger_through, context.ledger_position);
     HiddenContextAuditFixture {
         store,

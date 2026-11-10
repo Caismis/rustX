@@ -1,0 +1,455 @@
+{
+  "identity": {
+    "rust_sha256": "8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233",
+    "production_revision": "e8d6380fa6ea0724b752970473d093c629cb8a63",
+    "baseline_head_same_production": true,
+    "plan_inputs_match_current_files": true,
+    "pi_revision": "90d863f7c1183b965f099855715d6e88c7b8a52c",
+    "pi_tracked_changes": [],
+    "pi_status_porcelain": "?? packages/ai/tsconfig.benchmark.json",
+    "identity_scope": "Current binary rehash and stored build identity; profile per-product manifests. WAL has only post-run global identity, not per-product binary/driver freezes."
+  },
+  "products": [
+    {
+      "directory": "profile-d-live-large-control",
+      "accepted": true,
+      "requests": 96,
+      "measured_turns": 32,
+      "observer_mode": "live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_shutdown",
+        "after_driver_drop",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    },
+    {
+      "directory": "profile-d-live-large-cpu",
+      "accepted": true,
+      "requests": 96,
+      "measured_turns": 32,
+      "observer_mode": "live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_shutdown",
+        "after_driver_drop",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    },
+    {
+      "directory": "profile-d-live-small-control",
+      "accepted": true,
+      "requests": 40,
+      "measured_turns": 32,
+      "observer_mode": "live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_shutdown",
+        "after_driver_drop",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    },
+    {
+      "directory": "profile-d-live-small-cpu",
+      "accepted": true,
+      "requests": 40,
+      "measured_turns": 32,
+      "observer_mode": "live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_shutdown",
+        "after_driver_drop",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    },
+    {
+      "directory": "profile-d-no-live-large-control",
+      "accepted": true,
+      "requests": 96,
+      "measured_turns": 32,
+      "observer_mode": "no-live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_shutdown",
+        "after_driver_drop",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    },
+    {
+      "directory": "profile-d-no-live-large-cpu",
+      "accepted": true,
+      "requests": 96,
+      "measured_turns": 32,
+      "observer_mode": "no-live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_shutdown",
+        "after_driver_drop",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    },
+    {
+      "directory": "profile-d-no-live-small-control",
+      "accepted": true,
+      "requests": 40,
+      "measured_turns": 32,
+      "observer_mode": "no-live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_shutdown",
+        "after_driver_drop",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    },
+    {
+      "directory": "profile-d-no-live-small-cpu",
+      "accepted": true,
+      "requests": 40,
+      "measured_turns": 32,
+      "observer_mode": "no-live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_shutdown",
+        "after_driver_drop",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    },
+    {
+      "directory": "wal-d-short-small-rust",
+      "accepted": true,
+      "requests": 40,
+      "measured_turns": 32,
+      "observer_mode": "no-live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_shutdown",
+        "after_driver_drop",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    },
+    {
+      "directory": "wal-d-short-small-pi",
+      "accepted": true,
+      "requests": 40,
+      "measured_turns": 32,
+      "observer_mode": "no-live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    },
+    {
+      "directory": "wal-d-short-large-rust",
+      "accepted": true,
+      "requests": 96,
+      "measured_turns": 32,
+      "observer_mode": "no-live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_shutdown",
+        "after_driver_drop",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    },
+    {
+      "directory": "wal-d-short-large-pi",
+      "accepted": true,
+      "requests": 96,
+      "measured_turns": 32,
+      "observer_mode": "no-live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    }
+  ],
+  "cpu": [
+    {
+      "directory": "profile-d-live-large-cpu",
+      "denominator_samples": 503,
+      "requested_interval_us": 4000,
+      "raw_records": 498,
+      "raw_sha256": "6618469a580c70e8499b93d4643c85b9c4650fd2ed5742c07b78c04d09782e0f",
+      "selected_inclusive_samples": {
+        "PublicationDraft>::encode": 103,
+        "CheckpointSeed>::checkpoint_unfitted": 60,
+        "index_request_read_layouts": 69,
+        "sqlite3LockAndPrepare": 104
+      },
+      "phase": "before_measured_turns -> after_turns",
+      "includes_driver_and_profiler_boundary_work": true
+    },
+    {
+      "directory": "profile-d-live-small-cpu",
+      "denominator_samples": 374,
+      "requested_interval_us": 4000,
+      "raw_records": 373,
+      "raw_sha256": "3e0d7770b2c92c9e5965020eec3b42dacb127a006157a9c9e89a9a0874b0b8ca",
+      "selected_inclusive_samples": {
+        "PublicationDraft>::encode": 80,
+        "CheckpointSeed>::checkpoint_unfitted": 44,
+        "index_request_read_layouts": 41,
+        "sqlite3LockAndPrepare": 77
+      },
+      "phase": "before_measured_turns -> after_turns",
+      "includes_driver_and_profiler_boundary_work": true
+    },
+    {
+      "directory": "profile-d-no-live-large-cpu",
+      "denominator_samples": 269,
+      "requested_interval_us": 4000,
+      "raw_records": 262,
+      "raw_sha256": "1ee14cb20111f06386075613c3ab41add61dd51dc3211608d2006974b632cd5e",
+      "selected_inclusive_samples": {
+        "PublicationDraft>::encode": 53,
+        "CheckpointSeed>::checkpoint_unfitted": 29,
+        "index_request_read_layouts": 53,
+        "sqlite3LockAndPrepare": 43
+      },
+      "phase": "before_measured_turns -> after_turns",
+      "includes_driver_and_profiler_boundary_work": true
+    },
+    {
+      "directory": "profile-d-no-live-small-cpu",
+      "denominator_samples": 253,
+      "requested_interval_us": 4000,
+      "raw_records": 241,
+      "raw_sha256": "05d96018d4bfddd3ff4ff7112973bf6de61fccb76abf9a36d37f40ab2536d498",
+      "selected_inclusive_samples": {
+        "PublicationDraft>::encode": 44,
+        "CheckpointSeed>::checkpoint_unfitted": 22,
+        "index_request_read_layouts": 47,
+        "sqlite3LockAndPrepare": 39
+      },
+      "phase": "before_measured_turns -> after_turns",
+      "includes_driver_and_profiler_boundary_work": true
+    }
+  ],
+  "wal": [
+    {
+      "case_engine": "short-small-rust",
+      "write_commit_markers": 512,
+      "measured_turns": 32,
+      "commit_markers_per_turn": 16.0,
+      "frame_headers": 10722,
+      "frame_body_writes": 10722,
+      "page_size": 4096,
+      "frame_bytes": 44174640,
+      "all_successful_write_sizes": {
+        "24": 10722,
+        "4096": 10722,
+        "32": 10
+      },
+      "wal_header_writes": 10,
+      "steady_wal_pwrite_bytes": 44174960,
+      "unmapped_owner_frames": 2,
+      "mixed_owner_frames": 0,
+      "all_producer_wal_summary_fields_equal": true,
+      "raw_sha256": "05799ae51edaa5e4216bef68a5805714a71f580dee9b763714984c00dd0328a8"
+    },
+    {
+      "case_engine": "short-small-pi",
+      "write_commit_markers": 160,
+      "measured_turns": 32,
+      "commit_markers_per_turn": 5.0,
+      "frame_headers": 1683,
+      "frame_body_writes": 1683,
+      "page_size": 4096,
+      "frame_bytes": 6933960,
+      "all_successful_write_sizes": {
+        "24": 1683,
+        "4096": 1683,
+        "32": 2
+      },
+      "wal_header_writes": 2,
+      "steady_wal_pwrite_bytes": 6934024,
+      "unmapped_owner_frames": 0,
+      "mixed_owner_frames": 0,
+      "all_producer_wal_summary_fields_equal": true,
+      "raw_sha256": "9390815402458d95c44e017b8b5aa7507141390457f2650fd943f570f389149d"
+    },
+    {
+      "case_engine": "short-large-rust",
+      "write_commit_markers": 512,
+      "measured_turns": 32,
+      "commit_markers_per_turn": 16.0,
+      "frame_headers": 11748,
+      "frame_body_writes": 11748,
+      "page_size": 4096,
+      "frame_bytes": 48401760,
+      "all_successful_write_sizes": {
+        "24": 11748,
+        "4096": 11748,
+        "32": 12
+      },
+      "wal_header_writes": 12,
+      "steady_wal_pwrite_bytes": 48402144,
+      "unmapped_owner_frames": 1,
+      "mixed_owner_frames": 0,
+      "all_producer_wal_summary_fields_equal": true,
+      "raw_sha256": "f7637540e63e49d2921583a8cc0189d99845ce54f817971ec1b89597277d9b36"
+    },
+    {
+      "case_engine": "short-large-pi",
+      "write_commit_markers": 160,
+      "measured_turns": 32,
+      "commit_markers_per_turn": 5.0,
+      "frame_headers": 1688,
+      "frame_body_writes": 1688,
+      "page_size": 4096,
+      "frame_bytes": 6954560,
+      "all_successful_write_sizes": {
+        "24": 1688,
+        "4096": 1688,
+        "32": 2
+      },
+      "wal_header_writes": 2,
+      "steady_wal_pwrite_bytes": 6954624,
+      "unmapped_owner_frames": 0,
+      "mixed_owner_frames": 0,
+      "all_producer_wal_summary_fields_equal": true,
+      "raw_sha256": "3cddafa282ec766f5b37879d241c71760a5fb95ac66e9eeafe40278e4211b6c8"
+    }
+  ],
+  "comparisons": [
+    {
+      "case": "short-small",
+      "checked": 40,
+      "core_all_equal": true,
+      "full_request_all_equal": false
+    },
+    {
+      "case": "short-large",
+      "checked": 96,
+      "core_all_equal": true,
+      "full_request_all_equal": false
+    }
+  ],
+  "failed_attempt_retained": {
+    "directory": "wal-d-short-small-pi-initial-failed",
+    "accepted": false,
+    "cause": "ERR_MODULE_NOT_FOUND: relative pi-observer-fixture.mjs after adapter relocation",
+    "raw_files": [
+      "calls.strace",
+      "phases.json",
+      "sample.log",
+      "sample.process.json",
+      "sample.provider.log"
+    ]
+  },
+  "counts": {
+    "profiles_and_controls_accepted": 8,
+    "wal_products_accepted": 4,
+    "cross_engine_comparisons": 2,
+    "failed_wal_attempts_retained": 1
+  },
+  "semantic_scope": "Existing oracle records, captured request equality, phase and persisted/reopened evidence checked. This script does not reimplement every native oracle or test power-loss durability."
+}

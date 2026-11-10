@@ -11,6 +11,7 @@
 //! MCP tools, Issue #174). No external SDK type appears here.
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::runtime::identity::{McpServerId, ToolCallId, ToolId};
 use crate::runtime::types::CancellationReason;
@@ -42,7 +43,7 @@ pub struct ToolDefinition {
     pub description: String,
     /// The original canonical JSON Schema document describing the accepted
     /// tool-call arguments. Tool-owned and never mutated by the runtime.
-    pub input_schema: serde_json::Value,
+    pub input_schema: Arc<serde_json::Value>,
     /// Who owns an invocation of this tool: the attempt (foreground) or the
     /// conversation (background). Required: a missing policy is never
     /// silently interpreted.
@@ -406,6 +407,14 @@ impl ToolResultProjection {
         self.parts.join("\n")
     }
 
+    fn into_text(mut self) -> String {
+        if self.parts.len() == 1 {
+            self.parts.pop().unwrap_or_default()
+        } else {
+            self.as_text()
+        }
+    }
+
     /// Returns the exact byte length of [`Self::as_text`].
     #[must_use]
     pub fn byte_len(&self) -> usize {
@@ -449,22 +458,16 @@ pub(crate) enum ModelToolResultContent {
 }
 impl ToolExecutionResult {
     pub(crate) fn model_visible_content(&self) -> Result<ModelToolResultContent, &'static str> {
-        let parts = self.image_projection()?;
-        if parts
+        if self
+            .content
             .iter()
-            .any(|p| matches!(p, ModelToolResultPart::Image(_)))
+            .any(|block| matches!(block, ToolResultContent::Image(_)))
         {
-            Ok(ModelToolResultContent::Parts(parts))
+            self.image_projection().map(ModelToolResultContent::Parts)
         } else {
+            self.reject_file_projection()?;
             Ok(ModelToolResultContent::Text(
-                parts
-                    .into_iter()
-                    .filter_map(|p| match p {
-                        ModelToolResultPart::Text(text) => Some(text),
-                        ModelToolResultPart::Image(_) => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
+                self.model_facing_projection().into_text(),
             ))
         }
     }
@@ -474,13 +477,7 @@ impl ToolExecutionResult {
     /// Project supported input content without encoding provider wire structures.
     /// Status/continuation text keeps its reserved budget; images retain position.
     pub(crate) fn image_projection(&self) -> Result<Vec<ModelToolResultPart>, &'static str> {
-        if self
-            .content
-            .iter()
-            .any(|block| matches!(block, ToolResultContent::File(_)))
-        {
-            return Err("file tool results are unsupported");
-        }
+        self.reject_file_projection()?;
         if !self
             .content
             .iter()
@@ -488,9 +485,8 @@ impl ToolExecutionResult {
         {
             return Ok(self
                 .model_facing_projection()
-                .parts()
-                .iter()
-                .cloned()
+                .parts
+                .into_iter()
                 .map(ModelToolResultPart::Text)
                 .collect());
         }
@@ -506,34 +502,38 @@ impl ToolExecutionResult {
         for block in &self.content {
             if let ToolResultContent::Image(image) = block {
                 parts.push(ModelToolResultPart::Image(image.clone()));
-            } else {
-                let mut text = Self::project_result(
-                    std::slice::from_ref(block),
-                    &ToolExecutionStatus::Success,
-                    None,
-                    &[],
-                )
-                .as_text();
-                let mut end = remaining.min(text.len());
-                while !text.is_char_boundary(end) {
-                    end -= 1;
-                }
-                text.truncate(end);
-                remaining -= end;
+            } else if remaining != 0 {
+                // The media path historically caps the single block first,
+                // then takes its remaining prefix. Preserve any marker that
+                // falls within that prefix.
+                let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+                let block = std::slice::from_ref(block);
+                let text = if remaining <= bound - CONTENT_TRUNCATION_MARKER.len() - 3 {
+                    render_content_prefix(block, remaining).finish("")
+                } else {
+                    let mut text = render_tool_owned_content(block, bound);
+                    text.truncate(text.floor_char_boundary(remaining.min(text.len())));
+                    text
+                };
+                remaining -= text.len();
                 if !text.is_empty() {
                     parts.push(ModelToolResultPart::Text(text));
                 }
             }
         }
-        parts.extend(
-            feedback
-                .parts()
-                .iter()
-                .filter(|text| !text.is_empty())
-                .cloned()
-                .map(ModelToolResultPart::Text),
-        );
+        parts.extend(feedback.parts.into_iter().map(ModelToolResultPart::Text));
         Ok(parts)
+    }
+
+    fn reject_file_projection(&self) -> Result<(), &'static str> {
+        if self
+            .content
+            .iter()
+            .any(|block| matches!(block, ToolResultContent::File(_)))
+        {
+            return Err("file tool results are unsupported");
+        }
+        Ok(())
     }
 }
 
@@ -572,24 +572,30 @@ impl ToolExecutionResult {
         managed_output: Option<&ManagedOutputContinuation>,
         artifacts: &[crate::message::content::FileReference],
     ) -> ToolResultProjection {
-        const CONTENT_TRUNCATION_MARKER: &str = "\n...[tool-owned result content truncated]";
         const STATUS_TRUNCATION_MARKER: &str = "\n...[tool status truncated]";
         let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
 
-        let status = status.feedback_text();
-        let (content, contains_non_text_content) = render_tool_owned_content(content);
+        let has_status = *status != ToolExecutionStatus::Success;
+        let contains_non_text_content = content.iter().any(|block| {
+            matches!(
+                block,
+                ToolResultContent::File(_) | ToolResultContent::Image(_)
+            )
+        });
         // Reserve the minimum truthful continuation before allowing a large
         // status diagnostic to consume the result budget. This makes the
         // locator/guidance structural rather than something that can be
         // accidentally truncated away by an error string.
-        let continuation_minimum = managed_output
-            .map(ManagedOutputContinuation::minimum_render)
-            .map_or(0, |text| text.len());
+        let continuation_minimum =
+            managed_output.map_or(0, ManagedOutputContinuation::minimum_render_len);
         let status_budget = bound.saturating_sub(
-            continuation_minimum + usize::from(status.is_some() && managed_output.is_some()),
+            continuation_minimum + usize::from(has_status && managed_output.is_some()),
         );
-        let status = status
-            .map(|text| bounded_projection_text(&text, status_budget, STATUS_TRUNCATION_MARKER));
+        let status = has_status.then(|| {
+            let mut text = ProjectionText::new(status_budget);
+            let _ = status.write_feedback(&mut text);
+            text.finish(STATUS_TRUNCATION_MARKER)
+        });
 
         // Continuation is allocated after status, before ordinary content.
         // Its structural minimum is guaranteed by the reservation above.
@@ -613,18 +619,13 @@ impl ToolExecutionResult {
             + usize::from(reserved > 0 && artifacts.is_some());
         let content_budget = bound.saturating_sub(
             reserved
-                + if content.is_empty() {
-                    0
-                } else {
-                    usize::from(status.is_some())
-                        + usize::from(continuation.is_some())
-                        + usize::from(artifacts.is_some())
-                },
+                + usize::from(status.is_some())
+                + usize::from(continuation.is_some())
+                + usize::from(artifacts.is_some()),
         );
-        let content = (!content.is_empty())
-            .then(|| bounded_projection_text(&content, content_budget, CONTENT_TRUNCATION_MARKER));
+        let content = render_tool_owned_content(content, content_budget);
 
-        let parts = [status, content, artifacts, continuation]
+        let parts = [status, Some(content), artifacts, continuation]
             .into_iter()
             .flatten()
             .filter(|part| !part.is_empty())
@@ -649,78 +650,160 @@ fn render_artifact_references(
     if artifacts.is_empty() || bound == 0 {
         return None;
     }
-    let mut text = String::new();
+    let mut text = ProjectionText::new(bound);
     for (index, reference) in artifacts.iter().enumerate() {
-        let value = serde_json::to_string(reference).expect("Artifact reference serializes");
-        let line = format!("Artifact reference: {value}");
-        let separator = usize::from(!text.is_empty());
-        let omission = if index + 1 < artifacts.len() {
-            1 + OMITTED.len()
-        } else {
-            0
-        };
-        if text.len() + separator + line.len() + omission > bound {
-            if separator > 0 {
-                text.push('\n');
+        if !text.bytes.is_empty() {
+            text.append("\n");
+        }
+        let before = text.bytes.len();
+        if index + 1 < artifacts.len() {
+            text.limit = bound.saturating_sub(1 + OMITTED.len());
+        }
+        if before <= text.limit {
+            text.append("Artifact reference: ");
+            if !text.overflowed
+                && let Err(error) = serde_json::to_writer(&mut text, reference)
+                && !text.overflowed
+            {
+                panic!("Artifact reference serializes: {error}");
             }
-            text.push_str(&crate::tools::limits::bound_utf8_text(
-                OMITTED.to_owned(),
-                bound.saturating_sub(text.len()),
-            ));
+        } else {
+            text.overflowed = true;
+        }
+        text.limit = bound;
+        if text.overflowed {
+            text.bytes.truncate(before);
+            text.overflowed = false;
+            text.append(utf8_prefix(OMITTED, bound - before));
             break;
         }
-        if separator > 0 {
-            text.push('\n');
-        }
-        text.push_str(&line);
     }
-    Some(text)
+    Some(text.finish(""))
 }
 
-fn render_tool_owned_content(content: &[ToolResultContent]) -> (String, bool) {
-    let mut rendered = String::new();
-    let mut contains_non_text_content = false;
+const CONTENT_TRUNCATION_MARKER: &str = "\n...[tool-owned result content truncated]";
+
+fn render_tool_owned_content(content: &[ToolResultContent], budget: usize) -> String {
+    render_content_prefix(content, budget).finish(CONTENT_TRUNCATION_MARKER)
+}
+
+fn render_content_prefix(content: &[ToolResultContent], budget: usize) -> ProjectionText {
+    let mut text = ProjectionText::new(budget);
     for (index, block) in content.iter().enumerate() {
-        let (text, non_text) = match block {
-            ToolResultContent::Text(text) => (text.text.clone(), false),
-            ToolResultContent::Json { value } => (
-                serde_json::to_string(value)
-                    .unwrap_or_else(|_| "<unserializable JSON result>".to_owned()),
-                false,
-            ),
-            ToolResultContent::File(reference) => (
-                format!(
-                    "[file artifact: {}]",
+        if index > 0 {
+            text.append("\n");
+        }
+        if text.overflowed {
+            break;
+        }
+        match block {
+            ToolResultContent::Text(value) => text.append(&value.text),
+            ToolResultContent::Json { value } => {
+                let before = text.bytes.len();
+                if serde_json::to_writer(&mut text, value).is_err() && !text.overflowed {
+                    text.bytes.truncate(before);
+                    text.append("<unserializable JSON result>");
+                }
+            }
+            ToolResultContent::File(reference) => {
+                text.append("[file artifact: ");
+                text.append(
                     reference
                         .name
-                        .clone()
-                        .unwrap_or_else(|| reference.artifact_id.as_str().to_owned())
-                ),
-                true,
-            ),
-            ToolResultContent::Image(_) => ("[image content]".to_owned(), true),
-        };
-        if index > 0 {
-            rendered.push('\n');
+                        .as_deref()
+                        .unwrap_or(reference.artifact_id.as_str()),
+                );
+                text.append("]");
+            }
+            ToolResultContent::Image(_) => text.append("[image content]"),
         }
-        rendered.push_str(&text);
-        contains_non_text_content |= non_text;
+        if text.overflowed {
+            break;
+        }
     }
-    (rendered, contains_non_text_content)
+    text
 }
 
-fn bounded_projection_text(text: &str, bound: usize, marker: &str) -> String {
-    if text.len() <= bound {
-        return text.to_owned();
+fn utf8_prefix(text: &str, bound: usize) -> &str {
+    &text[..text.floor_char_boundary(bound.min(text.len()))]
+}
+
+/// A bounded prefix of serialized or borrowed text. Overflow stops the
+/// serializer and keeps only the bytes needed for the final UTF-8 prefix.
+struct ProjectionText {
+    bytes: Vec<u8>,
+    limit: usize,
+    overflowed: bool,
+}
+
+impl ProjectionText {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+            overflowed: false,
+        }
     }
-    if bound > marker.len() {
-        let prefix = crate::tools::limits::bound_utf8_text(
-            text.to_owned(),
-            bound.saturating_sub(marker.len()),
-        );
-        return format!("{prefix}{marker}");
+
+    fn append(&mut self, text: &str) {
+        self.append_bytes(text.as_bytes());
     }
-    crate::tools::limits::bound_utf8_text(marker.to_owned(), bound)
+
+    fn append_bytes(&mut self, bytes: &[u8]) {
+        let take = bytes.len().min(self.limit.saturating_sub(self.bytes.len()));
+        let needed = self.bytes.len() + take;
+        if needed > self.bytes.capacity() {
+            let capacity = needed
+                .max(self.bytes.capacity().saturating_mul(2))
+                .min(self.limit);
+            self.bytes.reserve_exact(capacity - self.bytes.len());
+        }
+        self.bytes.extend_from_slice(&bytes[..take]);
+        self.overflowed |= take < bytes.len();
+    }
+
+    fn finish(mut self, marker: &str) -> String {
+        if self.overflowed {
+            if self.limit <= marker.len() {
+                return utf8_prefix(marker, self.limit).to_owned();
+            }
+            self.bytes.truncate(self.limit - marker.len());
+        }
+        let mut text = String::from_utf8(self.bytes).unwrap_or_else(|error| {
+            let valid = error.utf8_error().valid_up_to();
+            let mut bytes = error.into_bytes();
+            bytes.truncate(valid);
+            String::from_utf8(bytes).expect("valid UTF-8 prefix")
+        });
+        if self.overflowed {
+            text.push_str(marker);
+        }
+        text
+    }
+}
+
+impl std::io::Write for ProjectionText {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.append_bytes(bytes);
+        if self.overflowed {
+            return Err(std::io::ErrorKind::WriteZero.into());
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl std::fmt::Write for ProjectionText {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        self.append(text);
+        if self.overflowed {
+            return Err(std::fmt::Error);
+        }
+        Ok(())
+    }
 }
 
 /// Runtime-owned managed textual-output continuation metadata of one tool
@@ -856,8 +939,8 @@ impl ManagedOutputContinuation {
                     return crate::tools::limits::bound_utf8_text(structural, bound);
                 }
                 let locator_text = locator.to_string_lossy();
-                let structural_with_locator = format!("{partial_prefix}{locator_text}{guidance}");
-                if structural_with_locator.len() > bound {
+                let structural_len = partial_prefix.len() + locator_text.len() + guidance.len();
+                if structural_len > bound {
                     let locator_budget = bound
                         .saturating_sub(partial_prefix.len())
                         .saturating_sub(guidance.len());
@@ -867,15 +950,15 @@ impl ManagedOutputContinuation {
                         guidance
                     );
                 }
-                let remaining = bound.saturating_sub(structural_with_locator.len());
+                let structural_with_locator = format!("{partial_prefix}{locator_text}{guidance}");
+                let remaining = bound - structural_len;
                 if remaining < diagnostic_prefix.len() + 1 {
                     return structural_with_locator;
                 }
                 let diagnostic_budget = remaining
                     .saturating_sub(diagnostic_prefix.len())
                     .min(crate::tools::limits::MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES);
-                let bounded =
-                    crate::tools::limits::bound_utf8_text(diagnostic.clone(), diagnostic_budget);
+                let bounded = utf8_prefix(diagnostic, diagnostic_budget);
                 format!("{structural_with_locator}{diagnostic_prefix}{bounded}")
             }
             Self::Unavailable { diagnostic } => {
@@ -890,26 +973,19 @@ impl ManagedOutputContinuation {
                 let diagnostic_budget = remaining
                     .saturating_sub(diagnostic_prefix.len())
                     .min(crate::tools::limits::MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES);
-                let bounded =
-                    crate::tools::limits::bound_utf8_text(diagnostic.clone(), diagnostic_budget);
+                let bounded = utf8_prefix(diagnostic, diagnostic_budget);
                 format!("{prefix}{diagnostic_prefix}{bounded}")
             }
         }
     }
 
-    fn minimum_render(&self) -> String {
+    fn minimum_render_len(&self) -> usize {
         match self {
-            Self::Complete { locator } => format!(
-                "Complete output: {}\n{}",
-                locator.display(),
-                Self::COMPLETE_GUIDANCE
-            ),
-            Self::Partial { locator, .. } => format!(
-                "Partial output only: {}\n{}",
-                locator.display(),
-                Self::PARTIAL_GUIDANCE
-            ),
-            Self::Unavailable { .. } => "The output capture did not complete; the bounded result content is the only record and no complete output file is available.".to_owned(),
+            Self::Complete { locator } =>
+                "Complete output: ".len() + locator.to_string_lossy().len() + 1 + Self::COMPLETE_GUIDANCE.len(),
+            Self::Partial { locator, .. } =>
+                "Partial output only: ".len() + locator.to_string_lossy().len() + 1 + Self::PARTIAL_GUIDANCE.len(),
+            Self::Unavailable { .. } => "The output capture did not complete; the bounded result content is the only record and no complete output file is available.".len(),
         }
     }
 }
@@ -920,10 +996,7 @@ fn bound_locator(locator: &std::path::Path, bound: usize, marker: &str) -> Strin
         return locator.into_owned();
     }
     if bound > marker.len() {
-        let prefix = crate::tools::limits::bound_utf8_text(
-            locator.into_owned(),
-            bound.saturating_sub(marker.len()),
-        );
+        let prefix = utf8_prefix(&locator, bound - marker.len());
         format!("{prefix}{marker}")
     } else {
         crate::tools::limits::bound_utf8_text(marker.to_owned(), bound)
@@ -1028,19 +1101,21 @@ pub enum ToolExecutionStatus {
 }
 
 impl ToolExecutionStatus {
-    /// Renders the status detail consumed by the canonical result projection.
-    ///
-    /// Every terminal non-success status produces non-empty feedback: the
-    /// model never sees an empty tool result for a failed, denied, cancelled,
-    /// timed-out, or unknown-outcome execution. The typed status remains
-    /// authoritative; this helper does not enforce the model-result byte
-    /// budget and is never called by a provider adapter.
+    /// Renders status feedback for consumers that apply their own byte budget.
     #[must_use]
     pub(crate) fn feedback_text(&self) -> Option<String> {
+        (*self != Self::Success).then(|| {
+            let mut text = String::new();
+            self.write_feedback(&mut text).expect("writing to a String");
+            text
+        })
+    }
+
+    fn write_feedback(&self, output: &mut impl std::fmt::Write) -> std::fmt::Result {
         match self {
-            Self::Success => None,
-            Self::Failed { error } => Some(format!("Tool call failed: {error}")),
-            Self::Denied { reason } => Some(format!("Denied: {reason}")),
+            Self::Success => Ok(()),
+            Self::Failed { error } => write!(output, "Tool call failed: {error}"),
+            Self::Denied { reason } => write!(output, "Denied: {reason}"),
             Self::Cancelled { reason, phase } => {
                 let reason = match reason {
                     CancellationReason::UserRequested => "user_requested",
@@ -1058,17 +1133,14 @@ impl ToolExecutionStatus {
                         "Execution had already started and cancellation was confirmed before normal completion. Partial side effects may have occurred before the execution was stopped."
                     }
                 };
-                Some(format!(
-                    "Tool call was cancelled (reason: {reason}). {phase}"
-                ))
+                write!(output, "Tool call was cancelled (reason: {reason}). {phase}")
             }
-            Self::TimedOut => Some(
-                "Tool call timed out: the execution deadline expired and rustX established terminal settlement; the execution was stopped and proven unable to continue."
-                    .to_owned(),
+            Self::TimedOut => output.write_str(
+                "Tool call timed out: the execution deadline expired and rustX established terminal settlement; the execution was stopped and proven unable to continue.",
             ),
-            Self::OutcomeUnknown { detail } => Some(format!(
+            Self::OutcomeUnknown { detail } => write!(output,
                 "The tool execution started, but rustX could not establish its final external outcome ({detail}). The operation may have partially or fully completed; inspect the relevant state before repeating any side-effecting call, because blind repetition may duplicate work."
-            )),
+            ),
         }
     }
 }
@@ -1140,7 +1212,7 @@ pub struct ModelToolDefinition {
     pub description: String,
     /// The compiled model-facing JSON Schema, including the reserved
     /// runtime invocation metadata for `ModelSelectable` tools.
-    pub input_schema: serde_json::Value,
+    pub input_schema: Arc<serde_json::Value>,
 }
 
 #[cfg(test)]
@@ -1195,7 +1267,7 @@ mod tests {
             id: ToolId::new("tool-bash"),
             name: "bash".to_owned(),
             description: "Run a shell command".to_owned(),
-            input_schema: json!({"type": "object"}),
+            input_schema: json!({"type": "object"}).into(),
             execution_policy: ToolExecutionPolicy::ModelSelectable,
             concurrency_policy: ToolConcurrencyPolicy::Parallel,
             approval_policy: ToolApprovalPolicy::Always,
@@ -1511,6 +1583,69 @@ mod tests {
         let marker = "\n...[tool-owned result content truncated]";
         let prefix = text.strip_suffix(marker).expect("truncation marker");
         assert_eq!(prefix.len() % "😀".len(), 0);
+    }
+
+    #[test]
+    fn bounded_render_matches_the_full_projection_prefix_and_detects_late_media() {
+        use super::{CONTENT_TRUNCATION_MARKER, ToolResultContent};
+        use crate::message::content::{ImageReference, TextBlock};
+        use crate::runtime::identity::ArtifactId;
+
+        let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
+        let value = json!({"escaped": "界😀\n\"".repeat(bound)});
+        let content = vec![
+            ToolResultContent::Text(TextBlock {
+                text: String::new(),
+            }),
+            ToolResultContent::Text(TextBlock {
+                text: "😀".repeat(16),
+            }),
+            ToolResultContent::Json {
+                value: value.clone(),
+            },
+            ToolResultContent::Image(ImageReference {
+                artifact_id: ArtifactId::new("late-image"),
+                alt: None,
+            }),
+        ];
+        let full = format!("\n{}\n{value}\n[image content]", "😀".repeat(16));
+        let marker = CONTENT_TRUNCATION_MARKER;
+        for budget in [
+            0,
+            1,
+            marker.len() - 1,
+            marker.len(),
+            marker.len() + 3,
+            80,
+            bound,
+        ] {
+            let rendered = super::render_content_prefix(&content, budget);
+            assert!(rendered.bytes.capacity() <= budget);
+            let expected = if budget <= marker.len() {
+                marker[..budget].to_owned()
+            } else {
+                let end = full.floor_char_boundary(budget - marker.len());
+                format!("{}{marker}", &full[..end])
+            };
+            assert_eq!(rendered.finish(marker), expected);
+        }
+        let result = ToolExecutionResult {
+            deliveries: Vec::new(),
+            status: ToolExecutionStatus::Success,
+            content,
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            workflow: None,
+            managed_output: None,
+        };
+        assert!(result.model_facing_projection().contains_non_text_content());
+        let parts = result.image_projection().expect("image projection");
+        assert!(matches!(
+            parts.last(),
+            Some(super::ModelToolResultPart::Image(_))
+        ));
     }
 
     #[test]

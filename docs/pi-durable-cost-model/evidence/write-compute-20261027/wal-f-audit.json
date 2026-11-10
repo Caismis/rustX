@@ -1,0 +1,235 @@
+{
+  "verified": true,
+  "identity": {
+    "rust_sha256": "7ca19d99e1a241e5e33627819fe837a81788d26609072d8c41a1a0ab805ef109",
+    "rust_source": "2800be25a650305d5daf9f543ffbf7d8f62ea79b",
+    "pi_revision": "90d863f7c1183b965f099855715d6e88c7b8a52c",
+    "scope": "Diagnostic WAL counts only. No timing claims. External strace parent, sibling provider; dbstat snapshots at synchronous boundaries. Production binaries unmodified; extra Pi driver boundary handshake. Endpoint page ownership cannot detect every intermediate page reuse."
+  },
+  "per_product_before_identity_verified": true,
+  "products": [
+    {
+      "directory": "wal-f-short-small-rust",
+      "accepted": true,
+      "requests": 40,
+      "measured_turns": 32,
+      "observer_mode": "no-live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_shutdown",
+        "after_driver_drop",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    },
+    {
+      "directory": "wal-f-short-small-pi",
+      "accepted": true,
+      "requests": 40,
+      "measured_turns": 32,
+      "observer_mode": "no-live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    },
+    {
+      "directory": "wal-f-short-large-rust",
+      "accepted": true,
+      "requests": 96,
+      "measured_turns": 32,
+      "observer_mode": "no-live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_shutdown",
+        "after_driver_drop",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    },
+    {
+      "directory": "wal-f-short-large-pi",
+      "accepted": true,
+      "requests": 96,
+      "measured_turns": 32,
+      "observer_mode": "no-live-subscriber",
+      "oracle_record": "passed",
+      "live_reopen_equal": true,
+      "phases": [
+        "before_initialization",
+        "after_provider_start",
+        "after_initialization",
+        "after_turns",
+        "after_late_snapshot",
+        "after_verification",
+        "after_final_writer_close",
+        "after_reopen_verification",
+        "after_cleanup"
+      ]
+    }
+  ],
+  "comparisons": [
+    {
+      "case": "short-small",
+      "checked": 40,
+      "core_all_equal": true,
+      "full_request_all_equal": false
+    },
+    {
+      "case": "short-large",
+      "checked": 96,
+      "core_all_equal": true,
+      "full_request_all_equal": false
+    }
+  ],
+  "wal": [
+    {
+      "case_engine": "short-small-rust",
+      "write_commit_markers": 512,
+      "measured_turns": 32,
+      "commit_markers_per_turn": 16.0,
+      "frame_headers": 10513,
+      "frame_body_writes": 10513,
+      "page_size": 4096,
+      "frame_bytes": 43313560,
+      "all_successful_write_sizes": {
+        "24": 10513,
+        "4096": 10513,
+        "32": 10
+      },
+      "wal_header_writes": 10,
+      "steady_wal_pwrite_bytes": 43313880,
+      "unmapped_owner_frames": 2,
+      "mixed_owner_frames": 0,
+      "all_producer_wal_summary_fields_equal": true,
+      "raw_sha256": "c41011bac9029eb97aad4825e2f74c6b8c705703a8ffa9948f01516c4b5db04b"
+    },
+    {
+      "case_engine": "short-small-pi",
+      "write_commit_markers": 160,
+      "measured_turns": 32,
+      "commit_markers_per_turn": 5.0,
+      "frame_headers": 1683,
+      "frame_body_writes": 1683,
+      "page_size": 4096,
+      "frame_bytes": 6933960,
+      "all_successful_write_sizes": {
+        "24": 1683,
+        "4096": 1683,
+        "32": 2
+      },
+      "wal_header_writes": 2,
+      "steady_wal_pwrite_bytes": 6934024,
+      "unmapped_owner_frames": 0,
+      "mixed_owner_frames": 0,
+      "all_producer_wal_summary_fields_equal": true,
+      "raw_sha256": "30b1c192aa5ac8aa26e649f70168841bed492764ad3ee2bb665b1ee1a9dc2803"
+    },
+    {
+      "case_engine": "short-large-rust",
+      "write_commit_markers": 512,
+      "measured_turns": 32,
+      "commit_markers_per_turn": 16.0,
+      "frame_headers": 11458,
+      "frame_body_writes": 11458,
+      "page_size": 4096,
+      "frame_bytes": 47206960,
+      "all_successful_write_sizes": {
+        "24": 11458,
+        "4096": 11458,
+        "32": 11
+      },
+      "wal_header_writes": 11,
+      "steady_wal_pwrite_bytes": 47207312,
+      "unmapped_owner_frames": 1,
+      "mixed_owner_frames": 0,
+      "all_producer_wal_summary_fields_equal": true,
+      "raw_sha256": "6ef692c14f729c4ef3e305cb0468da7fed2db9a9f3b24dfb6e64b7b7c3977389"
+    },
+    {
+      "case_engine": "short-large-pi",
+      "write_commit_markers": 160,
+      "measured_turns": 32,
+      "commit_markers_per_turn": 5.0,
+      "frame_headers": 1688,
+      "frame_body_writes": 1688,
+      "page_size": 4096,
+      "frame_bytes": 6954560,
+      "all_successful_write_sizes": {
+        "24": 1688,
+        "4096": 1688,
+        "32": 2
+      },
+      "wal_header_writes": 2,
+      "steady_wal_pwrite_bytes": 6954624,
+      "unmapped_owner_frames": 0,
+      "mixed_owner_frames": 0,
+      "all_producer_wal_summary_fields_equal": true,
+      "raw_sha256": "0b90436f40852622fd37e354f831f7686a16608c8d03fb1368765a604985e435"
+    }
+  ],
+  "D_comparison": [
+    {
+      "case_engine": "short-small-rust",
+      "D_frames": 10722,
+      "F_frames": 10513,
+      "frame_delta": -209,
+      "frame_ratio": 0.9805073680283529,
+      "D_commit_markers": 512,
+      "F_commit_markers": 512
+    },
+    {
+      "case_engine": "short-small-pi",
+      "D_frames": 1683,
+      "F_frames": 1683,
+      "frame_delta": 0,
+      "frame_ratio": 1.0,
+      "D_commit_markers": 160,
+      "F_commit_markers": 160
+    },
+    {
+      "case_engine": "short-large-rust",
+      "D_frames": 11748,
+      "F_frames": 11458,
+      "frame_delta": -290,
+      "frame_ratio": 0.9753149472250596,
+      "D_commit_markers": 512,
+      "F_commit_markers": 512
+    },
+    {
+      "case_engine": "short-large-pi",
+      "D_frames": 1688,
+      "F_frames": 1688,
+      "frame_delta": 0,
+      "frame_ratio": 1.0,
+      "D_commit_markers": 160,
+      "F_commit_markers": 160
+    }
+  ],
+  "scope": "Frame headers/body writes paired; exact producer summary equality and original source/build/driver identities checked. Native oracle records checked, not reimplemented. Endpoint dbstat ownership cannot exclude intermediate page reuse; WAL bytes are not device traffic or fsync counts."
+}

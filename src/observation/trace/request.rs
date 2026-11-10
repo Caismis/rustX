@@ -1,10 +1,10 @@
 //! Finite canonical-message shaping for the native request read index.
 use super::bounds::{TraceText, identity_fits};
 use super::content::{assistant_blocks, tool_result_block, user_blocks, user_source_label};
-use super::types::{TraceMessageRole, TraceRequestMessage};
 use crate::message::types::MessageBlock;
 use crate::model::input::ModelInputMessage;
 use crate::model::types::ModelProtocol;
+use crate::observation::trace::{TraceMessageRole, TraceRequestMessage};
 
 /// The provider-neutral protocol label of one historical invocation.
 pub(crate) const fn protocol_label(protocol: ModelProtocol) -> &'static str {
@@ -36,10 +36,10 @@ pub(crate) fn bind_original_provenance(
     message: &mut TraceRequestMessage,
     header: &crate::durable::observation::MessageHeader,
 ) -> Result<(), crate::durable::ConversationStoreError> {
-    use super::types::TraceInputProvenance;
     use crate::observation::content::{
         CanonicalContentComponent, CanonicalContentLocator, ContentSource,
     };
+    use crate::observation::trace::TraceInputProvenance;
     let TraceInputProvenance::Original {
         source,
         locator,
@@ -84,9 +84,9 @@ pub(crate) fn bind_original_provenance(
 }
 fn original_provenance(
     reference: &crate::model::projected::CanonicalMessageRef,
-) -> super::types::TraceInputProvenance {
+) -> crate::observation::trace::TraceInputProvenance {
     let inline = identity_fits(reference.message_id.as_str());
-    super::types::TraceInputProvenance::Original {
+    crate::observation::trace::TraceInputProvenance::Original {
         conversation_id: reference.conversation_id.clone(),
         content_digest: reference.content_digest.clone(),
         locator: inline.then(|| {
@@ -101,8 +101,8 @@ fn original_provenance(
 fn input_provenance(
     message: &ModelInputMessage,
     scope: &crate::runtime::identity::ConversationId,
-) -> super::types::TraceInputProvenance {
-    use super::types::TraceInputProvenance;
+) -> crate::observation::trace::TraceInputProvenance {
+    use crate::observation::trace::TraceInputProvenance;
     match message {
         ModelInputMessage::Canonical(message) => original_provenance(
             &crate::model::projected::CanonicalMessageRef::of(scope, message),
@@ -125,11 +125,11 @@ fn input_provenance(
 }
 fn derived_message(
     derived: &crate::model::projected::DerivedModelMessage,
-    provenance: super::types::TraceInputProvenance,
+    provenance: crate::observation::trace::TraceInputProvenance,
 ) -> TraceRequestMessage {
     let provenance_truncated = matches!(
         &provenance,
-        super::types::TraceInputProvenance::Derived {
+        crate::observation::trace::TraceInputProvenance::Derived {
             truncated: true,
             ..
         }
@@ -148,7 +148,11 @@ fn derived_message(
             tool_id,
             result,
         } => {
-            let block = super::content::projected_tool_result_block(tool_call_id, tool_id, result);
+            let block = crate::observation::trace::content::projected_tool_result_block(
+                tool_call_id,
+                tool_id,
+                result,
+            );
             let truncated = block.is_none();
             (
                 TraceMessageRole::Tool,
@@ -240,7 +244,7 @@ pub(crate) fn request_message_with_original(
             // inventing one here would manufacture history.
             message_id: None,
             source: None,
-            blocks: vec![super::types::TraceContentBlock::Text {
+            blocks: vec![crate::observation::trace::TraceContentBlock::Text {
                 text: TraceText::detail(&context.render()),
             }],
             truncated: false,

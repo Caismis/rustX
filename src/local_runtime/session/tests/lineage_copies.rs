@@ -191,7 +191,8 @@ fn lineage_product_paths_preserve_reused_provider_ids_without_compaction() {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     };
     let history = vec![
@@ -311,7 +312,7 @@ fn lineage_product_paths_preserve_reused_provider_ids_without_compaction() {
                                 && result.occurrence.block_index == tool.block_index
                         })
                         .expect("indexed result has its exact canonical owner after reopen");
-                    assert_eq!(tool.result.as_ref(), Some(&canonical_result.result));
+                    assert_eq!(tool.result.as_ref(), Some(canonical_result.result.as_ref()));
                     assert_eq!(tool.call.id, ToolCallId::new("call-1"));
                     observed += 1;
                 }

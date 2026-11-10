@@ -1528,7 +1528,7 @@ fn optional_observation_capture_failure_preserves_authoritative_audit() {
         .unwrap()
         .execute_batch(
             "CREATE TEMP TRIGGER fail_optional_observation
-             BEFORE INSERT ON event_observation_readiness
+             BEFORE UPDATE OF observation_witness ON main.events
              BEGIN SELECT RAISE(ABORT,'optional observation failure'); END;",
         )
         .unwrap();
@@ -1566,7 +1566,7 @@ fn optional_observation_capture_failure_preserves_authoritative_audit() {
         .lock()
         .unwrap()
         .query_row(
-            "SELECT observation_readiness_missing FROM events WHERE sequence=?1",
+            "SELECT observation_unavailable FROM events WHERE sequence=?1",
             [i64::try_from(call.event.sequence).unwrap()],
             |row| row.get(0),
         )

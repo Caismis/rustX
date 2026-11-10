@@ -771,7 +771,7 @@ impl RecoveryEvidence {
                         ToolRepairEvidence {
                             tool_id: tool_id.clone(),
                             lifecycle: ToolExternalLifecycle::OutcomeKnown(Box::new(
-                                result.clone(),
+                                result.as_ref().clone(),
                             )),
                         },
                     );
@@ -1291,10 +1291,8 @@ pub struct RecoveryPlan {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicationRecoveryClass {
-    /// The unsettled stream.
-    pub stream_id: PublicationStreamId,
-    /// The owning attempt of the stream.
-    pub attempt_id: AttemptId,
+    /// The exact unsettled stream generation.
+    pub start: crate::publication::PublicationStreamStart,
     /// The audit settlement this stream must reach.
     pub kind: PublicationAuditKind,
 }
@@ -1397,8 +1395,7 @@ impl RecoveryPlan {
                 .unsettled_publications
                 .iter()
                 .map(|record| PublicationRecoveryClass {
-                    stream_id: record.start.stream_id.clone(),
-                    attempt_id: record.start.attempt_id.clone(),
+                    start: record.start.clone(),
                     kind: record.audit_kind(),
                 })
                 .collect(),
@@ -1729,7 +1726,7 @@ impl RecoveryPlan {
         committed: &mut RecoveryReconciliation,
     ) -> Result<(), RecoveryError> {
         for class in &self.publications {
-            let (audit, _) = store.terminalize_publication_audit(&class.stream_id, clock.now())?;
+            let (audit, _) = store.terminalize_publication_audit(&class.start, clock.now())?;
             committed
                 .publication_audits
                 .push((audit.stream_id.clone(), audit.kind));
@@ -1765,7 +1762,7 @@ impl RecoveryPlan {
                     ),
                     tool_call_id: missing.call_id.clone(),
                     tool_id: missing.tool_id.clone(),
-                    result: missing.result.clone(),
+                    result: missing.result.clone().into(),
                 }));
                 events.push(self.recovery_envelope(
                     EventId::new(format!("recovery-tool-committed:{message_id}")),
@@ -2837,7 +2834,7 @@ mod tests {
                     RuntimeEvent::ToolExecutionCompleted {
                         tool_call_id: ToolCallId::new("call-1"),
                         tool_id: ToolId::new("tool-a"),
-                        result: unknown_outcome_result(),
+                        result: unknown_outcome_result().into(),
                     },
                     Some(a.clone()),
                 ),
@@ -3010,7 +3007,7 @@ mod tests {
                 RuntimeEvent::ToolExecutionCompleted {
                     tool_call_id: ToolCallId::new(format!("call-{call}")),
                     tool_id: ToolId::new("tool-a"),
-                    result: unknown_outcome_result(),
+                    result: unknown_outcome_result().into(),
                 },
                 Some(a.clone()),
             ));

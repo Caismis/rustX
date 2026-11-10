@@ -1,0 +1,23 @@
+{
+  "head": "86bf61a3050dbf85818386d7242d141c59785439",
+  "production_tree": "42fe0c56decf66012cd4320784ba5e9967124c40",
+  "helpers": {
+    "/home/capi/.cache/rustx-pr485-replay-layout-20261110/run-ordinary.py": "774747aec69b1baffcd81d34b54be841a2b95b20abb2b276bdee494c49e282cd",
+    "/home/capi/.cache/rustx-pr485-replay-layout-20261110/ordinary_summary.py": "6f82a14f3920437e812d4206368369eab80f5bdeda92319e6e2468342d8a1546",
+    "/home/capi/.cache/rustx-pr485-replay-layout-20261110/run-memory.py": "0c684b58a381434a9d115a19bc665eea1b4fad14b549f7ceb6b81f31e9624a18",
+    "/home/capi/.cache/rustx-pr485-replay-layout-20261110/audit-memory.py": "50f2f761e6aaa1ab2341b52816525f65556148cd028ede6d11f95d9bd72d604c",
+    "/home/capi/.cache/rustx-pr485-replay-layout-20261110/run-native.py": "b6a94345fccd6806b6ead4156d33431e220a596abc43d0b68581dac49cd2d03d",
+    "/home/capi/.cache/rustx-pr485-replay-layout-20261110/audit-native.py": "4ca1c4c1b3ce1fba7d45058736f1b608ff40299a9b44d2dadae4ca57a3bbeced",
+    "/home/capi/.cache/rustx-pr485-replay-layout-20261110/run-deep.py": "7f25f82411ccc8595aa070f11b4e09ed8a0a4924d4547c0ed9117438bb2341fe"
+  },
+  "harness": {
+    "tests/common/provider_emulator.rs": "038d196cdfbc10b2c4d0453a66a52f163d099d08ce9dfcd337cce96e76fead55",
+    "tests/conformance/agent_loop/runtime_benchmark.rs": "1d34e5e5931b0b204004fe8c91721e5e67e42f046554464cd07ccb67f78aa82c",
+    "tests/conformance/agent_loop/runtime_benchmark/aligned.rs": "638862395ef5bf2892988405b2a8fbaed81eec12a48a99468bfcda9b4ee6383f",
+    "tests/conformance/agent_loop/runtime_benchmark/expected_system_prompt.txt": "dd885d2f065b0c2bd83f8d47c5235fe90028b4946f27f201252eeb6c32383113",
+    "tests/conformance/agent_loop/runtime_benchmark/expected_tools.json": "43e36eff2a90d65687ba5d4ffe59d523c7445b50d495b022eb699eae8e1a00cb",
+    "tests/conformance/agent_loop/runtime_benchmark/profiling.rs": "12362c4abf9f80deed923b77855a2529d4aeb427cfffe39d6953cad823de0c66",
+    "tests/conformance/agent_loop/runtime_benchmark/request_oracle.rs": "bbd81e1071ff3e4f2e5ef1831aaa9375c2fd1cddb8a3c07db480e759cbc67b46"
+  },
+  "ordinary_build_verified": true
+}

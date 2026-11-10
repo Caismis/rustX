@@ -2,9 +2,11 @@
 
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
 
-pub(super) const AUXILIARY_SCHEMA: &str = r"
-CREATE INDEX IF NOT EXISTS events_primary_trace_kind_idx
-    ON events(observation_kind,sequence) WHERE observation_trace_fact_required=1;
+pub(super) const AUXILIARY_SCHEMA: &str = concat!(
+    "CREATE INDEX IF NOT EXISTS events_primary_trace_kind_idx ON events",
+    crate::durable::sqlite::event_kind_key::sql!("observation_kind"),
+    " WHERE observation_trace_fact_required=1;",
+    r"
 CREATE TABLE IF NOT EXISTS request_owners (
     request_id TEXT PRIMARY KEY
         CHECK(length(CAST(request_id AS BLOB)) >= 1),
@@ -126,9 +128,10 @@ CREATE INDEX IF NOT EXISTS request_owners_source_idx
     WHERE owner_kind='auxiliary';
 CREATE INDEX IF NOT EXISTS events_auxiliary_call_id_kind_idx
     ON events(json_extract(event_json,'$.event.call_id'),
-              json_extract(event_json,'$.event.type'),sequence);
+              json_extract(event_json,'$.event.type'))
+    WHERE json_extract(event_json,'$.event.call_id') IS NOT NULL;
 CREATE INDEX IF NOT EXISTS events_auxiliary_fact_type_idx
-    ON events(json_extract(event_json,'$.event.type'),sequence)
+    ON events(json_extract(event_json,'$.event.type'))
     WHERE (
         json_extract(event_json,'$.event.type') IN
             ('model_request_started','model_request_completed','model_request_failed')
@@ -136,7 +139,8 @@ CREATE INDEX IF NOT EXISTS events_auxiliary_fact_type_idx
     )
     OR json_extract(event_json,'$.event.type') IN
         ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled');
-";
+"
+);
 
 pub(super) const AUXILIARY_SEQUENCE_ENCODING_DIGITS_MAX: usize = 20;
 
@@ -179,8 +183,12 @@ pub(super) const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
         name: "events_primary_trace_kind_idx",
         unique: false,
         partial: true,
-        columns: &[Some("observation_kind"), Some("sequence")],
-        definition: "CREATE INDEX events_primary_trace_kind_idx ON events(observation_kind,sequence) WHERE observation_trace_fact_required=1",
+        columns: &[None],
+        definition: concat!(
+            "CREATE INDEX events_primary_trace_kind_idx ON events",
+            crate::durable::sqlite::event_kind_key::sql!("observation_kind"),
+            " WHERE observation_trace_fact_required=1"
+        ),
     },
     AuxiliaryIndexShape {
         table: "auxiliary_requests",
@@ -270,26 +278,29 @@ pub(super) const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
         table: "events",
         name: "events_auxiliary_call_id_kind_idx",
         unique: false,
-        partial: false,
-        columns: &[None, None, Some("sequence")],
-        definition: "CREATE INDEX events_auxiliary_call_id_kind_idx ON events(json_extract(event_json,'$.event.call_id'),json_extract(event_json,'$.event.type'),sequence)",
+        partial: true,
+        columns: &[None, None],
+        definition: "CREATE INDEX events_auxiliary_call_id_kind_idx ON events(json_extract(event_json,'$.event.call_id'),json_extract(event_json,'$.event.type')) WHERE json_extract(event_json,'$.event.call_id') IS NOT NULL",
     },
     AuxiliaryIndexShape {
         table: "events",
         name: "events_auxiliary_fact_type_idx",
         unique: false,
         partial: true,
-        columns: &[None, Some("sequence")],
-        definition: "CREATE INDEX events_auxiliary_fact_type_idx ON events(json_extract(event_json,'$.event.type'),sequence) WHERE (json_extract(event_json,'$.event.type') IN ('model_request_started','model_request_completed','model_request_failed') AND json_extract(event_json,'$.event.owner.type')='auxiliary') OR json_extract(event_json,'$.event.type') IN ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')",
+        columns: &[None],
+        definition: "CREATE INDEX events_auxiliary_fact_type_idx ON events(json_extract(event_json,'$.event.type')) WHERE (json_extract(event_json,'$.event.type') IN ('model_request_started','model_request_completed','model_request_failed') AND json_extract(event_json,'$.event.owner.type')='auxiliary') OR json_extract(event_json,'$.event.type') IN ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')",
     },
 ];
 
 pub(in crate::durable::sqlite) fn create_schema(
     connection: &Connection,
 ) -> Result<(), ConversationStoreError> {
-    connection
-        .execute_batch(AUXILIARY_SCHEMA)
-        .map_err(|error| storage(format!("create auxiliary owner schema: {error}")))
+    connection.execute_batch(AUXILIARY_SCHEMA).map_err(|error| {
+        crate::durable::sqlite::sqlite_error(
+            &error,
+            format!("create auxiliary owner schema: {error}"),
+        )
+    })
 }
 
 pub(super) fn normalized_index_definition(value: &str) -> String {
@@ -320,7 +331,12 @@ pub(super) fn verify_required_indexes(
                     row.get::<_, i64>(4)?,
                 ))
             })
-            .map_err(|error| storage(format!("read auxiliary indexes: {error}")))?
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("read auxiliary indexes: {error}"),
+                )
+            })?
             .find_map(|row| match row {
                 Ok((name, unique, partial)) if name == expected.name => {
                     Some(Ok((unique == 1, partial == 1)))
@@ -345,9 +361,19 @@ pub(super) fn verify_required_indexes(
         let quoted = expected.name.replace('"', "\"\"");
         let columns = connection
             .prepare(&format!("PRAGMA index_info(\"{quoted}\")"))
-            .map_err(|error| storage(format!("inspect auxiliary index columns: {error}")))?
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("inspect auxiliary index columns: {error}"),
+                )
+            })?
             .query_map([], |row| row.get::<_, Option<String>>(2))
-            .map_err(|error| storage(format!("read auxiliary index columns: {error}")))?
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("read auxiliary index columns: {error}"),
+                )
+            })?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(format!("collect auxiliary index columns: {error}")))?;
         if columns.len() != expected.columns.len()
@@ -369,7 +395,12 @@ pub(super) fn verify_required_indexes(
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(format!("read auxiliary index definition: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("read auxiliary index definition: {error}"),
+                )
+            })?;
         let expected_definition = normalized_index_definition(expected.definition);
         if definition
             .as_deref()
@@ -444,10 +475,20 @@ pub(in crate::durable::sqlite) fn verify_schema(
     ] {
         let mut statement = connection
             .prepare(&format!("PRAGMA table_info({table})"))
-            .map_err(|error| storage(format!("inspect auxiliary table {table}: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("inspect auxiliary table {table}: {error}"),
+                )
+            })?;
         let actual = statement
             .query_map([], |row| row.get::<_, String>(1))
-            .map_err(|error| storage(format!("read auxiliary table {table}: {error}")))?
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("read auxiliary table {table}: {error}"),
+                )
+            })?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(format!("collect auxiliary table {table}: {error}")))?;
         for column in columns {

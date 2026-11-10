@@ -1,12 +1,12 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { CheckpointPage, RuntimeClientGoalSnapshot } from '../../protocol/app-server/v77';
+import type { CheckpointPage, RuntimeClientGoalSnapshot } from '../../protocol/app-server/v78';
 import { useComposerContent } from '../src/app/agent/useComposerContent';
 import { TodoDock } from '../src/app/composer/TodoDock';
 import { GoalDock } from '../src/app/composer/GoalDock';
 import { goalDock, todoDock } from '../src/bindings/composer-context';
 import type { SessionView } from '../src/client/contracts';
-import { Server, snapshot } from './fixture';
+import { Server, checkpoint, snapshot, traceRefreshed } from './fixture';
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); });
 const tasks = [1, 2, 3].map(id => ({ id: String(id), subject: `Original task ${id}`, status: 'pending' as const }));
@@ -20,6 +20,7 @@ function Goal({ view }: { view: SessionView }) {
 }
 it('keeps a complete Goal and its matching CAS reference while a newer Goal revision hydrates', async () => {
  server = new Server();
+ server.handlers.set('session/trace', request => ({ type: 'trace', refreshed: traceRefreshed(request), page: { read_cut: checkpoint(server.snapshots.get('A')!, String(server.cursor)).read_cut, records: [], next_cursor: null } }));
  const goal: RuntimeClientGoalSnapshot = { reference: { id: 'goal-1', revision: '3' }, objective: 'Complete Goal objective', objective_deferred: false, phase: 'active', blocked_reason_deferred: false, autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' }, last_round_message_id_deferred: false, fields: [] };
  server.snapshots.set('A', { ...snapshot(), goal: { current: goal } }); await server.attached('A');
  const view = server.client.getSnapshot().views.A;

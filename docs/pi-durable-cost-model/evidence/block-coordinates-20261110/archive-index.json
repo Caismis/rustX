@@ -1,0 +1,22 @@
+{
+  "root": "/home/capi/.cache/rustx-pr485-block-coordinates-20261110",
+  "scope": "Both archives retain every raw measurement, per-turn/process counter, provider request, negative/failed result, build identity, script, verification record and backup hash. Full archive additionally retains every consistent native backup DB. Portable archive includes first/last representative native DBs; it does not include every DB image. Product ELF/dependency trees and private/live runtime/workspace roots are excluded. Originals remain in this root.",
+  "archives": {
+    "full": {
+      "path": "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/packed/block-coordinates-full.tar.xz",
+      "bytes": 163803400,
+      "sha256": "b2cb02af8cec1e93b9f3c844213be6e836975ed5688981790753d7ea229588f1",
+      "manifest": "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/packed/block-coordinates-full.tar.manifest.json",
+      "files": 2329,
+      "verified": true
+    },
+    "portable": {
+      "path": "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/packed/block-coordinates-portable.tar.xz",
+      "bytes": 37061296,
+      "sha256": "d9905c2ffc99228cbe2f2cd2c1a2552d10c26811e0e7614411dafc0cb7eb8390",
+      "manifest": "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/packed/block-coordinates-portable.tar.manifest.json",
+      "files": 802,
+      "verified": true
+    }
+  }
+}

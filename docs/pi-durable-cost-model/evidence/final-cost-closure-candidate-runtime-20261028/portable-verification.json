@@ -1,0 +1,113 @@
+{
+  "accepted": true,
+  "started_utc": "2026-10-28T14:23:27.541828+00:00",
+  "errors": [],
+  "commands": [
+    {
+      "label": "formal",
+      "argv": [
+        "python3",
+        "direct-audit.py",
+        "--root",
+        ".",
+        "--raw-only",
+        "--output",
+        "../direct-raw-audit.json"
+      ],
+      "cwd": "/home/capi/.cache/rustx-pr485-final-cost-closure-candidate-portable/raw",
+      "start_utc": "2026-10-28T14:23:30.518963+00:00",
+      "end_utc": "2026-10-28T14:23:35.701579+00:00",
+      "exit": 0,
+      "stdout_sha256": "7984863cb82a89dd8a6d2bf589c4de571d4f6a93c6a10d67cf9d1d2f94cd31b3",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "diagnostic",
+      "argv": [
+        "python3",
+        "diagnostic-audit.py",
+        "--root",
+        ".",
+        "--raw-only",
+        "--formal-audit",
+        "../direct-raw-audit.json",
+        "--output",
+        "../diagnostic-raw-audit.json"
+      ],
+      "cwd": "/home/capi/.cache/rustx-pr485-final-cost-closure-candidate-portable/raw",
+      "start_utc": "2026-10-28T14:23:35.701768+00:00",
+      "end_utc": "2026-10-28T14:23:38.553074+00:00",
+      "exit": 0,
+      "stdout_sha256": "c468a06a2f584a2ee12b9804a99ca92d7582bd51c2b6ab334742507561c4b644",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "summary",
+      "argv": [
+        "python3",
+        "summarize-results.py",
+        "--root",
+        ".",
+        "--audit",
+        "../direct-raw-audit.json",
+        "--output",
+        "../report-data.json",
+        "--markdown",
+        "../report-tables.md"
+      ],
+      "cwd": "/home/capi/.cache/rustx-pr485-final-cost-closure-candidate-portable/raw",
+      "start_utc": "2026-10-28T14:23:38.553229+00:00",
+      "end_utc": "2026-10-28T14:23:38.645295+00:00",
+      "exit": 0,
+      "stdout_sha256": "b3c4877ea8d12de589bc2306d75f083def99444fd1435295bcc0d71ff8942411",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "verification_script_sha256": "ce7ad59ea807d80b0f3a4ebea982aff7598007ed3baa353f151c09dd54039791",
+  "actual_host_binaries_reverified": false,
+  "actual_host_sources_reverified": false,
+  "external_verification_directory": "/home/capi/.cache/rustx-pr485-final-cost-closure-candidate-portable",
+  "archive_sha256": "b08a058432d34d29c64c7d820a2a4f1cd994a96278ee47fc5b9b5dcf2e891864",
+  "archive_bytes": 12180536,
+  "summary_sha256": "5cd41a05d01f1ffb0fcebcd4a4d7d1da7f3dc90c86ceceb609a594d0c8c86cfa",
+  "manifest_sha256": "49737cf7c0fb712fdf9a24bb9419f88ae8469bc844249983aab7cbb6e1ca34a6",
+  "verified_payload_files": 1214,
+  "verified_payload_bytes": 1335036012,
+  "all_payload_stream_hashes_match": true,
+  "no_extra_members": true,
+  "phase_and_reference_binding": {
+    "formal_products": 120,
+    "diagnostic_products": 20,
+    "new_pi_products": 0,
+    "new_deepseek_products": 0,
+    "fixed_reference_archive_sha256": "eef4c601144965e23fc32b303be67bbccdc7b0197b332d62deba9933840b49ec",
+    "previous_raw_archive_recomputed_here": false,
+    "scope": "Prior fixed report, archive identity and prior portable receipt retained; old raw is a separate content-hash-pinned dependency, not re-derived by this round."
+  },
+  "formal_numerics_and_admissions_identical": {
+    "products": 120,
+    "comparisons": 60,
+    "checked_requests": 1410,
+    "comparison": "Entire report except mode/current-host source assertion/timestamp; all dataset fields, successful and failed validation histories equal."
+  },
+  "diagnostic_numerics_and_identity_records_identical": {
+    "counts": {
+      "profiles": 12,
+      "columns": 4,
+      "wal": 4
+    },
+    "comparison": "All raw/profile/logical-column/WAL/command data equal; only explicit relocated paths and formal report identity mode/hash differ."
+  },
+  "summary_numerics_and_tables_identical": {
+    "comparison": "Entire numerical report and rendered Markdown equal; only the freshly recomputed formal audit hash differs."
+  },
+  "replayed_report_sha256": {
+    "direct-raw-audit.json": "f09e133d0768aca01c69d91fe548612592d188c0f9254658324d421545245c18",
+    "diagnostic-raw-audit.json": "58bba20a763f544c818abb86229002b6d87b2d5e678b260f0e4ef51ed0451b24",
+    "report-data.json": "03c5450dd1627c7180cecc4ba95944e9000e35a53beb2dcb4cfd4f89a17681dd",
+    "report-tables.md": "979e6a5a9eaab94fa2b80294c538149bd4e9f12714da27221892aadd1e66a294"
+  },
+  "post_audit_raw_inventory_and_hashes_unchanged": true,
+  "finished_utc": "2026-10-28T14:23:39.666288+00:00",
+  "scope": "Safe complete archive extraction, per-file integrity, retained raw-only arithmetic and tables. No products/builds/profiler sampling or historical machine identity checks. Fixed prior Pi/DeepSeek are not rerun or re-derived from their separate old raw archive."
+}

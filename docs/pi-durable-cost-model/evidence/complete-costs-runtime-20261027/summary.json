@@ -1,0 +1,76 @@
+{
+  "archive": "raw.tar.xz",
+  "archive_bytes": 39816596,
+  "archive_sha256": "c3fa3cbdfbdd7055b97627fe51acdb03a0e3692b0fd2270a687d771d9dc811e1",
+  "candidate_sha256": "8d033129f343660821b5fd7cef957a424e6d769c55948011f2798c6e2f3a0cb7",
+  "compression": "xz preset 0",
+  "created_utc": "2026-10-27T06:46:12.018388+00:00",
+  "excluded_entries": 7,
+  "excluded_reasons": {
+    "compiled conformance artifact": 2,
+    "dependency, compiled-output, or previous archive/extract directory": 1,
+    "non-regular file": 4
+  },
+  "format": "rustx-complete-costs-raw-evidence-v1",
+  "harness_revision": "f5cf22a8fbd2b1f0b3abc7fc2082a586f1126e20",
+  "manifest_bytes": 832863,
+  "manifest_sha256": "3d90ec4348300a0f46a3973e8797ddc4b7f57d5434e8928e338c8013686af2cc",
+  "phases": {
+    "final_products": 276,
+    "pass1": {
+      "archive_prefix": "pass1",
+      "diagnostic_products": 11,
+      "files": 513,
+      "freeze_sha256": "9f87c229edd09043742140657a45cb77a01e4d63ce6acdaea5cd4d4573a2605d",
+      "scope": "Exploratory first candidate only. Preserve all raw bytes and failures as history; never pool these products with final 276 products or count these checks as final candidate validation.",
+      "screen_products": 24
+    }
+  },
+  "raw_bytes": 3403068439,
+  "raw_files": 2802,
+  "raw_only_audit_command": [
+    "python3",
+    "audit-complete.py",
+    "--root",
+    ".",
+    "--raw-only",
+    "--stage",
+    "all",
+    "--baseline-identity",
+    "baseline-build/identity.json",
+    "--candidate-identity",
+    "candidate-complete-build/identity.json",
+    "--freeze",
+    "deepseek-setup/final-source-identity.json",
+    "--expected-harness-revision",
+    "f5cf22a8fbd2b1f0b3abc7fc2082a586f1126e20",
+    "--expect-rust-sha256",
+    "8d033129f343660821b5fd7cef957a424e6d769c55948011f2798c6e2f3a0cb7",
+    "--output",
+    "../archive-complete-audit.json"
+  ],
+  "raw_only_diagnostic_audit_command": [
+    "python3",
+    "audit-diagnostics.py",
+    "--root",
+    ".",
+    "--raw-only",
+    "--baseline-identity",
+    "baseline-build/identity.json",
+    "--candidate-identity",
+    "candidate-complete-build/identity.json",
+    "--formal-audit",
+    "complete-all-audit.json",
+    "--expect-rust-sha256",
+    "8d033129f343660821b5fd7cef957a424e6d769c55948011f2798c6e2f3a0cb7",
+    "--output",
+    "../diagnostic-raw-audit.json"
+  ],
+  "reference_pins": {
+    "deepseek_node": "v24.19.0",
+    "deepseek_revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+    "deepseek_tree": "f127f0f96a815eac4dea336a2ae0d9cd0f2aa82d",
+    "pi_revision": "90d863f7c1183b965f099855715d6e88c7b8a52c"
+  },
+  "stream_verified_all_members": true
+}

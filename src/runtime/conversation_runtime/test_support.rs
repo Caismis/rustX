@@ -101,7 +101,7 @@ pub(super) use futures_util::future::BoxFuture;
 /// adoption transaction requires.
 pub(super) fn adopt_accepted(
     store: &dyn ConversationStore,
-    accepted: &crate::durable::inbox::AcceptedInbound,
+    accepted: &crate::durable::AcceptedInbound,
 ) {
     store
         .adopt_pending_batch(accepted.sequence, None)
@@ -389,6 +389,7 @@ pub(super) async fn headless_runtime_with_options(
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: options.policy,
             estimator: options.estimator,
             status_engine: Some(options.status_engine),
@@ -498,6 +499,7 @@ pub(super) async fn headless_runtime_over_store_with_policy(
         model_timeout_policy,
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -606,6 +608,7 @@ pub(super) async fn headless_runtime_over_store_with_subagents(
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -721,6 +724,7 @@ pub(super) async fn subagent_runtime_config_with_registry(
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -1094,7 +1098,7 @@ pub(super) fn assert_pending_mutation_preserves_child(
             correlation: None,
         })
         .unwrap();
-    let expected = crate::durable::inbox::PendingInboundRef {
+    let expected = crate::durable::PendingInboundRef {
         sequence: item.sequence,
         revision: 0,
     };
@@ -1104,18 +1108,18 @@ pub(super) fn assert_pending_mutation_preserves_child(
                     .mailbox()
                     .edit_pending(&expected, "edited pending")
                     .unwrap(),
-    crate::durable::inbox::PendingMutationOutcome::Applied { read_cut, .. } if read_cut.pending_total <= read_cut.pending_through
+    crate::durable::PendingMutationOutcome::Applied { read_cut, .. } if read_cut.pending_total <= read_cut.pending_through
     ));
     assert!(matches!(
     runtime
                     .tool_runtime()
                     .mailbox()
-                    .remove_pending(&crate::durable::inbox::PendingInboundRef {
+                    .remove_pending(&crate::durable::PendingInboundRef {
                         revision: 1,
                         ..expected
                     })
                     .unwrap(),
-    crate::durable::inbox::PendingMutationOutcome::Applied { read_cut, .. } if read_cut.pending_total <= read_cut.pending_through
+    crate::durable::PendingMutationOutcome::Applied { read_cut, .. } if read_cut.pending_total <= read_cut.pending_through
     ));
     assert_eq!(subagents.snapshot(child_id).unwrap(), before);
 }
@@ -1207,7 +1211,8 @@ pub(super) fn cause_probe_registry_and_script(
             "type": "object",
             "properties": {},
             "additionalProperties": false
-        }),
+        })
+        .into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         concurrency_policy: ToolConcurrencyPolicy::Sequential,
         approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
@@ -1625,6 +1630,95 @@ pub(super) async fn runtime_with_model_at(
     runtime_with_model_probe_at(dir, conversation_id, initial_messages, scripts, None).await
 }
 
+#[tokio::test]
+async fn missing_native_event_receipt_never_releases_individual_sources() {
+    let dir = tempfile::tempdir().unwrap();
+    let conversation = ConversationId::new("conv_436572e9-e9e5-7ce9-a5bb-dd7e28c1d862");
+    let runtime = runtime_at(&dir, conversation.as_str(), Vec::new(), Vec::new())
+        .await
+        .unwrap();
+    let pending = Arc::new(PendingObservations::new());
+    runtime.install_observation_bridge(pending.clone()).unwrap();
+    let store = &runtime.inner.store;
+    let attempt = AttemptId::for_conversation(&conversation, 0);
+    let started = store
+        .append_event(attempt_event(
+            &conversation,
+            "missing-receipt-start",
+            &attempt,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt.clone(),
+            },
+        ))
+        .unwrap();
+    let failed = store
+        .append_event(attempt_event(
+            &conversation,
+            "missing-receipt-failed",
+            &attempt,
+            RuntimeEvent::AttemptFailed {
+                attempt_id: attempt.clone(),
+                error: crate::events::types::AttemptFailure::Runtime {
+                    error: crate::runtime::types::RuntimeError::Internal {
+                        message: "terminal source release fixture".into(),
+                    },
+                },
+            },
+        ))
+        .unwrap();
+    let cut = store.observation_read_cut().unwrap();
+    let terminal_cursor = store
+        .event_transcript_cursor_at_sequence(failed.sequence)
+        .unwrap()
+        .expect("failed terminal owns a real transcript position");
+    assert_eq!(terminal_cursor.get(), cut.read.transcript);
+    let before_j = store
+        .observation_ready_frontier(0, failed.sequence)
+        .unwrap();
+    let before_t = store
+        .observation_transcript_ready_frontier(0, cut.read.transcript)
+        .unwrap();
+    assert!(before_j < failed.sequence);
+    assert!(before_t < cut.read.transcript);
+    let observer = super::RuntimeObserver::new(&runtime.inner);
+    for event in [&started, &failed] {
+        assert!(
+            event.observation.is_some(),
+            "the real durable writer supplies evidence"
+        );
+        // Lose the complete native evidence after commit, as when a family
+        // witness cannot be constructed. Each callback must leave J/T shut.
+        crate::agent::observer::AgentExecutionObserver::observe_event(
+            &observer,
+            &attempt,
+            &event.event,
+            event.sequence,
+            None,
+            None,
+        );
+        assert_eq!(
+            store
+                .observation_ready_frontier(0, failed.sequence)
+                .unwrap(),
+            before_j
+        );
+        assert_eq!(
+            store
+                .observation_transcript_ready_frontier(0, cut.read.transcript)
+                .unwrap(),
+            before_t
+        );
+        assert!(
+            matches!(
+                pending.drain().as_slice(),
+                [ConversationObservation::JournalBatch { through: None, .. }]
+            ),
+            "missing native evidence reports source failure instead of releasing a row"
+        );
+    }
+    assert_eq!(store.read_events(None, 8).unwrap().events.len(), 2);
+}
+
 /// The probe-armed variant of [`runtime_with_model_at`] (Issue #12, M9b
 /// deterministic race tests).
 pub(super) async fn runtime_with_model_probe_at(
@@ -1675,6 +1769,7 @@ pub(super) async fn runtime_with_model_probe_at(
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -1749,7 +1844,8 @@ pub(super) fn tool_result_block(call: &str) -> MessageBlock {
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     })
 }
 

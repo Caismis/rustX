@@ -23,7 +23,243 @@ use crate::tools::types::ToolCall;
 use chrono::Utc;
 
 // Original J/C/request bodies are an independent oracle, never default read input.
-pub(super) fn trace_raw_seed() -> (LineageSeed, Vec<u8>) {
+fn trace_batch_append(store: &SqliteConversationStore, first: usize, count: usize) -> Vec<u64> {
+    let mut sequences = Vec::new();
+    for index in first..first + count {
+        let attempt = AttemptId::new(format!("trace-batch-{index}"));
+        let started = store
+            .append_event(envelope(
+                store.conversation_id(),
+                &format!("trace-batch-start-{index}"),
+                Some(attempt.clone()),
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .unwrap();
+        let mut turn = envelope(
+            store.conversation_id(),
+            &format!("trace-batch-turn-{index}"),
+            Some(attempt),
+            RuntimeEvent::TurnStarted,
+        );
+        turn.turn_id = Some(TurnId::new("1"));
+        let turn = store.append_event(turn).unwrap();
+        sequences.extend([started.sequence, turn.sequence]);
+    }
+    sequences
+}
+
+#[test]
+fn trace_fact_batch_matches_point_reads_at_old_cuts_and_page_bounds() {
+    use crate::durable::observation::{TraceFactKind, TraceFactQuery, TraceFactScope};
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let mut sequences = trace_batch_append(&store, 0, 20);
+    let old_cut = store.observation_read_cut().unwrap();
+    sequences.extend(trace_batch_append(&store, 20, 20));
+    let latest = store.observation_read_cut().unwrap();
+    let connection = store.lock().unwrap();
+    connection
+        .authorizer(Some(deny_trace_original_columns))
+        .unwrap();
+    for cut in [&old_cut, &latest] {
+        for ascending in [false, true] {
+            for limit in [1, 7, 32] {
+                let query = TraceFactQuery {
+                    scope: TraceFactScope::All,
+                    kinds: vec![
+                        TraceFactKind::TurnStarted,
+                        TraceFactKind::AttemptStarted,
+                        TraceFactKind::TurnStarted,
+                    ],
+                    before: Some(73),
+                    after: 7,
+                    ascending,
+                    limit,
+                };
+                let mut selected: Vec<_> = sequences
+                    .iter()
+                    .copied()
+                    .filter(|sequence| {
+                        *sequence > 7 && *sequence < 73 && *sequence <= cut.read.journal
+                    })
+                    .collect();
+                if !ascending {
+                    selected.reverse();
+                }
+                selected.truncate(limit);
+                let expected: Vec<_> = selected
+                    .iter()
+                    .map(|sequence| {
+                        observation_trace::header(&connection, *sequence, cut.read.journal).unwrap()
+                    })
+                    .collect();
+                observation_trace::take_header_queries();
+                observation_trace::read_work();
+                assert_eq!(
+                    observation_trace::facts(&connection, cut, &query).unwrap(),
+                    expected
+                );
+                assert_eq!(observation_trace::take_header_queries(), 1);
+                assert_eq!(observation_trace::read_work().0, selected.len());
+            }
+        }
+    }
+    let empty = TraceFactQuery {
+        scope: TraceFactScope::All,
+        kinds: vec![TraceFactKind::AttemptStarted],
+        before: None,
+        after: latest.read.journal,
+        ascending: true,
+        limit: 32,
+    };
+    assert!(
+        observation_trace::facts(&connection, &latest, &empty)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(observation_trace::take_header_queries(), 0);
+    connection
+        .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
+        .unwrap();
+}
+
+#[test]
+fn trace_fact_batch_keeps_selected_corruption_order_and_unselected_rows_unread() {
+    use crate::durable::observation::{TraceFactKind, TraceFactQuery, TraceFactScope};
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let sequences = trace_batch_append(&store, 0, 4);
+    let cut = store.observation_read_cut().unwrap();
+    let connection = store.lock().unwrap();
+    let mut query = TraceFactQuery {
+        scope: TraceFactScope::All,
+        kinds: vec![TraceFactKind::AttemptStarted, TraceFactKind::TurnStarted],
+        before: None,
+        after: 0,
+        ascending: true,
+        limit: 1,
+    };
+    let first = observation_trace::header(&connection, sequences[0], cut.read.journal).unwrap();
+    connection
+        .execute(
+            "UPDATE events SET observation_trace_fact=x'7b' WHERE sequence=?1",
+            [sequences[7]],
+        )
+        .unwrap();
+    observation_trace::read_work();
+    assert_eq!(
+        observation_trace::facts(&connection, &cut, &query).unwrap(),
+        [first]
+    );
+    assert_eq!(observation_trace::read_work().0, 1);
+
+    connection
+        .execute(
+            "UPDATE events SET observation_trace_fact=x'7b' WHERE sequence=?1",
+            [sequences[0]],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE events SET event_timestamp='different retained clock' WHERE sequence=?1",
+            [sequences[1]],
+        )
+        .unwrap();
+    query.before = Some(sequences[2]);
+    query.limit = 2;
+    let mut failures = Vec::new();
+    for (ascending, first) in [(true, sequences[0]), (false, sequences[1])] {
+        query.ascending = ascending;
+        let expected = observation_trace::header(&connection, first, cut.read.journal).unwrap_err();
+        let actual = observation_trace::facts(&connection, &cut, &query).unwrap_err();
+        assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+        failures.push(format!("{actual:?}"));
+    }
+    assert_ne!(failures[0], failures[1]);
+    connection
+        .execute(
+            "UPDATE events SET observation_trace_fact=NULL WHERE sequence=?1",
+            [sequences[2]],
+        )
+        .unwrap();
+    query.before = None;
+    assert!(
+        matches!(observation_trace::facts(&connection, &cut, &query), Err(ConversationStoreError::Storage(message)) if message == "native Trace fact header unavailable")
+    );
+}
+
+#[test]
+fn trace_fact_batch_preserves_owner_anchor_validation_before_holes() {
+    use crate::durable::observation::{TraceFactKind, TraceFactQuery, TraceFactScope};
+    use crate::durable::sqlite::tests::observation_response_tests::{
+        response_complete, response_start,
+    };
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = response_start(&store, "trace-batch-owner");
+    let old_cut = store.observation_read_cut().unwrap();
+    let start = old_cut.read.journal;
+    response_complete(&store, &attempt);
+    let cut = store.observation_read_cut().unwrap();
+    let terminal = cut.read.journal;
+    let connection = store.lock().unwrap();
+    let query = TraceFactQuery {
+        scope: TraceFactScope::Owner {
+            anchor_sequence: start,
+        },
+        kinds: vec![
+            TraceFactKind::AttemptStarted,
+            TraceFactKind::AttemptCompleted,
+        ],
+        before: None,
+        after: 0,
+        ascending: true,
+        limit: 32,
+    };
+    let expected: Vec<_> = [start, terminal]
+        .iter()
+        .map(|sequence| {
+            observation_trace::header(&connection, *sequence, cut.read.journal).unwrap()
+        })
+        .collect();
+    observation_trace::take_header_queries();
+    assert_eq!(
+        observation_trace::facts(&connection, &cut, &query).unwrap(),
+        expected
+    );
+    assert_eq!(observation_trace::take_header_queries(), 2);
+    connection
+        .execute(
+            "UPDATE events SET observation_trace_fact=NULL WHERE sequence=?1",
+            [terminal],
+        )
+        .unwrap();
+    assert!(
+        matches!(observation_trace::facts(&connection, &cut, &query), Err(ConversationStoreError::Storage(message)) if message == "native Trace owner relationship unavailable")
+    );
+    assert_eq!(
+        observation_trace::facts(&connection, &old_cut, &query).unwrap(),
+        expected[..1]
+    );
+    connection
+        .execute(
+            "UPDATE events SET observation_trace_fact=x'7b' WHERE sequence=?1",
+            [start],
+        )
+        .unwrap();
+    let expected = observation_trace::header(&connection, start, cut.read.journal).unwrap_err();
+    assert_eq!(
+        format!(
+            "{:?}",
+            observation_trace::facts(&connection, &cut, &query).unwrap_err()
+        ),
+        format!("{expected:?}")
+    );
+}
+
+fn trace_raw_seed() -> (LineageSeed, Vec<u8>) {
     use crate::durable::CanonicalRawToolArguments;
     use crate::message::types::ContentBlockIndex;
     let raw = format!(
@@ -49,7 +285,78 @@ pub(super) fn trace_raw_seed() -> (LineageSeed, Vec<u8>) {
         .unwrap();
     (seed, raw)
 }
-pub(super) fn trace_raw_occurrence() -> crate::events::types::ToolObservationOccurrence {
+
+#[test]
+fn trace_kind_candidates_remain_independent_of_changed_native_json_kind() {
+    use crate::durable::observation::{TraceFactKind, TraceFactQuery, TraceFactScope};
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let attempt = AttemptId::new("independent-trace-kind");
+    let original = store
+        .append_event(envelope(
+            store.conversation_id(),
+            "independent-trace-kind-start",
+            Some(attempt.clone()),
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt,
+            },
+        ))
+        .unwrap();
+    let cut = store.observation_read_cut().unwrap();
+    let query = TraceFactQuery {
+        scope: TraceFactScope::All,
+        kinds: vec![TraceFactKind::AttemptStarted],
+        before: None,
+        after: original.sequence - 1,
+        ascending: true,
+        limit: 1,
+    };
+    let retained = store.observation_trace_facts(&cut, &query).unwrap();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].sequence, original.sequence);
+    {
+        let connection = store.lock().unwrap();
+        // This remains valid JSON and moves only the native kind index key.
+        // A native-index-driven Trace query would silently lose the retained
+        // own fact before its independent header validation could run.
+        connection.execute(
+            "UPDATE events SET event_json=json_set(event_json,'$.event.type','turn_started') WHERE sequence=?1",
+            [original.sequence],
+        ).unwrap();
+        let native_candidates: u64 = connection
+            .query_row(
+                concat!(
+                    "SELECT COUNT(*) FROM events INDEXED BY events_kind_idx WHERE ",
+                    crate::durable::sqlite::event_kind_key::sql!(
+                        "json_extract(event_json,'$.event.type')"
+                    ),
+                    "=x'0002'",
+                    " AND sequence=?1"
+                ),
+                [original.sequence],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(native_candidates, 0);
+    }
+    assert_eq!(
+        store.observation_trace_facts(&cut, &query).unwrap(),
+        retained
+    );
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE events SET observation_trace_fact=x'7b' WHERE sequence=?1",
+            [original.sequence],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.observation_trace_facts(&cut, &query),
+        Err(ConversationStoreError::Storage(_))
+    ));
+}
+fn trace_raw_occurrence() -> crate::events::types::ToolObservationOccurrence {
     crate::events::types::ToolObservationOccurrence {
         tool_ordinal: 0,
         ledger_position: 1,
@@ -60,7 +367,7 @@ pub(super) fn trace_arguments_reference(
     fields: &[crate::observation::trace::TraceFieldSource],
 ) -> crate::observation::content::ContentRef {
     use crate::observation::trace::{TraceFieldKind, TraceFieldSource};
-    fields
+    (fields
         .iter()
         .find_map(|field| match field {
             TraceFieldSource::Content {
@@ -69,7 +376,9 @@ pub(super) fn trace_arguments_reference(
             } => Some(binding.content_ref.clone()),
             _ => None,
         })
-        .expect("original arguments field")
+        .expect("original arguments field"))
+    .as_ref()
+    .clone()
 }
 pub(super) fn trace_original_journal_field_bytes(
     store: &SqliteConversationStore,
@@ -297,7 +606,7 @@ pub(super) fn trace_commit_raw_publication(
         turn_id: snapshot.identity.turn.clone(),
         request_id: snapshot.request_id.clone(),
     };
-    store.open_publication_stream(&start).unwrap();
+
     let (seed, raw) = trace_raw_seed();
     let MessageBlock::Assistant(mut assistant) = seed.canonical()[0].clone() else {
         panic!("original proposal")
@@ -307,7 +616,7 @@ pub(super) fn trace_commit_raw_publication(
         panic!("original call")
     };
     store
-        .stage_publication_frames(&trace_raw_publication_frames(&start, call, &raw))
+        .stage_publication_frames(&start, &trace_raw_publication_frames(&start, call, &raw))
         .unwrap();
     let mut outcome = envelope(
         store.conversation_id(),
@@ -331,7 +640,7 @@ pub(super) fn trace_commit_raw_publication(
     store.append_event(outcome).unwrap();
     store
         .commit_publication_terminal(
-            &start.stream_id,
+            &start,
             &[PublicationFrame {
                 stream_id: start.stream_id.clone(),
                 message_id: start.message_id.clone(),
@@ -391,7 +700,12 @@ fn t08_t14_t15_t19_trace_arguments_preserve_original_raw_spelling_and_missing_fr
     loop {
         let chunk = store.content_read(&reference, offset, 65_536).unwrap();
         let (rows, bytes) = SqliteConversationStore::content_read_work();
-        assert!(rows <= 2 && bytes <= 65_536);
+        // Canonical raw Tool arguments retain the original 8 KiB stream
+        // geometry. A 64 KiB range may span nine rows at an unaligned offset.
+        assert!(
+            rows <= 9 && bytes <= 65_536,
+            "read {rows} rows, {bytes} bytes"
+        );
         restored.extend(
             base64::engine::general_purpose::STANDARD
                 .decode(chunk.data_base64)
@@ -407,7 +721,7 @@ fn t08_t14_t15_t19_trace_arguments_preserve_original_raw_spelling_and_missing_fr
         .unwrap()
         .authorizer(None::<fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization>)
         .unwrap();
-    store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='raw_json_utf8'", []).unwrap();
+    store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='r'", []).unwrap();
     assert!(matches!(
         store.observation_trace_tool_proposal(&cut, &trace_raw_occurrence()),
         Err(ConversationStoreError::Storage(_))
@@ -437,7 +751,7 @@ fn t10_t14_t19_trace_raw_refresh_fault_keeps_native_commit_and_never_falls_back(
     );
     // Original retained bytes prove that absent layout is a source fault,
     // including when the cached pre-raw proposal still names canonical JSON.
-    store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='raw_json_utf8'", []).unwrap();
+    store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='r'", []).unwrap();
     assert!(matches!(
         store.observation_trace_tool_proposal(&cut, &trace_raw_occurrence()),
         Err(ConversationStoreError::Storage(_))
@@ -446,7 +760,7 @@ fn t10_t14_t19_trace_raw_refresh_fault_keeps_native_commit_and_never_falls_back(
         .lock()
         .unwrap()
         .execute(
-            "INSERT INTO content_frontiers VALUES('canonical','ledger:1',0,'raw_json_utf8',1,?1)",
+            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical','ledger:1',0,'r',1,?1)",
             [u64::try_from(raw.len()).unwrap()],
         )
         .unwrap();
@@ -522,8 +836,8 @@ fn t08_t10_t14_t19_published_trace_raw_fields_bind_after_original_retention() {
     );
     // Removing the entire original representation cannot turn the retained
     // Raw source selector back into a reserialized canonical fallback.
-    store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND representation='raw_json_utf8'", []).unwrap();
-    store.lock().unwrap().execute("DELETE FROM content_segments WHERE source_kind='canonical' AND source_id='ledger:1' AND representation='raw_json_utf8'", []).unwrap();
+    store.lock().unwrap().execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND representation='r'", []).unwrap();
+    store.lock().unwrap().execute("DELETE FROM content_segments WHERE source_kind='canonical' AND source_id='ledger:1' AND representation='r'", []).unwrap();
     assert!(matches!(
         store.observation_trace_tool_proposal(&cut, &trace_raw_occurrence()),
         Err(ConversationStoreError::Storage(_))
@@ -576,7 +890,8 @@ pub(super) fn trace_large_request(store: &SqliteConversationStore) -> (RequestSn
         id: ToolId::new("trace-original-tool"),
         name: "Original".into(),
         description: "original schema".repeat(100_000),
-        input_schema: serde_json::json!({"opaque":"水".repeat(400_000),"integer":u64::MAX,"zero":-0.0}),
+        input_schema:
+            serde_json::json!({"opaque":"水".repeat(400_000),"integer":u64::MAX,"zero":-0.0}).into(),
     }];
     freeze_test_input(store, &mut snapshot, &[]);
     let start = store
@@ -1321,104 +1636,140 @@ fn t08_t12_t19_native_request_summary_survives_large_original_canonical_input() 
 }
 
 #[test]
-fn primary_request_predecessor_filters_auxiliary_start_before_limit() {
-    use crate::model::auxiliary::{
-        AuxiliaryAttribution, AuxiliaryCallStart, AuxiliaryFingerprint, AuxiliaryRequestStart,
+fn trace_unchanged_bindings_do_not_rewrite_summaries_or_proposals() {
+    use crate::durable::sqlite::tests::observation_response_tests::{
+        response_message, response_start,
     };
-    use crate::runtime::identity::{AuxiliaryCallId, RequestId};
-
     let store = store();
     store.initialize(&[]).unwrap();
-    let identity = crate::model::RequestIdentity {
-        attempt_id: AttemptId::new("predecessor-owner"),
-        turn: TurnId::new("1"),
-        retry_number: 0,
-    };
-    let mut first = progress_request_snapshot(
-        identity.attempt_id.as_str(),
-        identity.turn.as_str(),
-        identity.retry_number,
-        store.load_head().unwrap().revision,
-        Vec::new(),
-    );
-    freeze_test_input(&store, &mut first, &[]);
-    let first_request_id = first.request_id.clone();
-    let first_start = store
-        .commit_model_turn_start(&[], &first, Utc::now())
+    store.lock().unwrap().execute_batch(
+        "CREATE TEMP TABLE trace_writes(kind TEXT);
+         CREATE TEMP TRIGGER count_summary AFTER UPDATE OF observation_trace_summary ON message_ledger BEGIN INSERT INTO trace_writes VALUES('summary'); END;
+         CREATE TEMP TRIGGER count_proposal AFTER UPDATE OF observation_trace_proposal ON canonical_tool_calls BEGIN INSERT INTO trace_writes VALUES('proposal'); END;"
+    ).unwrap();
+    let attempt = response_start(&store, "unchanged-trace");
+    response_message(&store, &attempt, "unchanged-trace-message");
+    let connection = store.lock().unwrap();
+    let writes: u64 = connection
+        .query_row("SELECT count(*) FROM trace_writes", [], |row| row.get(0))
         .unwrap();
+    // The canonical summary is installed once. Its subsequent event refresh
+    // authenticates that stored summary without issuing a no-op rewrite.
+    assert_eq!(writes, 1);
+    drop(connection);
 
-    let fingerprint = AuxiliaryFingerprint::new("c".repeat(64)).unwrap();
-    let call_id = AuxiliaryCallId::generate();
-    store
-        .commit_auxiliary_call_start(
-            &AuxiliaryCallStart {
-                call_id: call_id.clone(),
-                purpose: AuxiliaryAttribution::new("summary").unwrap(),
-                trigger: AuxiliaryAttribution::new("automatic").unwrap(),
-                semantic_input_fingerprint: fingerprint.clone(),
-                invocation_fingerprint: fingerprint,
-                business_source: crate::model::auxiliary::AuxiliaryBusinessSource::Independent,
-                input: crate::model::auxiliary::AuxiliaryInputEvidence::Temporary,
-                selected_message_ids: Vec::new(),
-            },
-            Utc::now(),
+    let store = self::store();
+    let (message, _, committed) = trace_commit_raw_publication(&store);
+    let connection = store.lock().unwrap();
+    connection.execute_batch(
+        "CREATE TEMP TABLE trace_writes(kind TEXT);
+         CREATE TEMP TRIGGER count_summary AFTER UPDATE OF observation_trace_summary ON message_ledger BEGIN INSERT INTO trace_writes VALUES('summary'); END;
+         CREATE TEMP TRIGGER count_proposal AFTER UPDATE OF observation_trace_proposal ON canonical_tool_calls BEGIN INSERT INTO trace_writes VALUES('proposal'); END;"
+    ).unwrap();
+    let before: (Vec<u8>,Vec<u8>) = connection.query_row(
+        "SELECT m.observation_trace_summary,c.observation_trace_proposal FROM message_ledger m JOIN canonical_tool_calls c ON c.observation_ledger=m.position WHERE m.position=1 AND c.block_index=0", [],
+        |row| Ok((row.get(0)?,row.get(1)?)),
+    ).unwrap();
+    observation_trace::settle_fields(&connection, &committed).unwrap();
+    let writes: u64 = connection
+        .query_row("SELECT count(*) FROM trace_writes", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(writes, 0);
+    let after: (Vec<u8>,Vec<u8>) = connection.query_row(
+        "SELECT m.observation_trace_summary,c.observation_trace_proposal FROM message_ledger m JOIN canonical_tool_calls c ON c.observation_ledger=m.position WHERE m.position=1 AND c.block_index=0", [],
+        |row| Ok((row.get(0)?,row.get(1)?)),
+    ).unwrap();
+    assert_eq!(after, before);
+    connection
+        .execute(
+            "UPDATE message_ledger SET observation_trace_summary=?1 WHERE position=1",
+            [b"[".as_slice()],
         )
         .unwrap();
-    store
-        .commit_auxiliary_request_start(
-            &AuxiliaryRequestStart {
-                call_id,
-                ordinal: 0,
-                request_id: RequestId::new("auxiliary-between-primary-requests"),
-                model: "auxiliary".into(),
-            },
-            Utc::now(),
+    assert!(observation_trace::settle_fields(&connection, &committed).is_err());
+    connection
+        .execute(
+            "UPDATE message_ledger SET observation_trace_summary=?1 WHERE position=1",
+            [&before.0],
         )
         .unwrap();
-
-    let mut second = progress_request_snapshot(
-        identity.attempt_id.as_str(),
-        identity.turn.as_str(),
-        1,
-        store.load_head().unwrap().revision,
-        Vec::new(),
-    );
-    freeze_test_input(&store, &mut second, &[]);
-    let second = store
-        .commit_model_turn_start(&[], &second, Utc::now())
-        .unwrap();
-    let starts = store
-        .observation_trace_facts(
-            &store.observation_read_cut().unwrap(),
-            &crate::durable::observation::TraceFactQuery {
-                scope: crate::durable::observation::TraceFactScope::Agent,
-                kinds: vec![crate::durable::observation::TraceFactKind::ModelRequestStarted],
-                before: None,
-                after: 0,
-                ascending: true,
-                limit: 32,
-            },
-        )
-        .unwrap();
-    assert_eq!(starts.len(), 2);
-    assert!(starts.iter().all(|fact| matches!(
-        fact.owner.as_ref(),
-        Some(crate::durable::observation::RequestOwnerKind::Agent)
-    )));
-    let predecessor = store
-        .observation_request_predecessor_at(
-            second.started.sequence,
-            store.observation_read_cut().unwrap().read.journal,
-        )
-        .unwrap()
-        .expect("the primary predecessor exists");
-    assert_eq!(predecessor.start_sequence, first_start.started.sequence);
-    assert_eq!(predecessor.request_id.as_ref(), Some(&first_request_id));
+    connection.execute("UPDATE canonical_tool_calls SET observation_trace_proposal=?1 WHERE observation_ledger=1", [b"[".as_slice()]).unwrap();
+    assert!(observation_trace::settle_fields(&connection, &committed).is_err());
+    connection.execute("UPDATE canonical_tool_calls SET observation_trace_proposal=?1 WHERE observation_ledger=1", [&before.1]).unwrap();
+    observation_trace::settle_fields(&connection, &committed).unwrap();
+    connection.execute("DELETE FROM content_frontiers WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='r'", []).unwrap();
+    assert!(observation_trace::settle_fields(&connection, &committed).is_err());
+    drop(connection);
+    assert_eq!(store.load_canonical().unwrap(), vec![message]);
     assert_eq!(
-        predecessor
-            .summary
-            .as_ref()
-            .map(|summary| &summary.request_id),
-        Some(&Some(first_request_id))
+        store
+            .read_events(Some(committed.sequence - 1), 1)
+            .unwrap()
+            .events[0]
+            .sequence,
+        committed.sequence
     );
+}
+
+#[test]
+fn trace_unchanged_bindings_keep_typed_encoding_admission() {
+    let store = store();
+    let (_, _, committed) = trace_commit_raw_publication(&store);
+    let connection = store.lock().unwrap();
+    let before: Vec<u8> = connection
+        .query_row(
+            "SELECT observation_trace_summary FROM message_ledger WHERE position=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&before).unwrap();
+    // serde permits omitted Option fields. The stored bytes still fit, while
+    // encoding the decoded typed object must restore these fields and fail.
+    let object = value.as_object_mut().unwrap();
+    for key in [
+        "source",
+        "context_kind",
+        "identity",
+        "preview",
+        "tool_outcome",
+        "tool_detail",
+    ] {
+        object.remove(key);
+    }
+    object.insert("fields".into(), serde_json::json!([]));
+    object.insert("calls".into(), serde_json::json!([]));
+    object.insert("collections".into(), serde_json::json!([]));
+    object.insert("identity".into(), serde_json::json!(""));
+    let base = serde_json::to_vec(&value).unwrap().len();
+    value["identity"] =
+        serde_json::json!("x".repeat(crate::durable::observation::HEADER_ENCODED_MAX - base));
+    let bytes = serde_json::to_vec(&value).unwrap();
+    assert_eq!(bytes.len(), crate::durable::observation::HEADER_ENCODED_MAX);
+    let decoded: crate::durable::observation::TraceCanonicalSummary =
+        serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        crate::observation::bounded::bounded_bytes(
+            &decoded,
+            crate::durable::observation::HEADER_ENCODED_MAX
+        )
+        .is_none()
+    );
+    connection
+        .execute(
+            "UPDATE message_ledger SET observation_trace_summary=?1 WHERE position=1",
+            [bytes],
+        )
+        .unwrap();
+    assert!(matches!(
+        observation_trace::settle_fields(&connection, &committed),
+        Err(ConversationStoreError::Storage(_))
+    ));
+    connection
+        .execute(
+            "UPDATE message_ledger SET observation_trace_summary=?1 WHERE position=1",
+            [before],
+        )
+        .unwrap();
+    observation_trace::settle_fields(&connection, &committed).unwrap();
 }

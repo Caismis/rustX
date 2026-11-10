@@ -1,0 +1,954 @@
+{
+  "pi-auth-leaveout-identity-check.json": {
+    "bytes": 5046,
+    "sha256": "31b73648b2e0bffb38d8bcd609d32e35dd179ec52036daba37299bb3392a14a4"
+  },
+  "pi-auth-leaveout-matrix/0-cancel-after.json": {
+    "bytes": 126107,
+    "sha256": "ca84bb95c8ed7e13f41a6385038f24a2f3bca6506124ce60183306a0aff4cd12"
+  },
+  "pi-auth-leaveout-matrix/0-cancel-after.log": {
+    "bytes": 319,
+    "sha256": "35663b6ed9b1fa900604c83bd790fb890f3fef9eb7c318ffe52dca747e3453dd"
+  },
+  "pi-auth-leaveout-matrix/0-cancel-after.process.json": {
+    "bytes": 22652,
+    "sha256": "fa4e4a7f8bcccacefd390991002bed3864a8f2871e1ea29213816c5e123b6f8b"
+  },
+  "pi-auth-leaveout-matrix/0-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "39de4406c984b374e797e9a0c89bb7f3f58225a066b1ebd40f2554c048432b0d"
+  },
+  "pi-auth-leaveout-matrix/0-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "37b7fef03e9be40d2de8f040f6599cd4f21f713318549a44fcb617013f25b0a0"
+  },
+  "pi-auth-leaveout-matrix/0-cancel-before.json": {
+    "bytes": 126113,
+    "sha256": "5397057346ee09680a6a15152eb37d36e411135be5b506d9190e3dad58c76387"
+  },
+  "pi-auth-leaveout-matrix/0-cancel-before.log": {
+    "bytes": 319,
+    "sha256": "06e088187573c6a5dcf4aca6ca4619955dc8d1b99f9dbe92d74e48455e81e8d7"
+  },
+  "pi-auth-leaveout-matrix/0-cancel-before.process.json": {
+    "bytes": 22658,
+    "sha256": "b691f0393bccb168492c64c64dd05d0985c8dc49c5970e43eb271f78c7a9566c"
+  },
+  "pi-auth-leaveout-matrix/0-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "d8589c0d536a37383e8b3d73e971aa5b166867c0b9e066955e6392f88482a7dc"
+  },
+  "pi-auth-leaveout-matrix/0-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "37b7fef03e9be40d2de8f040f6599cd4f21f713318549a44fcb617013f25b0a0"
+  },
+  "pi-auth-leaveout-matrix/0-cancel-comparison.json": {
+    "bytes": 602,
+    "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6"
+  },
+  "pi-auth-leaveout-matrix/0-large-after.json": {
+    "bytes": 159080,
+    "sha256": "a4bba44fb77db17b51af398939fb8d90522a02d7f6ab4a42222fdf7331a65307"
+  },
+  "pi-auth-leaveout-matrix/0-large-after.log": {
+    "bytes": 318,
+    "sha256": "84ec25eda97dbb868fe2a9e409896afc7b9d6e2e4574236f09bd16332897b3cd"
+  },
+  "pi-auth-leaveout-matrix/0-large-after.process.json": {
+    "bytes": 44420,
+    "sha256": "bca56cae180c8f9c90a898b4003628ee3f0388e6ff09cebee472276fa202a6bc"
+  },
+  "pi-auth-leaveout-matrix/0-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "912d0d4d3532d244d22e19bba3d5b188f37cdd5ee86d61feecbe71e97cc317ec"
+  },
+  "pi-auth-leaveout-matrix/0-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "d23d3f982dfae92957eb35e224247c1d6adacf878698521088328f61e5a25cb2"
+  },
+  "pi-auth-leaveout-matrix/0-large-before.json": {
+    "bytes": 159082,
+    "sha256": "1885a2589a9630cc2397c979796952d78139c87eaad39d4b082da4e154e1c966"
+  },
+  "pi-auth-leaveout-matrix/0-large-before.log": {
+    "bytes": 318,
+    "sha256": "9fd7802308cdc6a3171bf254c0bfb55913f1375ebd5560120f0a434e741146b5"
+  },
+  "pi-auth-leaveout-matrix/0-large-before.process.json": {
+    "bytes": 44426,
+    "sha256": "47a8493b6707bfb23415b8add4778ff2b2553141842f702f9b5f2a8ba3595542"
+  },
+  "pi-auth-leaveout-matrix/0-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "619b0229bdf1432726308911f8f0a00373b20935d7798699584ee628a41948a0"
+  },
+  "pi-auth-leaveout-matrix/0-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "d23d3f982dfae92957eb35e224247c1d6adacf878698521088328f61e5a25cb2"
+  },
+  "pi-auth-leaveout-matrix/0-large-comparison.json": {
+    "bytes": 601,
+    "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab"
+  },
+  "pi-auth-leaveout-matrix/0-short-large-after.json": {
+    "bytes": 24770875,
+    "sha256": "f749d191ce67c53376d923fcef64079ba6dfb647b271872eba4625953036af28"
+  },
+  "pi-auth-leaveout-matrix/0-short-large-after.log": {
+    "bytes": 325,
+    "sha256": "96fca9309054c4745fa805cad8221bf5b70b1cf927e6b064f7709688937a0004"
+  },
+  "pi-auth-leaveout-matrix/0-short-large-after.process.json": {
+    "bytes": 4384553,
+    "sha256": "6ec0d941450fd065fc0a1bb4276bd371700ddf3ed7eb2621bd4dc3b284bb2d76"
+  },
+  "pi-auth-leaveout-matrix/0-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "3b6d5d089aa2702a556c8a7701aa84b42e50ad3d65cf9dadf8822438ed99541d"
+  },
+  "pi-auth-leaveout-matrix/0-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "1ae67124ceb7d79c822f53c4a3f507cc031d833c40ee79e22a5f3a20ae246c9b"
+  },
+  "pi-auth-leaveout-matrix/0-short-large-before.json": {
+    "bytes": 24770851,
+    "sha256": "ae9a4da4d344ad6e5d16d8a34516622ceb1130a375132bc061edca241ff646e4"
+  },
+  "pi-auth-leaveout-matrix/0-short-large-before.log": {
+    "bytes": 325,
+    "sha256": "434d8182b6a4aa21bbac2a0b83acf54331f58fbdb04f452e37c9e12ba8d7cd6f"
+  },
+  "pi-auth-leaveout-matrix/0-short-large-before.process.json": {
+    "bytes": 4384559,
+    "sha256": "8a506afd0edd439143dae704ae8e7d0e6ba3aa46d2729f61fd97aee138d8b149"
+  },
+  "pi-auth-leaveout-matrix/0-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "89fe2d2445ad478a5c04bd886193d8db85c03f33b40ef914caccb574de0a5508"
+  },
+  "pi-auth-leaveout-matrix/0-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "a4e615d9ca138bd181d1b334e069f5a4b6f977896f76ec708bf16506f2a16e9e"
+  },
+  "pi-auth-leaveout-matrix/0-short-large-comparison.json": {
+    "bytes": 53988,
+    "sha256": "0470c7d81e34e64f315b4a650e4ddb80521a19babd8b6b3499376f25aa057937"
+  },
+  "pi-auth-leaveout-matrix/0-short-small-after.json": {
+    "bytes": 6681347,
+    "sha256": "41a69296a6a6c163df6cba7c537e4658fc0dd18579960bba243a1d364ca86f10"
+  },
+  "pi-auth-leaveout-matrix/0-short-small-after.log": {
+    "bytes": 324,
+    "sha256": "979942e7736c15617fac58c07c29e79a99b287279e63620b99fe5eab35a06826"
+  },
+  "pi-auth-leaveout-matrix/0-short-small-after.process.json": {
+    "bytes": 1262887,
+    "sha256": "0baa2acc6827b0f8a432546917cfd0e3fb92a0dab81f824b66ea4615885562f3"
+  },
+  "pi-auth-leaveout-matrix/0-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "254693c001b7748146a095cf6002f3b11e29c29d20bad2dbe3e371265eef3666"
+  },
+  "pi-auth-leaveout-matrix/0-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "6ff2a7585be5d63c25d4d797531d8ee99435d255a3b423cd46d45399865712c8"
+  },
+  "pi-auth-leaveout-matrix/0-short-small-before.json": {
+    "bytes": 6681353,
+    "sha256": "acce27e5feb946626977b89ab45549d711669b8ba7bb1539755d55d00344b311"
+  },
+  "pi-auth-leaveout-matrix/0-short-small-before.log": {
+    "bytes": 324,
+    "sha256": "4efd7db59c3c83943a6ba26e07eb28a07b162590b8857cc8c3d14a4230925692"
+  },
+  "pi-auth-leaveout-matrix/0-short-small-before.process.json": {
+    "bytes": 1262893,
+    "sha256": "d8a66e5fa229d1d152516830cf237a5b99d217e3f7aeaa70a0977519e2d408d2"
+  },
+  "pi-auth-leaveout-matrix/0-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "9283bf8c7843c24a6f62a6aff4ff49681ed5f676b9626b5358900434947d724c"
+  },
+  "pi-auth-leaveout-matrix/0-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "f778fefa0ebe0d858ab8e1567688992281cd7770263c1f6897446d4219457e24"
+  },
+  "pi-auth-leaveout-matrix/0-short-small-comparison.json": {
+    "bytes": 22516,
+    "sha256": "5390510949ea4c0b3fb6b9ba1f9a1667deb2c8e475c1a36dd7766e0fc81a7ad2"
+  },
+  "pi-auth-leaveout-matrix/0-stream-after.json": {
+    "bytes": 128637,
+    "sha256": "92c722754804a75a20d8409a54a2951e28fcc0972d9f6552b3051e8d490c8932"
+  },
+  "pi-auth-leaveout-matrix/0-stream-after.log": {
+    "bytes": 319,
+    "sha256": "9c37c9d6aed1224efe71226699f63f7f5601f7841b68e2d1c86f4045200a973b"
+  },
+  "pi-auth-leaveout-matrix/0-stream-after.process.json": {
+    "bytes": 66864,
+    "sha256": "b37f180c63cd8de06f0257993c72860b6ad690375508e9148cc55b63d34788e0"
+  },
+  "pi-auth-leaveout-matrix/0-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "6613e3c3d3d1debbf9086172b2d574edc6769ec349bb24e51ba7d6c4a3c5df39"
+  },
+  "pi-auth-leaveout-matrix/0-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "6eabd2285bddbcc3dccb3b3e8463e633b044f3400c9a713806d7828b6c5eaa32"
+  },
+  "pi-auth-leaveout-matrix/0-stream-before.json": {
+    "bytes": 128645,
+    "sha256": "fc6562cc552fb7c78b11df45aefe66630268f9fc601cde2166c89ca061ab3cda"
+  },
+  "pi-auth-leaveout-matrix/0-stream-before.log": {
+    "bytes": 319,
+    "sha256": "3c57583b85bf7c2f5bf6314f076f8a82039ab97308db33f5c7c0606510bfacec"
+  },
+  "pi-auth-leaveout-matrix/0-stream-before.process.json": {
+    "bytes": 66870,
+    "sha256": "d059b218055c26eee4bf52ab8ae648bc8faa0b48222d752654ed06a5d2ec257c"
+  },
+  "pi-auth-leaveout-matrix/0-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "813094ac2dfb4d2734af56a6b240883146b52cc0250cb5370a5ac83beacfca81"
+  },
+  "pi-auth-leaveout-matrix/0-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "0aca6d2f15b4e95aa418237913362c8d3e50797bbb41a8fa135751f2a8386d26"
+  },
+  "pi-auth-leaveout-matrix/0-stream-comparison.json": {
+    "bytes": 602,
+    "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed"
+  },
+  "pi-auth-leaveout-matrix/0-tool-after.json": {
+    "bytes": 232822,
+    "sha256": "9dfb7b54064c6838eade7b4abab3ac4ceef4230e658b2ee1bd7d9283c79feab8"
+  },
+  "pi-auth-leaveout-matrix/0-tool-after.log": {
+    "bytes": 317,
+    "sha256": "8b5ada0b982c498b2df3cd89e65610c9d31a86a869f3e6d0a4ef58842748088a"
+  },
+  "pi-auth-leaveout-matrix/0-tool-after.process.json": {
+    "bytes": 45168,
+    "sha256": "d7727edf34b9d615bf4129962dad3e0ec69622ac38e85603a59f8cf0083497b9"
+  },
+  "pi-auth-leaveout-matrix/0-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "14c5efe5e708bbaf7f8762b08cec605a5ebfe06b6ed914e6319539f178c9a5c1"
+  },
+  "pi-auth-leaveout-matrix/0-tool-after.provider.stdout": {
+    "bytes": 26202,
+    "sha256": "009dd47a9330db9eb8431ebafa6d446f11d454e45063830153642c7c627d3ebd"
+  },
+  "pi-auth-leaveout-matrix/0-tool-before.json": {
+    "bytes": 232834,
+    "sha256": "5f46532f9045027053c9f42717d1435e878a884bdb230b05368784469965ed5b"
+  },
+  "pi-auth-leaveout-matrix/0-tool-before.log": {
+    "bytes": 317,
+    "sha256": "ca32df3713607c3a93b2b4c3effc93728e81d53168609e6e24477bad0136783e"
+  },
+  "pi-auth-leaveout-matrix/0-tool-before.process.json": {
+    "bytes": 45174,
+    "sha256": "157ad12ca7c2533b7ae37bb23a7c2d7f6e928f5aae8aeb48a0142b0c635de545"
+  },
+  "pi-auth-leaveout-matrix/0-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "6cce4fd797c2a9909251fb5146b9f2005ed80f164951a14c1f6b818f5d850906"
+  },
+  "pi-auth-leaveout-matrix/0-tool-before.provider.stdout": {
+    "bytes": 26202,
+    "sha256": "93730aba5b582fd4af142d2fbe29403c05f4636aa30b47c60823f4ffea4d0dd6"
+  },
+  "pi-auth-leaveout-matrix/0-tool-comparison.json": {
+    "bytes": 1161,
+    "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493"
+  },
+  "pi-auth-leaveout-matrix/1-cancel-after.json": {
+    "bytes": 126113,
+    "sha256": "dc68b59a7d16be7d6ecba481a3b79cc2d33282ce9a4303cb501961b359a540e0"
+  },
+  "pi-auth-leaveout-matrix/1-cancel-after.log": {
+    "bytes": 319,
+    "sha256": "02a3fb76ff3dfd5d163047c5bf394cb13e21daa50752258d3617fa0a6fef4df9"
+  },
+  "pi-auth-leaveout-matrix/1-cancel-after.process.json": {
+    "bytes": 22652,
+    "sha256": "789a93ca4e5596558fb49be6e703644012e170336e267f801bd22bac6b51b81b"
+  },
+  "pi-auth-leaveout-matrix/1-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "b5243fc52038f376f42293a856eefed0f185f797c95723f824b1c60cac01d3f8"
+  },
+  "pi-auth-leaveout-matrix/1-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "2dd3d6f042bb96d3f54cbb77b67a998619ae2e261af26a5c6a821c2febb4b6b8"
+  },
+  "pi-auth-leaveout-matrix/1-cancel-before.json": {
+    "bytes": 126105,
+    "sha256": "b091872a12f468938ce291d044c75c38d87d2434fa21fd9500dd6ffb3ccaa053"
+  },
+  "pi-auth-leaveout-matrix/1-cancel-before.log": {
+    "bytes": 319,
+    "sha256": "f964cd0f794988237a3c4e0b3fba66b69272c8774a3c357876db4fb4e51b94bf"
+  },
+  "pi-auth-leaveout-matrix/1-cancel-before.process.json": {
+    "bytes": 22658,
+    "sha256": "a768d5fb068947f28367267c128fbd1223ec594ec38b37bc30bf1f7a4dce3efd"
+  },
+  "pi-auth-leaveout-matrix/1-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "353a5aa1f452f3266614f0aaea36907587af810328d7d81203bb40c21a003a56"
+  },
+  "pi-auth-leaveout-matrix/1-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "2dd3d6f042bb96d3f54cbb77b67a998619ae2e261af26a5c6a821c2febb4b6b8"
+  },
+  "pi-auth-leaveout-matrix/1-cancel-comparison.json": {
+    "bytes": 602,
+    "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6"
+  },
+  "pi-auth-leaveout-matrix/1-large-after.json": {
+    "bytes": 159080,
+    "sha256": "12acfa81a2d3f8a0f61a73ac983d34d1009c3c823b7ae9aa1725781dc2867eb8"
+  },
+  "pi-auth-leaveout-matrix/1-large-after.log": {
+    "bytes": 318,
+    "sha256": "134bb19db228187890f6f6a16d0ba1a584ad1bc10ed946c5dcdbc5061eefb6cc"
+  },
+  "pi-auth-leaveout-matrix/1-large-after.process.json": {
+    "bytes": 44420,
+    "sha256": "209aaf887ca88a9b6d10288541f1aceffba7f35c3edce80295218ae91aae842c"
+  },
+  "pi-auth-leaveout-matrix/1-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "4ceb88c19c21e841153fd0d4138da20ede6f044a9eba81ae566fe590bc5d7289"
+  },
+  "pi-auth-leaveout-matrix/1-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "029cb558d569865830a1a19515ed1b8a19a7fcceecfe006a8ec6b30a6dfd4b84"
+  },
+  "pi-auth-leaveout-matrix/1-large-before.json": {
+    "bytes": 159082,
+    "sha256": "b41359fd832626433524b1a5b45356dc803deae88532c1ecdbfd277980d21a45"
+  },
+  "pi-auth-leaveout-matrix/1-large-before.log": {
+    "bytes": 318,
+    "sha256": "9e7d2fb93f789b3db664858c348b2ae684915c851d26464b823f8fcf464f2792"
+  },
+  "pi-auth-leaveout-matrix/1-large-before.process.json": {
+    "bytes": 44426,
+    "sha256": "d7433a26580185e7a6c0b455868919499d783fb361b960faca2cf6dd4bdcdcfd"
+  },
+  "pi-auth-leaveout-matrix/1-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "45d92ea17c8a2878ebd7c94d03314846dd826d1f4652e9882d37b0e31a907b01"
+  },
+  "pi-auth-leaveout-matrix/1-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "029cb558d569865830a1a19515ed1b8a19a7fcceecfe006a8ec6b30a6dfd4b84"
+  },
+  "pi-auth-leaveout-matrix/1-large-comparison.json": {
+    "bytes": 601,
+    "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab"
+  },
+  "pi-auth-leaveout-matrix/1-short-large-after.json": {
+    "bytes": 24770806,
+    "sha256": "5146f2b63ecbdcd87de89a7103f54203c416056fb092bd61d7887ca976aa07c0"
+  },
+  "pi-auth-leaveout-matrix/1-short-large-after.log": {
+    "bytes": 325,
+    "sha256": "6d23d635b7bbfd3afdbe933bcc8fe1e615f9c19c54e8b65e011d7f052859c2b8"
+  },
+  "pi-auth-leaveout-matrix/1-short-large-after.process.json": {
+    "bytes": 4384553,
+    "sha256": "d9609e868eed7f7d065ea157f724b4e48ed16021c74a21b50276a02ce6fbba92"
+  },
+  "pi-auth-leaveout-matrix/1-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "103e6705048ed5d2f05116b961f4266bcf0be6b4fc1151b0deda6107a912d80c"
+  },
+  "pi-auth-leaveout-matrix/1-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "f397c375b85d2a5c114dcff5e1225e29a21affd3b39a96c584affc4e6c4ff872"
+  },
+  "pi-auth-leaveout-matrix/1-short-large-before.json": {
+    "bytes": 24770933,
+    "sha256": "2b5c375531dee6e240674c5cc3d3e880cd70e510a9f27d36812ec77cfb5a401a"
+  },
+  "pi-auth-leaveout-matrix/1-short-large-before.log": {
+    "bytes": 325,
+    "sha256": "c74e27d19a99e8badb6ba61df6d3b698d445e2952b6bc7c6d38110ca057eff3c"
+  },
+  "pi-auth-leaveout-matrix/1-short-large-before.process.json": {
+    "bytes": 4384559,
+    "sha256": "d273eb7d6d7646031e8da1d975724c8cb9e10359ace9e52e717da3c76a683a0c"
+  },
+  "pi-auth-leaveout-matrix/1-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "fca2757eb585d0f1d0040fc11c08e24942baa6b2113d439520018dcd00068af5"
+  },
+  "pi-auth-leaveout-matrix/1-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "d5211747bac05b51a9f84c395602ca691fa468caec77965c9dc3635be23c6bb1"
+  },
+  "pi-auth-leaveout-matrix/1-short-large-comparison.json": {
+    "bytes": 53988,
+    "sha256": "0470c7d81e34e64f315b4a650e4ddb80521a19babd8b6b3499376f25aa057937"
+  },
+  "pi-auth-leaveout-matrix/1-short-small-after.json": {
+    "bytes": 6681349,
+    "sha256": "6e81f0644fe7a7ec020e0f581aefcd9833819b4c5111bb7590378e0d01ae327c"
+  },
+  "pi-auth-leaveout-matrix/1-short-small-after.log": {
+    "bytes": 324,
+    "sha256": "97da8ba53805715cd75b590e065905fd02911943f912537ffc254011efe048e3"
+  },
+  "pi-auth-leaveout-matrix/1-short-small-after.process.json": {
+    "bytes": 1262887,
+    "sha256": "8fda817f4c872c435637b6c5e8fddd4307f24b3acf4676ea35657555dd7fe3f8"
+  },
+  "pi-auth-leaveout-matrix/1-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "d4fe29ce65c38fb8b535cca33c8b9cda61e1a0cac373f9ede6d6bb69d11532a5"
+  },
+  "pi-auth-leaveout-matrix/1-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "40fb0bb2c0da3cd7eca612139de828dfc6623c2d2aa530a0206bbf88ee70928a"
+  },
+  "pi-auth-leaveout-matrix/1-short-small-before.json": {
+    "bytes": 6681343,
+    "sha256": "dc06e7436187dd6bd04353ec415754d9d5f298927e2f3d1e2d5df28d622f8efe"
+  },
+  "pi-auth-leaveout-matrix/1-short-small-before.log": {
+    "bytes": 324,
+    "sha256": "09d95d4c2f7fe6ee6c484ee3dcf008320c2a25134e55e00428bc8c4a9772a427"
+  },
+  "pi-auth-leaveout-matrix/1-short-small-before.process.json": {
+    "bytes": 1262893,
+    "sha256": "06d1e0d4d86a8338be7424609177e7fdbba24741467bfff5afabb2fe63c9398c"
+  },
+  "pi-auth-leaveout-matrix/1-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "f5a14e6ab390fcab1e61e90e4a9b670a869ea26e855cae898e2748ea5132aab2"
+  },
+  "pi-auth-leaveout-matrix/1-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "7cae496b083bb729a98e580abf48f15d5bd2360f46a8bb4d606435345bd81d9b"
+  },
+  "pi-auth-leaveout-matrix/1-short-small-comparison.json": {
+    "bytes": 22516,
+    "sha256": "5390510949ea4c0b3fb6b9ba1f9a1667deb2c8e475c1a36dd7766e0fc81a7ad2"
+  },
+  "pi-auth-leaveout-matrix/1-stream-after.json": {
+    "bytes": 128632,
+    "sha256": "dc9aa48e6b1e785082d7aac87abd3547faf046361d1832bb58a9be678170da4e"
+  },
+  "pi-auth-leaveout-matrix/1-stream-after.log": {
+    "bytes": 319,
+    "sha256": "a76245f122a3d8c98543b2185e540001dd3c5821ea575738418b5a441fee4ba7"
+  },
+  "pi-auth-leaveout-matrix/1-stream-after.process.json": {
+    "bytes": 66864,
+    "sha256": "8dfb34fbfe88bb59970ec7e88ff70fd4763f5c3a2620d46f3178e43d1fb6dffc"
+  },
+  "pi-auth-leaveout-matrix/1-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "84dccf32db97441df28bb6581ecab484fea212944a9707a0c4f2b758d1e56548"
+  },
+  "pi-auth-leaveout-matrix/1-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "5a134353bfd462fc8f4f4a926fd3113bb78bcc837e9533a155df595169a9b78c"
+  },
+  "pi-auth-leaveout-matrix/1-stream-before.json": {
+    "bytes": 128637,
+    "sha256": "cfe2dbc6934b5f7269468c28f5685d21df77b8315f8c42b684da5f724daebadf"
+  },
+  "pi-auth-leaveout-matrix/1-stream-before.log": {
+    "bytes": 319,
+    "sha256": "0bc1e96b2d02f669535ec0c06614a28e16913a58982a08beecc938d2c387e130"
+  },
+  "pi-auth-leaveout-matrix/1-stream-before.process.json": {
+    "bytes": 66870,
+    "sha256": "8ce69177d1d7383111cd7f0f3b878129726f56f138cae2a99d924ee82f5e9a2c"
+  },
+  "pi-auth-leaveout-matrix/1-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "eb8b7693788af78530427ab3cc5583a911b75f197554f0d56d41df527799e53c"
+  },
+  "pi-auth-leaveout-matrix/1-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "8d2d6365362e533cae2f2eed35dab85d481ede58feb6d32c5c43b90d58814195"
+  },
+  "pi-auth-leaveout-matrix/1-stream-comparison.json": {
+    "bytes": 602,
+    "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed"
+  },
+  "pi-auth-leaveout-matrix/1-tool-after.json": {
+    "bytes": 232821,
+    "sha256": "4965d79eff0df2e2cc0cb90f1c89e98794e4f6a90d283f6929fbe0348ca772cc"
+  },
+  "pi-auth-leaveout-matrix/1-tool-after.log": {
+    "bytes": 317,
+    "sha256": "f883afb4f67692ee31d494cf03f4b49c21e067f656d9f4a713ba000dddf91990"
+  },
+  "pi-auth-leaveout-matrix/1-tool-after.process.json": {
+    "bytes": 45168,
+    "sha256": "b2fa26ecbfb21857f07c67922bf9ac34128dea5d1b14b5039ebd485e22372dcf"
+  },
+  "pi-auth-leaveout-matrix/1-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "34c4f8a7451d98dce610301651190ae9c0e052d882ec87353537056b2f83d5c6"
+  },
+  "pi-auth-leaveout-matrix/1-tool-after.provider.stdout": {
+    "bytes": 26202,
+    "sha256": "3d727a5695600716e6baaad13a4e6503fabd5884f3cdcb96254b271ceb2bafda"
+  },
+  "pi-auth-leaveout-matrix/1-tool-before.json": {
+    "bytes": 232829,
+    "sha256": "e167f293a0aea7c40cb57cda69d66fc0690e3dfbe249c9d2c5a880b4639404f1"
+  },
+  "pi-auth-leaveout-matrix/1-tool-before.log": {
+    "bytes": 317,
+    "sha256": "6a229c7b1c2b852671bb11c6f3678514a44d4a306e362ea1c7cc06d65c2b83c2"
+  },
+  "pi-auth-leaveout-matrix/1-tool-before.process.json": {
+    "bytes": 45174,
+    "sha256": "22ba564f624ba4acfb514e02ad03dd65b535d892d617854037275f2a184b9629"
+  },
+  "pi-auth-leaveout-matrix/1-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "2c09130a539df34fc258d73a67f191ddb57569fb951b108d3d90dce6389b7921"
+  },
+  "pi-auth-leaveout-matrix/1-tool-before.provider.stdout": {
+    "bytes": 26202,
+    "sha256": "4d12f69338d0463f203fc98ebce0e5783067980a264a0aa7360adbf36931d845"
+  },
+  "pi-auth-leaveout-matrix/1-tool-comparison.json": {
+    "bytes": 1161,
+    "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493"
+  },
+  "pi-auth-leaveout-matrix/2-cancel-after.json": {
+    "bytes": 126105,
+    "sha256": "fa86b6914c43202319ccd9bdc8dd598e290481516fec6925e14bad0a65632769"
+  },
+  "pi-auth-leaveout-matrix/2-cancel-after.log": {
+    "bytes": 319,
+    "sha256": "fac6bbf7c65e45c1916b3a3cc401f1c26286a509c9f030a3fd437b62271dd002"
+  },
+  "pi-auth-leaveout-matrix/2-cancel-after.process.json": {
+    "bytes": 22652,
+    "sha256": "417595df79594747cd0f93fe8b6421ffd162b83cc06b46bb74df7452a51f1012"
+  },
+  "pi-auth-leaveout-matrix/2-cancel-after.provider.log": {
+    "bytes": 67,
+    "sha256": "0eeea08d6855ab7c4b3961441f845b86c30ceaf46f5aec7dc7a6fb4fb460ac0c"
+  },
+  "pi-auth-leaveout-matrix/2-cancel-after.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "f018faded9d847466fb040b71a74de29de9caeb5cccd1280af70fc717c9f1e87"
+  },
+  "pi-auth-leaveout-matrix/2-cancel-before.json": {
+    "bytes": 126113,
+    "sha256": "114bfd5098dadc347ba7c224686bf758da4edc17df5b6e9216855df887ce8ef3"
+  },
+  "pi-auth-leaveout-matrix/2-cancel-before.log": {
+    "bytes": 319,
+    "sha256": "128644e38e74c59ec4b1c730540b4b5578789ef65be06a861eff6f2f6ec8c43e"
+  },
+  "pi-auth-leaveout-matrix/2-cancel-before.process.json": {
+    "bytes": 22658,
+    "sha256": "4ef6bcc829cc2398aadd16f7d1bb81d4afaa5e3d3be4d0a7cf326f91f57897f2"
+  },
+  "pi-auth-leaveout-matrix/2-cancel-before.provider.log": {
+    "bytes": 67,
+    "sha256": "3f6cf8c4ec2a8d0a4eb4aa8127837fd57463bc741311744cbc779e29c674b9d2"
+  },
+  "pi-auth-leaveout-matrix/2-cancel-before.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "fb6ee2ac825a1dd8ef716d07530a99f1e8c7ea12d35ca4ac2f9b3b36be8e8f97"
+  },
+  "pi-auth-leaveout-matrix/2-cancel-comparison.json": {
+    "bytes": 602,
+    "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6"
+  },
+  "pi-auth-leaveout-matrix/2-large-after.json": {
+    "bytes": 159080,
+    "sha256": "a1abd8056c07076c321a0f069ece8e252603287595b9c901e0ce460f8405cbb1"
+  },
+  "pi-auth-leaveout-matrix/2-large-after.log": {
+    "bytes": 318,
+    "sha256": "9f385aa44d56a5436bd5202d777a4bcc3fdc2e84d43420ad290943b8332016d7"
+  },
+  "pi-auth-leaveout-matrix/2-large-after.process.json": {
+    "bytes": 44420,
+    "sha256": "5ca13d00e4d5f377168a05584349d08a6fabe523ef05e43f623138fe2821ead6"
+  },
+  "pi-auth-leaveout-matrix/2-large-after.provider.log": {
+    "bytes": 66,
+    "sha256": "542253d141b924c68787e0dc8b319201be3913acd641587507a6911e6f93f1bd"
+  },
+  "pi-auth-leaveout-matrix/2-large-after.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "22236ecbac12395459fa11f76e9071f16b7a79b18646ddd7f1cdb9394e78febc"
+  },
+  "pi-auth-leaveout-matrix/2-large-before.json": {
+    "bytes": 159080,
+    "sha256": "2781e822b10768f90bc263552cc08076afd638572f40cf40552b11bb869f659b"
+  },
+  "pi-auth-leaveout-matrix/2-large-before.log": {
+    "bytes": 318,
+    "sha256": "ccd12ce5d309e46b168e0004045ce58bfcdc2bb7697bf6b22089e2f8f87357fc"
+  },
+  "pi-auth-leaveout-matrix/2-large-before.process.json": {
+    "bytes": 44426,
+    "sha256": "3c435cb41091d1cabdc363a1fb8686017f09fceae49fcd14993fd4f5209de578"
+  },
+  "pi-auth-leaveout-matrix/2-large-before.provider.log": {
+    "bytes": 66,
+    "sha256": "68623af96e3d4eec9710079e7176bd5a372dcf40e11e9fae2c9ebec4cfc81357"
+  },
+  "pi-auth-leaveout-matrix/2-large-before.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "22236ecbac12395459fa11f76e9071f16b7a79b18646ddd7f1cdb9394e78febc"
+  },
+  "pi-auth-leaveout-matrix/2-large-comparison.json": {
+    "bytes": 601,
+    "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab"
+  },
+  "pi-auth-leaveout-matrix/2-short-large-after.json": {
+    "bytes": 24770821,
+    "sha256": "c803c1251f3f7931a40b383d090ae00fe6a8b5e32967a3bd501fec8dbf2a3777"
+  },
+  "pi-auth-leaveout-matrix/2-short-large-after.log": {
+    "bytes": 325,
+    "sha256": "d6c43c76fd5321f4d6ac56cc0f7413251555b90fa8d353de510984e6b0e8f7c7"
+  },
+  "pi-auth-leaveout-matrix/2-short-large-after.process.json": {
+    "bytes": 4384553,
+    "sha256": "cf4e5d3ac41158f5273dcd61bf00f6ff532c01a20eb92afe8f3165d81f9c0144"
+  },
+  "pi-auth-leaveout-matrix/2-short-large-after.provider.log": {
+    "bytes": 72,
+    "sha256": "ab867893805b9a65d9b670a0dd93ca40c465e44dd4b37d0d0a759f40924d0a88"
+  },
+  "pi-auth-leaveout-matrix/2-short-large-after.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "d59e63a44e93e2141b60cc640978bc591018ebe4e660e86f8b4f1f4fab58e270"
+  },
+  "pi-auth-leaveout-matrix/2-short-large-before.json": {
+    "bytes": 24770893,
+    "sha256": "f38e9d9e59d8118e22a57154c556bd4f3f6eb3f991e5d2cc1f9ef9882c5d912e"
+  },
+  "pi-auth-leaveout-matrix/2-short-large-before.log": {
+    "bytes": 325,
+    "sha256": "f237b398addc560ed271d36e0883b20518077f59cdbe71ef8a6443be387ba541"
+  },
+  "pi-auth-leaveout-matrix/2-short-large-before.process.json": {
+    "bytes": 4384559,
+    "sha256": "0b1825680bb4e226de11410f981e49de7fe1301e08ca7bddc720cb09ccfe77c4"
+  },
+  "pi-auth-leaveout-matrix/2-short-large-before.provider.log": {
+    "bytes": 72,
+    "sha256": "e65040539c60521933f6686883ea635d8dae56462108a77b2b8ff7d6bcdef277"
+  },
+  "pi-auth-leaveout-matrix/2-short-large-before.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "1f6ff0bff2b212f5011d7c8f2575ca8cd9dd253eed8f03d4bbe580f04bf30156"
+  },
+  "pi-auth-leaveout-matrix/2-short-large-comparison.json": {
+    "bytes": 53988,
+    "sha256": "0470c7d81e34e64f315b4a650e4ddb80521a19babd8b6b3499376f25aa057937"
+  },
+  "pi-auth-leaveout-matrix/2-short-small-after.json": {
+    "bytes": 6681352,
+    "sha256": "5914babe8d8390ecb1b401d01f3817cd702061cb36803ea3f6d46251aa597c36"
+  },
+  "pi-auth-leaveout-matrix/2-short-small-after.log": {
+    "bytes": 324,
+    "sha256": "f25e24447d45b76098ec259fc3731bb99d86ebb792e0990e536b855262a7be08"
+  },
+  "pi-auth-leaveout-matrix/2-short-small-after.process.json": {
+    "bytes": 1262887,
+    "sha256": "d30308e1375c64c47f57c51e06956e87a63de9bffc2d5a6dd3efe78508993f1f"
+  },
+  "pi-auth-leaveout-matrix/2-short-small-after.provider.log": {
+    "bytes": 72,
+    "sha256": "1ff3047e557ffab5379e962e3b18add7a07325460cb0b83d2a416047e1a06a34"
+  },
+  "pi-auth-leaveout-matrix/2-short-small-after.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "fe707a79caaef1026ec9335af85ee9c297a0eb7309bc5ec51e46c8f3c5d839fc"
+  },
+  "pi-auth-leaveout-matrix/2-short-small-before.json": {
+    "bytes": 6681351,
+    "sha256": "bc2a49cb4a83e71614b0626524d56d593f2ef0fe2ad2d31d292ef75063eb5f59"
+  },
+  "pi-auth-leaveout-matrix/2-short-small-before.log": {
+    "bytes": 324,
+    "sha256": "c67e5f430ebce7a189e50f1cc278a1299f5fe865287c5499d7963c4028e06d2d"
+  },
+  "pi-auth-leaveout-matrix/2-short-small-before.process.json": {
+    "bytes": 1262893,
+    "sha256": "acf5b748b1d627d052527cb96883e94170e4d640f1ba8a663ea7596d28e1d666"
+  },
+  "pi-auth-leaveout-matrix/2-short-small-before.provider.log": {
+    "bytes": 72,
+    "sha256": "7b35629f89633a16be8f0a9968ceecd8c1564628a9779ac6cd89e0381ac310ff"
+  },
+  "pi-auth-leaveout-matrix/2-short-small-before.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "464af64fb429a0d6520fc22fcb685e42496db3778f951345eec4b31ef29e74f7"
+  },
+  "pi-auth-leaveout-matrix/2-short-small-comparison.json": {
+    "bytes": 22516,
+    "sha256": "5390510949ea4c0b3fb6b9ba1f9a1667deb2c8e475c1a36dd7766e0fc81a7ad2"
+  },
+  "pi-auth-leaveout-matrix/2-stream-after.json": {
+    "bytes": 128637,
+    "sha256": "20e438433320692d0bf6cf598f820711feea53d71638112a610ca08d7b14f459"
+  },
+  "pi-auth-leaveout-matrix/2-stream-after.log": {
+    "bytes": 319,
+    "sha256": "67f322f172029b54dcd0671e64cc7acd9cc4c39318e3cecef70b93aa11bfd8c5"
+  },
+  "pi-auth-leaveout-matrix/2-stream-after.process.json": {
+    "bytes": 66864,
+    "sha256": "39ee5a64fe8689b54b8d2ef22c18240f64fc277e3de8563d60f56494bc83c72a"
+  },
+  "pi-auth-leaveout-matrix/2-stream-after.provider.log": {
+    "bytes": 67,
+    "sha256": "0e43e1c712ba3908a86c16c541fb2ddd3d5113e2b3cd8980c2c9b8f8bdea8281"
+  },
+  "pi-auth-leaveout-matrix/2-stream-after.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "d72a09c980dfb3e491b80785ddeced5b2c0c56df47e268cd2dde4d4d3b8d9cfa"
+  },
+  "pi-auth-leaveout-matrix/2-stream-before.json": {
+    "bytes": 128629,
+    "sha256": "fb0da233e0a7426f35de1c3d09078ff4b78fea022120be7f0cc418fc3e9847f2"
+  },
+  "pi-auth-leaveout-matrix/2-stream-before.log": {
+    "bytes": 319,
+    "sha256": "02c34791050c1884a9f684ab8b86c4dd38cdb6bdde3fff15186b6c4b25135108"
+  },
+  "pi-auth-leaveout-matrix/2-stream-before.process.json": {
+    "bytes": 66870,
+    "sha256": "869663f4a12c5513fe9bf647e404f2d84c9adabed2677609e3891102278cc91d"
+  },
+  "pi-auth-leaveout-matrix/2-stream-before.provider.log": {
+    "bytes": 67,
+    "sha256": "61c0ea0e33fb29c34d762d756e517297967bac6fb627b16ab43afaec4eec61de"
+  },
+  "pi-auth-leaveout-matrix/2-stream-before.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "ac5154b4da46ee9aeae438209f5d787831cd6bacf5fe0b8890c3f3c8f9e9237d"
+  },
+  "pi-auth-leaveout-matrix/2-stream-comparison.json": {
+    "bytes": 602,
+    "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed"
+  },
+  "pi-auth-leaveout-matrix/2-tool-after.json": {
+    "bytes": 232821,
+    "sha256": "cbd8382f3c19a41475b7d5bb734881929778e3697676c7f46d1b96d25e1a9ada"
+  },
+  "pi-auth-leaveout-matrix/2-tool-after.log": {
+    "bytes": 317,
+    "sha256": "a7d729537fed457bb8f263d32a5e30b8059ec09f89a7cc6073f9969b563548fc"
+  },
+  "pi-auth-leaveout-matrix/2-tool-after.process.json": {
+    "bytes": 45168,
+    "sha256": "d010750ba026478209437cefc5d6a856ee654829cce5078b702b22c14f2bdd43"
+  },
+  "pi-auth-leaveout-matrix/2-tool-after.provider.log": {
+    "bytes": 65,
+    "sha256": "7803a17a72dfa20239b40496b2ee232f427e8bf923efe0f2617b175406d2fc80"
+  },
+  "pi-auth-leaveout-matrix/2-tool-after.provider.stdout": {
+    "bytes": 26202,
+    "sha256": "f037576efa6af0b727a63809eb7a327f52dd97bc8f8b79447e811ff323db9555"
+  },
+  "pi-auth-leaveout-matrix/2-tool-before.json": {
+    "bytes": 232824,
+    "sha256": "c9c12f94de260b2a8595637f9a88fad9c4f3e023bf74707b49422e8f0bdbe1dd"
+  },
+  "pi-auth-leaveout-matrix/2-tool-before.log": {
+    "bytes": 317,
+    "sha256": "5a2ae09aaf2b7920042c9b920f83fabb9d55956261f2a1f7f4aaf3dab4a814bd"
+  },
+  "pi-auth-leaveout-matrix/2-tool-before.process.json": {
+    "bytes": 45174,
+    "sha256": "d738250b46e82a0e136df23190010b32c32b20dfe4ec573d4f4f64d8fbfa383b"
+  },
+  "pi-auth-leaveout-matrix/2-tool-before.provider.log": {
+    "bytes": 65,
+    "sha256": "6036282de1f89a7484e1d5f5d3229a17062498f98436c6e417bcf75ec022fc60"
+  },
+  "pi-auth-leaveout-matrix/2-tool-before.provider.stdout": {
+    "bytes": 26202,
+    "sha256": "e0f61fbe57cbeb5936f367f7010fa40b3aa5c2f3a20ab90f0c2bd87ab299969b"
+  },
+  "pi-auth-leaveout-matrix/2-tool-comparison.json": {
+    "bytes": 1161,
+    "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493"
+  },
+  "pi-auth-leaveout-matrix/manifest.json": {
+    "bytes": 791,
+    "sha256": "c8baed07f0147b5f82452146db6eb56f16c79ad772b75a16ec91f03c42a28311"
+  },
+  "pi-auth-leaveout-profile/analyze.py": {
+    "bytes": 2874,
+    "sha256": "f4583f37c6e98072ccae099cee12614a4fcf17fbb4d2e6a2fa4705836b437bb7"
+  },
+  "pi-auth-leaveout-profile/comparison.json": {
+    "bytes": 22516,
+    "sha256": "5390510949ea4c0b3fb6b9ba1f9a1667deb2c8e475c1a36dd7766e0fc81a7ad2"
+  },
+  "pi-auth-leaveout-profile/complete-after/after_turns-database.json": {
+    "bytes": 1978668,
+    "sha256": "ada80c9fbe9a6451cf0929accdadb8c5a5dffa8ee6d50f24735998a0e247a6ed"
+  },
+  "pi-auth-leaveout-profile/complete-after/before_measured_turns-database.json": {
+    "bytes": 339162,
+    "sha256": "b13f5a7a3f0bbbf62802d7bcd4d24dc28a62054c4b1b265ff21900205c79f391"
+  },
+  "pi-auth-leaveout-profile/complete-after/calls.strace": {
+    "bytes": 17415602,
+    "sha256": "ab5a8aae0f3a8c49fa4792c2cbb31f0241a38853fd53253387875e958bad7f6f"
+  },
+  "pi-auth-leaveout-profile/complete-after/phases.json": {
+    "bytes": 877,
+    "sha256": "a9900a234697570862053e9563466575fd47ba3a3dfb105fda89cc367f3eace7"
+  },
+  "pi-auth-leaveout-profile/complete-after/sample.json": {
+    "bytes": 6686930,
+    "sha256": "999333fa2ff6a0b20b0956a602409be7ca7732fb6d72a389e4b0bed9e9926f2d"
+  },
+  "pi-auth-leaveout-profile/complete-after/sample.log": {
+    "bytes": 341,
+    "sha256": "e2e090e83b9829e6bf4e128a7a69ae2817fc08538b96b73a101f858ef63d2624"
+  },
+  "pi-auth-leaveout-profile/complete-after/sample.process.json": {
+    "bytes": 1262890,
+    "sha256": "7cae854fa9ca2a9d04350a6bfa3d43f6afa3c3349af406e014a086426e94c39a"
+  },
+  "pi-auth-leaveout-profile/complete-after/sample.provider.log": {
+    "bytes": 72,
+    "sha256": "8ff29c1497d876ec26c0831cf91e5b5d54199e5349c04319b3291c134b65418c"
+  },
+  "pi-auth-leaveout-profile/complete-after/sample.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "360e76fa8e9623dbd832b0283ae15650c396ba8491dd6f358acf1f8f8ff73f29"
+  },
+  "pi-auth-leaveout-profile/complete-after/tracer.log": {
+    "bytes": 288,
+    "sha256": "c93701a76f2a8df95d2a2b43701fffbeb5b6fd34bc2e9474d570482f88cc0edd"
+  },
+  "pi-auth-leaveout-profile/complete-before/after_turns-database.json": {
+    "bytes": 1980369,
+    "sha256": "a935e007891eeb87907eeed2e0fa89fdaa28c50028cb146c01e5342ea50b4044"
+  },
+  "pi-auth-leaveout-profile/complete-before/before_measured_turns-database.json": {
+    "bytes": 340374,
+    "sha256": "13deda1cc88bee8d1023cc0cd790a434fb8a754f73425df191dea84067944a1b"
+  },
+  "pi-auth-leaveout-profile/complete-before/calls.strace": {
+    "bytes": 17467617,
+    "sha256": "f036a3e1c0db82a818f8be923474807df9ac958eff72fb2ea284fb476a713a4b"
+  },
+  "pi-auth-leaveout-profile/complete-before/phases.json": {
+    "bytes": 877,
+    "sha256": "955a2a66cca0e9a0d752f0f38808cfc0a18c5c6cd72b9adcbd8979c33c0a1cc2"
+  },
+  "pi-auth-leaveout-profile/complete-before/sample.json": {
+    "bytes": 6687258,
+    "sha256": "a5ba18cf89e390a12ad17241d6fe94818a89d079e28c7d19b78397f43476d6cc"
+  },
+  "pi-auth-leaveout-profile/complete-before/sample.log": {
+    "bytes": 342,
+    "sha256": "9b105f80852aabba1d29abc9d437f5ab01936956ca55688c5be269fc5e389fd9"
+  },
+  "pi-auth-leaveout-profile/complete-before/sample.process.json": {
+    "bytes": 1262896,
+    "sha256": "eeec3aa4859754fb0abc6a60563f067de3a7db35a0ceec19a1064b10293bb561"
+  },
+  "pi-auth-leaveout-profile/complete-before/sample.provider.log": {
+    "bytes": 72,
+    "sha256": "f5534630f5a788321fea199135703e2c3612d53ecd3c75bd85bba86647ba46a6"
+  },
+  "pi-auth-leaveout-profile/complete-before/sample.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "b274efe4d6f5a5a7def525d10a84489d208e5d2ed7860fdc5756cf47fee76e30"
+  },
+  "pi-auth-leaveout-profile/complete-before/tracer.log": {
+    "bytes": 320,
+    "sha256": "fb3bb171abb1c916de93ed3f30bb86b76fe251e1254c081ca2f3e8b6350d8896"
+  },
+  "pi-auth-leaveout-profile/identity.json": {
+    "bytes": 630,
+    "sha256": "6f063970f627d1eaa8a53b35c91d1f39ec59596c11dc82480cd784364743761a"
+  },
+  "pi-auth-leaveout-profile/run.py": {
+    "bytes": 4341,
+    "sha256": "614e5dd3088e072dc9907603e2dd8e3c6b0dd9030e69773fabe5a59775ce9af7"
+  },
+  "pi-auth-leaveout-profile/summary.json": {
+    "bytes": 22289,
+    "sha256": "80829a7ff994a3a978ca89b275ec20eeeb0dda6c3f16d7ab95f8888149c1071b"
+  },
+  "pi-auth-leaveout-stage.log": {
+    "bytes": 532,
+    "sha256": "0ad14d04bf97bedc40897e5c6cc8f0d9834be77d2c0fe27fa1a1e1a8d4743e56"
+  },
+  "pi-auth-restored-build/build.stderr": {
+    "bytes": 125,
+    "sha256": "845990d378aa818237525fdb6ff907f9108156f52be64f63bad513a443eaf91b"
+  },
+  "pi-auth-restored-build/build.stdout": {
+    "bytes": 461436,
+    "sha256": "7bb1d2d644b5b3350cfbe103908117e7595dcd927fd837164c3aedb8b34baf1e"
+  },
+  "pi-auth-restored-build/clean.stderr": {
+    "bytes": 38,
+    "sha256": "58bd8bf761f15b2d20312c422793b276828b24abe6e47e926d73ec3e237864a3"
+  },
+  "pi-auth-restored-build/clean.stdout": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "pi-auth-restored-build/identity.json": {
+    "bytes": 2349,
+    "sha256": "bc9951049dede5cba3e9a83c803eb3e06d33f89379c71de8f13ea4713d979638"
+  },
+  "pi-leaveout-provenance/auth-restored-complete-fixture.json": {
+    "bytes": 415,
+    "sha256": "b07c28b8c8cc9b8f7fb67b482993ce843950b9c18323e9479d6d248e4f27354e"
+  },
+  "pi-leaveout-provenance/auth-restored-complete-fixture.patch": {
+    "bytes": 73426,
+    "sha256": "5ef927471ecf5ef2ceaa21adca0ceeefbe3a49e842c498a4365cbb6c6919de17"
+  },
+  "pi-leaveout-provenance/auth-restored.json": {
+    "bytes": 348,
+    "sha256": "7525b1e870a17446fe0adf7e9b260219ab76ef045d4edb652860c351b6a27cf9"
+  },
+  "pi-leaveout-provenance/auth-restored.patch": {
+    "bytes": 74923,
+    "sha256": "788ae0fef6f22f5129d0d25d6a20161e50155e50ecaaf4e9f4ad1656cd4ec95c"
+  },
+  "rawvalue-p2/auth-benchmark-library-profile.json": {
+    "bytes": 626,
+    "sha256": "f619787b6ca755fa6689fdcdf272cd6e04e3b7c36e5821dcd6a2eba8e6ba7810"
+  },
+  "run-cost-stage.py": {
+    "bytes": 2130,
+    "sha256": "ec8cbc71fd51a463e1e1de238d7b6485120e286c6987332c5621c66b02d97860"
+  },
+  "write-auth-leaveout-report.py": {
+    "bytes": 5812,
+    "sha256": "db57ed861435919471e42ca5c73ec840f14916da5faed51adafda2a12ef24427"
+  }
+}

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Menu } from '@base-ui/react/menu';
 import clsx from 'clsx';
-import type { WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v77';
+import type { WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v78';
 import { useTranslation } from '../../../../../locale/react';
 import {
   IconChevronDownOutline14,
@@ -184,7 +184,7 @@ function SimpleCondition({
 }) {
   const tx = useTranslation(),
     location = within(address, [unary ? 'value' : 'left']),
-    schema = useReferenceSchema(location, left.path);
+    schema = useReferenceSchema(location, left.path, address);
   const right: Value = 'right' in condition ? condition.right : constant('string');
   const inferred =
     right.type === 'literal'

@@ -23,12 +23,13 @@ pub enum ContentRepresentation {
     CanonicalJsonV1,
 }
 impl ContentRepresentation {
+    /// Private storage/cache key; serde retains the descriptive public name.
     pub(crate) const fn key(self) -> &'static str {
         match self {
-            Self::Utf8Text => "utf8_text",
-            Self::RawJsonUtf8 => "raw_json_utf8",
-            Self::BinaryBytes => "binary_bytes",
-            Self::CanonicalJsonV1 => "canonical_json_v1",
+            Self::Utf8Text => "t",
+            Self::RawJsonUtf8 => "r",
+            Self::BinaryBytes => "b",
+            Self::CanonicalJsonV1 => "j",
         }
     }
 }
@@ -47,8 +48,8 @@ impl CanonicalContentComponent {
     pub(crate) const fn key(self) -> &'static str {
         match self {
             Self::Payload => "canonical",
-            Self::BlockMetadata => "canonical_block_metadata",
-            Self::MessageMetadata => "canonical_message_metadata",
+            Self::BlockMetadata => "cb",
+            Self::MessageMetadata => "cm",
         }
     }
 }

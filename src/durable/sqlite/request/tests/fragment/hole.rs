@@ -53,8 +53,8 @@ fn t08_t12_t19_parametric_request_holes_reject_root_corruption_before_allocation
         "metadata='not a blob'",
         "metadata=zeroblob(2000000)",
         "metadata=X'7b'",
-        "witness=zeroblob(32)",
-        "witness='invalid'",
+        "checksum=zeroblob(32)",
+        "checksum='invalid'",
     ] {
         connection
             .execute_batch("SAVEPOINT bad_root; PRAGMA ignore_check_constraints=ON")
@@ -112,7 +112,7 @@ fn t08_t12_t19_parametric_request_holes_reject_root_corruption_before_allocation
     assert_eq!(store.observation_read_cut().unwrap(), cut);
 }
 #[test]
-fn t10_t12_t19_parametric_hole_identity_cannot_be_rehashed_or_laundered_into_new_requests() {
+fn t10_t12_t19_invalid_previous_root_does_not_poison_native_source_reuse() {
     for key in ["sequence", "messages_start", "length"] {
         let ShapeTarget {
             store,
@@ -127,21 +127,22 @@ fn t10_t12_t19_parametric_hole_identity_cannot_be_rehashed_or_laundered_into_new
         let connection = store.lock().unwrap();
         let original: (Vec<u8>, Vec<u8>) = connection
             .query_row(
-                "SELECT metadata,witness FROM request_source_roots WHERE source_id=?1",
+                "SELECT metadata,checksum FROM request_source_roots WHERE source_id=?1",
                 [sequence.to_string()],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        let mut metadata: serde_json::Value = serde_json::from_slice(&original.0).unwrap();
+        let mut metadata: serde_json::Value =
+            observation_request::composed::inspect_root_record(&original.0);
         metadata[key] = serde_json::json!(metadata[key].as_u64().unwrap() + 1);
-        let bytes = serde_json::to_vec(&metadata).unwrap();
+        let bytes = observation_request::composed::encode_test_root_record(metadata);
         let mut digest = <sha2::Sha256 as sha2::Digest>::new();
         sha2::Digest::update(&mut digest, b"rustx-composed-request-source-v1\0");
         sha2::Digest::update(&mut digest, &bytes);
         let digest = sha2::Digest::finalize(digest);
         connection
             .execute(
-                "UPDATE request_source_roots SET metadata=?2,witness=?3 WHERE source_id=?1",
+                "UPDATE request_source_roots SET metadata=?2,checksum=?3 WHERE source_id=?1",
                 params![sequence.to_string(), bytes, digest.as_slice()],
             )
             .unwrap();
@@ -153,7 +154,10 @@ fn t10_t12_t19_parametric_hole_identity_cannot_be_rehashed_or_laundered_into_new
             .unwrap()
             .started;
         assert_eq!(started.sequence, before + 1);
-        assert_shape_optional_source_hole(&store, &next, started.sequence);
+        // A new request owns a new root; it no longer walks the old root's
+        // independent capture proof. Unmodified native nodes remain reusable.
+        let next_oracle = shape_oracle(&store, &next, started.sequence);
+        assert_shape_oracle(&store, &next, started.sequence, &next_oracle);
         assert_eq!(
             store.load_request_snapshot(&snapshot.request_id).unwrap(),
             snapshot
@@ -164,7 +168,7 @@ fn t10_t12_t19_parametric_hole_identity_cannot_be_rehashed_or_laundered_into_new
             .lock()
             .unwrap()
             .execute(
-                "UPDATE request_source_roots SET metadata=?2,witness=?3 WHERE source_id=?1",
+                "UPDATE request_source_roots SET metadata=?2,checksum=?3 WHERE source_id=?1",
                 params![sequence.to_string(), original.0, original.1],
             )
             .unwrap();
@@ -268,7 +272,7 @@ fn t08_t12_t19_decimal_request_and_rank_widths_match_the_original_full_producer(
 }
 
 #[test]
-fn t10_t14_t19_composed_source_schema_requires_exact_bounds_keys_and_original_witness_seat() {
+fn t10_t14_t19_composed_source_schema_requires_exact_bounds_keys_and_root_checksums() {
     let store = fragment_fixture();
     let snapshot = shape_snapshot(&store, 1);
     let started = store
@@ -298,11 +302,7 @@ fn t10_t14_t19_composed_source_schema_requires_exact_bounds_keys_and_original_wi
         ("request_source_nodes", "native_id INTEGER,metadata BLOB"),
         (
             "request_source_roots",
-            "source_id TEXT,metadata BLOB,witness BLOB",
-        ),
-        (
-            "request_observation_fields",
-            "source_id TEXT,shape_witness BLOB",
+            "source_id TEXT,metadata BLOB,checksum BLOB",
         ),
     ] {
         connection
@@ -397,4 +397,41 @@ fn t19_composed_branch_reuses_its_already_authenticated_native_node() {
         sequence,
     );
     assert_fragment_oracle(&store, &snapshot, sequence);
+}
+
+#[test]
+fn repeated_native_leaves_do_not_recompute_template_metrics() {
+    let store = fragment_fixture();
+    let first = shape_snapshot(&store, 1);
+    observation_request::composed::take_work();
+    let started = store
+        .commit_model_turn_start(&[], &first, Utc::now())
+        .unwrap()
+        .started;
+    let work = observation_request::composed::take_work();
+    assert_eq!(work.new_leaves, first.input.len());
+    assert_eq!(work.leaf_width_calls, work.new_leaves);
+    assert!(work.width_hole_encodes >= work.new_leaves);
+    assert_shape_oracle(
+        &store,
+        &first,
+        started.sequence,
+        &shape_oracle(&store, &first, started.sequence),
+    );
+    let repeated = shape_snapshot(&store, 2);
+    observation_request::composed::take_work();
+    let next = store
+        .commit_model_turn_start(&[], &repeated, Utc::now())
+        .unwrap()
+        .started;
+    let work = observation_request::composed::take_work();
+    assert_eq!(work.new_leaves, 0);
+    assert_eq!(work.leaf_width_calls, 0);
+    assert_eq!(work.width_hole_encodes, 0);
+    assert_shape_oracle(
+        &store,
+        &repeated,
+        next.sequence,
+        &shape_oracle(&store, &repeated, next.sequence),
+    );
 }

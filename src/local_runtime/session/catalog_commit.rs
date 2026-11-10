@@ -11,6 +11,7 @@ use super::SessionError;
 use super::SessionNode;
 use super::SessionNodeOrigin;
 use super::SessionPersistentState;
+use super::catalog_file::PublishedCatalog;
 #[cfg(test)]
 use super::create_profile;
 use super::creation::next_ordinal;
@@ -106,7 +107,7 @@ impl SessionCatalog {
             target: target.clone(),
             target_node: self.document.sessions[target].active_node.clone(),
             document: self.document.clone(),
-            changed: !self.published,
+            changed: self.published.is_none(),
         }
     }
 
@@ -330,10 +331,9 @@ impl SessionCatalog {
                     detail: e.to_string(),
                 },
             )?;
-        let current = Self::read_under_guard(&self.product)?;
+        let current_generation = self.stored_generation()?;
         if next.generation != self.document.generation
-            || current.as_ref().map(|c| c.document.generation)
-                != self.published.then_some(self.document.generation)
+            || current_generation != self.published.as_ref().map(|_| self.document.generation)
         {
             return Err(SessionError::Catalog {
                 detail: "stale catalog generation".into(),
@@ -347,30 +347,41 @@ impl SessionCatalog {
             })?;
         // Assign the catalog commit identity only to newly admitted ownership.
         // Metadata-only commits and repeated selection retain the old generation.
-        for (id, session) in &mut next.sessions {
-            session.ownership_generation = self
-                .document
-                .sessions
-                .get(id)
-                .filter(|old| self.published && old.active_node == session.active_node)
-                .map_or(next.generation, |old| old.ownership_generation);
+        let owners: Vec<_> = next
+            .sessions
+            .iter()
+            .filter_map(|(id, session)| {
+                let generation = self
+                    .document
+                    .sessions
+                    .get(id)
+                    .filter(|old| {
+                        self.published.is_some() && old.active_node == session.active_node
+                    })
+                    .map_or(next.generation, |old| old.ownership_generation);
+                (session.ownership_generation != generation).then(|| (id.clone(), generation))
+            })
+            .collect();
+        for (id, generation) in owners {
+            next.sessions
+                .get_mut(&id)
+                .expect("planned Session")
+                .ownership_generation = generation;
         }
         validate_document(&next)?;
         // Membership evidence belongs to the visibility commit, including
         // uncertain directory durability. Cleanup/recovery commits with unchanged
         // membership emit nothing. This covers creation, copies and deletion.
-        let membership: Vec<_> = self
-            .document
-            .sessions
-            .keys()
-            .filter(|id| self.published && !next.sessions.contains_key(*id))
-            .chain(
-                next.sessions
-                    .keys()
-                    .filter(|id| !self.published || !self.document.sessions.contains_key(*id)),
-            )
-            .cloned()
-            .collect();
+        let membership: Vec<_> =
+            self.document
+                .sessions
+                .keys()
+                .filter(|id| self.published.is_some() && !next.sessions.contains_key(*id))
+                .chain(next.sessions.keys().filter(|id| {
+                    self.published.is_none() || !self.document.sessions.contains_key(*id)
+                }))
+                .cloned()
+                .collect();
         let retired: Vec<_> = self
             .document
             .sessions
@@ -382,11 +393,15 @@ impl SessionCatalog {
             })
             .map(|(id, old)| (id.clone(), old.ownership_generation))
             .collect();
-        let committed = self.persist(&next);
+        let bytes = self.encode_catalog(&next)?;
+        let committed = self.persist(&bytes);
         if committed.is_ok() || committed.as_ref().is_err_and(SessionError::committed) {
             self.node_observation_index = Arc::new(observation::node_index(&next));
+            self.published = Some(Arc::new(PublishedCatalog {
+                generation: next.generation,
+                bytes,
+            }));
             self.document = next;
-            self.published = true;
             for (id, generation) in retired {
                 self.summary_invalidations.retire_ownership(&id, generation);
             }
@@ -397,10 +412,10 @@ impl SessionCatalog {
         committed
     }
 
-    pub(super) fn persist(&self, document: &CatalogDocument) -> Result<(), SessionError> {
+    fn encode_catalog(&self, document: &CatalogDocument) -> Result<Vec<u8>, SessionError> {
         let bytes = profile_stage!(
             |times: &mut create_profile::StageTimes| &mut times.catalog_serialize_ns,
-            serde_json::to_vec_pretty(document)
+            serde_json::to_vec(document)
         )
         .map_err(|error| SessionError::CatalogCommit {
             error: CatalogCommitError::NotCommitted {
@@ -408,10 +423,14 @@ impl SessionCatalog {
                 detail: format!("cannot encode catalog: {error}"),
             },
         })?;
+        Ok(bytes)
+    }
+
+    pub(super) fn persist(&self, bytes: &[u8]) -> Result<(), SessionError> {
         #[cfg(test)]
-        let result = atomic_write(&self.path, &bytes, &self.write_fault);
+        let result = atomic_write(&self.path, bytes, &self.write_fault);
         #[cfg(not(test))]
-        let result = atomic_write(&self.path, &bytes);
+        let result = atomic_write(&self.path, bytes);
         result.map_err(SessionError::from)
     }
 }

@@ -202,7 +202,7 @@ async fn t02_t03_large_child_observation_keeps_parent_websocket_and_other_sessio
             assert!(cursor.cursor > consumed.cursor);
             for event in &events {
                 assert_eq!(event.cursor.get(), consumed.cursor.get() + 1);
-                let cut = match &event.event {
+                let cut = match event.event.as_ref() {
                     RuntimeClientEvent::ProjectionTransition { metadata, .. } => &metadata.read_cut,
                     RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
                         &checkpoint.read_cut

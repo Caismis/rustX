@@ -703,4 +703,34 @@ pub trait ObservationStore: Send + Sync + 'static {
         offset: u64,
         max_bytes: u32,
     ) -> Result<crate::observation::content::ContentChunk, ConversationStoreError>;
+
+    /// Release every Journal and transcript source owned by one installed native
+    /// observation batch in one transaction. The caller must finish its CPU-only
+    /// projection installation first. Failure publishes no part of the release.
+    fn mark_native_observation_ready(
+        &self,
+        batch: &crate::durable::observation::NativeObservationBatch,
+    ) -> Result<(), ConversationStoreError>;
+
+    /// Read and decorate the bounded live checkpoint domains in one transaction.
+    /// `through` must equal the validated native cut's Journal frontier.
+    fn observation_checkpoint_head(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        through: u64,
+        limit: usize,
+    ) -> Result<crate::durable::observation::CheckpointHead, ConversationStoreError>;
+
+    /// Resolve at most one native header page under a single validated source cut.
+    fn observation_response_page(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        selections: &[crate::durable::observation::ResponsePageSelection],
+    ) -> Result<crate::durable::observation::ResponsePage, ConversationStoreError>;
+
+    /// Best-effort maintenance of reconstructible connection caches. In-memory
+    /// backends have no such cache. This never changes facts or read proofs.
+    fn reclaim_idle_cache(&self) -> Result<bool, ConversationStoreError> {
+        Ok(false)
+    }
 }

@@ -424,6 +424,43 @@ fn declares_request_params(schema: &Value, root: &Value, path: &[Segment]) -> bo
     }
 }
 
+pub(super) trait Envelope: schemars::JsonSchema + 'static {
+    fn serialize_native<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error>;
+}
+
+struct Native<'a, T>(&'a T);
+impl<T: Envelope> Serialize for Native<'_, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[cfg(test)]
+        NATIVE_PASSES.with(|passes| passes.set(passes.get() + 1));
+        self.0.serialize_native(serializer)
+    }
+}
+
+// Only the bounded transport writer uses this carrier. Wire encoding preserves
+// native JSON or adds decimal quotes, so its final byte bound also bounds the
+// native representation. Avoid traversing the entire DTO once just to count it.
+pub(super) fn bounded_envelope<T: Envelope>(value: &T) -> impl Serialize + '_ {
+    struct Wire<'a, T>(&'a T);
+    impl<T: Envelope> Serialize for Wire<'_, T> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            let schema = crate::observation::structural_json::root::<T>();
+            crate::observation::structural_json::serialize_wire(
+                &Native(self.0),
+                &schema,
+                serializer,
+            )
+        }
+    }
+    Wire(value)
+}
+
+#[cfg(test)]
+thread_local! { static NATIVE_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(super) fn take_native_passes() -> usize {
+    NATIVE_PASSES.with(|passes| passes.replace(0))
+}
 fn workflow_document_schema() -> &'static Value {
     static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
     SCHEMA.get_or_init(|| {
@@ -512,19 +549,17 @@ pub(crate) fn workflow_check_report_from_json(
 
 macro_rules! envelope {
     ($ty:ty) => {
+        impl Envelope for $ty {
+            fn serialize_native<S: serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> Result<S::Ok, S::Error> {
+                <$ty>::serialize(self, serializer)
+            }
+        }
         impl Serialize for $ty {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                struct Native<'a>(&'a $ty);
-                impl Serialize for Native<'_> {
-                    fn serialize<S: serde::Serializer>(
-                        &self,
-                        serializer: S,
-                    ) -> Result<S::Ok, S::Error> {
-                        <$ty>::serialize(self.0, serializer)
-                    }
-                }
-                static SCHEMA: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-                // Bound native encoding before the numeric codec builds a Value.
+                // Bound the original native record before wire numeric validation.
                 // The final wire encoding is checked independently by the writer.
                 struct Budget(usize);
                 impl std::io::Write for Budget {
@@ -549,13 +584,7 @@ macro_rules! envelope {
                         serde::ser::Error::custom(error)
                     }
                 })?;
-                let schema = SCHEMA.get_or_init(|| {
-                    serde_json::to_value(schemars::schema_for!($ty)).expect("Rust schema")
-                });
-                let mut value =
-                    serde_json::to_value(Native(self)).map_err(serde::ser::Error::custom)?;
-                convert(&mut value, schema, schema, true).map_err(serde::ser::Error::custom)?;
-                value.serialize(serializer)
+                bounded_envelope(self).serialize(serializer)
             }
         }
         impl<'de> Deserialize<'de> for $ty {
@@ -602,6 +631,9 @@ pub(super) fn protocol_schema() -> Value {
             .expect("Rust schema"),
     )
 }
+
+#[cfg(test)]
+mod direct_tests;
 
 #[cfg(test)]
 mod tests {
@@ -756,7 +788,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v77.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v78.ts"),
         )
         .unwrap();
         for domain in [

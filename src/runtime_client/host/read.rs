@@ -516,7 +516,7 @@ impl ClientInner {
                             "payload".into()
                         }],
                         source_path: None,
-                        content_ref: reference.clone(),
+                        content_ref: reference.clone().into(),
                         deferred: true,
                     })
                     .collect();
@@ -916,11 +916,11 @@ impl ClientInner {
             )
             .map(Some);
         }
-        if super::super::delivery::selection(domain).is_some() {
+        if crate::runtime_client::delivery::selection(domain).is_some() {
             self.lock_published_state()
                 .projection
                 .validate_checkpoint_cut(cut)?;
-            return super::super::delivery::value_read(
+            return crate::runtime_client::delivery::value_read(
                 self.store.as_ref(),
                 cut,
                 domain,

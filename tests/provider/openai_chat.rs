@@ -1381,7 +1381,8 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })),
         rustx::model::ModelInputMessage::Canonical(user("msg-a", "A")),
         rustx::model::ModelInputMessage::Canonical(user("msg-b", "B")),

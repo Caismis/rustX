@@ -1,7 +1,7 @@
 import { validateObservationCut } from '../../../protocol/app-server/observation';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
-import { standaloneTraceCut, inlineTraceDetail, retainedTraceDetailPage, bindTraceDetailReader, TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, fillTraceGap, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceCache, type TraceFieldReader } from './trace';
-import type { AttachmentTarget, CheckpointReadCut, ProjectionDetail, TraceRecord, TraceToolLocator } from '../../../protocol/app-server/v77';
+import { standaloneTraceCut, inlineTraceDetail, retainedTraceDetailPage, bindTraceDetailReader, TRACE_PAGE_SIZE, TRACE_REFRESH_SIZE, beginTraceDetail, completeTraceDetail, fillTraceGap, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceCache, type TraceFieldReader } from './trace';
+import type { AttachmentTarget, CheckpointReadCut, ProjectionDetail, TraceRecord, TraceToolLocator } from '../../../protocol/app-server/v78';
 import { traceWindowReady } from './history-policy';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, OperationAdmission, SessionView } from './contracts';
@@ -116,6 +116,16 @@ export class TraceReads {
     ) };
   }
   private traceReads = new Map<string, { dirty: boolean; work: Promise<void> }>();
+  repairDomain(id: string) {
+    const observation = this.port.observe(id);
+    if (!observation) return;
+    const authority = this.traceAuthorities.get(id);
+    void this.refreshDomain(id).catch(cause => {
+      const trace = this.port.state().views[id]?.trace;
+      if (observation.current() && this.traceAuthorities.get(id) === authority && trace)
+        this.port.setSession(id, {trace: {...trace, error: String(cause), loading: false}});
+    });
+  }
   refreshDomain(id: string): Promise<void> {
     const existing = this.traceReads.get(id);
     if (existing) { existing.dirty = true; return existing.work; }
@@ -131,14 +141,17 @@ export class TraceReads {
           read.dirty = false;
           const authority = this.traceAuthorities.get(id);
           const observed = this.port.state().views[id]?.snapshot;
-          const batches=traceInterestBatches(this.port.state().views[id]?.trace);
-          for(const [index,records] of batches.entries()) {
+          const interests=traceInterestBatches(this.port.state().views[id]?.trace).flat();
+          let offset=0,index=0;
+          do {
             if(!current()||this.traceAuthorities.get(id)!==authority)break;
+            const records=interests.slice(offset,offset+TRACE_REFRESH_SIZE);
             let result;
             try {
               result=await this.port.request({method:'session/trace',params:{target,before:null,limit:index?1:TRACE_PAGE_SIZE,records}},'trace',undefined,current);
             }catch(error){if(!read.dirty||!current())throw error;break;}
             standaloneTraceCut(result.page,target.conversation_id);
+            if(!Number.isInteger(result.refreshed)||result.refreshed<0||result.refreshed>records.length||(records.length>0&&result.refreshed===0))throw new Error('Trace repair returned invalid progress.');
             if(current()&&this.traceAuthorities.get(id)===authority) {
               const latest = this.port.state().views[id]?.snapshot;
               if (latest?.trace !== observed?.trace || latest?.trace_updates !== observed?.trace_updates) {
@@ -146,9 +159,11 @@ export class TraceReads {
                 // resident detail, then coalesce one read for the new head.
                 read.dirty = true; break;
               }
-              this.port.setSession(id,{trace:{...refreshTrace(this.port.state().views[id]?.trace,result.page,result.page.updates??[],undefined,index>0),fields:this.liveFields(target)}});
+              const previous=this.port.state().views[id]?.trace;
+              this.port.setSession(id,{trace:{...refreshTrace(previous&&index===0?{...previous,error:undefined}:previous,result.page,result.page.updates??[],undefined,index>0),fields:this.liveFields(target)}});
             }
-          }
+            offset+=result.refreshed;index++;
+          } while(offset<interests.length);
         }
       } finally {
         // Retire in the same continuation that decides to exit, so a new call

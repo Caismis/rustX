@@ -1,5 +1,5 @@
 //! Finite committed-delivery heads at their native canonical source.
-use super::content::CanonicalContentLocator;
+use crate::observation::content::CanonicalContentLocator;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

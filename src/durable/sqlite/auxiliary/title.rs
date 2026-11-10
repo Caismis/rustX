@@ -17,7 +17,7 @@ pub(super) fn validate_start(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let source: Option<(String, bool)> = transaction
         .query_row(
             "SELECT message_id,consumed FROM auxiliary_title_sources WHERE call_id=?1",
@@ -25,7 +25,7 @@ pub(super) fn validate_start(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if bound.as_ref() != source.as_ref().map(|(message, _)| message) {
         return Err(storage(
             "Title Call no longer owns its exact current source association",
@@ -50,7 +50,7 @@ pub(super) fn consume(
             "UPDATE auxiliary_title_sources SET consumed=1 WHERE call_id=?1",
             [call_id.as_str()],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 pub(super) fn release_zero_request(
@@ -63,7 +63,7 @@ pub(super) fn release_zero_request(
                 "UPDATE auxiliary_title_sources SET call_id=NULL WHERE call_id=?1 AND consumed=0",
                 [call_id.as_str()],
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     }
     Ok(())
 }
@@ -93,13 +93,13 @@ pub(super) fn associate(
             "Title source is unavailable or differs from its native first Human",
         ));
     }
-    transaction.execute("INSERT INTO auxiliary_title_sources(message_id,call_id,consumed) VALUES(?1,?2,0) ON CONFLICT(message_id) DO UPDATE SET call_id=excluded.call_id WHERE auxiliary_title_sources.call_id IS NULL AND auxiliary_title_sources.consumed=0",params![source.message_id.as_str(),start.call_id.as_str()]).map_err(|error|storage(error.to_string()))?;
+    transaction.execute("INSERT INTO auxiliary_title_sources(message_id,call_id,consumed) VALUES(?1,?2,0) ON CONFLICT(message_id) DO UPDATE SET call_id=excluded.call_id WHERE auxiliary_title_sources.call_id IS NULL AND auxiliary_title_sources.consumed=0",params![source.message_id.as_str(),start.call_id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     transaction
         .execute(
             "INSERT INTO auxiliary_title_calls(call_id,message_id) VALUES(?1,?2)",
             params![start.call_id.as_str(), source.message_id.as_str()],
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(())
 }
 pub(super) fn confirm_association(
@@ -113,7 +113,7 @@ pub(super) fn confirm_association(
             params![call_id.as_str(), source.message_id.as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     if !exists {
         return Err(storage(
             "Title exact replay lacks its immutable source binding",
@@ -134,7 +134,7 @@ impl SqliteConversationStore {
         }
         let mut connection = self.lock().map_err(AuxiliaryWriteFailure::known)?;
         commit::run_auxiliary_write(&mut connection, |transaction| {
-            let call:Option<String>=transaction.query_row("SELECT call_id FROM auxiliary_title_sources WHERE message_id=?1 AND consumed=0 AND call_id IS NOT NULL",[source.message_id.as_str()],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+            let call:Option<String>=transaction.query_row("SELECT call_id FROM auxiliary_title_sources WHERE message_id=?1 AND consumed=0 AND call_id IS NOT NULL",[source.message_id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             let Some(call) = call else {
                 return Ok(());
             };
@@ -156,7 +156,12 @@ impl SqliteConversationStore {
                     request_evidence: None,
                 },
             )?;
-            persist_event_tx(transaction, &self.conversation_id, settled)?;
+            persist_event_tx(
+                &self.conn.event_guard,
+                transaction,
+                &self.conversation_id,
+                settled,
+            )?;
             Ok(())
         })
     }

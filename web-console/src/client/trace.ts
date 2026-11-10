@@ -1,7 +1,7 @@
 export {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import type {TraceValueSelector} from '../../../protocol/app-server/trace-field';
-import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v77';
+import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v78';
 
 /** Records requested per older page. */
 export const TRACE_PAGE_SIZE = 32;
@@ -30,8 +30,8 @@ export interface TraceDetailEntry {
   /** One in-flight read; lifecycle refreshes may mark its result stale without cancelling it. */
   readonly read?: object;
   readonly stale?: boolean;
-  readonly content?:import('../../../protocol/app-server/v77').ContentBinding[];
-  readonly readContent?:(ref:import('../../../protocol/app-server/v77').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v77').ContentChunk>;
+  readonly content?:import('../../../protocol/app-server/v78').ContentBinding[];
+  readonly readContent?:(ref:import('../../../protocol/app-server/v78').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v78').ContentChunk>;
   /** A positive finite descriptor is not a complete TraceDetail. */
   readonly page?: CheckpointPage;
   readonly reader?: TraceFieldReader;
@@ -141,7 +141,9 @@ export function bindTraceDetailReader(reader:TraceFieldReader,page:CheckpointPag
  };
 }
 
-type TraceInterests = NonNullable<Extract<Request1, {method:'session/trace'}>['params']['records']>;
+type TraceInterests = NonNullable<Extract<Request1, {method:'session/checkpoint'}>['params']['trace_records']>;
+/** Standalone admission; checkpoint and Agent enrichment still use eight. */
+export const TRACE_REFRESH_SIZE = 128;
 
 function appendInterest(batch: TraceInterests, value: string): TraceInterests {
   if (batch.length === 8) throw new Error('Trace refresh exceeds eight interests.');
@@ -283,7 +285,7 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
   const repair = (record: TraceRecord): TraceRecord => {
     const update = repairs.get(record.id);
     if (!update) return record;
-    return {
+    return retainRecord(record, {
       ...record,
       location: update.location,
       fields:update.fields,collections:update.collections,
@@ -294,9 +296,13 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
       truncated: update.truncated,
       request: record.request && update.request ? { ...record.request, ...update.request } : record.request,
       tool: record.tool && update.tool ? { ...record.tool, ...update.tool } : record.tool,
-    };
+    });
   };
   if (retainPage) page = { ...previous.page, records: previous.page.records.map(repair) };
+  else {
+    const old = new Map(previous.page.records.map(record => [record.id, record]));
+    page = { ...page, records: page.records.map(record => retainRecord(old.get(record.id), record)) };
+  }
   const selection = previous.selection
     ? repair(page.records.find(record => record.id === previous.selection!.id) ?? previous.selection)
     : undefined;
@@ -307,7 +313,9 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
   if (!retainPage && page.records.length && !page.records.some(record => overlap.has(record.id)) && page.next_cursor) {
     gaps.push({ after: previous.page.records.at(-1)!.id, before: page.records[0]!.id, cursor: page.next_cursor });
   }
-  const records = merge(previous.page.records.map(repair), page.records);
+  const merged = merge(previous.page.records.map(repair), page.records);
+  const records = merged.length === previous.page.records.length && merged.every((record,index) => record === previous.page.records[index])
+    ? previous.page.records : merged;
   const latest = new Map(records.map(record => [record.id, record]));
   if (selection) latest.set(selection.id, selection);
   const old = new Map(previous.page.records.map(record => [record.id, record]));
@@ -323,7 +331,12 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
     [id, unchanged(id) && !(entry.error && old.get(id)?.state !== latest.get(id)?.state)
       ? entry : { ...entry, stale: true, error: undefined }],
   ));
-  return { ...previous, gaps, selection, details, readCuts:retainedCuts(readCuts,records,selection),page: { read_cut:null,records, next_cursor: previous.page.next_cursor } };
+  // A fuller native head may reveal an older prefix before the retained tail.
+  // Its oldest row owns that pagination boundary; the shorter checkpoint's
+  // null cursor cannot declare the newly revealed interval complete.
+  const nextCursor = records[0]?.id === previous.page.records[0]?.id
+    ? previous.page.next_cursor : page.next_cursor;
+  return { ...previous, gaps, selection, details, readCuts:retainedCuts(readCuts,records,selection),page: { read_cut:null,records, next_cursor: nextCursor } };
 }
 
 /** Insert one bounded native page at its own gap, without replacing the live tail. */
@@ -345,4 +358,8 @@ export function fillTraceGap(previous: TraceCache, gap: TraceGap, page: TracePag
 export function prependTrace(previous: TraceCache, page: TracePage): TraceCache {
   const records = merge(page.records, previous.page.records);
   return { ...previous, loading: false, error: undefined,readCuts:retainedCuts({...pageCuts(page),...previous.readCuts},records,previous.selection),page: { read_cut:null,records, next_cursor: page.next_cursor } };
+}
+
+function retainRecord(previous: TraceRecord | undefined, current: TraceRecord): TraceRecord {
+  return previous && JSON.stringify(previous) === JSON.stringify(current) ? previous : current;
 }

@@ -149,10 +149,6 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use super::projection::views::background_view;
 use super::projection::{RuntimeClientProjection, SubscriberPoll};
-use super::types::{
-    AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor, RuntimeClientError,
-    RuntimeClientProtocolEvent, RuntimeClientResult,
-};
 use crate::durable::{ConversationStore, TRANSCRIPT_PAGE_LIMIT_MAX};
 use crate::model::session::SessionModelConfig;
 use crate::model::{ModelRequest, RequestIdentity};
@@ -166,6 +162,10 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse, RoutedInt
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::request_history::{RequestHistory, RequestHistoryError};
 use crate::runtime::subagent::InteractionPublicationAuthority;
+use crate::runtime_client::types::{
+    AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor, RuntimeClientError,
+    RuntimeClientProtocolEvent, RuntimeClientResult,
+};
 
 /// The one Runtime Client host construction failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -277,6 +277,14 @@ impl ClientInner {
         *self.publication_gate.settlement_wait.lock().unwrap() = None;
         let mut turns = self.worker_turns.subscribe();
         loop {
+            let requested = self
+                .lock_published_state()
+                .projection
+                .request_read_domains();
+            if requested.is_some_and(|(_, new)| new) {
+                self.pending
+                    .push(ConversationObservation::JournalSourceReady);
+            }
             let worker_turn = *turns.borrow_and_update();
             {
                 let _preparation = self
@@ -498,6 +506,12 @@ pub(crate) struct ClientInner {
     #[cfg(test)]
     snapshot_read_hook: Mutex<Option<Box<dyn FnMut() + Send>>>,
     #[cfg(test)]
+    checkpoint_read_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    checkpoint_page_admitted_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
+    checkpoint_source_wait_hook: Mutex<Option<Box<dyn FnMut() + Send>>>,
+    #[cfg(test)]
     cancellation_receipt_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     manual_compaction_response_gate: Mutex<Option<ManualCompactionResponseGate>>,
@@ -587,6 +601,14 @@ impl core::fmt::Debug for RuntimeClientHost {
 }
 
 impl RuntimeClientHost {
+    #[cfg(feature = "issue-387-profile")]
+    pub(crate) fn retention_profile(&self) -> serde_json::Value {
+        self.inner
+            .lock_published_state()
+            .projection
+            .retention_profile()
+    }
+
     pub(crate) fn install_interaction_lifecycle(&self, sink: Arc<dyn InteractionLifecycleSink>) {
         assert!(
             self.inner.interaction_lifecycle.set(sink).is_ok(),
