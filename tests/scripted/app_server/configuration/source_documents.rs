@@ -662,11 +662,9 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
         assert_eq!(adopted.configured, explicit);
         assert_eq!(adopted.effective, view.effective);
         assert_eq!(runtime.runtime_resources().revision(), revision);
-        // Moving the default no longer reaches this Session's explicit
-        // selection; a new Session follows the moved default.
-        let resources = runtime.runtime_resources();
-        let invocation = runtime.model_snapshot();
-        let previous = fixture.manager.configuration_application(&id).unwrap();
+        // Moving the default leaves the pinned primary alone, but Lowest
+        // auxiliary follows the new default and must be prepared.
+        let primary_before = runtime.model_view().effective.clone();
         write(
             &fixture,
             0,
@@ -676,9 +674,17 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
             ),
         )
         .await;
-        settled(&fixture, 0).await;
-        unchanged(&resources, &invocation, &previous);
-        assert_eq!(runtime.model_view().effective, view.effective);
+        applied(&fixture, 0).await;
+        assert_eq!(runtime.model_view().effective, primary_before);
+        let Some(crate::model::session::AuxiliaryModelView::Session { effective: auxiliary }) =
+            runtime.model_view().auxiliary
+        else {
+            panic!("session auxiliary");
+        };
+        assert_eq!(
+            auxiliary.profile,
+            Some(ModelProfileId::new("fast"))
+        );
         let created = fixture
             .manager
             .create_session(SessionPersistentState {
@@ -755,9 +761,9 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(input("request-A frozen")).unwrap();
         fixture.gates[0].wait_entered().await;
-        // A metadata-only publication during the real provider gate commits
-        // without waiting for the safe boundary, and keeps the admitted
-        // Attempt and explicit Summary invocation exactly as frozen.
+        // reasoning_profile_order is metadata-only here: auxiliary is Explicit
+        // Profile "creative", so Lowest order does not move the frozen
+        // invocation. Publication commits without the safe boundary.
         let admitted = runtime.model_snapshot();
         let resources = runtime.runtime_resources();
         let mut ordered = model(
@@ -1585,19 +1591,17 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
         let pinned_resources = runtime(&pinned).runtime_resources();
         let pinned_invocation = runtime(&pinned).model_snapshot();
 
-        // The default moves: only the following Session's invocation changes.
+        // The default moves: following rebuilds primary+auxiliary; pinned keeps
+        // its primary Profile but rebuilds Lowest auxiliary to the new default.
         let following_resources = runtime(&following).runtime_resources();
         write(&f, 0, model("fast")).await;
         applied(&f, 0).await;
         applied(&f, 1).await;
-        // The pinned Session only receives the published catalog.
-        let published = runtime(&pinned).runtime_resources();
-        assert_eq!(published.revision(), pinned_resources.revision().next());
-        assert!(Arc::ptr_eq(
-            pinned_resources.capability(),
-            published.capability()
+        assert!(!Arc::ptr_eq(
+            &pinned_resources,
+            &runtime(&pinned).runtime_resources()
         ));
-        assert_eq!(runtime(&pinned).model_snapshot(), pinned_invocation);
+        assert_ne!(runtime(&pinned).model_snapshot(), pinned_invocation);
         assert_eq!(
             runtime(&pinned).model_catalog().models[0]
                 .default_profile
@@ -1606,7 +1610,6 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
                 .as_deref(),
             Some("fast")
         );
-        // The followed default moved: its invocation was prepared and committed.
         assert!(!Arc::ptr_eq(
             &following_resources,
             &runtime(&following).runtime_resources()
@@ -1627,6 +1630,12 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
             pins.effective.as_ref().unwrap().profile,
             Some(ModelProfileId::new("balanced"))
         );
+        let Some(crate::model::session::AuxiliaryModelView::Session { effective: pinned_aux }) =
+            pins.auxiliary
+        else {
+            panic!("pinned session auxiliary");
+        };
+        assert_eq!(pinned_aux.profile, Some(ModelProfileId::new("fast")));
         assert_eq!(
             follows.effective.as_ref().unwrap().request_params["temperature"],
             json!(1.0)

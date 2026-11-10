@@ -149,8 +149,6 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
             max_output_tokens: Some(128),
         };
         original.auxiliary = summary.clone();
-        let title = summary.clone();
-        original.auxiliary = title.clone();
         f.manager.set_model(id, original).await.unwrap();
         let before =
             crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
@@ -263,7 +261,6 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
         );
         let configured = model_view.configured;
         assert_eq!(configured.auxiliary, summary);
-        assert_eq!(configured.auxiliary, title);
         assert_eq!(configured.model.as_str(), enormous_model);
         assert_eq!(configured.profile.unwrap().as_str(), enormous_profile);
         let (_, durable) = f.manager.sessions.read_settings(id).await.unwrap();

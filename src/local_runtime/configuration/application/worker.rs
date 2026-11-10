@@ -367,9 +367,19 @@ impl ConfigurationApplications {
             self.notify(&state);
             return;
         };
-        let context_only = adopted
-            .as_ref()
-            .is_some_and(|old| capture.same_capabilities(old));
+        // Context-only preparation is valid only when the Provider/model plane
+        // is already settled: either this turn published the catalog without
+        // changing invocations, or every adopted Session/Agent/Workflow model
+        // invocation (including Lowest auxiliary resolution) is unchanged.
+        // Capability equality alone is not enough — a default_profile or
+        // reasoning_profile_order edit can change Lowest auxiliary while
+        // leaving capabilities identical (#543).
+        let context_only = provider_published
+            || adopted.as_ref().is_some_and(|old| {
+                capture.same_capabilities(old)
+                    && capture.same_session_model(old)
+                    && capture.preserves_adopted_models(old, |_| false)
+            });
         let bindings = |capture: &crate::local_runtime::configuration::ProspectiveSessionConfig| {
             capture
                 .models

@@ -322,11 +322,11 @@ function AuxiliaryModelSelections({ value, change, models, profiles }: ModelSele
         else if (mode === 'model_default') setProfile({ mode: 'model_default' });
         else setProfile({ mode: 'explicit', id: auxiliary.profile?.mode === 'explicit' ? auxiliary.profile.id : (profiles[modelId ?? '']?.[0] ?? '') });
       }} />
-    {profileMode === 'explicit' && modelId && <ModelProfileChoice label={tx('settings:models-page.auxiliary-profile')} profile={auxiliary.profile?.mode === 'explicit' ? auxiliary.profile.id : undefined}
-      profiles={profiles[modelId] ?? []}
-      onChange={id => setProfile({ mode: 'explicit', id })} />}
     <p className={css.hint}>{tx('settings:models-page.auxiliary-profile-lowest-help')}</p>
     <fieldset><legend>{tx('settings:models-page.auxiliary-model-settings')}</legend>
+      {profileMode === 'explicit' && modelId && <ModelProfileChoice label={tx('settings:models-page.auxiliary-profile')} profile={auxiliary.profile?.mode === 'explicit' ? auxiliary.profile.id : undefined}
+        profiles={profiles[modelId] ?? []}
+        onChange={id => setProfile({ mode: 'explicit', id })} />}
       <label>{tx('settings:models-page.output-limit-auxiliary')}<input type="number" min="1" value={auxiliary.max_output_tokens?.mode === 'limit' ? auxiliary.max_output_tokens.tokens : ''}
         onChange={event => setAuxiliary({ ...auxiliary, max_output_tokens: event.target.value ? { mode: 'limit', tokens: Number(event.target.value) } : { mode: 'catalog_default' } })} /></label>
       <JsonObjectEditor label={tx('settings:models-page.request-parameter-overrides-auxiliary')} value={auxiliary.request_params ?? undefined}

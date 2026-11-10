@@ -49,10 +49,13 @@ fn missing_agent_model_field(
     if models.model(&selection.model).is_err() {
         Some("model.model")
     } else {
-        crate::model::session::auxiliary_selection(models, selection)
-            .ok()
-            .filter(|auxiliary| models.model(&auxiliary.model).is_err())
-            .map(|_| "model.auxiliary")
+        // Resolve against this catalog: an explicit auxiliary naming a missing
+        // model returns Err from auxiliary_selection (it looks the model up).
+        // Do not require Ok-then-filter — that dead path never sees the miss.
+        match crate::model::session::auxiliary_selection(models, selection) {
+            Ok(_) => None,
+            Err(_) => Some("model.auxiliary"),
+        }
     }
 }
 

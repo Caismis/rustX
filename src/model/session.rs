@@ -723,11 +723,13 @@ impl SessionModelState {
     ///   valid replacement is chosen from, and no new snapshot is admitted
     ///   until one is applied.
     /// - When the configuration still resolves, publication is sound only
-    ///   while it resolves to effectively the same invocations
-    ///   ([`ModelCatalog::same_invocation`]). Otherwise — including a
-    ///   selection that becomes admissible again — nothing changes and
-    ///   `false` is returned, because that change needs invocation
-    ///   preparation and adoption.
+    ///   while primary and shared auxiliary resolve to effectively the same
+    ///   invocations against the new catalog ([`same_session_invocation`],
+    ///   which re-resolves Lowest against each catalog's
+    ///   `reasoning_profile_order` / `default_profile`). Otherwise —
+    ///   including a selection that becomes admissible again — nothing
+    ///   changes and `false` is returned, because that change needs
+    ///   invocation preparation and adoption.
     ///
     /// A frozen authority owns no catalog and always refuses.
     ///
@@ -743,18 +745,10 @@ impl SessionModelState {
             self.unavailable = Some(std::sync::Arc::new(error));
             return true;
         }
-        let same = |selection: ModelSelection, layer| {
-            old.same_invocation(&selection, new, &selection, layer)
-        };
-        let Ok(auxiliary) = auxiliary_selection(old, &self.config) else {
-            return false;
-        };
+        // Resolve auxiliary independently against each catalog so Lowest
+        // (reasoning_profile_order / default_profile) changes refuse publication.
         if self.unavailable.is_some()
-            || !same(
-                self.config.selection(),
-                RequestParamsLayer::SessionOverrides,
-            )
-            || !same(auxiliary, RequestParamsLayer::AuxiliaryOverrides)
+            || !same_session_invocation(old, &self.config, new, &self.config)
         {
             return false;
         }
@@ -1473,6 +1467,28 @@ request_params = '{{"effort":"high"}}'
         let unordered = profiled_catalog(None);
         let selection = auxiliary_selection(&unordered, &config).unwrap();
         assert_eq!(selection.profile.unwrap().as_str(), "high");
+    }
+
+    #[test]
+    fn publish_catalog_refuses_when_lowest_first_profile_changes() {
+        let credentials = crate::model::catalog::MapCredentialEnvironment::new([(
+            "RUSTX_EXAMPLE_API_KEY".into(),
+            "test-only".into(),
+        )]);
+        let bind = |catalog: ModelCatalog| {
+            ModelBindingRegistry::new(catalog.resolve(&credentials).unwrap()).unwrap()
+        };
+        let config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
+        let mut state =
+            SessionModelState::new(bind(profiled_catalog(Some(&["lowest", "high"]))), config)
+                .unwrap();
+        // Reordering without moving the first Profile is metadata-only.
+        assert!(state.publish_catalog(bind(profiled_catalog(Some(&["lowest", "high"])))));
+        assert!(state.publish_catalog(bind(profiled_catalog(Some(&["lowest", "high"])))));
+        // Moving Lowest's first Profile changes the auxiliary invocation.
+        assert!(!state.publish_catalog(bind(profiled_catalog(Some(&["high", "lowest"])))));
+        // Clearing the order falls back to default_profile ("high").
+        assert!(!state.publish_catalog(bind(profiled_catalog(None))));
     }
 
     #[test]

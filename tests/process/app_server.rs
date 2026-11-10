@@ -164,7 +164,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":77,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":78,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -2232,7 +2232,7 @@ async fn app_server_startup_repairs_the_user_source_before_process_policy() {
         assert_eq!(
             receipt.changes,
             vec![
-                ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 11 },
+                ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 12 },
                 ConfigRepairChange::RemovedField { object_path: String::new() },
                 ConfigRepairChange::RemovedField {
                     object_path: "app_server".into()

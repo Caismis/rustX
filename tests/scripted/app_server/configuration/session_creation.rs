@@ -245,7 +245,7 @@ async fn deleting_a_model_releases_creation_when_a_named_agent_depends_on_it() {
         .unwrap();
         std::fs::write(
             agent_directory.join("stable.toml"),
-            "instructions = 'Review changes'\n[model]\nmodel = 'local/b'\n[model.auxiliary]\nmode = 'explicit'\nmodel = 'local/a'\n",
+            "instructions = 'Review changes'\n[model]\nmodel = 'local/b'\n",
         )
         .unwrap();
         let settings = directory.join("rustx.toml");

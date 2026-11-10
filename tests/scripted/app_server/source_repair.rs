@@ -1067,7 +1067,7 @@ async fn a_repair_refused_by_the_size_bound_reaches_no_application() {
         assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
         assert_eq!(
             receipt.changes,
-            [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 11 }]
+            [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 12 }]
         );
         assert!(!receipt.backup_available);
         assert!(receipt.after_revision.is_none());
