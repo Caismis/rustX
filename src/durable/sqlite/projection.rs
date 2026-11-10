@@ -1208,7 +1208,9 @@ fn selected_history_cut(
     result
         .input_manifest
         .certify_selection(owner.id, epoch, result.cut.clone());
-    result.messages = result.input_manifest.messages();
+    result.messages = result
+        .input_manifest
+        .messages_with_preparation(&result.messages);
     owner
         .frontier
         .store(cut.ledger.0, std::sync::atomic::Ordering::Release);
@@ -1247,7 +1249,9 @@ fn append_history_message(
         unreachable!()
     };
     let reference = reference.clone();
-    let selected_messages = history.input_manifest.messages();
+    let selected_messages = history
+        .input_manifest
+        .messages_with_preparation(&history.messages);
     let value = &selected_messages[index as usize];
     let crate::model::ModelInputMessage::Canonical(message) = value else {
         unreachable!()
@@ -1354,7 +1358,9 @@ fn append_history_delta(
         ));
     }
     history.cut.ledger = cut.ledger;
-    history.messages = history.input_manifest.messages();
+    history.messages = history
+        .input_manifest
+        .messages_with_preparation(&history.messages);
     Ok(())
 }
 

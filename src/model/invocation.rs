@@ -1506,11 +1506,19 @@ pub fn validate_content_modalities<'a>(
     messages: impl IntoIterator<Item = &'a crate::model::input::ModelInputMessage>,
     capabilities: &ModelCapabilities,
 ) -> Result<(), ModelError> {
+    let mut required = Vec::new();
+    append_content_modalities(messages, &mut required);
+    validate_required_modalities(&required, capabilities)
+}
+
+pub(crate) fn append_content_modalities<'a>(
+    messages: impl IntoIterator<Item = &'a crate::model::input::ModelInputMessage>,
+    required: &mut Vec<Modality>,
+) {
     use crate::message::types::{AssistantContentBlock, UserContentBlock};
     use crate::model::projected::ModelMessageView;
     use crate::tools::types::ToolResultContent;
 
-    let mut required: Vec<Modality> = Vec::new();
     let mut require = |modality: Modality| {
         if !required.contains(&modality) {
             required.push(modality);
@@ -1557,8 +1565,14 @@ pub fn validate_content_modalities<'a>(
             ModelMessageView::RequestOnly(_) => require(Modality::Text),
         }
     }
+}
+
+pub(crate) fn validate_required_modalities(
+    required: &[Modality],
+    capabilities: &ModelCapabilities,
+) -> Result<(), ModelError> {
     for modality in required {
-        if !capabilities.input_modalities.contains(&modality) {
+        if !capabilities.input_modalities.contains(modality) {
             return Err(ModelError {
                 kind: ModelErrorKind::Unsupported,
                 message: format!(

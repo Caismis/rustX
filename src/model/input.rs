@@ -508,7 +508,10 @@ pub(crate) fn assemble_selected_model_input(
     let _profile = crate::agent::execution::attribution::Timer::new(
         crate::agent::execution::attribution::Phase::InputAssembly,
     );
-    if !manifest.messages().same_input(historical) {
+    if !manifest
+        .messages_with_preparation(historical)
+        .same_input(historical)
+    {
         return Err("historical input differs from its native manifest".into());
     }
     let mut selected = manifest.clone();
@@ -536,7 +539,7 @@ pub(crate) fn assemble_selected_model_input(
             )),
         );
     }
-    Ok((selected.messages(), selected))
+    Ok((selected.messages_with_preparation(historical), selected))
 }
 
 fn assemble_with_location<'a>(

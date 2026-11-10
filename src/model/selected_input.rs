@@ -301,6 +301,7 @@ fn prefix_equal(
     current: Option<&Arc<InputNode>>,
     measured: Option<&Arc<InputNode>>,
     count: usize,
+    owners_only: bool,
 ) -> bool {
     if count == 0 {
         return true;
@@ -326,7 +327,7 @@ fn prefix_equal(
         }
         if x.count == 1 && y.count == 1 {
             #[cfg(any(test, feature = "issue-387-profile"))]
-            {
+            if !owners_only {
                 record_actual_visit();
                 record_actual_visit();
             }
@@ -335,7 +336,8 @@ fn prefix_equal(
                 let (nodes, leaves) = work.get();
                 work.set((nodes, leaves + 1));
             });
-            if !matches!((&x.actual,&y.actual),(Some(a),Some(b)) if a==b) {
+            if !matches!((&x.actual,&y.actual),(Some(a),Some(b)) if if owners_only { Arc::ptr_eq(a,b) } else { a==b })
+            {
                 return false;
             }
             remaining -= 1;
@@ -850,13 +852,20 @@ fn actual(node: &InputNode, index: usize) -> &ModelInputMessage {
 /// Cold provider requests may own actual-only leaves; native persistence requires
 /// their explicit scoped freeze before accepting them as immutable evidence.
 #[derive(Debug, Clone, Default)]
-pub struct SelectedModelInput(pub(crate) SelectedInputManifest);
+pub struct SelectedModelInput(
+    pub(crate) SelectedInputManifest,
+    Arc<Mutex<super::adapter::cache::RequestCache>>,
+);
 impl PartialEq for SelectedModelInput {
     fn eq(&self, other: &Self) -> bool {
         self.same_input(other)
     }
 }
 impl SelectedModelInput {
+    pub(crate) fn preparation(&self) -> &Arc<Mutex<super::adapter::cache::RequestCache>> {
+        &self.1
+    }
+
     /// Original ranks that contain media, skipping immutable media-free subtrees.
     #[must_use]
     pub(crate) fn media_indices(&self) -> Vec<usize> {
@@ -884,25 +893,6 @@ impl SelectedModelInput {
             .root
             .as_ref()
             .is_some_and(|node| node_metrics(node).tool_relationships > 0)
-    }
-    pub(crate) fn tool_indices(&self) -> Vec<usize> {
-        fn visit(node: &InputNode, base: usize, output: &mut Vec<usize>) {
-            if node_metrics(node).tool_relationships == 0 {
-                return;
-            }
-            match &node.kind {
-                InputNodeKind::Leaf(_) => output.push(base),
-                InputNodeKind::Branch { left, right } => {
-                    visit(left, base, output);
-                    visit(right, base + left.count, output);
-                }
-            }
-        }
-        let mut output = Vec::new();
-        if let Some(root) = &self.0.root {
-            visit(root, 0, &mut output);
-        }
-        output
     }
     /// Native relationship validation survives only a certified unchanged prefix
     /// followed by the actual producer's new canonical Context messages.
@@ -944,7 +934,10 @@ impl SelectedModelInput {
         }
         SelectedInputManifest {
             root: self.0.root.as_ref().map(|node| bind(node, scope)),
-            ..SelectedInputManifest::default()
+            semantic: None,
+            invalid_budget: false,
+            origin: None,
+            edits: imbl::Vector::new(),
         }
     }
     /// Borrows ordered model-visible values without copying bodies.
@@ -1067,7 +1060,7 @@ impl SelectedModelInput {
     pub fn semantic_fingerprint(&self) -> String {
         self.0
             .semantic_digest()
-            .unwrap_or_else(|| super::types::semantic_messages_fingerprint(self))
+            .unwrap_or_else(|| super::adapter::cache::prefix_fingerprint(self, self.len()))
     }
     /// Exact same ordered actual input, skipping shared immutable subtrees.
     #[must_use]
@@ -1078,7 +1071,18 @@ impl SelectedModelInput {
     #[must_use]
     pub fn covers_prefix(&self, other: &Self) -> bool {
         other.len() <= self.len()
-            && prefix_equal(self.0.root.as_ref(), other.0.root.as_ref(), other.len())
+            && prefix_equal(
+                self.0.root.as_ref(),
+                other.0.root.as_ref(),
+                other.len(),
+                false,
+            )
+    }
+    /// Wire certificates require shared immutable owners. Value equality alone
+    /// does not distinguish JSON numbers such as -0.0 and 0.0.
+    pub(crate) fn shares_prefix(&self, root: Option<&Arc<InputNode>>) -> bool {
+        let count = root.map_or(0, |node| node.count);
+        count <= self.len() && prefix_equal(self.0.root.as_ref(), root, count, true)
     }
     /// Borrows a persistent selected interval.
     /// # Panics
@@ -1089,14 +1093,20 @@ impl SelectedModelInput {
             range.start <= range.end && range.end <= self.len(),
             "model input range bounds"
         );
-        Self(SelectedInputManifest {
-            root: self
-                .0
-                .root
-                .as_ref()
-                .and_then(|node| select_range(node, range.start, range.end)),
-            ..SelectedInputManifest::default()
-        })
+        Self(
+            SelectedInputManifest {
+                root: self
+                    .0
+                    .root
+                    .as_ref()
+                    .and_then(|node| select_range(node, range.start, range.end)),
+                semantic: None,
+                invalid_budget: false,
+                origin: None,
+                edits: imbl::Vector::new(),
+            },
+            self.1.clone(),
+        )
     }
     /// Exact model-visible JSON array bytes, without constructing the array.
     #[must_use]
@@ -1160,7 +1170,14 @@ impl SelectedInputManifest {
     /// Shares the actual selected values with their exact frozen provenance.
     #[must_use]
     pub(crate) fn messages(&self) -> SelectedModelInput {
-        SelectedModelInput(self.clone())
+        SelectedModelInput(self.clone(), Arc::default())
+    }
+    /// Keep active execution caches out of frozen manifest/snapshot owners.
+    pub(crate) fn messages_with_preparation(
+        &self,
+        previous: &SelectedModelInput,
+    ) -> SelectedModelInput {
+        SelectedModelInput(self.clone(), previous.1.clone())
     }
 }
 impl IndexMut<usize> for SelectedModelInput {
