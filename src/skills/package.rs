@@ -53,10 +53,13 @@
 //!
 //! Skill packages remain current filesystem resources. Discovery freezes
 //! identities, versions, catalog metadata, and dependency declarations at
-//! candidate-generation time. Package *bodies* are read at use time through
-//! ordinary tool semantics — discovery never loads a `SKILL.md` body into
-//! model context. Only definition edits publish a later generation at the
-//! existing safe boundary. Bodies and assets remain live Tool inputs.
+//! candidate-generation time. Package roots follow ordinary path semantics:
+//! a symlinked root is resolved and admitted wherever it points, inside or
+//! outside its collection — discovery performs no containment check, and the
+//! tools that open package files own path and permission rules. Package
+//! *bodies* are read at use time through ordinary tool semantics — discovery
+//! never loads a `SKILL.md` body into model context. Only definition edits
+//! publish a later generation. Bodies and assets remain live Tool inputs.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -148,9 +151,6 @@ pub enum SkillPackageError {
         #[serde(skip)]
         detail: String,
     },
-    /// A symlinked package root was found. Internal resources are validated
-    /// by the Tool that actually opens them, never by discovery.
-    UnsupportedSymlink { path: String },
     /// The canonical package root is not losslessly representable as UTF-8,
     /// so it cannot be published as a model-visible location.
     UnrepresentableRoot { path: String },
@@ -227,9 +227,6 @@ impl core::fmt::Display for SkillPackageError {
                 "the skill package root {path} is not valid UTF-8 and cannot be published as a \
                  model-visible location"
             ),
-            Self::UnsupportedSymlink { path } => {
-                write!(f, "skill package symlinks are rejected: {path:?}")
-            }
             Self::Io { path, detail } => write!(f, "cannot read {path:?}: {detail}"),
         }
     }
@@ -413,7 +410,6 @@ struct Candidate {
 /// function of the source alone, independent of the order its roots were
 /// configured in.
 struct ResolvedRoot {
-    boundary: PathBuf,
     entries: Vec<(String, PathBuf)>,
 }
 
@@ -679,13 +675,12 @@ fn collect_automatic_source(
         });
         return Vec::new();
     }
-    // Phase 2: validate each candidate against the root that offered it.
+    // Phase 2: validate each candidate the root offered.
     let mut collected = Vec::with_capacity(candidates);
-    for ResolvedRoot { boundary, entries } in resolved {
+    for root in resolved {
         collected.extend(validate_candidates(
             source,
-            &boundary,
-            entries,
+            root.entries,
             diagnostics,
             cancellation,
         ));
@@ -734,18 +729,21 @@ fn resolve_automatic_root(
         }
     };
     match collect_collection_entries(&boundary) {
-        Ok(entries) => Some(ResolvedRoot { boundary, entries }),
+        Ok(entries) => Some(ResolvedRoot { entries }),
         Err(detail) => invalid(detail),
     }
 }
 
-/// Validates each candidate independently against its own source boundary.
+/// Validates each candidate independently.
 ///
 /// A candidate that fails is excluded with a typed diagnostic; the loop
-/// always continues, which is the whole point of the contract.
+/// always continues, which is the whole point of the contract. Package roots
+/// follow ordinary path semantics: a symlinked root resolves wherever it
+/// points, inside or outside its source collection, and discovery performs
+/// no containment check. The tools that open package files own path and
+/// permission rules.
 fn validate_candidates(
     source: SkillSource,
-    boundary: &Path,
     entries: Vec<(String, PathBuf)>,
     diagnostics: &mut Vec<SkillDiagnostic>,
     cancellation: &crate::runtime::CancellationSignal,
@@ -771,30 +769,9 @@ fn validate_candidates(
             });
             continue;
         }
-        match std::fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                diagnostics.push(SkillDiagnostic::PackageInvalid {
-                    source,
-                    package: package_display.clone(),
-                    cause: SkillPackageError::UnsupportedSymlink {
-                        path: package_display,
-                    },
-                });
-                continue;
-            }
-            Ok(_) => {}
-            Err(error) => {
-                diagnostics.push(SkillDiagnostic::PackageInvalid {
-                    source,
-                    package: package_display.clone(),
-                    cause: SkillPackageError::Io {
-                        path: package_display,
-                        detail: error.to_string(),
-                    },
-                });
-                continue;
-            }
-        }
+        // Resolve the offered path, following symlinks, and admit the package
+        // at its canonical root. A root that cannot be resolved (for example
+        // a broken link) is the one package-level exclusion left here.
         let root = match std::fs::canonicalize(&path) {
             Ok(root) => root,
             Err(error) => {
@@ -803,23 +780,12 @@ fn validate_candidates(
                     package: package_display.clone(),
                     cause: SkillPackageError::Io {
                         path: package_display,
-                        detail: format!("cannot canonicalize the Skill package root: {error}"),
+                        detail: format!("cannot resolve the Skill package root: {error}"),
                     },
                 });
                 continue;
             }
         };
-        // A source is a bounded authority. Containment is package-in-source,
-        // never package-in-workspace: global and workspace are different
-        // authorities and neither may be measured against the other.
-        if !root.starts_with(boundary) {
-            diagnostics.push(SkillDiagnostic::PackageEscapesSource {
-                source,
-                package: package_display,
-                root: boundary.display().to_string(),
-            });
-            continue;
-        }
         match discover_package(&root, &name, source, cancellation) {
             Ok(package) => {
                 candidates.last_mut().expect("reserved identity").package = Some(package);
@@ -847,8 +813,8 @@ fn existing_symlink_metadata(path: &Path) -> Option<Result<std::fs::Metadata, St
 /// The direct child package candidates of one Skill collection directory.
 ///
 /// Hidden entries and ordinary files are ignored. A symlinked direct entry
-/// is *returned* as a candidate so package validation rejects it as the
-/// package-level fact it is, rather than suppressing the whole root.
+/// is *returned* as a candidate; package validation resolves and follows it
+/// with ordinary path semantics, wherever it points.
 fn collect_collection_entries(path: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     let entries = std::fs::read_dir(path).map_err(|error| error.to_string())?;
     let entries = entries
@@ -1444,10 +1410,11 @@ mod frontmatter_tests {
         assert_eq!(outcome.invalid.len(), 1);
     }
 
-    /// #280 (12): a symlinked package root is excluded as the package-level
-    /// fact it is, without suppressing its source.
+    /// #280 (12): a symlinked package root is followed with ordinary path
+    /// semantics and admitted wherever it resolves, without suppressing its
+    /// source.
     #[test]
-    fn cfg280_a_symlinked_package_root_is_excluded_not_fatal() {
+    fn cfg280_a_symlinked_package_root_is_followed_not_excluded() {
         let (_temp, base, workspace) = workspace_fixture();
         let root = workspace.root().join(".agents/skills");
         write_skill(&root, "valid", "Valid", "");
@@ -1456,14 +1423,47 @@ mod frontmatter_tests {
         let outcome =
             SkillDiscovery::with_config(&workspace, SkillDiscoveryConfig::workspace_root(root))
                 .discover();
+        assert_eq!(names(&outcome.packages), ["linked", "valid"]);
+        assert!(outcome.diagnostics.is_empty(), "{:?}", outcome.diagnostics);
+        let linked = outcome
+            .packages
+            .iter()
+            .find(|package| package.name() == "linked")
+            .expect("linked package");
+        assert_eq!(
+            linked.location(),
+            base.join("linked/SKILL.md")
+                .canonicalize()
+                .expect("canonical")
+                .display()
+                .to_string(),
+            "a followed root publishes its canonical target location"
+        );
+    }
+
+    /// A package root symlink that cannot be resolved (a broken link) is
+    /// excluded with a named diagnostic; the source still publishes.
+    #[test]
+    fn a_broken_package_root_symlink_is_excluded_with_a_named_diagnostic() {
+        let (_temp, _base, workspace) = workspace_fixture();
+        let root = workspace.root().join(".agents/skills");
+        write_skill(&root, "valid", "Valid", "");
+        std::os::unix::fs::symlink(root.join("missing"), root.join("broken")).expect("symlink");
+        let outcome =
+            SkillDiscovery::with_config(&workspace, SkillDiscoveryConfig::workspace_root(root))
+                .discover();
         assert_eq!(names(&outcome.packages), ["valid"]);
-        assert!(matches!(
-            outcome.diagnostics.as_slice(),
-            [SkillDiagnostic::PackageInvalid {
-                cause: super::SkillPackageError::UnsupportedSymlink { .. },
-                ..
-            }]
-        ));
+        assert!(
+            outcome.diagnostics.iter().any(|d| matches!(
+                d,
+                SkillDiagnostic::PackageInvalid {
+                    cause: super::SkillPackageError::Io { .. },
+                    ..
+                }
+            )),
+            "{:?}",
+            outcome.diagnostics
+        );
     }
 
     /// A source root that exists but cannot be scanned excludes only that

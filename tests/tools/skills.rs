@@ -274,33 +274,46 @@ fn nested_packages_are_not_recursively_discovered() {
     assert_eq!(names, ["outer"], "nested packages are never discovered");
 }
 
-/// Discovery rejects symlinked package roots; internal resources belong to Tools.
+/// Discovery follows symlinked package roots with ordinary path semantics;
+/// internal resources belong to Tools.
 #[test]
-fn package_symlinks_are_rejected() {
+fn package_root_symlinks_are_followed() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "real", "Real skill.", &[], "body\n");
-    std::os::unix::fs::symlink(
-        dir.path().join(".agents/skills/real"),
-        dir.path().join(".agents/skills/link"),
-    )
-    .expect("symlink root");
+    // A distinct definition outside the collection, linked in as a root.
+    // Identity is the offered entry name: the target definition must carry
+    // the same frontmatter name as the linking entry.
+    let store = dir.path().join("external-store");
+    let external = store.join(".agents/skills/link");
+    write_skill(&store, "link", "External skill.", &[], "body\n");
+    std::os::unix::fs::symlink(&external, dir.path().join(".agents/skills/link"))
+        .expect("symlink root");
     let outcome = project_discovery(&workspace).discover();
-    // The valid sibling still publishes; only the symlinked root is excluded.
+    // The followed root is admitted under its offered identity alongside the
+    // real in-collection sibling.
     assert_eq!(
         outcome
             .packages
             .iter()
             .map(rustx::skills::SkillPackage::name)
             .collect::<Vec<_>>(),
-        ["real"]
+        ["link", "real"]
     );
-    assert!(matches!(
-        outcome.diagnostics.as_slice(),
-        [SkillDiagnostic::PackageInvalid {
-            cause: SkillPackageError::UnsupportedSymlink { .. },
-            ..
-        }]
-    ));
+    assert!(outcome.diagnostics.is_empty(), "{:?}", outcome.diagnostics);
+    let followed = outcome
+        .packages
+        .iter()
+        .find(|package| package.name() == "link")
+        .expect("followed package");
+    assert_eq!(
+        followed.location(),
+        external
+            .join("SKILL.md")
+            .canonicalize()
+            .expect("canonical")
+            .display()
+            .to_string()
+    );
 
     let (dir2, workspace2) = fixture();
     write_skill(dir2.path(), "skill", "A skill.", &[], "body\n");

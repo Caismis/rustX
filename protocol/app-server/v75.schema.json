@@ -10414,34 +10414,6 @@
           ]
         },
         {
-          "description": "One candidate canonicalized outside the source root that offered it.\nSources are bounded authorities, so the candidate is excluded rather\nthan silently admitted under the wrong authority.",
-          "type": "object",
-          "properties": {
-            "source": {
-              "description": "The source that offered the candidate.",
-              "$ref": "#/$defs/SkillSource"
-            },
-            "package": {
-              "description": "The candidate package directory as offered.",
-              "type": "string"
-            },
-            "root": {
-              "description": "The canonical source root the candidate left.",
-              "type": "string"
-            },
-            "kind": {
-              "type": "string",
-              "const": "package_escapes_source"
-            }
-          },
-          "required": [
-            "kind",
-            "source",
-            "package",
-            "root"
-          ]
-        },
-        {
           "description": "Two or more distinct packages in the **same** scope resolve to one\nlogical Skill identity. Every conflicting definition is excluded;\ndiscovery never picks a winner by enumeration order.",
           "type": "object",
           "properties": {
@@ -10666,23 +10638,6 @@
           "required": [
             "cause",
             "directory"
-          ]
-        },
-        {
-          "description": "A symlinked package root was found. Internal resources are validated\nby the Tool that actually opens them, never by discovery.",
-          "type": "object",
-          "properties": {
-            "path": {
-              "type": "string"
-            },
-            "cause": {
-              "type": "string",
-              "const": "unsupported_symlink"
-            }
-          },
-          "required": [
-            "cause",
-            "path"
           ]
         },
         {

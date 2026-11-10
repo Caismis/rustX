@@ -15,7 +15,6 @@
 //! SourceRootInvalid      an automatic root exists but cannot be scanned
 //! SourceBudgetExceeded   one source offered more candidates than its budget
 //! PackageInvalid         one candidate failed Agent Skills validation
-//! PackageEscapesSource   one candidate resolved outside its own source
 //! DuplicateIdentity      one scope defines the same identity twice
 //! Shadowed               a higher-precedence source won the same identity
 //! ```
@@ -94,17 +93,6 @@ pub enum SkillDiagnostic {
         /// The preserved typed validation cause.
         cause: SkillPackageError,
     },
-    /// One candidate canonicalized outside the source root that offered it.
-    /// Sources are bounded authorities, so the candidate is excluded rather
-    /// than silently admitted under the wrong authority.
-    PackageEscapesSource {
-        /// The source that offered the candidate.
-        source: SkillSource,
-        /// The candidate package directory as offered.
-        package: String,
-        /// The canonical source root the candidate left.
-        root: String,
-    },
     /// Two or more distinct packages in the **same** scope resolve to one
     /// logical Skill identity. Every conflicting definition is excluded;
     /// discovery never picks a winner by enumeration order.
@@ -152,7 +140,6 @@ impl SkillDiagnostic {
             Self::SourceRootInvalid { .. }
             | Self::SourceBudgetExceeded { .. }
             | Self::PackageInvalid { .. }
-            | Self::PackageEscapesSource { .. }
             | Self::DuplicateIdentity { .. } => SkillDiagnosticSeverity::Warning,
         }
     }
@@ -165,7 +152,6 @@ impl SkillDiagnostic {
             | Self::SourceRootInvalid { source, .. }
             | Self::SourceBudgetExceeded { source, .. }
             | Self::PackageInvalid { source, .. }
-            | Self::PackageEscapesSource { source, .. }
             | Self::DuplicateIdentity { source, .. } => Some(*source),
             Self::Shadowed { .. } => None,
         }
@@ -205,15 +191,6 @@ impl core::fmt::Display for SkillDiagnostic {
             } => write!(
                 formatter,
                 "the {source} Skill package {package:?} is excluded: {cause}"
-            ),
-            Self::PackageEscapesSource {
-                source,
-                package,
-                root,
-            } => write!(
-                formatter,
-                "the {source} Skill package {package:?} resolves outside its source root \
-                 {root:?} and is excluded"
             ),
             Self::DuplicateIdentity {
                 source,

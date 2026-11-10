@@ -99,15 +99,6 @@
       "source": "workspace",
       "package": "/workspace/.agents/skills/review",
       "cause": {
-        "cause": "unsupported_symlink",
-        "path": "/workspace/.agents/skills/review"
-      }
-    },
-    {
-      "kind": "package_invalid",
-      "source": "workspace",
-      "package": "/workspace/.agents/skills/review",
-      "cause": {
         "cause": "unrepresentable_root",
         "path": "/workspace/.agents/skills/review"
       }

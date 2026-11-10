@@ -7,9 +7,11 @@ The process binds exactly User `~/rustx/.agents/skills` and Workspace
 `<workspace>/.agents/skills`. Discovery enumerates their direct candidate entries
 once, validates each candidate's `SKILL.md` frontmatter, and preserves deterministic
 Workspace-over-User replacement. An invalid Workspace winner never exposes the
-lower User definition. Collection/candidate bounds, root containment, canonical
-UTF-8 locations, symlinked root rejection and regular/non-symlink SKILL.md checks
-remain in the discovery owner.
+lower User definition. Collection/candidate bounds, canonical
+UTF-8 locations and regular/non-symlink SKILL.md checks remain in the discovery
+owner. Package roots follow ordinary path semantics: a symlinked candidate root
+is resolved and admitted wherever it points, inside or outside its collection —
+discovery performs no containment check on package roots.
 
 `skills/frontmatter.rs` opens SKILL.md through the existing anchored directory I/O
 owner. It reads a cancellable prefix with 4 KiB bounded read-ahead and stops on the
@@ -17,8 +19,9 @@ closing YAML delimiter. Two matching prefix reads verify the definition without
 using mtime/size/inode as content equality. No body UTF-8 validation occurs.
 The **frontmatter prefix**, including malformed newline-free input, is bounded to
 1 MiB. The file, body and assets have no discovery size limit. Missing delimiters,
-invalid YAML, field shapes, names, directory mismatches and malformed dependency
-metadata retain explicit candidate diagnostics. Internal resource symlinks are
+invalid YAML, field shapes, names, directory mismatches, malformed dependency
+metadata and unresolvable (for example broken-link) package roots retain explicit
+candidate diagnostics. Internal resource symlinks are
 not inspected; actual Native Tools own their ordinary path/permission rules.
 
 `SkillPackage` stores one normalized definition, its dependency manifest, version
