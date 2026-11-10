@@ -144,56 +144,59 @@ fn tool_association_rollback_trigger_corruption_and_retry_publish_no_stale_seats
         .append_canonical_batch(&selected_tool_batch("second"))
         .unwrap();
     let (second, request) = selected_snapshot(&store, 2);
-    for action in [
-        "SELECT RAISE(ABORT,'after immutable association insert');",
-        "UPDATE tool_association_nodes SET association_json=json_set(association_json,'$.call_block',99) WHERE id=1;",
-        "DELETE FROM tool_association_nodes WHERE id=2;",
-        "UPDATE tool_association_origin_sets SET origins_json='{}' WHERE id=1;",
-        "DELETE FROM tool_association_origin_sets WHERE id=2;",
-    ] {
-        store.lock().unwrap().execute_batch(&format!("CREATE TEMP TRIGGER corrupt_association AFTER INSERT ON request_snapshots BEGIN {action} END;")).unwrap();
-        assert!(
-            store
-                .commit_model_turn_start(&[], &second, Utc::now())
-                .is_err(),
-            "{action}"
-        );
-        let connection = store.lock().unwrap();
-        assert_eq!(
+    for timing in ["INSERT", "UPDATE OF started_sequence"] {
+        for action in [
+            "SELECT RAISE(ABORT,'after immutable association insert');",
+            "UPDATE tool_association_nodes SET association_json=json_set(association_json,'$.call_block',99) WHERE id=1;",
+            "DELETE FROM tool_association_nodes WHERE id=2;",
+            "UPDATE tool_association_origin_sets SET origins_json='{}' WHERE id=1;",
+            "UPDATE tool_association_origin_sets SET origins_json=replace(origins_json,'\"call_message\":0','\"call_message\":9') WHERE id=1;",
+            "DELETE FROM tool_association_origin_sets WHERE id=2;",
+        ] {
+            store.lock().unwrap().execute_batch(&format!("CREATE TEMP TRIGGER corrupt_association AFTER {timing} ON request_snapshots BEGIN {action} END;")).unwrap();
+            assert!(
+                store
+                    .commit_model_turn_start(&[], &second, Utc::now())
+                    .is_err(),
+                "{action}"
+            );
+            let connection = store.lock().unwrap();
+            assert_eq!(
+                connection
+                    .query_row("SELECT count(*) FROM tool_association_nodes", [], |r| r
+                        .get::<_, usize>(
+                        0
+                    ))
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT count(*) FROM tool_association_origin_sets",
+                        [],
+                        |r| r.get::<_, usize>(0)
+                    )
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                connection
+                    .query_row("SELECT count(*) FROM request_snapshot_payloads", [], |r| {
+                        r.get::<_, usize>(0)
+                    })
+                    .unwrap(),
+                1
+            );
             connection
-                .query_row("SELECT count(*) FROM tool_association_nodes", [], |r| r
-                    .get::<_, usize>(
-                    0
-                ))
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            connection
-                .query_row(
-                    "SELECT count(*) FROM tool_association_origin_sets",
-                    [],
-                    |r| r.get::<_, usize>(0)
-                )
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            connection
-                .query_row("SELECT count(*) FROM request_snapshot_payloads", [], |r| {
-                    r.get::<_, usize>(0)
-                })
-                .unwrap(),
-            1
-        );
-        connection
-            .execute_batch("DROP TRIGGER corrupt_association")
-            .unwrap();
-        drop(connection);
-        assert_eq!(
-            store.load_request_snapshot(&first.request_id).unwrap(),
-            first
-        );
+                .execute_batch("DROP TRIGGER corrupt_association")
+                .unwrap();
+            drop(connection);
+            assert_eq!(
+                store.load_request_snapshot(&first.request_id).unwrap(),
+                first
+            );
+        }
     }
     store
         .commit_model_turn_start(&[], &second, Utc::now())
@@ -258,6 +261,78 @@ fn tool_association_roots_survive_real_sqlite_reopen_and_new_append() {
         store.load_request_snapshot(&first.request_id).unwrap(),
         first
     );
+}
+
+#[test]
+fn ignored_association_inserts_cannot_publish_unauthenticated_facts() {
+    for (table, replacement) in [
+        (
+            "tool_association_origin_sets",
+            "INSERT INTO tool_association_origin_sets(id,digest,origins_json) VALUES(last_insert_rowid(),NEW.digest,'{}');",
+        ),
+        (
+            "tool_association_nodes",
+            "INSERT INTO tool_association_nodes(id,parent_id,parent_digest,parent_private_bytes,digest,count,private_bytes,association_json) VALUES(last_insert_rowid(),NEW.parent_id,NEW.parent_digest,NEW.parent_private_bytes,NEW.digest,NEW.count,NEW.private_bytes,'{}');",
+        ),
+    ] {
+        let store = store();
+        store.initialize(&[]).unwrap();
+        store
+            .append_canonical_batch(&selected_tool_batch("ignored-origin"))
+            .unwrap();
+        let (snapshot, request) = selected_snapshot(&store, 1);
+        // INSERT itself does not revoke immutable-prefix certificates. Replace the
+        // expected row using only INSERT, then ignore the outer statement. SQLite
+        // restores last_insert_rowid after the trigger, so use that same ID here.
+        store
+            .lock()
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TEMP TRIGGER replace_fact BEFORE INSERT ON {table} BEGIN
+            {replacement} SELECT RAISE(IGNORE); END;",
+            ))
+            .unwrap();
+        let committed = store.commit_model_turn_start(&[], &snapshot, Utc::now());
+        assert!(
+            matches!(committed, Err(ConversationStoreError::InvalidReference(ref message)) if message.ends_with("insert was ignored")),
+            "a swallowed {table} INSERT must roll back before publishing its root"
+        );
+        {
+            let connection = store.lock().unwrap();
+            for table in [
+                "tool_association_origin_sets",
+                "tool_association_nodes",
+                "request_snapshot_payloads",
+                "request_snapshots",
+                "native_input_nodes",
+            ] {
+                assert_eq!(
+                    connection
+                        .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                            .get::<_, usize>(0))
+                        .unwrap(),
+                    0,
+                    "{table} must roll back"
+                );
+            }
+            connection
+                .execute_batch("DROP TRIGGER replace_fact")
+                .unwrap();
+        }
+        store
+            .commit_model_turn_start(&[], &snapshot, Utc::now())
+            .unwrap();
+        assert_eq!(
+            store.load_request_snapshot(&snapshot.request_id).unwrap(),
+            snapshot
+        );
+        assert_eq!(
+            store
+                .reconstruct_model_request(&snapshot.request_id)
+                .unwrap(),
+            request
+        );
+    }
 }
 
 #[test]

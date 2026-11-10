@@ -172,7 +172,10 @@ pub(super) fn persist(
             }
             id
         } else {
-            connection.execute_cached("INSERT INTO tool_association_nodes(parent_id,parent_digest,digest,count,association_json,private_bytes,parent_private_bytes) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![root.map(|r|r.id),root.as_ref().map(|r|r.digest.as_slice()),hash.as_slice(),node.count,json,private_bytes,root.map(|r|r.private_bytes)]).map_err(|e|super::sqlite_error(&e,e.to_string()))?;
+            let inserted = connection.execute_cached("INSERT INTO tool_association_nodes(parent_id,parent_digest,digest,count,association_json,private_bytes,parent_private_bytes) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![root.map(|r|r.id),root.as_ref().map(|r|r.digest.as_slice()),hash.as_slice(),node.count,json,private_bytes,root.map(|r|r.private_bytes)]).map_err(|e|super::sqlite_error(&e,e.to_string()))?;
+            if inserted != 1 {
+                return Err(invalid("Tool association insert was ignored"));
+            }
             #[cfg(test)]
             WRITTEN.with(|work| {
                 let (rows, bytes) = work.get();
