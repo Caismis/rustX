@@ -62,9 +62,26 @@
         {
           "additionalProperties": false,
           "properties": {
+            "max_output_tokens": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelOutput"
+                }
+              ]
+            },
             "mode": {
               "const": "session",
               "type": "string"
+            },
+            "profile": {
+              "$ref": "#/$defs/AuxiliaryProfileAuthoring",
+              "default": {
+                "mode": "lowest"
+              }
+            },
+            "request_params": {
+              "$ref": "#/$defs/RequestParamsJson",
+              "default": "{}"
             }
           },
           "required": [
@@ -90,11 +107,10 @@
               "$ref": "#/$defs/ModelRef"
             },
             "profile": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelProfileId"
-                }
-              ]
+              "$ref": "#/$defs/AuxiliaryProfileAuthoring",
+              "default": {
+                "mode": "lowest"
+              }
             },
             "request_params": {
               "$ref": "#/$defs/RequestParamsJson",
@@ -104,6 +120,53 @@
           "required": [
             "mode",
             "model"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AuxiliaryProfileAuthoring": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "lowest",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "model_default",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ModelProfileId"
+            },
+            "mode": {
+              "const": "explicit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "id"
           ],
           "type": "object"
         }
@@ -135,14 +198,7 @@
     "ModelLayer": {
       "additionalProperties": false,
       "properties": {
-        "btw_model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AuxiliaryModelAuthoring"
-            }
-          ]
-        },
-        "classification_model": {
+        "auxiliary": {
           "anyOf": [
             {
               "$ref": "#/$defs/AuxiliaryModelAuthoring"
@@ -175,20 +231,6 @@
           "anyOf": [
             {
               "$ref": "#/$defs/RequestParamsJson"
-            }
-          ]
-        },
-        "summary_model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AuxiliaryModelAuthoring"
-            }
-          ]
-        },
-        "title_model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AuxiliaryModelAuthoring"
             }
           ]
         }
