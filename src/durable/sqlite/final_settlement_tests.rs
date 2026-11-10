@@ -12,8 +12,11 @@ impl FinalFixture {
     }
     fn with_store(store: SqliteConversationStore) -> Self {
         store.initialize(&[]).unwrap();
+        Self::with_initialized_store(store)
+    }
+    fn with_initialized_store(store: SqliteConversationStore) -> Self {
         let mut snapshot = test_request_snapshot(store.load_head().unwrap().revision, invocation());
-        freeze_test_input(&store, &mut snapshot, &[]);
+        crate::durable::sqlite::bounded_work_tests::freeze_native_input(&store, &mut snapshot);
         store
             .append_event(envelope(
                 store.conversation_id(),
@@ -1651,6 +1654,45 @@ fn publication_header_keeps_shared_failure_repair_and_custom_trigger_order() {
                     .is_some()
             );
             assert_eq!(connection.query_row("SELECT count(*) FROM content_frontiers WHERE source_kind IN ('canonical','cb','cm')",[],|row|row.get::<_,u64>(0)).unwrap(),0);
+        }
+    }
+}
+
+#[test]
+fn bounded_work_staged_publication_and_final_settlement_sql() {
+    use crate::durable::sqlite::query_work::{self, HISTORY_SIZES};
+    for tools in [false, true] {
+        let mut samples = Vec::new();
+        for size in HISTORY_SIZES.map(|size| size * 2) {
+            let store = crate::durable::sqlite::bounded_work_tests::history(size);
+            let mut fixture = FinalFixture::with_initialized_store(store);
+            let frames = if tools { final_tool_frames(&mut fixture) } else {
+                ["final ", "水"].into_iter().enumerate().map(|(sequence, suffix)| PublicationFrame {
+                    stream_id: fixture.start.stream_id.clone(), message_id: fixture.start.message_id.clone(), sequence: sequence as u64,
+                    payload: PublicationPayload::TextSuffix { block_index: ContentBlockIndex::new(0), suffix: suffix.into() },
+                }).collect()
+            };
+            let prefix = if tools { 3 } else { 1 };
+            query_work::capture(&fixture.store.lock().unwrap());
+            fixture.store.stage_publication_frames(&fixture.start, &frames[..prefix]).unwrap();
+            fixture.frames = frames[prefix..].to_vec();
+            let mut candidate = fixture.candidate(None);
+            if tools { candidate.boundary = None; }
+            fixture.store.settle_model_turn(candidate).unwrap();
+            samples.push((size, query_work::finish(&fixture.store.lock().unwrap())));
+        }
+        let baseline = &samples[0].1;
+        assert!(baseline.len() > 100);
+        for (history, statements) in &samples {
+            assert_eq!(statements.len(), baseline.len(), "tools {tools}, history {history}");
+            for (sql, work) in statements {
+                let first = &baseline[sql];
+                assert_eq!(work.calls, first.calls, "tools {tools}, history {history}: {sql}");
+                assert!(work.steps <= first.steps + 16, "tools {tools}, history {history}, VM {} -> {}: {sql}", first.steps, work.steps);
+                assert!(work.scans <= first.scans + 2, "tools {tools}, history {history}: {sql}");
+                assert_eq!(work.sorts, 0, "tools {tools}, history {history}: {sql}");
+                assert_eq!(work.automatic, 0, "tools {tools}, history {history}: {sql}");
+            }
         }
     }
 }

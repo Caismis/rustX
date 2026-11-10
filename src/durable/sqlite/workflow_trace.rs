@@ -11,6 +11,8 @@ mod query_work;
 // These queries seek the exact run or visit before applying the immutable
 // Journal cut. In particular, missing I/O and terminal facts do not scan
 // later visits or unrelated runs to prove absence.
+pub(super) const TOOL_START_SQL: &str = "SELECT sequence FROM events INDEXED BY events_observation_tool_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_id=?2 AND json_extract(event_json,'$.event.type')='tool_execution_started' AND sequence<=?3 LIMIT 2";
+
 const RUN_TOTAL_SQL: &str = "SELECT count(*) FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE json_extract(event_json,'$.event.instance.block.run')=?3 AND json_extract(event_json,'$.event.type')='workflow_node_started' AND sequence>?1 AND sequence<=?2";
 const RUN_REVISION_SQL: &str = "SELECT max(sequence) FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE json_extract(event_json,'$.event.instance.block.run')=?3 AND json_extract(event_json,'$.event.type') IN ('workflow_node_started','workflow_node_waiting','workflow_node_settled') AND sequence>?1 AND sequence<=?2";
 const RUN_NODES_SQL: &str = "SELECT sequence,event_timestamp,CASE WHEN octet_length(json_extract(event_json,'$.event.instance'))<=8192 THEN json_extract(event_json,'$.event.instance') END FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE json_extract(event_json,'$.event.instance.block.run')=?3 AND json_extract(event_json,'$.event.type')='workflow_node_started' AND sequence>?1 AND sequence<=?2 ORDER BY sequence LIMIT ?4 OFFSET ?5";
@@ -41,7 +43,9 @@ pub(super) fn page(
         serde_json::from_str(&run).map_err(|error| storage(error.to_string()))?;
     let mut parents = Vec::new();
     if let (Some(attempt), Some(call)) = (run_id.origin.attempt_id(), call_id) {
-        let mut query=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_tool_call_scope_kind_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_id=?2 AND json_extract(event_json,'$.event.type')='tool_execution_started' AND sequence<=?3 LIMIT 2").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        let mut query = connection
+            .prepare_cached(TOOL_START_SQL)
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         parents = query
             .query_map(params![call, attempt.as_str(), start], |row| {
                 row.get::<_, u64>(0)

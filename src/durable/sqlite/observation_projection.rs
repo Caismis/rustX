@@ -5,6 +5,8 @@ use crate::durable::projection::ProjectionCheckpoint;
 use crate::durable::sqlite::statements::FixedStatements;
 use crate::observation::head::RuntimeClientProjectionHeadView;
 use sha2::{Digest, Sha256};
+pub(super) const INHERITED_TRANSCRIPT_ANCHOR_SQL: &str = "SELECT coalesce((SELECT native_transcript FROM message_ledger INDEXED BY message_ledger_transcript_position_idx WHERE position<=?1 AND native_transcript IS NOT NULL ORDER BY position DESC LIMIT 1),0)";
+
 const MAX: usize = 16_384;
 #[cfg(test)]
 thread_local! { static READ_WORK: std::cell::Cell<(usize,usize)> = const {std::cell::Cell::new((0,0))}; }
@@ -67,7 +69,11 @@ fn view(
             |row| row.get(0),
         )
     } else {
-        connection.query_row("SELECT coalesce((SELECT native_transcript FROM message_ledger WHERE position<=?1 AND native_transcript IS NOT NULL ORDER BY position DESC LIMIT 1),0)", [activation.ledger.0], |row| row.get(0))
+        connection.query_row(
+            INHERITED_TRANSCRIPT_ANCHOR_SQL,
+            [activation.ledger.0],
+            |row| row.get(0),
+        )
     }
     .map_err(|error| storage(error.to_string()))?;
     Ok(RuntimeClientProjectionHeadView {

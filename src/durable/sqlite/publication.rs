@@ -366,7 +366,7 @@ impl PublicationStore for SqliteConversationStore {
         let mut statement = connection
             .prepare(
                 "SELECT stream_id,attempt_id,turn_id,request_id,message_id,terminal_sequence,settlement
-                 FROM publication_streams WHERE settlement IS NULL ORDER BY stream_id",
+                 FROM publication_streams INDEXED BY publication_streams_open_idx WHERE settlement IS NULL ORDER BY stream_id",
             )
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("unsettled publication query: {error}")))?;
         let rows = statement

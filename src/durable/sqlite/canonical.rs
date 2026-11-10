@@ -468,7 +468,7 @@ impl CanonicalStore for SqliteConversationStore {
             ));
         }
         let connection = self.lock()?;
-        let mut query = connection.prepare_cached("SELECT CASE WHEN octet_length(assistant_message_id)<=4096 THEN assistant_message_id END, block_index, CASE WHEN octet_length(call_id)<=4096 THEN call_id END FROM canonical_tool_calls WHERE result_message_id IS NULL ORDER BY assistant_message_id,block_index LIMIT ?1").map_err(|e| storage(e.to_string()))?;
+        let mut query = connection.prepare_cached("SELECT CASE WHEN octet_length(assistant_message_id)<=4096 THEN assistant_message_id END, block_index, CASE WHEN octet_length(call_id)<=4096 THEN call_id END FROM canonical_tool_calls INDEXED BY canonical_tool_calls_pending WHERE result_message_id IS NULL ORDER BY assistant_message_id,block_index LIMIT ?1").map_err(|e| storage(e.to_string()))?;
         let rows = query
             .query_map([limit], |r| {
                 Ok((
@@ -606,10 +606,21 @@ impl CanonicalStore for SqliteConversationStore {
         &self,
         message_id: &MessageId,
     ) -> Result<Option<SurfaceRevision>, ConversationStoreError> {
-        let revision: Option<i64> = self.lock()?.query_row(
-            "SELECT revision FROM surface_ops WHERE json_extract(op_json, '$.op') = 'append' AND json_extract(op_json, '$.message_id') = ?1 ORDER BY revision LIMIT 1",
-            [message_id.as_str()], |row| row.get(0),
-        ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("message append revision: {error}")))?;
+        let revision: Option<i64> = self
+            .lock()?
+            .query_row(
+                "SELECT first_append_revision FROM message_ledger WHERE message_id=?1",
+                [message_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("message append revision: {error}"),
+                )
+            })?
+            .flatten();
         revision
             .map(|value| nonnegative(value, "message append revision").map(SurfaceRevision::new))
             .transpose()
@@ -1157,14 +1168,21 @@ pub(super) struct CanonicalSourceScalars {
     pub(super) todos: Option<crate::durable::NativeTodoObservation>,
 }
 
+// Each timed human row carries the greatest timestamp through its position.
+// Seeking the last such row preserves max-time semantics at any historical cut,
+// including out-of-order timestamps, without scanning later history by time.
+pub(super) const HUMAN_ACTIVITY_SQL: &str = "SELECT human_activity_max_seconds,human_activity_max_nanos FROM message_ledger INDEXED BY message_ledger_human_activity_idx WHERE human_activity_at IS NOT NULL AND position<=?1 ORDER BY position DESC LIMIT 1";
+
 pub(super) fn complete_canonical_scalars(
     connection: &Connection,
     cut: &crate::durable::observation::ObservationReadCut,
 ) -> Result<CanonicalSourceScalars, ConversationStoreError> {
-    let activity: Option<(i64,u32)> = connection.query_row_cached(
-        "SELECT human_activity_seconds,human_activity_nanos FROM message_ledger INDEXED BY message_ledger_human_activity_idx WHERE human_activity_at IS NOT NULL AND position<=?1 ORDER BY human_activity_seconds DESC,human_activity_nanos DESC LIMIT 1",
-        [cut.ledger_through], |row| Ok((row.get(0)?,row.get(1)?)),
-    ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let activity: Option<(i64, u32)> = connection
+        .query_row_cached(HUMAN_ACTIVITY_SQL, [cut.ledger_through], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let opening: Option<Option<String>> = connection.query_row_cached(
         "SELECT opening_preview FROM message_ledger INDEXED BY message_ledger_opening_idx WHERE ordinary_user=1 AND position<=?1 ORDER BY position LIMIT 1",
         [cut.ledger_through], |row| row.get(0),
