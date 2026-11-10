@@ -1218,21 +1218,27 @@ pub(super) fn find_event_by_id(
     connection: &rusqlite::Connection,
     event_id: &EventId,
 ) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
-    let Some(sequence) = find_event_sequence(connection, event_id.as_str())? else {
+    find_event_json_by_id(connection, event_id.as_str(), "event identity probe")?
+        .map(|json| decode(&json, "event identity"))
+        .transpose()
+}
+
+pub(super) fn find_event_json_by_id(
+    connection: &rusqlite::Connection,
+    event_id: &str,
+    lookup: &str,
+) -> Result<Option<String>, ConversationStoreError> {
+    let Some(sequence) = find_event_sequence(connection, event_id)? else {
         return Ok(None);
     };
-    let Some(json) = connection
+    connection
         .query_row_cached(
             "SELECT event_json FROM events WHERE sequence=?1",
             [sequence],
             |row| row.get::<_, String>(0),
         )
         .optional()
-        .map_err(|error| sqlite_error(&error, format!("event identity probe: {error}")))?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(decode(&json, "event identity")?))
+        .map_err(|error| sqlite_error(&error, format!("{lookup}: {error}")))
 }
 
 /// Compares a retried event with its durable copy. Event Journal sequence is

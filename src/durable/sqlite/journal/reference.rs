@@ -25,7 +25,7 @@ use crate::durable::sqlite::request::{
     reconstruct_request_start_reference, validate_request_start_metadata,
 };
 use crate::durable::sqlite::statements::FixedStatements;
-use crate::durable::sqlite::{projection, storage};
+use crate::durable::sqlite::{decode, projection, storage};
 use crate::durable::{ConversationStoreError, InboundDraft};
 use crate::events::interaction::{
     InteractionSubject, interaction_arguments_digest, validate_interaction_settlement,
@@ -1096,12 +1096,17 @@ pub(in crate::durable::sqlite) fn validate_event_reference_with_requests(
                     crate::runtime::subagent::terminal_settlement_event_id(subagent_id)
                 }
             };
-            let terminal = find_event_by_id(transaction, &terminal_id)?;
+            let terminal = super::find_event_json_by_id(
+                transaction,
+                terminal_id.as_str(),
+                "physical settlement terminal lookup",
+            )?;
             let terminal = terminal.ok_or_else(|| {
                 ConversationStoreError::InvalidReference(
                     "physical settlement without terminal publication".into(),
                 )
             })?;
+            let terminal: RuntimeEventEnvelope = decode(&terminal, "physical settlement terminal")?;
             if owner != *child_agent_id
                 || !matches!(
                     terminal.event,

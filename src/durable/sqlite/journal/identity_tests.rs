@@ -1,7 +1,7 @@
 //! Public aliases retain exact identity while ordinary appends use sequence.
 use super::*;
 use crate::durable::sqlite::test_support::{envelope, store};
-use crate::durable::{ConversationStore, JournalStore};
+use crate::durable::{ConversationStore, InboxStore, JournalStore};
 
 fn append(
     store: &SqliteConversationStore,
@@ -130,4 +130,64 @@ fn terminal_guard_keeps_precedence_over_a_repeated_event_alias() {
         store.append_event(terminal),
         Err(ConversationStoreError::TerminalViolation(_))
     ));
+}
+
+#[test]
+fn transcript_identity_lookup_preserves_decode_error_domain() {
+    for id in ["", "producer-transcript"] {
+        let store = store();
+        let event = append(&store, id).unwrap();
+        let connection = store.lock().unwrap();
+        connection
+            .execute(
+                "UPDATE events SET event_json='{}' WHERE sequence=?1",
+                [event.sequence],
+            )
+            .unwrap();
+        let error = crate::durable::sqlite::canonical::transcript::load_transcript_event(
+            &connection,
+            "attempt_terminal",
+            event.event_id.as_str(),
+        )
+        .unwrap_err();
+        let expected = decode::<RuntimeEventEnvelope>("{}", "transcript event").unwrap_err();
+        assert_eq!(format!("{error:?}"), format!("{expected:?}"));
+    }
+}
+
+#[test]
+fn physical_settlement_identity_lookup_preserves_decode_error_domain() {
+    use crate::durable::sqlite::test_support::{own_normal_subagent, success_publication};
+    use crate::runtime::identity::{AgentId, SubagentId};
+
+    let store = store();
+    let child = AgentId::new("decode-domain-child");
+    let subagent = SubagentId::for_conversation(store.conversation_id(), 1);
+    own_normal_subagent(&store, &subagent, &child);
+    let (notice, report, terminal) = success_publication(&store, &subagent, &child, "result");
+    let terminal_id = terminal.event_id.clone();
+    store
+        .accept_subagent_terminal(Some(notice), report, terminal)
+        .unwrap();
+    store
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE events SET event_json='{}' WHERE event_id=?1",
+            [terminal_id.as_str()],
+        )
+        .unwrap();
+    let proof = envelope(
+        store.conversation_id(),
+        crate::runtime::subagent::physical_settlement_event_id(&subagent).as_str(),
+        None,
+        RuntimeEvent::SubagentPhysicalSettlementProven {
+            subagent_id: subagent,
+            child_agent_id: child,
+        },
+    );
+    let error = store.append_event(proof).unwrap_err();
+    let expected =
+        decode::<RuntimeEventEnvelope>("{}", "physical settlement terminal").unwrap_err();
+    assert_eq!(format!("{error:?}"), format!("{expected:?}"));
 }
