@@ -1208,7 +1208,7 @@ fn t08_t20_request_source_ranges_use_bounded_authenticated_composed_pages() {
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection
         .execute(
-            "UPDATE request_snapshots SET snapshot_json='invalid JSON'",
+            "UPDATE request_snapshot_payloads SET snapshot_json='invalid JSON'",
             [],
         )
         .unwrap();

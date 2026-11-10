@@ -295,7 +295,10 @@ fn indexed_occupancy_propagates_missing_and_corrupt_evidence() {
     store
         .lock()
         .unwrap()
-        .execute("UPDATE request_snapshots SET snapshot_json='{}'", [])
+        .execute(
+            "UPDATE request_snapshot_payloads SET snapshot_json='{}'",
+            [],
+        )
         .unwrap();
     assert!(crate::context::occupancy::read(&store, event.sequence).is_err());
     store

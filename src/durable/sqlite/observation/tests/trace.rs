@@ -860,7 +860,8 @@ pub(super) fn deny_trace_original_columns(
             ) | (
                 "request_snapshots",
                 "request_id" | "snapshot_json" | "previous_request_id"
-            ) | ("message_ledger", "message_id" | "message_json")
+            ) | ("request_snapshot_payloads", "request_id" | "snapshot_json")
+                | ("message_ledger", "message_id" | "message_json")
         ) =>
         {
             Authorization::Deny
@@ -1287,7 +1288,7 @@ pub(super) fn deny_original_request_body(
     use rusqlite::hooks::{AuthAction, Authorization};
     match context.action {
         AuthAction::Read {
-            table_name: "request_snapshots",
+            table_name: "request_snapshot_payloads",
             column_name: "snapshot_json",
         } => Authorization::Deny,
         _ => Authorization::Allow,

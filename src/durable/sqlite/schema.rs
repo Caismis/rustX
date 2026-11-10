@@ -798,6 +798,24 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 digest TEXT PRIMARY KEY CHECK(typeof(digest)='text' AND octet_length(digest)=64),
                 configuration_json TEXT NOT NULL CHECK(typeof(configuration_json)='text' AND octet_length(configuration_json)<=67108864)
             ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS tool_association_origin_sets (
+                id INTEGER PRIMARY KEY,
+                digest BLOB NOT NULL UNIQUE CHECK(typeof(digest)='blob' AND length(digest)=32),
+                origins_json TEXT NOT NULL CHECK(typeof(origins_json)='text' AND octet_length(origins_json)<=67108864)
+            );
+            CREATE TABLE IF NOT EXISTS tool_association_nodes (
+                id INTEGER PRIMARY KEY,
+                parent_id INTEGER REFERENCES tool_association_nodes(id),parent_digest BLOB,parent_private_bytes INTEGER,
+                digest BLOB NOT NULL UNIQUE CHECK(typeof(digest)='blob' AND length(digest)=32),
+                count INTEGER NOT NULL CHECK(count BETWEEN 1 AND 8192),
+                private_bytes INTEGER NOT NULL CHECK(private_bytes BETWEEN 1 AND 67108864),
+                association_json TEXT NOT NULL CHECK(typeof(association_json)='text' AND octet_length(association_json)<=67108864),
+                CHECK((count=1 AND parent_id IS NULL AND parent_digest IS NULL AND parent_private_bytes IS NULL) OR
+                      (count>1 AND parent_id<id AND parent_private_bytes BETWEEN 1 AND private_bytes-1 AND typeof(parent_digest)='blob' AND length(parent_digest)=32))
+            );
+            CREATE TABLE IF NOT EXISTS request_snapshot_payloads (
+                request_id TEXT PRIMARY KEY,snapshot_json TEXT NOT NULL
+            ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS request_snapshots (
                 observation_step_anchor INTEGER, observation_retry_number INTEGER, observation_context_total INTEGER, observation_accepted_ledger INTEGER,
                 observation_summary BLOB CHECK(observation_summary IS NULL OR length(observation_summary)<=16384),
@@ -815,7 +833,6 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 previous_request_id TEXT,
                 request_id TEXT PRIMARY KEY,
                 retry_message_id TEXT,
-                snapshot_json TEXT NOT NULL,
                 CHECK((input_root IS NULL AND input_root_digest IS NULL AND input_count=0) OR
                     (input_root IS NOT NULL AND typeof(input_root_digest)='blob' AND length(input_root_digest)=32 AND input_count>0))
             );

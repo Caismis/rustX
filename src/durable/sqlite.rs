@@ -350,7 +350,8 @@ fn count_conversation_store_open() {
 /// Version 100 combines the scoped native indexes and observation layout with shared-control inbox semantics.
 /// Version 107 stores timestamp prefix maxima and pins bounded ledger/owner seeks.
 /// It also shares immutable Trace catalog versions with witnessed request bindings.
-pub const SQLITE_SCHEMA_VERSION: i64 = 107;
+/// Version 108 combines these with shared Tool association facts and immutable request payloads.
+pub const SQLITE_SCHEMA_VERSION: i64 = 108;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -1411,6 +1412,7 @@ mod attempt_start;
 mod event_insert;
 mod event_kind_key;
 
+mod associations;
 mod native_request;
 
 #[cfg(test)]

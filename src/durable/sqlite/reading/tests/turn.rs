@@ -82,7 +82,7 @@ pub(super) fn deny_outline_original_bodies(
             (table_name, column_name),
             ("events", "event_json" | "attempt_id")
                 | ("message_ledger", "message_json")
-                | ("request_snapshots", "snapshot_json")
+                | ("request_snapshot_payloads", "snapshot_json")
                 | (
                     "inherited_turn_provenance" | "inherited_response_provenance",
                     "payload"
