@@ -163,6 +163,7 @@ all = "warn"
 pedantic = "warn"
 
 [dev-dependencies]
+rusqlite = { version = "0.40.2", features = ["trace"] }
 tokio = { version = "1", features = ["test-util"] }
 axum = "0.8"
 nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir"] }

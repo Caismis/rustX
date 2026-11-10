@@ -57,7 +57,8 @@ pub(super) fn probe_sql_work(
         .unwrap()
         .join("\n");
     assert!(
-        plan.contains("SEARCH events USING INDEX events_request_id_kind_idx"),
+        plan.replace("USING COVERING INDEX", "USING INDEX")
+            .contains("SEARCH events USING INDEX events_request_id_kind_idx"),
         "{plan}"
     );
     assert!(!plan.contains("SCAN events"), "{plan}");
@@ -68,6 +69,7 @@ pub(super) fn probe_sql_work(
         .collect::<Result<Vec<_>, _>>()
         .unwrap()
         .len();
+    assert_eq!(statement.get_status(rusqlite::StatementStatus::Sort), 0);
     (
         count,
         statement.get_status(rusqlite::StatementStatus::VmStep),

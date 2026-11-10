@@ -29,16 +29,47 @@ fn digest(bytes: &str) -> String {
     format!("{:x}", Sha256::digest(bytes.as_bytes()))
 }
 
+// One seek per closed lifecycle kind, including the no-match case. A backwards
+// Journal scan is unbounded after a long non-lifecycle tail (or an empty owner).
+pub(super) const OWNER_KIND_SQL: &str = concat!(
+    "SELECT sequence FROM events INDEXED BY events_kind_idx WHERE ",
+    crate::durable::sqlite::event_kind_key::sql!("json_extract(event_json,'$.event.type')"),
+    "=?1 ORDER BY sequence DESC LIMIT 1"
+);
+
 pub(super) fn owner(
     connection: &Connection,
     expected: Option<&AttemptId>,
 ) -> Result<ProjectionOwner, ConversationStoreError> {
-    let last: Option<(i64, String)> = connection.query_row(
-        "SELECT sequence,event_json FROM events WHERE json_extract(event_json,'$.event.type') IN ('attempt_started','attempt_completed','attempt_failed','attempt_cancelled','attempt_timed_out','attempt_limit_exceeded') ORDER BY sequence DESC LIMIT 1", [], |row| Ok((row.get(0)?, row.get(1)?)))
-        .optional().map_err(|e| storage(e.to_string()))?;
+    let mut last: Option<i64> = None;
+    let mut statement = connection
+        .prepare_cached(OWNER_KIND_SQL)
+        .map_err(|e| storage(e.to_string()))?;
+    for kind in [
+        "attempt_started",
+        "attempt_completed",
+        "attempt_failed",
+        "attempt_cancelled",
+        "attempt_timed_out",
+        "attempt_limit_exceeded",
+    ] {
+        let candidate: Option<i64> = statement
+            .query_row([super::event_kind_key::parameter(kind)], |row| row.get(0))
+            .optional()
+            .map_err(|e| storage(e.to_string()))?;
+        last = last.max(candidate);
+    }
     let (transition_sequence, active) = match last {
         None => (0, None),
-        Some((sequence, json)) => {
+        Some(sequence) => {
+            // Read only the winner's body; old terminal diagnostics may be large.
+            let json: String = connection
+                .query_row_cached(
+                    "SELECT event_json FROM events WHERE sequence=?1",
+                    [sequence],
+                    |row| row.get(0),
+                )
+                .map_err(|e| storage(e.to_string()))?;
             let event: RuntimeEventEnvelope = decode(&json, "projection execution fence")?;
             let active = match event.event {
                 RuntimeEvent::AttemptStarted { attempt_id } => Some(attempt_id),

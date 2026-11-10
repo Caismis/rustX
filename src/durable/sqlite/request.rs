@@ -58,6 +58,9 @@ use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+// started_sequence is unique, so no secondary sort key is needed.
+pub(super) const SNAPSHOT_HEADERS_SQL: &str = "SELECT request_id,started_sequence FROM request_snapshots INDEXED BY request_snapshots_started_idx WHERE started_sequence IS NOT NULL AND started_sequence>?1 ORDER BY started_sequence LIMIT ?2";
+
 impl RequestStore for SqliteConversationStore {
     fn load_request_owner(
         &self,
@@ -352,18 +355,9 @@ impl RequestStore for SqliteConversationStore {
         let after = seq_to_i64(after_sequence.unwrap_or(0))?;
         let limit = i64::try_from(limit)
             .map_err(|_| storage("request snapshot page limit is too large"))?;
-        let mut statement = connection
-            .prepare(
-                "SELECT request_id,started_sequence FROM request_snapshots
-                 WHERE started_sequence IS NOT NULL AND started_sequence > ?1
-                 ORDER BY started_sequence, request_id LIMIT ?2",
-            )
-            .map_err(|error| {
-                crate::durable::sqlite::sqlite_error(
-                    &error,
-                    format!("request snapshot page: {error}"),
-                )
-            })?;
+        let mut statement = connection.prepare(SNAPSHOT_HEADERS_SQL).map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("request snapshot page: {error}"))
+        })?;
         let rows = statement
             .query_map(params![after, limit], |row| {
                 let request_id: String = row.get(0)?;

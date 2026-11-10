@@ -319,6 +319,21 @@ pub(in crate::durable::sqlite) fn append_message_with_head(
     Ok(transcript_cursor)
 }
 
+fn human_activity_max(
+    connection: &Connection,
+    position: i64,
+    time: chrono::DateTime<chrono::Utc>,
+) -> Result<(i64, u32), ConversationStoreError> {
+    let previous: Option<(i64, u32)> = connection
+        .query_row_cached(super::HUMAN_ACTIVITY_SQL, [position], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .optional()
+        .map_err(|e| storage(e.to_string()))?;
+    let current = (time.timestamp(), time.timestamp_subsec_nanos());
+    Ok(previous.unwrap_or(current).max(current))
+}
+
 fn append_message_ledger_with_capture(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
@@ -357,10 +372,13 @@ fn append_message_ledger_with_capture(
     } else {
         None
     };
+    let activity_max = human_activity_at
+        .map(|time| human_activity_max(transaction, position, time))
+        .transpose()?;
     transaction
         .execute_cached(
-            "INSERT INTO message_ledger(position,message_id,message_json,ordinary_user,human_activity_at,human_activity_seconds,human_activity_nanos,opening_preview,native_todo,ordinary_human,title_source_text) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-            params![position, id.as_str(), encode(message, "canonical message")?,ordinary_user,human_activity_at.map(|time|time.to_rfc3339()),human_activity_at.map(|time|time.timestamp()),human_activity_at.map(|time|time.timestamp_subsec_nanos()),opening_preview,observation_state::todo_value(message).is_some(),ordinary_human,title_source_text],
+            "INSERT INTO message_ledger(position,message_id,message_json,ordinary_user,human_activity_at,human_activity_max_seconds,human_activity_max_nanos,opening_preview,native_todo,ordinary_human,title_source_text) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![position, id.as_str(), encode(message, "canonical message")?,ordinary_user,human_activity_at.map(|time|time.to_rfc3339()),activity_max.map(|value|value.0),activity_max.map(|value|value.1),opening_preview,observation_state::todo_value(message).is_some(),ordinary_human,title_source_text],
         )
         .map_err(|error| map_insert_error(&error, &id))?;
     let retain_publication = publication_header.is_some();
