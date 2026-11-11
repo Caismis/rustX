@@ -6,8 +6,16 @@ use std::sync::LazyLock;
 
 static FIND_WRITE_OPTIONS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
-        "-delete", "-exec", "-execdir", "-files0-from", "-fls", "-fprint", "-fprint0",
-        "-fprintf", "-ok", "-okdir",
+        "-delete",
+        "-exec",
+        "-execdir",
+        "-files0-from",
+        "-fls",
+        "-fprint",
+        "-fprint0",
+        "-fprintf",
+        "-ok",
+        "-okdir",
     ]
     .into_iter()
     .collect()
@@ -15,12 +23,51 @@ static FIND_WRITE_OPTIONS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
 
 static FIND_VALUE_OPTIONS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
-        "-Bmin", "-Bnewer", "-Btime", "-D", "-amin", "-anewer", "-atime", "-cmin", "-cnewer",
-        "-context", "-ctime", "-f", "-flags", "-fstype", "-gid", "-group", "-ilname", "-iname",
-        "-inum", "-ipath", "-iregex", "-iwholename", "-lname", "-links", "-maxdepth", "-mindepth",
-        "-mmin", "-mnewer", "-mtime", "-name", "-newer", "-path", "-perm", "-printf", "-regex",
-        "-regextype", "-samefile", "-size", "-type", "-used", "-user", "-wholename", "-xattrname",
-        "-xtype", "-uid",
+        "-Bmin",
+        "-Bnewer",
+        "-Btime",
+        "-D",
+        "-amin",
+        "-anewer",
+        "-atime",
+        "-cmin",
+        "-cnewer",
+        "-context",
+        "-ctime",
+        "-f",
+        "-flags",
+        "-fstype",
+        "-gid",
+        "-group",
+        "-ilname",
+        "-iname",
+        "-inum",
+        "-ipath",
+        "-iregex",
+        "-iwholename",
+        "-lname",
+        "-links",
+        "-maxdepth",
+        "-mindepth",
+        "-mmin",
+        "-mnewer",
+        "-mtime",
+        "-name",
+        "-newer",
+        "-path",
+        "-perm",
+        "-printf",
+        "-regex",
+        "-regextype",
+        "-samefile",
+        "-size",
+        "-type",
+        "-used",
+        "-user",
+        "-wholename",
+        "-xattrname",
+        "-xtype",
+        "-uid",
     ]
     .into_iter()
     .collect()
@@ -60,9 +107,9 @@ pub fn evaluate_direct_readonly_argv(argv: &[String]) -> Option<bool> {
                     && !argv[1].is_empty()
                     && argv[1].chars().all(|c| c.is_ascii_digit())),
         ),
-        Some("arch") => {
-            Some(argv.len() == 1 || (argv.len() == 2 && matches!(argv[1].as_str(), "-h" | "--help")))
-        }
+        Some("arch") => Some(
+            argv.len() == 1 || (argv.len() == 2 && matches!(argv[1].as_str(), "-h" | "--help")),
+        ),
         Some("ifconfig") => Some(
             argv.len() == 1
                 || (argv.len() == 2

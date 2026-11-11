@@ -340,7 +340,8 @@ CUSTOM_TOKEN = "SECRET_ENV"
         assert!(repaired.contains(exact), "{exact}");
     }
     // Issue #544: obsolete mcp_tool_policies is unknown, never a retained open map.
-    let with_obsolete = format!("{text}\n[mcp_tool_policies.\"docs\"]\nexecution = \"foreground_only\"\n");
+    let with_obsolete =
+        format!("{text}\n[mcp_tool_policies.\"docs\"]\nexecution = \"foreground_only\"\n");
     assert_eq!(changes(&with_obsolete), vec![removed("")]);
 }
 

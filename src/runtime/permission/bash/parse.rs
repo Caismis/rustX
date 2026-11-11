@@ -72,9 +72,18 @@ impl MutableAnalysis {
     }
 }
 
-fn collect_program(source: &str, program: &Program, options: &ParserOptions, analysis: &mut MutableAnalysis) {
+fn collect_program(
+    source: &str,
+    program: &Program,
+    options: &ParserOptions,
+    analysis: &mut MutableAnalysis,
+) {
     for (index, complete) in program.complete_commands.iter().enumerate() {
-        let op = if index == 0 { None } else { Some(BashCommandOperator::Sequence) };
+        let op = if index == 0 {
+            None
+        } else {
+            Some(BashCommandOperator::Sequence)
+        };
         collect_compound_list(source, complete, options, analysis, op, &[]);
     }
 }
@@ -88,7 +97,11 @@ fn collect_compound_list(
     inherited: &[BashRedirect],
 ) {
     for (index, item) in list.0.iter().enumerate() {
-        let op = if index == 0 { operator_before } else { Some(BashCommandOperator::Sequence) };
+        let op = if index == 0 {
+            operator_before
+        } else {
+            Some(BashCommandOperator::Sequence)
+        };
         if matches!(item.1, SeparatorOperator::Async) {
             analysis.note_unsupported("background");
         }
@@ -104,7 +117,14 @@ fn collect_and_or(
     operator_before: Option<BashCommandOperator>,
     inherited: &[BashRedirect],
 ) {
-    collect_pipeline(source, &list.first, options, analysis, operator_before, inherited);
+    collect_pipeline(
+        source,
+        &list.first,
+        options,
+        analysis,
+        operator_before,
+        inherited,
+    );
     for and_or in &list.additional {
         let (op, pipeline) = match and_or {
             AndOr::And(p) => (BashCommandOperator::And, p),
@@ -124,7 +144,11 @@ fn collect_pipeline(
 ) {
     let first_index = analysis.commands.len();
     for (index, command) in pipeline.seq.iter().enumerate() {
-        let op = if index == 0 { operator_before } else { Some(BashCommandOperator::Pipe) };
+        let op = if index == 0 {
+            operator_before
+        } else {
+            Some(BashCommandOperator::Pipe)
+        };
         collect_command(source, command, options, analysis, op, inherited);
     }
     if pipeline.timed.is_some() {
@@ -149,7 +173,14 @@ fn collect_command(
     inherited: &[BashRedirect],
 ) {
     match command {
-        Command::Simple(simple) => collect_simple(source, simple, options, analysis, operator_before, inherited),
+        Command::Simple(simple) => collect_simple(
+            source,
+            simple,
+            options,
+            analysis,
+            operator_before,
+            inherited,
+        ),
         Command::Compound(compound, redirects) => {
             if redirects.is_some() {
                 analysis.has_redirects = true;
@@ -214,7 +245,11 @@ fn collect_simple(
                             None
                         }
                     };
-                    env_assignments.push(BashEnvAssignment { name, value, value_dynamic });
+                    env_assignments.push(BashEnvAssignment {
+                        name,
+                        value,
+                        value_dynamic,
+                    });
                 }
                 CommandPrefixOrSuffixItem::Word(word) => {
                     push_word(&mut argv, &mut has_dynamic_words, word, options);
@@ -313,7 +348,11 @@ fn convert_redirect(redirect: &IoRedirect, options: &ParserOptions) -> BashRedir
         }
         IoRedirect::HereDocument(fd, here) => BashRedirect {
             file_descriptor: *fd,
-            operator: if here.remove_tabs { "<<-".into() } else { "<<".into() },
+            operator: if here.remove_tabs {
+                "<<-".into()
+            } else {
+                "<<".into()
+            },
             target: unquote_str(&here.here_end.value),
             dynamic: true,
         },
@@ -345,7 +384,10 @@ fn pieces_dynamic(pieces: &[WordPieceWithSource]) -> bool {
 
 fn piece_dynamic(piece: &WordPiece) -> bool {
     match piece {
-        WordPiece::Text(_) | WordPiece::SingleQuotedText(_) | WordPiece::AnsiCQuotedText(_) | WordPiece::EscapeSequence(_) => false,
+        WordPiece::Text(_)
+        | WordPiece::SingleQuotedText(_)
+        | WordPiece::AnsiCQuotedText(_)
+        | WordPiece::EscapeSequence(_) => false,
         WordPiece::DoubleQuotedSequence(inner) | WordPiece::GettextDoubleQuotedSequence(inner) => {
             inner.iter().any(|x| piece_dynamic(&x.piece))
         }
@@ -368,8 +410,12 @@ fn brace_in_text(pieces: &[WordPieceWithSource]) -> bool {
 }
 
 fn looks_brace(text: &str) -> bool {
-    let Some(start) = text.find('{') else { return false; };
-    let Some(end) = text[start + 1..].find('}') else { return false; };
+    let Some(start) = text.find('{') else {
+        return false;
+    };
+    let Some(end) = text[start + 1..].find('}') else {
+        return false;
+    };
     let inner = &text[start + 1..start + 1 + end];
     inner.contains(',') || inner.contains("..")
 }

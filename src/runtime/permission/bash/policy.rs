@@ -30,7 +30,10 @@ pub fn evaluate_bash_readonly_policy(command: &BashCommandInvocation) -> Option<
         return None;
     }
     if argv[0] == "git" {
-        return Some(is_git_read_only_command(&argv, &GIT_READONLY_SUBCOMMAND_POLICIES));
+        return Some(is_git_read_only_command(
+            &argv,
+            &GIT_READONLY_SUBCOMMAND_POLICIES,
+        ));
     }
     if let Some(direct) = evaluate_direct_readonly_argv(&argv) {
         return Some(direct);
@@ -74,7 +77,10 @@ pub fn analysis_contains_git_and_directory_change(commands: &[BashCommandInvocat
     let mut dir = false;
     for command in commands {
         let argv = strip_safe_command_wrappers(&command.argv);
-        let name = argv.first().map(String::as_str).unwrap_or(command.name.as_str());
+        let name = argv
+            .first()
+            .map(String::as_str)
+            .unwrap_or(command.name.as_str());
         git |= name == "git";
         dir |= matches!(name, "cd" | "pushd" | "popd");
     }
@@ -84,11 +90,18 @@ pub fn analysis_contains_git_and_directory_change(commands: &[BashCommandInvocat
 fn evaluate_prefix(argv: &[String]) -> Option<bool> {
     for (prefix, policy) in sorted_multiword_policies() {
         let words: Vec<&str> = prefix.split_whitespace().collect();
-        if !words.iter().enumerate().all(|(i, w)| argv.get(i).map(String::as_str) == Some(*w)) {
+        if !words
+            .iter()
+            .enumerate()
+            .all(|(i, w)| argv.get(i).map(String::as_str) == Some(*w))
+        {
             continue;
         }
         let args = &argv[words.len()..];
-        if args.iter().any(|a| a.contains('$') || (a.contains('{') && (a.contains(',') || a.contains("..")))) {
+        if args
+            .iter()
+            .any(|a| a.contains('$') || (a.contains('{') && (a.contains(',') || a.contains(".."))))
+        {
             return Some(false);
         }
         if let Some(cb) = policy.danger_callback {

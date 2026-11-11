@@ -1170,11 +1170,10 @@ impl MetadataAdmission {
     ) -> Self {
         let main_subagents =
             subagents.selected_definitions(&config.agent.agents.iter().cloned().collect());
-        let native_metadata =
-            crate::tools::native::definitions(
-                crate::tools::NativeToolPolicies::default(),
-                &main_subagents,
-            );
+        let native_metadata = crate::tools::native::definitions(
+            crate::tools::NativeToolPolicies::default(),
+            &main_subagents,
+        );
         let native_leaves = native_metadata
             .iter()
             .filter(|(_, policy)| *policy == crate::tools::deadline::ForegroundPolicy::Leaf)

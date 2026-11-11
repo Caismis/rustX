@@ -739,10 +739,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         .pop()
         .unwrap();
     let tools = catalog["tools"].as_array().unwrap();
-    assert!(
-        tools.iter().any(|tool| tool["name"] == "grep"),
-        "{catalog}"
-    );
+    assert!(tools.iter().any(|tool| tool["name"] == "grep"), "{catalog}");
     // Retry the same authored C2: it prepares and every resident Session
     // commits it automatically, while new Sessions bind C2 as well.
     fixture

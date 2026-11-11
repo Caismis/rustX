@@ -124,7 +124,11 @@ pub fn analyze_bash_readonly(command: &str) -> BashReadonlyAnalysis {
                 return facts(BashReadonlyClass::Unproven {
                     reason: format!(
                         "command `{}` is not on the read-only policy",
-                        if part.name.is_empty() { "<empty>" } else { part.name.as_str() }
+                        if part.name.is_empty() {
+                            "<empty>"
+                        } else {
+                            part.name.as_str()
+                        }
                     ),
                 });
             }
@@ -132,7 +136,11 @@ pub fn analyze_bash_readonly(command: &str) -> BashReadonlyAnalysis {
                 return facts(BashReadonlyClass::Unproven {
                     reason: format!(
                         "command `{}` has unresolved read-only policy",
-                        if part.name.is_empty() { "<empty>" } else { part.name.as_str() }
+                        if part.name.is_empty() {
+                            "<empty>"
+                        } else {
+                            part.name.as_str()
+                        }
                     ),
                 });
             }
@@ -173,16 +181,42 @@ mod tests {
     #[test]
     fn allows_simple_readonly_commands() {
         for command in [
-            "ls -la", "pwd", "cat README.md", "env", "date", "grep pattern",
-            "hostname", "hostname -f", "hostname --fqdn",
-            "git status", "git log --oneline", "git log -n 5 --graph --stat",
-            "git show --stat HEAD", "git branch -a", "rg -n foo src",
-            "find . -name '*.rs'", "head -n 20 README.md", "wc -l README.md",
-            "stat README.md", "file README.md", "echo hello", "printf '%s\\n' hello",
-            "true", "false", "test -f package.json", "tree -a", "tree -L 2",
-            "command grep -n foo src", "LC_ALL=C grep -n foo src", "cat < README.md",
-            "grep -n foo src 2>/dev/null", "grep -n foo src 2>&1", "ls | cat",
-            "pwd && whoami", "sed -n '1,20p' README.md", "sed 's/foo/bar/g'",
+            "ls -la",
+            "pwd",
+            "cat README.md",
+            "env",
+            "date",
+            "grep pattern",
+            "hostname",
+            "hostname -f",
+            "hostname --fqdn",
+            "git status",
+            "git log --oneline",
+            "git log -n 5 --graph --stat",
+            "git show --stat HEAD",
+            "git branch -a",
+            "rg -n foo src",
+            "find . -name '*.rs'",
+            "head -n 20 README.md",
+            "wc -l README.md",
+            "stat README.md",
+            "file README.md",
+            "echo hello",
+            "printf '%s\\n' hello",
+            "true",
+            "false",
+            "test -f package.json",
+            "tree -a",
+            "tree -L 2",
+            "command grep -n foo src",
+            "LC_ALL=C grep -n foo src",
+            "cat < README.md",
+            "grep -n foo src 2>/dev/null",
+            "grep -n foo src 2>&1",
+            "ls | cat",
+            "pwd && whoami",
+            "sed -n '1,20p' README.md",
+            "sed 's/foo/bar/g'",
         ] {
             assert_readonly(command);
         }
@@ -191,24 +225,59 @@ mod tests {
     #[test]
     fn rejects_writes_dynamics_and_unknowns() {
         for command in [
-            "rm -rf /", "echo hi > file", "ls | rm", "curl http://x", "git commit -am x",
-            "env rm -rf /", "git branch feature", "git tag v1.0.0", "find . -delete",
-            "find . -exec rm {} +", "find . '-delete'", "date -s 12:00:00", "date -s12:00:00",
-            r#"date "-s" 12:00:00"#, "date 1234567890", "pwd\nrm -rf /", "pwd\r\nrm -rf /",
-            "pwd & rm -rf /", "true && rm -rf /", "git diff --output=/tmp/written.patch",
+            "rm -rf /",
+            "echo hi > file",
+            "ls | rm",
+            "curl http://x",
+            "git commit -am x",
+            "env rm -rf /",
+            "git branch feature",
+            "git tag v1.0.0",
+            "find . -delete",
+            "find . -exec rm {} +",
+            "find . '-delete'",
+            "date -s 12:00:00",
+            "date -s12:00:00",
+            r#"date "-s" 12:00:00"#,
+            "date 1234567890",
+            "pwd\nrm -rf /",
+            "pwd\r\nrm -rf /",
+            "pwd & rm -rf /",
+            "true && rm -rf /",
+            "git diff --output=/tmp/written.patch",
             "git -calias.status=!touch /tmp/pwned status",
             "git -c alias.status=!touch /tmp/pwned status",
-            "hostname new-host", "hostname -- evil", "hostname -", r#"hostname """#,
-            "fd -x rm", "fd --exec rm {}", "fd --exec-batch rm", "fd -X rm",
-            "rg --pre=sh needle", "rg --pre ./filter foo src",
-            "jq -f filter.jq package.json", "jq 'env' package.json",
-            "tree -o out.txt", "tree --bogus", "xargs rm -rf",
-            "sed -i 's/a/b/' file", "sed -n -e 'e printf sed-probe' README.md",
-            "cat README.md > out.txt", "ls $(touch out.txt)", "ls `touch out.txt`",
-            "FOO=bar grep foo src", "cat /dev/tcp/127.0.0.1/80",
-            "head /dev/udp/127.0.0.1/53", "cat < /dev/tcp/example.com/80",
-            "ls file?", "cat *.txt", "/usr/bin/sed -n '1p' README.md",
-            "{ ls; }", "(ls)", "[[ -f x ]]", "cd /tmp && git status",
+            "hostname new-host",
+            "hostname -- evil",
+            "hostname -",
+            r#"hostname """#,
+            "fd -x rm",
+            "fd --exec rm {}",
+            "fd --exec-batch rm",
+            "fd -X rm",
+            "rg --pre=sh needle",
+            "rg --pre ./filter foo src",
+            "jq -f filter.jq package.json",
+            "jq 'env' package.json",
+            "tree -o out.txt",
+            "tree --bogus",
+            "xargs rm -rf",
+            "sed -i 's/a/b/' file",
+            "sed -n -e 'e printf sed-probe' README.md",
+            "cat README.md > out.txt",
+            "ls $(touch out.txt)",
+            "ls `touch out.txt`",
+            "FOO=bar grep foo src",
+            "cat /dev/tcp/127.0.0.1/80",
+            "head /dev/udp/127.0.0.1/53",
+            "cat < /dev/tcp/example.com/80",
+            "ls file?",
+            "cat *.txt",
+            "/usr/bin/sed -n '1p' README.md",
+            "{ ls; }",
+            "(ls)",
+            "[[ -f x ]]",
+            "cd /tmp && git status",
         ] {
             assert_unproven(command);
         }

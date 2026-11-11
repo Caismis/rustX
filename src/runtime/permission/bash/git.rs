@@ -11,8 +11,17 @@ static GIT_GLOBAL_NO_VALUE_FLAGS: LazyLock<HashSet<&'static str>> =
 
 static GIT_GLOBAL_DANGEROUS_FLAGS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
-        "-c", "-C", "--attr-source", "--bare", "--config-env", "--exec-path", "--git-dir",
-        "--namespace", "--shallow-file", "--super-prefix", "--work-tree",
+        "-c",
+        "-C",
+        "--attr-source",
+        "--bare",
+        "--config-env",
+        "--exec-path",
+        "--git-dir",
+        "--namespace",
+        "--shallow-file",
+        "--super-prefix",
+        "--work-tree",
     ]
     .into_iter()
     .collect()
@@ -46,7 +55,8 @@ pub fn is_git_read_only_command(
 
 #[must_use]
 pub fn has_dangerous_git_global_option(argv: &[String]) -> bool {
-    argv.iter().any(|word| has_dangerous_git_global_option_word(word))
+    argv.iter()
+        .any(|word| has_dangerous_git_global_option_word(word))
 }
 
 fn normalize_git_argv(argv: &[String]) -> Option<Vec<String>> {

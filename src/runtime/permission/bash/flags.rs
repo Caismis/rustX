@@ -109,19 +109,20 @@ pub static CAT_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = Lazy
 });
 
 /// ZCode `HEAD_TAIL_SAFE_FLAGS`.
-pub static HEAD_TAIL_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-c", SafeFlagValue::Number),
-        ("-n", SafeFlagValue::Number),
-        ("-q", SafeFlagValue::None),
-        ("-v", SafeFlagValue::None),
-        ("--bytes", SafeFlagValue::Number),
-        ("--lines", SafeFlagValue::Number),
-        ("--quiet", SafeFlagValue::None),
-        ("--silent", SafeFlagValue::None),
-        ("--verbose", SafeFlagValue::None),
-    ])
-});
+pub static HEAD_TAIL_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-c", SafeFlagValue::Number),
+            ("-n", SafeFlagValue::Number),
+            ("-q", SafeFlagValue::None),
+            ("-v", SafeFlagValue::None),
+            ("--bytes", SafeFlagValue::Number),
+            ("--lines", SafeFlagValue::Number),
+            ("--quiet", SafeFlagValue::None),
+            ("--silent", SafeFlagValue::None),
+            ("--verbose", SafeFlagValue::None),
+        ])
+    });
 
 /// ZCode `WC_SAFE_FLAGS`.
 pub static WC_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
@@ -518,46 +519,48 @@ pub static SORT_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = Laz
 });
 
 /// ZCode `BASE64_SAFE_FLAGS`.
-pub static BASE64_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-D", SafeFlagValue::None),
-        ("-b", SafeFlagValue::Number),
-        ("-d", SafeFlagValue::None),
-        ("-h", SafeFlagValue::None),
-        ("-i", SafeFlagValue::String),
-        ("-w", SafeFlagValue::Number),
-        ("--break", SafeFlagValue::Number),
-        ("--decode", SafeFlagValue::None),
-        ("--help", SafeFlagValue::None),
-        ("--ignore-garbage", SafeFlagValue::None),
-        ("--input", SafeFlagValue::String),
-        ("--version", SafeFlagValue::None),
-        ("--wrap", SafeFlagValue::Number),
-    ])
-});
+pub static BASE64_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-D", SafeFlagValue::None),
+            ("-b", SafeFlagValue::Number),
+            ("-d", SafeFlagValue::None),
+            ("-h", SafeFlagValue::None),
+            ("-i", SafeFlagValue::String),
+            ("-w", SafeFlagValue::Number),
+            ("--break", SafeFlagValue::Number),
+            ("--decode", SafeFlagValue::None),
+            ("--help", SafeFlagValue::None),
+            ("--ignore-garbage", SafeFlagValue::None),
+            ("--input", SafeFlagValue::String),
+            ("--version", SafeFlagValue::None),
+            ("--wrap", SafeFlagValue::Number),
+        ])
+    });
 
 /// ZCode `SHA_SUM_SAFE_FLAGS`.
-pub static SHA_SUM_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-b", SafeFlagValue::None),
-        ("-c", SafeFlagValue::None),
-        ("-t", SafeFlagValue::None),
-        ("-w", SafeFlagValue::None),
-        ("-z", SafeFlagValue::None),
-        ("--binary", SafeFlagValue::None),
-        ("--check", SafeFlagValue::None),
-        ("--help", SafeFlagValue::None),
-        ("--ignore-missing", SafeFlagValue::None),
-        ("--quiet", SafeFlagValue::None),
-        ("--status", SafeFlagValue::None),
-        ("--strict", SafeFlagValue::None),
-        ("--tag", SafeFlagValue::None),
-        ("--text", SafeFlagValue::None),
-        ("--version", SafeFlagValue::None),
-        ("--warn", SafeFlagValue::None),
-        ("--zero", SafeFlagValue::None),
-    ])
-});
+pub static SHA_SUM_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-b", SafeFlagValue::None),
+            ("-c", SafeFlagValue::None),
+            ("-t", SafeFlagValue::None),
+            ("-w", SafeFlagValue::None),
+            ("-z", SafeFlagValue::None),
+            ("--binary", SafeFlagValue::None),
+            ("--check", SafeFlagValue::None),
+            ("--help", SafeFlagValue::None),
+            ("--ignore-missing", SafeFlagValue::None),
+            ("--quiet", SafeFlagValue::None),
+            ("--status", SafeFlagValue::None),
+            ("--strict", SafeFlagValue::None),
+            ("--tag", SafeFlagValue::None),
+            ("--text", SafeFlagValue::None),
+            ("--version", SafeFlagValue::None),
+            ("--warn", SafeFlagValue::None),
+            ("--zero", SafeFlagValue::None),
+        ])
+    });
 
 /// ZCode `DATE_SAFE_FLAGS`.
 pub static DATE_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
@@ -581,31 +584,32 @@ pub static DATE_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = Laz
 });
 
 /// ZCode `HOSTNAME_SAFE_FLAGS`.
-pub static HOSTNAME_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-A", SafeFlagValue::None),
-        ("-V", SafeFlagValue::None),
-        ("-a", SafeFlagValue::None),
-        ("-d", SafeFlagValue::None),
-        ("-f", SafeFlagValue::None),
-        ("-h", SafeFlagValue::None),
-        ("-i", SafeFlagValue::None),
-        ("-I", SafeFlagValue::None),
-        ("-s", SafeFlagValue::None),
-        ("-v", SafeFlagValue::None),
-        ("--alias", SafeFlagValue::None),
-        ("--all-fqdns", SafeFlagValue::None),
-        ("--all-ip-addresses", SafeFlagValue::None),
-        ("--domain", SafeFlagValue::None),
-        ("--fqdn", SafeFlagValue::None),
-        ("--help", SafeFlagValue::None),
-        ("--ip-address", SafeFlagValue::None),
-        ("--long", SafeFlagValue::None),
-        ("--short", SafeFlagValue::None),
-        ("--verbose", SafeFlagValue::None),
-        ("--version", SafeFlagValue::None),
-    ])
-});
+pub static HOSTNAME_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-A", SafeFlagValue::None),
+            ("-V", SafeFlagValue::None),
+            ("-a", SafeFlagValue::None),
+            ("-d", SafeFlagValue::None),
+            ("-f", SafeFlagValue::None),
+            ("-h", SafeFlagValue::None),
+            ("-i", SafeFlagValue::None),
+            ("-I", SafeFlagValue::None),
+            ("-s", SafeFlagValue::None),
+            ("-v", SafeFlagValue::None),
+            ("--alias", SafeFlagValue::None),
+            ("--all-fqdns", SafeFlagValue::None),
+            ("--all-ip-addresses", SafeFlagValue::None),
+            ("--domain", SafeFlagValue::None),
+            ("--fqdn", SafeFlagValue::None),
+            ("--help", SafeFlagValue::None),
+            ("--ip-address", SafeFlagValue::None),
+            ("--long", SafeFlagValue::None),
+            ("--short", SafeFlagValue::None),
+            ("--verbose", SafeFlagValue::None),
+            ("--version", SafeFlagValue::None),
+        ])
+    });
 
 /// ZCode `PS_SAFE_FLAGS`.
 pub static PS_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
@@ -656,19 +660,20 @@ pub static PS_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyL
 });
 
 /// ZCode `PYRIGHT_SAFE_FLAGS`.
-pub static PYRIGHT_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("--dependencies", SafeFlagValue::None),
-        ("--level", SafeFlagValue::String),
-        ("--outputjson", SafeFlagValue::None),
-        ("--pythonplatform", SafeFlagValue::String),
-        ("--pythonversion", SafeFlagValue::String),
-        ("--stats", SafeFlagValue::None),
-        ("--verbose", SafeFlagValue::None),
-        ("--version", SafeFlagValue::None),
-        ("--warnings", SafeFlagValue::None),
-    ])
-});
+pub static PYRIGHT_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("--dependencies", SafeFlagValue::None),
+            ("--level", SafeFlagValue::String),
+            ("--outputjson", SafeFlagValue::None),
+            ("--pythonplatform", SafeFlagValue::String),
+            ("--pythonversion", SafeFlagValue::String),
+            ("--stats", SafeFlagValue::None),
+            ("--verbose", SafeFlagValue::None),
+            ("--version", SafeFlagValue::None),
+            ("--warnings", SafeFlagValue::None),
+        ])
+    });
 
 /// ZCode `MAN_SAFE_FLAGS`.
 pub static MAN_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
@@ -688,22 +693,23 @@ pub static MAN_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = Lazy
 });
 
 /// ZCode `NETSTAT_SAFE_FLAGS`.
-pub static NETSTAT_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-I", SafeFlagValue::String),
-        ("-L", SafeFlagValue::None),
-        ("-a", SafeFlagValue::None),
-        ("-f", SafeFlagValue::String),
-        ("-g", SafeFlagValue::None),
-        ("-i", SafeFlagValue::None),
-        ("-l", SafeFlagValue::None),
-        ("-m", SafeFlagValue::None),
-        ("-n", SafeFlagValue::None),
-        ("-r", SafeFlagValue::None),
-        ("-s", SafeFlagValue::None),
-        ("-v", SafeFlagValue::None),
-    ])
-});
+pub static NETSTAT_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-I", SafeFlagValue::String),
+            ("-L", SafeFlagValue::None),
+            ("-a", SafeFlagValue::None),
+            ("-f", SafeFlagValue::String),
+            ("-g", SafeFlagValue::None),
+            ("-i", SafeFlagValue::None),
+            ("-l", SafeFlagValue::None),
+            ("-m", SafeFlagValue::None),
+            ("-n", SafeFlagValue::None),
+            ("-r", SafeFlagValue::None),
+            ("-s", SafeFlagValue::None),
+            ("-v", SafeFlagValue::None),
+        ])
+    });
 
 /// ZCode `LSOF_SAFE_FLAGS`.
 pub static LSOF_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
@@ -921,30 +927,32 @@ pub static TEST_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = Laz
 });
 
 /// ZCode `DOCKER_LOGS_SAFE_FLAGS`.
-pub static DOCKER_LOGS_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-f", SafeFlagValue::None),
-        ("-n", SafeFlagValue::String),
-        ("-t", SafeFlagValue::None),
-        ("--details", SafeFlagValue::None),
-        ("--follow", SafeFlagValue::None),
-        ("--since", SafeFlagValue::String),
-        ("--tail", SafeFlagValue::String),
-        ("--timestamps", SafeFlagValue::None),
-        ("--until", SafeFlagValue::String),
-    ])
-});
+pub static DOCKER_LOGS_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-f", SafeFlagValue::None),
+            ("-n", SafeFlagValue::String),
+            ("-t", SafeFlagValue::None),
+            ("--details", SafeFlagValue::None),
+            ("--follow", SafeFlagValue::None),
+            ("--since", SafeFlagValue::String),
+            ("--tail", SafeFlagValue::String),
+            ("--timestamps", SafeFlagValue::None),
+            ("--until", SafeFlagValue::String),
+        ])
+    });
 
 /// ZCode `DOCKER_INSPECT_SAFE_FLAGS`.
-pub static DOCKER_INSPECT_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-f", SafeFlagValue::String),
-        ("-s", SafeFlagValue::None),
-        ("--format", SafeFlagValue::String),
-        ("--size", SafeFlagValue::None),
-        ("--type", SafeFlagValue::String),
-    ])
-});
+pub static DOCKER_INSPECT_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-f", SafeFlagValue::String),
+            ("-s", SafeFlagValue::None),
+            ("--format", SafeFlagValue::String),
+            ("--size", SafeFlagValue::None),
+            ("--type", SafeFlagValue::String),
+        ])
+    });
 
 /// ZCode `GH_REPO_FLAGS`.
 pub static GH_REPO_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
@@ -955,284 +963,293 @@ pub static GH_REPO_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyL
 });
 
 /// ZCode `GH_JSON_REPO_FLAGS`.
-pub static GH_JSON_REPO_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("--json", SafeFlagValue::String),
-    ])
-});
+pub static GH_JSON_REPO_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| HashMap::from([("--json", SafeFlagValue::String)]));
 
 /// ZCode `GH_LIMIT_REPO_FLAGS`.
-pub static GH_LIMIT_REPO_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-L", SafeFlagValue::Number),
-        ("--limit", SafeFlagValue::Number),
-    ])
-});
+pub static GH_LIMIT_REPO_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-L", SafeFlagValue::Number),
+            ("--limit", SafeFlagValue::Number),
+        ])
+    });
 
 /// ZCode `COMMON_GIT_REF_FLAGS`.
-pub static COMMON_GIT_REF_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("--all", SafeFlagValue::None),
-        ("--branches", SafeFlagValue::None),
-        ("--remotes", SafeFlagValue::None),
-        ("--tags", SafeFlagValue::None),
-    ])
-});
+pub static COMMON_GIT_REF_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("--all", SafeFlagValue::None),
+            ("--branches", SafeFlagValue::None),
+            ("--remotes", SafeFlagValue::None),
+            ("--tags", SafeFlagValue::None),
+        ])
+    });
 
 /// ZCode `COMMON_GIT_DATE_FLAGS`.
-pub static COMMON_GIT_DATE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("--after", SafeFlagValue::String),
-        ("--before", SafeFlagValue::String),
-        ("--since", SafeFlagValue::String),
-        ("--until", SafeFlagValue::String),
-    ])
-});
+pub static COMMON_GIT_DATE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("--after", SafeFlagValue::String),
+            ("--before", SafeFlagValue::String),
+            ("--since", SafeFlagValue::String),
+            ("--until", SafeFlagValue::String),
+        ])
+    });
 
 /// ZCode `COMMON_GIT_LOG_STYLE_FLAGS`.
-pub static COMMON_GIT_LOG_STYLE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("--date", SafeFlagValue::String),
-        ("--decorate", SafeFlagValue::None),
-        ("--graph", SafeFlagValue::None),
-        ("--no-decorate", SafeFlagValue::None),
-        ("--oneline", SafeFlagValue::None),
-        ("--relative-date", SafeFlagValue::None),
-    ])
-});
+pub static COMMON_GIT_LOG_STYLE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("--date", SafeFlagValue::String),
+            ("--decorate", SafeFlagValue::None),
+            ("--graph", SafeFlagValue::None),
+            ("--no-decorate", SafeFlagValue::None),
+            ("--oneline", SafeFlagValue::None),
+            ("--relative-date", SafeFlagValue::None),
+        ])
+    });
 
 /// ZCode `COMMON_GIT_COUNT_FLAGS`.
-pub static COMMON_GIT_COUNT_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-n", SafeFlagValue::Number),
-        ("--max-count", SafeFlagValue::Number),
-    ])
-});
+pub static COMMON_GIT_COUNT_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-n", SafeFlagValue::Number),
+            ("--max-count", SafeFlagValue::Number),
+        ])
+    });
 
 /// ZCode `COMMON_GIT_STAT_FLAGS`.
-pub static COMMON_GIT_STAT_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("--name-only", SafeFlagValue::None),
-        ("--name-status", SafeFlagValue::None),
-        ("--numstat", SafeFlagValue::None),
-        ("--shortstat", SafeFlagValue::None),
-        ("--stat", SafeFlagValue::None),
-    ])
-});
+pub static COMMON_GIT_STAT_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("--name-only", SafeFlagValue::None),
+            ("--name-status", SafeFlagValue::None),
+            ("--numstat", SafeFlagValue::None),
+            ("--shortstat", SafeFlagValue::None),
+            ("--stat", SafeFlagValue::None),
+        ])
+    });
 
 /// ZCode `COMMON_GIT_COLOR_FLAGS`.
-pub static COMMON_GIT_COLOR_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("--color", SafeFlagValue::None),
-        ("--no-color", SafeFlagValue::None),
-    ])
-});
+pub static COMMON_GIT_COLOR_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("--color", SafeFlagValue::None),
+            ("--no-color", SafeFlagValue::None),
+        ])
+    });
 
 /// ZCode `COMMON_GIT_PATCH_FLAGS`.
-pub static COMMON_GIT_PATCH_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-p", SafeFlagValue::None),
-        ("-s", SafeFlagValue::None),
-        ("--no-ext-diff", SafeFlagValue::None),
-        ("--no-patch", SafeFlagValue::None),
-        ("--patch", SafeFlagValue::None),
-    ])
-});
+pub static COMMON_GIT_PATCH_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-p", SafeFlagValue::None),
+            ("-s", SafeFlagValue::None),
+            ("--no-ext-diff", SafeFlagValue::None),
+            ("--no-patch", SafeFlagValue::None),
+            ("--patch", SafeFlagValue::None),
+        ])
+    });
 
 /// ZCode `GIT_STATUS_SAFE_FLAGS`.
-pub static GIT_STATUS_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-b", SafeFlagValue::None),
-        ("-M", SafeFlagValue::String),
-        ("-s", SafeFlagValue::None),
-        ("-u", SafeFlagValue::String),
-        ("--ahead-behind", SafeFlagValue::None),
-        ("--branch", SafeFlagValue::None),
-        ("--column", SafeFlagValue::None),
-        ("--find-renames", SafeFlagValue::String),
-        ("--ignore-submodules", SafeFlagValue::String),
-        ("--ignored", SafeFlagValue::None),
-        ("--long", SafeFlagValue::None),
-        ("--no-ahead-behind", SafeFlagValue::None),
-        ("--no-column", SafeFlagValue::None),
-        ("--no-renames", SafeFlagValue::None),
-        ("--porcelain", SafeFlagValue::None),
-        ("--renames", SafeFlagValue::None),
-        ("--short", SafeFlagValue::None),
-        ("--untracked-files", SafeFlagValue::String),
-        ("--verbose", SafeFlagValue::None),
-        ("-v", SafeFlagValue::None),
-    ])
-});
+pub static GIT_STATUS_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-b", SafeFlagValue::None),
+            ("-M", SafeFlagValue::String),
+            ("-s", SafeFlagValue::None),
+            ("-u", SafeFlagValue::String),
+            ("--ahead-behind", SafeFlagValue::None),
+            ("--branch", SafeFlagValue::None),
+            ("--column", SafeFlagValue::None),
+            ("--find-renames", SafeFlagValue::String),
+            ("--ignore-submodules", SafeFlagValue::String),
+            ("--ignored", SafeFlagValue::None),
+            ("--long", SafeFlagValue::None),
+            ("--no-ahead-behind", SafeFlagValue::None),
+            ("--no-column", SafeFlagValue::None),
+            ("--no-renames", SafeFlagValue::None),
+            ("--porcelain", SafeFlagValue::None),
+            ("--renames", SafeFlagValue::None),
+            ("--short", SafeFlagValue::None),
+            ("--untracked-files", SafeFlagValue::String),
+            ("--verbose", SafeFlagValue::None),
+            ("-v", SafeFlagValue::None),
+        ])
+    });
 
 /// ZCode `GIT_DIFF_SAFE_FLAGS`.
-pub static GIT_DIFF_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-B", SafeFlagValue::None),
-        ("-C", SafeFlagValue::None),
-        ("-D", SafeFlagValue::None),
-        ("-G", SafeFlagValue::String),
-        ("-M", SafeFlagValue::None),
-        ("-O", SafeFlagValue::String),
-        ("-R", SafeFlagValue::None),
-        ("-S", SafeFlagValue::String),
-        ("-l", SafeFlagValue::None),
-        ("-p", SafeFlagValue::None),
-        ("-s", SafeFlagValue::None),
-        ("-u", SafeFlagValue::None),
-        ("--cached", SafeFlagValue::None),
-        ("--check", SafeFlagValue::None),
-        ("--color", SafeFlagValue::None),
-        ("--color-words", SafeFlagValue::None),
-        ("--diff-algorithm", SafeFlagValue::String),
-        ("--diff-filter", SafeFlagValue::String),
-        ("--dirstat", SafeFlagValue::None),
-        ("--exit-code", SafeFlagValue::None),
-        ("--find-copies", SafeFlagValue::None),
-        ("--find-copies-harder", SafeFlagValue::None),
-        ("--find-renames", SafeFlagValue::None),
-        ("--full-index", SafeFlagValue::None),
-        ("--function-context", SafeFlagValue::None),
-        ("--histogram", SafeFlagValue::None),
-        ("--ignore-all-space", SafeFlagValue::None),
-        ("--ignore-blank-lines", SafeFlagValue::None),
-        ("--ignore-space-at-eol", SafeFlagValue::None),
-        ("--ignore-space-change", SafeFlagValue::None),
-        ("--inter-hunk-context", SafeFlagValue::Number),
-        ("--irreversible-delete", SafeFlagValue::None),
-        ("--minimal", SafeFlagValue::None),
-        ("--name-only", SafeFlagValue::None),
-        ("--name-status", SafeFlagValue::None),
-        ("--no-ext-diff", SafeFlagValue::None),
-        ("--no-index", SafeFlagValue::None),
-        ("--no-renames", SafeFlagValue::None),
-        ("--no-color", SafeFlagValue::None),
-        ("--numstat", SafeFlagValue::None),
-        ("--patch-with-stat", SafeFlagValue::None),
-        ("--patience", SafeFlagValue::None),
-        ("--pickaxe-all", SafeFlagValue::None),
-        ("--pickaxe-regex", SafeFlagValue::None),
-        ("--quiet", SafeFlagValue::None),
-        ("--relative", SafeFlagValue::String),
-        ("--shortstat", SafeFlagValue::None),
-        ("--staged", SafeFlagValue::None),
-        ("--stat", SafeFlagValue::None),
-        ("--summary", SafeFlagValue::None),
-        ("--word-diff", SafeFlagValue::None),
-        ("--word-diff-regex", SafeFlagValue::String),
-        ("--ws-error-highlight", SafeFlagValue::String),
-    ])
-});
+pub static GIT_DIFF_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-B", SafeFlagValue::None),
+            ("-C", SafeFlagValue::None),
+            ("-D", SafeFlagValue::None),
+            ("-G", SafeFlagValue::String),
+            ("-M", SafeFlagValue::None),
+            ("-O", SafeFlagValue::String),
+            ("-R", SafeFlagValue::None),
+            ("-S", SafeFlagValue::String),
+            ("-l", SafeFlagValue::None),
+            ("-p", SafeFlagValue::None),
+            ("-s", SafeFlagValue::None),
+            ("-u", SafeFlagValue::None),
+            ("--cached", SafeFlagValue::None),
+            ("--check", SafeFlagValue::None),
+            ("--color", SafeFlagValue::None),
+            ("--color-words", SafeFlagValue::None),
+            ("--diff-algorithm", SafeFlagValue::String),
+            ("--diff-filter", SafeFlagValue::String),
+            ("--dirstat", SafeFlagValue::None),
+            ("--exit-code", SafeFlagValue::None),
+            ("--find-copies", SafeFlagValue::None),
+            ("--find-copies-harder", SafeFlagValue::None),
+            ("--find-renames", SafeFlagValue::None),
+            ("--full-index", SafeFlagValue::None),
+            ("--function-context", SafeFlagValue::None),
+            ("--histogram", SafeFlagValue::None),
+            ("--ignore-all-space", SafeFlagValue::None),
+            ("--ignore-blank-lines", SafeFlagValue::None),
+            ("--ignore-space-at-eol", SafeFlagValue::None),
+            ("--ignore-space-change", SafeFlagValue::None),
+            ("--inter-hunk-context", SafeFlagValue::Number),
+            ("--irreversible-delete", SafeFlagValue::None),
+            ("--minimal", SafeFlagValue::None),
+            ("--name-only", SafeFlagValue::None),
+            ("--name-status", SafeFlagValue::None),
+            ("--no-ext-diff", SafeFlagValue::None),
+            ("--no-index", SafeFlagValue::None),
+            ("--no-renames", SafeFlagValue::None),
+            ("--no-color", SafeFlagValue::None),
+            ("--numstat", SafeFlagValue::None),
+            ("--patch-with-stat", SafeFlagValue::None),
+            ("--patience", SafeFlagValue::None),
+            ("--pickaxe-all", SafeFlagValue::None),
+            ("--pickaxe-regex", SafeFlagValue::None),
+            ("--quiet", SafeFlagValue::None),
+            ("--relative", SafeFlagValue::String),
+            ("--shortstat", SafeFlagValue::None),
+            ("--staged", SafeFlagValue::None),
+            ("--stat", SafeFlagValue::None),
+            ("--summary", SafeFlagValue::None),
+            ("--word-diff", SafeFlagValue::None),
+            ("--word-diff-regex", SafeFlagValue::String),
+            ("--ws-error-highlight", SafeFlagValue::String),
+        ])
+    });
 
 /// ZCode `GIT_LOG_SAFE_FLAGS`.
-pub static GIT_LOG_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-G", SafeFlagValue::String),
-        ("-S", SafeFlagValue::String),
-        ("--abbrev-commit", SafeFlagValue::None),
-        ("--ancestry-path", SafeFlagValue::None),
-        ("--author", SafeFlagValue::String),
-        ("--author-date-order", SafeFlagValue::None),
-        ("--boundary", SafeFlagValue::None),
-        ("--cherry-mark", SafeFlagValue::None),
-        ("--cherry-pick", SafeFlagValue::None),
-        ("--committer", SafeFlagValue::String),
-        ("--date-order", SafeFlagValue::None),
-        ("--dense", SafeFlagValue::None),
-        ("--diff-filter", SafeFlagValue::String),
-        ("--first-parent", SafeFlagValue::None),
-        ("--format", SafeFlagValue::String),
-        ("--full-history", SafeFlagValue::None),
-        ("--grep", SafeFlagValue::String),
-        ("--left-right", SafeFlagValue::None),
-        ("--max-age", SafeFlagValue::Number),
-        ("--min-age", SafeFlagValue::Number),
-        ("--merges", SafeFlagValue::None),
-        ("--no-max-parents", SafeFlagValue::None),
-        ("--no-merges", SafeFlagValue::None),
-        ("--no-min-parents", SafeFlagValue::None),
-        ("--no-walk", SafeFlagValue::None),
-        ("--pickaxe-all", SafeFlagValue::None),
-        ("--pickaxe-regex", SafeFlagValue::None),
-        ("--pretty", SafeFlagValue::String),
-        ("--reverse", SafeFlagValue::None),
-        ("--simplify-merges", SafeFlagValue::None),
-        ("--skip", SafeFlagValue::Number),
-        ("--source", SafeFlagValue::None),
-        ("--sparse", SafeFlagValue::None),
-        ("--topo-order", SafeFlagValue::None),
-        ("--walk-reflogs", SafeFlagValue::None),
-    ])
-});
+pub static GIT_LOG_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-G", SafeFlagValue::String),
+            ("-S", SafeFlagValue::String),
+            ("--abbrev-commit", SafeFlagValue::None),
+            ("--ancestry-path", SafeFlagValue::None),
+            ("--author", SafeFlagValue::String),
+            ("--author-date-order", SafeFlagValue::None),
+            ("--boundary", SafeFlagValue::None),
+            ("--cherry-mark", SafeFlagValue::None),
+            ("--cherry-pick", SafeFlagValue::None),
+            ("--committer", SafeFlagValue::String),
+            ("--date-order", SafeFlagValue::None),
+            ("--dense", SafeFlagValue::None),
+            ("--diff-filter", SafeFlagValue::String),
+            ("--first-parent", SafeFlagValue::None),
+            ("--format", SafeFlagValue::String),
+            ("--full-history", SafeFlagValue::None),
+            ("--grep", SafeFlagValue::String),
+            ("--left-right", SafeFlagValue::None),
+            ("--max-age", SafeFlagValue::Number),
+            ("--min-age", SafeFlagValue::Number),
+            ("--merges", SafeFlagValue::None),
+            ("--no-max-parents", SafeFlagValue::None),
+            ("--no-merges", SafeFlagValue::None),
+            ("--no-min-parents", SafeFlagValue::None),
+            ("--no-walk", SafeFlagValue::None),
+            ("--pickaxe-all", SafeFlagValue::None),
+            ("--pickaxe-regex", SafeFlagValue::None),
+            ("--pretty", SafeFlagValue::String),
+            ("--reverse", SafeFlagValue::None),
+            ("--simplify-merges", SafeFlagValue::None),
+            ("--skip", SafeFlagValue::Number),
+            ("--source", SafeFlagValue::None),
+            ("--sparse", SafeFlagValue::None),
+            ("--topo-order", SafeFlagValue::None),
+            ("--walk-reflogs", SafeFlagValue::None),
+        ])
+    });
 
 /// ZCode `GIT_SHOW_SAFE_FLAGS`.
-pub static GIT_SHOW_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-m", SafeFlagValue::None),
-        ("--abbrev-commit", SafeFlagValue::None),
-        ("--color-words", SafeFlagValue::None),
-        ("--diff-filter", SafeFlagValue::String),
-        ("--first-parent", SafeFlagValue::None),
-        ("--format", SafeFlagValue::String),
-        ("--pretty", SafeFlagValue::String),
-        ("--quiet", SafeFlagValue::None),
-        ("--raw", SafeFlagValue::None),
-        ("--word-diff", SafeFlagValue::None),
-        ("--word-diff-regex", SafeFlagValue::String),
-    ])
-});
+pub static GIT_SHOW_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-m", SafeFlagValue::None),
+            ("--abbrev-commit", SafeFlagValue::None),
+            ("--color-words", SafeFlagValue::None),
+            ("--diff-filter", SafeFlagValue::String),
+            ("--first-parent", SafeFlagValue::None),
+            ("--format", SafeFlagValue::String),
+            ("--pretty", SafeFlagValue::String),
+            ("--quiet", SafeFlagValue::None),
+            ("--raw", SafeFlagValue::None),
+            ("--word-diff", SafeFlagValue::None),
+            ("--word-diff-regex", SafeFlagValue::String),
+        ])
+    });
 
 /// ZCode `GIT_GREP_SAFE_FLAGS`.
-pub static GIT_GREP_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> = LazyLock::new(|| {
-    HashMap::from([
-        ("-A", SafeFlagValue::Number),
-        ("-B", SafeFlagValue::Number),
-        ("-C", SafeFlagValue::Number),
-        ("-E", SafeFlagValue::None),
-        ("-F", SafeFlagValue::None),
-        ("-G", SafeFlagValue::None),
-        ("-H", SafeFlagValue::None),
-        ("-L", SafeFlagValue::None),
-        ("-P", SafeFlagValue::None),
-        ("-c", SafeFlagValue::None),
-        ("-e", SafeFlagValue::String),
-        ("-h", SafeFlagValue::None),
-        ("-i", SafeFlagValue::None),
-        ("-l", SafeFlagValue::None),
-        ("-n", SafeFlagValue::None),
-        ("-o", SafeFlagValue::None),
-        ("-q", SafeFlagValue::None),
-        ("-v", SafeFlagValue::None),
-        ("-w", SafeFlagValue::None),
-        ("--after-context", SafeFlagValue::Number),
-        ("--and", SafeFlagValue::None),
-        ("--basic-regexp", SafeFlagValue::None),
-        ("--break", SafeFlagValue::None),
-        ("--cached", SafeFlagValue::None),
-        ("--color", SafeFlagValue::None),
-        ("--context", SafeFlagValue::Number),
-        ("--count", SafeFlagValue::None),
-        ("--extended-regexp", SafeFlagValue::None),
-        ("--files-with-matches", SafeFlagValue::None),
-        ("--files-without-match", SafeFlagValue::None),
-        ("--fixed-strings", SafeFlagValue::None),
-        ("--full-name", SafeFlagValue::None),
-        ("--heading", SafeFlagValue::None),
-        ("--ignore-case", SafeFlagValue::None),
-        ("--invert-match", SafeFlagValue::None),
-        ("--line-number", SafeFlagValue::None),
-        ("--max-depth", SafeFlagValue::Number),
-        ("--no-color", SafeFlagValue::None),
-        ("--no-index", SafeFlagValue::None),
-        ("--not", SafeFlagValue::None),
-        ("--only-matching", SafeFlagValue::None),
-        ("--or", SafeFlagValue::None),
-        ("--perl-regexp", SafeFlagValue::None),
-        ("--quiet", SafeFlagValue::None),
-        ("--recurse-submodules", SafeFlagValue::None),
-        ("--threads", SafeFlagValue::Number),
-        ("--untracked", SafeFlagValue::None),
-        ("--word-regexp", SafeFlagValue::None),
-    ])
-});
-
+pub static GIT_GREP_SAFE_FLAGS: LazyLock<HashMap<&'static str, SafeFlagValue>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("-A", SafeFlagValue::Number),
+            ("-B", SafeFlagValue::Number),
+            ("-C", SafeFlagValue::Number),
+            ("-E", SafeFlagValue::None),
+            ("-F", SafeFlagValue::None),
+            ("-G", SafeFlagValue::None),
+            ("-H", SafeFlagValue::None),
+            ("-L", SafeFlagValue::None),
+            ("-P", SafeFlagValue::None),
+            ("-c", SafeFlagValue::None),
+            ("-e", SafeFlagValue::String),
+            ("-h", SafeFlagValue::None),
+            ("-i", SafeFlagValue::None),
+            ("-l", SafeFlagValue::None),
+            ("-n", SafeFlagValue::None),
+            ("-o", SafeFlagValue::None),
+            ("-q", SafeFlagValue::None),
+            ("-v", SafeFlagValue::None),
+            ("-w", SafeFlagValue::None),
+            ("--after-context", SafeFlagValue::Number),
+            ("--and", SafeFlagValue::None),
+            ("--basic-regexp", SafeFlagValue::None),
+            ("--break", SafeFlagValue::None),
+            ("--cached", SafeFlagValue::None),
+            ("--color", SafeFlagValue::None),
+            ("--context", SafeFlagValue::Number),
+            ("--count", SafeFlagValue::None),
+            ("--extended-regexp", SafeFlagValue::None),
+            ("--files-with-matches", SafeFlagValue::None),
+            ("--files-without-match", SafeFlagValue::None),
+            ("--fixed-strings", SafeFlagValue::None),
+            ("--full-name", SafeFlagValue::None),
+            ("--heading", SafeFlagValue::None),
+            ("--ignore-case", SafeFlagValue::None),
+            ("--invert-match", SafeFlagValue::None),
+            ("--line-number", SafeFlagValue::None),
+            ("--max-depth", SafeFlagValue::Number),
+            ("--no-color", SafeFlagValue::None),
+            ("--no-index", SafeFlagValue::None),
+            ("--not", SafeFlagValue::None),
+            ("--only-matching", SafeFlagValue::None),
+            ("--or", SafeFlagValue::None),
+            ("--perl-regexp", SafeFlagValue::None),
+            ("--quiet", SafeFlagValue::None),
+            ("--recurse-submodules", SafeFlagValue::None),
+            ("--threads", SafeFlagValue::Number),
+            ("--untracked", SafeFlagValue::None),
+            ("--word-regexp", SafeFlagValue::None),
+        ])
+    });

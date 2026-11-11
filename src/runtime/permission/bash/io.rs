@@ -6,14 +6,48 @@ use std::sync::LazyLock;
 
 static SAFE_ENV_ASSIGNMENTS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
-        "ANTHROPIC_API_KEY", "BLOCK_SIZE", "BLOCKSIZE", "CGO_ENABLED", "CHARSET", "CI",
-        "CLICOLOR", "CLICOLOR_FORCE", "COLORTERM", "COLUMNS", "DEBIAN_FRONTEND", "FORCE_COLOR",
-        "GCC_COLORS", "GIT_TERMINAL_PROMPT", "GO111MODULE", "GOARCH", "GOEXPERIMENT", "GOOS",
-        "GREP_COLOR", "GREP_COLORS", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_TIME",
-        "LINES", "LSCOLORS", "LS_COLORS", "NO_COLOR", "NODE_ENV", "PYTEST_DEBUG",
-        "PYTEST_DISABLE_PLUGIN_AUTOLOAD", "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED",
-        "RUST_BACKTRACE", "RUST_LOG", "TERM", "TIME_STYLE", "TZ",
-    ].into_iter().collect()
+        "ANTHROPIC_API_KEY",
+        "BLOCK_SIZE",
+        "BLOCKSIZE",
+        "CGO_ENABLED",
+        "CHARSET",
+        "CI",
+        "CLICOLOR",
+        "CLICOLOR_FORCE",
+        "COLORTERM",
+        "COLUMNS",
+        "DEBIAN_FRONTEND",
+        "FORCE_COLOR",
+        "GCC_COLORS",
+        "GIT_TERMINAL_PROMPT",
+        "GO111MODULE",
+        "GOARCH",
+        "GOEXPERIMENT",
+        "GOOS",
+        "GREP_COLOR",
+        "GREP_COLORS",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_TIME",
+        "LINES",
+        "LSCOLORS",
+        "LS_COLORS",
+        "NO_COLOR",
+        "NODE_ENV",
+        "PYTEST_DEBUG",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONUNBUFFERED",
+        "RUST_BACKTRACE",
+        "RUST_LOG",
+        "TERM",
+        "TIME_STYLE",
+        "TZ",
+    ]
+    .into_iter()
+    .collect()
 });
 
 fn is_dev_tcp_udp(target: &str) -> bool {
@@ -21,14 +55,19 @@ fn is_dev_tcp_udp(target: &str) -> bool {
 }
 
 fn looks_like_unc(value: &str) -> bool {
-    let rest = value.strip_prefix("//").or_else(|| value.strip_prefix(r"\\"));
+    let rest = value
+        .strip_prefix("//")
+        .or_else(|| value.strip_prefix(r"\\"));
     rest.is_some_and(|r| r.chars().next().is_some_and(|c| c != '/' && c != '\\'))
 }
 
 #[must_use]
 pub fn are_env_assignments_allowed(command: &BashCommandInvocation) -> bool {
     command.env_assignments.iter().all(|a| {
-        a.name.as_deref().is_some_and(|n| SAFE_ENV_ASSIGNMENTS.contains(n)) && !a.value_dynamic
+        a.name
+            .as_deref()
+            .is_some_and(|n| SAFE_ENV_ASSIGNMENTS.contains(n))
+            && !a.value_dynamic
     })
 }
 
@@ -44,7 +83,10 @@ pub fn are_redirects_allowed(command: &BashCommandInvocation) -> bool {
         if redirect.target == "/dev/null" {
             continue;
         }
-        if matches!(redirect.operator.as_str(), "<" | "<<" | "<<-" | "<&" | "<<<") {
+        if matches!(
+            redirect.operator.as_str(),
+            "<" | "<<" | "<<-" | "<&" | "<<<"
+        ) {
             if looks_like_unc(&redirect.target) {
                 return false;
             }
@@ -73,13 +115,19 @@ pub fn strip_safe_command_wrappers(argv: &[String]) -> Vec<String> {
                 if stripped.get(index).map(String::as_str) == Some("--") {
                     index += 1;
                 }
-                if index >= stripped.len() || stripped.get(index).is_some_and(|w| w.starts_with('-')) {
+                if index >= stripped.len()
+                    || stripped.get(index).is_some_and(|w| w.starts_with('-'))
+                {
                     return stripped;
                 }
                 stripped = stripped[index..].to_vec();
             }
             Some("builtin") => {
-                let index = if stripped.get(1).map(String::as_str) == Some("--") { 2 } else { 1 };
+                let index = if stripped.get(1).map(String::as_str) == Some("--") {
+                    2
+                } else {
+                    1
+                };
                 if index >= stripped.len() {
                     return stripped;
                 }

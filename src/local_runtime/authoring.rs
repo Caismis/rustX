@@ -1,8 +1,6 @@
 //! Strict TOML layers and explicit native composition. No dynamic value merge.
 use super::{
-    config::{
-        ContextPolicyDocument, CurrentRuntimeConfig, McpServerDocument, McpTransportType,
-    },
+    config::{ContextPolicyDocument, CurrentRuntimeConfig, McpServerDocument, McpTransportType},
     configuration::Origin,
 };
 use crate::model::catalog::{ModelProfileId, ModelRef};
@@ -688,7 +686,14 @@ impl RuntimeLayer {
                 .map(ModelLayer::resolve)
                 .transpose()?,
         );
-        apply!(self, config, schema_version, agent_id, approval_mode, environment);
+        apply!(
+            self,
+            config,
+            schema_version,
+            agent_id,
+            approval_mode,
+            environment
+        );
         if let Some(layer) = self.agent {
             let mut profile = config.agent;
             apply!(layer, profile, description, agents, workflows, agents_md);
