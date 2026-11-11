@@ -127,10 +127,12 @@ class Child:
         self.proc.stdin.flush()
         return self.request_id
 
-    def response(self, request_id):
+    def response(self, request_id, refused=None):
         while True:
             arrived, frame = self.frame()
             if frame.get('type') == 'response' and frame.get('id') == request_id:
+                if refused and not frame['success'] and frame.get('error') == refused:
+                    return arrived, None
                 assert frame['success'], frame
                 return arrived, frame['data']
 
@@ -149,6 +151,7 @@ class Product:
     def __init__(self, a, engine, scenario, root, base, env):
         self.a, self.engine, self.scenario, self.root, self.base, self.env = a, engine, scenario, root, base, env
         self.generation = 0
+        self.prompt_retries = 0
         self.sessions = root / 'storage'
         self.workspace = root / 'workspace'
         self.sessions.mkdir()
@@ -197,7 +200,15 @@ class Product:
         began = time.monotonic_ns()
         rid = self.child.send('prompt', message=PROMPT)
         if self.engine == 'pi-rust':
-            accepted_at, data = self.child.response(rid)
+            # pi-rust can emit agent_settled before it releases the run slot;
+            # an immediate next prompt is then refused and must be repeated.
+            while True:
+                accepted_at, data = self.child.response(rid, refused='a run is already active')
+                if data is not None:
+                    break
+                self.prompt_retries += 1
+                time.sleep(.0005)
+                rid = self.child.send('prompt', message=PROMPT)
             assert data['accepted'], data
             deltas, tool_ends, counts = [], 0, Counter()
             while True:
@@ -319,7 +330,7 @@ def scenario(a, engine, kind, out, env):
         slopes = regress(windows, ['cpu_ms_per_turn', 'wall_ms_per_turn', 'wall_p50_ms', 'wall_p95_ms',
             'wchar_per_turn', 'write_bytes_per_turn', 'rss_bytes', 'pss_bytes', 'session_bytes'])
         result.update(accepted=True, windows=windows, reopen=reopen, closes=closes, slopes=slopes,
-                      verification=verification, closed_footprint=footprint(product.sessions))
+                      verification=verification, prompt_retries=product.prompt_retries, closed_footprint=footprint(product.sessions))
         write(out / 'result.json', result)
         return result
     except BaseException:
