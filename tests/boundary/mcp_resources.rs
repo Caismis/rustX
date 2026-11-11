@@ -19,6 +19,22 @@ use crate::tools::executor::ToolRegistry;
 use crate::tools::mcp::{McpServerBinding, McpTransportConfig, fixture};
 use support::fake::{FakeStep, ScriptedCall, fake_model, model_release, tool_call_events};
 
+/// Resource-derived System authority comparisons ignore the sparse permission
+/// reminder (Issue #544 §10): it appears on the first request only and is not
+/// part of the frozen resource generation under test.
+fn without_permission_reminder(prompt: &str) -> &str {
+    const MARKER: &str = "Execution permission mode:";
+    if let Some(index) = prompt.find("\n\nExecution permission mode:") {
+        &prompt[..index]
+    } else if let Some(index) = prompt.find(&format!("\n{MARKER}")) {
+        &prompt[..index]
+    } else if prompt.starts_with(MARKER) {
+        ""
+    } else {
+        prompt
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resource_body_enters_context_only_after_one_committed_normal_tool_result() {
     if fixture::serve_if_fixture_mode(fixture::FixtureServer::from_env()).await {
@@ -203,18 +219,6 @@ async fn resource_body_enters_context_only_after_one_committed_normal_tool_resul
     // Issue #544 §10: sparse permission reminder appears on the first request
     // only; ordinary subsequent Tool rounds keep the same resource-derived
     // System authority without repeating the reminder.
-    fn without_permission_reminder(prompt: &str) -> &str {
-        const MARKER: &str = "Execution permission mode:";
-        if let Some(index) = prompt.find("\n\nExecution permission mode:") {
-            &prompt[..index]
-        } else if let Some(index) = prompt.find(&format!("\n{MARKER}")) {
-            &prompt[..index]
-        } else if prompt.starts_with(MARKER) {
-            ""
-        } else {
-            prompt
-        }
-    }
     assert!(
         requests[0]
             .effective_system_prompt
