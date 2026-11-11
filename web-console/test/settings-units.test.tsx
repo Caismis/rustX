@@ -252,10 +252,8 @@ it('writes Native and MCP invocation policies independently, and an empty policy
   fireEvent.click(screen.getByRole('button', { name: 'Advanced Tool policies' }));
   const form = within(screen.getByRole('form', { name: 'bash policy' }));
   await chooseOption('execution', 'Model selectable', form);
-  await chooseOption('concurrency', 'Parallel', form);
-  await chooseOption('approval', 'Always', form);
   fireEvent.click(form.getByRole('button', { name: 'Save bash policy' }));
-  await waitFor(() => expect(write.mock.calls[0]).toEqual([{ kind: 'config', mutation: { unit: 'native_policy', id: 'bash', authored: { execution: 'model_selectable', concurrency: 'parallel', approval: 'always' } } }, 'p1']));
+  await waitFor(() => expect(write.mock.calls[0]).toEqual([{ kind: 'config', mutation: { unit: 'native_policy', id: 'bash', authored: { execution: 'model_selectable' } } }, 'p1']));
   const mcp = within(screen.getByRole('form', { name: 'MCP policy search' }));
   // This Workspace authors no `search` policy; opening its editor authors none
   // either, so there is nothing to save until the user says so.

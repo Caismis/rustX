@@ -47,6 +47,8 @@ impl ServerFixture {
         std::fs::create_dir_all(&workspace).unwrap();
         let config = root.path().join("rustx.toml");
         std::fs::write(&config,toml::to_string_pretty(&serde_json::json!({
+                // Host broadcast conformance is not a permission test.
+                "approval_mode": "full_access",
                 "agent":{"model":{"model":"emulator/chat-model"},"tools":{"builtin":[]}},
                 "providers":{"emulator":{"protocol":"openai_chat_completions","base_url":provider.openai_base_url(),"api_key":"$HOST_TEST_KEY"}},
                 "models":{"emulator/chat-model":{"provider":"emulator","id":"chat-model","context_window":128_000,"max_output_tokens":1024,"capabilities":{"input_modalities":["text"],"output_modalities":["text"]},"compat":{"chat_reasoning_replay":"omit"}}}

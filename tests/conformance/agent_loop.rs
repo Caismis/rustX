@@ -223,7 +223,7 @@ impl Driver {
             .unwrap();
             std::fs::write(
                 workspace.join("rustx.toml"),
-                "[agent]\nworkflows = [\"image_review\"]\n",
+                "approval_mode = \"full_access\"\n[agent]\nworkflows = [\"image_review\"]\n",
             )
             .unwrap();
         }
@@ -876,6 +876,9 @@ fn session_json(setup: &Setup) -> String {
         model["auxiliary"] = serde_json::json!({"mode": "explicit", "model": summary});
     }
     let document = serde_json::json!({
+        // Conformance loops are not permission tests: Full Access avoids
+        // elevation_reason Ask hangs on write/edit/bash that Plan would raise.
+        "approval_mode": "full_access",
         "agent_id": "agent-issue47",
         "agent": {"model": model, "skills": "all", "tools": {"builtin": if setup.images { vec!["read", "write", "edit", "glob", "grep", "bash", "read_image"] } else { vec!["read", "write", "edit", "glob", "grep", "bash"] }}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
         "context": {
@@ -1243,11 +1246,20 @@ async fn default_system_prompt_layers_project_instructions_on_every_protocol() {
             "Current working directory: {}",
             workspace.canonicalize().unwrap().display()
         )));
-        assert!(prompt.ends_with(&format!(
+        let project_instructions = format!(
             "\n\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\n{global}\n</project_instructions>\n\n<project_instructions path=\"{}\">\n{project}\n</project_instructions>",
             global_directory.canonicalize().unwrap().join("AGENTS.md").display(),
             workspace.canonicalize().unwrap().join("AGENTS.md").display()
-        )));
+        );
+        assert!(prompt.contains(&project_instructions));
+        // PermissionReminder is the last system-section lane when eligible, so
+        // the prompt may continue past project instructions on first request.
+        let after_project = prompt.split(&project_instructions).nth(1).unwrap_or("");
+        assert!(
+            after_project.is_empty()
+                || after_project.starts_with("\n\nExecution permission mode:"),
+            "unexpected system prompt tail after project instructions: {after_project:?}"
+        );
         let snapshots = driver.request_history().page(None, 32).unwrap().snapshots;
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].effective_system_prompt, prompt);

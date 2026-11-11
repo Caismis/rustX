@@ -118,7 +118,7 @@ it('loads initial permissions and models silently without replacing the editor o
   expect(input.value).toBe('Typed while loading'); expect(document.activeElement).toBe(input);
   expect([input.selectionStart, input.selectionEnd]).toEqual([2, 7]);
   expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('fixture/native');
-  expect(screen.getByRole('button', { name: 'Workspace permissions' }).textContent).toBe('Policy');
+  expect(screen.getByRole('button', { name: 'Workspace permissions' }).textContent).toBe('Plan');
 });
 it.each(['current', 'replacement'] as const)('Composer Add Workspace dispatches its opened picker scope to the %s Host', async kind => {
   let catalog: WorkspaceCatalog = { authorityId: 'host-A', endpoint,

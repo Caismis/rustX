@@ -159,16 +159,13 @@ it.each(['en', 'zh'] as const)('policy display choices preserve exact native val
   act(() => localeController.setLocale(locale));
   const change = vi.fn(), tx = translator(locale);
   render(<PolicyFields value={{}} change={change}/>);
-  for (const [field, label, values] of [
-    ['execution', 'settings:tools-page.execution', ['foreground_only', 'background_only', 'model_selectable']],
-    ['concurrency', 'settings:tools-page.concurrency', ['sequential', 'parallel']],
-    ['approval', 'settings:tools-page.approval-2', ['never', 'always']],
-  ] as const) {
-    for (const value of values) {
-      fireEvent.click(screen.getByRole('button', { name: new RegExp(`${tx(label)}$`) }));
-      fireEvent.click(screen.getByRole('option', { name: tx(`settings:policy.${value}`) }));
-      expect(change).toHaveBeenLastCalledWith({ [field]: value });
-    }
+  // Issue #544: per-tool overrides keep only execution ownership. Mode-level
+  // approval and concurrency no longer live on NativePolicyOverrideDocument.
+  const label = tx('settings:tools-page.execution');
+  for (const value of ['foreground_only', 'background_only', 'model_selectable'] as const) {
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`${label}$`) }));
+    fireEvent.click(screen.getByRole('option', { name: tx(`settings:policy.${value}`) }));
+    expect(change).toHaveBeenLastCalledWith({ execution: value });
   }
-  expect(change).toHaveBeenCalledTimes(7);
+  expect(change).toHaveBeenCalledTimes(3);
 });

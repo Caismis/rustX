@@ -297,6 +297,7 @@ fn models_json(emulator: &ProviderEmulator) -> String {
 
 const CONFIG: &str = r#"schema_version = 12
 agent_id = "agent-issue83"
+approval_mode = "full_access"
 
 [context]
 reserve_tokens = 0
@@ -319,7 +320,8 @@ builtin = ["read"]
 "#;
 
 /// A Workspace enables its own Workflow files.
-const ENABLE: &str = "[agent]\nworkflows = [\"review_pr\"]\n";
+const ENABLE: &str =
+    "approval_mode = \"full_access\"\n[agent]\nworkflows = [\"review_pr\"]\n";
 
 const WORKFLOW: &str = r"description: Review the request with a native child agent.
 block:
@@ -1801,7 +1803,12 @@ impl Driver {
         // fixture; the Workspace keeps only the Workflows it enables.
         std::fs::write(
             workspace.join("rustx.toml"),
-            toml::to_string(&toml::toml! { [agent] workflows = enabled }).unwrap(),
+            toml::to_string(&toml::toml! {
+                approval_mode = "full_access"
+                [agent]
+                workflows = enabled
+            })
+            .unwrap(),
         )
         .unwrap();
 
