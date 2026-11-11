@@ -269,7 +269,9 @@ fn live_domain_refresh_defers_trace_and_keeps_issued_pins_while_checkpoint_reads
     commit_result_without_terminal_j(&mut projection, &store, call);
     let fence = projection.read_domain_cut().unwrap();
     crate::runtime_client::trace::take_page_read_work();
-    let live = fence.read_live(&store).unwrap();
+    let live = fence
+        .read_live(&store, &projection.read_supersession())
+        .unwrap();
     assert!(live.trace.is_none());
     assert_eq!(crate::runtime_client::trace::take_page_read_work(), 0);
     publish_source_fact(&mut projection, |projection| {

@@ -714,11 +714,15 @@ pub trait ObservationStore: Send + Sync + 'static {
 
     /// Read and decorate the bounded live checkpoint domains in one transaction.
     /// `through` must equal the validated native cut's Journal frontier.
+    /// `retired` is consulted once the connection is owned: a caller whose
+    /// result can no longer be installed gets `ObservationCutExpired` without
+    /// any read.
     fn observation_checkpoint_head(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
         through: u64,
         limit: usize,
+        retired: &dyn Fn() -> bool,
     ) -> Result<crate::durable::observation::CheckpointHead, ConversationStoreError>;
 
     /// Resolve at most one native header page under a single validated source cut.

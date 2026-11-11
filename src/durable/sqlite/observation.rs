@@ -1846,7 +1846,7 @@ mod tool_owner_work_tests {
             // Prime the same bounded descriptor and response owners on both paths.
             for _ in 0..2 {
                 store
-                    .observation_checkpoint_head(&cut, cut.read.journal, 32)
+                    .observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false)
                     .unwrap();
             }
             let sample = |disable| {
@@ -1857,7 +1857,7 @@ mod tool_owner_work_tests {
                     crate::durable::sqlite::query_work::capture(&connection);
                 }
                 let head = store
-                    .observation_checkpoint_head(&cut, cut.read.journal, 32)
+                    .observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false)
                     .unwrap();
                 let sql = {
                     let connection = store.lock().unwrap();

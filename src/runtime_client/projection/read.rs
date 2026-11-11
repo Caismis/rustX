@@ -389,11 +389,9 @@ impl RuntimeClientProjection {
         }
         self.source_state.source_unavailable = self.source_cut.is_none();
         self.read_domains_dirty = true;
-        let Some(revision) = self.read_revision.checked_add(1) else {
-            self.publication_failed(&RuntimeClientError::ProjectionExhausted);
+        if !self.advance_read_revision() {
             return;
-        };
-        self.read_revision = revision;
+        }
         for owner in ["inbound", "transcript"] {
             let Some(_) = self.domain_revisions.advance_revision(owner) else {
                 self.publication_failed(&RuntimeClientError::ProjectionExhausted);

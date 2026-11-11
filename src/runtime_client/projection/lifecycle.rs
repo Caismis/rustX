@@ -123,6 +123,7 @@ impl RuntimeClientProjection {
             read_domains_requested: false,
             read_failure: None,
             read_revision: 0,
+            latest_read_revision: Arc::default(),
             domain_revisions: crate::observation::metadata::MetadataFragment::default(),
             auxiliary_audit_total: None,
             domain_sources: DomainSources::new(),
