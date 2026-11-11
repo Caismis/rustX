@@ -485,6 +485,7 @@ pub(super) fn validate_fresh_input_binding(
 #[allow(clippy::too_many_arguments)] // Native start inputs plus its transaction-local optional fragment session.
 pub(super) fn index_request_read_layouts(
     transaction: &Transaction<'_>,
+    trigger_free: bool,
     scope: &ConversationId,
     snapshot: &RequestSnapshot,
     configuration: &native_request::FreshConfiguration,
@@ -521,6 +522,7 @@ pub(super) fn index_request_read_layouts(
         observation_request_summary::index(transaction, snapshot)?;
         observation_request::index_selection(
             transaction,
+            trigger_free,
             event.sequence,
             scope,
             input,
@@ -963,8 +965,12 @@ impl SqliteConversationStore {
                 .messages()
             },
         );
+        // Proven once before the optional layouts and again before the final
+        // binding check: unchanged schema cookies mean no DDL ran in between.
+        let trigger_free = self.conn.event_guard.can_prepare(transaction)?;
         index_request_read_layouts(
             transaction,
+            trigger_free,
             &self.conversation_id,
             snapshot,
             &configuration,
@@ -999,7 +1005,17 @@ impl SqliteConversationStore {
             persisted.event,
             contribution_emissions,
         )?;
-        validate_fresh_input_binding(transaction, snapshot, &json, &configuration, selection.root)?;
+        // The binding was validated after its insertion above. Only a custom SQL
+        // program run by a later write in this transaction could change it.
+        if !(trigger_free && self.conn.event_guard.can_prepare(transaction)?) {
+            validate_fresh_input_binding(
+                transaction,
+                snapshot,
+                &json,
+                &configuration,
+                selection.root,
+            )?;
+        }
         associations.authenticate(transaction, &self.conn.manifest)?;
         if self.conn.manifest.epoch.load(Ordering::Acquire) != validated_epoch {
             reconstruct_request_start_reference(transaction, &result.started, Some(&json))?;

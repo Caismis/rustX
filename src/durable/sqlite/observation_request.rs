@@ -85,8 +85,10 @@ impl Write for SourceWriter<'_> {
 fn encoded_path(path: &[String]) -> Result<String, ConversationStoreError> {
     serde_json::to_string(path).map_err(|error| storage(error.to_string()))
 }
+#[allow(clippy::too_many_arguments)] // The native request start plus its trigger proof.
 pub(in crate::durable::sqlite) fn index_selection(
     connection: &Connection,
+    trigger_free: bool,
     source_sequence: u64,
     scope: &crate::runtime::identity::ConversationId,
     messages: &crate::model::SelectedModelInput,
@@ -96,6 +98,7 @@ pub(in crate::durable::sqlite) fn index_selection(
 ) -> Result<(), ConversationStoreError> {
     composed::index_selection(
         connection,
+        trigger_free,
         source_sequence,
         scope,
         messages,
