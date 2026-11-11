@@ -70,13 +70,15 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
         };
     }
     if command.contains('|')
-        || command.contains("&&")
-        || command.contains("||")
+        || command.contains('&')
         || command.contains(';')
+        || command.contains('\n')
+        || command.contains('\r')
     {
-        // Pipelines/chains require every member to be proven; until the AST
-        // walker lands, treat them as unproven rather than partially trusting
-        // a safe prefix.
+        // Pipelines/chains/background jobs/newlines require every member to
+        // be proven; until the AST walker lands, treat them as unproven rather
+        // than partially trusting a safe prefix. Newlines and bare `&` must
+        // not collapse into argv of an allowlisted head via split_whitespace.
         return BashReadonlyClass::Unproven {
             reason: "pipelines and command chains require full AST analysis".to_owned(),
         };
@@ -321,6 +323,10 @@ mod tests {
             "date \"-s\" 12:00:00",
             "date 1234567890",
             "date -u",
+            "pwd\nrm -rf /",
+            "pwd\r\nrm -rf /",
+            "pwd & rm -rf /",
+            "true && rm -rf /",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
