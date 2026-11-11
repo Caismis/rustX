@@ -2,8 +2,8 @@
 //!
 //! Each fixture appends completed turns through the production append path,
 //! closes the store, and then measures every SQL statement a cold reopen
-//! executes: a fresh store, runtime construction with startup recovery, and
-//! the Runtime Client bootstrap cut. The work must not change with history.
+//! executes: a fresh store, runtime construction with startup recovery and
+//! subagent registry restoration, and the Runtime Client bootstrap cut. The work must not change with history.
 
 use super::test_support::*;
 use super::*;
@@ -21,7 +21,11 @@ async fn cold_attach(id: &ConversationId, path: &std::path::Path) -> ColdAttach 
     let statements = {
         let _oracle = crate::runtime::recovery::suspend_frontier_oracle();
         store.begin_query_work();
-        let (runtime, _) = headless_runtime_over_store(&dir, id.as_str(), store.clone()).await;
+        // A conversation-owned subagent registry restores its durable
+        // Agent records during construction, as in the App Server.
+        let (runtime, _, _registry) =
+            headless_runtime_over_store_with_subagents(&dir, id.as_str(), store.clone(), None)
+                .await;
         runtime
             .install_client_observation_bridge(Arc::new(PendingObservations::new()))
             .unwrap();
