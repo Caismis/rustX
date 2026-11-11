@@ -496,10 +496,11 @@ impl AgentExecution<'_> {
                                         }
                                         let tool_call_id = slots[slot_index].call.id.clone();
                                         let tool_id = slots[slot_index].tool_id.clone();
-                                        slots[slot_index].executor_started = true;
                                         // Shared emission: run futures already
                                         // hold `&self`, so `&mut self` emit is
                                         // unavailable while siblings proceed.
+                                        // Mark started only after Started is
+                                        // durable so Completed cannot outrun it.
                                         if let Err(message) =
                                             self.emit_shared(RuntimeEvent::ToolExecutionStarted {
                                                 tool_call_id,
@@ -514,6 +515,7 @@ impl AgentExecution<'_> {
                                                 ));
                                             continue;
                                         }
+                                        slots[slot_index].executor_started = true;
                                         #[cfg(test)]
                                         self.park_after_tool_start();
                                         if let Some(error) = self.durable_failure_commit_error() {
