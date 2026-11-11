@@ -734,6 +734,14 @@ impl<'a> AgentExecution<'a> {
         {
             Ok(settled) => settled,
             Err(error) => {
+                // Deferred group errors can commit a complete batch then return
+                // Err. Cancellation still wins over Failure/ControlLost once
+                // the batch is structurally settled.
+                if self.cancellation.is_cancelled() {
+                    return Some(Terminal::Cancelled {
+                        reason: self.cancellation.reason(),
+                    });
+                }
                 return Some(
                     self.commit_failure_terminal("a tool result cannot be committed", error),
                 );

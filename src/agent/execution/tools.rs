@@ -762,6 +762,21 @@ impl AgentExecution<'_> {
                 }
             }
         }
+        // Cancellation fill runs before ControlLost Failed placeholders so a
+        // cancelled attempt keeps Cancelled phase invariants on unset slots
+        // (started → DuringExecution, otherwise BeforeStart).
+        if self.cancellation.is_cancelled() {
+            let reason = self.cancellation.reason();
+            for slot in &mut slots {
+                if slot.result.is_none() {
+                    slot.result = Some(if slot.executor_started {
+                        cancelled_after_start(reason)
+                    } else {
+                        cancelled_result(reason)
+                    });
+                }
+            }
+        }
         if self.cancellation.interaction_failed() {
             let started = slots.iter().any(|slot| slot.executor_started);
             if started {
@@ -779,21 +794,6 @@ impl AgentExecution<'_> {
                 return Err(CanonicalCommitError::Interaction(
                     InteractionFailure::ControlLost,
                 ));
-            }
-        }
-        // Cancellation fill: every unset foreground call receives a cancelled
-        // result slot, so the committed batch covers every logical call exactly
-        // once. Started slots must never receive BeforeStart.
-        if self.cancellation.is_cancelled() {
-            let reason = self.cancellation.reason();
-            for slot in &mut slots {
-                if slot.result.is_none() {
-                    slot.result = Some(if slot.executor_started {
-                        cancelled_after_start(reason)
-                    } else {
-                        cancelled_result(reason)
-                    });
-                }
             }
         }
         if deferred_group_error.is_some() {
