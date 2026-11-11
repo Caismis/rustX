@@ -549,6 +549,13 @@ fn finish(
     }
     let witness = row.source.map(|source| source.witness);
     let execution = row.execution.map(|execution| execution.capture);
+    // The pending witness counted Trace through this J: an anchor's own new
+    // total, otherwise the count through its predecessor, which this row
+    // neither extends nor leaves a hole in. Only the native row and rows of
+    // other tables were written since that read in this guarded transaction.
+    let trace_total = witness
+        .as_ref()
+        .and_then(|witness| witness.value.trace_total);
     event.observation = prepare_observation
         .then(|| {
             observation_receipt::single_prepared(
@@ -557,6 +564,7 @@ fn finish(
                 event,
                 witness.as_ref(),
                 execution.as_ref(),
+                trace_total,
             )
         })
         .flatten();
