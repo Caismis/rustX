@@ -410,7 +410,8 @@ fn repeated_native_leaves_do_not_recompute_template_metrics() {
     let work = observation_request::composed::take_work();
     assert_eq!(work.new_leaves, first.input.len());
     assert_eq!(work.leaf_width_calls, work.new_leaves);
-    assert!(work.width_hole_encodes >= work.new_leaves);
+    assert_eq!(work.width_hole_encodes, 0);
+    assert!(work.width_hole_reuses >= work.new_leaves);
     assert_shape_oracle(
         &store,
         &first,

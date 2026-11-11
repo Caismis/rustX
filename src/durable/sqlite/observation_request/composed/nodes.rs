@@ -124,12 +124,13 @@ fn leaf_geometry(
     connection: &Connection,
     leaf: &Leaf,
 ) -> Result<(WidthTable, u64, u64), ConversationStoreError> {
-    leaf_geometry_reusing(connection, leaf, Vec::new())
+    leaf_geometry_reusing(connection, leaf, Vec::new(), None)
 }
 fn leaf_geometry_reusing(
     connection: &Connection,
     leaf: &Leaf,
     captured: Vec<fragments::CapturedTemplate>,
+    prepared_hole: Option<(u64, u64)>,
 ) -> Result<(WidthTable, u64, u64), ConversationStoreError> {
     if leaf.variants.len() != weights::CLASSES
         || leaf.templates.is_empty()
@@ -149,18 +150,37 @@ fn leaf_geometry_reusing(
     let mut max_path = 0;
     let mut max_key_path = 0;
     let mut captured = captured.into_iter();
+    // The producer already encoded this exact provenance source while
+    // extracting the first header. The matching value is still checked after
+    // each independently authenticated template load.
+    let mut previous_hole = prepared_hole;
     for digest in &leaf.templates {
         let template = fragments::load_template_reusing(connection, *digest, captured.next())?;
-        let hole = hole(1, 0, template.provenance_bytes)?;
-        #[cfg(test)]
-        super::WORK.with(|work| {
-            let mut value = work.get();
-            value.width_hole_encodes += 1;
-            work.set(value);
-        });
+        let hole_length = match previous_hole {
+            Some((provenance_bytes, length)) if provenance_bytes == template.provenance_bytes => {
+                #[cfg(test)]
+                super::WORK.with(|work| {
+                    let mut value = work.get();
+                    value.width_hole_reuses += 1;
+                    work.set(value);
+                });
+                length
+            }
+            _ => {
+                let length = hole(1, 0, template.provenance_bytes)?.len() as u64;
+                #[cfg(test)]
+                super::WORK.with(|work| {
+                    let mut value = work.get();
+                    value.width_hole_encodes += 1;
+                    work.set(value);
+                });
+                previous_hole = Some((template.provenance_bytes, length));
+                length
+            }
+        };
         bases.push(add(
             add(template.prefix.length, template.suffix.length)?,
-            hole.len() as u64,
+            hole_length,
         )?);
         max_path = max_path.max(template.prefix.max_path.max(template.suffix.max_path));
         max_key_path = max_key_path.max(
@@ -269,8 +289,12 @@ impl Capture<'_> {
                     .get(at)
                     .ok_or_else(|| storage("actual frozen input missing new leaf"))?;
                 let captured = fragments::capture(connection, self.scope, message, frozen)?;
-                let (widths, max_path, max_key_path) =
-                    leaf_geometry_reusing(connection, &captured.leaf, captured.templates)?;
+                let (widths, max_path, max_key_path) = leaf_geometry_reusing(
+                    connection,
+                    &captured.leaf,
+                    captured.templates,
+                    captured.hole,
+                )?;
                 (
                     Content::Leaf {
                         leaf: captured.leaf,
