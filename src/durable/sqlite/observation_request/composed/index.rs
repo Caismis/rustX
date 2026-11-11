@@ -38,20 +38,22 @@ pub(super) fn install_cache(connection: &Connection) -> Result<(), ConversationS
     connection.execute_batch("CREATE TEMP TABLE IF NOT EXISTS request_source_page_memo(stamp INTEGER PRIMARY KEY,hash BLOB NOT NULL UNIQUE,page_id INTEGER NOT NULL)")
         .map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))
 }
-fn remember(connection: &Connection, reference: BlobRef) -> Result<(), ConversationStoreError> {
+/// Marks `reference` most recently used. Replacing an existing hash keeps the
+/// memo size, so only a newly remembered page can exceed the bound.
+fn remember(
+    connection: &Connection,
+    reference: BlobRef,
+    hit: bool,
+) -> Result<(), ConversationStoreError> {
     connection
         .execute_cached(
-            "DELETE FROM request_source_page_memo WHERE hash=?1",
-            [reference.hash.as_slice()],
-        )
-        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
-    connection
-        .execute_cached(
-            "INSERT INTO request_source_page_memo(hash,page_id)VALUES(?1,?2)",
+            "INSERT OR REPLACE INTO request_source_page_memo(hash,page_id)VALUES(?1,?2)",
             params![reference.hash.as_slice(), reference.id],
         )
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
-    connection.execute_cached("DELETE FROM request_source_page_memo WHERE stamp=(SELECT min(stamp) FROM request_source_page_memo) AND (SELECT count(*) FROM request_source_page_memo)>256",[]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    if !hit {
+        connection.execute_cached("DELETE FROM request_source_page_memo WHERE stamp=(SELECT min(stamp) FROM request_source_page_memo) AND (SELECT count(*) FROM request_source_page_memo)>256",[]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    }
     Ok(())
 }
 fn encode(page: &Page) -> Result<Vec<u8>, ConversationStoreError> {
@@ -101,7 +103,7 @@ pub(super) fn store_blob(
     if let Some(id) = cached {
         let reference = BlobRef { id, hash };
         load_blob_reusing(connection, reference, Some(bytes))?;
-        remember(connection, reference)?;
+        remember(connection, reference, true)?;
         return Ok(reference);
     }
     connection
@@ -113,7 +115,7 @@ pub(super) fn store_blob(
         id: super::super::super::nonnegative(connection.last_insert_rowid(), "Source page id")?,
         hash,
     };
-    remember(connection, reference)?;
+    remember(connection, reference, false)?;
     Ok(reference)
 }
 #[cfg(test)]
