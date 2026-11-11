@@ -267,6 +267,20 @@ fn append_certificate_tracks_surface_columns_on_the_store_root() {
 }
 
 #[test]
+fn journal_frontier_updates_preserve_append_certificate() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    store.append_canonical(&user_message("a", "A")).unwrap();
+    append_validation::take_work();
+    crate::durable::sqlite::tests::observation_response_tests::response_start(
+        &store,
+        "certificate",
+    );
+    store.append_canonical(&user_message("b", "B")).unwrap();
+    assert_eq!(append_validation::take_work(), (0, 1));
+}
+
+#[test]
 fn append_certificate_epoch_exhaustion_fails_closed() {
     let store = store();
     store.initialize(&[]).unwrap();

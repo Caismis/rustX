@@ -206,3 +206,44 @@ fn a_journal_row_missing_behind_the_frontier_is_caught_by_the_debug_oracle() {
     }
     let _ = RecoveryEvidence::reconstruct(&store);
 }
+
+#[test]
+fn root_page_and_journal_wal_work() {
+    use crate::durable::JournalStore;
+    for tool in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("measure.sqlite");
+        let store = SqliteConversationStore::open(ConversationId::generate(), &path).unwrap();
+        store.initialize(&[]).unwrap();
+        super::super::append_completed_turns(&store, 0, 3, tool);
+        {
+            let connection = store.lock().unwrap();
+            connection
+                .execute_batch("PRAGMA wal_autocheckpoint=0; PRAGMA wal_checkpoint(TRUNCATE)")
+                .unwrap();
+            let pages: Vec<(String, i64, i64)> = connection.prepare("SELECT pagetype, payload, unused FROM dbstat WHERE name='rustx_store' ORDER BY pageno").unwrap().query_map([], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap().map(Result::unwrap).collect();
+            println!("tool={tool} idle root pages: {pages:?}");
+        }
+        let wal_path = path.with_extension("sqlite-wal");
+        let start = response_start(&store, "wal-probe");
+        let after_append = std::fs::metadata(&wal_path).unwrap().len();
+        super::super::tests::observation_response_tests::response_complete(&store, &start);
+        {
+            let connection = store.lock().unwrap();
+            connection
+                .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+                .unwrap();
+        }
+        super::super::append_completed_turns(&store, 3, 1, tool);
+        let turn = std::fs::metadata(&wal_path).unwrap().len();
+        println!(
+            "tool={tool} append frames={} turn frames={}",
+            (after_append - 32) / 536,
+            (turn - 32) / 536
+        );
+        assert_eq!((after_append - 32) % 536, 0);
+        assert_eq!((turn - 32) % 536, 0);
+        assert_eq!(frontier(&store)["through"], next_event_sequence(&store));
+        let _ = &store as &dyn JournalStore;
+    }
+}
