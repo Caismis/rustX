@@ -750,16 +750,16 @@ Review/Submit remain reachable, and long Markdown previews can be inspected
 with PageUp/PageDown without allowing preview content to displace the option
 list.
 
-The footer displays the authoritative effective mode as `approval POLICY` or
-`approval FULL ACCESS`, and appends `· next attempt …` when the runtime has
-accepted a busy-time mode request that reconciles onto the next attempt —
-changing the desired mode never mutates a running attempt. Full Access is not
-a local prompt suppression switch: it changes
-only effective approval for eligible Tool calls. It cannot activate disabled
-Tools, restore excluded Tools, bypass execution/concurrency restrictions, or
-answer a pending interaction. `/tools` displays each Tool's independent
-execution, concurrency, and approval policy; availability and activation are
-shown separately.
+The footer displays the authoritative effective mode as `approval PLAN`,
+`approval AUTOMATIC`, or `approval FULL ACCESS`, and appends
+`· next attempt …` when the runtime has accepted a busy-time mode request that
+reconciles onto the next attempt — changing the desired mode never mutates a
+running attempt. Full Access is not a local prompt suppression switch: it
+changes only effective approval for eligible Tool calls. It cannot activate
+disabled Tools, restore excluded Tools, bypass execution/concurrency
+restrictions, or answer a pending interaction. `/tools` displays each Tool's
+independent execution ownership; availability, activation, and the three-mode
+permission matrix are shown separately.
 
 ## The model selector
 

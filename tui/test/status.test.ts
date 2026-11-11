@@ -322,7 +322,7 @@ describe("footer", () => {
       model: sessionModel("provider/" + "long-model-identity".repeat(5)),
       effective_approval_mode: "plan",
     }), "connected", 24);
-    assert.equal(rendered, "POLICY\nmodel: /settings");
+    assert.equal(rendered, "PLAN · model: /settings");
   });
 
   it("omits settled outcomes from stable context", () => {
@@ -394,7 +394,7 @@ describe("footer", () => {
   it("names the generation-owned effective approval mode", () => {
     assert.match(
       footer(stateOf({ effective_approval_mode: "plan" }), "connected"),
-      /approval POLICY/,
+      /approval PLAN/,
     );
     assert.match(
       footer(stateOf({ effective_approval_mode: "full_access" }), "connected"),
@@ -891,7 +891,7 @@ it("an unavailable selection is named as configured, never shown through a fallb
 it("unknown context window is omitted and snapshot replacement rebuilds approval/model truth", () => {
   const before = stateOf({ model: sessionModel("old/model"), effective_approval_mode: "plan" });
   const after = stateOf({ model: sessionModel("new/model"), effective_approval_mode: "full_access" });
-  assert.match(footer(before, "connected"), /approval POLICY/);
+  assert.match(footer(before, "connected"), /approval PLAN/);
   assert.match(footer(after, "connected"), /new\/model.*approval FULL ACCESS/);
   assert.doesNotMatch(footer(after, "connected"), /old\/model|next attempt/);
   const noWindow = stateOf({ model: { ...sessionModel("new/model"), effective: { ...sessionModel("new/model").effective!, contextWindow: 0 } } });
@@ -911,7 +911,7 @@ it("drops tokens then Session then context before essential facts require two ro
   assert.match(withoutSession, /context/); assert.doesNotMatch(withoutSession, /session/);
   const essentials = footer(state, "connected", 30, session);
   assert.doesNotMatch(essentials, /context|session|↑/);
-  assert.match(essentials, /alpha\/model-a.*approval POLICY/s);
+  assert.match(essentials, /alpha\/model-a.*approval PLAN/s);
   assert.ok(essentials.split("\n").length <= 2);
 });
 

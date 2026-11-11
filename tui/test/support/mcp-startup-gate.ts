@@ -114,4 +114,15 @@ export async function mcpStartupGate(workspace: string, signal: AbortSignal, too
   };
 }
 
-export const startupToolSchema = { type: 'object', properties: { message: { type: 'string' } }, required: ['message'] };
+export const startupToolSchema = {
+  type: 'object',
+  properties: {
+    elevation_reason: {
+      description:
+        'Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. This is a reason only — never approval evidence — and it never reaches the tool\'s business executor.',
+      type: ['string', 'null'],
+    },
+    message: { type: 'string' },
+  },
+  required: ['message'],
+};

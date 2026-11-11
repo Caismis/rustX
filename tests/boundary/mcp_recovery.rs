@@ -2522,11 +2522,18 @@ async fn a_policy_change_failure_preserves_the_published_generation() {
     let before = capability.coordinator.current_snapshot();
     assert_eq!(published_mcp_tools(&before, &capability.server_id).len(), 3);
 
-    let b2 = recovery_binding(test_name, &control, &script);
+    let mut b2 = recovery_binding(test_name, &control, &script);
+    // Resource-permission overrides replaced approval-policy on the binding:
+    // a distinct permission set is still a candidate-changing binding edit.
+    b2.permissions = Some(rustx::runtime::permission::ResourcePermissionSet {
+        plan: rustx::runtime::permission::ResourcePermissionValue::Ask,
+        automatic: rustx::runtime::permission::ResourcePermissionValue::Ask,
+        full_access: rustx::runtime::permission::ResourcePermissionValue::Allow,
+    });
     assert_ne!(
         before.mcp_servers().get(&capability.server_id),
         Some(&b2),
-        "an approval-policy change is a binding change"
+        "a resource-permission change is a binding change"
     );
 
     let failure = capability

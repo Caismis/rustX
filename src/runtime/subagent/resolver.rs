@@ -2742,12 +2742,6 @@ mod tests {
         model_selected.execution_policy = ToolExecutionPolicy::ModelSelectable;
         variants.push(spec_with_builtin(model_selected));
 
-        let parallel = base.clone();
-        variants.push(spec_with_builtin(parallel));
-
-        let gated = base.clone();
-        variants.push(spec_with_builtin(gated));
-
         // `replay_policy` participates deliberately: it is the frozen
         // declaration of whether re-execution after an unknown outcome is
         // permitted, and it must not be silently equated with `Never`.
@@ -2832,7 +2826,7 @@ mod tests {
     /// cross-process identity, and neither substitutes for the other.
     ///
     /// `SourceToolIdentity` commits the server-published contract — name,
-    /// description, canonical schema, and the three invocation policies — but
+    /// description, canonical schema, and execution ownership — but
     /// deliberately not `replay_policy` or `ToolId`. Relying on it alone would
     /// therefore reintroduce exactly the collision this issue corrects, on the
     /// MCP side. The identity stays framed because it is an independently
@@ -2884,11 +2878,12 @@ mod tests {
         );
 
         // A field the cross-process identity does cover moves both.
-        let gated = definition.clone();
-        assert_ne!(identity_of(&definition), identity_of(&gated));
+        let mut backgrounded = definition.clone();
+        backgrounded.execution_policy = ToolExecutionPolicy::BackgroundOnly;
+        assert_ne!(identity_of(&definition), identity_of(&backgrounded));
         assert_ne!(
             spec_with(definition.clone()).profile_digest(),
-            spec_with(gated).profile_digest()
+            spec_with(backgrounded).profile_digest()
         );
 
         // And the frozen identity is itself framed: a specification that

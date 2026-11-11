@@ -284,6 +284,6 @@ it("pure Tool/footer rendering performs no filesystem, process, or native contro
     return original(content, args);
   });
   const rendered = renderFooter(state, "connected");
-  assert.match(rendered, /approval POLICY/);
+  assert.match(rendered, /approval PLAN/);
   for (const tool of tools.byCallId.values()) renderToolCard(tool, { expanded: true, budget: prefs().previewBudget });
 });
