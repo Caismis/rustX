@@ -767,6 +767,9 @@ pub trait CanonicalStore: Send + Sync + 'static {
         through: u64,
     ) -> Result<Option<CanonicalToolResultOwner>, ConversationStoreError>;
 
+    /// The newest successful `todo` result in the whole Ledger, by its index.
+    fn latest_todo_publication(&self) -> Result<Option<MessageBlock>, ConversationStoreError>;
+
     /// The attempt that committed one canonical Assistant with physical Tool
     /// calls, from the native Tool-call index verified against its exact
     /// `AssistantMessageCommitted` Journal fact. `None` when no attempt

@@ -216,6 +216,30 @@ impl CanonicalStore for SqliteConversationStore {
         tool_result_owner(&connection, message, call, through)
     }
 
+    fn latest_todo_publication(&self) -> Result<Option<MessageBlock>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let row: Option<(String, String)> = connection
+            .query_row_cached(
+                "SELECT message_id,message_json FROM message_ledger INDEXED BY message_ledger_todo_publication_idx WHERE todo_publication=1 ORDER BY position DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        row.map(|(stored_id, json)| {
+            let message: MessageBlock = crate::durable::sqlite::decode(&json, "Ledger message")?;
+            if crate::conversation::message_id_of(&message).as_str() != stored_id
+                || !crate::tools::todo::is_publication(&message)
+            {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Ledger row {stored_id} is not its indexed todo result"
+                )));
+            }
+            Ok(message)
+        })
+        .transpose()
+    }
+
     fn canonical_assistant_owner(
         &self,
         assistant: &MessageId,

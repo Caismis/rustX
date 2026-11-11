@@ -695,6 +695,10 @@ pub(crate) enum DurableOperation {
     /// Preparing the canonical adoption transition (in-memory validation):
     /// a semantic contract failure, not a transient storage failure.
     PrepareAdoption,
+    /// Hydrating the reopened conversation's active working set from its
+    /// durable Surface head, on first use: damaged durable history, not a
+    /// transient storage failure.
+    HydrateConversation,
     /// The live admission safety guard observed an incomplete tool turn.
     IncompleteToolTurn,
     /// An active attempt hit a durable canonical-write failure.
@@ -743,6 +747,7 @@ impl DurableOperation {
             Self::GoalRoundAdmission => "goal_round_admission",
             Self::GoalPause => "goal_pause",
             Self::PrepareAdoption => "prepare_adoption",
+            Self::HydrateConversation => "hydrate_conversation",
             Self::IncompleteToolTurn => "incomplete_tool_turn",
             Self::CanonicalCommit => "canonical_commit",
             Self::RequestStart => "request_start",

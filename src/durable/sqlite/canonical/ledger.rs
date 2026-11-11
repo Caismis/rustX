@@ -492,8 +492,8 @@ fn append_message_ledger_with_capture(
         .transpose()?;
     transaction
         .execute_cached(
-            "INSERT INTO message_ledger(position,message_id,message_json,ordinary_user,human_activity_at,human_activity_max_seconds,human_activity_max_nanos,opening_preview,native_todo,ordinary_human,title_source_text) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-            params![position, id.as_str(), encode(message, "canonical message")?,ordinary_user,human_activity_at.map(|time|time.to_rfc3339()),activity_max.map(|value|value.0),activity_max.map(|value|value.1),opening_preview,observation_state::todo_value(message).is_some(),ordinary_human,title_source_text],
+            "INSERT INTO message_ledger(position,message_id,message_json,ordinary_user,human_activity_at,human_activity_max_seconds,human_activity_max_nanos,opening_preview,native_todo,ordinary_human,title_source_text,todo_publication) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![position, id.as_str(), encode(message, "canonical message")?,ordinary_user,human_activity_at.map(|time|time.to_rfc3339()),activity_max.map(|value|value.0),activity_max.map(|value|value.1),opening_preview,observation_state::todo_value(message).is_some(),ordinary_human,title_source_text,crate::tools::todo::is_publication(message)],
         )
         .map_err(|error| map_insert_error(&error, &id))?;
     // The physical carrier is allocated first, but descriptor admission must

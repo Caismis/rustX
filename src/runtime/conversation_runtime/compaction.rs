@@ -360,7 +360,7 @@ impl RuntimeInner {
         let completion_result;
         {
             let mut state = self.lock_state();
-            state.conversation = Some(conversation);
+            state.conversation.restore(conversation);
             let maintenance = state
                 .manual_compaction
                 .take()
@@ -485,6 +485,11 @@ impl ConversationRuntime {
             {
                 return Err(ManualCompactionError::Busy);
             }
+            if let Err(error) = state.conversation.hydrate(self.inner.store.as_ref()) {
+                return Err(ManualCompactionError::Durable {
+                    message: error.to_string(),
+                });
+            }
             let operation_id = crate::runtime::identity::CompactionOperationId::new(
                 uuid::Uuid::now_v7().to_string(),
             );
@@ -544,8 +549,8 @@ impl ConversationRuntime {
             )?;
             let conversation = state
                 .conversation
-                .take()
-                .expect("the idle coordinator owns the conversation state");
+                .lend()
+                .expect("the idle coordinator hydrated the conversation state");
             state.manual_compaction = Some(CurrentManualCompaction {
                 operation_id: operation_id.clone(),
                 cancellation: cancellation.clone(),
