@@ -83,6 +83,14 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
             reason: "pipelines and command chains require full AST analysis".to_owned(),
         };
     }
+    if command.contains('\'') || command.contains('"') || command.contains('\\') {
+        // Whitespace splitting retains quote/escape characters, so exact flag
+        // matches miss forms like `'-exec'` / `'-i'` while the shell still
+        // runs the mutating option. Unsupported quoting stays unproven.
+        return BashReadonlyClass::Unproven {
+            reason: "quoted or escaped shell syntax requires full argv analysis".to_owned(),
+        };
+    }
 
     let mut tokens = command.split_whitespace();
     let Some(executable) = tokens.next() else {
@@ -172,33 +180,21 @@ fn is_find_write_option(token: &str) -> bool {
 }
 
 fn classify_git(args: &[&str]) -> BashReadonlyClass {
-    // Whitespace splitting keeps quote/escape characters in tokens, so a form
-    // like `'--output'` never matches the literal `--output` guard while the
-    // real shell still invokes Git with a write. Unsupported quoting stays
-    // unproven until full argv analysis exists.
-    if args
-        .iter()
-        .any(|arg| arg.contains('\'') || arg.contains('"') || arg.contains('\\'))
-    {
-        return BashReadonlyClass::Unproven {
-            reason: "quoted or escaped git arguments require full shell argv analysis".to_owned(),
-        };
-    }
-    if args
-        .iter()
-        .any(|arg| *arg == "-c" || arg.starts_with("--exec-path") || *arg == "--paginate")
-    {
-        return BashReadonlyClass::Unproven {
-            reason: "git global options that can change execution context are not proven read-only"
-                .to_owned(),
-        };
-    }
     let mut index = 0usize;
     while index < args.len() {
         let arg = args[index];
         if arg == "-C" {
             index += 2;
             continue;
+        }
+        // Reject spaced `-c`, glued `-ckey=value`, and bang-alias config that
+        // can rewrite a later allowlisted subcommand into shell execution.
+        if arg.starts_with("-c") || arg.starts_with("--exec-path") || arg == "--paginate" {
+            return BashReadonlyClass::Unproven {
+                reason:
+                    "git global options that can change execution context are not proven read-only"
+                        .to_owned(),
+            };
         }
         if arg.starts_with('-') {
             index += 1;
@@ -323,7 +319,7 @@ mod tests {
             "git branch -a",
             "env",
             "date",
-            "yq '.x' file.yaml",
+            "yq .x file.yaml",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
@@ -363,6 +359,10 @@ mod tests {
             "git diff --no-index '--output' /tmp/result.patch /tmp/input-a /tmp/input-b",
             "git diff \"--output=/tmp/written.patch\" a b",
             "git diff --output\\=/tmp/written.patch",
+            "git -calias.status=!touch /tmp/pwned status",
+            "find . '-delete'",
+            "yq '-i' .x=1 file.yaml",
+            "yq '.x' file.yaml",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
