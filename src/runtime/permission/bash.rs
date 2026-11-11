@@ -189,8 +189,9 @@ fn is_find_write_option(token: &str) -> bool {
 }
 
 fn is_fd_exec_option(token: &str) -> bool {
-    // Spaced and glued forms (`-x rm`, `-xrm`, `--execrm`, `--exec-batch=…`).
-    token.starts_with("-x") || token.starts_with("--exec")
+    // Spaced and glued forms (`-x rm`, `-xrm`, `-Xrm`, `--execrm`, `--exec-batch=…`).
+    // `-X` is fd's short `--exec-batch` flag.
+    token.starts_with("-x") || token.starts_with("-X") || token.starts_with("--exec")
 }
 
 fn classify_git(args: &[&str]) -> BashReadonlyClass {
@@ -381,6 +382,8 @@ mod tests {
             "fd --exec rm {}",
             "fd --exec-batch rm",
             "fd -xrm",
+            "fd -X rm",
+            "fd -Xrm",
             "fd --execrm",
             "fd --exec-batch=rm",
         ] {
