@@ -734,10 +734,14 @@ impl<'a> AgentExecution<'a> {
         {
             Ok(settled) => settled,
             Err(error) => {
-                // Deferred group errors can commit a complete batch then return
-                // Err. Cancellation still wins over Failure/ControlLost once
-                // the batch is structurally settled.
-                if self.cancellation.is_cancelled() {
+                // Cancellation may win only over deferred Interaction failures
+                // (e.g. ControlLost after a committed sibling batch). Durable
+                // and conversation commit errors must still record through
+                // `commit_failure_terminal` so the coordinator keeps the
+                // durable-authority failure.
+                if self.cancellation.is_cancelled()
+                    && matches!(error, super::terminal::CanonicalCommitError::Interaction(_))
+                {
                     return Some(Terminal::Cancelled {
                         reason: self.cancellation.reason(),
                     });
