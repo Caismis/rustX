@@ -6,6 +6,7 @@ use rustx::model::session::AuxiliaryModelPolicy;
 use rustx::model::types::ModelProtocol;
 use rustx::skills::{SkillDiscovery, SkillDiscoveryConfig};
 use rustx::tools::Workspace;
+use rustx::tools::types::ToolExecutionPolicy;
 
 fn examples_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime")

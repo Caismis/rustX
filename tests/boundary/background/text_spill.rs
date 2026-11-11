@@ -73,7 +73,9 @@ fn fixture() -> IssueFixture {
             background: runtime.background().clone(),
             subagents: None,
         },
-        NativeToolPolicies::uniform(ToolInvocationPolicy::new(ToolExecutionPolicy::ModelSelectable),
+        NativeToolPolicies::uniform(ToolInvocationPolicy::new(
+            ToolExecutionPolicy::ModelSelectable,
+        )),
     )
     .expect("native tools");
     IssueFixture {

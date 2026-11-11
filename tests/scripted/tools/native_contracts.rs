@@ -353,7 +353,7 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_job_control_policy()
                 background: runtime.background().clone(),
                 subagents: None,
             },
-            NativeToolPolicies::uniform(ToolInvocationPolicy::new(execution),
+            NativeToolPolicies::uniform(ToolInvocationPolicy::new(execution)),
         )
         .expect("ordinary native policy registration");
 
@@ -396,8 +396,6 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_job_control_policy()
         assert_eq!(
             execution.execution_policy,
             ToolExecutionPolicy::ForegroundOnly
-        );
-        assert_eq!(
         );
     }
 }
@@ -455,18 +453,8 @@ fn independent_native_execution_policies_coexist_in_one_registry() {
         ToolExecutionPolicy::ModelSelectable
     );
     assert_eq!(
-    );
-    assert_eq!(
-    );
-    assert_eq!(
-    );
-    assert_eq!(
-    );
-    assert_eq!(
         policy("grep").execution_policy,
         ToolExecutionPolicy::BackgroundOnly
-    );
-    assert_eq!(
     );
 }
 
