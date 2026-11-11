@@ -47,8 +47,10 @@ lock, disk-full or permission failure is relabeled as success or retried blindly
 
 SQLite owns WAL/SHM files, reader snapshots and checkpoint state. No application
 code deletes a live sidecar or treats the main database alone as a live snapshot.
-The default 1,000-page automatic checkpoint remains; no checkpoint is forced on
-each semantic write. Last connection close may checkpoint and remove sidecars.
+The writer uses a 2,000-page automatic checkpoint window (about 4 MiB at the
+2 KiB page size); no checkpoint is forced on each semantic write. This allows
+more repeated page updates to be combined before writing the main database.
+Last connection close may checkpoint and remove sidecars.
 A read-only connection that outlives the writer can leave WAL files after all
 handles close; SQLite recovers them on reopen and a later writable close can
 complete checkpoint/cleanup. This is not authority to unlink those files. The
