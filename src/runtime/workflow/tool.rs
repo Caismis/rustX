@@ -210,10 +210,13 @@ impl WorkflowRuntime {
             )?;
         }
         let workspace_root = services.runtime.workspace().root();
-        let resource_permission = prepared
-            .resource_permissions
-            .unwrap_or_default()
-            .for_mode(services.lifecycle.approval_mode());
+        let resource_permission =
+            crate::runtime::permission::effective_invocation_resource_permission(
+                prepared.resource_permissions,
+                &prepared.resource_permission_targets,
+                &prepared.invocation.arguments,
+                services.lifecycle.approval_mode(),
+            );
         let view = crate::agent::PreToolView {
             conversation_id: &run.run_id.conversation_id,
             execution: services.execution.clone(),

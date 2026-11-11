@@ -27,6 +27,7 @@ pub use matrix::{BuiltinPermissionAction, BuiltinToolKind, builtin_action_for};
 pub use mode::ExecutionPermissionMode;
 pub use reminder::{PermissionReminderState, permission_reminder_text};
 pub use resource::{
-    ResourcePermissionSet, ResourcePermissionValue, resolve_resource_permission,
+    ResourcePermissionSet, ResourcePermissionValue, effective_invocation_resource_permission,
+    resolve_resource_permission, stricter_resource_permission,
 };
 pub use review::{PermissionReviewVerdict, accept_permission_review};

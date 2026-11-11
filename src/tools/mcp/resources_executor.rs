@@ -106,12 +106,23 @@ pub(crate) fn resource_definitions(
     if sources.is_empty() {
         return Vec::new();
     }
-    // Single-source catalogs can freeze the authored source/exact permission
-    // object onto the helper registration. Multi-source aggregates keep matrix
-    // defaults until a later per-target authorize path owns argument routing.
+    // Single-source catalogs freeze the authored source/exact permission object
+    // onto the helper registration. Multi-source catalogs freeze per-server
+    // objects so named reads authorize the selected target and aggregates take
+    // the strictest queried source.
     let frozen_permissions = (sources.len() == 1)
         .then(|| sources.values().next().cloned())
         .flatten();
+    let target_permissions: Vec<(String, Option<_>, BTreeMap<String, _>)> = sources
+        .iter()
+        .map(|(source, binding)| {
+            (
+                source_server_id(source).as_str().to_owned(),
+                binding.permissions,
+                binding.tool_permissions.clone(),
+            )
+        })
+        .collect();
     let sources = Arc::new(sources);
     let servers: Vec<_> = sources.keys().map(source_server_id).collect();
     let servers = serde_json::to_string(&servers).expect("server identities serialize");
@@ -150,6 +161,16 @@ pub(crate) fn resource_definitions(
                 .or(binding.permissions)
             {
                 registration = registration.with_resource_permissions(set);
+            }
+        } else {
+            let mut targets = BTreeMap::new();
+            for (server, permissions, tool_permissions) in &target_permissions {
+                if let Some(set) = tool_permissions.get(name).copied().or(*permissions) {
+                    targets.insert(server.clone(), set);
+                }
+            }
+            if !targets.is_empty() {
+                registration = registration.with_resource_permission_targets(targets);
             }
         }
         registration

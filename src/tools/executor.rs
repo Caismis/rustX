@@ -24,7 +24,7 @@
 //! metadata subsystem: only the concrete contracts the current tool plane
 //! needs.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use futures_util::FutureExt;
@@ -729,6 +729,10 @@ pub struct PreparedInvocation {
     /// Winning authored resource permission object (exact-tool or source
     /// default), before mode selection. `None` means product matrix defaults.
     pub resource_permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+    /// Per-server authored permission objects for multi-source resource helpers.
+    /// Empty unless the registration freezes more than one MCP resource target.
+    pub resource_permission_targets:
+        BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
 }
 
 /// The immutable validating tool registry of one attempt's capability set.
@@ -758,18 +762,8 @@ impl std::fmt::Debug for ToolRegistry {
 
 impl Clone for ToolRegistry {
     fn clone(&self) -> Self {
-        let mut clone = Self::new();
-        for entry in &self.entries {
-            clone
-                .register_with_execution_metadata(
-                    entry.definition.clone(),
-                    entry.executor.clone(),
-                    entry.normalizer,
-                    entry.foreground,
-                )
-                .expect("a validated registry clones without registration errors");
-        }
-        clone
+        Self::from_registrations(self.entries.iter().cloned())
+            .expect("a validated registry clones without registration errors")
     }
 }
 
@@ -790,6 +784,9 @@ pub(crate) struct ToolRegistration {
     pub(crate) normalizer: BusinessArgumentNormalizer,
     /// Exact-or-source resource permission object frozen with the registration.
     pub(crate) resource_permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+    /// Per-server permission objects for multi-source native resource helpers.
+    pub(crate) resource_permission_targets:
+        BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
 }
 
 impl std::fmt::Debug for ToolRegistration {
@@ -798,6 +795,10 @@ impl std::fmt::Debug for ToolRegistration {
             .field("definition", &self.definition)
             .field("foreground", &self.foreground)
             .field("resource_permissions", &self.resource_permissions)
+            .field(
+                "resource_permission_targets",
+                &self.resource_permission_targets,
+            )
             .finish_non_exhaustive()
     }
 }
@@ -814,6 +815,18 @@ impl ToolRegistration {
         permissions: crate::runtime::permission::ResourcePermissionSet,
     ) -> Self {
         self.resource_permissions = Some(permissions);
+        self.resource_permission_targets.clear();
+        self
+    }
+
+    /// Attaches per-server permission objects for multi-source resource helpers.
+    #[must_use]
+    pub(crate) fn with_resource_permission_targets(
+        mut self,
+        targets: BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
+    ) -> Self {
+        self.resource_permissions = None;
+        self.resource_permission_targets = targets;
         self
     }
     /// Prepares a fixed foreground invocation against an exact frozen
@@ -866,6 +879,7 @@ impl ToolRegistration {
             executor,
             normalizer: identity_arguments,
             resource_permissions: None,
+            resource_permission_targets: BTreeMap::new(),
         }
     }
 }
@@ -1033,6 +1047,7 @@ impl ToolRegistry {
             executor,
             normalizer,
             resource_permissions: None,
+            resource_permission_targets: BTreeMap::new(),
         });
         Ok(())
     }
@@ -1050,6 +1065,7 @@ impl ToolRegistry {
             .last_mut()
             .expect("register always pushes one entry");
         last.resource_permissions = Some(permissions);
+        last.resource_permission_targets.clear();
         Ok(())
     }
 
@@ -1095,19 +1111,19 @@ impl ToolRegistry {
         let mut registry = Self::new();
         for registration in registrations {
             let permissions = registration.resource_permissions;
+            let targets = registration.resource_permission_targets;
             registry.register_with_execution_metadata(
                 registration.definition,
                 registration.executor,
                 registration.normalizer,
                 registration.foreground,
             )?;
-            if let Some(permissions) = permissions {
-                registry
-                    .entries
-                    .last_mut()
-                    .expect("register always pushes one entry")
-                    .resource_permissions = Some(permissions);
-            }
+            let last = registry
+                .entries
+                .last_mut()
+                .expect("register always pushes one entry");
+            last.resource_permissions = permissions;
+            last.resource_permission_targets = targets;
         }
         Ok(registry)
     }
@@ -1273,6 +1289,7 @@ impl ToolRegistry {
             // generation would declare otherwise.
             progress_capability: entry.executor.progress_capability(),
             resource_permissions: entry.resource_permissions,
+            resource_permission_targets: entry.resource_permission_targets.clone(),
         })
     }
 

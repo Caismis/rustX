@@ -1231,10 +1231,13 @@ impl ParallelAuthFacts {
             .prepared
             .as_ref()
             .expect("a policy decision requires a preflight-ready invocation");
-        let resource_permission = prepared
-            .resource_permissions
-            .unwrap_or_default()
-            .for_mode(execution.permission_reminder.mode);
+        let resource_permission =
+            crate::runtime::permission::effective_invocation_resource_permission(
+                prepared.resource_permissions,
+                &prepared.resource_permission_targets,
+                &prepared.invocation.arguments,
+                execution.permission_reminder.mode,
+            );
         Self {
             slot_index,
             conversation_id: execution.request.conversation_id.clone(),

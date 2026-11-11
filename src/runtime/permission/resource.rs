@@ -1,5 +1,7 @@
 //! Per-resource three-mode permission overrides.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::mode::ExecutionPermissionMode;
@@ -90,6 +92,58 @@ pub fn resolve_resource_permission(
         .for_mode(mode)
 }
 
+/// Selects the stricter of two mode-local resource permission values.
+///
+/// Aggregate multi-source helpers require approval when any queried source
+/// requires it, so Deny beats Ask, Ask beats Default, and Default beats Allow.
+#[must_use]
+pub const fn stricter_resource_permission(
+    left: ResourcePermissionValue,
+    right: ResourcePermissionValue,
+) -> ResourcePermissionValue {
+    use ResourcePermissionValue::{Allow, Ask, Default, Deny};
+    match (left, right) {
+        (Deny, _) | (_, Deny) => Deny,
+        (Ask, _) | (_, Ask) => Ask,
+        (Default, _) | (_, Default) => Default,
+        (Allow, Allow) => Allow,
+    }
+}
+
+/// Resolves the mode-local permission for one prepared invocation.
+///
+/// A frozen single-source object wins. Otherwise a non-empty per-server map
+/// resolves the named `server` argument, or the strictest value across every
+/// target when the call aggregates without a server.
+#[must_use]
+pub fn effective_invocation_resource_permission(
+    frozen: Option<ResourcePermissionSet>,
+    targets: &BTreeMap<String, ResourcePermissionSet>,
+    arguments: &serde_json::Value,
+    mode: ExecutionPermissionMode,
+) -> ResourcePermissionValue {
+    if let Some(set) = frozen {
+        return set.for_mode(mode);
+    }
+    if targets.is_empty() {
+        return ResourcePermissionValue::Default;
+    }
+    if let Some(server) = arguments.get("server").and_then(serde_json::Value::as_str) {
+        return targets
+            .get(server)
+            .copied()
+            .unwrap_or_default()
+            .for_mode(mode);
+    }
+    targets
+        .values()
+        .map(|set| set.for_mode(mode))
+        .fold(
+            ResourcePermissionValue::Allow,
+            stricter_resource_permission,
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +179,45 @@ mod tests {
         assert_eq!(
             resolve_resource_permission(None, None, ExecutionPermissionMode::FullAccess),
             ResourcePermissionValue::Default
+        );
+    }
+
+    #[test]
+    fn named_target_uses_selected_server_object() {
+        let mut targets = BTreeMap::new();
+        targets.insert(
+            "alpha".into(),
+            ResourcePermissionSet {
+                plan: ResourcePermissionValue::Deny,
+                automatic: ResourcePermissionValue::Deny,
+                full_access: ResourcePermissionValue::Deny,
+            },
+        );
+        targets.insert(
+            "beta".into(),
+            ResourcePermissionSet {
+                plan: ResourcePermissionValue::Allow,
+                automatic: ResourcePermissionValue::Allow,
+                full_access: ResourcePermissionValue::Allow,
+            },
+        );
+        assert_eq!(
+            effective_invocation_resource_permission(
+                None,
+                &targets,
+                &serde_json::json!({"server":"beta"}),
+                ExecutionPermissionMode::Automatic,
+            ),
+            ResourcePermissionValue::Allow
+        );
+        assert_eq!(
+            effective_invocation_resource_permission(
+                None,
+                &targets,
+                &serde_json::json!({}),
+                ExecutionPermissionMode::Automatic,
+            ),
+            ResourcePermissionValue::Deny
         );
     }
 }
