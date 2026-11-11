@@ -123,7 +123,7 @@ impl Outbound {
             notification.notification,
             super::protocol::NotificationMethod::Auxiliary { .. }
         ) {
-            serialize_record_limit(
+            serialize_control_record_limit(
                 &notification,
                 crate::runtime::auxiliary::delivery::RESULT_RECORD_BYTES_MAX,
             )
@@ -134,7 +134,7 @@ impl Outbound {
             }
             #[cfg(not(test))]
             {
-                serialize_record(&notification)
+                serialize_control_record_limit(&notification, MAX_MESSAGE_BYTES)
             }
         };
         match encoded {
@@ -209,7 +209,7 @@ impl Outbound {
             }
             _ => MAX_MESSAGE_BYTES,
         };
-        let (record, success) = match serialize_record_limit(&reply.response, limit) {
+        let (record, success) = match serialize_control_record_limit(&reply.response, limit) {
             Ok(record) => (
                 record,
                 matches!(reply.response, super::protocol::Response::Success(_)),
@@ -507,6 +507,19 @@ fn serialize_envelope_record(value: &impl super::wire::Envelope) -> io::Result<S
     serialize_record(&super::wire::bounded_envelope(value))
 }
 
+fn serialize_control_record_limit(
+    value: &(impl super::wire::Envelope + Serialize),
+    limit: usize,
+) -> io::Result<String> {
+    // A successful bounded wire record also fits the native record budget:
+    // wire conversion only adds bytes. On failure, retain the public native
+    // size-before-numeric-validation error order, including smaller limits.
+    match serialize_record_limit(&super::wire::bounded_envelope(value), limit) {
+        Ok(record) => Ok(record),
+        Err(_) => serialize_record_limit(value, limit),
+    }
+}
+
 pub(super) fn serialize_record(value: &impl Serialize) -> io::Result<String> {
     serialize_record_limit(value, MAX_MESSAGE_BYTES)
 }
@@ -610,7 +623,7 @@ pub(crate) mod notification_fault {
             ..
         } = &notification.notification
         else {
-            return serialize_envelope_record(notification);
+            return serialize_control_record_limit(notification, MAX_MESSAGE_BYTES);
         };
         let canonical_user = event.facts().iter().any(|fact| match fact {
             RuntimeClientEvent::MessageCommitted { message, .. } => {
@@ -622,10 +635,10 @@ pub(crate) mod notification_fault {
             _ => false,
         });
         if !canonical_user {
-            return serialize_envelope_record(notification);
+            return serialize_control_record_limit(notification, MAX_MESSAGE_BYTES);
         }
         let Some(fault) = faults().lock().unwrap().remove(registration_id) else {
-            return serialize_envelope_record(notification);
+            return serialize_control_record_limit(notification, MAX_MESSAGE_BYTES);
         };
         fault.fired.store(true, Ordering::SeqCst);
         let mut record = Record(Vec::new(), MAX_MESSAGE_BYTES);
@@ -875,6 +888,63 @@ mod tests {
         let transport = serialize_envelope_record(&value).unwrap();
         assert_eq!(crate::app_server::wire::take_native_passes(), 1);
         assert_eq!(transport, public);
+    }
+
+    #[test]
+    fn control_records_encode_success_once_and_preserve_wire_bytes() {
+        for size in [8, 64, 512] {
+            let value = response("é\n\"\\".repeat(size));
+            crate::app_server::wire::take_native_passes();
+            let original = serialize_record_limit(&value, MAX_MESSAGE_BYTES).unwrap();
+            assert_eq!(crate::app_server::wire::take_native_passes(), 2);
+            let actual = serialize_control_record_limit(&value, MAX_MESSAGE_BYTES).unwrap();
+            assert_eq!(crate::app_server::wire::take_native_passes(), 1);
+            assert_eq!(actual, original);
+            let outbound = Outbound::reply(Reply {
+                response: value,
+                publication: None,
+                association: None,
+                registration: None,
+                may_have_committed: false,
+            })
+            .unwrap();
+            assert_eq!(crate::app_server::wire::take_native_passes(), 1);
+            assert_eq!(outbound.record, original);
+        }
+        let notification = Notification {
+            jsonrpc: JsonRpcVersion::V2,
+            notification: NotificationMethod::ScheduleChanged {},
+        };
+        let expected = serialize_record_limit(&notification, MAX_MESSAGE_BYTES).unwrap();
+        crate::app_server::wire::take_native_passes();
+        let outbound = Outbound::notification((notification, None)).unwrap();
+        assert_eq!(crate::app_server::wire::take_native_passes(), 1);
+        assert_eq!(outbound.record, expected);
+    }
+
+    #[test]
+    fn control_record_failure_preserves_native_size_and_numeric_error_order() {
+        for size in [8, MAX_MESSAGE_BYTES] {
+            let value = Response::Success(Box::new(Success {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(i64::MAX),
+                result: MethodResult::ArtifactBytes {
+                    data: "x".repeat(size),
+                },
+            }));
+            let original = serialize_record_limit(&value, MAX_MESSAGE_BYTES).unwrap_err();
+            let actual = serialize_control_record_limit(&value, MAX_MESSAGE_BYTES).unwrap_err();
+            assert_eq!(actual.kind(), original.kind());
+            assert_eq!(actual.to_string(), original.to_string());
+            assert_eq!(
+                original.kind(),
+                if size == MAX_MESSAGE_BYTES {
+                    io::ErrorKind::FileTooLarge
+                } else {
+                    io::ErrorKind::InvalidData
+                }
+            );
+        }
     }
 
     #[test]

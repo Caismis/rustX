@@ -992,7 +992,7 @@ fn tool_owner(
     position: u64,
     offset: u64,
 ) -> Result<MessageHeader, ConversationStoreError> {
-    let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM transcript_entries WHERE reference_kind='message' AND ledger_position=?1 AND journal_position<=?2",params![position,at.read.journal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row_cached("SELECT header_json FROM transcript_entries WHERE reference_kind='message' AND ledger_position=?1 AND journal_position<=?2",params![position,at.read.journal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("oversized canonical Tool owner header"));
     }
