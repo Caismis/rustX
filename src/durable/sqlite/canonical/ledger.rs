@@ -117,6 +117,8 @@ pub(in crate::durable::sqlite) fn materialize_head(
     checkpoint: Option<crate::durable::projection::ProjectionCheckpoint>,
 ) -> Result<DurableConversationHead, ConversationStoreError> {
     use crate::context::checkpoint::CheckpointMessage;
+    #[cfg(test)]
+    HEAD_MATERIALIZATIONS.with(|count| count.set(count.get() + 1));
     let mut ids = Vec::new();
     let mut seen = BTreeSet::new();
     let base = checkpoint
@@ -163,6 +165,14 @@ pub(in crate::durable::sqlite) fn materialize_head(
             .map_or(0, |checkpoint| checkpoint.activation.activation.0),
         active_message_ids: ids,
     })
+}
+
+#[cfg(test)]
+thread_local! { static HEAD_MATERIALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+#[cfg(test)]
+pub(in crate::durable::sqlite) fn take_head_materializations() -> usize {
+    HEAD_MATERIALIZATIONS.with(|count| count.replace(0))
 }
 
 /// Appending needs the frontier, not an owned copy of every active identity.

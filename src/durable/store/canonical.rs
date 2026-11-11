@@ -846,6 +846,13 @@ pub trait CanonicalStore: Send + Sync + 'static {
     /// Loads the current Surface head and checkpoint metadata without
     /// materializing historical revisions.
     fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError>;
+    /// Validate the current canonical head without returning its identities.
+    /// Recovery uses this when no canonical Tool calls need repair.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the native head is inconsistent or cannot be read.
+    fn validate_head(&self) -> Result<(), ConversationStoreError>;
     /// Prove that every exact Ledger identity is an ordinary human input.
     /// Reads authorship metadata only; content is not part of this projection.
     fn messages_are_human_inputs(&self, ids: &[MessageId]) -> Result<bool, ConversationStoreError>;
