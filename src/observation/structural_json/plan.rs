@@ -2,6 +2,22 @@
 use super::{Value, resolve};
 use std::collections::HashMap;
 
+#[cfg(test)]
+thread_local! {
+    static TAG_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static PROPERTY_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_tag_probes() -> usize {
+    TAG_PROBES.with(|count| count.replace(0))
+}
+
+#[cfg(test)]
+pub(crate) fn take_property_work() -> (usize, usize) {
+    PROPERTY_WORK.with(|count| count.replace((0, 0)))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[cfg_attr(test, derive(serde::Serialize))]
 pub(crate) enum Unsigned {
@@ -69,6 +85,9 @@ struct Node {
     items_object: bool,
     prefix: Span,
     branches: [Span; 3],
+    // Derived solely from immutable branch descriptors and never persisted.
+    #[serde(skip)]
+    wire_tags: std::sync::OnceLock<Box<[Span]>>,
 }
 impl Default for Node {
     fn default() -> Self {
@@ -82,16 +101,66 @@ impl Default for Node {
             items_object: false,
             prefix: Span::default(),
             branches: [Span::default(); 3],
+            wire_tags: std::sync::OnceLock::new(),
         }
     }
 }
 
 impl Node {
+    fn wire_tags(&self, plan: &Plan) -> &[Span] {
+        if self.branches.iter().all(|span| span.start == span.end) {
+            return &[];
+        }
+        self.wire_tags.get_or_init(|| {
+            let mut visited = vec![false; plan.nodes.len()];
+            let mut pending: Vec<u32> = self
+                .branches
+                .iter()
+                .flat_map(|span| span.slice(&plan.indices).iter().copied())
+                .collect();
+            let mut tags = Vec::new();
+            while let Some(index) = pending.pop() {
+                if std::mem::replace(&mut visited[index as usize], true) {
+                    continue;
+                }
+                let node = &plan.nodes[index as usize];
+                tags.extend(
+                    node.properties
+                        .slice(&plan.properties)
+                        .iter()
+                        .filter(|property| property.constant.is_some())
+                        .map(|property| property.name),
+                );
+                pending.extend(
+                    node.branches
+                        .iter()
+                        .flat_map(|span| span.slice(&plan.indices).iter().copied()),
+                );
+            }
+            tags.sort_unstable_by(|left, right| {
+                left.text(&plan.names).cmp(right.text(&plan.names))
+            });
+            tags.dedup_by(|left, right| left.text(&plan.names) == right.text(&plan.names));
+            tags.into_boxed_slice()
+        })
+    }
     fn property<'a>(&self, key: &str, plan: &'a Plan) -> Option<&'a Property> {
+        #[cfg(test)]
+        PROPERTY_WORK.with(|count| {
+            let (lookups, comparisons) = count.get();
+            count.set((lookups + 1, comparisons));
+        });
         let properties = self.properties.slice(&plan.properties);
         let names = self.property_names.slice(&plan.indices);
         let index = names
-            .binary_search_by(|index| properties[*index as usize].name.text(&plan.names).cmp(key))
+            .binary_search_by(|index| {
+                #[cfg(test)]
+                PROPERTY_WORK.with(|count| {
+                    let (lookups, comparisons) = count.get();
+                    count.set((lookups, comparisons + 1));
+                });
+                properties[*index as usize].name.text(&plan.names).cmp(key)
+            })
             .ok()?;
         properties.get(names[index] as usize)
     }
@@ -255,6 +324,7 @@ impl Builder {
             items_object: schema["items"].is_object(),
             prefix,
             branches,
+            wire_tags: std::sync::OnceLock::new(),
         };
         index
     }
@@ -563,27 +633,46 @@ impl<'a> View<'a> {
         Ok(value)
     }
     pub(crate) fn has_wire_tag(self, key: &str) -> bool {
-        for kind in 0..3 {
-            let mut index = 0;
-            while let Some(branch) = self.branch(kind, index) {
-                index += 1;
-                if branch.tag(key).is_some() || branch.has_wire_tag(key) {
-                    return true;
+        match self {
+            Self::Compiled(plan, index) => plan.nodes[index as usize]
+                .wire_tags(plan)
+                .binary_search_by(|name| {
+                    #[cfg(test)]
+                    TAG_PROBES.with(|count| count.set(count.get() + 1));
+                    name.text(&plan.names).cmp(key)
+                })
+                .is_ok(),
+            #[cfg(test)]
+            Self::Interpreted { .. } => {
+                for kind in 0..3 {
+                    let mut index = 0;
+                    while let Some(branch) = self.branch(kind, index) {
+                        index += 1;
+                        if branch.tag(key).is_some() || branch.has_wire_tag(key) {
+                            return true;
+                        }
+                    }
                 }
+                false
             }
         }
-        false
     }
     pub(crate) fn wire_variant(self, key: &str, value: &Value) -> Option<Self> {
+        self.wire_variant_matching(key, &|expected| expected == value)
+    }
+    pub(crate) fn wire_variant_str(self, key: &str, value: &str) -> Option<Self> {
+        self.wire_variant_matching(key, &|expected| expected.as_str() == Some(value))
+    }
+    fn wire_variant_matching(self, key: &str, matches: &impl Fn(&Value) -> bool) -> Option<Self> {
         for kind in 0..3 {
             let mut index = 0;
             while let Some(branch) = self.branch(kind, index) {
                 index += 1;
                 if let Some(expected) = branch.tag(key) {
-                    if expected == value {
+                    if matches(expected) {
                         return Some(branch);
                     }
-                } else if let Some(selected) = branch.wire_variant(key, value) {
+                } else if let Some(selected) = branch.wire_variant_matching(key, matches) {
                     return Some(selected);
                 }
             }

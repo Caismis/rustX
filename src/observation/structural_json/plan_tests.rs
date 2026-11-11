@@ -1,6 +1,41 @@
 use super::tests::property_encoding;
 use super::*;
 
+#[test]
+fn compiled_wire_tag_names_cover_nested_branches_without_direct_properties() {
+    let schema = serde_json::json!({
+        "properties": {"root_only": {"const": "root"}},
+        "oneOf": [
+            {"properties": {"kind": {"const": "one"}, "ordinary": {"type": "string"}}},
+            {"anyOf": [
+                {"properties": {"type": {"const": null}}},
+                {"allOf": [{"properties": {"state": {"const": false}}}]}
+            ]}
+        ]
+    });
+    let plan = plan::Plan::new(&schema, &schema);
+    let root = plan.root();
+    for key in ["kind", "type", "state"] {
+        assert!(root.has_wire_tag(key), "{key}");
+    }
+    for key in ["root_only", "ordinary", "absent"] {
+        assert!(!root.has_wire_tag(key), "{key}");
+    }
+    let selected = |view: Option<plan::View<'_>>| match view {
+        Some(plan::View::Compiled(_, index)) => Some(index),
+        _ => None,
+    };
+    for key in ["kind", "type", "state", "absent"] {
+        for value in ["one", "other", "null", "false"] {
+            assert_eq!(
+                selected(root.wire_variant_str(key, value)),
+                selected(root.wire_variant(key, &serde_json::json!(value))),
+                "{key}: {value}"
+            );
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Recursive {
