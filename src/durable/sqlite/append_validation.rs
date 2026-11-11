@@ -8,6 +8,7 @@ use super::{
     canonical::ledger::materialize_head, nonnegative, storage,
 };
 use rusqlite::hooks::PreUpdateCase;
+use std::sync::atomic::AtomicBool;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Versions {
@@ -44,6 +45,11 @@ struct Certificate {
 }
 pub(super) struct Owner {
     epoch: AtomicU64,
+    /// Set once this connection observed a Ledger identity rewrite: an
+    /// identity update, a deletion, or a nested (trigger) insert. The durable
+    /// identity frontier then no longer proves the rows behind it, so every
+    /// later validation on this connection starts from the first row.
+    identity_rewritten: AtomicBool,
     installed_schema: u64,
     identity_columns: Option<[i32; 2]>,
     committed: Mutex<Option<Certificate>>,
@@ -62,6 +68,7 @@ impl Owner {
             .map_err(|_| storage("append identity columns unavailable"))?;
         Ok(Arc::new(Self {
             epoch: AtomicU64::new(0),
+            identity_rewritten: AtomicBool::new(false),
             installed_schema: Versions::read(connection)?.main_schema,
             identity_columns: Some(identity_columns),
             committed: Mutex::new(None),
@@ -71,6 +78,7 @@ impl Owner {
     pub(super) fn uninstalled() -> Arc<Self> {
         Arc::new(Self {
             epoch: AtomicU64::new(0),
+            identity_rewritten: AtomicBool::new(false),
             installed_schema: 0,
             identity_columns: None,
             committed: Mutex::new(None),
@@ -125,6 +133,17 @@ impl Owner {
             ) => true,
             _ => false,
         };
+        if invalidates
+            && table == "message_ledger"
+            && match change {
+                PreUpdateCase::Insert(new) => new.get_query_depth() != 0,
+                PreUpdateCase::Update { .. }
+                | PreUpdateCase::Delete(_)
+                | PreUpdateCase::Unknown => true,
+            }
+        {
+            self.identity_rewritten.store(true, Ordering::Release);
+        }
         if invalidates {
             let direct = match change {
                 PreUpdateCase::Delete(old) => old.get_query_depth() == 0,
@@ -197,7 +216,13 @@ impl<'a> Batch<'a> {
                     .active_message_ids
                     .len()
             } else {
-                super::canonical::ledger::validate_append_identities(transaction, ledger)?
+                let count = super::canonical::ledger::validate_append_identities(
+                    transaction,
+                    ledger,
+                    self.owner.identity_rewritten.load(Ordering::Acquire),
+                )?;
+                super::canonical::ledger::record_identity_frontier(transaction, ledger, count)?;
+                count
             }
         };
         self.proof = reusable.then_some(Certificate {

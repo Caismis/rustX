@@ -3442,6 +3442,31 @@ fn native_history_actual_leases_canonical_ledger_allocations_before_and_after_re
 }
 
 #[test]
+fn selected_history_at_capacity_rejects_the_next_canonical_message() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let messages: Vec<_> = (1..=8192).map(message).collect();
+    store.append_canonical_batch(&messages).unwrap();
+    assert_eq!(store.projected_history().unwrap().messages.len(), 8192);
+    store.append_canonical(&message(8193)).unwrap();
+    let error = store.projected_history().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("historical Tail materialization exceeds bound"),
+        "unexpected failure: {error}"
+    );
+    *store.conn.manifest.history.lock().unwrap() = None;
+    let error = store.projected_history().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("historical Tail materialization exceeds bound"),
+        "unexpected cold failure: {error}"
+    );
+}
+
+#[test]
 fn compaction_items_are_materialized_from_the_exact_checkpoint_and_tail() {
     let store = store();
     let initial: Vec<_> = (1..=8).map(message).collect();
@@ -3500,14 +3525,36 @@ fn ordinary_recovery_reads_no_completed_canonical_bodies_at_8_64_512_4096() {
         let messages: Vec<_> = (1..=h).map(message).collect();
         store.initialize(&messages).unwrap();
         super::super::canonical::ledger::take_body_loads();
+        super::super::canonical::ledger::take_head_materializations();
         super::super::compaction_resources::take_body_decodes();
         let evidence = crate::runtime::recovery::RecoveryEvidence::reconstruct(&store).unwrap();
         assert!(evidence.tool_repair_messages().is_empty());
+        assert_eq!(
+            super::super::canonical::ledger::take_head_materializations(),
+            0,
+            "{h}"
+        );
         assert_eq!(super::super::canonical::ledger::take_body_loads(), 0, "{h}");
         assert_eq!(
             super::super::compaction_resources::take_body_decodes(),
             0,
             "{h}"
+        );
+    }
+}
+
+#[test]
+fn recovery_rejects_corrupt_canonical_identity_without_pending_tools() {
+    for expression in ["zeroblob(4097)", "x'ff'", "CAST(x'ff' AS TEXT)"] {
+        let store = store();
+        store.initialize(&[message(1)]).unwrap();
+        store.lock().unwrap().execute_batch(&format!(
+            "PRAGMA foreign_keys=OFF; UPDATE message_ledger SET message_id={expression}; PRAGMA foreign_keys=ON"
+        )).unwrap();
+        assert!(store.load_head().is_err(), "{expression}");
+        assert!(
+            crate::runtime::recovery::RecoveryEvidence::reconstruct(&store).is_err(),
+            "{expression}"
         );
     }
 }

@@ -2,10 +2,12 @@
 //! The publisher observes every node of a Session while retaining only a weak catalog.
 use std::sync::Weak;
 
+#[cfg(test)]
 use chrono::{DateTime, Utc};
 
 #[cfg(test)]
 use crate::message::types::MessageBlock;
+#[cfg(test)]
 use crate::message::types::{InboundKind, UserMessageBlock, UserSource};
 use crate::runtime::conversation_runtime::ConversationRuntime;
 #[cfg(test)]
@@ -13,6 +15,7 @@ use crate::runtime::observation::ConversationObservation;
 
 use super::session::{SessionCatalog, SessionId};
 
+#[cfg(test)]
 pub(crate) fn human_message_time(user: &UserMessageBlock) -> Option<DateTime<Utc>> {
     (user.kind == InboundKind::Message && user.source == UserSource::Human)
         .then_some(user.timestamp)

@@ -283,7 +283,7 @@ impl RuntimeInner {
             if let Some(fanout) = self.pending.get() {
                 fanout.child_settled();
             }
-            state.conversation = Some(result.conversation);
+            state.conversation.restore(result.conversation);
             if let Some(diagnostic) = durable_failure {
                 let operation = match result.durable_failure_kind {
                     Some(crate::agent::DurableFailureKind::Compaction) => {

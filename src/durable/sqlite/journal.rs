@@ -468,6 +468,12 @@ impl JournalStore for SqliteConversationStore {
         }
         Ok(events)
     }
+    fn recovery_frontier(
+        &self,
+    ) -> Result<crate::runtime::recovery::RecoveryFrontier, ConversationStoreError> {
+        let connection = self.lock()?;
+        super::recovery_frontier::authenticated(&connection)
+    }
     fn read_events(
         &self,
         after_sequence: Option<u64>,
@@ -477,7 +483,7 @@ impl JournalStore for SqliteConversationStore {
         let after = after_sequence.unwrap_or(0);
         let limit = i64::try_from(limit).map_err(|_| storage("event page limit is too large"))?;
         let mut statement = connection
-            .prepare(
+            .prepare_cached(
                 "SELECT sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json
                  FROM events WHERE sequence > ?1 ORDER BY sequence LIMIT ?2",
             )
@@ -768,7 +774,7 @@ pub(in crate::durable::sqlite) fn persist_event_tx_with_requests(
         ));
     }
     let json = encode(&event, "runtime event")?;
-    if let Some(inserted) = event_insert::prepared(
+    let persisted = if let Some(inserted) = event_insert::prepared(
         guard,
         transaction,
         conversation_id,
@@ -779,19 +785,23 @@ pub(in crate::durable::sqlite) fn persist_event_tx_with_requests(
         publication,
         previous_members,
     )? {
-        return Ok(PersistedEvent {
+        PersistedEvent {
             event,
             transcript_cursor: inserted.transcript_cursor,
             facts: inserted.facts,
-        });
-    }
-    persist_event_isolated(
-        transaction,
-        conversation_id,
-        event,
-        &json,
-        prepare_observation,
-    )
+        }
+    } else {
+        persist_event_isolated(
+            transaction,
+            conversation_id,
+            event,
+            &json,
+            prepare_observation,
+        )?
+    };
+    // The recovery frontier covers this fact in the same transaction.
+    super::recovery_frontier::advance(transaction, conversation_id, &persisted.event)?;
+    Ok(persisted)
 }
 
 /// Storage failure isolation uses the same current schema and domain builders.

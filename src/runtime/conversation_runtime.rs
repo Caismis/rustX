@@ -351,9 +351,12 @@ mod attempt;
 pub mod auxiliary;
 mod bootstrap;
 mod child;
+#[cfg(test)]
+mod cold_attach_work_tests;
 mod compaction;
 mod configuration;
 mod controls;
+mod conversation_slot;
 mod drain;
 mod durability;
 mod history;
@@ -804,10 +807,11 @@ struct CoordinatorState {
     /// **only between attempts**.
     ///
     /// Ownership is structural, not conventional: admission moves the state
-    /// out (`take`), so while an attempt runs this slot is `None` and the
+    /// out (`lend`), so while an attempt runs this slot is `Lent` and the
     /// coordinator physically cannot mutate a competing copy. Settlement
-    /// moves the authoritative state back in.
-    conversation: Option<ConversationState>,
+    /// moves the authoritative state back in. A reopened conversation starts
+    /// `Durable` and hydrates its active working set on first use.
+    conversation: conversation_slot::ConversationSlot,
     /// The current attempt slot (None = idle).
     current_attempt: Option<CurrentAttempt>,
     scheduled: Option<scheduled::CurrentScheduled>,

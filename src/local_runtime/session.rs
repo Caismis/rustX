@@ -30,7 +30,6 @@
 //! remains a monotonic usage classifier; unused Sessions are still listed and
 //! are never implicitly reused. See docs/durable-sessions.md for ownership.
 
-use crate::durable::JournalStore;
 use catalog_file::PublishedCatalog;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self};
@@ -822,29 +821,24 @@ impl SessionCatalog {
             }
             let store = SqliteConversationStore::recover_existing(id, &path, guard)
                 .map_err(SessionError::Store)?;
-            let mut cursor = None;
-            loop {
-                let page = store
-                    .read_events(cursor, 256)
-                    .map_err(SessionError::Store)?;
-                if page.events.is_empty() {
-                    break;
-                }
-                cursor = page.next_sequence;
-                for event in page.events {
-                    if let crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
-                        child_conversation_id,
-                        ..
-                    } = event.event
-                    {
-                        validate_id(child_conversation_id.as_str(), "child conversation")?;
-                        let path = crate::runtime::subagent::child_conversation_store_path(
-                            guard.root(),
-                            session_id,
-                            &child_conversation_id,
-                        );
-                        pending.push((child_conversation_id, path));
-                    }
+            // Child references are the ownership facts alone, read through
+            // the Journal kind index.
+            for event in
+                crate::durable::presentation::all_facts(&store, &["subagent_ownership_committed"])
+                    .map_err(SessionError::Store)?
+            {
+                if let crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
+                    child_conversation_id,
+                    ..
+                } = event.event
+                {
+                    validate_id(child_conversation_id.as_str(), "child conversation")?;
+                    let path = crate::runtime::subagent::child_conversation_store_path(
+                        guard.root(),
+                        session_id,
+                        &child_conversation_id,
+                    );
+                    pending.push((child_conversation_id, path));
                 }
             }
         }
