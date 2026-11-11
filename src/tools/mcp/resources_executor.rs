@@ -162,11 +162,16 @@ pub(crate) fn resource_definitions(
                 registration = registration.with_resource_permissions(set);
             }
         } else {
+            // Every authorized server must participate in aggregate strictness,
+            // including servers that inherit mode defaults (no authored object).
             let mut targets = BTreeMap::new();
             for (server, permissions, tool_permissions) in &target_permissions {
-                if let Some(set) = tool_permissions.get(name).copied().or(*permissions) {
-                    targets.insert(server.clone(), set);
-                }
+                let set = tool_permissions
+                    .get(name)
+                    .copied()
+                    .or(*permissions)
+                    .unwrap_or_default();
+                targets.insert(server.clone(), set);
             }
             if !targets.is_empty() {
                 registration = registration.with_resource_permission_targets(targets);

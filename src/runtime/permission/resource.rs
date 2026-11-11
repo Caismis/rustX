@@ -217,4 +217,27 @@ mod tests {
             ResourcePermissionValue::Deny
         );
     }
+
+    #[test]
+    fn aggregate_includes_default_servers_against_allow_overrides() {
+        let mut targets = BTreeMap::new();
+        targets.insert(
+            "allowing".into(),
+            ResourcePermissionSet {
+                plan: ResourcePermissionValue::Allow,
+                automatic: ResourcePermissionValue::Allow,
+                full_access: ResourcePermissionValue::Allow,
+            },
+        );
+        targets.insert("defaulting".into(), ResourcePermissionSet::default());
+        assert_eq!(
+            effective_invocation_resource_permission(
+                None,
+                &targets,
+                &serde_json::json!({}),
+                ExecutionPermissionMode::Automatic,
+            ),
+            ResourcePermissionValue::Default
+        );
+    }
 }

@@ -42,6 +42,9 @@ pub(crate) trait PermissionReviewPort: Send + Sync {
     ) -> BoxFuture<'a, PermissionReviewVerdict>;
 }
 
+/// Conversation-general Auxiliary capacity available to concurrent reviews.
+const PERMISSION_REVIEW_SLOTS: usize = 3;
+
 /// Production reviewer: one general Auxiliary Call per prepared invocation.
 pub(crate) struct AuxiliaryPermissionReviewer {
     executor: AuxiliaryExecutor,
@@ -49,6 +52,9 @@ pub(crate) struct AuxiliaryPermissionReviewer {
     timeout: ModelTimeoutPolicy,
     resource_revision: u64,
     cancellation: CancellationSignal,
+    /// Caps in-flight reviews to conversation-general capacity so concurrent
+    /// Authorize batches queue instead of hard-denying on Busy.
+    review_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl AuxiliaryPermissionReviewer {
@@ -66,6 +72,7 @@ impl AuxiliaryPermissionReviewer {
             timeout,
             resource_revision,
             cancellation,
+            review_slots: Arc::new(tokio::sync::Semaphore::new(PERMISSION_REVIEW_SLOTS)),
         }
     }
 }
@@ -199,15 +206,37 @@ async fn review_with_auxiliary(
             explanation: "permission review cancelled before start".into(),
         };
     }
+    // Queue behind sibling reviews before touching conversation-general
+    // capacity so a concurrent Authorize batch does not fail closed merely
+    // because more than three slots decided Review at once.
+    let review_slot = tokio::select! {
+        biased;
+        () = reviewer.cancellation.cancelled() => {
+            return PermissionReviewVerdict::Failed {
+                explanation: "permission review cancelled before start".into(),
+            };
+        }
+        permit = reviewer.review_slots.acquire() => match permit {
+            Ok(permit) => permit,
+            Err(_) => {
+                return PermissionReviewVerdict::Failed {
+                    explanation: "permission reviewer closed".into(),
+                };
+            }
+        },
+    };
     let scope = reviewer.executor.general_scope(3, &reviewer.cancellation);
     let reservation = match reviewer.executor.reserve_general(&scope) {
         Ok(reservation) => reservation,
         Err(error) => {
+            drop(review_slot);
             return PermissionReviewVerdict::Failed {
                 explanation: format!("permission reviewer unavailable: {error:?}"),
             };
         }
     };
+    // Keep the queue slot until this review finishes releasing capacity.
+    let _review_slot = review_slot;
     let prompt = build_prompt(view, matrix_reason);
     let request = match AuxiliaryOutputFormat::JsonSchema(review_schema()).prepare(ModelRequest {
         response_schema: None,
