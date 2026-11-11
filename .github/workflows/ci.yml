@@ -279,9 +279,11 @@ jobs:
     if: fromJSON(needs.plan.outputs.run)['rust-contracts']
     runs-on: ubuntu-26.04
     # Preparation and the two native builds consumed about 11 minutes in
-    # run 38883956631. Budget compilation and complete test execution here;
-    # individual liveness guards and the other lanes retain their bounds.
-    timeout-minutes: 45
+    # run 38883956631. Tip db4d4feea (run 43067970007) cancelled this lane at
+    # the prior 45m ceiling while unit/contract tests were still running;
+    # parent tip 9e8c7ed6 already spent ~35.5m end-to-end. Budget the added
+    # permission-mode and Bash AST surface with headroom for runner variance.
+    timeout-minutes: 60
 
     env:
       VERIFICATION_PROFILE: full
@@ -354,9 +356,11 @@ jobs:
     if: fromJSON(needs.plan.outputs.run)['rust-boundaries']
     runs-on: ubuntu-26.04
     # Cold libclang setup and both native builds exhausted 25 minutes in
-    # runs 39798438811 and 39811600857. Budget the complete test and coverage
-    # tail as well as preparation, with the same ceiling as rust-contracts.
-    timeout-minutes: 45
+    # runs 39798438811 and 39811600857. Tip db4d4feea (run 43067970007)
+    # cancelled this lane at the prior 45m ceiling during in-crate boundary
+    # execution after the larger permission-mode compile surface. Keep the
+    # same ceiling as rust-contracts so both Linux FULL lanes finish.
+    timeout-minutes: 60
 
     env:
       VERIFICATION_PROFILE: full
