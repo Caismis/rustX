@@ -27,6 +27,44 @@ pub enum FactScope {
     Interaction(String),
 }
 
+/// Every Journal fact of the given kinds, in Journal order, read through the
+/// kind index at one captured frontier.
+///
+/// # Errors
+///
+/// Returns the store failure of any page.
+pub fn all_facts(
+    store: &dyn crate::durable::JournalStore,
+    kinds: &[&'static str],
+) -> Result<Vec<crate::events::types::RuntimeEventEnvelope>, crate::durable::ConversationStoreError>
+{
+    const PAGE: usize = 128;
+    let through = store.presentation_frontier()?;
+    let mut facts = Vec::new();
+    let mut after = 0;
+    loop {
+        let page = store.read_presentation_events(&FactQuery {
+            scope: FactScope::All,
+            kinds: kinds.to_vec(),
+            before: None,
+            after,
+            ascending: true,
+            through,
+            limit: PAGE,
+        })?;
+        let full = page.len() == PAGE;
+        let Some(last) = page.last() else {
+            break;
+        };
+        after = last.sequence;
+        facts.extend(page);
+        if !full {
+            break;
+        }
+    }
+    Ok(facts)
+}
+
 /// A finite ordered query over authoritative facts at one captured frontier.
 #[derive(Debug, Clone)]
 pub struct FactQuery {
