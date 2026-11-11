@@ -441,20 +441,10 @@ impl AgentExecution<'_> {
                 },
             })
             .collect();
-        // Resolve every ready call through the one pre-tool policy boundary
-        // before scheduling any executor. This is a deliberately strong
-        // parallel-batch contract: all policy/interaction decisions for the
-        // committed batch settle in canonical call order before the existing
-        // sequential/parallel start frontier advances. The original
-        // PreparedInvocation remains in every slot unchanged.
-        self.resolve_pre_tool_decisions(&mut slots)
-            .await
-            .map_err(CanonicalCommitError::Interaction)?;
-        if self.cancellation.interaction_failed() {
-            return Err(CanonicalCommitError::Interaction(
-                InteractionFailure::ControlLost,
-            ));
-        }
+        // Issue #544: authorize each prepared invocation independently.
+        // Allowed work may start without waiting for unrelated Ask/Review
+        // siblings. Denied/cancelled slots settle their own result only.
+        // The original PreparedInvocation remains unchanged in every slot.
         let mut index = 0;
         while index < slots.len() {
             if self.cancellation.is_cancelled() {
@@ -465,6 +455,11 @@ impl AgentExecution<'_> {
                     index += 1;
                 }
                 Group::Sequential => {
+                    if slots[index].result.is_none() {
+                        self.authorize_slot(&mut slots[index])
+                            .await
+                            .map_err(CanonicalCommitError::Interaction)?;
+                    }
                     if slots[index].result.is_none() {
                         // This assignment is the per-call executor-start
                         // frontier. It is set before the existing start fact
@@ -507,54 +502,95 @@ impl AgentExecution<'_> {
                     index += 1;
                 }
                 Group::Parallel => {
-                    // Execution-start facts are emitted before any future is
-                    // created, so the loop owns `&mut self` emission and the
-                    // shared `&self` borrows of the spawned futures never
-                    // conflict.
+                    // Authorize siblings independently and start each allowed
+                    // call as soon as its decision is Allow, without waiting
+                    // for unrelated Ask/Review siblings.
                     let end = parallel_group_end(&slots, index);
-                    for slot in &mut slots[index..end] {
-                        // Cancellation can be requested by a synchronous
-                        // start-event observer while this group is being
-                        // announced. Stop the logical start frontier at the
-                        // first observed cancellation; the remaining slots
-                        // are filled by the canonical cancellation pass and
-                        // never acquire an execution future.
-                        if self.cancellation.is_cancelled() {
-                            break;
+                    let mut auth_futures = futures_util::stream::FuturesUnordered::new();
+                    for slot_index in index..end {
+                        if slots[slot_index].result.is_some() {
+                            continue;
                         }
-                        if slot.result.is_none() {
-                            // The slot crosses its authoritative start
-                            // frontier before the existing projection event.
-                            // A synchronous observer may cancel here; this
-                            // slot is still an in-flight cancellation, while
-                            // later siblings remain eligible for BeforeStart.
-                            slot.executor_started = true;
-                            self.emit(RuntimeEvent::ToolExecutionStarted {
-                                tool_call_id: slot.call.id.clone(),
-                                tool_id: slot.tool_id.clone(),
-                            });
-                            #[cfg(test)]
-                            self.park_after_tool_start();
+                        if self.cancellation.is_cancelled() {
+                            slots[slot_index].result =
+                                Some(cancelled_result(self.cancellation.reason()));
+                            continue;
+                        }
+                        let facts =
+                            ParallelAuthFacts::from_execution(slot_index, self, &slots[slot_index]);
+                        let lifecycle = self.lifecycle.clone();
+                        let cancellation = self.cancellation.execution_cancellation();
+                        auth_futures.push(Box::pin(async move {
+                            let outcome = authorize_owned(&lifecycle, &cancellation, &facts).await;
+                            (facts.slot_index, outcome)
+                        }));
+                    }
+                    let mut futures = futures_util::stream::FuturesUnordered::new();
+                    let mut remaining_auth = auth_futures.len();
+                    while remaining_auth > 0 {
+                        tokio::select! {
+                            biased;
+                            () = self.cancellation.cancelled() => break,
+                            Some((slot_index, outcome)) = auth_futures.next() => {
+                                remaining_auth -= 1;
+                                match outcome {
+                                    Ok(Some(result)) => {
+                                        slots[slot_index].result = Some(result);
+                                    }
+                                    Ok(None) => {
+                                        if self.cancellation.is_cancelled() {
+                                            slots[slot_index].result =
+                                                Some(cancelled_result(self.cancellation.reason()));
+                                            continue;
+                                        }
+                                        let tool_call_id = slots[slot_index].call.id.clone();
+                                        let tool_id = slots[slot_index].tool_id.clone();
+                                        slots[slot_index].executor_started = true;
+                                        // Shared emission: run futures already
+                                        // hold `&self`, so `&mut self` emit is
+                                        // unavailable while siblings proceed.
+                                        if let Err(message) =
+                                            self.emit_shared(RuntimeEvent::ToolExecutionStarted {
+                                                tool_call_id,
+                                                tool_id,
+                                            })
+                                        {
+                                            return Err(CanonicalCommitError::Durable(
+                                                crate::durable::ConversationStoreError::Storage(
+                                                    message,
+                                                ),
+                                            ));
+                                        }
+                                        #[cfg(test)]
+                                        self.park_after_tool_start();
+                                        if let Some(error) = self.durable_failure_commit_error() {
+                                            return Err(error);
+                                        }
+                                        let prepared = slots[slot_index]
+                                            .prepared
+                                            .as_ref()
+                                            .expect("unsettled slots are preflighted");
+                                        futures.push(Box::pin(self.run_single_call(
+                                            slot_index,
+                                            prepared.invocation.clone(),
+                                            prepared.progress_capability,
+                                            todo_writer.clone(),
+                                            occurrences[slot_index].clone(),
+                                        )));
+                                    }
+                                    Err(error) => {
+                                        return Err(CanonicalCommitError::Interaction(error));
+                                    }
+                                }
+                            }
+                            Some((slot_index, result, facts)) = futures.next(), if !futures.is_empty() => {
+                                slots[slot_index].result = Some(result);
+                                slots[slot_index].execution_facts = facts;
+                            }
                         }
                     }
                     if let Some(error) = self.durable_failure_commit_error() {
                         return Err(error);
-                    }
-                    let mut futures = futures_util::stream::FuturesUnordered::new();
-                    for (slot_index, slot) in slots[index..end].iter().enumerate() {
-                        if slot.executor_started {
-                            let prepared = slot
-                                .prepared
-                                .as_ref()
-                                .expect("unsettled slots are preflighted");
-                            futures.push(Box::pin(self.run_single_call(
-                                index + slot_index,
-                                prepared.invocation.clone(),
-                                prepared.progress_capability,
-                                todo_writer.clone(),
-                                occurrences[index + slot_index].clone(),
-                            )));
-                        }
                     }
                     let mut remaining = futures.len();
                     if remaining > 0 {
@@ -727,7 +763,7 @@ impl AgentExecution<'_> {
         Ok(settled)
     }
 
-    /// Resolves the typed pre-tool decision of every preflight-ready call.
+    /// Resolves the typed pre-tool decision of one preflight-ready call.
     ///
     /// The policy sees only an immutable view of the exact registry-resolved
     /// facts. `Ask` delegates the wait to the attempt's concrete native
@@ -737,49 +773,29 @@ impl AgentExecution<'_> {
     /// cancellation is observable; an owner cancellation produces the
     /// existing cancelled result slot and closes the later tool-start
     /// frontier.
-    async fn resolve_pre_tool_decisions(
-        &self,
-        slots: &mut [CallSlot],
-    ) -> Result<(), InteractionFailure> {
-        for slot in slots {
-            if slot.result.is_some() {
-                continue;
-            }
-            if self.cancellation.is_cancelled() {
-                slot.result = Some(cancelled_result(self.cancellation.reason()));
-                continue;
-            }
-            let prepared = slot
-                .prepared
-                .as_ref()
-                .expect("a policy decision requires a preflight-ready invocation");
-            let invocation = &prepared.invocation;
-            let view = PreToolView {
-                conversation_id: &self.request.conversation_id,
-                execution: crate::runtime::interaction::InteractionExecution::Attempt {
-                    attempt_id: self.request.attempt_id.clone(),
-                    turn: self.turn,
-                },
-                invocation_id: &invocation.id,
-                tool_id: &invocation.tool_id,
-                tool_name: &invocation.tool_name,
-                origin: &prepared.origin,
-                mode: invocation.mode,
-                arguments: &invocation.arguments,
-                audit_arguments: &slot.call.arguments,
-                approval_policy: prepared.approval,
-                elevation_reason: prepared.elevation_reason.as_deref(),
-                workspace_root: None,
-                resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,
-            };
-            slot.result = crate::tools::invocation::authorize(
-                &self.lifecycle,
-                &view,
-                &self.cancellation.execution_cancellation(),
-            )
-            .await?;
+    async fn authorize_slot(&self, slot: &mut CallSlot) -> Result<(), InteractionFailure> {
+        if slot.result.is_some() {
+            return Ok(());
         }
+        if self.cancellation.is_cancelled() {
+            slot.result = Some(cancelled_result(self.cancellation.reason()));
+            return Ok(());
+        }
+        slot.result = self.authorize_prepared(slot).await?;
         Ok(())
+    }
+
+    async fn authorize_prepared(
+        &self,
+        slot: &CallSlot,
+    ) -> Result<Option<ToolExecutionResult>, InteractionFailure> {
+        let facts = ParallelAuthFacts::from_execution(0, self, slot);
+        authorize_owned(
+            &self.lifecycle,
+            &self.cancellation.execution_cancellation(),
+            &facts,
+        )
+        .await
     }
 
     /// Runs the immutable tool-result observation pass of one structurally
@@ -1230,6 +1246,73 @@ impl AgentExecution<'_> {
             Err(error) => failed_result(&error.to_string()),
         }
     }
+}
+
+/// Owned pre-tool facts for one parallel authorization future.
+struct ParallelAuthFacts {
+    slot_index: usize,
+    conversation_id: crate::runtime::identity::ConversationId,
+    attempt_id: AttemptId,
+    turn: u32,
+    invocation_id: crate::tools::types::ToolInvocationId,
+    tool_id: ToolId,
+    tool_name: String,
+    origin: ToolOrigin,
+    mode: ToolInvocationMode,
+    arguments: serde_json::Value,
+    audit_arguments: serde_json::Value,
+    approval_policy: crate::tools::types::ToolApprovalPolicy,
+    elevation_reason: Option<String>,
+}
+
+impl ParallelAuthFacts {
+    fn from_execution(slot_index: usize, execution: &AgentExecution<'_>, slot: &CallSlot) -> Self {
+        let prepared = slot
+            .prepared
+            .as_ref()
+            .expect("a policy decision requires a preflight-ready invocation");
+        Self {
+            slot_index,
+            conversation_id: execution.request.conversation_id.clone(),
+            attempt_id: execution.request.attempt_id.clone(),
+            turn: execution.turn,
+            invocation_id: prepared.invocation.id.clone(),
+            tool_id: prepared.invocation.tool_id.clone(),
+            tool_name: prepared.invocation.tool_name.clone(),
+            origin: prepared.origin.clone(),
+            mode: prepared.invocation.mode,
+            arguments: prepared.invocation.arguments.clone(),
+            audit_arguments: slot.call.arguments.clone(),
+            approval_policy: prepared.approval,
+            elevation_reason: prepared.elevation_reason.clone(),
+        }
+    }
+}
+
+async fn authorize_owned(
+    lifecycle: &crate::agent::AttemptLifecycle,
+    cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+    facts: &ParallelAuthFacts,
+) -> Result<Option<ToolExecutionResult>, InteractionFailure> {
+    let view = PreToolView {
+        conversation_id: &facts.conversation_id,
+        execution: crate::runtime::interaction::InteractionExecution::Attempt {
+            attempt_id: facts.attempt_id.clone(),
+            turn: facts.turn,
+        },
+        invocation_id: &facts.invocation_id,
+        tool_id: &facts.tool_id,
+        tool_name: &facts.tool_name,
+        origin: &facts.origin,
+        mode: facts.mode,
+        arguments: &facts.arguments,
+        audit_arguments: &facts.audit_arguments,
+        approval_policy: facts.approval_policy,
+        elevation_reason: facts.elevation_reason.as_deref(),
+        workspace_root: None,
+        resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,
+    };
+    crate::tools::invocation::authorize(lifecycle, &view, cancellation).await
 }
 
 #[cfg(test)]
