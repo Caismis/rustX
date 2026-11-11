@@ -203,6 +203,8 @@ pub(super) fn prepared_lock<'a>(
 ) -> MutexGuard<'a, ClientState> {
     let _preparation = preparation.lock().expect("projection preparation mutex");
     #[cfg(test)]
+    let _scope = crate::durable::sqlite::query_work::scope("prepared_lock");
+    #[cfg(test)]
     publication.preparation_stage("drain");
     let observations = pending.drain();
     #[cfg(test)]

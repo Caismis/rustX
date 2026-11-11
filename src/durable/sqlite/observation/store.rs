@@ -1072,6 +1072,8 @@ impl ObservationStore for SqliteConversationStore {
         limit: usize,
     ) -> Result<crate::durable::observation::CheckpointHead, ConversationStoreError> {
         let mut connection = self.lock()?;
+        #[cfg(test)]
+        let _scope = crate::durable::sqlite::query_work::scope("checkpoint_head");
         let transaction = connection
             .transaction()
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
