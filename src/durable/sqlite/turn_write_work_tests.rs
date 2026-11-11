@@ -84,14 +84,14 @@ fn warmed_turn_write_work_is_fixed() {
     let expected = [
         TurnWork {
             calls: 654,
-            prepares: 25,
+            prepares: 18,
             steps: 22_608,
             commits: 7,
             wal_frames: 258,
         },
         TurnWork {
             calls: 1523,
-            prepares: 55,
+            prepares: 38,
             steps: 50_963,
             commits: 13,
             wal_frames: 552,
