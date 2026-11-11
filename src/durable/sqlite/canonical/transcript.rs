@@ -439,7 +439,7 @@ pub(in crate::durable::sqlite) fn load_user_message_boundaries_page_internal(
     let mut statement = connection
         .prepare(
             "SELECT s.revision,s.compaction_generation,s.message_id,m.message_id
-             FROM surface_ops s LEFT JOIN message_ledger m ON m.position=s.ledger_position WHERE s.revision <= ?1 ORDER BY s.revision",
+             FROM surface_ops s LEFT JOIN message_ledger m ON m.position=s.ledger_position AND m.message_id=s.message_id WHERE s.revision <= ?1 ORDER BY s.revision",
         )
         .map_err(|error| {
             crate::durable::sqlite::sqlite_error(&error, format!("read Surface history: {error}"))
