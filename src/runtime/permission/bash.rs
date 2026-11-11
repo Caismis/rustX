@@ -64,9 +64,15 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
                 .to_owned(),
         };
     }
-    if command.contains('>') || command.contains(">>") {
+    if command.contains('>') || command.contains('<') {
         return BashReadonlyClass::Unproven {
             reason: "redirects are not proven read-only".to_owned(),
+        };
+    }
+    if command.contains("/dev/tcp/") || command.contains("/dev/udp/") {
+        // Bash special files open network sockets; never treat as proven read-only.
+        return BashReadonlyClass::Unproven {
+            reason: "bash /dev/tcp and /dev/udp paths are not proven read-only".to_owned(),
         };
     }
     if command.contains('|')
@@ -204,6 +210,9 @@ mod tests {
             "date \"-u\"",
             "ls file?",
             "cat *.txt",
+            "cat /dev/tcp/127.0.0.1/80",
+            "head /dev/udp/127.0.0.1/53",
+            "cat < /etc/passwd",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
