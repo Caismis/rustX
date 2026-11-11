@@ -251,7 +251,13 @@ geometry. For eligible generated meshes the import Worker prepares an optional
 surface representation using the locked meshoptimizer 1.1.1 simplifier. Locked
 borders, attribute-aware joining and a relative error limit of 0.002 protect
 boundaries and shading; the renderer additionally requires at most one CSS pixel
-of projected error. Near views that exceed this limit draw the original geometry.
+of projected error. The bound uses both CSS viewport dimensions, minimum
+camera-space depth, and the complete source bounds' off-axis extent. Local
+error is mapped through the full affine view transform, including shear.
+Perspective depth displacement contributes to both the numerator and the
+minimum denominator. Views that exceed one pixel, cross the camera plane within
+the error bound, or use an unbounded/unsupported projection draw the original
+geometry. The bound is independent of the motion drawing-buffer pixel ratio.
 This is a display approximation, not a replacement for the admitted model.
 
 Large binary STL first attempts exact retriangulation of consecutive axis-planar,
@@ -454,6 +460,15 @@ remain responsible for it. The first-frame fence poll stops after that milestone
 Visible bodies do not allocate unused
 original-file Blob URLs. GLB loader-created image URLs/bitmaps are separately
 disposed with the scene.
+GLB preflight charges complete loaded `bufferView` allocations using the pinned
+loader's cache identity: different view indices allocate separately even when
+their BIN ranges overlap. A view shared by accessors or instances is charged
+once; unreachable accessors/views are validated structurally but do not allocate.
+Every declared texture is prepared before scene construction, so its referenced
+image view also participates in this plan. The existing logical-stream limit
+remains independently enforced. At the scene receiver, distinct complete
+`ArrayBuffer` backing lengths are budgeted across attributes, interleaved data
+and indices, with shared backing counted once across geometries and scenes.
 The demand-owned renderer context and trusted three-vertex PBR shader preparation
 overlap import. This preparation submits no model draw. Early cancellation,
 context loss or import failure disposes it under the same two-context cap.

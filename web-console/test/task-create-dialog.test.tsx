@@ -5,6 +5,7 @@ import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { localeController } from '../src/locale/controller';
 import { schedulerFixture } from './scheduler-fixture';
 import type { Server } from './fixture';
+import type { SessionModelConfig } from '../../protocol/app-server/v77';
 
 const servers: Server[] = [];
 afterEach(() => { cleanup(); for (const server of servers.splice(0)) server.client.dispose(); localStorage.clear(); localeController.setLocale('en'); vi.restoreAllMocks(); });
@@ -18,6 +19,29 @@ async function setup() {
   return { ...f, openSession, authority, ui };
 }
 const mutations = (server: Server) => server.requests.filter(row => ['thread/start', 'schedule/command', 'thread/resume', 'turn/start'].includes(row.request.method));
+
+it.each(['untouched', 'profile', 'model'] as const)('preserves effective model policy on the first %s task gesture', async gesture => {
+  const f = await setup(), read = f.server.workspaceHost.configureWorkspace!;
+  const auxiliary = { mode: 'explicit' as const, model: 'fixture/second', profile: 'medium', request_params: { temperature: 0.1 }, max_output_tokens: 64 };
+  const independent = { summaryModel: auxiliary, titleModel: auxiliary, classificationModel: auxiliary, btwModel: auxiliary };
+  const configured: SessionModelConfig = { model: 'fixture/native', profile: 'medium', requestParams: { temperature: 0.2 }, maxOutputTokens: 1234, ...independent };
+  f.server.workspaceHost.configureWorkspace = async (...args) => {
+    const result = await read(...args);
+    if (result.kind !== 'read' || result.projection.session_models?.kind !== 'available') throw Error('workspace model source');
+    return { ...result, projection: { ...result.projection, session_models: { ...result.projection.session_models, default_model: configured } } };
+  };
+  fireEvent.click(screen.getByRole('button', { name: 'New' })); await fill();
+  if (gesture !== 'untouched') {
+    fireEvent.click(screen.getByRole('button', { name: 'Model and thinking effort' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: gesture === 'profile' ? 'Thinking effort' : 'Model' }));
+    await act(async () => fireEvent.click(await screen.findByRole('menuitemradio', { name: gesture === 'profile' ? 'high' : 'fixture/second' })));
+  }
+  fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+  const request = await f.server.waitFor('thread/start', 1);
+  expect(request.params).toEqual({ settings: { cwd: '/workspace', ...(gesture === 'untouched' ? {} : { model: gesture === 'profile' ? { ...configured, profile: 'high' } : { model: 'fixture/second', ...independent } }) } });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(f.server.requests.some(row => ['thread/resume', 'turn/start'].includes(row.request.method))).toBe(false);
+});
 async function fill(text = 'Review the latest repository changes.') {
   await screen.findByRole('button', { name: 'Workspace' });
   fireEvent.change(screen.getByRole('textbox', { name: 'Task instruction' }), { target: { value: text } });

@@ -14,7 +14,7 @@ it('keeps all geometry, authored material and UV during motion, and restores opt
   const scene = new Scene(), root = new Group(), geometry = new BoxGeometry(), material = new MeshStandardMaterial(); scene.add(root);
   const mesh = new Mesh(geometry, material), line = new LineSegments(new BufferGeometry(), new ShaderMaterial()); root.add(mesh, line);
   const quality = createDisplayQuality(root);
-  try { quality.draw(scene, true, camera(), 480, () => { expect(mesh.geometry).toBe(geometry); expect(mesh.material).toBe(material); expect(line.visible).toBe(false); expect(mesh.geometry.getAttribute('uv')).toBe(geometry.getAttribute('uv')); }); expect(line.visible).toBe(true); }
+  try { quality.draw(scene, true, camera(), 480, 480, () => { expect(mesh.geometry).toBe(geometry); expect(mesh.material).toBe(material); expect(line.visible).toBe(false); expect(mesh.geometry.getAttribute('uv')).toBe(geometry.getAttribute('uv')); }); expect(line.visible).toBe(true); }
   finally { quality.dispose(); disposeScene([scene]); line.geometry.dispose(); line.material.dispose(); }
 });
 it('keeps the intact original while surface preparation is pending or times out, including failed draws', () => {
@@ -23,14 +23,14 @@ it('keeps the intact original while surface preparation is pending or times out,
   const positions = original.getAttribute('position'), normals = original.getAttribute('normal'), before = positions.array.slice();
   const disposed = vi.spyOn(original, 'dispose');
   try {
-    expect(() => quality.draw(scene, true, camera(), 480, () => {
+    expect(() => quality.draw(scene, true, camera(), 480, 480, () => {
       expect(mesh.geometry).toBe(original); expect(mesh.geometry.getAttribute('position')).toBe(positions);
       expect(mesh.geometry.getAttribute('normal')).toBe(normals); expect(mesh.material).toBe(material); expect(line.visible).toBe(false); throw new Error('submission failed');
     })).toThrow('submission failed');
     expect(mesh.geometry).toBe(original); expect(mesh.material).toBe(material); expect(line.visible).toBe(true);
     prepared.finishPreviews(); quality.refresh();
-    quality.draw(scene, true, camera(), 480, () => expect(mesh.geometry).toBe(original));
-    quality.draw(scene, false, camera(), 480, () => expect(mesh.geometry).toBe(original));
+    quality.draw(scene, true, camera(), 480, 480, () => expect(mesh.geometry).toBe(original));
+    quality.draw(scene, false, camera(), 480, 480, () => expect(mesh.geometry).toBe(original));
     expect(positions.array).toEqual(before); expect(disposed).not.toHaveBeenCalled();
   } finally { quality.dispose(); disposeScene([prepared.scene]); line.geometry.dispose(); line.material.dispose(); }
 });
@@ -47,25 +47,25 @@ it.each(['perspective', 'orthographic'] as const)('uses a complete surface only 
   if (view instanceof OrthographicCamera) { view.position.z = 3; view.updateMatrixWorld(true); }
   const material = mesh.material;
   try {
-    quality.draw(scene, true, view, 480, () => { lod=mesh.geometry; expect(lod).not.toBe(original); expect(lod.getAttribute('position').count/3).toBe(12); expect(mesh.material).toBe(material); });
+    quality.draw(scene, true, view, 480, 480, () => { lod=mesh.geometry; expect(lod).not.toBe(original); expect(lod.getAttribute('position').count/3).toBe(12); expect(mesh.material).toBe(material); });
     expect(mesh.geometry).toBe(original);
     if (view instanceof PerspectiveCamera) view.position.z = 1.2;
     else view.zoom = 10;
     view.updateProjectionMatrix(); view.updateMatrixWorld(true);
-    quality.draw(scene, true, view, 480, () => expect(mesh.geometry).toBe(original));
+    quality.draw(scene, true, view, 480, 480, () => expect(mesh.geometry).toBe(original));
     if (view instanceof PerspectiveCamera) view.position.z = 3;
     else view.zoom = 1;
     view.updateProjectionMatrix(); view.updateMatrixWorld(true);
-    expect(() => quality.draw(scene, true, view, 480, () => { expect(mesh.geometry).toBe(lod); throw new Error('submission failed'); })).toThrow('submission failed');
+    expect(() => quality.draw(scene, true, view, 480, 480, () => { expect(mesh.geometry).toBe(lod); throw new Error('submission failed'); })).toThrow('submission failed');
     expect(mesh.geometry).toBe(original);
-    quality.draw(scene, false, view, 480, () => expect(mesh.geometry).toBe(original));
+    quality.draw(scene, false, view, 480, 480, () => expect(mesh.geometry).toBe(original));
     const disposed = vi.spyOn(lod!, 'dispose'); quality.dispose(); expect(disposed).toHaveBeenCalledOnce();
   } finally { quality.dispose(); disposeScene([prepared.scene]); cube.dispose(); }
 });
 it('keeps generated motion colors, normals and original PBR references',()=>{
   const {prepared,mesh}=generated(),scene=new Scene();scene.add(prepared.scene);prepared.markPreviews([0]);
   const original=mesh.material,quality=createDisplayQuality(prepared.scene);
-  try{quality.draw(scene,true,camera(),480,()=>{expect(mesh.material).toBe(original);expect(mesh.geometry.getAttribute('normal')).toBeDefined();});expect(mesh.material).toBe(original);}
+  try{quality.draw(scene,true,camera(),480,480,()=>{expect(mesh.material).toBe(original);expect(mesh.geometry.getAttribute('normal')).toBeDefined();});expect(mesh.material).toBe(original);}
   finally{quality.dispose();disposeScene([prepared.scene]);}
 });
 it.each([false, true])('picks the opaque dense foreground while surface preparation is pending (moving=%s)', moving => {
@@ -77,7 +77,7 @@ it.each([false, true])('picks the opaque dense foreground while surface preparat
   scene.add(prepared.scene, back); scene.updateMatrixWorld(true); prepared.markPreviews([0]);
   const quality = createDisplayQuality(scene), raycaster = new Raycaster();
   try {
-    quality.draw(scene, moving, camera(), 480, () => {});
+    quality.draw(scene, moving, camera(), 480, 480, () => {});
     for (let triangle=0;triangle<50;triangle++) {
       const at=triangle*9, x=(positions[at]+positions[at+3]+positions[at+6])/3,y=(positions[at+1]+positions[at+4]+positions[at+7])/3;
       raycaster.set(new Vector3(x,y,1),new Vector3(0,0,-1));

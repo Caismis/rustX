@@ -112,7 +112,7 @@ export function TaskCreateDialog({ client, host, authority, creation, open, clos
             anchor={<Button size="sm" className={css.workspace} aria-label={t('create.workspace')} aria-haspopup="menu" aria-expanded={workspaceMenu} disabled={disabled || !bound || !catalog?.workspaces.length} onClick={() => setWorkspaceMenu(value => !value)}><span>{selected?.displayName ?? t('create.choose-workspace')}</span><IconChevronDownOutline14/></Button>}/></div>
           <div className={css.row}><label htmlFor={id + '-name'}>{t('create.name')}</label><Input id={id + '-name'} aria-label={t('create.name')} className={css.name} value={title} placeholder={t('create.name-placeholder')} disabled={disabled} onChange={event => { setTitle(event.target.value); setValidation(undefined); }}/></div>
           <div className={css.row}><span>{t('create.model')}</span><ModelSelect choices={catalogChoices(sessionCatalog(source))} current={selection?.model} profile={selection?.profile ?? undefined} disabled={disabled || !selected || !source || reading} loading={reading} load={() => {}} binding={workspaceId}
-            choose={async value => { setIntent(nextModelSelection(intent, value)); return true; }}/></div>
+            choose={async value => { setIntent(nextModelSelection(selection, value)); return true; }}/></div>
         </div>}
         <p className={css.note}>{t('create.local-note')}</p>
         {!connected && <p className={css.error} role="status">{t('connection.disconnected')}</p>}

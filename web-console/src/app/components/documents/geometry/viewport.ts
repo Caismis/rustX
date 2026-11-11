@@ -123,7 +123,7 @@ export function mountGeometry(container: HTMLElement, object: Object3D, bounds: 
       renderer.setDrawingBufferSize(width, height, ratio); drawingRatio = ratio; drawingWidth = width; drawingHeight = height;
     }
     renderer.setViewport(0, 0, width, height); renderer.autoClear = true;
-    if (quality && batches) quality.draw(scene, moving, camera, height, () => batches.draw(() => renderer.render(scene, camera)));
+    if (quality && batches) quality.draw(scene, moving, camera, width, height, () => batches.draw(() => renderer.render(scene, camera)));
     else renderer.render(scene, camera);
     canvas.dataset.geometryQuality = options?.provisional ? 'preview' : moving ? 'interactive' : 'complete';
     updateNavigation();

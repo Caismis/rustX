@@ -55,7 +55,15 @@ export function admitGlb(bytes: Uint8Array<ArrayBuffer>): Set<string> {
     if (item.byteStride !== undefined) check(integer(item.byteStride, 252) >= 4 && Number(item.byteStride) % 4 === 0);
     return { offset, length };
   });
-  let decoded = 0;
+  let decoded = 0, backingBytes = 0;
+  const loadedViews = new Set<number>();
+  const admitView = (index: number) => {
+    const range = ranges[index];
+    // GLTFLoader caches by view index and slices each complete range.
+    // Distinct overlapping views are distinct backing allocations.
+    if (!loadedViews.has(index)) { backingBytes += range.length; check(backingBytes <= L.decodedBytes, 'limit'); loadedViews.add(index); }
+    return range;
+  };
   const accessors = list(json.accessors, 4096);
   for (const accessor of accessors) {
     check(!accessor.sparse, 'unsupported');
@@ -66,17 +74,19 @@ export function admitGlb(bytes: Uint8Array<ArrayBuffer>): Set<string> {
     const stride = Number(views[index].byteStride ?? components * width); check(stride >= components * width);
     check(offset + (count ? (count - 1) * stride + components * width : 0) <= ranges[index].length);
   }
-  const meshes = list(json.meshes, L.parts), meshCosts: { triangles: number; draws: number }[] = []; let triangles = 0, vertices = 0, draws = 0;
+  const meshes = list(json.meshes, L.parts), meshCosts: { triangles: number; draws: number; accessors: Set<number> }[] = []; let triangles = 0, vertices = 0, draws = 0;
   for (const mesh of meshes) {
-    const cost = { triangles: 0, draws: 0 }; meshCosts.push(cost);
+    const cost = { triangles: 0, draws: 0, accessors: new Set<number>() }; meshCosts.push(cost);
     check(!mesh.weights, 'unsupported');
     for (const primitive of list(mesh.primitives, L.drawCalls)) {
       check(++draws <= L.drawCalls, 'limit'); check((primitive.mode ?? 4) === 4 && !primitive.targets, 'unsupported');
       const attributes = object(primitive.attributes), position = accessors[integer(attributes.POSITION, accessors.length - 1)];
+      for (const value of Object.values(attributes)) cost.accessors.add(integer(value, accessors.length - 1));
       check(position.type === 'VEC3' && position.componentType === 5126); vertices += Number(position.count);
       const elements = primitive.indices === undefined ? position.count : accessors[integer(primitive.indices, accessors.length - 1)].count;
       if (primitive.indices !== undefined) {
         const index = accessors[Number(primitive.indices)]; check(index.type === 'SCALAR' && [5121, 5123, 5125].includes(Number(index.componentType)));
+        cost.accessors.add(Number(primitive.indices));
       }
       check(Number(elements) % 3 === 0); triangles += Number(elements) / 3;
       cost.triangles += Number(elements) / 3; cost.draws++;
@@ -94,10 +104,10 @@ export function admitGlb(bytes: Uint8Array<ArrayBuffer>): Set<string> {
     check(Array.isArray(node.children));
     for (const value of node.children) { const child = integer(value, nodes.length - 1); check(!parents.has(child)); parents.add(child); }
   }
-  let roots = 0;
+  let roots = 0; const sceneRoots: number[] = [];
   for (const scene of list(json.scenes, 8)) {
     check(Array.isArray(scene.nodes)); roots += scene.nodes.length; check(roots <= L.nodes, 'limit');
-    for (const value of scene.nodes) integer(value, nodes.length - 1);
+    for (const value of scene.nodes) sceneRoots.push(integer(value, nodes.length - 1));
   }
   // Check every node, including nodes in unselected scenes, before loader recursion.
   function visit(index: number, depth: number, path: Set<number>) {
@@ -113,12 +123,24 @@ export function admitGlb(bytes: Uint8Array<ArrayBuffer>): Set<string> {
   }
   for (let index = 0; index < nodes.length; index++) pending.push({ index, depth: 0 });
   for (const { index, depth } of pending) visit(index, depth, new Set());
-  list(json.materials, L.materials); list(json.textures, L.textures);
+  // The parser builds every scene, but orphan accessors/meshes never request
+  // their views. Sharing a cached view is charged once across all occurrences.
+  const reached = new Set<number>();
+  while (sceneRoots.length) {
+    const index = sceneRoots.pop()!; if (reached.has(index)) continue; reached.add(index);
+    const node = nodes[index];
+    if (node.mesh !== undefined) for (const accessor of meshCosts[Number(node.mesh)].accessors) admitView(Number(accessors[accessor].bufferView));
+    for (const child of (node.children ?? []) as number[]) sceneRoots.push(child);
+  }
+  list(json.materials, L.materials);
+  const textures = list(json.textures, L.textures), images = list(json.images, L.textures), loadedImages = new Set<number>();
+  // beforeRoot intentionally loads every texture, including unused materials.
+  for (const texture of textures) loadedImages.add(integer(texture.source, images.length - 1));
   let pixels = 0;
-  for (const image of list(json.images, L.textures)) {
+  for (const [index, image] of images.entries()) {
     let content: Uint8Array<ArrayBuffer>;
     if (image.uri) content = dataUri(String(image.uri));
-    else { check(image.mimeType === 'image/png' || image.mimeType === 'image/jpeg', 'unsupported'); const range = ranges[integer(image.bufferView, views.length - 1)]; content = buffer.subarray(range.offset, range.offset + range.length); }
+    else { check(image.mimeType === 'image/png' || image.mimeType === 'image/jpeg', 'unsupported'); const viewIndex = integer(image.bufferView, views.length - 1), range = ranges[viewIndex]; if (loadedImages.has(index)) admitView(viewIndex); content = buffer.subarray(range.offset, range.offset + range.length); }
     validateRaster(content);
     const size = imageSize(content); check((size.type === 'png' || size.type === 'jpg') && size.width > 0 && size.height > 0, 'unsupported');
     pixels += size.width * size.height; check(size.width <= L.textureDimension && size.height <= L.textureDimension && pixels <= L.texturePixels, 'limit');

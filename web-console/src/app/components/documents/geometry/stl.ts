@@ -14,14 +14,18 @@ export function importStl(bytes: Uint8Array<ArrayBuffer>): GeometryModel {
     const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
     check(/^\s*solid\b/i.test(text) && /endsolid\b/i.test(text));
     let vertices = 0, facets = 0, solids = 0;
-    for (const _match of text.matchAll(/\bsolid\s+/gi)) { void _match; check(++solids <= L.parts, 'limit'); }
-    for (const _match of text.matchAll(/\bvertex\s+/gi)) { void _match; check(++vertices <= L.vertices, 'limit'); }
-    for (const _match of text.matchAll(/\bfacet\s+normal\b/gi)) { void _match; check(++facets <= L.triangles, 'limit'); }
+    // Consume complete solid-name records so their free-form names cannot
+    // contribute vertex, facet or additional solid tokens to admission.
+    for (const match of text.matchAll(/^[^\S\r\n]*(solid|endsolid)\b[^\r\n]*|(\bvertex\s+)|(\bfacet\s+normal\b)/gim)) {
+      if (match[1]) { if (match[1].toLowerCase() === 'solid') check(++solids <= L.parts, 'limit'); }
+      else if (match[2]) check(++vertices <= L.vertices, 'limit');
+      else check(++facets <= L.triangles, 'limit');
+    }
     check(facets > 0, 'empty'); check(vertices === facets * 3);
     check(!text.includes('\0'));
     // STLLoader detects ASCII only near byte zero, with lowercase keywords.
     // Preserve names while giving it the exact representation admitted above.
-    const normalized = text.trimStart().replace(/^([ \t]*)(solid|endsolid|facet\s+normal|outer\s+loop|endloop|endfacet|vertex)\b/gim,
+    const normalized = text.trimStart().replace(/^([^\S\r\n]*)(solid|endsolid|facet\s+normal|outer\s+loop|endloop|endfacet|vertex)\b/gim,
       (_match, indent: string, keyword: string) => indent + keyword.toLowerCase());
     input = new TextEncoder().encode(normalized); check(input.length >= 84);
     expectedVertices = vertices;

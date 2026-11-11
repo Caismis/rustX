@@ -1,4 +1,4 @@
-import { Box3, BufferAttribute, BufferGeometry, Color, Group, Material, Mesh, MeshStandardMaterial, Sphere, Texture, Vector3, type Object3D } from 'three';
+import { Box3, BufferAttribute, BufferGeometry, Color, Group, InterleavedBufferAttribute, Material, Mesh, MeshStandardMaterial, Sphere, Texture, Vector3, type Object3D } from 'three';
 import { GEOMETRY_LIMITS as L, requireGeometry as check } from './limits';
 import { validateModelStructure, type GeometryModel, type GeometryNode, type GeometryPreviewData } from './model';
 
@@ -58,12 +58,22 @@ export function validateScene(roots: Object3D[], selected?: Object3D): Box3 {
  * meshes. Scan them once; the graph walk separately charges occurrences. */
 function admitScene(roots: Object3D[], selected?: Object3D, generated?: BufferGeometry[]): Box3 {
   const unique = new Set<BufferGeometry>(), mats = materials(roots);
-  let vertices = 0, triangles = 0, bytes = 0, nodes = 0, parts = 0, draws = 0, pixels = 0;
+  const backings = new Set<ArrayBuffer>();
+  let vertices = 0, triangles = 0, bytes = 0, backingBytes = 0, nodes = 0, parts = 0, draws = 0, pixels = 0;
+  const admitBacking = (attribute: BufferAttribute | InterleavedBufferAttribute) => {
+    check(attribute instanceof BufferAttribute || attribute instanceof InterleavedBufferAttribute);
+    const array = attribute instanceof InterleavedBufferAttribute ? attribute.data.array : attribute.array;
+    check(ArrayBuffer.isView(array)); const buffer = array.buffer; check(buffer instanceof ArrayBuffer);
+    if (!backings.has(buffer)) { backingBytes += buffer.byteLength; check(backingBytes <= L.decodedBytes, 'limit'); backings.add(buffer); }
+  };
   check(mats.size <= L.materials, 'limit');
   const admitGeometry = (geometry: BufferGeometry) => {
       const position = geometry.getAttribute('position'); check(position && position.itemSize === 3);
       if (unique.has(geometry)) return; unique.add(geometry); vertices += position.count;
       check(vertices <= L.vertices, 'limit');
+      check(Object.keys(geometry.morphAttributes).length === 0, 'unsupported');
+      for (const attribute of Object.values(geometry.attributes)) admitBacking(attribute);
+      if (geometry.index) admitBacking(geometry.index);
       if (geometry.index) {
         const attribute = geometry.index;
         if (attribute instanceof BufferAttribute && !attribute.normalized && (attribute.array instanceof Uint32Array || attribute.array instanceof Uint16Array || attribute.array instanceof Uint8Array)) {

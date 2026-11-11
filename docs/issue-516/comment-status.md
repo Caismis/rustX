@@ -1,27 +1,29 @@
 # PR 517 comment implementation status
 
-Checked on 2026-11-10, Asia/Shanghai, through review comment 6761761816. The
-file-change hover preview Copy action is restored, the native watcher contention
-test now checks the published resync callback deterministically, and the current
-Playwright plan uses three weighted whole-file shards under the existing budget.
-The local Web/Host suite and required builds/checks pass; exact results and the
-remaining remote CI/macOS verification are in [the hover-copy repair report](hover-copy-ci-repair-20261110.md).
-The earlier pinned-browser screenshot repair remains documented below: its
-baseline was reconciled, 17 references were reviewed, and all 73 original
-Shell/Scheduler browser tests passed; that result still requires its own remote
-CI run.
-Earlier repairs cover retained geometry visibility across primary pages, v3
-browser fixtures, committed Session recovery, proxy retirement, narrow child titles, the
-Native closed-peer test precondition, and exact-target browser restoration/latency
-evidence. Validation and screenshot evidence are in
-[the comment/CI repair report](comment-ci-repairs-20261109.md) and the
-[2026-11-10 screenshot repair report](ci-screenshot-repair-20261110.md). The
-preceding upstream-main and v75 integration is recorded in
-[the integration report](main-integration-20261109.md). Earlier repair details
-and limits are in [the review/CI repair report](review-ci-repairs.md);
-the inline-thread list was empty. This is an implementation inventory, not a public reply or an
-acceptance of the remaining latency budget. The current implementation and
-verification are recorded in [the whole-model LOD report](lod-validation.md). The hover-preview diff Copy restoration and its current CI limits are in [the 2026-11-10 hover-copy repair report](hover-copy-ci-repair-20261110.md).
+Checked on 2026-11-11, Asia/Shanghai, including formal
+[review 5854777822](https://github.com/Caismis/rustX/pull/517#pullrequestreview-5854777822)
+of `16871aec4dfdd10bea531bc245581537c0ce26f0`. Its four findings are implemented
+with deterministic regressions: GLB admission accounts for complete cached view
+allocations and independently checks receiver backing buffers; the first task
+model selection starts from the displayed effective configuration; STL solid
+names cannot contribute structural tokens; and perspective motion LOD uses a
+conservative camera-space projection bound. Implementation, validation and limits
+are in [the requested-changes report](requested-changes-20261111.md).
+
+The reviewed revision's [FULL CI run](https://github.com/Caismis/rustX/actions/runs/42958477060)
+passed, including 4,780 Web/Host/launcher tests (four platform skips), 766 browser
+tests (two intentional skips), 4,213 macOS Rust tests (20 ignored), and
+format/Clippy and merge verification. That validates the preceding hover Copy,
+watcher and screenshot repairs, but does not validate a subsequent revision.
+Every new HEAD requires its own FULL CI result. The formal review remains
+changes requested until the reviewer reassesses the fixes; this inventory does
+not claim approval or acceptance of the separate latency gate.
+
+Earlier repair evidence remains in [the hover-copy report](hover-copy-ci-repair-20261110.md),
+[comment/CI report](comment-ci-repairs-20261109.md),
+[screenshot report](ci-screenshot-repair-20261110.md),
+[integration report](main-integration-20261109.md),
+[review/CI report](review-ci-repairs.md), and [whole-model LOD report](lod-validation.md).
 
 ## Requested PR work still open
 
@@ -51,8 +53,12 @@ These follow-ups are not represented as disabled placeholder controls.
 
 | Comment | Implementation status |
 | --- | --- |
-| [6761761816](https://github.com/Caismis/rustX/pull/517#issuecomment-6761761816) | Restored the requested Copy action to the file-change hover preview after main integration removed it. The localized button supports keyboard activation and reports copied state; it copies the exact admitted diff text through the existing serialization and clipboard-feedback paths, including while preview is open. Preview admission limits, truncation notice, Floating UI placement and full-review Copy remain. Component/type checks and the pinned-browser cases pass locally; the latest full browser workflow was canceled at its 45-minute limit, with no assertion failure logged, and current macOS CI remains required. See the [repair report](hover-copy-ci-repair-20261110.md). |
-| [6758147163](https://github.com/Caismis/rustX/pull/517#issuecomment-6758147163) | Addressed with explicit Shell/Scheduler readiness and model assertions and 17 reviewed pinned PNG references. All 73 original Shell/Scheduler browser tests passed against the pinned browser (zero skipped, unexpected, or flaky); TypeScript, 349 source provenance records, and i18n checks passed. The resulting revision requires its own remote CI run. See the report for environment and image evidence. |
+| [4534738776](https://github.com/Caismis/rustX/pull/517#discussion_r4534738776) | Complete loaded GLB views are charged once per loader cache identity, including overlapping distinct views and embedded images used by textures. The receiver independently charges full distinct attribute/interleaved/index ArrayBuffers. Existing logical expansion limits remain. Regressions include actual padded imports, shared ownership and rejection before a 528-MiB allocation plan. |
+| [4534738783](https://github.com/Caismis/rustX/pull/517#discussion_r4534738783) | The first model/profile gesture uses the effective displayed selection. Real-dialog request regressions preserve same-model request/output settings and four auxiliary policies, retain the helper's primary-model reset semantics, and verify untouched model omission. |
+| [4534738798](https://github.com/Caismis/rustX/pull/517#discussion_r4534738798) | Admission consumes complete solid/endsolid name records before counting facet/vertex tokens. Actual-loader regressions preserve keyword-containing names and identical cube geometry, mixed-case/whitespace normalization, multiple solids and the unchanged part limit. |
+| [4534738802](https://github.com/Caismis/rustX/pull/517#discussion_r4534738802) | Motion selection bounds depth and off-axis displacement over the complete camera-space box, using both CSS viewport dimensions and affine amplification including shear. Unknown projections or unsafe depth retain originals. The real simplifier regression reproduces the visible greater-than-one-pixel witness and keeps original geometry; a centered safe view still admits the LOD. |
+| [6761761816](https://github.com/Caismis/rustX/pull/517#issuecomment-6761761816) | Restored the localized, keyboard-accessible Copy action to the file-change hover preview, copying exact admitted diff text through existing serialization and feedback. Preview limits, truncation, Floating UI placement and full-review Copy remain. The reviewed `16871aec` FULL CI passed browser and macOS lanes. See the [repair report](hover-copy-ci-repair-20261110.md) for implementation evidence. |
+| [6758147163](https://github.com/Caismis/rustX/pull/517#issuecomment-6758147163) | Explicit Shell/Scheduler readiness/model assertions and 17 reviewed pinned PNG references repair the screenshot baseline. All 73 original Shell/Scheduler cases passed locally; the reviewed `16871aec` FULL CI subsequently passed all browser lanes. See the screenshot report for environment and image evidence. |
 | [6744114729](https://github.com/Caismis/rustX/pull/517#issuecomment-6744114729) | Reload verification matches the selected Session's real resume, checkpoint and subscription to its exact target, retaining concurrent background restoration and all authority, membership, credentials and no-send checks. The v75 latency observer derives missing resume identity from observed Native Session/Node lineage and the returned target. Successful attachments require complete metadata; the strict superseded-history classifier and its error evidence remain unchanged. |
 | [6742233989](https://github.com/Caismis/rustX/pull/517#issuecomment-6742233989) | Home no longer renews eligibility from an old restore destination tag. Primary-page navigation carries only an already-current hint for the same previously admitted editor. Unadmitted startup hints and failed replacements retain their stale revision. Three-page failed-Fork/reload regressions and a previously admitted selection with pending Native recovery protect retirement, alongside the repeated-offline positive and cold-selection controls. |
 | [6738080037](https://github.com/Caismis/rustX/pull/517#issuecomment-6738080037) | Repeated primary-page visits retain a still-current restore hint for the previously admitted Home editor. Cold explicit selections remain ephemeral; replacement navigation and authority retirement retain their protections. Component and real-Native browser regressions cover two offline primary-page/Home returns followed by a fresh App or page reload. The closed-peer framing test creates and closes its peer in an isolated test process with both original error assertions; full Linux and macOS CI passed at `9f887269e`. Current validation is in [the repair report](comment-ci-repairs-20261109.md). |
@@ -78,8 +84,8 @@ These follow-ups are not represented as disabled placeholder controls.
 | [6600405482](https://github.com/Caismis/rustX/pull/517#issuecomment-6600405482) | Historical checkpoint. Admitted geometry is lossless and original PBR/MSAA remain. Current lossy surface representations are temporary display resources with independent bounds, provenance, screen-error admission and disposal. Its paused state does not describe this active implementation. The latency gap remains open. |
 | [6600502539](https://github.com/Caismis/rustX/pull/517#issuecomment-6600502539) | Exact preparation preserves the import deadline reserve and admitted geometry. Optional lossy display work starts after receiver admission and first GPU readiness, within its separate 2-second cap and the original deadline. Dense closed STL and tiny disconnected-solid regressions retain complete settled geometry/bounds. |
 
-[The review follow-up](review-follow-up.md) contains current validation, chat
-captures and final measured performance gaps. PR #517 remains draft.
-Source/API authority changes, merging, auto-merge and
-ready-for-review transitions are outside this delivery. The resulting revision requires its own remote CI run; prior-head success is
-not certification of a new revision.
+[The review follow-up](review-follow-up.md) contains earlier validation, chat
+captures and measured performance gaps. The current formal review and the
+approximately-200-MiB performance acceptance remain open. No merge, auto-merge,
+review approval or PR readiness transition is part of these fixes. Prior-head
+CI success is not certification of a new revision.
