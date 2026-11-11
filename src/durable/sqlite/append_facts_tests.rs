@@ -254,6 +254,7 @@ fn append_facts_reuse_observes_changed_and_corrupt_stored_cells() {
         &persisted.event,
         Some(capture),
         Some(execution),
+        None,
     )
     .unwrap();
     assert!(receipt.failure.is_none());

@@ -34,12 +34,31 @@ pub(super) struct CapturedNode {
     prepared: Option<(Augmentation, Vec<u8>)>,
 }
 impl CapturedNode {
+    /// A node prepared by this capture is reread unless `trigger_free` proves
+    /// that no SQL program can have changed its row since the checked UPDATE
+    /// that stored exactly these bytes. Earlier nodes are always read.
     pub(super) fn into_node(
         self,
         connection: &Connection,
         native: manifest::NodeRef,
+        trigger_free: bool,
     ) -> Result<Augmentation, ConversationStoreError> {
-        load_reusing(connection, native, self.digest, self.prepared)
+        match self.prepared {
+            Some((node, _)) if trigger_free => {
+                node.widths.validate(native.count)?;
+                if node.native != native {
+                    return Err(storage("captured Source node geometry differs"));
+                }
+                #[cfg(test)]
+                super::WORK.with(|work| {
+                    let mut value = work.get();
+                    value.node_reuses += 1;
+                    work.set(value);
+                });
+                Ok(node)
+            }
+            prepared => load_reusing(connection, native, self.digest, prepared),
+        }
     }
 }
 pub(super) fn load(
@@ -63,8 +82,7 @@ fn load_reusing(
         value.native_nodes += 1;
         work.set(value);
     });
-    let actual = manifest::node(connection, &native)?;
-    let bytes:Option<Vec<u8>>=connection.prepare_cached("SELECT CASE WHEN typeof(source_metadata)='blob' AND length(source_metadata)<=65536 AND source_native_digest=?2 AND source_hash=?3 THEN source_metadata END FROM native_input_nodes WHERE id=?1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row(params![native.id,native.digest.as_slice(),expected.as_slice()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let (actual, bytes) = manifest::node_with_source(connection, &native, &expected)?;
     let bytes = bytes.ok_or_else(|| storage("captured Source augmentation unavailable"))?;
     #[cfg(test)]
     super::record_metadata(bytes.len());
@@ -124,12 +142,13 @@ fn leaf_geometry(
     connection: &Connection,
     leaf: &Leaf,
 ) -> Result<(WidthTable, u64, u64), ConversationStoreError> {
-    leaf_geometry_reusing(connection, leaf, Vec::new())
+    leaf_geometry_reusing(connection, leaf, Vec::new(), None)
 }
 fn leaf_geometry_reusing(
     connection: &Connection,
     leaf: &Leaf,
     captured: Vec<fragments::CapturedTemplate>,
+    prepared_hole: Option<(u64, u64)>,
 ) -> Result<(WidthTable, u64, u64), ConversationStoreError> {
     if leaf.variants.len() != weights::CLASSES
         || leaf.templates.is_empty()
@@ -149,18 +168,37 @@ fn leaf_geometry_reusing(
     let mut max_path = 0;
     let mut max_key_path = 0;
     let mut captured = captured.into_iter();
+    // The producer already encoded this exact provenance source while
+    // extracting the first header. The matching value is still checked after
+    // each independently authenticated template load.
+    let mut previous_hole = prepared_hole;
     for digest in &leaf.templates {
         let template = fragments::load_template_reusing(connection, *digest, captured.next())?;
-        let hole = hole(1, 0, template.provenance_bytes)?;
-        #[cfg(test)]
-        super::WORK.with(|work| {
-            let mut value = work.get();
-            value.width_hole_encodes += 1;
-            work.set(value);
-        });
+        let hole_length = match previous_hole {
+            Some((provenance_bytes, length)) if provenance_bytes == template.provenance_bytes => {
+                #[cfg(test)]
+                super::WORK.with(|work| {
+                    let mut value = work.get();
+                    value.width_hole_reuses += 1;
+                    work.set(value);
+                });
+                length
+            }
+            _ => {
+                let length = hole(1, 0, template.provenance_bytes)?.len() as u64;
+                #[cfg(test)]
+                super::WORK.with(|work| {
+                    let mut value = work.get();
+                    value.width_hole_encodes += 1;
+                    work.set(value);
+                });
+                previous_hole = Some((template.provenance_bytes, length));
+                length
+            }
+        };
         bases.push(add(
             add(template.prefix.length, template.suffix.length)?,
-            hole.len() as u64,
+            hole_length,
         )?);
         max_path = max_path.max(template.prefix.max_path.max(template.suffix.max_path));
         max_key_path = max_key_path.max(
@@ -218,6 +256,7 @@ fn store(
 }
 struct Capture<'a> {
     connection: &'a Connection,
+    trigger_free: bool,
     scope: &'a crate::runtime::identity::ConversationId,
     input: &'a crate::model::SelectedModelInput,
     snapshot: &'a crate::model::RequestSnapshot,
@@ -269,8 +308,12 @@ impl Capture<'_> {
                     .get(at)
                     .ok_or_else(|| storage("actual frozen input missing new leaf"))?;
                 let captured = fragments::capture(connection, self.scope, message, frozen)?;
-                let (widths, max_path, max_key_path) =
-                    leaf_geometry_reusing(connection, &captured.leaf, captured.templates)?;
+                let (widths, max_path, max_key_path) = leaf_geometry_reusing(
+                    connection,
+                    &captured.leaf,
+                    captured.templates,
+                    captured.hole,
+                )?;
                 (
                     Content::Leaf {
                         leaf: captured.leaf,
@@ -286,8 +329,8 @@ impl Capture<'_> {
                 let (left_hash, right_hash) = (left_captured.digest, right_captured.digest);
                 // Read after both recursive writes, so triggers on the right
                 // subtree cannot silently invalidate a prepared left sibling.
-                let a = left_captured.into_node(connection, left)?;
-                let b = right_captured.into_node(connection, right)?;
+                let a = left_captured.into_node(connection, left, self.trigger_free)?;
+                let b = right_captured.into_node(connection, right, self.trigger_free)?;
                 let widths = WidthTable::join(&a.widths, &b.widths)?;
                 (
                     Content::Branch {
@@ -324,6 +367,7 @@ impl Capture<'_> {
 }
 pub(super) fn capture(
     connection: &Connection,
+    trigger_free: bool,
     scope: &crate::runtime::identity::ConversationId,
     input: &crate::model::SelectedModelInput,
     snapshot: &crate::model::RequestSnapshot,
@@ -331,6 +375,7 @@ pub(super) fn capture(
 ) -> Result<Option<CapturedNode>, ConversationStoreError> {
     let mut capture = Capture {
         connection,
+        trigger_free,
         scope,
         input,
         snapshot,

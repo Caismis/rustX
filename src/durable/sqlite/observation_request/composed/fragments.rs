@@ -255,7 +255,9 @@ pub(super) fn scalar(
         end,
     ))
 }
-fn header_parts(value: &serde_json::Value) -> Result<(String, String), ConversationStoreError> {
+fn header_parts(
+    value: &serde_json::Value,
+) -> Result<(String, String, u64), ConversationStoreError> {
     let bytes = bounded(value, 16384)?;
     let marker = b",\"provenance_source\":";
     let start = bytes
@@ -275,6 +277,7 @@ fn header_parts(value: &serde_json::Value) -> Result<(String, String), Conversat
             .map_err(|_| storage("header prefix UTF8 unavailable"))?,
         String::from_utf8(bytes[end..].to_vec())
             .map_err(|_| storage("header suffix UTF8 unavailable"))?,
+        hole.len() as u64,
     ))
 }
 struct RawMessage<'a> {
@@ -419,6 +422,7 @@ fn capture_suffix(
 pub(super) struct CapturedLeaf {
     pub(super) leaf: Leaf,
     pub(super) templates: Vec<CapturedTemplate>,
+    pub(super) hole: Option<(u64, u64)>,
 }
 pub(super) struct CapturedTemplate {
     template: Template,
@@ -435,6 +439,7 @@ fn store_templates(
             templates: Vec::with_capacity(templates.len()),
         },
         templates: Vec::with_capacity(templates.len()),
+        hole: None,
     };
     for template in templates {
         let encoded = super::record::encode(&template, 65536)?;
@@ -475,7 +480,7 @@ pub(super) fn capture(
         .map_err(|error| storage(error.to_string()))?;
     let (prefix, suffix) = persist_provenance_parts(connection, &source, &reader, total, true)?;
     let prefix = prefix.ok_or_else(|| storage("composed producer prefix unavailable"))?;
-    let (header_prefix, header_suffix) = header_parts(&minimum)?;
+    let (header_prefix, header_suffix, hole_length) = header_parts(&minimum)?;
     let template = Template {
         prefix,
         suffix,
@@ -492,13 +497,10 @@ pub(super) fn capture(
     ));
     let maximum = display(&view, header.as_ref())?;
     let max_parts = header_parts(&maximum)?;
-    if max_parts
-        == (
-            template.header_prefix.clone(),
-            template.header_suffix.clone(),
-        )
-    {
-        return store_templates(connection, vec![template], vec![0; weights::CLASSES]);
+    if max_parts.0 == template.header_prefix && max_parts.1 == template.header_suffix {
+        let mut captured = store_templates(connection, vec![template], vec![0; weights::CLASSES])?;
+        captured.hole = Some((provenance_bytes, hole_length));
+        return Ok(captured);
     }
     let mut templates = vec![template];
     let mut variants = vec![0];
@@ -536,7 +538,9 @@ pub(super) fn capture(
             nodes: 33,
         });
     }
-    store_templates(connection, templates, variants)
+    let mut captured = store_templates(connection, templates, variants)?;
+    captured.hole = Some((provenance_bytes, hole_length));
+    Ok(captured)
 }
 pub(super) fn fact(
     connection: &Connection,

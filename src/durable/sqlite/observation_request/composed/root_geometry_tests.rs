@@ -106,7 +106,7 @@ fn borrowed_root_geometry_preserves_path_error_before_left_length_overflow() {
     let root = branch(&connection, 5, &left, &c);
     let proof = store(&connection, root.clone()).unwrap();
     let digest = proof.digest;
-    let checked = proof.into_node(&connection, root.native).unwrap();
+    let checked = proof.into_node(&connection, root.native, false).unwrap();
     let old_path = validate_paths(&connection, root.native, digest, 9)
         .unwrap_err()
         .to_string();

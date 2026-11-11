@@ -84,6 +84,18 @@ pub(super) struct Executions {
 struct Trace {
     before: BTreeMap<String, [i32; 4]>,
     completed: BTreeMap<String, Executions>,
+    phase: &'static str,
+    phases: BTreeMap<(&'static str, String), PhaseWork>,
+}
+
+/// Work of one statement text inside one labelled phase of a measured run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PhaseWork {
+    pub calls: usize,
+    /// Executions whose statement had never run before, i.e. fresh prepares.
+    pub prepares: usize,
+    pub steps: i64,
+    pub rows: usize,
 }
 thread_local! { static TRACE: RefCell<Trace> = RefCell::default(); }
 
@@ -100,14 +112,23 @@ fn counters(statement: &rusqlite::trace::StmtRef<'_>) -> [i32; 4] {
 fn record(event: TraceEvent<'_>) {
     TRACE.with_borrow_mut(|trace| match event {
         TraceEvent::Stmt(statement, text) if !text.starts_with("--") => {
-            trace
-                .before
-                .insert(statement.sql().into_owned(), counters(&statement));
+            let sql = statement.sql().into_owned();
+            if statement.get_status(StatementStatus::Run) == 0 && !trace.before.contains_key(&sql) {
+                trace
+                    .phases
+                    .entry((trace.phase, sql.clone()))
+                    .or_default()
+                    .prepares += 1;
+            }
+            trace.before.insert(sql, counters(&statement));
         }
         TraceEvent::Profile(statement, _) => {
             let sql = statement.sql().into_owned();
             if let Some(before) = trace.before.remove(&sql) {
                 let after = counters(&statement);
+                let phase = trace.phases.entry((trace.phase, sql.clone())).or_default();
+                phase.calls += 1;
+                phase.steps += i64::from(after[0] - before[0]);
                 let execution = trace.completed.entry(sql).or_default();
                 execution.calls += 1;
                 execution.steps = execution.steps.max(after[0] - before[0]);
@@ -119,6 +140,11 @@ fn record(event: TraceEvent<'_>) {
         }
         TraceEvent::Row(statement) => {
             let sql = statement.sql().into_owned();
+            trace
+                .phases
+                .entry((trace.phase, sql.clone()))
+                .or_default()
+                .rows += 1;
             trace.completed.entry(sql).or_default().rows += 1;
         }
         _ => {}
@@ -149,4 +175,14 @@ pub(super) fn finish(connection: &Connection) -> BTreeMap<String, Executions> {
         }
         completed
     })
+}
+
+/// Labels the statements traced from now on; see [`finish_phases`].
+pub(crate) fn phase(label: &'static str) {
+    TRACE.with_borrow_mut(|trace| trace.phase = label);
+}
+
+/// Takes the per-phase work recorded since the last [`capture`].
+pub(crate) fn finish_phases() -> BTreeMap<(&'static str, String), PhaseWork> {
+    TRACE.with_borrow_mut(|trace| std::mem::take(&mut trace.phases))
 }

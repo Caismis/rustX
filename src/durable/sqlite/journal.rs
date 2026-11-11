@@ -1048,6 +1048,7 @@ fn persist_event_isolated(
                 &event,
                 witness_facts.witness.as_ref(),
                 execution_facts.as_ref(),
+                None,
             )
         })
         .flatten();

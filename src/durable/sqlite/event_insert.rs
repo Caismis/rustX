@@ -281,10 +281,19 @@ fn prepare(
                 )
             })?;
     }
-    let readiness = optional_display_layout(transaction, || {
-        observation_readiness::prepare(transaction, event)
-    })?
-    .is_some();
+    // Readiness writes at most one row with one statement. SQLite rolls that
+    // statement back on failure and this guarded schema has no custom trigger,
+    // so it needs no savepoint of its own. As with a contained layout, only a
+    // failure that kept the owning transaction alive retires the domain.
+    let readiness = match observation_readiness::prepare(transaction, event) {
+        Ok(()) => true,
+        Err(
+            error @ (ConversationStoreError::OperationCancelled
+            | ConversationStoreError::TransactionInvalid(_)),
+        ) => return Err(error),
+        Err(error) if transaction.is_autocommit() => return Err(error),
+        Err(_) => false,
+    };
     let aggregate_required = observation_statistics::is_trace_anchor(&event.event)
         || observation_statistics::requires_statistics(event)
         || observation_members::requires_members(event);
@@ -549,6 +558,13 @@ fn finish(
     }
     let witness = row.source.map(|source| source.witness);
     let execution = row.execution.map(|execution| execution.capture);
+    // The pending witness counted Trace through this J: an anchor's own new
+    // total, otherwise the count through its predecessor, which this row
+    // neither extends nor leaves a hole in. Only the native row and rows of
+    // other tables were written since that read in this guarded transaction.
+    let trace_total = witness
+        .as_ref()
+        .and_then(|witness| witness.value.trace_total);
     event.observation = prepare_observation
         .then(|| {
             observation_receipt::single_prepared(
@@ -557,6 +573,7 @@ fn finish(
                 event,
                 witness.as_ref(),
                 execution.as_ref(),
+                trace_total,
             )
         })
         .flatten();

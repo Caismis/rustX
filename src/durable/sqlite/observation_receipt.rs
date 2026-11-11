@@ -36,6 +36,7 @@ fn batch(
         canonical,
         transition,
         summary,
+        None,
     )
 }
 fn terminal_witness(transition: &NativeObservationTransition) -> Option<&ObservationEventWitness> {
@@ -62,6 +63,7 @@ fn batch_with_summary(
     canonical: Option<Arc<CanonicalObservationBatch>>,
     transition: NativeObservationTransition,
     summary: Option<crate::durable::observation::AttemptExecutionSummary>,
+    trace_total: Option<u64>,
 ) -> Option<Arc<NativeObservationBatch>> {
     let terminal = terminal_witness(&transition);
     let finish_reason = terminal
@@ -92,8 +94,9 @@ fn batch_with_summary(
             read_cut.read.transcript,
         )
         .ok(),
-        trace_total: super::observation_statistics::trace_total(connection, read_cut.read.journal)
-            .ok(),
+        trace_total: trace_total.or_else(|| {
+            super::observation_statistics::trace_total(connection, read_cut.read.journal).ok()
+        }),
         pending: None,
         source_unavailable: source_unavailable
             || canonical
@@ -125,14 +128,18 @@ pub(super) fn single(
     conversation: &ConversationId,
     event: &RuntimeEventEnvelope,
 ) -> Option<Arc<NativeObservationBatch>> {
-    single_prepared(connection, conversation, event, None, None)
+    single_prepared(connection, conversation, event, None, None, None)
 }
+/// `trace_total` is the native Trace count through this event when the
+/// caller's own transaction already derived it from the rows it read and the
+/// row it just inserted; otherwise the count is read from storage.
 pub(super) fn single_prepared(
     connection: &Connection,
     conversation: &ConversationId,
     event: &RuntimeEventEnvelope,
     witness: Option<&super::observation_event::Captured>,
     execution: Option<&super::observation_execution::Captured>,
+    trace_total: Option<u64>,
 ) -> Option<Arc<NativeObservationBatch>> {
     let mut evidence =
         stored_events(connection, &[(event, witness)], Some(event.sequence))?.into_iter();
@@ -148,6 +155,7 @@ pub(super) fn single_prepared(
         None,
         transition,
         summary,
+        trace_total,
     )
 }
 pub(super) type PreparedEvent<'a> = (
@@ -315,6 +323,7 @@ pub(super) fn model_turn_settlement(
             boundary,
         },
         summary,
+        None,
     )?;
     let receipt_value = Arc::get_mut(&mut receipt)?;
     receipt_value.pending = pending;
