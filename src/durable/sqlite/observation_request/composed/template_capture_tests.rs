@@ -36,6 +36,22 @@ fn connection() -> Connection {
 }
 
 #[test]
+fn captured_header_hole_length_matches_the_width_encoder() {
+    for encoded_bytes in [0, 9, 10, 9_007_199_254_740_991, u64::MAX] {
+        let source = super::super::super::provenance_source(1, 0, encoded_bytes);
+        let source = super::super::super::typed_value(&Some(source)).unwrap();
+        let value = serde_json::json!({"a": 1, "provenance_source": source});
+        let (_, _, length) = header_parts(&value).unwrap();
+        assert_eq!(
+            length,
+            super::super::nodes::hole(1, 0, encoded_bytes)
+                .unwrap()
+                .len() as u64
+        );
+    }
+}
+
+#[test]
 fn captured_templates_reuse_decode_only_after_current_byte_comparison() {
     let connection = connection();
     // An identical pre-existing page has its own numeric location. Each
