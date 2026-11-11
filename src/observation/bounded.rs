@@ -151,10 +151,7 @@ pub(crate) fn bounded_clone<T: Serialize + DeserializeOwned>(value: &T, limit: u
 }
 /// Opaque JSON is never rewritten with the typed protocol's integer codec.
 /// A browser-unsafe integer is deferred to its exact authoritative UTF-8 bytes.
-pub(crate) fn bounded_json_value(
-    value: &serde_json::Value,
-    limit: usize,
-) -> Option<serde_json::Value> {
+pub(crate) fn bounded_json_fits(value: &serde_json::Value, limit: usize) -> bool {
     fn safe(value: &serde_json::Value, remaining: &mut usize) -> bool {
         if *remaining == 0 {
             return false;
@@ -181,8 +178,17 @@ pub(crate) fn bounded_json_value(
         }
     }
     safe(value, &mut 512)
-        .then(|| bounded_clone(value, limit))
-        .flatten()
+        && match crate::observation::preflight::bounded_fit(value, limit) {
+            Some(admitted) => admitted,
+            None => encoded_len_admitted(value, limit).is_some(),
+        }
+}
+
+pub(crate) fn bounded_json_value(
+    value: &serde_json::Value,
+    limit: usize,
+) -> Option<serde_json::Value> {
+    bounded_json_fits(value, limit).then(|| value.clone())
 }
 
 impl std::io::Write for Length {
@@ -201,6 +207,40 @@ impl std::io::Write for Length {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_json_clone_matches_encoded_roundtrip_at_boundaries() {
+        let values = [
+            serde_json::json!(null),
+            serde_json::json!({"z": "水\n\\\"", "a": [-0.0, 0.1, 1.0e-300]}),
+            serde_json::json!([f64::MAX, f64::MIN, f64::MIN_POSITIVE]),
+            serde_json::json!([9_007_199_254_740_991_u64, -9_007_199_254_740_991_i64]),
+            serde_json::json!((0..CHECKPOINT_PAGE_ITEMS).collect::<Vec<_>>()),
+            serde_json::json!((0..=CHECKPOINT_PAGE_ITEMS).collect::<Vec<_>>()),
+        ];
+        for value in values {
+            let size = serde_json::to_vec(&value).unwrap().len();
+            for limit in [0, 1, size.saturating_sub(1), size, size + 1, 1024, 16_384] {
+                let old = bounded_clone(&value, limit);
+                let new = bounded_json_value(&value, limit);
+                assert_eq!(bounded_json_fits(&value, limit), old.is_some());
+                assert_eq!(new, old, "limit {limit}, value {value}");
+                assert_eq!(
+                    new.map(|item| serde_json::to_vec(&item).unwrap()),
+                    old.map(|item| serde_json::to_vec(&item).unwrap()),
+                );
+            }
+        }
+        assert!(bounded_json_value(&serde_json::json!(9_007_199_254_740_992_u64), 64).is_none());
+        assert!(bounded_json_value(&serde_json::json!(-9_007_199_254_740_992_i64), 64).is_none());
+
+        let value = serde_json::json!({"text": "escaped \n text", "numbers": [0.1, -0.0]});
+        crate::observation::capture::take_item_work();
+        assert_eq!(bounded_clone(&value, 1024), Some(value.clone()));
+        assert_eq!(crate::observation::capture::take_item_work(), [1, 1, 1]);
+        assert_eq!(bounded_json_value(&value, 1024), Some(value));
+        assert_eq!(crate::observation::capture::take_item_work(), [0, 0, 0]);
+    }
 
     #[test]
     fn t20_checkpoint_encoder_preserves_exact_bytes_at_small_budgets() {

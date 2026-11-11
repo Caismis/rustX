@@ -818,7 +818,7 @@ fn persist_event_isolated(
                 event.timestamp.to_rfc3339(),
                 observation_statistics::is_trace_anchor(&event.event),
                 observation_statistics::requires_statistics(&event),
-                observation_event::native_kind(&event.event).ok(),
+                Some(observation_event::native_kind(&event.event)),
                 observation_members::requires_members(&event),
                 observation_turn::required(&event),
                 observation_trace::required(&event),

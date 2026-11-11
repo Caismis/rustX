@@ -2,6 +2,7 @@
 
 use crate::durable::ConversationStoreError;
 use crate::durable::sqlite::canonical::ledger::{load_head, load_message_tx};
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::durable::sqlite::{sqlite_error, storage};
 use crate::message::types::{AssistantContentBlock, ContentBlockIndex, MessageBlock};
 use crate::publication::{
@@ -412,7 +413,7 @@ pub(in crate::durable::sqlite) fn record_tool_proposal_dependency(
         };
     // Keep the global absence/mismatched-generation distinction, but never
     // materialize proposals belonging to unrelated historical generations.
-    let any_proposal: bool = transaction.query_row(
+    let any_proposal: bool = transaction.query_row_cached(
         "SELECT EXISTS(SELECT 1 FROM publication_proposals p INDEXED BY publication_proposals_call_idx CROSS JOIN publication_streams s ON s.stream_id=p.stream_id WHERE p.call_id=?1)",
         [call_id.as_str()], |row| row.get(0),
     ).map_err(|error| sqlite_error(&error, format!("tool proposal presence: {error}")))?;

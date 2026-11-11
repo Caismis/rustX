@@ -1135,6 +1135,25 @@ struct CredentialRedactingAdapter {
     credential: crate::model::catalog::ResolvedCredential,
 }
 
+impl CredentialRedactingAdapter {
+    fn redact_stream(
+        &self,
+        stream: crate::model::adapter::ModelStream,
+    ) -> crate::model::adapter::ModelStream {
+        use futures_util::StreamExt;
+        let credential = self.credential.clone();
+        Box::pin(stream.map(move |mut item| {
+            if let crate::model::adapter::ModelStreamItem::Event(
+                crate::model::event::ModelEvent::Failed { error },
+            ) = &mut item
+            {
+                redact_provider_error(error, &credential);
+            }
+            item
+        }))
+    }
+}
+
 fn redact_provider_error(
     error: &mut ModelError,
     credential: &crate::model::catalog::ResolvedCredential,
@@ -1157,21 +1176,15 @@ impl ModelAdapter for CredentialRedactingAdapter {
         request: crate::model::types::ModelRequest,
         cancellation: crate::runtime::cancellation::CancellationSignal,
     ) -> crate::model::adapter::ModelStream {
-        use futures_util::StreamExt;
-        let credential = self.credential.clone();
-        Box::pin(
-            self.inner
-                .stream(request, cancellation)
-                .map(move |mut item| {
-                    if let crate::model::adapter::ModelStreamItem::Event(
-                        crate::model::event::ModelEvent::Failed { error },
-                    ) = &mut item
-                    {
-                        redact_provider_error(error, &credential);
-                    }
-                    item
-                }),
-        )
+        self.redact_stream(self.inner.stream(request, cancellation))
+    }
+
+    fn stream_prepared(
+        &self,
+        request: crate::model::adapter::validation::PreparedModelRequest,
+        cancellation: crate::runtime::cancellation::CancellationSignal,
+    ) -> crate::model::adapter::ModelStream {
+        self.redact_stream(self.inner.stream_prepared(request, cancellation))
     }
 }
 
@@ -1594,6 +1607,75 @@ pub(crate) fn validate_required_modalities(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn credential_wrapper_forwards_prepared_body_and_redacts_failures() {
+        use std::sync::Arc;
+
+        use futures_util::StreamExt;
+
+        use crate::model::adapter::validation::{
+            PreparedModelRequest, prepare_request, take_preparation_work,
+        };
+        use crate::model::adapter::{ModelAdapter, ModelStream, model_stream_of_failure};
+        use crate::model::catalog::ResolvedCredential;
+        use crate::model::deadline::ModelTimeoutPhase;
+        use crate::model::error::ModelError;
+        use crate::model::types::{ModelProtocol, ModelRequest};
+        use crate::runtime::cancellation::CancellationSignal;
+
+        struct ProbeAdapter {
+            protocol: ModelProtocol,
+            body: (usize, usize),
+        }
+        impl ModelAdapter for ProbeAdapter {
+            fn protocol(&self) -> ModelProtocol {
+                self.protocol
+            }
+            fn stream(&self, _: ModelRequest, _: CancellationSignal) -> ModelStream {
+                panic!("prepared dispatch must not rebuild the request")
+            }
+            fn stream_prepared(
+                &self,
+                request: PreparedModelRequest,
+                _: CancellationSignal,
+            ) -> ModelStream {
+                assert_eq!(request.ownership_probe().body, self.body);
+                let mut error = ModelError::timeout(ModelTimeoutPhase::ResponseStart);
+                error.message = "provider secret".into();
+                error.provider_code = Some("secret".into());
+                model_stream_of_failure(error)
+            }
+        }
+
+        for protocol in [
+            ModelProtocol::OpenAiChatCompletions,
+            ModelProtocol::OpenAiResponses,
+            ModelProtocol::AnthropicMessages,
+        ] {
+            take_preparation_work();
+            let input = crate::scripted_suites::common::simple_request(protocol, "model", "input");
+            let request = prepare_request(input, protocol).unwrap();
+            let adapter = super::CredentialRedactingAdapter {
+                inner: Arc::new(ProbeAdapter {
+                    protocol,
+                    body: request.ownership_probe().body,
+                }),
+                credential: ResolvedCredential::new("secret"),
+            };
+            let mut stream = adapter.stream_prepared(request, CancellationSignal::new());
+            assert_eq!(take_preparation_work(), (1, 1));
+            let Some(crate::model::adapter::ModelStreamItem::Event(
+                crate::model::event::ModelEvent::Failed { error },
+            )) = stream.next().await
+            else {
+                panic!("expected provider failure");
+            };
+            assert_eq!(error.message, "provider <redacted>");
+            assert_eq!(error.provider_code.as_deref(), Some("<redacted>"));
+            assert!(stream.next().await.is_none());
+        }
+    }
+
     #[test]
     fn unattributed_invocation_is_readable_but_cannot_authorize_native_replay() {
         let config = crate::scripted_suites::common::simple_request(

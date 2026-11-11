@@ -536,7 +536,7 @@ pub(super) fn validate_start(
     through: u64,
 ) -> Result<(), ConversationStoreError> {
     let agent: bool = connection
-        .query_row(
+        .query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM request_owners o WHERE o.start_sequence=e.sequence AND o.owner_kind='agent') FROM events e WHERE e.sequence=?1 AND e.sequence<=?2",
             params![sequence, through],
             |row| row.get(0),

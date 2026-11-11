@@ -370,7 +370,7 @@ pub(super) fn at_sequence(
     sequence: u64,
 ) -> Result<crate::durable::observation::AttemptMemberCounts, ConversationStoreError> {
     let bytes: Option<Vec<u8>> = connection
-        .query_row(
+        .query_row_cached(
             "SELECT observation_members FROM events WHERE sequence=?1",
             [sequence],
             |row| row.get(0),
@@ -642,4 +642,73 @@ pub(super) fn inherited_process(
         ));
     }
     process_view(connection, cut, counts, Some(fallback))
+}
+
+#[cfg(test)]
+mod plan_reuse_tests {
+    use super::*;
+    use rusqlite::StatementStatus;
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[test]
+    fn member_lookup_reuses_plan_but_reads_current_row() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE events(sequence INTEGER PRIMARY KEY, observation_members BLOB)",
+            )
+            .unwrap();
+        let mut members = crate::durable::observation::AttemptMemberCounts::default();
+        connection
+            .execute(
+                "INSERT INTO events VALUES(1, ?1)",
+                [encode(&members).unwrap()],
+            )
+            .unwrap();
+        let prepares = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&prepares);
+        connection
+            .authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "events",
+                        column_name: "observation_members"
+                    }
+                ) {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
+                Authorization::Allow
+            }))
+            .unwrap();
+        assert_eq!(at_sequence(&connection, 1).unwrap(), members);
+        assert!(prepares.swap(0, Ordering::SeqCst) > 0);
+        let sql = "SELECT observation_members FROM events WHERE sequence=?1";
+        let statement = connection.prepare_cached(sql).unwrap();
+        let steps = statement.get_status(StatementStatus::VmStep);
+        assert!(steps > 0);
+        statement.reset_status(StatementStatus::VmStep);
+        drop(statement);
+        members.message_count = 3;
+        connection
+            .execute(
+                "UPDATE events SET observation_members=?1 WHERE sequence=1",
+                [encode(&members).unwrap()],
+            )
+            .unwrap();
+        prepares.store(0, Ordering::SeqCst);
+        assert_eq!(at_sequence(&connection, 1).unwrap(), members);
+        assert_eq!(prepares.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            connection
+                .prepare_cached(sql)
+                .unwrap()
+                .get_status(StatementStatus::VmStep),
+            steps
+        );
+    }
 }

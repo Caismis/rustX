@@ -1344,7 +1344,7 @@ pub(super) fn tool_occurrence_receipt(
         | RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
         | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. } => tool_call_id,
         RuntimeEvent::ToolMessageCommitted { message_id, .. } => {
-            let value:Option<(u64,u32,u64)>=connection.query_row("SELECT observation_ledger,block_index,observation_tool_ordinal FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1)",[message_id.as_str()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+            let value:Option<(u64,u32,u64)>=connection.query_row_cached("SELECT observation_ledger,block_index,observation_tool_ordinal FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1)",[message_id.as_str()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             return Ok(value.map(|(ledger_position, index, tool_ordinal)| {
                 crate::events::types::ToolObservationOccurrence {
                     tool_ordinal,
@@ -1358,7 +1358,7 @@ pub(super) fn tool_occurrence_receipt(
     let Some(attempt) = &event.attempt_id else {
         return Ok(None);
     };
-    let value: Option<(u64, u32, u64)> = connection.query_row(
+    let value: Option<(u64, u32, u64)> = connection.query_row_cached(
         "SELECT l.position,c.block_index,c.observation_tool_ordinal FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_scope_idx CROSS JOIN message_ledger l ON l.message_id=c.assistant_message_id WHERE c.attempt_id=?1 AND c.call_id=?2 AND c.commit_sequence<=?3 ORDER BY c.commit_sequence DESC LIMIT 1",
         params![attempt.as_str(), call.as_str(), seq_to_i64(event.sequence)?],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),

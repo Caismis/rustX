@@ -1,7 +1,8 @@
 //! Bounded capture of finite native display descriptors. Capture copies finite
 //! descriptors; source-owned bytes are materialized only by their native owner.
 use super::bounded::{
-    CHECKPOINT_ITEM_BYTES, CHECKPOINT_PAGE_ITEMS, bounded_clone, bounded_json_value,
+    CHECKPOINT_ITEM_BYTES, CHECKPOINT_PAGE_ITEMS, bounded_clone, bounded_json_fits,
+    bounded_json_value,
 };
 use super::bounded::{CHECKPOINT_TARGET_BYTES, bounded_item, bounded_item_bytes};
 use super::bounded::{bounded_len, prepare_capture_item};
@@ -21,7 +22,7 @@ fn message_json_safe(message: &crate::message::types::MessageBlock) -> bool {
                 .take(CHECKPOINT_PAGE_ITEMS)
                 .all(|block| match block {
                     AssistantContentBlock::ToolCall(call) => {
-                        bounded_json_value(&call.arguments, CHECKPOINT_ITEM_BYTES).is_some()
+                        bounded_json_fits(&call.arguments, CHECKPOINT_ITEM_BYTES)
                     }
                     _ => true,
                 })
@@ -33,7 +34,7 @@ fn message_json_safe(message: &crate::message::types::MessageBlock) -> bool {
             .take(CHECKPOINT_PAGE_ITEMS)
             .all(|block| match block {
                 crate::tools::types::ToolResultContent::Json { value } => {
-                    bounded_json_value(value, CHECKPOINT_ITEM_BYTES).is_some()
+                    bounded_json_fits(value, CHECKPOINT_ITEM_BYTES)
                 }
                 _ => true,
             }),
