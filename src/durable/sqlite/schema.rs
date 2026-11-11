@@ -90,7 +90,7 @@ pub(super) fn configure_connection(
     register_native_functions(connection)?;
     connection
         .execute_batch(
-            "PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; PRAGMA page_size = 2048;",
+            "PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; PRAGMA page_size = 2048; PRAGMA wal_autocheckpoint = 2000;",
         )
         .map_err(|error| {
             crate::durable::sqlite::sqlite_error(&error, format!("configure SQLite: {error}"))
