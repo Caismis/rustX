@@ -132,7 +132,9 @@ timezone = "UTC"
     // publish Allow once. Lifecycle fixtures that mutate without a browser Ask
     // use Full Access (root here and/or Workspace rustx.toml below).
     // Root approval_mode must precede any [context] table header.
-    const rootApprovalMode = ['web_composer_context'].includes(scenario) ? 'full_access' : 'plan';
+    const rootApprovalMode = ['web_composer_context', 'web_chat_history'].includes(scenario)
+      ? 'full_access'
+      : 'plan';
     const writeSettings = (model = primaryModel, modelFields = '') => writeFileSync(settings, `approval_mode = "${rootApprovalMode}"\n` + (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n[agent.model]\nmodel = "fixture/${model}"\n${modelFields}` + imageSource);
     writeSettings();
     if (['web_child_capabilities', 'web_large_write'].includes(scenario)) writeFileSync(settings, readFileSync(settings, 'utf8') + '\n');

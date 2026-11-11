@@ -443,8 +443,10 @@ def web_stop() -> Scenario:
         Step(expected("Stop during proposal"), Stream(Text("Preparing a file without executing it."),
             Raw(b'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"stopped-write","type":"function","function":{"name":"write","arguments":"{\\\"path\\\":"}}]},"finish_reason":null}]}\n\n'),
             Gate("stop-proposal"), Finish("tool_calls")), allow_disconnect=True),
+        # Redirect keeps the chain unproven: sleep+printf alone is read-only and
+        # would Allow under Plan without the Ask this Stop-while-running case needs.
         Step(expected("Stop running tool"), Stream(ToolCall("stopped-bash", "bash", json.dumps({
-            "command": "sleep 30; printf must-not-run",
+            "command": "sleep 30; printf must-not-run >> stop-effect",
             "execution_mode": "foreground",
             "elevation_reason": "integration fixture escalates unproven bash under Plan mode",
         }, separators=(",", ":"))), Finish("tool_calls"))),
