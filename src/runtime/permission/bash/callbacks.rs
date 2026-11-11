@@ -14,6 +14,7 @@ pub static XARGS_TARGET_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::ne
 pub fn run_danger_callback(id: DangerCallbackId, _command_text: &str, args: &[String]) -> bool {
     match id {
         DangerCallbackId::Date => date_dangerous(args),
+        DangerCallbackId::Hostname => hostname_dangerous(args),
         DangerCallbackId::Jq => jq_dangerous(args),
         DangerCallbackId::Lsof => lsof_dangerous(args),
         DangerCallbackId::Man => man_dangerous(args),
@@ -217,6 +218,28 @@ fn date_dangerous(args: &[String]) -> bool {
         i += 1;
     }
     false
+}
+
+/// GNU/BSD `hostname NAME` sets the host name. Safe flags are query-only;
+/// any positional operand (including after `--`) is a mutation.
+fn hostname_dangerous(args: &[String]) -> bool {
+    let mut after_dd = false;
+    for arg in args {
+        if after_dd {
+            return true;
+        }
+        if arg == "--" {
+            after_dd = true;
+            continue;
+        }
+        if arg.is_empty() {
+            continue;
+        }
+        if !arg.starts_with('-') {
+            return true;
+        }
+    }
+    after_dd
 }
 
 fn man_dangerous(args: &[String]) -> bool {

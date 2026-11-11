@@ -13,6 +13,14 @@ fn flags_arc(map: &LazyLock<HashMap<&'static str, SafeFlagValue>>) -> Arc<HashMa
     Arc::new((**map).clone())
 }
 
+fn merge_flags(maps: &[&LazyLock<HashMap<&'static str, SafeFlagValue>>]) -> Arc<HashMap<&'static str, SafeFlagValue>> {
+    let mut out = HashMap::new();
+    for map in maps {
+        out.extend((**map).iter().map(|(k, v)| (*k, *v)));
+    }
+    Arc::new(out)
+}
+
 pub static READONLY_ALLOW_ANY_ARG_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
         "basename",
@@ -91,7 +99,7 @@ pub static READONLY_COMMAND_POLICIES: LazyLock<HashMap<&'static str, BashReadonl
         map.insert("head", BashReadonlyCommandPolicy { allow_any_args: false, command_only: false, allow_compact_numeric_count_flag: false, respects_double_dash: true, safe_flags: Some(flags_arc(&HEAD_TAIL_SAFE_FLAGS)), danger_callback: None });
         map.insert("help", BashReadonlyCommandPolicy { allow_any_args: false, command_only: false, allow_compact_numeric_count_flag: false, respects_double_dash: true, safe_flags: Some(Arc::new(HashMap::from([("-d", SafeFlagValue::None), ("-m", SafeFlagValue::None), ("-s", SafeFlagValue::None)]))), danger_callback: None });
         map.insert("hexdump", BashReadonlyCommandPolicy { allow_any_args: true, command_only: false, allow_compact_numeric_count_flag: false, respects_double_dash: true, safe_flags: None, danger_callback: None });
-        map.insert("hostname", BashReadonlyCommandPolicy { allow_any_args: false, command_only: false, allow_compact_numeric_count_flag: false, respects_double_dash: true, safe_flags: Some(flags_arc(&HOSTNAME_SAFE_FLAGS)), danger_callback: None });
+        map.insert("hostname", BashReadonlyCommandPolicy { allow_any_args: false, command_only: false, allow_compact_numeric_count_flag: false, respects_double_dash: true, safe_flags: Some(flags_arc(&HOSTNAME_SAFE_FLAGS)), danger_callback: Some(DangerCallbackId::Hostname) });
         map.insert("id", BashReadonlyCommandPolicy { allow_any_args: true, command_only: false, allow_compact_numeric_count_flag: false, respects_double_dash: true, safe_flags: None, danger_callback: None });
         map.insert("jq", BashReadonlyCommandPolicy { allow_any_args: false, command_only: false, allow_compact_numeric_count_flag: false, respects_double_dash: true, safe_flags: Some(flags_arc(&JQ_SAFE_FLAGS)), danger_callback: Some(DangerCallbackId::Jq) });
         map.insert("lsof", BashReadonlyCommandPolicy { allow_any_args: false, command_only: false, allow_compact_numeric_count_flag: false, respects_double_dash: true, safe_flags: Some(flags_arc(&LSOF_SAFE_FLAGS)), danger_callback: Some(DangerCallbackId::Lsof) });
@@ -150,7 +158,15 @@ pub static GIT_READONLY_SUBCOMMAND_POLICIES: LazyLock<Vec<(String, BashReadonlyC
             }),
             ("git show".to_owned(), BashReadonlyCommandPolicy {
                 allow_any_args: false, command_only: false, allow_compact_numeric_count_flag: false,
-                respects_double_dash: true, safe_flags: Some(flags_arc(&GIT_SHOW_SAFE_FLAGS)), danger_callback: Some(DangerCallbackId::GitRevisionFormat),
+                respects_double_dash: true,
+                safe_flags: Some(merge_flags(&[
+                    &GIT_SHOW_SAFE_FLAGS,
+                    &COMMON_GIT_COLOR_FLAGS,
+                    &COMMON_GIT_PATCH_FLAGS,
+                    &COMMON_GIT_STAT_FLAGS,
+                    &COMMON_GIT_LOG_STYLE_FLAGS,
+                ])),
+                danger_callback: Some(DangerCallbackId::GitRevisionFormat),
             }),
             ("git diff".to_owned(), BashReadonlyCommandPolicy {
                 allow_any_args: false, command_only: false, allow_compact_numeric_count_flag: false,
@@ -158,7 +174,18 @@ pub static GIT_READONLY_SUBCOMMAND_POLICIES: LazyLock<Vec<(String, BashReadonlyC
             }),
             ("git log".to_owned(), BashReadonlyCommandPolicy {
                 allow_any_args: false, command_only: false, allow_compact_numeric_count_flag: true,
-                respects_double_dash: true, safe_flags: Some(flags_arc(&GIT_LOG_SAFE_FLAGS)), danger_callback: Some(DangerCallbackId::GitRevisionFormat),
+                respects_double_dash: true,
+                safe_flags: Some(merge_flags(&[
+                    &GIT_LOG_SAFE_FLAGS,
+                    &COMMON_GIT_REF_FLAGS,
+                    &COMMON_GIT_DATE_FLAGS,
+                    &COMMON_GIT_LOG_STYLE_FLAGS,
+                    &COMMON_GIT_COUNT_FLAGS,
+                    &COMMON_GIT_STAT_FLAGS,
+                    &COMMON_GIT_COLOR_FLAGS,
+                    &COMMON_GIT_PATCH_FLAGS,
+                ])),
+                danger_callback: Some(DangerCallbackId::GitRevisionFormat),
             }),
             ("git grep".to_owned(), BashReadonlyCommandPolicy {
                 allow_any_args: false, command_only: false, allow_compact_numeric_count_flag: false,

@@ -107,6 +107,7 @@ impl Default for BashReadonlyCommandPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DangerCallbackId {
     Date,
+    Hostname,
     Jq,
     Lsof,
     Man,

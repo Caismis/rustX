@@ -174,7 +174,9 @@ mod tests {
     fn allows_simple_readonly_commands() {
         for command in [
             "ls -la", "pwd", "cat README.md", "env", "date", "grep pattern",
-            "git status", "git log --oneline", "git branch -a", "rg -n foo src",
+            "hostname", "hostname -f", "hostname --fqdn",
+            "git status", "git log --oneline", "git log -n 5 --graph --stat",
+            "git show --stat HEAD", "git branch -a", "rg -n foo src",
             "find . -name '*.rs'", "head -n 20 README.md", "wc -l README.md",
             "stat README.md", "file README.md", "echo hello", "printf '%s\\n' hello",
             "true", "false", "test -f package.json", "tree -a", "tree -L 2",
@@ -196,6 +198,7 @@ mod tests {
             "pwd & rm -rf /", "true && rm -rf /", "git diff --output=/tmp/written.patch",
             "git -calias.status=!touch /tmp/pwned status",
             "git -c alias.status=!touch /tmp/pwned status",
+            "hostname new-host", "hostname -- evil",
             "fd -x rm", "fd --exec rm {}", "fd --exec-batch rm", "fd -X rm",
             "rg --pre=sh needle", "rg --pre ./filter foo src",
             "jq -f filter.jq package.json", "jq 'env' package.json",
