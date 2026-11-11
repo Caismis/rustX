@@ -56,6 +56,7 @@ chat_reasoning_replay = "omit"
 /// The launch configuration with the deliberately tiny frozen timeout
 /// policy that every launched child must inherit.
 const SESSION_TOML: &str = r#"agent_id = "agent-parent"
+approval_mode = "full_access"
 
 [context]
 reserve_tokens = 1024

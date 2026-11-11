@@ -140,11 +140,10 @@ async fn a_real_child_executes_native_tools_in_the_frozen_nested_workspace() {
     let worktrees = git(&repository, &["worktree", "list", "--porcelain"]);
     let refs = git(&repository, &["show-ref"]);
     let identity = std::fs::metadata(&workspace).unwrap();
-    let session = format!("approval_mode = \"full_access\"\n{SHARED_SUBDIRECTORY_SESSION_TOML}")
-        .replace(
-            "builtin = [\"read\"]",
-            "builtin = [\"read\", \"write\", \"edit\", \"bash\"]",
-        );
+    let session = SHARED_SUBDIRECTORY_SESSION_TOML.replace(
+        "builtin = [\"read\"]",
+        "builtin = [\"read\", \"write\", \"edit\", \"bash\"]",
+    );
     let models = models_json(&server.url("/v1"));
     let mut process = launch_parent(
         root.path(),
