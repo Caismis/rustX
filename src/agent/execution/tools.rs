@@ -484,12 +484,10 @@ impl AgentExecution<'_> {
                     if slots[index].result.is_none() {
                         let tool_call_id = slots[index].call.id.clone();
                         let tool_id = slots[index].tool_id.clone();
-                        if let Err(message) =
-                            self.emit_shared(RuntimeEvent::ToolExecutionStarted {
-                                tool_call_id,
-                                tool_id,
-                            })
-                        {
+                        if let Err(message) = self.emit_shared(RuntimeEvent::ToolExecutionStarted {
+                            tool_call_id,
+                            tool_id,
+                        }) {
                             return Err(CanonicalCommitError::Durable(
                                 crate::durable::ConversationStoreError::Storage(message),
                             ));

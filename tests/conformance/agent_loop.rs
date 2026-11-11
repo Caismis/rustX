@@ -1248,16 +1248,23 @@ async fn default_system_prompt_layers_project_instructions_on_every_protocol() {
         )));
         let project_instructions = format!(
             "\n\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\n{global}\n</project_instructions>\n\n<project_instructions path=\"{}\">\n{project}\n</project_instructions>",
-            global_directory.canonicalize().unwrap().join("AGENTS.md").display(),
-            workspace.canonicalize().unwrap().join("AGENTS.md").display()
+            global_directory
+                .canonicalize()
+                .unwrap()
+                .join("AGENTS.md")
+                .display(),
+            workspace
+                .canonicalize()
+                .unwrap()
+                .join("AGENTS.md")
+                .display()
         );
         assert!(prompt.contains(&project_instructions));
         // PermissionReminder is the last system-section lane when eligible, so
         // the prompt may continue past project instructions on first request.
         let after_project = prompt.split(&project_instructions).nth(1).unwrap_or("");
         assert!(
-            after_project.is_empty()
-                || after_project.starts_with("\n\nExecution permission mode:"),
+            after_project.is_empty() || after_project.starts_with("\n\nExecution permission mode:"),
             "unexpected system prompt tail after project instructions: {after_project:?}"
         );
         let snapshots = driver.request_history().page(None, 32).unwrap().snapshots;

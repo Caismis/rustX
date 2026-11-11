@@ -320,8 +320,7 @@ builtin = ["read"]
 "#;
 
 /// A Workspace enables its own Workflow files.
-const ENABLE: &str =
-    "approval_mode = \"full_access\"\n[agent]\nworkflows = [\"review_pr\"]\n";
+const ENABLE: &str = "approval_mode = \"full_access\"\n[agent]\nworkflows = [\"review_pr\"]\n";
 
 const WORKFLOW: &str = r"description: Review the request with a native child agent.
 block:
