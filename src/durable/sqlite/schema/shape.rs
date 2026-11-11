@@ -211,6 +211,8 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "logical_step_sequence",
                 "pending_unresolved_output_stream_id",
                 "bootstrap_initialized",
+                "surface_revision",
+                "surface_compaction_generation",
             ] as &[&str],
         ),
         (
@@ -356,7 +358,6 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "message_id",
             ],
         ),
-        ("surface_head", &["revision", "compaction_generation"]),
         ("request_configurations", &["digest", "configuration_json"]),
         (
             "request_snapshot_payloads",
@@ -550,11 +551,6 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
             })?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(format!("read schema columns {table}: {error}")))?;
-        if table == "surface_head" && columns.iter().any(|column| column == "active_json") {
-            return Err(ConversationStoreError::IncompatibleSchema(
-                "surface_head retains retired active_json layout".into(),
-            ));
-        }
         for column in required_columns {
             if !columns.iter().any(|candidate| candidate == column) {
                 return Err(ConversationStoreError::IncompatibleSchema(format!(

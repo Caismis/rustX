@@ -353,7 +353,7 @@ fn count_conversation_store_open() {
 /// Version 108 combines these with shared Tool association facts and immutable request payloads.
 /// Version 109 unifies sparse event identities, integer request ownership, selected-input
 /// and Source trees, co-located transcript headers, numeric Content coordinates, and Surface identity.
-pub const SQLITE_SCHEMA_VERSION: i64 = 111;
+pub const SQLITE_SCHEMA_VERSION: i64 = 112;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
