@@ -675,6 +675,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 ordinary_human INTEGER NOT NULL DEFAULT 0 CHECK(ordinary_human IN (0,1)),
                 title_source_text TEXT CHECK(title_source_text IS NULL OR length(CAST(title_source_text AS BLOB))<=4096),
                 native_todo INTEGER NOT NULL DEFAULT 0 CHECK(native_todo IN (0,1)),
+                todo_publication INTEGER NOT NULL DEFAULT 0 CHECK(todo_publication IN (0,1)),
                 boundary_indexed INTEGER NOT NULL DEFAULT 0 CHECK(boundary_indexed IN (0,1)),
                 first_append_revision INTEGER,
                 position INTEGER PRIMARY KEY,
@@ -964,6 +965,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
             CREATE INDEX IF NOT EXISTS message_ledger_append_position_idx ON message_ledger(position,first_append_revision) WHERE first_append_revision IS NOT NULL;
             CREATE INDEX IF NOT EXISTS message_ledger_transcript_position_idx ON message_ledger(position) WHERE native_transcript IS NOT NULL;
             CREATE INDEX IF NOT EXISTS message_ledger_todo_idx ON message_ledger(position) WHERE native_todo=1;
+            CREATE INDEX IF NOT EXISTS message_ledger_todo_publication_idx ON message_ledger(position) WHERE todo_publication=1;
             CREATE INDEX IF NOT EXISTS message_ledger_opening_idx ON message_ledger(position) WHERE ordinary_user=1;
             CREATE INDEX IF NOT EXISTS message_ledger_human_activity_idx ON message_ledger(position) WHERE human_activity_at IS NOT NULL;
             CREATE INDEX IF NOT EXISTS message_ledger_boundary_holes_idx ON message_ledger(first_append_revision) WHERE ordinary_user=1 AND boundary_indexed=0 AND first_append_revision IS NOT NULL;

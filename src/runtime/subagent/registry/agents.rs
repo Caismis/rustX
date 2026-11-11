@@ -1139,6 +1139,15 @@ impl SubagentRegistry {
     }
 }
 
+/// Every Journal fact kind the subagent registry restores from.
+const SUBAGENT_LIFECYCLE_KINDS: &[&str] = &[
+    "agent_activation_admission",
+    "subagent_ownership_committed",
+    "subagent_terminal_published",
+    "subagent_terminal_settled",
+    "subagent_physical_settlement_proven",
+];
+
 impl SubagentRegistry {
     /// Rebuild durable identity/activation relationships from committed facts.
     /// Startup reconciliation has already terminalized orphaned activations.
@@ -1152,25 +1161,19 @@ impl SubagentRegistry {
         use crate::events::types::RuntimeEvent;
         let mut pending_admissions = std::collections::BTreeMap::new();
         let mut unsettled = std::collections::BTreeSet::new();
-        let mut cursor = None;
         let mut events = Vec::new();
         let mut authorities = std::collections::BTreeMap::new();
-        loop {
-            let page = store.read_events(cursor, 256)?;
-            if page.events.is_empty() {
-                break;
+        // Only the subagent lifecycle facts participate; they are read through
+        // the Journal kind index instead of decoding the whole history.
+        for envelope in crate::durable::presentation::all_facts(store, SUBAGENT_LIFECYCLE_KINDS)? {
+            if let RuntimeEvent::SubagentOwnershipCommitted {
+                admitted_authority: Some(agent_id),
+                ..
+            } = &envelope.event
+            {
+                authorities.insert(agent_id.clone(), store.load_agent_authority(agent_id)?);
             }
-            cursor = page.next_sequence;
-            for envelope in page.events {
-                if let RuntimeEvent::SubagentOwnershipCommitted {
-                    admitted_authority: Some(agent_id),
-                    ..
-                } = &envelope.event
-                {
-                    authorities.insert(agent_id.clone(), store.load_agent_authority(agent_id)?);
-                }
-                events.push(envelope);
-            }
+            events.push(envelope);
         }
         let consumed = super::super::physical_recovery::consumed_session_allocations(
             &self.config.spawn.product_root,

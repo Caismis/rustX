@@ -767,6 +767,24 @@ pub trait CanonicalStore: Send + Sync + 'static {
         through: u64,
     ) -> Result<Option<CanonicalToolResultOwner>, ConversationStoreError>;
 
+    /// The greatest timestamp of any ordinary Human message in the whole
+    /// Ledger, by its index.
+    fn latest_human_activity(
+        &self,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, ConversationStoreError>;
+
+    /// The newest successful `todo` result in the whole Ledger, by its index.
+    fn latest_todo_publication(&self) -> Result<Option<MessageBlock>, ConversationStoreError>;
+
+    /// The attempt that committed one canonical Assistant with physical Tool
+    /// calls, from the native Tool-call index verified against its exact
+    /// `AssistantMessageCommitted` Journal fact. `None` when no attempt
+    /// committed it (a supplied bootstrap turn).
+    fn canonical_assistant_owner(
+        &self,
+        assistant: &MessageId,
+    ) -> Result<Option<crate::runtime::identity::AttemptId>, ConversationStoreError>;
+
     /// Native canonical allocation registry. Independent observation domains
     /// never read or populate it.
     fn canonical_bodies(&self) -> std::sync::Arc<crate::conversation::bodies::CanonicalBodies>;
@@ -846,6 +864,13 @@ pub trait CanonicalStore: Send + Sync + 'static {
     /// Loads the current Surface head and checkpoint metadata without
     /// materializing historical revisions.
     fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError>;
+    /// Validate the current canonical head without returning its identities.
+    /// Recovery uses this when no canonical Tool calls need repair.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the native head is inconsistent or cannot be read.
+    fn validate_head(&self) -> Result<(), ConversationStoreError>;
     /// Prove that every exact Ledger identity is an ordinary human input.
     /// Reads authorship metadata only; content is not part of this projection.
     fn messages_are_human_inputs(&self, ids: &[MessageId]) -> Result<bool, ConversationStoreError>;

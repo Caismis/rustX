@@ -3,9 +3,9 @@
 
 #[cfg(test)]
 use super::{
-    AgentId, Arc, ConversationId, ConversationRuntimeError, ConversationState, DurableOperation,
-    MessageBlock, MessageId, Mutex, PendingObservations, RuntimeBootstrapError,
-    RuntimeBootstrapSnapshot, RuntimeConversationConfig, Weak,
+    AgentId, Arc, ConversationId, ConversationRuntimeError, DurableOperation, MessageBlock,
+    MessageId, Mutex, PendingObservations, RuntimeBootstrapError, RuntimeBootstrapSnapshot,
+    RuntimeConversationConfig, Weak,
 };
 use super::{ConversationRuntime, RuntimeInner};
 
@@ -317,7 +317,8 @@ impl ConversationRuntime {
             .lock()
             .expect("runtime lock")
             .conversation
-            .as_ref()
+            .hydrate(self.inner.store.as_ref())
+            .expect("hydrate the coordinator conversation")
             .map(|conversation| conversation.ledger().audit_records())
     }
 
@@ -335,8 +336,9 @@ impl ConversationRuntime {
             .lock()
             .expect("runtime lock")
             .conversation
-            .as_ref()
-            .map(ConversationState::active_ids)
+            .hydrate(self.inner.store.as_ref())
+            .expect("hydrate the coordinator conversation")
+            .map(|conversation| conversation.active_ids())
     }
 
     /// Whether idle maintenance currently owns the conversation state.

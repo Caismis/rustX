@@ -705,10 +705,19 @@ impl RuntimeInner {
         // validate stable identities; committed receipts supply the content. On a validation failure
         // nothing is durably adopted and the items remain pending.
         {
-            let conversation = state
-                .conversation
-                .as_ref()
-                .expect("the coordinator owns the conversation state while idle");
+            let conversation = match state.conversation.hydrate(self.store.as_ref()) {
+                Ok(conversation) => {
+                    &*conversation.expect("the coordinator owns the conversation state while idle")
+                }
+                Err(error) => {
+                    self.record_durability_failure(
+                        &mut state,
+                        DurableOperation::HydrateConversation,
+                        error.to_string(),
+                    );
+                    return;
+                }
+            };
             for item in batch.items() {
                 let block = crate::durable::canonical_block(item.message());
                 match conversation.prepare_commit(&block) {
@@ -752,7 +761,7 @@ impl RuntimeInner {
         state.recovered_continuation = None;
         // Mutation preserves identity. Every committed row is a subset of the
         // prevalidated identities; only the committed receipt supplies content.
-        let conversation = state.conversation.as_ref().expect("idle conversation");
+        let conversation = state.conversation.owned().expect("idle conversation");
         let prepared_commits: Vec<_> = adopted
             .iter()
             .map(|item| {
@@ -800,7 +809,7 @@ impl RuntimeInner {
         // authority.
         let mut conversation = state
             .conversation
-            .take()
+            .lend()
             .expect("the coordinator owns the conversation state while idle");
         for ((prepared, _item), receipt) in prepared_commits
             .into_iter()
@@ -844,10 +853,20 @@ impl RuntimeInner {
         self: &Arc<Self>,
         mut state: MutexGuard<'_, CoordinatorState>,
     ) {
-        let conversation = state
-            .conversation
-            .take()
-            .expect("the coordinator owns the conversation state while idle");
+        let conversation = match state.conversation.hydrate(self.store.as_ref()) {
+            Ok(_) => state
+                .conversation
+                .lend()
+                .expect("the coordinator owns the conversation state while idle"),
+            Err(error) => {
+                self.record_durability_failure(
+                    &mut state,
+                    DurableOperation::HydrateConversation,
+                    error.to_string(),
+                );
+                return;
+            }
+        };
         let provenance = state
             .recovered_continuation
             .take()
@@ -1351,7 +1370,7 @@ impl ConversationRuntime {
         };
         if (state.current_attempt.is_some() || state.scheduled.is_some())
             || state.manual_compaction.is_some()
-            || state.conversation.is_none()
+            || state.conversation.is_lent()
             || state.recovered_continuation.is_some()
             || !self.inner.durability_gate.healthy_for_idle_claim()
             || state.mcp_settlement_failure.is_some()

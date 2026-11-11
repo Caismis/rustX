@@ -15,6 +15,55 @@ pub(super) fn append(
 }
 
 #[test]
+fn journal_pages_reuse_statement_and_recheck_current_rows() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let store = store();
+    for _ in 0..3 {
+        append(&store, "").unwrap();
+    }
+    let prepares = std::sync::Arc::new(AtomicUsize::new(0));
+    {
+        let connection = store.lock().unwrap();
+        connection.flush_prepared_statement_cache();
+        let prepares = prepares.clone();
+        connection
+            .authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "events",
+                        column_name: "event_json"
+                    }
+                ) {
+                    prepares.fetch_add(1, Ordering::Relaxed);
+                }
+                Authorization::Allow
+            }))
+            .unwrap();
+    }
+    let mut cursor = None;
+    for sequence in 1..=3 {
+        let page = store.read_events(cursor, 1).unwrap();
+        assert_eq!(page.events[0].sequence, sequence);
+        cursor = page.next_sequence;
+    }
+    assert!(store.read_events(cursor, 1).unwrap().events.is_empty());
+    assert_eq!(prepares.load(Ordering::Relaxed), 1);
+    {
+        let connection = store.lock().unwrap();
+        connection
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+            .unwrap();
+        connection
+            .execute("UPDATE events SET event_json='{}' WHERE sequence=2", [])
+            .unwrap();
+    }
+    assert!(store.read_events(Some(1), 1).is_err());
+}
+
+#[test]
 fn numeric_identity_keeps_custom_aliases_and_rejects_reserved_defaults() {
     let store = store();
     let first = append(&store, "").unwrap();
