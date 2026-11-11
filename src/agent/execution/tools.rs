@@ -467,59 +467,81 @@ impl AgentExecution<'_> {
                 }
                 Group::Sequential => {
                     // Todo shares one provisional list per batch. Run each call
-                    // alone so later siblings observe earlier mutations.
-                    if slots[index].result.is_none() {
+                    // alone so later siblings observe earlier mutations. Errors
+                    // still defer through batch-wide started tracking so an
+                    // earlier Concurrent Allow cannot outlive missing ToolMessages.
+                    let mut group_error: Option<CanonicalCommitError> = None;
+                    if slots[index].result.is_none() && !self.cancellation.is_cancelled() {
                         let facts = ParallelAuthFacts::from_execution(index, self, &slots[index]);
-                        let outcome = authorize_owned(
+                        match authorize_owned(
                             &self.lifecycle,
                             &self.cancellation.execution_cancellation(),
                             &facts,
                         )
                         .await
-                        .map_err(CanonicalCommitError::Interaction)?;
-                        if let Some(result) = outcome {
-                            slots[index].result = Some(result);
+                        {
+                            Ok(Some(result)) => slots[index].result = Some(result),
+                            Ok(None) => {}
+                            Err(error) => {
+                                group_error = Some(CanonicalCommitError::Interaction(error));
+                            }
                         }
                     }
-                    if slots[index].result.is_none() {
+                    if group_error.is_none()
+                        && slots[index].result.is_none()
+                        && !self.cancellation.is_cancelled()
+                    {
                         let tool_call_id = slots[index].call.id.clone();
                         let tool_id = slots[index].tool_id.clone();
                         if let Err(message) = self.emit_shared(RuntimeEvent::ToolExecutionStarted {
                             tool_call_id,
                             tool_id,
                         }) {
-                            return Err(CanonicalCommitError::Durable(
+                            group_error = Some(CanonicalCommitError::Durable(
                                 crate::durable::ConversationStoreError::Storage(message),
                             ));
-                        }
-                        slots[index].executor_started = true;
-                        #[cfg(test)]
-                        self.park_after_tool_start();
-                        if let Some(error) = self.durable_failure_commit_error() {
-                            return Err(error);
-                        }
-                        let prepared = slots[index]
-                            .prepared
-                            .as_ref()
-                            .expect("unsettled slots are preflighted");
-                        let (_, result, facts) = self
-                            .run_single_call(
-                                index,
-                                prepared.invocation.clone(),
-                                prepared.progress_capability,
-                                todo_writer.clone(),
-                                occurrences[index].clone(),
-                            )
-                            .await;
-                        slots[index].result = Some(result);
-                        slots[index].execution_facts = facts;
-                        if self.cancellation.interaction_failed() {
-                            return Err(CanonicalCommitError::Interaction(
-                                InteractionFailure::ControlLost,
-                            ));
+                        } else {
+                            slots[index].executor_started = true;
+                            #[cfg(test)]
+                            self.park_after_tool_start();
+                            if let Some(error) = self.durable_failure_commit_error() {
+                                group_error = Some(error);
+                            } else {
+                                let prepared = slots[index]
+                                    .prepared
+                                    .as_ref()
+                                    .expect("unsettled slots are preflighted");
+                                let (_, result, facts) = self
+                                    .run_single_call(
+                                        index,
+                                        prepared.invocation.clone(),
+                                        prepared.progress_capability,
+                                        todo_writer.clone(),
+                                        occurrences[index].clone(),
+                                    )
+                                    .await;
+                                slots[index].result = Some(result);
+                                slots[index].execution_facts = facts;
+                            }
                         }
                     }
+                    if group_error.is_none() && self.cancellation.interaction_failed() {
+                        group_error = Some(CanonicalCommitError::Interaction(
+                            InteractionFailure::ControlLost,
+                        ));
+                    }
+                    if let Some(error) = group_error {
+                        let batch_started = slots.iter().any(|slot| slot.executor_started);
+                        if batch_started {
+                            deferred_group_error = Some(error);
+                            break;
+                        }
+                        return Err(error);
+                    }
                     index += 1;
+                    if deferred_group_error.is_some() {
+                        break;
+                    }
                 }
                 Group::Concurrent => {
                     // Authorize siblings independently and start each allowed
@@ -697,30 +719,19 @@ impl AgentExecution<'_> {
                         slots[slot_index].execution_facts = facts;
                     }
                     if let Some(error) = group_error {
-                        let started = slots[index..end].iter().any(|slot| slot.executor_started);
-                        if started {
-                            for slot in &mut slots[index..end] {
-                                if slot.result.is_none() {
-                                    slot.result = Some(failed_result(
-                                        "tool authorization aborted after sibling execution started",
-                                    ));
-                                }
-                            }
+                        // Batch-wide: an earlier Sequential/Concurrent group may
+                        // already have started even when this group's frontier is
+                        // empty.
+                        let batch_started = slots.iter().any(|slot| slot.executor_started);
+                        if batch_started {
                             deferred_group_error = Some(error);
                         } else {
                             return Err(error);
                         }
                     }
                     if self.cancellation.interaction_failed() {
-                        let started = slots[index..end].iter().any(|slot| slot.executor_started);
-                        if started {
-                            for slot in &mut slots[index..end] {
-                                if slot.result.is_none() {
-                                    slot.result = Some(failed_result(
-                                        "tool authorization aborted after sibling execution started",
-                                    ));
-                                }
-                            }
+                        let batch_started = slots.iter().any(|slot| slot.executor_started);
+                        if batch_started {
                             deferred_group_error = Some(CanonicalCommitError::Interaction(
                                 InteractionFailure::ControlLost,
                             ));
