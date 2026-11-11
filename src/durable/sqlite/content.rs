@@ -1790,16 +1790,15 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
         ("content_segments", "segment"),
         ("content_frontiers", "revision"),
     ] {
+        let first = if table == "content_frontiers" {
+            ["source_id", "source_kind"]
+        } else {
+            ["source_kind", "source_id"]
+        };
         super::schema::shape::verify_unique_columns(
             connection,
             table,
-            &[
-                "source_kind",
-                "source_id",
-                "block_index",
-                "representation",
-                last,
-            ],
+            &[first[0], first[1], "block_index", "representation", last],
         )?;
         let sql: String = connection
             .query_row(
