@@ -113,7 +113,7 @@ fn classify_allowlisted_executable(executable: &str, args: &[&str]) -> BashReado
         "ls" | "pwd" | "echo" | "printf" | "true" | "false" | "test" | "[" | "cat" | "head"
         | "tail" | "wc" | "stat" | "file" | "which" | "type" | "basename" | "dirname"
         | "realpath" | "readlink" | "uname" | "id" | "whoami" | "printenv" | "grep" | "rg"
-        | "jq" | "sleep" => BashReadonlyClass::Readonly,
+        | "sleep" => BashReadonlyClass::Readonly,
         "date" => {
             // Conservative: only bare `date` is proven display-only.
             if args.is_empty() {
@@ -143,9 +143,9 @@ fn classify_allowlisted_executable(executable: &str, args: &[&str]) -> BashReado
                 BashReadonlyClass::Readonly
             }
         }
-        // `fd` and `yq` stay off the proven-readonly path: short-option
-        // clustering/gluing can hide exec and in-place forms without full
-        // clap/cobra argv analysis.
+        // `fd`, `yq`, and `jq` stay off the proven-readonly path: in-place /
+        // exec forms (including clustered short options) need full argv
+        // analysis before they can be trusted.
         "git" => classify_git(args),
         _ => BashReadonlyClass::Unproven {
             reason: format!(
@@ -336,6 +336,9 @@ mod tests {
             "yq -i .x=1 file.yaml",
             "yq -iy .x=1 file.yaml",
             "yq .x file.yaml",
+            "jq -i . file.json",
+            "jq --in-place . file.json",
+            "jq . file.json",
             "fd .",
             "fd -ex rm",
             "fd -eXrm",
