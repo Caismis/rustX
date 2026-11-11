@@ -319,9 +319,6 @@ impl SessionCatalog {
         // Root ownership precedes publication exclusion. Lock a stable directory,
         // never the replaced catalog inode. The generation comparison and rename
         // are one serialized publication; cloned/planned views cannot lose updates.
-        fs::create_dir_all(&self.root).map_err(|e| SessionError::Catalog {
-            detail: e.to_string(),
-        })?;
         let file = fs::File::open(&self.root).map_err(|e| SessionError::Catalog {
             detail: e.to_string(),
         })?;
@@ -616,10 +613,6 @@ fn atomic_write(
             path: path.to_path_buf(),
             detail: "catalog has no parent".to_owned(),
         })?;
-    fs::create_dir_all(parent).map_err(|error| CatalogCommitError::NotCommitted {
-        path: parent.to_path_buf(),
-        detail: error.to_string(),
-    })?;
     let temporary = path.with_extension("json.tmp");
     crate::runtime::local_storage::logical_operations::record_catalog_temp_open();
     let mut file = profile_stage!(
