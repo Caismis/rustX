@@ -112,8 +112,9 @@ fn classify_allowlisted_executable(executable: &str, args: &[&str]) -> BashReado
     match executable {
         "ls" | "pwd" | "echo" | "printf" | "true" | "false" | "test" | "[" | "cat" | "head"
         | "tail" | "wc" | "stat" | "file" | "which" | "type" | "basename" | "dirname"
-        | "realpath" | "readlink" | "uname" | "id" | "whoami" | "printenv" | "grep" | "rg"
-        | "sleep" => BashReadonlyClass::Readonly,
+        | "realpath" | "readlink" | "uname" | "id" | "whoami" | "printenv" | "grep" | "sleep" => {
+            BashReadonlyClass::Readonly
+        }
         "date" => {
             // Conservative: only bare `date` is proven display-only.
             if args.is_empty() {
@@ -143,9 +144,8 @@ fn classify_allowlisted_executable(executable: &str, args: &[&str]) -> BashReado
                 BashReadonlyClass::Readonly
             }
         }
-        // `fd`, `yq`, and `jq` stay off the proven-readonly path: in-place /
-        // exec forms (including clustered short options) need full argv
-        // analysis before they can be trusted.
+        // `fd`, `yq`, `jq`, and `rg` stay off the proven-readonly path:
+        // in-place / exec / --pre forms need full argv analysis first.
         "git" => classify_git(args),
         _ => BashReadonlyClass::Unproven {
             reason: format!(
@@ -198,10 +198,10 @@ fn classify_git(args: &[&str]) -> BashReadonlyClass {
                 // Diff-family options such as `--output=` write a file without
                 // shell redirects; keep those unproven under the conservative
                 // checker.
-                if git_writes_output(rest) {
+                if git_writes_output(rest) || git_invokes_external(rest) {
                     BashReadonlyClass::Unproven {
                         reason: format!(
-                            "git {arg} forms that write output files are not proven read-only"
+                            "git {arg} forms that write output or invoke external helpers are not proven read-only"
                         ),
                     }
                 } else {
@@ -245,6 +245,15 @@ fn classify_git(args: &[&str]) -> BashReadonlyClass {
 fn git_writes_output(rest: &[&str]) -> bool {
     rest.iter()
         .any(|arg| *arg == "--output" || arg.starts_with("--output="))
+}
+
+fn git_invokes_external(rest: &[&str]) -> bool {
+    rest.iter().any(|arg| {
+        *arg == "--ext-diff"
+            || *arg == "--textconv"
+            || arg.starts_with("--ext-diff=")
+            || arg.starts_with("--textconv=")
+    })
 }
 
 /// True only for listing/query forms with no positional ref name that could
@@ -339,9 +348,13 @@ mod tests {
             "jq -i . file.json",
             "jq --in-place . file.json",
             "jq . file.json",
+            "rg --pre touch pattern",
+            "rg .",
             "fd .",
             "fd -ex rm",
             "fd -eXrm",
+            "git diff --ext-diff HEAD",
+            "git show --textconv HEAD",
             "date -s 12:00:00",
             "date -s12:00:00",
             "date \"-s\" 12:00:00",
