@@ -4153,7 +4153,7 @@
           "treatment": "Selected bilingual wording adapted to rustX presentation semantics; no upstream runtime or plugin machinery."
         }
       ],
-      "local_sha256": "1b626a0f07d865311bed9dc1278f84ee942aa0deba37ff1bfd6173d74d84abb0"
+      "local_sha256": "b577f175a9e0fcfc832d9dda4b915825473316e19be7d2240a3907167d14173e"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -8428,7 +8428,6 @@
         "../../../locale/react",
         "../../settings/capability",
         "../../settings/forms/ConfigUnavailable",
-        "../../settings/forms/PolicyFields",
         "../../settings/forms/bridge",
         "../../settings/forms/controls"
       ],
@@ -8471,7 +8470,37 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3dd4259114cb96102ee0fd37983b0bd44569bd7dc51a2066dbc73d7075f41d54"
+      "local_sha256": "4cd28062398c0368b1b1fcdc70e3b251086e15a14d5d0d91651ada3d01b155ca"
+    },
+    {
+      "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx",
+      "destination": "web-console/src/app/resources/shared/McpPermissionDetail.tsx",
+      "treatment": "Issue #544: MCP three-mode permission overrides as an independent resource card extracted beside AvailabilityDetail; native MCP identity mutations and UnitForm CAS remain authoritative. Upstream source pin unchanged.",
+      "upstream_sha256": "0437a264aa8a9806fabc5f3691420a01d379782a20417fb5a3abe9defba0a174",
+      "retained_dependencies": [
+        "../../../../../protocol/app-server/v78",
+        "../../../locale/react",
+        "../../settings/forms/ConfigUnavailable",
+        "../../settings/forms/ResourcePermissionFields",
+        "../../settings/forms/bridge",
+        "../../settings/projection",
+        "./AvailabilityDetail"
+      ],
+      "excluded_dependencies": [
+        "Cordis and dynamic plugin runtime",
+        "Harness Settings schema and source resolver",
+        "Harness backend credential and MCP authority"
+      ],
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "additional_sources": [
+        {
+          "upstream": "packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.module.css",
+          "upstream_sha256": "fcde749f0cc6dba596f52875501d0872d019d558f7ee76b52aafbc813aebad17",
+          "treatment": "inspected presentation pattern; rewritten for native Rust Settings"
+        }
+      ],
+      "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
+      "local_sha256": "5c400b353c84c796b05cc941dca2bdad3f414a1601f388822bf986b998b5c60e"
     }
   ],
   "inspected_only": [
