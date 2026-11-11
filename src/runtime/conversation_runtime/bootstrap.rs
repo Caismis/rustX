@@ -836,17 +836,9 @@ impl ConversationRuntime {
                 });
             }
         };
-        // The recovered hot read model is built from the durable head **after**
-        // reconciliation, so it reflects the repaired canonical structure
-        // rather than the crash-time one.
-        let conversation = match Self::recovered_conversation(store.as_ref()) {
-            Ok(conversation) => conversation,
-            Err(error) => {
-                config.capability.release_conversation_runtime_claim();
-                config.tool_runtime.release_conversation_runtime_claim();
-                return Err(error);
-            }
-        };
+        // The hot read model is hydrated from the durable head on first use,
+        // which is always **after** reconciliation, so it reflects the
+        // repaired canonical structure rather than the crash-time one.
 
         // ---- Infallible wiring: from here construction always succeeds. ----
         let mailbox = config.tool_runtime.mailbox();
@@ -952,7 +944,7 @@ impl ConversationRuntime {
                 resources: config.resources,
                 mcp_settlement_failure: None,
                 effective_approval_mode: config.approval_mode,
-                conversation: Some(conversation),
+                conversation: super::conversation_slot::ConversationSlot::Durable,
                 current_attempt: None,
                 scheduled: None,
                 scheduled_retries: std::collections::BTreeMap::default(),

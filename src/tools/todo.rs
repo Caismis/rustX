@@ -108,7 +108,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::message::types::MessageBlock;
-use crate::runtime::identity::{ConversationId, ToolId};
+use crate::runtime::identity::ConversationId;
 use crate::tools::types::{ToolExecutionStatus, ToolResultContent};
 
 /// The durable identity of the native `todo` tool.
@@ -1540,14 +1540,12 @@ fn stage(
 pub fn published_snapshot(
     message: &MessageBlock,
 ) -> Option<Result<TodoSnapshot, TodoRebuildError>> {
+    if !is_publication(message) {
+        return None;
+    }
     let MessageBlock::Tool(tool) = message else {
         return None;
     };
-    if tool.tool_id != ToolId::new(TODO_TOOL_ID)
-        || tool.result.status != ToolExecutionStatus::Success
-    {
-        return None;
-    }
     let Some(value) = tool
         .result
         .content
@@ -1560,6 +1558,15 @@ pub fn published_snapshot(
         return Some(Err(TodoRebuildError::Missing));
     };
     Some(decode_snapshot(value))
+}
+
+/// Whether `message` is a successful `todo` result: the messages whose
+/// newest instance is the list (see [`published_snapshot`]).
+#[must_use]
+pub fn is_publication(message: &MessageBlock) -> bool {
+    matches!(message, MessageBlock::Tool(tool)
+        if tool.tool_id.as_str() == TODO_TOOL_ID
+            && tool.result.status == ToolExecutionStatus::Success)
 }
 
 /// Decodes and validates one published list, strictly.
