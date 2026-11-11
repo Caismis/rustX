@@ -23,8 +23,8 @@ use crate::tools::executor::{
     PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext, ToolRegistry,
 };
 use crate::tools::types::{
-    ToolCall, ToolCancellationPhase, ToolConcurrencyPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolProgress,
+    ToolCall, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolInvocationMode, ToolOrigin, ToolProgress,
 };
 use futures_util::StreamExt;
 use std::sync::Arc;
@@ -100,34 +100,26 @@ pub(super) struct SettledCall {
 enum Group {
     /// The slot is already settled (validation rejection); no barrier.
     Trivial,
-    /// An exclusive scheduling barrier.
-    Sequential,
-    /// Adjacent parallel invocations executing concurrently.
-    Parallel,
+    /// Adjacent prepared invocations authorize and may execute concurrently.
+    Concurrent,
 }
 
-/// The scheduling phase beginning at `index`: a `Sequential` invocation is
-/// an exclusive barrier; adjacent `Parallel` invocations form one group.
+/// Issue #544: tool-level Sequential/Parallel authoring is removed. Every
+/// prepared slot joins one concurrent authorize-and-start group; rejected
+/// slots remain trivial fill.
 fn group_at(slots: &[CallSlot], index: usize) -> Group {
-    let Some(prepared) = slots[index].prepared.as_ref() else {
-        return Group::Trivial;
-    };
-    match prepared.concurrency {
-        ToolConcurrencyPolicy::Sequential => Group::Sequential,
-        ToolConcurrencyPolicy::Parallel => Group::Parallel,
+    if slots[index].prepared.is_some() {
+        Group::Concurrent
+    } else {
+        Group::Trivial
     }
 }
 
-/// The exclusive end of the parallel group beginning at `index`: every
-/// adjacent `Parallel` invocation forms one group.
-fn parallel_group_end(slots: &[CallSlot], index: usize) -> usize {
+/// End of the concurrent group beginning at `index`: every adjacent prepared
+/// invocation forms one group.
+fn concurrent_group_end(slots: &[CallSlot], index: usize) -> usize {
     let mut end = index + 1;
-    while end < slots.len()
-        && slots[end]
-            .prepared
-            .as_ref()
-            .is_some_and(|candidate| candidate.concurrency == ToolConcurrencyPolicy::Parallel)
-    {
+    while end < slots.len() && slots[end].prepared.is_some() {
         end += 1;
     }
     end
@@ -454,58 +446,11 @@ impl AgentExecution<'_> {
                 Group::Trivial => {
                     index += 1;
                 }
-                Group::Sequential => {
-                    if slots[index].result.is_none() {
-                        self.authorize_slot(&mut slots[index])
-                            .await
-                            .map_err(CanonicalCommitError::Interaction)?;
-                    }
-                    if slots[index].result.is_none() {
-                        // This assignment is the per-call executor-start
-                        // frontier. It is set before the existing start fact
-                        // and before constructing the executor future; once
-                        // crossed, cancellation must be classified as
-                        // `DuringExecution` for this slot.
-                        slots[index].executor_started = true;
-                        self.emit(RuntimeEvent::ToolExecutionStarted {
-                            tool_call_id: slots[index].call.id.clone(),
-                            tool_id: slots[index].tool_id.clone(),
-                        });
-                        #[cfg(test)]
-                        self.park_after_tool_start();
-                        if let Some(error) = self.durable_failure_commit_error() {
-                            return Err(error);
-                        }
-                        let prepared = slots[index]
-                            .prepared
-                            .as_ref()
-                            .expect("unsettled slots are preflighted");
-                        let invocation = prepared.invocation.clone();
-                        let progress_capability = prepared.progress_capability;
-                        let (_, result, facts) = self
-                            .run_single_call(
-                                index,
-                                invocation,
-                                progress_capability,
-                                todo_writer.clone(),
-                                occurrences[index].clone(),
-                            )
-                            .await;
-                        slots[index].result = Some(result);
-                        slots[index].execution_facts = facts;
-                        if self.cancellation.interaction_failed() {
-                            return Err(CanonicalCommitError::Interaction(
-                                InteractionFailure::ControlLost,
-                            ));
-                        }
-                    }
-                    index += 1;
-                }
-                Group::Parallel => {
+                Group::Concurrent => {
                     // Authorize siblings independently and start each allowed
                     // call as soon as its decision is Allow, without waiting
                     // for unrelated Ask/Review siblings.
-                    let end = parallel_group_end(&slots, index);
+                    let end = concurrent_group_end(&slots, index);
                     let mut auth_futures = futures_util::stream::FuturesUnordered::new();
                     for slot_index in index..end {
                         if slots[slot_index].result.is_some() {
