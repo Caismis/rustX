@@ -470,7 +470,11 @@ impl PreToolPolicy for ConfiguredApprovalPolicy {
         view: &'a PreToolView<'a>,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
         Box::pin(async move {
-            let mutation_target = mutation_target_from_arguments(view.tool_name, view.arguments);
+            let mutation_target = mutation_target_from_arguments(
+                view.tool_name,
+                view.arguments,
+                view.workspace_root,
+            );
             let bash_command = view
                 .arguments
                 .get("command")
@@ -523,14 +527,22 @@ impl PreToolPolicy for ConfiguredApprovalPolicy {
 fn mutation_target_from_arguments(
     tool_name: &str,
     arguments: &serde_json::Value,
+    workspace_root: Option<&std::path::Path>,
 ) -> Option<std::path::PathBuf> {
     if !matches!(tool_name, "write" | "edit") {
         return None;
     }
-    arguments
-        .get("path")
-        .and_then(|value| value.as_str())
-        .map(std::path::PathBuf::from)
+    let requested = arguments.get("path").and_then(|value| value.as_str())?;
+    // Match Write/Edit execution: relative paths resolve against the workspace
+    // root so Plan-mode PLAN.md fast-path classification sees the same target.
+    let path = std::path::PathBuf::from(requested);
+    Some(if path.is_absolute() {
+        path
+    } else if let Some(root) = workspace_root {
+        root.join(path)
+    } else {
+        path
+    })
 }
 
 /// The immutable invocation facts of one call that reached invocation

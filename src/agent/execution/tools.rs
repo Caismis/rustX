@@ -434,6 +434,11 @@ impl AgentExecution<'_> {
         // Allowed work may start without waiting for unrelated Ask/Review
         // siblings. Denied/cancelled slots settle their own result only.
         // The original PreparedInvocation remains unchanged in every slot.
+        //
+        // If an Interaction failure arrives after siblings already started,
+        // finish a structurally complete result batch before surfacing the
+        // failure so Allow side effects cannot outlive missing ToolMessages.
+        let mut deferred_interaction_error: Option<CanonicalCommitError> = None;
         let mut index = 0;
         while index < slots.len() {
             if self.cancellation.is_cancelled() {
@@ -583,21 +588,68 @@ impl AgentExecution<'_> {
                         slots[slot_index].execution_facts = facts;
                     }
                     if let Some(error) = group_error {
-                        return Err(error);
+                        let started = slots[index..end]
+                            .iter()
+                            .any(|slot| slot.executor_started || slot.result.is_some());
+                        if matches!(error, CanonicalCommitError::Interaction(_)) && started {
+                            for slot in &mut slots[index..end] {
+                                if slot.result.is_none() {
+                                    slot.result = Some(failed_result(
+                                        "tool authorization aborted after sibling execution started",
+                                    ));
+                                }
+                            }
+                            deferred_interaction_error = Some(error);
+                        } else {
+                            return Err(error);
+                        }
                     }
                     if self.cancellation.interaction_failed() {
-                        return Err(CanonicalCommitError::Interaction(
-                            InteractionFailure::ControlLost,
-                        ));
+                        let started = slots[index..end]
+                            .iter()
+                            .any(|slot| slot.executor_started || slot.result.is_some());
+                        if started {
+                            for slot in &mut slots[index..end] {
+                                if slot.result.is_none() {
+                                    slot.result = Some(failed_result(
+                                        "tool authorization aborted after sibling execution started",
+                                    ));
+                                }
+                            }
+                            deferred_interaction_error =
+                                Some(CanonicalCommitError::Interaction(
+                                    InteractionFailure::ControlLost,
+                                ));
+                        } else {
+                            return Err(CanonicalCommitError::Interaction(
+                                InteractionFailure::ControlLost,
+                            ));
+                        }
                     }
                     index = end;
                 }
             }
         }
         if self.cancellation.interaction_failed() {
-            return Err(CanonicalCommitError::Interaction(
-                InteractionFailure::ControlLost,
-            ));
+            let started = slots
+                .iter()
+                .any(|slot| slot.executor_started || slot.result.is_some());
+            if started {
+                for slot in &mut slots {
+                    if slot.result.is_none() {
+                        slot.result = Some(failed_result(
+                            "tool authorization aborted after sibling execution started",
+                        ));
+                    }
+                }
+                deferred_interaction_error.get_or_insert_with(|| {
+                    CanonicalCommitError::Interaction(InteractionFailure::ControlLost)
+                });
+            } else {
+                return Err(CanonicalCommitError::Interaction(
+                    InteractionFailure::ControlLost,
+                ));
+            }
         }
         // Cancellation fill: every not-yet-started foreground call receives
         // a cancelled result slot, so the committed batch covers every
@@ -606,6 +658,15 @@ impl AgentExecution<'_> {
             for slot in &mut slots {
                 if slot.result.is_none() {
                     slot.result = Some(cancelled_result(self.cancellation.reason()));
+                }
+            }
+        }
+        if deferred_interaction_error.is_some() {
+            for slot in &mut slots {
+                if slot.result.is_none() {
+                    slot.result = Some(failed_result(
+                        "tool authorization aborted after sibling execution started",
+                    ));
                 }
             }
         }
@@ -717,6 +778,9 @@ impl AgentExecution<'_> {
             .collect();
         self.emit(RuntimeEvent::TurnCompleted);
         if let Some(error) = self.durable_failure_commit_error() {
+            return Err(error);
+        }
+        if let Some(error) = deferred_interaction_error {
             return Err(error);
         }
         Ok(settled)

@@ -131,6 +131,10 @@ mod tests {
             Some(&root),
             Some(Path::new("/workspace/PLAN.md"))
         ));
+        assert!(is_workspace_plan_file(
+            Some(&root),
+            Some(&root.join("PLAN.md"))
+        ));
         assert!(!is_workspace_plan_file(
             Some(&root),
             Some(Path::new("/workspace/docs/PLAN.md"))
@@ -142,6 +146,10 @@ mod tests {
         assert!(!is_workspace_plan_file(
             Some(&root),
             Some(Path::new("/workspace/plan.md"))
+        ));
+        assert!(!is_workspace_plan_file(
+            Some(&root),
+            Some(Path::new("PLAN.md"))
         ));
     }
 
