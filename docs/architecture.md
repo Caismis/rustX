@@ -341,7 +341,7 @@ Committed facts survive process termination while the OS/filesystem remains heal
 Power loss or OS failure may lose recent transactions; there is no promised time
 window or per-commit stable-media guarantee. Ordinary accepted model output commits P, U and C together, including its no-tool inbox/terminal boundary.
 Known write/commit failures remain errors. SQLite owns WAL/SHM recovery and the
-1,000-page automatic checkpoint; no per-turn forced checkpoint is added.
+2,000-page automatic checkpoint; no per-turn forced checkpoint is added.
 See [the durability audit](issue-480/durability.md) for connection and lifetime rules.
 
 Version 9 froze the durable **answer obligation** (Issue #111): adoption
