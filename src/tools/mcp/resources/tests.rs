@@ -56,11 +56,14 @@ impl HttpPeer {
             binding: McpServerBinding {
                 credentials: crate::credentials::SourceCredentials::default(),
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
+                permissions: None,
+                tool_permissions: Default::default(),
                 transport: McpTransportConfig::StreamableHttp {
                     endpoint: format!("http://{address}/mcp"),
                     headers: BTreeMap::new(),
                 },
-            },
+            
+},
         }
     }
 
@@ -460,6 +463,8 @@ async fn resource_only_stdio_negotiates_modern_and_legacy_without_tools_list() {
         let binding = McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
             policy: crate::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: Default::default(),
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .unwrap()
@@ -471,7 +476,8 @@ async fn resource_only_stdio_negotiates_modern_and_legacy_without_tools_list() {
                 cwd: None,
                 environment,
             },
-        };
+        
+};
         let connected = McpServerRuntime::connect(
             &McpServerId::new("resource-stdio"),
             &binding,
@@ -817,7 +823,10 @@ async fn opaque_http_diagnostics_never_replay_debug_escaped_response_headers() {
                     headers,
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
-            },
+                permissions: None,
+                tool_permissions: Default::default(),
+            
+},
             tools.workspace().clone(),
             Arc::default(),
             crate::runtime::CancellationSignal::new(),

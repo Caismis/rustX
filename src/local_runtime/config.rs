@@ -701,6 +701,14 @@ pub(super) fn resolve_mcp_bindings(
                         .copied()
                         .unwrap_or_default()
                         .to_policy(),
+                    permissions: document.permissions,
+                    tool_permissions: document
+                        .tools
+                        .iter()
+                        .filter_map(|(name, tool)| {
+                            tool.permissions.map(|permissions| (name.clone(), permissions))
+                        })
+                        .collect(),
                 },
             ))
         })
@@ -1019,6 +1027,22 @@ pub struct McpServerDocument {
     /// workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
+    /// Source-default three-mode permission object (Issue #544).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+    /// Exact-tool permission exceptions keyed by remote tool name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tools: BTreeMap<String, McpToolPermissionDocument>,
+}
+
+/// Exact-tool permission override authored under one MCP server.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
+pub struct McpToolPermissionDocument {
+    /// Complete three-mode permission object for this exact tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
 }
 
 /// The transport an `mcpServers` entry selects explicitly.

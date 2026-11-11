@@ -76,6 +76,8 @@ fn recovery_binding(
             environment: control.environment(script),
         },
         policy: rustx::tools::types::ToolInvocationPolicy::default(),
+    permissions: None,
+    tool_permissions: Default::default(),
     }
 }
 

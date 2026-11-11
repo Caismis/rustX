@@ -178,7 +178,10 @@ impl HttpServer {
                     headers: BTreeMap::new(),
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
-            },
+                permissions: None,
+                tool_permissions: Default::default(),
+            
+},
             cancellation,
             task,
         }

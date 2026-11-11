@@ -1320,6 +1320,8 @@ fn fixture_binding(test_name: &str, prefix: &str) -> crate::tools::mcp::McpServe
             ]),
         },
         policy: ToolInvocationPolicy::default(),
+    permissions: None,
+    tool_permissions: Default::default(),
     }
 }
 
@@ -1594,7 +1596,10 @@ async fn an_unreachable_required_mcp_server_fails_child_composition() {
                 environment: std::collections::BTreeMap::new(),
             },
             policy: ToolInvocationPolicy::default(),
-        },
+            permissions: None,
+            tool_permissions: Default::default(),
+        
+},
     );
     let error = LocalConversationCore::compose_subagent_child(
         &child_spec,

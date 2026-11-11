@@ -726,6 +726,9 @@ pub struct PreparedInvocation {
     /// invocation resolution so a running call's effective idle-liveness
     /// contract can never change mid-execution.
     pub progress_capability: ToolProgressCapability,
+    /// Winning authored resource permission object (exact-tool or source
+    /// default), before mode selection. `None` means product matrix defaults.
+    pub resource_permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
 }
 
 /// The immutable validating tool registry of one attempt's capability set.
@@ -785,6 +788,8 @@ pub(crate) struct ToolRegistration {
     pub(crate) definition: ToolDefinition,
     pub(crate) executor: Arc<dyn ToolExecutor>,
     pub(crate) normalizer: BusinessArgumentNormalizer,
+    /// Exact-or-source resource permission object frozen with the registration.
+    pub(crate) resource_permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
 }
 
 impl std::fmt::Debug for ToolRegistration {
@@ -792,6 +797,7 @@ impl std::fmt::Debug for ToolRegistration {
         f.debug_struct("ToolRegistration")
             .field("definition", &self.definition)
             .field("foreground", &self.foreground)
+            .field("resource_permissions", &self.resource_permissions)
             .finish_non_exhaustive()
     }
 }
@@ -799,6 +805,16 @@ impl std::fmt::Debug for ToolRegistration {
 impl ToolRegistration {
     pub(crate) fn foreground(&self) -> crate::tools::deadline::ForegroundPolicy {
         self.foreground
+    }
+
+    /// Attaches the winning authored resource permission object.
+    #[must_use]
+    pub(crate) fn with_resource_permissions(
+        mut self,
+        permissions: crate::runtime::permission::ResourcePermissionSet,
+    ) -> Self {
+        self.resource_permissions = Some(permissions);
+        self
     }
     /// Prepares a fixed foreground invocation against an exact frozen
     /// definition. Runtime metadata is never accepted as business input.
@@ -849,6 +865,7 @@ impl ToolRegistration {
             definition,
             executor,
             normalizer: identity_arguments,
+            resource_permissions: None,
         }
     }
 }
@@ -1015,7 +1032,24 @@ impl ToolRegistry {
             definition,
             executor,
             normalizer,
+            resource_permissions: None,
         });
+        Ok(())
+    }
+
+    /// Registers one tool together with its authored resource permission object.
+    pub(crate) fn register_with_resource_permissions(
+        &mut self,
+        definition: ToolDefinition,
+        executor: Arc<dyn ToolExecutor>,
+        permissions: crate::runtime::permission::ResourcePermissionSet,
+    ) -> Result<(), ToolRegistryError> {
+        self.register(definition, executor)?;
+        let last = self
+            .entries
+            .last_mut()
+            .expect("register always pushes one entry");
+        last.resource_permissions = Some(permissions);
         Ok(())
     }
 
@@ -1230,6 +1264,7 @@ impl ToolRegistry {
             // idle-liveness contract is frozen even if a later registry
             // generation would declare otherwise.
             progress_capability: entry.executor.progress_capability(),
+            resource_permissions: entry.resource_permissions,
         })
     }
 

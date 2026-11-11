@@ -37,6 +37,8 @@ async fn resource_body_enters_context_only_after_one_committed_normal_tool_resul
     let binding = McpServerBinding {
         credentials: crate::credentials::SourceCredentials::default(),
         policy: crate::tools::types::ToolInvocationPolicy::default(),
+        permissions: None,
+        tool_permissions: Default::default(),
         transport: McpTransportConfig::Stdio {
             program: std::env::current_exe()
                 .unwrap()
@@ -56,7 +58,8 @@ async fn resource_body_enters_context_only_after_one_committed_normal_tool_resul
                 ),
             ]),
         },
-    };
+    
+};
     let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
         conversation_id: fixture.runtime.conversation_id().clone(),
         workspace: fixture.runtime.workspace().clone(),

@@ -738,6 +738,8 @@ impl RegisteredToolResultObserver {
 pub struct AttemptLifecycle {
     pre_step: Arc<dyn PreStepPolicy>,
     pre_tool: Arc<dyn PreToolPolicy>,
+    /// Frozen execution-permission mode for resource-override resolution.
+    approval_mode: ApprovalMode,
     interaction: InteractionBinding,
     tool_results: Vec<RegisteredToolResultObserver>,
 }
@@ -770,9 +772,16 @@ impl AttemptLifecycle {
         Self {
             pre_step: Arc::new(AlwaysEnter),
             pre_tool: Arc::new(ConfiguredApprovalPolicy::new(ApprovalMode::Plan)),
+            approval_mode: ApprovalMode::Plan,
             interaction: InteractionBinding::Unavailable,
             tool_results: Vec::new(),
         }
+    }
+
+    /// The frozen execution-permission mode of this attempt lifecycle.
+    #[must_use]
+    pub(crate) fn approval_mode(&self) -> ApprovalMode {
+        self.approval_mode
     }
 
     /// Replaces the attempt's single pre-step policy owner.
@@ -793,6 +802,7 @@ impl AttemptLifecycle {
     /// pre-tool policy. Test/custom policies can still replace this seam
     /// explicitly with [`Self::with_pre_tool_policy`].
     pub(crate) fn with_approval_mode(mut self, mode: ApprovalMode) -> Self {
+        self.approval_mode = mode;
         self.pre_tool = Arc::new(ConfiguredApprovalPolicy::new(mode));
         self
     }
@@ -803,6 +813,7 @@ impl AttemptLifecycle {
         mode: ApprovalMode,
         reviewer: Arc<dyn crate::runtime::permission::review::PermissionReviewPort>,
     ) -> Self {
+        self.approval_mode = mode;
         self.pre_tool = Arc::new(ConfiguredApprovalPolicy::new(mode).with_reviewer(reviewer));
         self
     }

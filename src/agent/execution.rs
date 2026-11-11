@@ -465,7 +465,7 @@ pub struct AgentExecution<'a> {
     turn: u32,
     terminal_emitted: bool,
     /// Sparse permission-mode reminder eligibility for this attempt.
-    permission_reminder: crate::runtime::permission::PermissionReminderState,
+    pub(crate) permission_reminder: crate::runtime::permission::PermissionReminderState,
 }
 
 #[cfg(test)]

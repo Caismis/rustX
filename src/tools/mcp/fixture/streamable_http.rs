@@ -615,7 +615,10 @@ impl HttpFixture {
     #[must_use]
     pub fn binding(&self) -> crate::tools::mcp::McpServerBinding {
         self.binding_with_header(None)
-    }
+    
+        permissions: None,
+        tool_permissions: Default::default(),
+}
 
     /// The same binding with one extra static request header.
     ///
@@ -637,8 +640,11 @@ impl HttpFixture {
                 headers,
             },
             policy: crate::tools::types::ToolInvocationPolicy::default(),
+        permissions: None,
+        tool_permissions: Default::default(),
         }
-    }
+    
+}
 
     /// Cancels the server and joins its task.
     pub async fn shutdown(self) {

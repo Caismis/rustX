@@ -210,6 +210,10 @@ impl WorkflowRuntime {
             )?;
         }
         let workspace_root = services.runtime.workspace().root();
+        let resource_permission = prepared
+            .resource_permissions
+            .unwrap_or_default()
+            .for_mode(services.lifecycle.approval_mode());
         let view = crate::agent::PreToolView {
             conversation_id: &run.run_id.conversation_id,
             execution: services.execution.clone(),
@@ -222,7 +226,7 @@ impl WorkflowRuntime {
             audit_arguments: &prepared.invocation.arguments,
             elevation_reason: prepared.elevation_reason.as_deref(),
             workspace_root: Some(workspace_root),
-            resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,
+            resource_permission,
         };
         self.read_model.node(node, |view| {
             view.state = super::read_model::WorkflowState::Waiting {

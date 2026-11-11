@@ -1061,7 +1061,10 @@ mod tests {
                                 .collect(),
                         },
                         policy: crate::tools::types::ToolInvocationPolicy::default(),
-                    },
+                        permissions: None,
+                        tool_permissions: Default::default(),
+                    
+},
                 )]
                 .into_iter()
                 .collect(),

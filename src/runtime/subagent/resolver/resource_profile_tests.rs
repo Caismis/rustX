@@ -37,6 +37,8 @@ fn binding(source: &ToolSourceId) -> McpServerBinding {
             },
         },
         policy: ToolInvocationPolicy::default(),
+    permissions: None,
+    tool_permissions: Default::default(),
     }
 }
 

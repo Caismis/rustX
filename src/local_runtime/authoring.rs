@@ -432,6 +432,10 @@ pub struct McpAuthoring {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub cwd: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tools: BTreeMap<String, crate::local_runtime::config::McpToolPermissionDocument>,
 }
 impl McpAuthoring {
     pub(super) fn resolve(self) -> McpServerDocument {
@@ -445,6 +449,8 @@ impl McpAuthoring {
             args: self.args,
             env: self.env,
             cwd: self.cwd,
+            permissions: self.permissions,
+            tools: self.tools,
         }
     }
 }

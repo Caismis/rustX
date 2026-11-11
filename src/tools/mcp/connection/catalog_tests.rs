@@ -147,7 +147,10 @@ impl Fixture {
                     headers: std::collections::BTreeMap::default(),
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
-            },
+                permissions: None,
+                tool_permissions: Default::default(),
+            
+},
             server,
             shutdown,
             _temp: temp,

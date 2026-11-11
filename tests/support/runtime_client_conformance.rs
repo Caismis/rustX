@@ -2391,7 +2391,10 @@ pub async fn capability_projection_covers_mcp_origins(
                 )]),
             },
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
-        },
+            permissions: None,
+            tool_permissions: Default::default(),
+        
+},
     )]);
     let fixture = ConformanceFixture::builder(&conversation(factory, "mcp"))
         .mcp_servers(servers)

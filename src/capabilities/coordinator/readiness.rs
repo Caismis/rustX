@@ -424,7 +424,7 @@ impl CapabilityCoordinator {
                 )
                 .into_iter()
                 .map(|(definition, executor)| {
-                    crate::tools::executor::ToolRegistration::plain(definition, executor)
+                    crate::tools::mcp::with_binding_permissions(definition, executor, binding)
                 })
                 .collect::<Vec<_>>();
                 changed |= previous
@@ -503,7 +503,7 @@ fn live_registrations(
     )
     .into_iter()
     .map(|(definition, executor)| {
-        crate::tools::executor::ToolRegistration::plain(definition, executor)
+        crate::tools::mcp::with_binding_permissions(definition, executor, binding)
     })
     .collect()
 }

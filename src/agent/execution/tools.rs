@@ -469,7 +469,11 @@ impl AgentExecution<'_> {
                     }
                     let mut futures = futures_util::stream::FuturesUnordered::new();
                     let mut remaining_auth = auth_futures.len();
-                    while remaining_auth > 0 {
+                    // Prefer draining already-started executors before surfacing
+                    // a sibling auth/durable failure: dropping run futures would
+                    // abandon live work without a structurally complete batch.
+                    let mut group_error: Option<CanonicalCommitError> = None;
+                    while remaining_auth > 0 && group_error.is_none() {
                         tokio::select! {
                             biased;
                             () = self.cancellation.cancelled() => break,
@@ -497,16 +501,19 @@ impl AgentExecution<'_> {
                                                 tool_id,
                                             })
                                         {
-                                            return Err(CanonicalCommitError::Durable(
-                                                crate::durable::ConversationStoreError::Storage(
-                                                    message,
-                                                ),
-                                            ));
+                                            group_error =
+                                                Some(CanonicalCommitError::Durable(
+                                                    crate::durable::ConversationStoreError::Storage(
+                                                        message,
+                                                    ),
+                                                ));
+                                            continue;
                                         }
                                         #[cfg(test)]
                                         self.park_after_tool_start();
                                         if let Some(error) = self.durable_failure_commit_error() {
-                                            return Err(error);
+                                            group_error = Some(error);
+                                            continue;
                                         }
                                         let prepared = slots[slot_index]
                                             .prepared
@@ -521,7 +528,8 @@ impl AgentExecution<'_> {
                                         )));
                                     }
                                     Err(error) => {
-                                        return Err(CanonicalCommitError::Interaction(error));
+                                        group_error =
+                                            Some(CanonicalCommitError::Interaction(error));
                                     }
                                 }
                             }
@@ -531,8 +539,14 @@ impl AgentExecution<'_> {
                             }
                         }
                     }
-                    if let Some(error) = self.durable_failure_commit_error() {
-                        return Err(error);
+                    // Drop unfinished auth futures without starting them; started
+                    // run futures below must still settle before any group_error
+                    // is returned.
+                    drop(auth_futures);
+                    if group_error.is_none()
+                        && let Some(error) = self.durable_failure_commit_error()
+                    {
+                        group_error = Some(error);
                     }
                     let mut remaining = futures.len();
                     if remaining > 0 {
@@ -567,6 +581,9 @@ impl AgentExecution<'_> {
                     while let Some((slot_index, result, facts)) = futures.next().await {
                         slots[slot_index].result = Some(result);
                         slots[slot_index].execution_facts = facts;
+                    }
+                    if let Some(error) = group_error {
+                        return Err(error);
                     }
                     if self.cancellation.interaction_failed() {
                         return Err(CanonicalCommitError::Interaction(
@@ -1205,6 +1222,7 @@ struct ParallelAuthFacts {
     audit_arguments: serde_json::Value,
     elevation_reason: Option<String>,
     workspace_root: std::path::PathBuf,
+    resource_permission: crate::runtime::permission::ResourcePermissionValue,
 }
 
 impl ParallelAuthFacts {
@@ -1213,6 +1231,10 @@ impl ParallelAuthFacts {
             .prepared
             .as_ref()
             .expect("a policy decision requires a preflight-ready invocation");
+        let resource_permission = prepared
+            .resource_permissions
+            .unwrap_or_default()
+            .for_mode(execution.permission_reminder.mode);
         Self {
             slot_index,
             conversation_id: execution.request.conversation_id.clone(),
@@ -1227,6 +1249,7 @@ impl ParallelAuthFacts {
             audit_arguments: slot.call.arguments.clone(),
             elevation_reason: prepared.elevation_reason.clone(),
             workspace_root: execution.tool_runtime.workspace().root().to_path_buf(),
+            resource_permission,
         }
     }
 }
@@ -1251,7 +1274,7 @@ async fn authorize_owned(
         audit_arguments: &facts.audit_arguments,
         elevation_reason: facts.elevation_reason.as_deref(),
         workspace_root: Some(facts.workspace_root.as_path()),
-        resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,
+        resource_permission: facts.resource_permission,
     };
     crate::tools::invocation::authorize(lifecycle, &view, cancellation).await
 }

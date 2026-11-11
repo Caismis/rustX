@@ -33,7 +33,10 @@ async fn sibling_mcp_settlement_failures_aggregate_through_one_runtime_drain() {
                 environment,
             },
             policy: crate::tools::types::ToolInvocationPolicy::default(),
-        }
+            permissions: None,
+            tool_permissions: Default::default(),
+        
+}
     };
     let alpha = crate::runtime::identity::McpServerId::new("sibling-alpha");
     let beta = crate::runtime::identity::McpServerId::new("sibling-beta");

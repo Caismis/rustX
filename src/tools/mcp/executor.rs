@@ -316,6 +316,26 @@ pub(crate) fn definitions_owned(
         .collect()
 }
 
+
+/// Applies the binding's exact-tool or source permission object onto a plain registration.
+pub(crate) fn with_binding_permissions(
+    definition: crate::tools::types::ToolDefinition,
+    executor: std::sync::Arc<dyn crate::tools::executor::ToolExecutor>,
+    binding: &super::McpServerBinding,
+) -> crate::tools::executor::ToolRegistration {
+    let remote_name = definition.name.clone();
+    let mut registration = crate::tools::executor::ToolRegistration::plain(definition, executor);
+    if let Some(set) = binding
+        .tool_permissions
+        .get(&remote_name)
+        .copied()
+        .or(binding.permissions)
+    {
+        registration = registration.with_resource_permissions(set);
+    }
+    registration
+}
+
 /// Generates a stable, length-prefixed MCP logical tool identity.
 #[must_use]
 pub fn mcp_tool_id(server_id: &McpServerId, remote_name: &str) -> String {

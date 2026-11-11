@@ -163,7 +163,10 @@ fn agent_authorities_reopen_from_private_capture_without_journal_secrets() {
                 environment: [("TOKEN".into(), "private-mcp-env".into())].into(),
             },
             policy: crate::tools::ToolInvocationPolicy::default(),
-        },
+            permissions: None,
+            tool_permissions: Default::default(),
+        
+},
     );
     authority
         .resolved
@@ -179,7 +182,10 @@ fn agent_authorities_reopen_from_private_capture_without_journal_secrets() {
                 headers: [("Authorization".into(), "private-http-auth".into()), ("X-Private".into(), "private-http-header".into())].into(),
             },
             policy: crate::tools::ToolInvocationPolicy::default(),
-        },
+            permissions: None,
+            tool_permissions: Default::default(),
+        
+},
     );
     let canaries = [
         "private-literal",

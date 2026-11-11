@@ -40,7 +40,10 @@ fn cfg274_admit_child(
                 environment: BTreeMap::new(),
             },
             policy: crate::tools::types::ToolInvocationPolicy::default(),
-        },
+            permissions: None,
+            tool_permissions: Default::default(),
+        
+},
     )]
     .into();
     catalog.admit(available, availability, skills, agents, &servers);

@@ -75,7 +75,10 @@ async fn capability_projection_carries_mcp_origin_metadata() {
                 )]),
             },
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
-        },
+            permissions: None,
+            tool_permissions: Default::default(),
+        
+},
     )]);
     let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder(
         "conv_119cd575-494a-7c52-8213-069259d9272c",

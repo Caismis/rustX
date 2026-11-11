@@ -1903,7 +1903,10 @@ mod tests {
                 environment: std::collections::BTreeMap::new(),
             },
             policy: crate::tools::types::ToolInvocationPolicy::default(),
-        };
+            permissions: None,
+            tool_permissions: Default::default(),
+        
+};
         let configured: crate::tools::mcp::McpServerBindings =
             [(github.clone(), binding()), (unrelated.clone(), binding())]
                 .into_iter()
@@ -1997,7 +2000,10 @@ mod tests {
                     environment: std::collections::BTreeMap::new(),
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
-            };
+                permissions: None,
+                tool_permissions: Default::default(),
+            
+};
             let mut configured = [(server.clone(), binding.clone())].into();
             let frozen =
                 super::FrozenAgentComposition::freeze(&definition, &profile, &skills, &configured)
@@ -2944,7 +2950,10 @@ mod tests {
                 environment: std::collections::BTreeMap::new(),
             },
             policy: crate::tools::types::ToolInvocationPolicy::default(),
-        };
+            permissions: None,
+            tool_permissions: Default::default(),
+        
+};
         let plane = |command: &str| {
             let mut spec = frozen_spec();
             spec.materialization = super::ResolvedSubagentMaterialization {

@@ -70,7 +70,10 @@ mod unix_tests {
                 ]),
             },
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
-        };
+            permissions: None,
+            tool_permissions: Default::default(),
+        
+};
         let runtime = rustx::tools::mcp::McpServerRuntime::connect(
             &server_id,
             &binding,
@@ -295,7 +298,10 @@ mod unix_tests {
                     environment,
                 },
                 policy: rustx::tools::types::ToolInvocationPolicy::default(),
-            };
+                permissions: None,
+                tool_permissions: Default::default(),
+            
+};
             let runtime = rustx::tools::mcp::McpServerRuntime::connect(
                 &server_id,
                 &binding,
@@ -463,7 +469,10 @@ mod unix_tests {
                 ]),
             },
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
-        };
+            permissions: None,
+            tool_permissions: Default::default(),
+        
+};
         let mcp_runtime = rustx::tools::mcp::McpServerRuntime::connect(
             &server_id,
             &binding,
@@ -614,7 +623,10 @@ mod unix_tests {
                 headers: std::collections::BTreeMap::new(),
             },
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
-        };
+            permissions: None,
+            tool_permissions: Default::default(),
+        
+};
         let runtime = rustx::tools::mcp::McpServerRuntime::connect(
             &server_id,
             &binding,
@@ -799,7 +811,10 @@ mod unix_tests {
                 ]),
             },
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
-        };
+            permissions: None,
+            tool_permissions: Default::default(),
+        
+};
         let runtime = rustx::tools::mcp::McpServerRuntime::connect(
             &server_id,
             &binding,
@@ -1010,7 +1025,10 @@ mod unix_tests {
                 ]),
             },
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
-        };
+            permissions: None,
+            tool_permissions: Default::default(),
+        
+};
         let runtime = rustx::tools::mcp::McpServerRuntime::connect(
             &server_id,
             &binding,

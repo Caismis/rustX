@@ -141,7 +141,9 @@ impl McpPreparationOwner {
             discovery.tools.clone(),
         )
         .into_iter()
-        .map(|(definition, executor)| ToolRegistration::plain(definition, executor));
+        .map(|(definition, executor)| {
+            crate::tools::mcp::with_binding_permissions(definition, executor, binding)
+        });
         if let Err(error) = ToolRegistry::from_registrations(registrations) {
             let close = generation.retire_and_close().await;
             return Err(

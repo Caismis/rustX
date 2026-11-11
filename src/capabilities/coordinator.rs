@@ -1429,13 +1429,21 @@ impl CapabilityCoordinator {
                             crate::tools::mcp::McpResourceBinding::new(generation.binding()),
                         );
                     }
-                    mcp_tools.extend(crate::tools::mcp::definitions_owned_for_source(
-                        &source_id,
-                        server_id,
-                        binding.policy,
-                        &generation.binding(),
-                        discovery.tools,
-                    ));
+                    mcp_tools.extend(
+                        crate::tools::mcp::definitions_owned_for_source(
+                            &source_id,
+                            server_id,
+                            binding.policy,
+                            &generation.binding(),
+                            discovery.tools,
+                        )
+                        .into_iter()
+                        .map(|(definition, executor)| {
+                            crate::tools::mcp::with_binding_permissions(
+                                definition, executor, binding,
+                            )
+                        }),
+                    );
                     mcp_runtimes.push(generation);
                     availability.insert(source_id.clone(), CapabilitySourceState::Ready);
                 }
@@ -1456,11 +1464,7 @@ impl CapabilityCoordinator {
                 CapabilitySourceState::unavailable(reason),
             );
         }
-        discovered_tools.extend(
-            mcp_tools
-                .into_iter()
-                .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
-        );
+        discovered_tools.extend(mcp_tools);
         let selection = select_tools(
             &discovered_tools,
             self.inner.extension_tools.registrations(),
@@ -3065,7 +3069,10 @@ body
                     headers: std::collections::BTreeMap::new(),
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
-            };
+                permissions: None,
+                tool_permissions: Default::default(),
+            
+};
             candidate
                 .resource_inputs
                 .mcp_servers
@@ -4171,7 +4178,10 @@ mod mcp_race_tests {
                         )]),
                     },
                     policy: crate::tools::types::ToolInvocationPolicy::default(),
-                },
+                    permissions: None,
+                    tool_permissions: Default::default(),
+                
+},
             )]),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
@@ -4217,7 +4227,10 @@ mod mcp_race_tests {
                             )]),
                         },
                         policy: crate::tools::types::ToolInvocationPolicy::default(),
-                    },
+                        permissions: None,
+                        tool_permissions: Default::default(),
+                    
+},
                 )
             })
             .collect();
