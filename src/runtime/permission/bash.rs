@@ -193,11 +193,16 @@ fn classify_git(args: &[&str]) -> BashReadonlyClass {
         }
         let rest = &args[index + 1..];
         return match arg {
-            "status" | "log" | "show" | "diff" | "ls-files" | "ls-tree" | "rev-parse"
-            | "describe" | "blame" | "shortlog" | "version" | "help" => {
-                // Diff-family options such as `--output=` write a file without
-                // shell redirects; keep those unproven under the conservative
-                // checker.
+            // Diff-family commands can invoke config-driven external helpers
+            // (diff.external, textconv, filters) even without --ext-diff /
+            // --textconv on argv, so they stay unproven for now.
+            "log" | "show" | "diff" | "blame" => BashReadonlyClass::Unproven {
+                reason: format!(
+                    "git {arg} may invoke config-driven external helpers and is not proven read-only"
+                ),
+            },
+            "status" | "ls-files" | "ls-tree" | "rev-parse" | "describe" | "shortlog"
+            | "version" | "help" => {
                 if git_writes_output(rest) || git_invokes_external(rest) {
                     BashReadonlyClass::Unproven {
                         reason: format!(
@@ -313,7 +318,6 @@ mod tests {
             "ls -la",
             "pwd",
             "git status",
-            "git log --oneline",
             "cat README.md",
             "git branch",
             "git branch -a",
@@ -355,6 +359,10 @@ mod tests {
             "fd -eXrm",
             "git diff --ext-diff HEAD",
             "git show --textconv HEAD",
+            "git diff HEAD",
+            "git log --oneline",
+            "git show HEAD",
+            "git blame README.md",
             "date -s 12:00:00",
             "date -s12:00:00",
             "date \"-s\" 12:00:00",
