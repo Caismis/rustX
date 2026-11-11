@@ -16,6 +16,8 @@ use crate::observation::content::{
     ContentSource as Source,
 };
 use base64::Engine;
+#[path = "content_keys.rs"]
+pub(super) mod keys;
 const SEGMENT: u64 = 65_536;
 const SEGMENT_BYTES: usize = 65_536;
 const STREAM_SEGMENT_BYTES: usize = 8_192;
@@ -364,12 +366,12 @@ fn descriptor_resolved(
     position: Option<u64>,
 ) -> Result<Option<ContentRef>, ConversationStoreError> {
     let (kind, id, block) = storage_key(source, position);
-    let evidence:Option<(u64,u64)>=connection.query_row_cached("SELECT revision,readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 ORDER BY revision DESC LIMIT 1",params![kind,id,block,representation.key()],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|e|storage(e.to_string()))?;
+    let evidence:Option<(u64,u64)>=connection.query_row_cached("SELECT revision,readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 ORDER BY revision DESC LIMIT 1",params![kind, keys::read(connection, kind, &id)?,block,representation.key()],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|e|storage(e.to_string()))?;
     if evidence.is_none() && representation == Rep::RawJsonUtf8 {
         let retained: bool = connection
             .prepare_cached("SELECT EXISTS(SELECT 1 FROM content_segments WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4)")
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
-            .query_row(params![kind, id, block, representation.key()], |row| row.get(0))
+            .query_row(params![kind, keys::read(connection, kind, &id)?, block, representation.key()], |row| row.get(0))
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if retained {
             return Err(storage(
@@ -398,7 +400,7 @@ pub(super) fn descriptor_at(
         return Err(invalid());
     }
     let (kind, id, block) = storage_key(&source, position);
-    let evidence:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision=?5",params![kind,id,block,representation.key(),revision],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let evidence:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision=?5",params![kind, keys::read(connection, kind, &id)?,block,representation.key(),revision],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(evidence.map(|readable_end| ContentRef {
         conversation_id: conversation.clone(),
         source: source.into_owned(),
@@ -491,7 +493,7 @@ fn read_bytes_at_position(
         validate_source(connection, &reference.source)?
     };
     let (kind, id, block) = storage_key(&reference.source, position);
-    let frontier:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision=?5",params![kind,id,block,reference.representation.key(),reference.content_revision],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
+    let frontier:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision=?5",params![kind, keys::read(connection, kind, &id)?,block,reference.representation.key(),reference.content_revision],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
     if frontier != Some(reference.readable_end) {
         return Err(invalid());
     }
@@ -573,6 +575,7 @@ fn range_bytes_segmented(
         return Err(ConversationStoreError::InvalidContentRange);
     }
     let (kind, id, block, representation) = key;
+    let source_id = keys::read(connection, kind, id)?;
     let mut bytes = Vec::with_capacity(usize::try_from(end - offset).map_err(|_| invalid())?);
     let mut offset = offset;
     if super::content_encoding::inline_first(kind, representation)
@@ -585,7 +588,7 @@ fn range_bytes_segmented(
             "SELECT 0,substr(bytes,?5+1,?6-?5) FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision=?7",
             &[
                 &kind,
-                &id,
+                &source_id,
                 &block,
                 &representation.key(),
                 &offset,
@@ -604,7 +607,7 @@ fn range_bytes_segmented(
         "SELECT segment,substr(bytes,MAX(0,?7-segment*?9)+1,MIN(?9,?8-segment*?9)-MAX(0,?7-segment*?9)) FROM content_segments WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND segment>=?5 AND segment<=?6 ORDER BY segment LIMIT (?6-?5+1)",
         &[
             &kind,
-            &id,
+            &source_id,
             &block,
             &representation.key(),
             &(offset / segment_size),
@@ -712,7 +715,7 @@ pub(super) fn clear_pending(
         "DELETE FROM content_frontiers WHERE source_kind='pending' AND source_id=?1",
     ] {
         connection
-            .execute_cached(sql, [id])
+            .execute_cached(sql, [keys::read(connection, "pending", id)?])
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     }
     Ok(())
@@ -743,6 +746,7 @@ fn put_segmented(
     segment_size: usize,
 ) -> Result<(), ConversationStoreError> {
     let (kind, id, block, representation) = key;
+    keys::write(connection, kind, id)?;
     if revision > CONTENT_SAFE_INTEGER_MAX {
         return Err(invalid());
     }
@@ -765,7 +769,7 @@ fn put_segmented(
         connection
             .execute_cached(
                 "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end,bytes) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-                params![kind, id, block, representation.key(), revision, end, &bytes[..bytes.len().min(segment_size)]],
+                params![kind, keys::read(connection, kind, id)?, block, representation.key(), revision, end, &bytes[..bytes.len().min(segment_size)]],
             )
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         return Ok(());
@@ -779,7 +783,7 @@ fn put_segmented(
     connection
         .execute_cached(
             "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES(?1,?2,?3,?4,?5,?6)",
-            params![kind, id, block, representation.key(), revision, end],
+            params![kind, keys::read(connection, kind, id)?, block, representation.key(), revision, end],
         )
         .map_err(|e| storage(e.to_string()))?;
     Ok(())
@@ -810,7 +814,12 @@ fn append_prior(
     let (previous, end, segment, length) = connection
         .query_row_cached(
             APPEND_PRIOR_SQL,
-            params![kind, id, block, representation.key()],
+            params![
+                kind,
+                keys::read(connection, kind, id)?,
+                block,
+                representation.key()
+            ],
             |row| {
                 Ok((
                     row.get::<_, Option<u64>>(0)?,
@@ -851,6 +860,7 @@ fn append_segments(
     bytes: &[u8],
     segment_size: usize,
 ) -> Result<u64, ConversationStoreError> {
+    keys::write(connection, kind, id)?;
     let end = prior
         .checked_add(bytes.len() as u64)
         .filter(|v| *v <= CONTENT_SAFE_INTEGER_MAX)
@@ -869,7 +879,7 @@ fn append_segments(
         // The selected frontier must match the actual tail.
         let changed = connection.execute_cached(
             "UPDATE content_segments SET bytes=rustx_append_content(bytes,?6) WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND segment=?5 AND typeof(bytes)='blob' AND length(bytes)=?7",
-            params![kind,id,block,representation.key(),segment,&bytes[..consumed],tail_length],
+            params![kind, keys::read(connection, kind, id)?,block,representation.key(),segment,&bytes[..consumed],tail_length],
         ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if changed != 1 {
             return Err(invalid());
@@ -885,7 +895,7 @@ fn append_segments(
                 "INSERT INTO content_segments VALUES(?1,?2,?3,?4,?5,?6)",
                 params![
                     kind,
-                    id,
+                    keys::read(connection, kind, id)?,
                     block,
                     representation.key(),
                     (prior + start as u64) / width,
@@ -907,7 +917,7 @@ fn append_canonical_raw(
 ) -> Result<(), ConversationStoreError> {
     let prior: u64 = connection.query_row(
         "SELECT COALESCE((SELECT readable_end FROM content_frontiers WHERE source_kind='canonical' AND source_id=?1 AND block_index=?2 AND representation='r' AND revision=1),0)",
-        params![id, block], |row| row.get(0),
+        params![keys::read(connection,"canonical",id)?, block], |row| row.get(0),
     ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let end = append_segments(
         connection,
@@ -918,7 +928,7 @@ fn append_canonical_raw(
     )?;
     connection.execute(
         "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical',?1,?2,'r',1,?3) ON CONFLICT(source_kind,source_id,block_index,representation,revision) DO UPDATE SET readable_end=excluded.readable_end",
-        params![id, block, end],
+        params![keys::read(connection,"canonical",id)?, block, end],
     ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
@@ -1490,7 +1500,7 @@ fn live_headers(
             *actual_component = component;
             *block_index = crate::message::types::ContentBlockIndex::new(index);
             let (source_kind, id, block) = block_source.key();
-            let revision:Option<u64>=connection.query_row("SELECT revision FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision<=?5 ORDER BY revision DESC LIMIT 1",params![source_kind,id,block,rep.key(),through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+            let revision:Option<u64>=connection.query_row("SELECT revision FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision<=?5 ORDER BY revision DESC LIMIT 1",params![source_kind,keys::read(connection,source_kind,&id)?,block,rep.key(),through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             if let Some(revision) = revision {
                 if component == PublicationContentComponent::Payload && rep == Rep::CanonicalJsonV1
                 {
@@ -1595,8 +1605,8 @@ fn transfer(
     kind: &str,
     id: &str,
 ) -> Result<(), ConversationStoreError> {
-    connection.execute("INSERT INTO content_segments SELECT ?2,?3,block_index,representation,segment,bytes FROM content_segments WHERE source_kind=?4 AND source_id=?1 AND (representation='r' OR segment>0)",params![stream.as_str(),kind,id,source_kind]).map_err(|e|storage(e.to_string()))?;
-    connection.execute("INSERT INTO content_frontiers SELECT ?2,?3,f.block_index,f.representation,1,MAX(f.readable_end),CASE WHEN f.representation='r' THEN NULL ELSE COALESCE((SELECT s.bytes FROM content_segments s WHERE s.source_kind=?4 AND s.source_id=?1 AND s.block_index=f.block_index AND s.representation=f.representation AND s.segment=0),x'') END FROM content_frontiers f WHERE f.source_kind=?4 AND f.source_id=?1 GROUP BY f.block_index,f.representation",params![stream.as_str(),kind,id,source_kind]).map_err(|e|storage(e.to_string()))?;
+    connection.execute("INSERT INTO content_segments SELECT ?2,?3,block_index,representation,segment,bytes FROM content_segments WHERE source_kind=?4 AND source_id=?1 AND (representation='r' OR segment>0)",params![keys::read(connection,source_kind,stream.as_str())?,kind,keys::write(connection,kind,id)?,source_kind]).map_err(|e|storage(e.to_string()))?;
+    connection.execute("INSERT INTO content_frontiers SELECT ?2,?3,f.block_index,f.representation,1,MAX(f.readable_end),CASE WHEN f.representation='r' THEN NULL ELSE COALESCE((SELECT s.bytes FROM content_segments s WHERE s.source_kind=?4 AND s.source_id=?1 AND s.block_index=f.block_index AND s.representation=f.representation AND s.segment=0),x'') END FROM content_frontiers f WHERE f.source_kind=?4 AND f.source_id=?1 GROUP BY f.block_index,f.representation",params![keys::read(connection,source_kind,stream.as_str())?,kind,keys::write(connection,kind,id)?,source_kind]).map_err(|e|storage(e.to_string()))?;
     Ok(())
 }
 fn clear_live(
@@ -1607,11 +1617,18 @@ fn clear_live(
         "DELETE FROM publication_metadata_segments WHERE stream_id=?1",
         "DELETE FROM publication_observation_blocks WHERE stream_id=?1",
         "DELETE FROM publication_observation_counts WHERE stream_id=?1",
+    ] {
+        connection
+            .execute_cached(sql, [stream.as_str()])
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    }
+    let source_id = keys::read(connection, "live", stream.as_str())?;
+    for sql in [
         "DELETE FROM content_segments WHERE source_kind IN ('live','live_block_metadata') AND source_id=?1",
         "DELETE FROM content_frontiers WHERE source_kind IN ('live','live_block_metadata') AND source_id=?1",
     ] {
         connection
-            .execute_cached(sql, [stream.as_str()])
+            .execute_cached(sql, [source_id])
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     }
     Ok(())
@@ -1666,8 +1683,8 @@ pub(super) fn settle_canonical(
             }
         }
     } else {
-        connection.execute_cached("INSERT INTO content_segments SELECT 'canonical',?2,block_index,representation,segment,bytes FROM content_segments WHERE source_kind='live' AND source_id=?1 AND representation='r'",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
-        connection.execute_cached("INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) SELECT 'canonical',?2,block_index,representation,1,MAX(readable_end) FROM content_frontiers WHERE source_kind='live' AND source_id=?1 AND representation='r' AND readable_end>0 GROUP BY block_index,representation",params![stream.as_str(),key.as_str()]).map_err(|e|storage(e.to_string()))?;
+        connection.execute_cached("INSERT INTO content_segments SELECT 'canonical',?2,block_index,representation,segment,bytes FROM content_segments WHERE source_kind='live' AND source_id=?1 AND representation='r'",params![keys::read(connection,"live",stream.as_str())?,keys::write(connection,"canonical",key.as_str())?]).map_err(|e|storage(e.to_string()))?;
+        connection.execute_cached("INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) SELECT 'canonical',?2,block_index,representation,1,MAX(readable_end) FROM content_frontiers WHERE source_kind='live' AND source_id=?1 AND representation='r' AND readable_end>0 GROUP BY block_index,representation",params![keys::read(connection,"live",stream.as_str())?,keys::write(connection,"canonical",key.as_str())?]).map_err(|e|storage(e.to_string()))?;
     }
     // These final suffixes were validated with the terminal marker but never
     // exposed as a live prefix. Preserve their original bytes directly in C.
@@ -1768,6 +1785,7 @@ pub(super) fn settle_audit(
 /// The physical-work proof depends on exact ordered compound keys and the
 /// finite BLOB constraint, so these are development-schema requirements.
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
+    keys::verify_schema(connection)?;
     for (table, last) in [
         ("content_segments", "segment"),
         ("content_frontiers", "revision"),
@@ -1795,7 +1813,8 @@ pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationS
             .filter(|c| !c.is_whitespace())
             .flat_map(char::to_lowercase)
             .collect();
-        if !compact.ends_with("withoutrowid")
+        if (table == "content_segments" && !compact.ends_with("withoutrowid"))
+            || (table == "content_frontiers" && compact.ends_with("withoutrowid"))
             || (table == "content_segments" && !compact.contains("check(length(bytes)<=65536)"))
             || (table == "content_frontiers"
                 && !compact.contains("check(bytesisnullorlength(bytes)<=65536)"))
@@ -1823,7 +1842,7 @@ pub(super) fn canonical_raw_arguments(
                 continue;
             }
             let block_index = u32::try_from(index).map_err(|_| invalid())?;
-            let end:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='canonical' AND source_id=?1 AND block_index=?2 AND representation='r' AND revision=1",params![key.as_str(),block_index],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+            let end:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='canonical' AND source_id=?1 AND block_index=?2 AND representation='r' AND revision=1",params![keys::read(connection,"canonical",key.as_str())?,block_index],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             let Some(end) = end else { continue };
             let mut bytes = Vec::new();
             let mut offset = 0;
@@ -1892,7 +1911,7 @@ pub(super) fn model_name_range(
     offset: u64,
     end: u64,
 ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
-    let readable_end:u64=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='attempt_model' AND source_id=?1 AND block_index=0 AND representation='j' AND revision=1",[&source_sequence.to_string()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let readable_end:u64=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='attempt_model' AND source_id=?1 AND block_index=0 AND representation='j' AND revision=1",[keys::read(connection,"attempt_model",&source_sequence.to_string())?],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if end > readable_end || offset > end || end - offset > u64::from(CONTENT_READ_MAX_BYTES) {
         return Err(ConversationStoreError::InvalidContentRange);
     }
@@ -1934,7 +1953,7 @@ pub(super) fn attempt_failure_range(
     offset: u64,
     end: u64,
 ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
-    let readable_end:u64=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='attempt_failure' AND source_id=?1 AND block_index=0 AND representation='j' AND revision=1",[&format!("journal:{sequence}")],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let readable_end:u64=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind='attempt_failure' AND source_id=?1 AND block_index=0 AND representation='j' AND revision=1",[keys::read(connection,"attempt_failure",&format!("journal:{sequence}"))?],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if end > readable_end || offset > end || end - offset > u64::from(CONTENT_READ_MAX_BYTES) {
         return Err(ConversationStoreError::InvalidContentRange);
     }
@@ -1981,7 +2000,7 @@ pub(super) fn utf8_field_end(
     id: &str,
     field: u32,
 ) -> Result<Option<u64>, ConversationStoreError> {
-    connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation='t' AND revision=1",params![kind,id,field],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))
+    connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation='t' AND revision=1",params![kind, keys::read(connection, kind, id)?,field],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))
 }
 pub(super) fn utf8_field_read(
     connection: &Connection,
@@ -2031,7 +2050,7 @@ pub(super) fn structural_field_read(
     offset: u64,
     max_bytes: u32,
 ) -> Result<crate::durable::observation::ObservationValueChunk, ConversationStoreError> {
-    let readable_end:u64=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation='j' AND revision=1",params![kind,id,field],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.ok_or_else(invalid)?;
+    let readable_end:u64=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation='j' AND revision=1",params![kind, keys::read(connection, kind, id)?,field],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.ok_or_else(invalid)?;
     if max_bytes == 0 || max_bytes > CONTENT_READ_MAX_BYTES || offset > readable_end {
         return Err(ConversationStoreError::InvalidContentRange);
     }
@@ -2071,9 +2090,9 @@ pub(super) fn validate_source_cut(
     let allowed=match &reference.source {
         Source::CanonicalMessageBlock {locator,..}=> {
             let position=canonical_position(connection,locator)?;
-            position<=cut.ledger_through && connection.query_row("SELECT journal_position<=?2 AND (transcript_position IS NULL OR transcript_position<=?3) FROM observation_headers WHERE ledger_position=?1",params![position,cut.read.journal,cut.read.transcript],|row|row.get::<_,bool>(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.unwrap_or(false)
+            position<=cut.ledger_through && connection.query_row("SELECT journal_position<=?2 AND (position IS NULL OR position<=?3) FROM transcript_entries WHERE ledger_position=?1",params![position,cut.read.journal,cut.read.transcript],|row|row.get::<_,bool>(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.unwrap_or(false)
         },
-        Source::DurableTranscriptAudit {stream_id,..}=>connection.query_row("SELECT transcript_position<=?2 AND journal_position<=?3 FROM observation_headers WHERE reference_kind='publication_audit' AND reference_id=?1",params![stream_id.as_str(),cut.read.transcript,cut.read.journal],|row|row.get::<_,bool>(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.unwrap_or(false),
+        Source::DurableTranscriptAudit {stream_id,..}=>connection.query_row("SELECT position<=?2 AND journal_position<=?3 FROM transcript_entries WHERE reference_kind='publication_audit' AND reference_id=?1",params![stream_id.as_str(),cut.read.transcript,cut.read.journal],|row|row.get::<_,bool>(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.unwrap_or(false),
         Source::LivePublicationPrefix {..}=>true,
         Source::ConfigurationInstructions { journal_sequence }
         | Source::ConfigurationCatalog { journal_sequence } => *journal_sequence <= cut.read.journal,

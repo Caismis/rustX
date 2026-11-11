@@ -397,7 +397,7 @@ fn append_certificate_does_not_certify_trigger_replacement() {
     store.initialize(&[]).unwrap();
     store.append_canonical(&user_message("a", "A")).unwrap();
     let mut connection = store.conn.lock().unwrap();
-    connection.execute_batch("PRAGMA foreign_keys=OFF; CREATE TEMP TRIGGER replace_certificate_identity BEFORE INSERT ON main.message_ledger WHEN new.message_id='b' BEGIN INSERT INTO message_ledger(position,message_id,message_json) VALUES(new.position,CAST(x'ff' AS TEXT),new.message_json); SELECT RAISE(IGNORE); END").unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=OFF; CREATE TEMP TRIGGER replace_certificate_identity BEFORE INSERT ON main.message_ledger WHEN new.message_id='b' BEGIN UPDATE message_ledger SET message_id=CAST(x'ff' AS TEXT) WHERE message_id='a'; INSERT INTO message_ledger(position,message_id,message_json) VALUES(new.position,new.message_id,new.message_json); SELECT RAISE(IGNORE); END").unwrap();
     append_validation::take_work();
     let mut validation = append_validation::Batch::begin(&store.conn.append_validation);
     let transaction = connection

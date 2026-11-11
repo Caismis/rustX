@@ -29,8 +29,15 @@ pub(super) fn event_source_rows(
 ) -> Vec<Vec<rusqlite::types::Value>> {
     let mut statement = connection.prepare(sql).unwrap();
     let columns = statement.column_count();
+    let source_id = if sql.contains("content_") {
+        rusqlite::types::Value::Integer(
+            crate::durable::sqlite::content::keys::read(connection, "oj", id).unwrap(),
+        )
+    } else {
+        rusqlite::types::Value::Text(id.to_owned())
+    };
     statement
-        .query_map([id], |row| {
+        .query_map([source_id], |row| {
             (0..columns).map(|column| row.get(column)).collect()
         })
         .unwrap()
@@ -83,8 +90,18 @@ pub(super) fn rebuild_event_source(
         "content_segments",
         "content_frontiers",
     ] {
+        let source_id = if table == "state_observation_fields" {
+            rusqlite::types::Value::Text(id.clone())
+        } else {
+            rusqlite::types::Value::Integer(
+                crate::durable::sqlite::content::keys::read(&transaction, "oj", &id).unwrap(),
+            )
+        };
         transaction
-            .execute(&format!("DELETE FROM {table} WHERE source_id=?1"), [&id])
+            .execute(
+                &format!("DELETE FROM {table} WHERE source_id=?1"),
+                [source_id],
+            )
             .unwrap();
     }
     observation_event::take_preview_work();
@@ -596,8 +613,18 @@ fn clear_event_source(connection: &Connection, sequence: u64) {
         "content_segments",
         "content_frontiers",
     ] {
+        let source_id = if table == "state_observation_fields" {
+            rusqlite::types::Value::Text(id.clone())
+        } else {
+            rusqlite::types::Value::Integer(
+                crate::durable::sqlite::content::keys::read(connection, "oj", &id).unwrap(),
+            )
+        };
         connection
-            .execute(&format!("DELETE FROM {table} WHERE source_id=?1"), [&id])
+            .execute(
+                &format!("DELETE FROM {table} WHERE source_id=?1"),
+                [source_id],
+            )
             .unwrap();
     }
     connection
@@ -732,10 +759,17 @@ fn assert_inline_event_oracle(connection: &Connection, event: &RuntimeEventEnvel
             "content_segments",
             "content_frontiers",
         ] {
+            let source_id = if table == "state_observation_fields" {
+                rusqlite::types::Value::Text(id.clone())
+            } else {
+                rusqlite::types::Value::Integer(
+                    crate::durable::sqlite::content::keys::read(&transaction, "oj", &id).unwrap(),
+                )
+            };
             let rows: u64 = transaction
                 .query_row(
                     &format!("SELECT count(*) FROM {table} WHERE source_id=?1"),
-                    [&id],
+                    [source_id],
                     |row| row.get(0),
                 )
                 .unwrap();

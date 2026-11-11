@@ -381,10 +381,18 @@ fn binary_digest_index_failure_is_optional_and_rolls_back_its_frontier() {
         "canonical_binary_segments",
         "content_frontiers",
     ] {
+        let source_id = if table == "content_frontiers" {
+            rusqlite::types::Value::Integer(
+                crate::durable::sqlite::content::keys::read(&connection, "canonical", "ledger:2")
+                    .unwrap(),
+            )
+        } else {
+            rusqlite::types::Value::Text("ledger:2".into())
+        };
         let count: u64 = connection
             .query_row(
-                &format!("SELECT count(*) FROM {table} WHERE source_id='ledger:2'"),
-                [],
+                &format!("SELECT count(*) FROM {table} WHERE source_id=?1"),
+                [source_id],
                 |row| row.get(0),
             )
             .unwrap();
@@ -474,10 +482,18 @@ fn canonical_binary_index_cannot_reauthenticate_a_modified_native_artifact() {
         "canonical_binary_segments",
         "content_frontiers",
     ] {
+        let source_id = if table == "content_frontiers" {
+            rusqlite::types::Value::Integer(
+                crate::durable::sqlite::content::keys::read(&connection, "canonical", "ledger:2")
+                    .unwrap(),
+            )
+        } else {
+            rusqlite::types::Value::Text("ledger:2".into())
+        };
         let count: u64 = connection
             .query_row(
-                &format!("SELECT count(*) FROM {table} WHERE source_id='ledger:2'"),
-                [],
+                &format!("SELECT count(*) FROM {table} WHERE source_id=?1"),
+                [source_id],
                 |row| row.get(0),
             )
             .unwrap();

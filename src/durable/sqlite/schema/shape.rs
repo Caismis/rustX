@@ -145,6 +145,15 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
         ));
     }
     verify_unique_columns(connection, "message_ledger", &["position", "message_id"])?;
+    let paired: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_list('surface_ops') a JOIN pragma_foreign_key_list('surface_ops') b ON a.id=b.id WHERE a.\"table\"='message_ledger' AND a.\"from\"='ledger_position' AND a.\"to\"='position' AND b.\"from\"='message_id' AND b.\"to\"='message_id' AND a.seq=0 AND b.seq=1)",
+        [], |row| row.get(0),
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    if !paired {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "Surface canonical identity is not paired".into(),
+        ));
+    }
     verify_unique_column(
         connection,
         "inherited_message_membership",
@@ -221,7 +230,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
             &["correlation", "sequence", "message_id"],
         ),
         (
-            "observation_headers",
+            "transcript_entries",
             &[
                 "reference_kind",
                 "reference_id",
@@ -229,6 +238,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "header_json",
             ],
         ),
+        ("content_source_ids", &["id", "alias"]),
         (
             "content_segments",
             &[
@@ -273,8 +283,8 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
             ],
         ),
         (
-            "transcript_order",
-            &["position", "reference_kind", "reference_id"],
+            "transcript_entries",
+            &["position", "native_reference_kind", "native_reference_id"],
         ),
         (
             "canonical_tool_calls",
@@ -339,7 +349,12 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
         ),
         (
             "surface_ops",
-            &["revision", "compaction_generation", "op_json"],
+            &[
+                "revision",
+                "compaction_generation",
+                "ledger_position",
+                "message_id",
+            ],
         ),
         ("surface_head", &["revision", "compaction_generation"]),
         ("request_configurations", &["digest", "configuration_json"]),
@@ -619,8 +634,8 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
     )?;
     verify_unique_columns(
         connection,
-        "transcript_order",
-        &["reference_kind", "reference_id"],
+        "transcript_entries",
+        &["native_reference_kind", "native_reference_id"],
     )?;
     verify_unique_columns(
         connection,

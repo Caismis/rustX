@@ -13,7 +13,7 @@ pub(super) fn put_json<T: Serialize + ?Sized>(
     value: &T,
     publication_metadata: bool,
 ) -> Result<u64, ConversationStoreError> {
-    let mut writer = SegmentWriter::new(connection, key, revision, publication_metadata);
+    let mut writer = SegmentWriter::new(connection, key, revision, publication_metadata)?;
     crate::runtime::read_layout::canonical::to_writer(&mut writer, value)
         .map_err(|error| storage(error.to_string()))?;
     writer.finish()
@@ -25,7 +25,7 @@ pub(super) fn put_native<T: Serialize + schemars::JsonSchema>(
     revision: u64,
     value: &T,
 ) -> Result<u64, ConversationStoreError> {
-    let mut writer = SegmentWriter::new(connection, key, revision, false);
+    let mut writer = SegmentWriter::new(connection, key, revision, false)?;
     crate::observation::structural_json::to_writer(&mut writer, value)
         .map_err(|error| storage(error.to_string()))?;
     writer.finish()
@@ -46,6 +46,7 @@ struct SegmentWriter<'a> {
     connection: &'a Connection,
     key: (&'a str, &'a str, u32, ContentRepresentation),
     revision: u64,
+    source_id: i64,
     publication_metadata: bool,
     buffer: Vec<u8>,
     first: Option<Vec<u8>>,
@@ -58,17 +59,18 @@ impl<'a> SegmentWriter<'a> {
         key: (&'a str, &'a str, u32, ContentRepresentation),
         revision: u64,
         publication_metadata: bool,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ConversationStoreError> {
+        Ok(Self {
             connection,
             key,
             revision,
+            source_id: super::content::keys::write(connection, key.0, key.1)?,
             publication_metadata,
             buffer: Vec::new(),
             first: None,
             written: 0,
             segment: 0,
-        }
+        })
     }
     fn finish(mut self) -> Result<u64, ConversationStoreError> {
         self.flush().map_err(|error| storage(error.to_string()))?;
@@ -83,7 +85,7 @@ impl<'a> SegmentWriter<'a> {
         };
         self.connection.execute_cached(
             "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end,bytes) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-            params![self.key.0, self.key.1, self.key.2, self.key.3.key(), self.revision, self.written, first],
+            params![self.key.0, self.source_id, self.key.2, self.key.3.key(), self.revision, self.written, first],
         ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         Ok(self.written)
     }
@@ -136,7 +138,7 @@ impl std::io::Write for SegmentWriter<'_> {
                 "INSERT INTO content_segments VALUES(?1,?2,?3,?4,?5,?6)",
                 params![
                     self.key.0,
-                    self.key.1,
+                    self.source_id,
                     self.key.2,
                     self.key.3.key(),
                     self.segment,
@@ -164,7 +166,8 @@ mod tests {
             ("canonical", "small", 0, ContentRepresentation::Utf8Text),
             1,
             false,
-        );
+        )
+        .unwrap();
         small.write_all(b"one").unwrap();
         small.flush().unwrap();
         assert_eq!(small.first.as_ref().unwrap().capacity(), 256);
@@ -185,7 +188,8 @@ mod tests {
             ),
             1,
             false,
-        );
+        )
+        .unwrap();
         writer.write_all(&vec![b'a'; 65_536]).unwrap();
         assert_eq!(writer.buffer.capacity(), 0);
         for _ in 0..12_000 {

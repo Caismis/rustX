@@ -317,7 +317,7 @@ impl Reader<'_> {
             ));
         };
         self.ledger(position);
-        let role: Option<String> = self.connection.prepare_cached("SELECT json_extract(header_json,'$.role') FROM observation_headers INDEXED BY observation_headers_ledger_idx WHERE ledger_position=?1 AND ledger_position IS NOT NULL AND transcript_position=?2 AND journal_position<=?3").and_then(|mut statement| statement.query_row(params![position,cursor,self.cut.read.journal], |row| row.get(0))).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        let role: Option<String> = self.connection.prepare_cached("SELECT json_extract(header_json,'$.role') FROM transcript_entries INDEXED BY transcript_entries_ledger_idx WHERE ledger_position=?1 AND ledger_position IS NOT NULL AND position=?2 AND journal_position<=?3").and_then(|mut statement| statement.query_row(params![position,cursor,self.cut.read.journal], |row| row.get(0))).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let role = role.ok_or_else(|| storage("native member message header unavailable"))?;
         let proposal: Option<u64> = self.connection.prepare_cached("SELECT observation_ledger FROM canonical_tool_calls INDEXED BY canonical_tool_calls_result_ledger_idx WHERE result_ledger_position=?1 AND result_ledger_position IS NOT NULL").and_then(|mut statement| statement.query_row([position], |row| row.get(0))).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if role == "tool" && proposal.is_none() {
@@ -411,7 +411,7 @@ impl Reader<'_> {
             return Ok((None, None));
         };
         self.ledger(position);
-        let bytes: Vec<u8> = self.connection.prepare_cached("SELECT header_json FROM observation_headers INDEXED BY observation_headers_ledger_idx WHERE ledger_position=?1 AND reference_kind='message'").and_then(|mut statement| statement.query_row([position], |row| row.get(0))).map_err(|error| crate::durable::sqlite::sqlite_error(&error,"native retry message header unavailable"))?;
+        let bytes: Vec<u8> = self.connection.prepare_cached("SELECT header_json FROM transcript_entries INDEXED BY transcript_entries_ledger_idx WHERE ledger_position=?1 AND reference_kind='message'").and_then(|mut statement| statement.query_row([position], |row| row.get(0))).map_err(|error| crate::durable::sqlite::sqlite_error(&error,"native retry message header unavailable"))?;
         let header: crate::durable::observation::MessageHeader = serde_json::from_slice(&bytes)
             .map_err(|_| storage("native retry message header corrupt"))?;
         Ok((

@@ -435,9 +435,9 @@ fn bounded_work_message_pages_preserve_cuts_gaps_and_wrong_kinds() {
         }
     }
     for damage in [
-        "DELETE FROM observation_headers WHERE ledger_position=20",
-        "UPDATE observation_headers SET reference_kind='wrong-kind' WHERE ledger_position=20",
-        "UPDATE observation_headers SET header_json=X'7b' WHERE ledger_position=20",
+        "UPDATE transcript_entries SET header_json=NULL,reference_kind=NULL,reference_id=NULL,ledger_position=NULL WHERE ledger_position=20",
+        "UPDATE transcript_entries SET reference_kind='wrong-kind' WHERE ledger_position=20",
+        "UPDATE transcript_entries SET header_json=X'7b' WHERE ledger_position=20",
     ] {
         let connection = store.lock().unwrap();
         connection.execute_batch("SAVEPOINT damage").unwrap();
@@ -461,10 +461,10 @@ fn bounded_work_message_pages_preserve_cuts_gaps_and_wrong_kinds() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap()
         .join("\n");
-    assert!(plan.contains("observation_headers_ledger_idx"), "{plan}");
+    assert!(plan.contains("transcript_entries_ledger_idx"), "{plan}");
     assert!(!plan.contains("TEMP B-TREE"), "{plan}");
     connection
-        .execute_batch("DROP INDEX observation_headers_ledger_idx")
+        .execute_batch("DROP INDEX transcript_entries_ledger_idx")
         .unwrap();
     assert!(
         connection
@@ -495,7 +495,7 @@ fn bounded_work_append_revision_uses_canonical_metadata_and_survives_reopen() {
         .collect();
     for (id, actual) in ids.iter().zip(&expected) {
         let original: Option<u64> = store.lock().unwrap().query_row(
-            "SELECT revision FROM surface_ops WHERE json_extract(op_json,'$.op')='append' AND json_extract(op_json,'$.message_id')=?1 ORDER BY revision LIMIT 1", [id], |row| row.get(0),
+            "SELECT revision FROM surface_ops WHERE ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1) ORDER BY revision LIMIT 1", [id], |row| row.get(0),
         ).optional().unwrap();
         assert_eq!(actual.map(SurfaceRevision::get), original);
     }
@@ -825,7 +825,7 @@ fn bounded_work_message_probe_reproduces_and_rejects_the_old_scan_sort_plan() {
         let connection = store.lock().unwrap();
         let old = query_work::measure(
             &connection,
-            "SELECT h.header_json FROM observation_headers h WHERE h.ledger_position>?1 AND h.ledger_position<=?2 AND h.reference_kind='message' ORDER BY h.ledger_position LIMIT ?3",
+            "SELECT h.header_json FROM transcript_entries h WHERE h.ledger_position>?1 AND h.ledger_position<=?2 AND h.reference_kind='message' ORDER BY h.ledger_position LIMIT ?3",
             params![size - 8, size, 8],
         );
         let new = query_work::measure(

@@ -1,7 +1,8 @@
-use super::super::{PublicationHeader, index_message, index_publication_message};
+use super::super::PublicationHeader;
 #[cfg(test)]
 use crate::durable::CanonicalStore;
 use crate::durable::sqlite::SqliteConversationStore;
+use crate::durable::sqlite::observation::index::{index_message, index_message_capture};
 use crate::message::content::TextBlock;
 use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, MessageBlock};
 use crate::observation::{bounded::bounded_bytes, preflight::required_budget};
@@ -27,7 +28,7 @@ fn captured(message: &MessageBlock) -> (SqliteConversationStore, PublicationHead
             )
             .unwrap();
         crate::durable::sqlite::content::index_message(&connection, message).unwrap();
-        index_publication_message(&connection, message, 1)
+        index_message_capture(&connection, message, Some(1), true, None)
             .unwrap()
             .unwrap()
     };
@@ -38,7 +39,7 @@ fn bytes(store: &SqliteConversationStore) -> Vec<u8> {
         .lock()
         .unwrap()
         .query_row(
-            "SELECT header_json FROM observation_headers WHERE ledger_position=1",
+            "SELECT header_json FROM transcript_entries WHERE ledger_position=1",
             [],
             |row| row.get(0),
         )
@@ -62,6 +63,22 @@ fn publication_header_reuse_preserves_transcript_rebinding_admission_boundary() 
         message.id().as_str(),
     )
     .unwrap();
+    // The current layout allocates the native T seat before capturing a
+    // header. Recreate that physical order with the original pre-T admission,
+    // then run the separate cursor patch whose boundary this test protects.
+    transaction
+        .execute(
+            "DELETE FROM transcript_entries WHERE position<0 AND ledger_position=1",
+            [],
+        )
+        .unwrap();
+    index_message_capture(&transaction, &message, Some(1), false, None).unwrap();
+    crate::durable::sqlite::canonical::ledger::patch_message_transcript(
+        &transaction,
+        message.id(),
+        cursor,
+    )
+    .unwrap();
     // The physical JSON patch fits SQLite's byte CHECK, but adding T crosses
     // the typed admission threshold used by the original final capture.
     let patched = super::super::message(&transaction, message.id())
@@ -75,7 +92,7 @@ fn publication_header_reuse_preserves_transcript_rebinding_admission_boundary() 
     draft.rebind(&transaction, &message, 1).unwrap();
     let rebound: Vec<u8> = transaction
         .query_row(
-            "SELECT header_json FROM observation_headers WHERE ledger_position=1",
+            "SELECT header_json FROM transcript_entries WHERE ledger_position=1",
             [],
             |row| row.get(0),
         )
@@ -89,7 +106,68 @@ fn publication_header_reuse_preserves_transcript_rebinding_admission_boundary() 
     index_message(&transaction, &message, Some(1)).unwrap();
     let original: Vec<u8> = transaction
         .query_row(
-            "SELECT header_json FROM observation_headers WHERE ledger_position=1",
+            "SELECT header_json FROM transcript_entries WHERE ledger_position=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rebound, original);
+    transaction.rollback().unwrap();
+}
+
+#[test]
+fn publication_header_recapture_admits_the_permanent_transcript_cursor_before_reuse() {
+    let (store, draft, message) = captured_at_budget(16_383);
+    assert_eq!(bounded_bytes(&draft.header, 16_384).unwrap(), bytes(&store));
+    let connection = store.lock().unwrap();
+    let transaction = connection.unchecked_transaction().unwrap();
+    transaction
+        .execute(
+            "UPDATE rustx_store SET next_transcript_position=9007199254740990 WHERE id=1",
+            [],
+        )
+        .unwrap();
+    let cursor = crate::durable::sqlite::canonical::ledger::append_transcript_reference(
+        &transaction,
+        "message",
+        message.id().as_str(),
+    )
+    .unwrap();
+    // A full re-capture after T exists must still apply typed admission to its
+    // current cursor, as the final publication repair does.
+    transaction
+        .execute(
+            "DELETE FROM transcript_entries WHERE position<0 AND ledger_position=1",
+            [],
+        )
+        .unwrap();
+    let prepared = index_message_capture(&transaction, &message, Some(1), true, Some(cursor))
+        .unwrap()
+        .unwrap();
+    let admitted = super::super::message(&transaction, message.id())
+        .unwrap()
+        .unwrap();
+    assert_eq!(admitted.transcript_cursor, Some(cursor));
+    assert!(admitted.display.is_none());
+    assert!(bounded_bytes(&admitted, 16_384).is_some());
+    prepared.rebind(&transaction, &message, 1).unwrap();
+    let rebound: Vec<u8> = transaction
+        .query_row(
+            "SELECT header_json FROM transcript_entries WHERE ledger_position=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let header = super::super::message(&transaction, message.id())
+        .unwrap()
+        .unwrap();
+    assert_eq!(header.transcript_cursor, Some(cursor));
+    assert!(header.display.is_none());
+    assert_eq!(bounded_bytes(&header, 16_384).unwrap(), rebound);
+    index_message(&transaction, &message, Some(1)).unwrap();
+    let original: Vec<u8> = transaction
+        .query_row(
+            "SELECT header_json FROM transcript_entries WHERE ledger_position=1",
             [],
             |row| row.get(0),
         )
@@ -136,6 +214,28 @@ fn captured_at_budget(budget: usize) -> (SqliteConversationStore, PublicationHea
 }
 
 #[test]
+fn canonical_append_preserves_the_original_header_admission_before_cursor_patch() {
+    let (oracle, _, message) = captured_at_budget(16_383);
+    let expected: Vec<u8> = oracle
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT CAST(json_set(header_json,'$.transcript_cursor',1) AS BLOB) FROM transcript_entries WHERE ledger_position=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let expected_header: crate::durable::observation::MessageHeader =
+        serde_json::from_slice(&expected).unwrap();
+    assert!(expected_header.display.is_some());
+    assert!(expected.len() <= 16_384);
+    let store = crate::durable::sqlite::test_support::store();
+    store.initialize(&[]).unwrap();
+    store.append_canonical(&message).unwrap();
+    assert_eq!(bytes(&store), expected);
+}
+
+#[test]
 fn publication_block_rebinding_rejects_a_foreign_native_position() {
     let message = raw_message(1);
     let (store, mut draft) = captured(&message);
@@ -157,7 +257,7 @@ fn publication_block_rebinding_rejects_a_foreign_native_position() {
         )
         .unwrap();
     crate::durable::sqlite::content::index_message(&transaction, &foreign).unwrap();
-    index_publication_message(&transaction, &foreign, 2).unwrap();
+    index_message_capture(&transaction, &foreign, Some(2), true, None).unwrap();
     transaction.execute("UPDATE observation_block_headers SET message_id=?1 WHERE ledger_position=2 AND block_index=8", [message.id().as_str()]).unwrap();
     let before: Vec<u8> = transaction.query_row(
         "SELECT header_json FROM observation_block_headers WHERE ledger_position=2 AND block_index=8",
@@ -189,13 +289,13 @@ fn publication_header_pretrim_draft_restores_display_after_shorter_original_raw_
     let connection = store.lock().unwrap();
     connection
         .execute(
-            "INSERT INTO content_segments VALUES('canonical','ledger:1',8,'r',0,?1)",
+            "INSERT INTO content_segments VALUES('canonical',5,8,'r',0,?1)",
             [raw.as_slice()],
         )
         .unwrap();
     connection
         .execute(
-            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical','ledger:1',8,'r',1,?1)",
+            "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical',5,8,'r',1,?1)",
             [raw.len()],
         )
         .unwrap();
@@ -210,7 +310,7 @@ fn publication_header_pretrim_draft_restores_display_after_shorter_original_raw_
     assert!(required_budget(&restored, 128 * 1024).unwrap() <= 16_384);
     let rebound: Vec<u8> = connection
         .query_row(
-            "SELECT header_json FROM observation_headers WHERE ledger_position=1",
+            "SELECT header_json FROM transcript_entries WHERE ledger_position=1",
             [],
             |row| row.get(0),
         )
@@ -218,7 +318,7 @@ fn publication_header_pretrim_draft_restores_display_after_shorter_original_raw_
     index_message(&connection, &message, Some(1)).unwrap();
     let original: Vec<u8> = connection
         .query_row(
-            "SELECT header_json FROM observation_headers WHERE ledger_position=1",
+            "SELECT header_json FROM transcript_entries WHERE ledger_position=1",
             [],
             |row| row.get(0),
         )

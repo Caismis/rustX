@@ -95,7 +95,7 @@ pub(super) fn index(
     connection
         .execute(
             "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical',?1,?2,'b',1,?3)",
-            params![id, block, reader.len],
+            params![super::keys::write(connection,"canonical",id)?, block, reader.len],
         )
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())

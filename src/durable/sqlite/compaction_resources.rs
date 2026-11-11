@@ -262,7 +262,7 @@ pub(super) fn trajectory(
     let mut bytes = source.bytes;
     let mut result = Vec::new();
     for (position, message) in source.rows {
-        let transcript: Option<u64> = connection.query_row("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1 AND position<=?2", params![message.id().as_str(), cut.transcript.get()], |r|r.get(0)).optional().map_err(|e|storage(e.to_string()))?;
+        let transcript: Option<u64> = connection.query_row("SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1 AND position<=?2", params![message.id().as_str(), cut.transcript.get()], |r|r.get(0)).optional().map_err(|e|storage(e.to_string()))?;
         let mut query = connection.prepare_cached("SELECT sequence,CASE WHEN octet_length(event_json)<=?4 THEN event_json END,octet_length(event_json) FROM events WHERE json_extract(event_json,'$.event.message_id')=?1 AND json_extract(event_json,'$.event.type')=?2 AND sequence<=?3 ORDER BY sequence DESC LIMIT 1").map_err(|e|storage(e.to_string()))?;
         let kind = match &message {
             MessageBlock::Assistant(_) => "assistant_message_committed",

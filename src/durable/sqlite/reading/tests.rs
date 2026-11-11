@@ -912,9 +912,9 @@ fn inherited_boundary_query_work_is_independent_of_seed_size() {
             let mut aggregate = connection.prepare(
                 "SELECT COALESCE(MAX(position),0) FROM (
                  SELECT t.position FROM message_ledger m
-                 JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.message_id
+                 JOIN transcript_entries t ON t.native_reference_kind='message' AND t.native_reference_id=m.message_id
                  WHERE m.position <= (SELECT message_count FROM bootstrap_identity WHERE id=1)
-                 UNION ALL SELECT position FROM transcript_order WHERE reference_kind='inherited_turn')",
+                 UNION ALL SELECT position FROM transcript_entries WHERE native_reference_kind='inherited_turn')",
             ).unwrap();
             assert_eq!(
                 aggregate.query_row([], |row| row.get::<_, i64>(0)).unwrap(),

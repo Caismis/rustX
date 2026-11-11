@@ -222,7 +222,7 @@ fn t10_t19_t20_transcript_readiness_failure_preserves_native_canonical_commit() 
         2
     );
     let connection = store.lock().unwrap();
-    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT MIN(position) FROM transcript_order INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND position>0 AND position<=2", [], |row| row.get(3)).unwrap();
+    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT MIN(position) FROM transcript_entries INDEXED BY transcript_observation_readiness_missing_idx WHERE observation_readiness_missing=1 AND position>0 AND position<=2", [], |row| row.get(3)).unwrap();
     assert!(
         plan.contains("transcript_observation_readiness_missing_idx"),
         "{plan}"

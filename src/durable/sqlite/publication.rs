@@ -507,10 +507,10 @@ pub(super) fn audit_observation_receipt(
     let summary = observation::audit_summary(audit);
     let _ = optional_display_layout(connection, || {
         observation::index::index_audit(connection, audit, cursor)?;
-        connection.execute("UPDATE observation_headers SET journal_position=?1 WHERE reference_kind='publication_audit' AND reference_id=?2",params![read_cut.read.journal,audit.stream_id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        connection.execute("UPDATE transcript_entries SET journal_position=?1 WHERE reference_kind='publication_audit' AND reference_id=?2",params![read_cut.read.journal,audit.stream_id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         Ok(())
     })?;
-    let bytes:Option<Vec<u8>>=connection.query_row("SELECT header_json FROM observation_headers WHERE reference_kind='publication_audit' AND reference_id=?1",[audit.stream_id.as_str()],|row|row.get(0)).optional().ok().flatten();
+    let bytes:Option<Vec<u8>>=connection.query_row("SELECT header_json FROM transcript_entries WHERE reference_kind='publication_audit' AND reference_id=?1",[audit.stream_id.as_str()],|row|row.get(0)).optional().ok().flatten();
     let header = bytes
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_else(|| crate::durable::observation::TranscriptHeader {

@@ -109,7 +109,7 @@ fn response_cache_revalidates_same_connection_sources_and_survives_rollback() {
     for mutation in [
         "UPDATE events SET observation_execution=x'7b' WHERE observation_kind='attempt_completed'",
         "UPDATE events SET observation_members=x'7b' WHERE observation_kind='attempt_completed'",
-        "UPDATE observation_headers SET header_json=CAST(json_set(header_json,'$.role','user') AS BLOB)",
+        "UPDATE transcript_entries SET header_json=CAST(json_set(header_json,'$.role','user') AS BLOB)",
         "UPDATE message_ledger SET native_transcript=NULL",
         "UPDATE message_ledger SET first_append_revision=NULL",
     ] {
