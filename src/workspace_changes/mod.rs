@@ -17,7 +17,7 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -119,7 +119,7 @@ pub(crate) struct ChangeRecording {
     attempt: AttemptId,
     cancellation: CancellationSignal,
     cwd: PathBuf,
-    directory: Arc<SnapshotDirectory>,
+    directory: OnceLock<Arc<SnapshotDirectory>>,
     task: tokio::sync::Mutex<Option<BaselineTask>>,
     baseline: Mutex<Option<Baseline>>,
     captures: Mutex<BTreeMap<PathBuf, Capture>>,
@@ -137,31 +137,38 @@ impl ChangeRecording {
         store: Arc<ChangesStore>,
         cancellation: CancellationSignal,
     ) -> Option<Arc<Self>> {
-        let directory = match create_snapshot_directory(&std::env::temp_dir()) {
-            Ok(directory) => Arc::new(directory),
-            Err(error) => {
-                tracing::warn!(%error, "workspace change recording unavailable");
-                return None;
-            }
-        };
-        let root = cwd.clone();
-        let scratch = Arc::clone(&directory);
-        let observation_cancellation = cancellation.clone();
-        let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-            let Some(repository) =
-                Repository::locate(&root, scratch, observation_cancellation).await?
-            else {
-                return Ok(None);
+        let directory = OnceLock::new();
+        let task = if git::may_have_repository(&cwd) {
+            let scratch = match create_snapshot_directory(&std::env::temp_dir()) {
+                Ok(directory) => Arc::new(directory),
+                Err(error) => {
+                    tracing::warn!(%error, "workspace change recording unavailable");
+                    return None;
+                }
             };
-            let tree = repository.snapshot().await?;
-            Ok(Some(Baseline { repository, tree }))
-        }));
+            let _ = directory.set(Arc::clone(&scratch));
+            let root = cwd.clone();
+            let observation_cancellation = cancellation.clone();
+            Some(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+                async move {
+                    let Some(repository) =
+                        Repository::locate(&root, scratch, observation_cancellation).await?
+                    else {
+                        return Ok(None);
+                    };
+                    let tree = repository.snapshot().await?;
+                    Ok(Some(Baseline { repository, tree }))
+                },
+            )))
+        } else {
+            None
+        };
         Some(Arc::new(Self {
             attempt,
             cancellation,
             cwd,
             directory,
-            task: tokio::sync::Mutex::new(Some(task)),
+            task: tokio::sync::Mutex::new(task),
             baseline: Mutex::new(None),
             captures: Mutex::new(BTreeMap::new()),
             used: AtomicBool::new(false),
@@ -194,7 +201,26 @@ impl ChangeRecording {
 
     /// Resolved, guarded mutation target, captured once before its first edit.
     pub(crate) fn capture(&self, path: &Path) {
-        if self.directory.contains(path) {
+        // Serialize initialization with captures so concurrent tools allocate at most
+        // one private directory, and only when a file actually needs capture.
+        let mut captures = self.captures.lock().expect("workspace captures");
+        if self.directory.get().is_none() {
+            match create_snapshot_directory(&std::env::temp_dir()) {
+                Ok(directory) => {
+                    let _ = self.directory.set(Arc::new(directory));
+                }
+                Err(error) => {
+                    self.failed.store(true, Ordering::Relaxed);
+                    tracing::warn!(%error, "workspace change recording unavailable");
+                    return;
+                }
+            }
+        }
+        let directory = self
+            .directory
+            .get()
+            .expect("snapshot directory initialized");
+        if directory.contains(path) {
             return;
         }
         // Temporary output outside the workspace is not a user deliverable.
@@ -209,11 +235,10 @@ impl ChangeRecording {
         {
             return;
         }
-        let mut captures = self.captures.lock().expect("workspace captures");
         if captures.contains_key(path) {
             return;
         }
-        match Capture::read(path, self.directory.path()) {
+        match Capture::read(path, directory.path()) {
             Ok(Some(capture)) => {
                 captures.insert(path.to_owned(), capture);
             }
@@ -296,8 +321,11 @@ impl ChangeRecording {
             trees = Some((before, after));
             repository = Some(repo);
         }
+        let Some(directory) = self.directory.get() else {
+            return Ok(());
+        };
         let cwd = self.cwd.clone();
-        let directory = Arc::clone(&self.directory);
+        let directory = Arc::clone(directory);
         let repository_root = repository.as_ref().map(|repo| repo.root.clone());
         let files = tokio::task::spawn_blocking(move || {
             capture_endpoints(
@@ -341,7 +369,7 @@ impl ChangeRecording {
             sources,
             repository,
             trees,
-            _directory: Arc::clone(&self.directory),
+            _directory: Arc::clone(self.directory.get().ok_or("snapshot unavailable")?),
         };
         // Cancellation and publication share a grant boundary. A detached
         // blocking file comparison can never publish after cancellation wins.

@@ -430,13 +430,13 @@ async fn removing_a_nested_repository_and_its_index_entry_records_the_gitlink_de
         );
         let (before, after) = completed.trees.as_ref().unwrap();
         let initial = git(
-            record.directory.path(),
+            record.directory.get().unwrap().path(),
             &["ls-tree", "-z", before, "--", "nested"],
         );
         assert!(initial.starts_with("160000 commit "));
         assert!(
             git(
-                record.directory.path(),
+                record.directory.get().unwrap().path(),
                 &["ls-tree", "-z", after, "--", "nested"]
             )
             .is_empty()
@@ -487,13 +487,13 @@ async fn replacing_a_nested_repository_samples_the_actual_file_or_symlink_endpoi
             let (before, after) = completed.trees.as_ref().unwrap();
             assert!(
                 git(
-                    record.directory.path(),
+                    record.directory.get().unwrap().path(),
                     &["ls-tree", "-z", before, "--", "nested"]
                 )
                 .starts_with("160000 commit ")
             );
             let final_entry = git(
-                record.directory.path(),
+                record.directory.get().unwrap().path(),
                 &["ls-tree", "-z", after, "--", "nested"],
             );
             assert!(
