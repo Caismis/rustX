@@ -784,13 +784,20 @@ impl Default for AttemptLifecycle {
 }
 
 impl AttemptLifecycle {
-    /// The identity configuration: enter every step, defer no context.
+    /// The identity configuration: enter every step, defer no context, and
+    /// authorize with Full Access until a caller applies an explicit mode.
+    ///
+    /// Production attempt construction always chains
+    /// [`Self::with_approval_mode_and_reviewer`]. Direct fixture construction
+    /// that needs Plan or Automatic must opt in; freezing Plan here made
+    /// non-interactive suites hang on Elevate Ask despite Full Access
+    /// reminder policy on [`crate::agent::execution::AgentExecutionRuntimePolicy`].
     #[must_use]
     pub fn inert() -> Self {
         Self {
             pre_step: Arc::new(AlwaysEnter),
-            pre_tool: Arc::new(ConfiguredApprovalPolicy::new(ApprovalMode::Plan)),
-            approval_mode: ApprovalMode::Plan,
+            pre_tool: Arc::new(ConfiguredApprovalPolicy::new(ApprovalMode::FullAccess)),
+            approval_mode: ApprovalMode::FullAccess,
             interaction: InteractionBinding::Unavailable,
             tool_results: Vec::new(),
         }

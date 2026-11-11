@@ -52,21 +52,21 @@ pub(crate) fn default_execution_policy() -> crate::agent::execution::AgentExecut
         // generation, so it hands out no subagent resolution authority.
         subagent_context: None,
         workflow_output: None,
-        // Reminder/projection mode only. Tool authorization uses
-        // [`full_access_lifecycle`] (or an explicit Plan lifecycle).
+        // Reminder/projection mode only. Tool authorization reads the
+        // attempt lifecycle (`inert` / [`full_access_lifecycle`] are Full
+        // Access; Plan fixtures must opt in).
         approval_mode: rustx::runtime::ApprovalMode::FullAccess,
     }
 }
 
 /// Non-interactive fixture lifecycle with Full Access pre-tool policy.
 ///
-/// [`rustx::agent::AttemptLifecycle::inert`] freezes Plan authorization.
-/// Permission decisions read that lifecycle, not
-/// [`default_execution_policy`]'s reminder `approval_mode`.
+/// Equivalent to [`rustx::agent::AttemptLifecycle::inert`] after #544: both
+/// authorize Full Access. Prefer this name at AgentExecution construction
+/// sites so permission intent stays explicit.
 #[must_use]
 pub(crate) fn full_access_lifecycle() -> rustx::agent::AttemptLifecycle {
     rustx::agent::AttemptLifecycle::inert()
-        .with_approval_mode(rustx::runtime::ApprovalMode::FullAccess)
 }
 
 /// The immutable attempt model snapshot of a loop suite.
