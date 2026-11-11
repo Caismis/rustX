@@ -3442,6 +3442,31 @@ fn native_history_actual_leases_canonical_ledger_allocations_before_and_after_re
 }
 
 #[test]
+fn selected_history_at_capacity_rejects_the_next_canonical_message() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    let messages: Vec<_> = (1..=8192).map(message).collect();
+    store.append_canonical_batch(&messages).unwrap();
+    assert_eq!(store.projected_history().unwrap().messages.len(), 8192);
+    store.append_canonical(&message(8193)).unwrap();
+    let error = store.projected_history().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("historical Tail materialization exceeds bound"),
+        "unexpected failure: {error}"
+    );
+    *store.conn.manifest.history.lock().unwrap() = None;
+    let error = store.projected_history().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("historical Tail materialization exceeds bound"),
+        "unexpected cold failure: {error}"
+    );
+}
+
+#[test]
 fn compaction_items_are_materialized_from_the_exact_checkpoint_and_tail() {
     let store = store();
     let initial: Vec<_> = (1..=8).map(message).collect();
