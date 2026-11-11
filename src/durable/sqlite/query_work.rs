@@ -186,3 +186,120 @@ pub(crate) fn phase(label: &'static str) {
 pub(crate) fn finish_phases() -> BTreeMap<(&'static str, String), PhaseWork> {
     TRACE.with_borrow_mut(|trace| std::mem::take(&mut trace.phases))
 }
+
+/// Per-scope totals of a connection traced across every thread that uses it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ScopeWork {
+    /// Scope entries (for example one `observation_checkpoint_head` call).
+    pub entries: usize,
+    pub statements: usize,
+    pub steps: i64,
+    pub rows: usize,
+    /// `BEGIN` statements, i.e. explicit transactions.
+    pub transactions: usize,
+    /// Statement text to (calls, steps, rows).
+    pub by_sql: BTreeMap<String, (usize, i64, usize)>,
+}
+
+#[derive(Default)]
+struct SharedTrace {
+    before: BTreeMap<String, i32>,
+    scopes: BTreeMap<&'static str, ScopeWork>,
+}
+
+static SHARED: std::sync::Mutex<Option<SharedTrace>> = std::sync::Mutex::new(None);
+thread_local! { static SCOPE: std::cell::Cell<&'static str> = const { std::cell::Cell::new("other") }; }
+
+/// Attributes statements executed on this thread to `name` until dropped.
+pub(crate) struct Scope(&'static str);
+
+impl Drop for Scope {
+    fn drop(&mut self) {
+        SCOPE.with(|scope| scope.set(self.0));
+    }
+}
+
+pub(crate) fn scope(name: &'static str) -> Scope {
+    if let Some(trace) = SHARED.lock().unwrap().as_mut() {
+        trace.scopes.entry(name).or_default().entries += 1;
+    }
+    Scope(SCOPE.with(|scope| scope.replace(name)))
+}
+
+fn record_shared(event: TraceEvent<'_>) {
+    let mut shared = SHARED.lock().unwrap();
+    let Some(trace) = shared.as_mut() else { return };
+    let scope = SCOPE.with(std::cell::Cell::get);
+    match event {
+        TraceEvent::Stmt(statement, text) if !text.starts_with("--") => {
+            trace.before.insert(
+                statement.sql().into_owned(),
+                statement.get_status(StatementStatus::VmStep),
+            );
+            let work = trace.scopes.entry(scope).or_default();
+            work.statements += 1;
+            work.by_sql
+                .entry(statement.sql().into_owned())
+                .or_default()
+                .0 += 1;
+            if text.trim_start().to_ascii_uppercase().starts_with("BEGIN") {
+                work.transactions += 1;
+            }
+        }
+        TraceEvent::Profile(statement, _) => {
+            let sql = statement.sql();
+            if let Some(before) = trace.before.remove(sql.as_ref()) {
+                let steps = i64::from(statement.get_status(StatementStatus::VmStep) - before);
+                let work = trace.scopes.entry(scope).or_default();
+                work.steps += steps;
+                work.by_sql.entry(sql.into_owned()).or_default().1 += steps;
+            }
+        }
+        TraceEvent::Row(statement) => {
+            let work = trace.scopes.entry(scope).or_default();
+            work.rows += 1;
+            work.by_sql
+                .entry(statement.sql().into_owned())
+                .or_default()
+                .2 += 1;
+        }
+        _ => {}
+    }
+}
+
+/// Traces one connection from every thread; at most one capture per process.
+pub(crate) fn capture_shared(connection: &Connection) {
+    *SHARED.lock().unwrap() = Some(SharedTrace::default());
+    connection.trace_v2(
+        TraceEventCodes::SQLITE_TRACE_STMT
+            | TraceEventCodes::SQLITE_TRACE_PROFILE
+            | TraceEventCodes::SQLITE_TRACE_ROW,
+        Some(record_shared),
+    );
+}
+
+/// Takes the totals recorded since the last take, keeping the trace armed.
+pub(crate) fn take_shared() -> BTreeMap<&'static str, ScopeWork> {
+    SHARED
+        .lock()
+        .unwrap()
+        .as_mut()
+        .map(|trace| std::mem::take(&mut trace.scopes))
+        .unwrap_or_default()
+}
+
+pub(crate) fn finish_shared(connection: &Connection) {
+    connection.trace_v2(TraceEventCodes::empty(), None);
+    *SHARED.lock().unwrap() = None;
+}
+
+impl super::SqliteConversationStore {
+    /// Traces every statement of this store's connection, from any thread.
+    pub(crate) fn begin_shared_query_work(&self) {
+        capture_shared(&self.lock().unwrap());
+    }
+
+    pub(crate) fn finish_shared_query_work(&self) {
+        finish_shared(&self.lock().unwrap());
+    }
+}

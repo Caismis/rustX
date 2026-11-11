@@ -52,14 +52,14 @@ fn checkpoint_head_keeps_one_wal_snapshot_across_concurrent_source_changes() {
     });
     assert_eq!(
         reader
-            .observation_checkpoint_head(&cut, cut.read.journal, 32)
+            .observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false)
             .unwrap(),
         original,
     );
     assert!(reached.load(Ordering::SeqCst));
     let expected = checkpoint_head_oracle(&reader, &cut, cut.read.journal, 32).unwrap_err();
     let actual = reader
-        .observation_checkpoint_head(&cut, cut.read.journal, 32)
+        .observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false)
         .unwrap_err();
     assert_eq!(actual.to_string(), expected.to_string());
     assert!(matches!(actual, ConversationStoreError::Storage(_)));
@@ -89,7 +89,7 @@ fn checkpoint_head_preserves_cut_bound_and_source_error_order() {
     ] {
         let expected = checkpoint_head_oracle(&store, selected, through, limit).unwrap_err();
         let actual = store
-            .observation_checkpoint_head(selected, through, limit)
+            .observation_checkpoint_head(selected, through, limit, &|| false)
             .unwrap_err();
         assert_eq!(actual.to_string(), expected.to_string());
         assert_eq!(
@@ -112,7 +112,7 @@ fn checkpoint_head_preserves_cut_bound_and_source_error_order() {
         damaged.lock().unwrap().execute_batch(damage).unwrap();
         let expected = checkpoint_head_oracle(&damaged, &cut, cut.read.journal, 32).unwrap_err();
         let actual = damaged
-            .observation_checkpoint_head(&cut, cut.read.journal, 32)
+            .observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false)
             .unwrap_err();
         assert_eq!(actual.to_string(), expected.to_string(), "{damage}");
         assert_eq!(
@@ -145,13 +145,13 @@ fn checkpoint_head_keeps_projection_and_occupancy_at_the_same_historical_cut() {
     );
     assert_eq!(
         store
-            .observation_checkpoint_head(&before, before.read.journal, 32)
+            .observation_checkpoint_head(&before, before.read.journal, 32, &|| false)
             .unwrap(),
         before_head
     );
     assert_eq!(
         store
-            .observation_checkpoint_head(&cut, cut.read.journal, 32)
+            .observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false)
             .unwrap(),
         expected
     );
@@ -165,12 +165,12 @@ fn checkpoint_head_keeps_projection_and_occupancy_at_the_same_historical_cut() {
         .unwrap();
     let expected = checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap_err();
     let actual = store
-        .observation_checkpoint_head(&cut, cut.read.journal, 32)
+        .observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false)
         .unwrap_err();
     assert_eq!(actual.to_string(), expected.to_string());
     assert_eq!(
         store
-            .observation_checkpoint_head(&before, before.read.journal, 32)
+            .observation_checkpoint_head(&before, before.read.journal, 32, &|| false)
             .unwrap(),
         before_head
     );
@@ -199,7 +199,7 @@ fn checkpoint_read_reuses_one_actual_native_head_for_response_and_statistics() {
             connection.prepare_cached(query).unwrap().reset_status(rusqlite::StatementStatus::Run);
         }
     }
-    let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap();
+    let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false).unwrap();
     assert_eq!(actual, expected);
     let connection = store.lock().unwrap();
     let counts: Vec<_> = queries.into_iter().map(|query| connection.prepare_cached(query).unwrap().get_status(rusqlite::StatementStatus::Run)).collect();
@@ -248,7 +248,7 @@ fn checkpoint_shared_cut_preserves_order_when_multiple_native_domains_are_corrup
         let cut = store.observation_read_cut().unwrap();
         store.lock().unwrap().execute_batch(damage).unwrap();
         let expected = checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap_err();
-        let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap_err();
+        let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false).unwrap_err();
         assert_eq!(std::mem::discriminant(&actual), std::mem::discriminant(&expected), "{damage}");
         assert_eq!(actual.to_string(), expected.to_string(), "{damage}");
     }
@@ -262,16 +262,16 @@ fn checkpoint_complete_rows_reuse_only_verified_body_and_response_owners() {
     response_message(&store, &attempt, "prepared-native-message");
     response_complete(&store, &attempt);
     let before = store.observation_read_cut().unwrap();
-    let original = store.observation_checkpoint_head(&before, before.read.journal, 32).unwrap();
+    let original = store.observation_checkpoint_head(&before, before.read.journal, 32, &|| false).unwrap();
     assert_eq!(original.transcript_rows.len(), 2, "both ordinary user and completed assistant are in the real fixture");
     let _active = response_start(&store, "prepared-native-unrelated");
     let cut = store.observation_read_cut().unwrap();
-    let repeated = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap();
+    let repeated = store.observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false).unwrap();
     assert_eq!(original.transcript.entries, repeated.transcript.entries);
     for (first, second) in original.transcript_rows.iter().zip(&repeated.transcript_rows) {
         assert!(first.same_owner(second), "unchanged exact body and authenticated response retain one complete-row owner");
     }
-    let historical = store.observation_checkpoint_head(&before, before.read.journal, 32).unwrap();
+    let historical = store.observation_checkpoint_head(&before, before.read.journal, 32, &|| false).unwrap();
     assert_eq!(historical.transcript, original.transcript);
     assert!(historical.transcript_rows.iter().zip(&original.transcript_rows).all(|(a,b)| a.same_owner(b)));
     // A coherent descriptor rewrite at the same cursor must not reuse the old
@@ -283,14 +283,14 @@ fn checkpoint_complete_rows_reuse_only_verified_body_and_response_owners() {
         header.display = Some(user_message("prepared-native-user", "coherently changed user body"));
         connection.execute("UPDATE transcript_entries SET header_json=?1 WHERE ledger_position=1", [serde_json::to_vec(&header).unwrap()]).unwrap();
     }
-    let changed = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap();
+    let changed = store.observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false).unwrap();
     assert!(!original.transcript_rows[0].same_owner(&changed.transcript_rows[0]));
     assert_ne!(original.transcript_rows[0].value(), changed.transcript_rows[0].value());
     assert_eq!(changed, checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap());
     assert_eq!(original.transcript_rows[0].value(), *original.transcript.entries[0], "an old owner still discloses its original body");
     store.lock().unwrap().execute("UPDATE transcript_entries SET header_json=x'7b' WHERE ledger_position=1", []).unwrap();
     let expected = checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap_err();
-    let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap_err();
+    let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false).unwrap_err();
     assert_eq!(actual.to_string(), expected.to_string());
 }
 
@@ -320,7 +320,7 @@ fn checkpoint_tool_rows_share_cut_proof_but_keep_each_native_tool_validation() {
     super::super::observation_response::row_work();
     super::super::observation::descriptor_work();
     super::super::observation_tools::page_work();
-    let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap();
+    let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false).unwrap();
     assert_eq!(actual, expected);
     assert_eq!(actual.transcript.entries.len(), 2);
     assert!(actual.transcript.entries.iter().all(|entry| !entry.tool_calls.is_empty()));
@@ -328,7 +328,7 @@ fn checkpoint_tool_rows_share_cut_proof_but_keep_each_native_tool_validation() {
     assert_eq!(super::super::observation_response::row_work(), (2, 0));
     assert_eq!(super::super::observation::descriptor_work(), (2, 0));
     assert_eq!(super::super::observation_tools::page_work(), 2);
-    let repeated = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap();
+    let repeated = store.observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false).unwrap();
     assert!(actual.transcript_rows.iter().zip(&repeated.transcript_rows).all(|(a,b)| a.same_owner(b)), "independently validated Tool inputs retain the complete immutable row");
     assert_eq!(super::super::observation_response::row_work(), (0, 2));
     assert_eq!(super::super::observation::descriptor_work(), (0, 2), "message descriptor decoding is reused while each Tool page is still read and validated");
@@ -339,7 +339,7 @@ fn checkpoint_tool_rows_share_cut_proof_but_keep_each_native_tool_validation() {
     assert_eq!(store.lock().unwrap().execute("UPDATE observation_block_headers SET header_json=CAST(json_set(header_json,'$.deferred','not-a-bool') AS BLOB) WHERE ledger_position=1", []).unwrap(), 1);
     let expected = checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap_err();
     store.lock().unwrap().prepare_cached(query).unwrap().reset_status(rusqlite::StatementStatus::Run);
-    let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap_err();
+    let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false).unwrap_err();
     assert_eq!(actual.to_string(), expected.to_string());
     assert_eq!(store.lock().unwrap().prepare_cached(query).unwrap().get_status(rusqlite::StatementStatus::Run), 1);
     // Public historical Tool pages still validate their caller-provided cut,
@@ -367,7 +367,7 @@ fn checkpoint_tail_reuses_descriptor_decoding_and_shared_response_facts() {
     let before = store.observation_read_cut().unwrap();
     super::super::observation::descriptor_work();
     let original = store
-        .observation_checkpoint_head(&before, before.read.journal, 8)
+        .observation_checkpoint_head(&before, before.read.journal, 8, &|| false)
         .unwrap();
     assert_eq!(super::super::observation::descriptor_work(), (8, 0));
     assert_eq!(original.transcript.entries.len(), 8);
@@ -379,7 +379,7 @@ fn checkpoint_tail_reuses_descriptor_decoding_and_shared_response_facts() {
         super::super::observation_response::ownership_work();
         super::super::observation_response::row_work();
         let repeated = store
-            .observation_checkpoint_head(&cut, cut.read.journal, 8)
+            .observation_checkpoint_head(&cut, cut.read.journal, 8, &|| false)
             .unwrap();
         assert_eq!(
             super::super::observation::descriptor_work(),
@@ -416,14 +416,14 @@ fn checkpoint_descriptor_reuse_keeps_running_decoration_and_exact_current_bytes(
     response_message(&store, &attempt, "checkpoint-descriptor-running-message");
     let before = store.observation_read_cut().unwrap();
     let running = store
-        .observation_checkpoint_head(&before, before.read.journal, 8)
+        .observation_checkpoint_head(&before, before.read.journal, 8, &|| false)
         .unwrap();
     assert!(running.transcript.entries[0].response_pending);
     response_complete(&store, &attempt);
     let cut = store.observation_read_cut().unwrap();
     super::super::observation::descriptor_work();
     let complete = store
-        .observation_checkpoint_head(&cut, cut.read.journal, 8)
+        .observation_checkpoint_head(&cut, cut.read.journal, 8, &|| false)
         .unwrap();
     assert_eq!(super::super::observation::descriptor_work(), (0, 1));
     assert!(!complete.transcript.entries[0].response_pending);
@@ -446,11 +446,33 @@ fn checkpoint_descriptor_reuse_keeps_running_decoration_and_exact_current_bytes(
         .unwrap();
     let expected = checkpoint_head_oracle(&store, &cut, cut.read.journal, 8).unwrap_err();
     let actual = store
-        .observation_checkpoint_head(&cut, cut.read.journal, 8)
+        .observation_checkpoint_head(&cut, cut.read.journal, 8, &|| false)
         .unwrap_err();
     assert_eq!(actual.to_string(), expected.to_string());
     assert_eq!(
         running.transcript_rows[0].value(),
         *running.transcript.entries[0]
+    );
+}
+
+#[test]
+fn retired_checkpoint_head_runs_no_statement_and_keeps_the_cut_readable() {
+    let store = store();
+    let attempt = response_start(&store, "checkpoint-retired");
+    response_message(&store, &attempt, "checkpoint-retired-message");
+    response_complete(&store, &attempt);
+    let cut = store.observation_read_cut().unwrap();
+    store.begin_query_work();
+    let retired = store.observation_checkpoint_head(&cut, cut.read.journal, 32, &|| true);
+    assert!(store.finish_query_work().is_empty());
+    assert!(matches!(
+        retired,
+        Err(ConversationStoreError::ObservationCutExpired)
+    ));
+    assert_eq!(
+        store
+            .observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false)
+            .unwrap(),
+        checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap()
     );
 }

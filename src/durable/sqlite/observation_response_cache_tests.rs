@@ -37,7 +37,7 @@ fn completed_response_and_transcript_owner_survive_real_request_workspace_spill(
     let before = store.observation_read_cut().unwrap();
     let original = response_cache_prime(&store, &before, &response_page_at(&store, &before));
     let old = store
-        .observation_checkpoint_head(&before, before.read.journal, 32)
+        .observation_checkpoint_head(&before, before.read.journal, 32, &|| false)
         .unwrap();
     assert_eq!(old.transcript.entries, original.entries);
     assert_eq!(old.transcript_rows.len(), 1);
@@ -63,7 +63,7 @@ fn completed_response_and_transcript_owner_survive_real_request_workspace_spill(
     super::super::observation_response::read_work();
     super::super::observation_response::cache_work();
     let current = store
-        .observation_checkpoint_head(&after, after.read.journal, 32)
+        .observation_checkpoint_head(&after, after.read.journal, 32, &|| false)
         .unwrap();
     assert_eq!(super::super::observation_response::read_work(), (0, 0));
     assert_eq!(super::super::observation_response::cache_work(), (1, 0, 1));

@@ -291,11 +291,14 @@ impl ClientInner {
                     {
                         None
                     } else {
-                        guard.projection.read_domain_candidate()
+                        guard
+                            .projection
+                            .read_domain_candidate()
+                            .map(|cut| (cut, guard.projection.read_supersession()))
                     }
                 };
                 if reading.is_none()
-                    && let Some(cut) = cut
+                    && let Some((cut, supersession)) = cut
                 {
                     #[cfg(test)]
                     publication_gate.worker_stage("spawn_read");
@@ -322,7 +325,7 @@ impl ClientInner {
                         }
                         #[cfg(test)]
                         read_diagnostic.read_stage("source", &cut);
-                        let domains = cut.read_live(store.as_ref());
+                        let domains = cut.read_live(store.as_ref(), &supersession);
                         #[cfg(test)]
                         read_diagnostic.read_stage("completed", &cut);
                         (cut, domains)

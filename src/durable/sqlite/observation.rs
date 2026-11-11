@@ -261,6 +261,7 @@ pub(super) struct TranscriptRowProof {
 pub(super) struct TranscriptDescriptor {
     header: TranscriptHeader,
     tool_locator: Option<crate::observation::content::CanonicalContentLocator>,
+    tool_owner: Option<ToolOwner>,
     retained_bytes: usize,
 }
 
@@ -355,6 +356,7 @@ fn transcript_at(
         let cursor =
             crate::durable::TranscriptCursor::new(nonnegative(position, "transcript header")?);
         let mut tool_locator = None;
+        let mut known_owner = None;
         let mut tool_proof = None;
         let mut reusable = false;
         let cached = reuse
@@ -378,6 +380,7 @@ fn transcript_at(
             let mut header = prior.header.clone();
             header.display = Some(body.undecorated_value());
             tool_locator.clone_from(&prior.tool_locator);
+            known_owner.clone_from(&prior.tool_owner);
             descriptor = Some(prior);
             reusable = true;
             header
@@ -393,6 +396,7 @@ fn transcript_at(
             }
             if message.role == "assistant" && message.tool_call_count > 0 {
                 tool_locator.clone_from(&message.locator);
+                known_owner = Some(ToolOwner::from_header(&message));
             }
             reusable = message.display.is_some();
             transcript_message_header(cursor, kind.clone(), id.clone(), message)
@@ -412,19 +416,27 @@ fn transcript_at(
             // Charge the retained metadata to the same bounded proof cache.
             // This body-free length is measured only when a new descriptor
             // owner is created; unchanged reads reuse its certificate.
-            let retained_bytes =
-                super::observation_codec::public_length(&(&header, &tool_locator), usize::MAX)?;
+            let retained_bytes = super::observation_codec::public_length(
+                &(&header, &tool_locator, &known_owner),
+                usize::MAX,
+            )?;
             descriptor = Some(std::sync::Arc::new(TranscriptDescriptor {
                 header: header.clone(),
                 tool_locator: tool_locator.clone(),
+                tool_owner: known_owner.clone(),
                 retained_bytes,
             }));
             header.display = display;
         }
         if let Some(locator) = tool_locator {
             let tools = if let Some((validated, _, _)) = &reuse {
-                let (tools, proof) =
-                    super::observation_tools::page_validated(validated, &locator, 0, 32)?;
+                let (tools, proof) = super::observation_tools::page_validated(
+                    validated,
+                    &locator,
+                    0,
+                    32,
+                    known_owner.as_ref().map(|owner| (bytes.as_slice(), owner)),
+                )?;
                 tool_proof = Some(proof);
                 tools
             } else {
@@ -986,18 +998,59 @@ pub(super) fn tools(
     )
 }
 
+#[derive(Clone, serde::Serialize)]
+pub(super) struct ToolOwner {
+    identity: Option<crate::runtime::identity::MessageId>,
+    ledger_position: Option<u64>,
+    role: String,
+    block_count: u64,
+    tool_call_count: u64,
+}
+
+impl ToolOwner {
+    fn from_header(header: &MessageHeader) -> Self {
+        Self {
+            identity: header.identity.clone(),
+            ledger_position: header.ledger_position,
+            role: header.role.clone(),
+            block_count: header.block_count,
+            tool_call_count: header.tool_call_count,
+        }
+    }
+}
+
 fn tool_owner(
     connection: &Connection,
     at: &ObservationReadCut,
     position: u64,
     offset: u64,
-) -> Result<MessageHeader, ConversationStoreError> {
+    known: Option<(&[u8], &ToolOwner)>,
+) -> Result<ToolOwner, ConversationStoreError> {
     let bytes:Vec<u8>=connection.query_row_cached("SELECT header_json FROM transcript_entries WHERE reference_kind='message' AND ledger_position=?1 AND journal_position<=?2",params![position,at.read.journal],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("oversized canonical Tool owner header"));
     }
-    let assistant: MessageHeader =
-        serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
+    // The transaction-local descriptor already passed the full MessageHeader
+    // decoder. Reuse its small owner fields only after comparing the exact
+    // current source bytes, including fields irrelevant to this page.
+    #[cfg(test)]
+    let known = if DISABLE_TOOL_OWNER_REUSE.with(std::cell::Cell::get) {
+        None
+    } else {
+        known
+    };
+    let assistant = if let Some((_, owner)) = known.filter(|(source, _)| *source == bytes) {
+        owner.clone()
+    } else {
+        #[cfg(test)]
+        TOOL_OWNER_DECODE_WORK.with(|work| {
+            let (calls, size) = work.get();
+            work.set((calls + 1, size + bytes.len()));
+        });
+        let header: MessageHeader =
+            serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
+        ToolOwner::from_header(&header)
+    };
     if assistant.role != "assistant"
         || assistant
             .ledger_position
@@ -1016,6 +1069,7 @@ pub(super) fn tools_by_locator_validated(
     locator: &crate::observation::content::CanonicalContentLocator,
     offset: u64,
     requested: usize,
+    known: Option<(&[u8], &ToolOwner)>,
 ) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError> {
     tools_by_locator_at(
         validated.connection()?,
@@ -1023,6 +1077,7 @@ pub(super) fn tools_by_locator_validated(
         locator,
         offset,
         requested,
+        known,
     )
 }
 
@@ -1032,6 +1087,7 @@ fn tools_by_locator_at(
     locator: &crate::observation::content::CanonicalContentLocator,
     offset: u64,
     requested: usize,
+    known: Option<(&[u8], &ToolOwner)>,
 ) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError> {
     let limit = limit(requested)?;
     let position = crate::durable::sqlite::content::canonical_position(connection, locator)?;
@@ -1040,7 +1096,7 @@ fn tools_by_locator_at(
             "canonical Tool source beyond captured cut".into(),
         ));
     }
-    let assistant = tool_owner(connection, at, position, offset)?;
+    let assistant = tool_owner(connection, at, position, offset, known)?;
     let mut statement=connection.prepare_cached("SELECT c.block_index,c.observation_call_id,c.observation_tool_id,b.header_json,h.header_json FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_observation_idx JOIN observation_block_headers b ON b.ledger_position=c.observation_ledger AND b.block_index=c.block_index LEFT JOIN transcript_entries h ON h.ledger_position=c.result_ledger_position AND h.position<=?5 AND h.ledger_position<=?3 AND h.journal_position<=?6 WHERE c.observation_ledger=?1 AND c.block_index>=?2 ORDER BY c.block_index LIMIT ?4").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
@@ -1132,7 +1188,7 @@ pub(super) fn tools_by_locator(
     requested: usize,
 ) -> Result<crate::durable::observation::ToolAssociationHeaderPage, ConversationStoreError> {
     validate(connection, conversation, at)?;
-    tools_by_locator_at(connection, at, locator, offset, requested)
+    tools_by_locator_at(connection, at, locator, offset, requested, None)
 }
 
 pub(super) fn window(
@@ -1648,3 +1704,189 @@ pub(super) use store::response_identity_fields;
 
 #[cfg(test)]
 thread_local! { static PUBLICATION_CAPTURE_WORK: std::cell::Cell<(usize, usize, usize)> = const { std::cell::Cell::new((0,0,0)) }; }
+
+#[cfg(test)]
+thread_local! {
+    static TOOL_OWNER_DECODE_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    static DISABLE_TOOL_OWNER_REUSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+mod tool_owner_work_tests {
+    use super::*;
+    use crate::durable::{CanonicalStore as _, ObservationStore as _};
+
+    #[test]
+    fn matching_validated_owner_avoids_redecoding_and_changed_source_is_checked() {
+        let store =
+            crate::durable::sqlite::SqliteConversationStore::in_memory(ConversationId::generate())
+                .unwrap();
+        store.initialize(&[]).unwrap();
+        let mut cut = store.observation_read_cut().unwrap();
+        cut.ledger_through = 1;
+        cut.read.journal = 1;
+        let header = MessageHeader {
+            deliveries: None,
+            tool_calls: Vec::new(),
+            transcript_cursor: None,
+            identity: Some(crate::runtime::identity::MessageId::new("owner")),
+            locator: None,
+            ledger_position: Some(1),
+            role: "assistant".into(),
+            source_label: None,
+            opening_prompt: false,
+            human_activity_at: None,
+            opening_preview: Some("escaped \" text".into()),
+            has_text_preview: false,
+            kind: "assistant".into(),
+            block_count: 1,
+            tool_call_count: 1,
+            display: None,
+            content: Vec::new(),
+            collections: Vec::new(),
+            deferred: false,
+        };
+        let bytes = serde_json::to_vec(&header).unwrap();
+        let known = ToolOwner::from_header(&header);
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch("CREATE TABLE transcript_entries(reference_kind TEXT, ledger_position INTEGER, journal_position INTEGER, header_json BLOB)").unwrap();
+        connection
+            .execute(
+                "INSERT INTO transcript_entries VALUES('message', 1, 1, ?1)",
+                [&bytes],
+            )
+            .unwrap();
+
+        TOOL_OWNER_DECODE_WORK.with(|work| work.set((0, 0)));
+        crate::durable::sqlite::query_work::capture(&connection);
+        let baseline = tool_owner(&connection, &cut, 1, 0, None).unwrap();
+        let baseline_sql = crate::durable::sqlite::query_work::finish(&connection);
+        let baseline_work = TOOL_OWNER_DECODE_WORK.with(|work| work.replace((0, 0)));
+        crate::durable::sqlite::query_work::capture(&connection);
+        let reused = tool_owner(&connection, &cut, 1, 0, Some((&bytes, &known))).unwrap();
+        let reused_sql = crate::durable::sqlite::query_work::finish(&connection);
+        let reused_work = TOOL_OWNER_DECODE_WORK.with(|work| work.replace((0, 0)));
+        assert_eq!(
+            serde_json::to_vec(&baseline).unwrap(),
+            serde_json::to_vec(&reused).unwrap()
+        );
+        assert_eq!(baseline_work, (1, bytes.len()));
+        assert_eq!(reused_work, (0, 0));
+        let counts = |sql: &std::collections::BTreeMap<
+            _,
+            crate::durable::sqlite::query_work::Executions,
+        >| {
+            sql.values().fold((0, 0, 0), |(calls, steps, rows), work| {
+                (
+                    calls + work.calls,
+                    steps + work.total_steps,
+                    rows + work.rows,
+                )
+            })
+        };
+        assert_eq!(counts(&baseline_sql), counts(&reused_sql));
+        println!(
+            "owner header bytes={} decode before={baseline_work:?} after={reused_work:?}; SQL (calls, steps, rows) before={:?} after={:?}",
+            bytes.len(),
+            counts(&baseline_sql),
+            counts(&reused_sql)
+        );
+
+        connection
+            .execute("UPDATE transcript_entries SET header_json=x'7b'", [])
+            .unwrap();
+        assert!(tool_owner(&connection, &cut, 1, 0, Some((&bytes, &known))).is_err());
+        assert_eq!(
+            TOOL_OWNER_DECODE_WORK.with(|work| work.replace((0, 0))),
+            (1, 1)
+        );
+        connection
+            .execute(
+                "UPDATE transcript_entries SET reference_kind='other', header_json=?1",
+                [&bytes],
+            )
+            .unwrap();
+        assert!(tool_owner(&connection, &cut, 1, 0, Some((&bytes, &known))).is_err());
+    }
+
+    #[test]
+    fn checkpoint_head_work_preserves_sql_and_reuses_tool_owner() {
+        use crate::durable::ConversationStore as _;
+        use crate::durable::sqlite::observation::tests::member::derived_enrichment_proposal;
+        use crate::durable::sqlite::test_support::{envelope, store};
+        use crate::durable::sqlite::tests::observation_response_tests::{
+            response_complete, response_message, response_start,
+        };
+        use crate::events::types::RuntimeEvent;
+
+        for tool in [false, true] {
+            let store = store();
+            store.initialize(&[]).unwrap();
+            let attempt = response_start(&store, "owner-work");
+            if tool {
+                let (proposal, _) = derived_enrichment_proposal();
+                store
+                    .append_canonical_with_event(
+                        &proposal,
+                        envelope(
+                            store.conversation_id(),
+                            "owner-work-proposal",
+                            Some(attempt.clone()),
+                            RuntimeEvent::AssistantMessageCommitted {
+                                message_id: proposal.id().clone(),
+                            },
+                        ),
+                    )
+                    .unwrap();
+            } else {
+                response_message(&store, &attempt, "owner-work-text");
+            }
+            response_complete(&store, &attempt);
+            let cut = store.observation_read_cut().unwrap();
+            // Prime the same bounded descriptor and response owners on both paths.
+            for _ in 0..2 {
+                store
+                    .observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false)
+                    .unwrap();
+            }
+            let sample = |disable| {
+                DISABLE_TOOL_OWNER_REUSE.with(|flag| flag.set(disable));
+                TOOL_OWNER_DECODE_WORK.with(|work| work.set((0, 0)));
+                {
+                    let connection = store.lock().unwrap();
+                    crate::durable::sqlite::query_work::capture(&connection);
+                }
+                let head = store
+                    .observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false)
+                    .unwrap();
+                let sql = {
+                    let connection = store.lock().unwrap();
+                    crate::durable::sqlite::query_work::finish(&connection)
+                };
+                let decoded = TOOL_OWNER_DECODE_WORK.with(|work| work.replace((0, 0)));
+                DISABLE_TOOL_OWNER_REUSE.with(|flag| flag.set(false));
+                let counts = sql.values().fold((0, 0, 0), |(calls, steps, rows), work| {
+                    (
+                        calls + work.calls,
+                        steps + work.total_steps,
+                        rows + work.rows,
+                    )
+                });
+                (head, decoded, counts)
+            };
+            let (before, before_decode, before_sql) = sample(true);
+            let (after, after_decode, after_sql) = sample(false);
+            assert_eq!(before, after);
+            assert_eq!(
+                serde_json::to_vec(&before.transcript).unwrap(),
+                serde_json::to_vec(&after.transcript).unwrap()
+            );
+            assert_eq!(before_sql, after_sql);
+            assert_eq!(after_decode, (0, 0));
+            assert_eq!(before_decode.0, usize::from(tool));
+            println!(
+                "tool={tool}: owner decode before={before_decode:?} after={after_decode:?}; SQL (statements, VM steps, rows) before={before_sql:?} after={after_sql:?}"
+            );
+        }
+    }
+}

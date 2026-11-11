@@ -19,37 +19,37 @@ use super::{
 };
 
 impl ReadDomainCut {
-    pub(crate) fn read_live(&self, store: &dyn crate::durable::ConversationStore) -> ReadDomains {
-        self.read_with_trace(store, false)
-    }
-
-    fn read_with_trace(
+    /// The worker's live refresh. A read retired by a newer revision before it
+    /// owns the connection is skipped: installation would reject its result.
+    pub(crate) fn read_live(
         &self,
         store: &dyn crate::durable::ConversationStore,
-        materialize_trace: bool,
+        supersession: &super::ReadSupersession,
     ) -> ReadDomains {
-        if !materialize_trace {
-            let cut = self.source_cut.as_ref().ok_or_else(|| {
-                crate::durable::ConversationStoreError::InvalidReference(
-                    "native read-domain source cut unavailable".into(),
-                )
-            })?;
-            let head = store.observation_checkpoint_head(
-                cut,
-                self.through,
-                super::checkpoint::CHECKPOINT_NATIVE_HEAD_ITEMS,
-            )?;
-            return Ok(ReadDomainValues {
-                projection_head: head.projection_head,
-                transcript: head.transcript,
-                transcript_rows: crate::observation::transcript::PreparedTranscriptHead::new(
-                    head.transcript_rows,
-                ),
-                occupancy: head.occupancy,
-                trace: None,
-                trace_total: head.trace_total,
-            });
-        }
+        let cut = self.source_cut.as_ref().ok_or_else(|| {
+            crate::durable::ConversationStoreError::InvalidReference(
+                "native read-domain source cut unavailable".into(),
+            )
+        })?;
+        let head = store.observation_checkpoint_head(
+            cut,
+            self.through,
+            super::checkpoint::CHECKPOINT_NATIVE_HEAD_ITEMS,
+            &|| supersession.retires(self),
+        )?;
+        Ok(ReadDomainValues {
+            projection_head: head.projection_head,
+            transcript: head.transcript,
+            transcript_rows: crate::observation::transcript::PreparedTranscriptHead::new(
+                head.transcript_rows,
+            ),
+            occupancy: head.occupancy,
+            trace: None,
+            trace_total: head.trace_total,
+        })
+    }
+
+    pub(crate) fn read(&self, store: &dyn crate::durable::ConversationStore) -> ReadDomains {
         let mut page = if let Some(cut) = &self.source_cut {
             crate::observation::transcript::transcript_header_view(store.transcript_header_page(
                 cut,
@@ -67,14 +67,9 @@ impl ReadDomainCut {
             .source_cut
             .as_ref()
             .ok_or(crate::durable::ConversationStoreError::ObservationCutExpired)?;
-        let trace = if materialize_trace {
-            let mut trace = super::trace::TraceProjection::at_cut(store, trace_cut)?
-                .page(None, super::trace::TRACE_PAGE_LIMIT)?;
-            trace.read_cut = None;
-            Some(trace)
-        } else {
-            None
-        };
+        let mut trace = super::trace::TraceProjection::at_cut(store, trace_cut)?
+            .page(None, super::trace::TRACE_PAGE_LIMIT)?;
+        trace.read_cut = None;
         let trace_total = store.observation_trace_total(self.through)?;
         Ok(ReadDomainValues {
             projection_head: projection_head_view(store, self.through)?,
@@ -89,13 +84,9 @@ impl ReadDomainCut {
             ),
             transcript: page,
             occupancy,
-            trace,
+            trace: Some(trace),
             trace_total,
         })
-    }
-
-    pub(crate) fn read(&self, store: &dyn crate::durable::ConversationStore) -> ReadDomains {
-        self.read_with_trace(store, true)
     }
 }
 #[cfg(test)]
@@ -187,6 +178,22 @@ impl RuntimeClientProjection {
             trace_through: self.journal_through,
             read_cut: self.read_domain_fence(),
         })
+    }
+
+    /// Retire every outstanding read fence. Exhaustion fails the publication.
+    pub(super) fn advance_read_revision(&mut self) -> bool {
+        let Some(revision) = self.read_revision.checked_add(1) else {
+            self.publication_failed(&super::RuntimeClientError::ProjectionExhausted);
+            return false;
+        };
+        self.read_revision = revision;
+        self.latest_read_revision
+            .store(revision, std::sync::atomic::Ordering::Release);
+        true
+    }
+
+    pub(crate) fn read_supersession(&self) -> super::ReadSupersession {
+        super::ReadSupersession(std::sync::Arc::clone(&self.latest_read_revision))
     }
 
     /// Capture a finite derived cut; Store work must happen outside the host lock.
