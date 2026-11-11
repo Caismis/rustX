@@ -13,12 +13,17 @@ fn assert_invalid_reference<T: std::fmt::Debug>(result: &Result<T, ConversationS
 }
 
 fn assert_surface_readers_reject(store: &SqliteConversationStore) {
+    assert_surface_replay_rejects(store);
+    let revision = SurfaceRevision::new(1);
+    assert_invalid_reference(&store.load_user_message_boundaries(revision));
+    assert_invalid_reference(&store.load_user_message_boundaries_page(revision, 0, 1));
+}
+
+fn assert_surface_replay_rejects(store: &SqliteConversationStore) {
     let revision = SurfaceRevision::new(1);
     assert_invalid_reference(&store.reconstruct_surface(revision));
     assert_invalid_reference(&store.load_surface_history(revision));
     assert_invalid_reference(&store.load_surface_snapshot(revision));
-    assert_invalid_reference(&store.load_user_message_boundaries(revision));
-    assert_invalid_reference(&store.load_user_message_boundaries_page(revision, 0, 1));
     assert_invalid_reference(&store.read_lineage_cut(revision));
     assert_invalid_reference(&store.read_message_lineage_cut(
         revision,
@@ -27,6 +32,41 @@ fn assert_surface_readers_reject(store: &SqliteConversationStore) {
     ));
     let archived = store.archive_record(Authority::Surface, 0, 1);
     assert!(archived.is_err(), "damaged Surface exported: {archived:?}");
+}
+
+#[test]
+fn historical_surface_preserves_invalid_reference_for_invalid_ledger_identity() {
+    for damage in [
+        "UPDATE message_ledger SET message_id=CAST(message_id AS BLOB) WHERE position=1",
+        "UPDATE message_ledger SET message_id=CAST(x'80' AS TEXT) WHERE position=1",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("surface.sqlite");
+        let conversation = ConversationId::generate();
+        let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+        store
+            .initialize(&[user_message("original", "body")])
+            .unwrap();
+        store
+            .append_canonical(&user_message("later", "body"))
+            .unwrap();
+        let raw = rusqlite::Connection::open(&path).unwrap();
+        raw.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+        raw.execute_batch(damage).unwrap();
+        let original_exists: bool = raw
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM message_ledger WHERE message_id=?1)",
+                ["original"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!original_exists);
+        drop(raw);
+        assert_surface_replay_rejects(&store);
+        drop(store);
+        let reopened = SqliteConversationStore::open_existing(conversation, &path).unwrap();
+        assert_surface_replay_rejects(&reopened);
+    }
 }
 
 fn check_damage_before_and_after_reopen(damage: &str) {
