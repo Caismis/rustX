@@ -34,12 +34,31 @@ pub(super) struct CapturedNode {
     prepared: Option<(Augmentation, Vec<u8>)>,
 }
 impl CapturedNode {
+    /// A node prepared by this capture is reread unless `trigger_free` proves
+    /// that no SQL program can have changed its row since the checked UPDATE
+    /// that stored exactly these bytes. Earlier nodes are always read.
     pub(super) fn into_node(
         self,
         connection: &Connection,
         native: manifest::NodeRef,
+        trigger_free: bool,
     ) -> Result<Augmentation, ConversationStoreError> {
-        load_reusing(connection, native, self.digest, self.prepared)
+        match self.prepared {
+            Some((node, _)) if trigger_free => {
+                node.widths.validate(native.count)?;
+                if node.native != native {
+                    return Err(storage("captured Source node geometry differs"));
+                }
+                #[cfg(test)]
+                super::WORK.with(|work| {
+                    let mut value = work.get();
+                    value.node_reuses += 1;
+                    work.set(value);
+                });
+                Ok(node)
+            }
+            prepared => load_reusing(connection, native, self.digest, prepared),
+        }
     }
 }
 pub(super) fn load(
@@ -237,6 +256,7 @@ fn store(
 }
 struct Capture<'a> {
     connection: &'a Connection,
+    trigger_free: bool,
     scope: &'a crate::runtime::identity::ConversationId,
     input: &'a crate::model::SelectedModelInput,
     snapshot: &'a crate::model::RequestSnapshot,
@@ -309,8 +329,8 @@ impl Capture<'_> {
                 let (left_hash, right_hash) = (left_captured.digest, right_captured.digest);
                 // Read after both recursive writes, so triggers on the right
                 // subtree cannot silently invalidate a prepared left sibling.
-                let a = left_captured.into_node(connection, left)?;
-                let b = right_captured.into_node(connection, right)?;
+                let a = left_captured.into_node(connection, left, self.trigger_free)?;
+                let b = right_captured.into_node(connection, right, self.trigger_free)?;
                 let widths = WidthTable::join(&a.widths, &b.widths)?;
                 (
                     Content::Branch {
@@ -347,6 +367,7 @@ impl Capture<'_> {
 }
 pub(super) fn capture(
     connection: &Connection,
+    trigger_free: bool,
     scope: &crate::runtime::identity::ConversationId,
     input: &crate::model::SelectedModelInput,
     snapshot: &crate::model::RequestSnapshot,
@@ -354,6 +375,7 @@ pub(super) fn capture(
 ) -> Result<Option<CapturedNode>, ConversationStoreError> {
     let mut capture = Capture {
         connection,
+        trigger_free,
         scope,
         input,
         snapshot,

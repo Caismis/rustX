@@ -221,8 +221,12 @@ fn root_checksum(root: &[u8]) -> index::Hash {
     sha.update(root);
     sha.finalize().into()
 }
+/// `trigger_free` is the caller's proof, inside this transaction, that the
+/// schema has no SQL program which could rewrite rows this capture stores.
+#[allow(clippy::too_many_arguments)] // The native request start plus its trigger proof.
 pub(super) fn index_selection(
     connection: &Connection,
+    trigger_free: bool,
     sequence: u64,
     scope: &crate::runtime::identity::ConversationId,
     input: &crate::model::SelectedModelInput,
@@ -242,7 +246,7 @@ pub(super) fn index_selection(
         let _timer = crate::agent::execution::attribution::Timer::new(
             crate::agent::execution::attribution::Phase::SourceCapture,
         );
-        nodes::capture(connection, scope, input, snapshot, selection)?
+        nodes::capture(connection, trigger_free, scope, input, snapshot, selection)?
     };
     let source_hash = captured_root.as_ref().map(|node| node.digest);
     let captured = {
@@ -266,7 +270,7 @@ pub(super) fn index_selection(
                 // Scalar capture writes can trigger changes to the root. Check
                 // actual storage now, then share the path/width traversal.
                 // All path errors still precede deferred length errors.
-                let node = captured.into_node(connection, native)?;
+                let node = captured.into_node(connection, native, trigger_free)?;
                 add(nodes::geometry(connection, &node, 0, sequence)?, 2)?
             }
             (None, None) => 2,

@@ -358,11 +358,14 @@ fn request_root_reuses_one_post_scalar_read_for_paths_and_length() {
             .started
             .sequence;
         let work = observation_request::composed::take_work();
+        // A root this start just stored is reused without a reread in this
+        // trigger-free schema; an earlier root is read once for both stages.
         assert_eq!(
-            work.native_nodes, 1,
-            "one actual root read serves both geometry stages"
+            work.native_nodes,
+            usize::from(turn == 2),
+            "at most one actual root read serves both geometry stages"
         );
-        assert_eq!(work.source_nodes, 1);
+        assert_eq!(work.source_nodes, usize::from(turn == 2));
         assert_eq!(work.node_reuses, usize::from(turn == 1));
         assert_eq!(work.node_decodes, usize::from(turn == 2));
         assert_fragment_oracle(&store, &snapshot, sequence);
