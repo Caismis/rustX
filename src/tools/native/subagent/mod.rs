@@ -14,8 +14,8 @@ use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::types::{
-    ToolCancellationPhase, ToolDefinition, ToolExecutionPolicy,
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
+    ToolCancellationPhase, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
+    ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 
 use super::input::decode;
@@ -529,8 +529,7 @@ chat_reasoning_replay = "omit"
         };
         use crate::tools::mcp::McpRuntimeLeaseAuthority;
         use crate::tools::types::{
-            ToolDefinition, ToolExecutionPolicy,
-            ToolOrigin, ToolReplayPolicy,
+            ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
         };
 
         struct NeverRuns;

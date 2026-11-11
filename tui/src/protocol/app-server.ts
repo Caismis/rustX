@@ -76,7 +76,7 @@ export type {
   AdmittedSettings,
   EffectiveConfiguration,
   AgentStatusGenerationMetadata,
-  ApprovalMode,
+  ExecutionPermissionMode as ApprovalMode,
   AttachmentTarget,
   AttachmentId,
   CapabilityInspection,

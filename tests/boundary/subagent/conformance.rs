@@ -3825,7 +3825,8 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
         common::tool_policies(
             "probe",
             "tool-probe",
-            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly),
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+        ),
         support::fake::success_result("probe done"),
     );
     let mut probe_started = probe.started();
@@ -3834,7 +3835,8 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
         common::tool_policies(
             "scan",
             "tool-scan",
-            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly),
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+        ),
         support::fake::success_result("scan done"),
     );
     let scan = scan.emitting_progress(3);
@@ -4045,7 +4047,8 @@ async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
         common::tool_policies(
             "probe-a",
             "tool-probe-a",
-            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly),
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+        ),
         support::fake::success_result("a done"),
     );
     let mut a_started = probe_a.started();
@@ -4054,7 +4057,8 @@ async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
         common::tool_policies(
             "probe-b",
             "tool-probe-b",
-            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly),
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+        ),
         support::fake::success_result("b done"),
         &["b phase 2"],
     );
@@ -4439,7 +4443,8 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
             common::tool_policies(
                 "scan",
                 "tool-scan",
-                rustx::tools::types::ToolExecutionPolicy::ForegroundOnly),
+                rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            ),
             support::fake::success_result("scan done"),
         );
         let scan = scan.emitting_progress(3);
@@ -4767,7 +4772,8 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
         common::tool_policies(
             "scan",
             "tool-scan",
-            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly),
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+        ),
         support::fake::success_result("scan done"),
     );
     // Far more revisions than any queue capacity: per-revision queueing
@@ -5006,7 +5012,8 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         common::tool_policies(
             "phased",
             "tool-phased",
-            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly),
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+        ),
         support::fake::success_result("phased done"),
         &["phase 1", "phase 2"],
     );
@@ -5461,7 +5468,8 @@ async fn a_fresh_request_after_a_retry_projects_retry_zero() {
         common::tool_policies(
             "probe",
             "tool-probe",
-            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly),
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+        ),
         support::fake::success_result("probe done"),
     )
     .register(&mut tools);
@@ -5564,7 +5572,8 @@ async fn activity_frames_commit_no_parent_journal_facts() {
         common::tool_policies(
             "scan",
             "tool-scan",
-            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly),
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+        ),
         support::fake::success_result("scan done"),
     );
     let mut scan_started = scan.started();
@@ -5672,7 +5681,8 @@ async fn child_activity_never_enters_the_parent_model_context() {
         common::tool_policies(
             "scan178",
             "tool-178-secret",
-            rustx::tools::types::ToolExecutionPolicy::ModelSelectable),
+            rustx::tools::types::ToolExecutionPolicy::ModelSelectable,
+        ),
         support::fake::success_result("scan done"),
     )
     .register(&mut tools);

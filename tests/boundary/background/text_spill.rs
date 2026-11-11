@@ -37,8 +37,8 @@ use rustx::tools::executor::{PreflightOutcome, ToolExecutor, ToolRegistry};
 use rustx::tools::native::{NativeToolPolicies, NativeToolResources, register_native_tools};
 use rustx::tools::runtime::ConversationToolRuntime;
 use rustx::tools::types::{
-    ToolCall, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
-    ToolInvocation, ToolInvocationMode, ToolInvocationPolicy,
+    ToolCall, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolInvocationMode, ToolInvocationPolicy,
 };
 
 /// A background Bash command whose combined output provably crosses the

@@ -27,11 +27,11 @@ use rustx::model::finish::ModelFinishReason;
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
+use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, fake_model, success_result,
     tool_call_events,
 };
-use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 
 fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {
@@ -202,17 +202,11 @@ async fn parallel_reversed_completion_keeps_canonical_order() {
     let call_b = scripted("call-b", "tool-beta", "beta", serde_json::json!({"n": 2}));
     let model = fake_model(tool_turn_then_stop(&[&call_a, &call_b]));
     let (tool_a, release_a) = FakeTool::parking(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let (tool_b, release_b) = FakeTool::parking(
-        common::tool_policies(
-            "beta",
-            "tool-beta",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("beta", "tool-beta", ToolExecutionPolicy::ForegroundOnly),
         success_result("b"),
     );
     let mut started_a = tool_a.started();
@@ -291,17 +285,11 @@ async fn sequential_barrier_blocks_later_calls() {
     let call_b = scripted("call-b", "tool-beta", "beta", serde_json::json!({}));
     let model = fake_model(tool_turn_then_stop(&[&call_a, &call_b]));
     let (tool_a, release_a) = FakeTool::parking(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let tool_b = FakeTool::new(
-        common::tool_policies(
-            "beta",
-            "tool-beta",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("beta", "tool-beta", ToolExecutionPolicy::ForegroundOnly),
         success_result("b"),
     );
     let mut started_a = tool_a.started();
@@ -358,24 +346,15 @@ async fn parallel_group_then_sequential_barrier() {
     let call_s = scripted("call-s", "tool-s", "s", serde_json::json!({}));
     let model = fake_model(tool_turn_then_stop(&[&call_p1, &call_p2, &call_s]));
     let (tool_p1, release_p1) = FakeTool::parking(
-        common::tool_policies(
-            "p1",
-            "tool-p1",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("p1", "tool-p1", ToolExecutionPolicy::ForegroundOnly),
         success_result("p1"),
     );
     let (tool_p2, release_p2) = FakeTool::parking(
-        common::tool_policies(
-            "p2",
-            "tool-p2",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("p2", "tool-p2", ToolExecutionPolicy::ForegroundOnly),
         success_result("p2"),
     );
     let tool_s = FakeTool::new(
-        common::tool_policies(
-            "s",
-            "tool-s",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("s", "tool-s", ToolExecutionPolicy::ForegroundOnly),
         success_result("s"),
     );
     let mut started_p1 = tool_p1.started();
@@ -443,26 +422,17 @@ async fn mixed_foreground_background_group_does_not_wait_for_detached_terminal()
     let call_c = scripted("call-c", "tool-gamma", "gamma", serde_json::json!({}));
     let model = fake_model(tool_turn_then_stop(&[&call_a, &call_b, &call_c]));
     let (tool_a, release_a) = FakeTool::parking(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     // The background tool parks forever: the originating attempt must not
     // wait for its detached terminal settlement.
     let (tool_b, _never_released) = FakeTool::parking(
-        common::tool_policies(
-            "beta",
-            "tool-beta",
-            ToolExecutionPolicy::ModelSelectable),
+        common::tool_policies("beta", "tool-beta", ToolExecutionPolicy::ModelSelectable),
         success_result("b"),
     );
     let (tool_c, release_c) = FakeTool::parking(
-        common::tool_policies(
-            "gamma",
-            "tool-gamma",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("gamma", "tool-gamma", ToolExecutionPolicy::ForegroundOnly),
         success_result("c"),
     );
     let mut started_b = tool_b.started();
@@ -569,31 +539,19 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
     // foreground, parking; delta: sequential foreground after the parallel
     // group — it must never start.
     let (tool_a, release_a) = FakeTool::parking(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let (tool_b, _never_released) = FakeTool::parking(
-        common::tool_policies(
-            "beta",
-            "tool-beta",
-            ToolExecutionPolicy::ModelSelectable),
+        common::tool_policies("beta", "tool-beta", ToolExecutionPolicy::ModelSelectable),
         success_result("b"),
     );
     let (tool_c, release_c) = FakeTool::parking(
-        common::tool_policies(
-            "gamma",
-            "tool-gamma",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("gamma", "tool-gamma", ToolExecutionPolicy::ForegroundOnly),
         success_result("c"),
     );
     let tool_d = FakeTool::new(
-        common::tool_policies(
-            "delta",
-            "tool-delta",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("delta", "tool-delta", ToolExecutionPolicy::ForegroundOnly),
         success_result("d"),
     );
     let mut started_a = tool_a.started();
@@ -724,20 +682,15 @@ async fn business_schema_violation_is_a_normal_failed_result_slot() {
     let call = scripted("call-1", "tool-read", "read", serde_json::json!({}));
     let model = fake_model(tool_turn_then_stop(&[&call]));
     let tool = FakeTool::new(
-        common::tool_policies(
-            "read",
-            "tool-read",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("read", "tool-read", ToolExecutionPolicy::ForegroundOnly),
         success_result("unexpected"),
     );
     let mut calls_seen = tool.calls();
     let mut tools = ToolRegistry::new();
     // The fixture definition is overridden with a strict schema so the
     // business arguments fail validation.
-    let mut definition = common::tool_policies(
-        "read",
-        "tool-read",
-        ToolExecutionPolicy::ForegroundOnly);
+    let mut definition =
+        common::tool_policies("read", "tool-read", ToolExecutionPolicy::ForegroundOnly);
     definition.input_schema = serde_json::json!({
         "type": "object",
         "properties": {"path": {"type": "string"}},
@@ -809,10 +762,7 @@ async fn missing_model_selectable_field_is_rejected_without_executor() {
     let call = scripted("call-1", "tool-sel", "sel", serde_json::json!({}));
     let model = fake_model(tool_turn_then_stop(&[&call]));
     let tool = FakeTool::new(
-        common::tool_policies(
-            "sel",
-            "tool-sel",
-            ToolExecutionPolicy::ModelSelectable),
+        common::tool_policies("sel", "tool-sel", ToolExecutionPolicy::ModelSelectable),
         success_result("unexpected"),
     );
     let mut calls_seen = tool.calls();
@@ -851,10 +801,7 @@ async fn identity_mismatch_is_a_structural_contract_failure() {
         FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
     ]]);
     let tool = FakeTool::new(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let mut tools = ToolRegistry::new();

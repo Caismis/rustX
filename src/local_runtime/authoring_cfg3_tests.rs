@@ -1,8 +1,8 @@
 //! Contract tests for atomic semantic overlay, independent of source I/O.
 use super::*;
 use crate::local_runtime::config::{
-    McpStartupPolicyDocument, ModelTimeoutPolicyDocument,
-    SubagentsDocument, ToolDeadlinePolicyDocument,
+    McpStartupPolicyDocument, ModelTimeoutPolicyDocument, SubagentsDocument,
+    ToolDeadlinePolicyDocument,
 };
 
 fn parse(text: &str) -> RuntimeLayer {
@@ -294,8 +294,7 @@ fn plugin_omission_empty_and_explicit_enable_are_distinct_without_splicing() {
 
 #[test]
 fn native_policy_is_atomic_per_tool() {
-    let (config, origins) =
-        effective(LOWER, "[native_tools.bash]\nexecution = 'background_only'");
+    let (config, origins) = effective(LOWER, "[native_tools.bash]\nexecution = 'background_only'");
     assert_eq!(
         config.native_tools.bash.execution,
         Some(crate::local_runtime::config::ExecutionPolicyDocument::BackgroundOnly)

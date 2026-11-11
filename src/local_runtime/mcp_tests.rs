@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use crate::local_runtime::config::CurrentRuntimeConfigError;
 use crate::runtime::identity::McpServerId;
 use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
-use crate::tools::types::{ToolExecutionPolicy};
+use crate::tools::types::ToolExecutionPolicy;
 
 /// Fixtures author independent resource definitions and global policy documents.
 /// Native readers own both; no MCP fields are accepted by rustx.toml.

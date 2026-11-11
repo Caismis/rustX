@@ -138,10 +138,7 @@ pub fn effective_invocation_resource_permission(
     targets
         .values()
         .map(|set| set.for_mode(mode))
-        .fold(
-            ResourcePermissionValue::Allow,
-            stricter_resource_permission,
-        )
+        .fold(ResourcePermissionValue::Allow, stricter_resource_permission)
 }
 
 #[cfg(test)]

@@ -20,8 +20,8 @@ use crate::scripted_suites::common::{capability_lease, tool_runtime, tool_runtim
 use crate::scripted_suites::support::fake::inbound_message;
 use crate::tools::executor::{ToolExecutor, ToolRegistry};
 use crate::tools::types::{
-    ToolCall, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
+    ToolCall, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
+    ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 use std::sync::Arc;
 

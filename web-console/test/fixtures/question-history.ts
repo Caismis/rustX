@@ -33,7 +33,7 @@ export function questionHistoryFixture(server: Server, current: RuntimeClientSna
   const live: ForegroundToolExecution = { ...tool, message_id: message.id, block_index: 0, call_id: 'call-ask',
     occurrence: { locator: { type: 'by_message_id', message_id: message.id }, block_index: 0 }, state: { type: 'running', arguments: JSON.stringify(args) } };
   current.pending_interactions = [pending];
-  current.attempt = { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 2, foreground: [live], execution_settings: { resource_revision: '1', approval_mode: 'policy' } };
+  current.attempt = { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 2, foreground: [live], execution_settings: { resource_revision: '1', approval_mode: 'plan' } };
   current.messages.push(prompt, message);
   current.transcript.entries!.push({ cursor: '8', item: { type: 'message', message: prompt } }, { cursor: '9', item: { type: 'message', message }, tool_calls: [live] });
   server.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: {

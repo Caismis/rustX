@@ -45,11 +45,11 @@ use rustx::model::{
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
+use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 use support::audit::{assert_outcome, assert_single_terminal};
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, success_result, tool_call_events,
 };
-use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 
 const CONVERSATION: &str = "conv_5cdad274-a06f-7a35-8b6c-e0beb9470e1f";
 
@@ -346,7 +346,8 @@ fn write_tool_definition() -> rustx::tools::types::ToolDefinition {
     common::tool_policies(
         "write_file",
         "tool-write",
-        ToolExecutionPolicy::ForegroundOnly)
+        ToolExecutionPolicy::ForegroundOnly,
+    )
 }
 
 // ---------------------------------------------------------------------------

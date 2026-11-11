@@ -344,10 +344,10 @@ fn s1_mcp_literal_environment_and_headers_stay_redacted() {
         args: Vec::new(),
         env: BTreeMap::from([("TOKEN".to_string(), SENTINEL.to_string())]),
         cwd: None,
-    
+
         permissions: None,
         tools: Default::default(),
-};
+    };
     let rejected = manager
         .write_source_settings(
             &user,

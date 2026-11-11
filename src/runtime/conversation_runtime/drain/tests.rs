@@ -35,8 +35,7 @@ async fn sibling_mcp_settlement_failures_aggregate_through_one_runtime_drain() {
             policy: crate::tools::types::ToolInvocationPolicy::default(),
             permissions: None,
             tool_permissions: Default::default(),
-        
-}
+        }
     };
     let alpha = crate::runtime::identity::McpServerId::new("sibling-alpha");
     let beta = crate::runtime::identity::McpServerId::new("sibling-beta");
@@ -2206,9 +2205,7 @@ async fn runtime_shutdown_waits_for_foreground_process_terminality() {
     use crate::runtime::types::ConversationLifecycleState;
     use crate::tools::executor::ToolRegistry;
     use crate::tools::native::{BashTestControl, BashTool};
-    use crate::tools::types::{
-        ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-    };
+    use crate::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 
     let control = BashTestControl::new().hold_terminal_event();
     let process_lifecycle: RunnerLifecycleHook = control.runner_control().lifecycle.clone();
@@ -2347,9 +2344,7 @@ async fn runtime_shutdown_waits_for_foreground_process_terminality() {
 async fn runtime_shutdown_closes_parallel_foreground_start_frontier() {
     use crate::agent::execution::test_sync::ToolStartPause;
     use crate::tools::executor::ToolRegistry;
-    use crate::tools::types::{
-        ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-    };
+    use crate::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 
     let definition = |id: &str, name: &str| ToolDefinition {
         id: crate::runtime::identity::ToolId::new(id),

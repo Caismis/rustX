@@ -641,8 +641,7 @@ async fn preactivation_mcp_settlement_failure_is_replayed_and_fences_activation(
         policy: crate::tools::types::ToolInvocationPolicy::default(),
         permissions: None,
         tool_permissions: Default::default(),
-    
-};
+    };
     let server_id = crate::runtime::identity::McpServerId::new("preactivation-failure");
     let close = Arc::new(CloseProbe::failing(
         "preactivation MCP terminal state is unproven",
@@ -730,8 +729,7 @@ async fn mcp_settlement_failure_wins_deterministic_activation_race() {
         policy: crate::tools::types::ToolInvocationPolicy::default(),
         permissions: None,
         tool_permissions: Default::default(),
-    
-};
+    };
     let server_id = crate::runtime::identity::McpServerId::new("activation-race");
     let activation_gate = Arc::new(Gate::default());
     activation_gate.arm();
@@ -829,8 +827,7 @@ async fn mcp_settlement_failure_fences_after_activation_wins() {
         policy: crate::tools::types::ToolInvocationPolicy::default(),
         permissions: None,
         tool_permissions: Default::default(),
-    
-};
+    };
     let server_id = crate::runtime::identity::McpServerId::new("activation-first");
     let dir = tempfile::tempdir().expect("temp dir");
     let (runtime, model) = headless_runtime_with_options(

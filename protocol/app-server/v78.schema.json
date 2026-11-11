@@ -28059,6 +28059,22 @@
             "null"
           ],
           "default": null
+        },
+        "permissions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourcePermissionSet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tools": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/McpToolPermissionDocument"
+          }
         }
       },
       "additionalProperties": false
@@ -28082,6 +28098,73 @@
           "const": "stdio"
         }
       ]
+    },
+    "ResourcePermissionSet": {
+      "description": "Complete three-mode permission object for one resource or exact tool.\n\nAn authored object must supply all three entries. Omission of the whole\nobject inherits the winning source default or product defaults.",
+      "type": "object",
+      "properties": {
+        "plan": {
+          "description": "Plan-mode override.",
+          "$ref": "#/$defs/ResourcePermissionValue"
+        },
+        "automatic": {
+          "description": "Automatic-mode override.",
+          "$ref": "#/$defs/ResourcePermissionValue"
+        },
+        "full_access": {
+          "description": "Full Access-mode override.",
+          "$ref": "#/$defs/ResourcePermissionValue"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "plan",
+        "automatic",
+        "full_access"
+      ]
+    },
+    "ResourcePermissionValue": {
+      "description": "One mode entry on a resource permission object.\n\nAutomatic model review is never a resource enum value: it is Automatic\nmode's built-in `default` behavior.",
+      "oneOf": [
+        {
+          "description": "Delegate to the selected mode's built-in matrix behavior.",
+          "type": "string",
+          "const": "default"
+        },
+        {
+          "description": "Allow the call without ordinary approval or Auxiliary review.",
+          "type": "string",
+          "const": "allow"
+        },
+        {
+          "description": "Require human approval for the exact frozen invocation.",
+          "type": "string",
+          "const": "ask"
+        },
+        {
+          "description": "Hard-deny this invocation; elevation cannot override it.",
+          "type": "string",
+          "const": "deny"
+        }
+      ]
+    },
+    "McpToolPermissionDocument": {
+      "description": "Exact-tool permission override authored under one MCP server.",
+      "type": "object",
+      "properties": {
+        "permissions": {
+          "description": "Complete three-mode permission object for this exact tool.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourcePermissionSet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "AgentSourceView": {
       "type": "object",

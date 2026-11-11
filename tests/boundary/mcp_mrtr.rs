@@ -291,8 +291,7 @@ impl Harness {
             policy: ToolInvocationPolicy::default(),
             permissions: None,
             tool_permissions: Default::default(),
-        
-};
+        };
         let workspace = Workspace::new(&workspace_root).expect("workspace");
         let runtime = McpServerRuntime::connect(
             &McpServerId::new("mrtr-fixture"),

@@ -58,8 +58,8 @@ use rustx::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry, ToolSettlement,
 };
 use rustx::tools::types::{
-    ToolCancellationPhase, ToolExecutionPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolProgress,
+    ToolCancellationPhase, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
+    ToolInvocation, ToolProgress,
 };
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, fake_model, success_result,
@@ -117,7 +117,6 @@ fn execution_policy(
     clock: Arc<dyn MonotonicClock>,
 ) -> crate::agent::execution::AgentExecutionRuntimePolicy {
     crate::agent::execution::AgentExecutionRuntimePolicy {
-
         workspace_changes: None,
         model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy,
@@ -442,10 +441,7 @@ impl UncooperativeTool {
         );
         registry
             .register(
-                common::tool_policies(
-                    name,
-                    tool_id,
-                    ToolExecutionPolicy::ForegroundOnly),
+                common::tool_policies(name, tool_id, ToolExecutionPolicy::ForegroundOnly),
                 Arc::new(tool),
             )
             .expect("uncooperative tool registration");
@@ -533,10 +529,7 @@ fn register_probe(
     };
     registry
         .register(
-            common::tool_policies(
-                name,
-                tool_id,
-                ToolExecutionPolicy::ForegroundOnly),
+            common::tool_policies(name, tool_id, ToolExecutionPolicy::ForegroundOnly),
             Arc::new(probe),
         )
         .expect("probe tool registration");
@@ -590,10 +583,7 @@ impl DetachedSettlementTool {
         };
         registry
             .register(
-                common::tool_policies(
-                    name,
-                    tool_id,
-                    ToolExecutionPolicy::ForegroundOnly),
+                common::tool_policies(name, tool_id, ToolExecutionPolicy::ForegroundOnly),
                 Arc::new(tool),
             )
             .expect("detached settlement tool registration");
@@ -699,10 +689,7 @@ impl RemoteFrontierTool {
         };
         registry
             .register(
-                common::tool_policies(
-                    name,
-                    tool_id,
-                    ToolExecutionPolicy::ForegroundOnly),
+                common::tool_policies(name, tool_id, ToolExecutionPolicy::ForegroundOnly),
                 Arc::new(tool),
             )
             .expect("remote frontier tool registration");
@@ -1638,7 +1625,8 @@ async fn issue204_batch_siblings_settle_exactly_once_in_model_order() {
         common::tool_policies(
             "fast_sibling",
             "tool-fast-sibling",
-            ToolExecutionPolicy::ForegroundOnly),
+            ToolExecutionPolicy::ForegroundOnly,
+        ),
         success_result("sibling done"),
     )
     .register(&mut tools);
@@ -2382,7 +2370,8 @@ async fn issue206_executor_panic_cannot_orphan_parallel_siblings() {
                 common::tool_policies(
                     "panic_probe",
                     "tool-panic",
-                    ToolExecutionPolicy::ForegroundOnly),
+                    ToolExecutionPolicy::ForegroundOnly,
+                ),
                 Arc::new(ConformancePanicTool {
                     construction,
                     reclaimed: reclaimed.clone(),
@@ -2402,10 +2391,7 @@ async fn issue206_executor_panic_cannot_orphan_parallel_siblings() {
             ),
         ] {
             FakeTool::new(
-                common::tool_policies(
-                    name,
-                    id,
-                    ToolExecutionPolicy::ForegroundOnly),
+                common::tool_policies(name, id, ToolExecutionPolicy::ForegroundOnly),
                 result,
             )
             .register(&mut tools);
@@ -2504,7 +2490,8 @@ async fn issue206_settlement_panic_never_manufactures_confirmed_timeout() {
             common::tool_policies(
                 "panic_probe",
                 "tool-panic",
-                ToolExecutionPolicy::ForegroundOnly),
+                ToolExecutionPolicy::ForegroundOnly,
+            ),
             Arc::new(CancellationPanicTool {
                 started,
                 reclaimed: reclaimed.clone(),

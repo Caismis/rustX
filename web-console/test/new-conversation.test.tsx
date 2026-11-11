@@ -30,7 +30,7 @@ const authored = { provider: 'transport', id: 'wire', context_window: '128000', 
  * native Session catalog does not publish, and whose catalog carries native
  * reasoning vocabulary the documents never mention. */
 function workspaceSource(session_models: SourceSettings['session_models'] = { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/native', ['low', 'high'], 'high'), nativeModel('fixture/second')] } }): SourceSettings {
-  return { ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace' }, prospective_approval_mode: 'policy',
+  return { ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace' }, prospective_approval_mode: 'plan',
     resolved: { models: { 'fixture/configuration-only': authored, 'fixture/native': authored } }, session_models };
 }
 async function mount({ current = () => true, source = workspaceSource(), configureWorkspace, ready = true, workspaceHost }: { workspaceHost?: Partial<ProductHostWorkspaces>; current?: () => boolean; source?: SourceSettings; configureWorkspace?: (id: string) => Promise<{ kind: 'read'; projection: SourceSettings }>; ready?: boolean } = {}) {

@@ -83,11 +83,10 @@ chat_reasoning_replay = "omit"
                 environment,
             },
             policy: ToolInvocationPolicy::default(),
-        permissions: None,
-        tool_permissions: Default::default(),
+            permissions: None,
+            tool_permissions: Default::default(),
         }
-    
-}
+    }
 
     async fn connect(
         test_name: &str,
@@ -354,8 +353,7 @@ chat_reasoning_replay = "omit"
             policy: ToolInvocationPolicy::default(),
             permissions: None,
             tool_permissions: Default::default(),
-        
-};
+        };
 
         let runtime = McpServerRuntime::connect(
             &server_id,
@@ -538,8 +536,7 @@ chat_reasoning_replay = "omit"
             policy: ToolInvocationPolicy::default(),
             permissions: None,
             tool_permissions: Default::default(),
-        
-};
+        };
 
         let runtime = McpServerRuntime::connect(
             &server_id,
@@ -631,8 +628,7 @@ chat_reasoning_replay = "omit"
             policy: ToolInvocationPolicy::default(),
             permissions: None,
             tool_permissions: Default::default(),
-        
-};
+        };
         let error = McpServerRuntime::connect(
             &McpServerId::new("legacy-no-overlap"),
             &binding,
@@ -950,8 +946,7 @@ chat_reasoning_replay = "omit"
                 policy: ToolInvocationPolicy::default(),
                 permissions: None,
                 tool_permissions: Default::default(),
-            
-},
+            },
             &workspace,
             Arc::new(McpInvalidationState::new()),
         )
@@ -1025,11 +1020,10 @@ chat_reasoning_replay = "omit"
                 ]),
             },
             policy: ToolInvocationPolicy::default(),
-        permissions: None,
-        tool_permissions: Default::default(),
+            permissions: None,
+            tool_permissions: Default::default(),
         }
-    
-}
+    }
 
     /// Connects the raw fixture directly at the runtime boundary.
     async fn connect_raw_fixture(
@@ -1474,11 +1468,10 @@ chat_reasoning_replay = "omit"
                     headers: BTreeMap::new(),
                 },
                 policy: ToolInvocationPolicy::default(),
-            permissions: None,
-            tool_permissions: Default::default(),
+                permissions: None,
+                tool_permissions: Default::default(),
             }
-        
-}
+        }
 
         async fn connect(&self, workspace_dir: &tempfile::TempDir) -> Arc<McpServerRuntime> {
             let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
@@ -1928,8 +1921,7 @@ async fn measure_configured_http_mcp() {
         policy: rustx::tools::types::ToolInvocationPolicy::default(),
         permissions: None,
         tool_permissions: Default::default(),
-    
-};
+    };
     for sample in 1..=3 {
         let started = Instant::now();
         let runtime = McpServerRuntime::connect(

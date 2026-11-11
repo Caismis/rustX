@@ -51,7 +51,7 @@ const capabilities = { inputModalities: ['text' as const], outputModalities: ['t
 let releaseSource!: () => void;
 const sourceGate = new Promise<void>(resolve => { releaseSource = resolve; });
 if (!new URL(location.href).searchParams.has('source-gate')) releaseSource();
-server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: { ...cfg3Source(), session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] })) } }, prospective_approval_mode: 'policy', target: { kind: 'workspace', directory: '/workspace/A' } } });
+server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: { ...cfg3Source(), session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] })) } }, prospective_approval_mode: 'plan', target: { kind: 'workspace', directory: '/workspace/A' } } });
 const configureWorkspace = server.workspaceHost.configureWorkspace;
 server.workspaceHost.configureWorkspace = async (...args) => { await sourceGate; return configureWorkspace(...args); };
 if (new URL(location.href).searchParams.has('models')) {
@@ -232,7 +232,7 @@ const handled = new Set<Request>(server.requests.filter(row => row.request.metho
       input_tokens: String(input), context_window_tokens: "100000", model: 'measured/model',
       breakdown: { system_tokens: "1000", tool_tokens: "2000", message_tokens: String(input - 3000) },
     } };
-    next.attempt = running ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } } : null;
+    next.attempt = running ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'plan' } } : null;
     await server.update('A', next);
   },
   async appendSavedReply() {

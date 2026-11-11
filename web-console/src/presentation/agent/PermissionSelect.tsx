@@ -1,7 +1,7 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted PermissionSelect/RiskConfirmation; see PROVENANCE.md. */
 import { useState } from 'react';
-import type { ApprovalMode } from '../../../../protocol/app-server/v78';
+import type { Translate } from '../../locale/translation';
 import { Menu } from '../primitives/Menu';
 import { Button } from '../primitives/Button';
 import { DialogSurface } from '../primitives/DialogSurface';
@@ -10,6 +10,7 @@ import css from './PermissionSelect.module.css';
 import risk from '../primitives/RiskConfirmation.module.css';
 import modal from '../primitives/Modal.module.css';
 /** Closed native-expressible vocabulary supplied by the Workspace adapter. */
+type ApprovalMode = 'plan' | 'automatic' | 'full_access';
 export function PermissionSelect({ value, disabled, choose }: { value?: ApprovalMode; disabled: boolean; choose: (value: ApprovalMode) => void }) {
   const tx = useTranslation();
   const [open, setOpen] = useState(false), [confirm, setConfirm] = useState(false), [acknowledged, setAcknowledged] = useState(false);
@@ -40,7 +41,7 @@ export function PermissionSelect({ value, disabled, choose }: { value?: Approval
   </>;
 }
 
-function permissionLabel(value: ApprovalMode | undefined, tx: (key: string) => string) {
+function permissionLabel(value: ApprovalMode | undefined, tx: Translate) {
   if (value === 'full_access') return tx('agent:permission-select.full-access');
   if (value === 'automatic') return tx('agent:permission-select.automatic');
   if (value === 'plan') return tx('agent:permission-select.plan');

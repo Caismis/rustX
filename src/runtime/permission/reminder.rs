@@ -60,8 +60,7 @@ impl PermissionReminderState {
     /// Text to inject when pending; does not consume eligibility.
     #[must_use]
     pub fn pending_text(&self) -> Option<String> {
-        self.pending
-            .then(|| permission_reminder_text(self.mode))
+        self.pending.then(|| permission_reminder_text(self.mode))
     }
 
     /// Consumes eligibility after successful request-start commit.

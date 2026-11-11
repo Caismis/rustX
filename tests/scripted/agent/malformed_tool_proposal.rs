@@ -46,12 +46,12 @@ use rustx::model::{
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
+use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 use support::audit::{assert_outcome, assert_single_terminal};
 use support::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, success_result, tool_call_events,
 };
-use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 
 const CONVERSATION: &str = "conv_2478d054-bec9-70c5-a4d2-7571989fe1a7";
 const MALFORMED_MARKER: &str = "no usable invocation id";
@@ -283,7 +283,8 @@ fn write_tool_definition() -> rustx::tools::types::ToolDefinition {
     common::tool_policies(
         "write_file",
         "tool-write",
-        ToolExecutionPolicy::ForegroundOnly)
+        ToolExecutionPolicy::ForegroundOnly,
+    )
 }
 
 // ---------------------------------------------------------------------------

@@ -9219,6 +9219,16 @@ export type InteractionOutcome =
  */
 export type ExecutionPolicyDocument = 'foreground_only' | 'background_only' | 'model_selectable';
 /**
+ * One mode entry on a resource permission object.
+ *
+ * Automatic model review is never a resource enum value: it is Automatic
+ * mode's built-in `default` behavior.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ResourcePermissionValue".
+ */
+export type ResourcePermissionValue = 'default' | 'allow' | 'ask' | 'deny';
+/**
  * Whether the native compiler admits the candidate's structure.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9933,6 +9943,45 @@ export interface McpAuthoring {
     [k: string]: string;
   };
   cwd?: string | null;
+  permissions?: ResourcePermissionSet | null;
+  tools?: {
+    [k: string]: McpToolPermissionDocument;
+  };
+}
+/**
+ * Complete three-mode permission object for one resource or exact tool.
+ *
+ * An authored object must supply all three entries. Omission of the whole
+ * object inherits the winning source default or product defaults.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ResourcePermissionSet".
+ */
+export interface ResourcePermissionSet {
+  /**
+   * Plan-mode override.
+   */
+  plan: 'default' | 'allow' | 'ask' | 'deny';
+  /**
+   * Automatic-mode override.
+   */
+  automatic: 'default' | 'allow' | 'ask' | 'deny';
+  /**
+   * Full Access-mode override.
+   */
+  full_access: 'default' | 'allow' | 'ask' | 'deny';
+}
+/**
+ * Exact-tool permission override authored under one MCP server.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "McpToolPermissionDocument".
+ */
+export interface McpToolPermissionDocument {
+  /**
+   * Complete three-mode permission object for this exact tool.
+   */
+  permissions?: ResourcePermissionSet | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema

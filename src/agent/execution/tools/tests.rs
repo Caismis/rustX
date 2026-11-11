@@ -12,8 +12,8 @@ use crate::scripted_suites::common::{capability_lease, tool_runtime_with_store};
 use crate::tools::executor::{ProgressReporter, ToolExecutor, ToolRegistry};
 use crate::tools::limits::{MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL, MAX_PROGRESS_MESSAGE_BYTES};
 use crate::tools::types::{
-    ToolCall, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
+    ToolCall, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
+    ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 use std::sync::Arc;
 use tokio::sync::watch;

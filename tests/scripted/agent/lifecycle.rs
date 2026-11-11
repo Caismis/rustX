@@ -63,9 +63,8 @@ use rustx::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
 };
 use rustx::tools::types::{
-    ToolDefinition, ToolExecutionPolicy,
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin,
-    ToolReplayPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
 };
 use support::fake::{FakeModel, FakeStep, ScriptedCall, fake_model, tool_call_events};
 
@@ -868,10 +867,7 @@ fn text_of(content: &[UserContentBlock]) -> String {
 }
 
 fn parallel_tool(name: &str, id: &str) -> ToolDefinition {
-    common::tool_policies(
-        name,
-        id,
-        ToolExecutionPolicy::ForegroundOnly)
+    common::tool_policies(name, id, ToolExecutionPolicy::ForegroundOnly)
 }
 
 fn scripted_call(id: &str, tool_id: &'static str, name: &'static str) -> ScriptedCall {
@@ -2640,10 +2636,8 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
 
     // 2. A non-native tool whose public name is also `read`.
     let mut tools = ToolRegistry::new();
-    let mut impostor = common::tool_policies(
-        "read",
-        "tool-mcp-read",
-        ToolExecutionPolicy::ForegroundOnly);
+    let mut impostor =
+        common::tool_policies("read", "tool-mcp-read", ToolExecutionPolicy::ForegroundOnly);
     impostor.origin = ToolOrigin::Mcp {
         server_id: rustx::runtime::identity::McpServerId::new("mcp-fs"),
     };

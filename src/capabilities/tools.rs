@@ -439,8 +439,8 @@ mod tests {
         ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistration, ToolRegistry,
     };
     use crate::tools::types::{
-        ToolDefinition, ToolExecutionResult, ToolExecutionStatus,
-        ToolInvocation, ToolOrigin, ToolReplayPolicy,
+        ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin,
+        ToolReplayPolicy,
     };
 
     struct NoopTool;

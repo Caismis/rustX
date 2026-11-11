@@ -269,10 +269,10 @@ impl CapabilityCoordinator {
                     resource_bindings.insert(
                         source.clone(),
                         crate::tools::mcp::McpResourceBinding::new(generation.binding())
-                        .with_permissions(
-                            bindings[id].permissions,
-                            bindings[id].tool_permissions.clone(),
-                        ),
+                            .with_permissions(
+                                bindings[id].permissions,
+                                bindings[id].tool_permissions.clone(),
+                            ),
                     );
                 } else {
                     resource_bindings.remove(source);
@@ -410,10 +410,7 @@ impl CapabilityCoordinator {
                 resource_bindings.insert(
                     source.clone(),
                     crate::tools::mcp::McpResourceBinding::new(generation.binding())
-                        .with_permissions(
-                            binding.permissions,
-                            binding.tool_permissions.clone(),
-                        ),
+                        .with_permissions(binding.permissions, binding.tool_permissions.clone()),
                 );
             }
             if let Some((epoch, Ok(discovery))) = generation.connection().catalog_snapshot() {
@@ -423,10 +420,10 @@ impl CapabilityCoordinator {
                     resource_bindings.insert(
                         source.clone(),
                         crate::tools::mcp::McpResourceBinding::new(generation.binding())
-                        .with_permissions(
-                            binding.permissions,
-                            binding.tool_permissions.clone(),
-                        ),
+                            .with_permissions(
+                                binding.permissions,
+                                binding.tool_permissions.clone(),
+                            ),
                     );
                 } else {
                     resource_bindings.remove(&source);

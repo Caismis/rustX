@@ -32,11 +32,11 @@ use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::limits::MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL;
+use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, fake_model, success_result,
     tool_call_events,
 };
-use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 
 fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {
@@ -215,10 +215,7 @@ fn scripted(id: &str, tool_id: &str, name: &str, arguments: serde_json::Value) -
 /// observations per call, for progress-bound tests.
 fn progress_tool(name: &str, tool_id: &str) -> FakeTool {
     FakeTool::new(
-        common::tool_policies(
-            name,
-            tool_id,
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies(name, tool_id, ToolExecutionPolicy::ForegroundOnly),
         success_result("ok"),
     )
 }
@@ -429,17 +426,11 @@ async fn parallel_calls_bound_progress_per_call_and_keep_canonical_order() {
     let call_b = scripted("call-b", "tool-beta", "beta", serde_json::json!({"n": 2}));
     let model = fake_model(tool_turn_then_stop(&[&call_a, &call_b]));
     let (tool_a, release_a) = FakeTool::parking(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let (tool_b, release_b) = FakeTool::parking(
-        common::tool_policies(
-            "beta",
-            "tool-beta",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("beta", "tool-beta", ToolExecutionPolicy::ForegroundOnly),
         success_result("b"),
     );
     let tool_a = tool_a.emitting_progress(FLOOD);

@@ -57,8 +57,7 @@ mod tests {
         ] {
             let encoded = serde_json::to_value(mode).expect("encode");
             assert_eq!(encoded, serde_json::Value::String(mode.as_str().into()));
-            let decoded: ExecutionPermissionMode =
-                serde_json::from_value(encoded).expect("decode");
+            let decoded: ExecutionPermissionMode = serde_json::from_value(encoded).expect("decode");
             assert_eq!(decoded, mode);
         }
     }

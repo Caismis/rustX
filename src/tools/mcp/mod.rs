@@ -176,11 +176,11 @@ use crate::tools::types::ToolInvocationPolicy;
 
 pub(crate) use connect::OwnedConnect;
 pub(crate) use connection::McpConnection;
-pub(crate) use executor::{definitions_owned_for_source, with_binding_permissions};
 pub use executor::{
     CanonicalMcpTool, McpToolExecutor, definitions, mcp_tool_id, source_server_id,
     source_tool_identity,
 };
+pub(crate) use executor::{definitions_owned_for_source, with_binding_permissions};
 pub(crate) use generation::{
     McpRuntimeBinding, McpRuntimeGeneration, McpRuntimeLeaseAuthority, McpRuntimeLeaseSet,
     McpRuntimeRetirementRegistry,

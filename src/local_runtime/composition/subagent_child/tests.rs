@@ -14,8 +14,7 @@ use crate::runtime::subagent::catalog::SubagentName;
 use crate::runtime::subagent::ipc::{SUBAGENT_IPC_VERSION, SubagentChildSpec};
 use crate::runtime::subagent::resolver::{ResolvedSubagentSpec, ResolvedSubagentTool};
 use crate::tools::types::{
-    ToolDefinition, ToolExecutionPolicy,
-    ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,
 };
 
 #[cfg(feature = "mcp-fixture")]
@@ -1320,8 +1319,8 @@ fn fixture_binding(test_name: &str, prefix: &str) -> crate::tools::mcp::McpServe
             ]),
         },
         policy: ToolInvocationPolicy::default(),
-    permissions: None,
-    tool_permissions: Default::default(),
+        permissions: None,
+        tool_permissions: Default::default(),
     }
 }
 
@@ -1598,8 +1597,7 @@ async fn an_unreachable_required_mcp_server_fails_child_composition() {
             policy: ToolInvocationPolicy::default(),
             permissions: None,
             tool_permissions: Default::default(),
-        
-},
+        },
     );
     let error = LocalConversationCore::compose_subagent_child(
         &child_spec,

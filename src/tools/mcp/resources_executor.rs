@@ -73,8 +73,7 @@ pub(crate) struct McpResourceBinding {
     /// Source-default three-mode permission object from the owning MCP binding.
     permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
     /// Exact-tool permission exceptions keyed by resource helper name.
-    tool_permissions:
-        BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
+    tool_permissions: BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
 }
 
 impl McpResourceBinding {

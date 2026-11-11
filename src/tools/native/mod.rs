@@ -632,10 +632,7 @@ pub(crate) fn test_ask_user_registration() -> crate::tools::executor::ToolRegist
 mod tests {
     use super::{register_subagent_child_tools, subagent_child_definition};
     use crate::tools::executor::ToolRegistry;
-    use crate::tools::types::{
-        ToolDefinition, ToolExecutionPolicy,
-        ToolInvocationPolicy,
-    };
+    use crate::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolInvocationPolicy};
 
     fn frozen(names: &[&str], policy: ToolInvocationPolicy) -> Vec<ToolDefinition> {
         names

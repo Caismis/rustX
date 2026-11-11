@@ -61,7 +61,7 @@ if (mode === 'settled') {
    timing: { model_ms: 20500, tool_ms: 9652000, mean_ttft_ms: 3100, output_tokens_per_second: 49 } };
  s.context = { compaction_count: 0, compaction_in_progress: false, occupancy: { estimated: false, model_deferred:false, model_source:null, input_tokens: "15000", context_window_tokens: "128000", model: 'native/coder', breakdown: { system_tokens: "1900", tool_tokens: "6000", message_tokens: "7100" } } };
 }
-if (mode !== 'settled' && mode !== 'composer') s.attempt = { attempt_id: 'attempt-1', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } };
+if (mode !== 'settled' && mode !== 'composer') s.attempt = { attempt_id: 'attempt-1', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'plan' } };
 if (mode === 'streaming') {
  s.messages.pop(); s.transcript.entries.pop();
  s.attempt!.in_flight = { message_id: 'streaming-1', blocks: [{ type: 'reasoning', block_index: 0, text: 'Checking the native Tool lifecycle…\nThe canonical ledger owns committed output.' }, { type: 'text', block_index: 1, text: 'The browser renders a replaceable projection. It does not reconstruct execution from events.' }] };
@@ -127,7 +127,7 @@ if (mode === 'retry-active' || mode === 'retry-settled') {
  const recovered = { role: 'assistant' as const, id: retry.request!.assistant_message_id!, content: [{ type: 'text' as const, text: 'Recovered after timeout.' }] };
  if (mode === 'retry-active') {
   s.messages.pop(); s.transcript.entries.pop();
-  s.attempt = { attempt_id: 'attempt-a', phase: { type: 'running' }, turn: 1, in_flight: { message_id: recovered.id, blocks: [] }, execution_settings: { resource_revision: '1', approval_mode: 'policy' } };
+  s.attempt = { attempt_id: 'attempt-a', phase: { type: 'running' }, turn: 1, in_flight: { message_id: recovered.id, blocks: [] }, execution_settings: { resource_revision: '1', approval_mode: 'plan' } };
  } else {
   s.attempt = { attempt_id: 'attempt-a', phase: { type: 'settled', outcome: { type: 'completed', finish_reason: { type: 'stop' } } }, turn: 1 };
   s.messages[1] = recovered; s.transcript.entries[1] = { cursor: '2', item: { type: 'message', message: recovered } };
@@ -159,7 +159,7 @@ if (mode === 'composer') {
       for (const { request, socket } of server.requests.slice(uploadStart)) if (request.method === 'session/uploadStatus') server.reply(request, socket);
     },
     uploads: () => server.requests.filter(row => row.request.method === 'session/uploadPrepare').length,
-    running: async value => { const next = structuredClone(server.snapshots.get('A')!); next.attempt = value ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } } : null; await server.update('A', next); },
+    running: async value => { const next = structuredClone(server.snapshots.get('A')!); next.attempt = value ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'plan' } } : null; await server.update('A', next); },
     docks: async value => {
       const next = structuredClone(server.snapshots.get('A')!);
       next.todos = value ? { next_id: '2', tasks: [{ id: '1', subject: 'Review the composer', status: 'in_progress', active_form: 'Reviewing the composer' }] } : null;

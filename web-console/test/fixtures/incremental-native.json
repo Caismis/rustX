@@ -27,7 +27,7 @@
           },
           "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
           "shutting_down": false,
-          "effective_approval_mode": "policy",
+          "effective_approval_mode": "plan",
           "messages": [],
           "message_descriptors": [],
           "publication_settlements": [],
@@ -1240,7 +1240,7 @@
                   },
                   "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
                   "shutting_down": false,
-                  "effective_approval_mode": "policy",
+                  "effective_approval_mode": "plan",
                   "messages": [
                     {
                       "role": "user",
@@ -16740,7 +16740,7 @@
           },
           "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
           "shutting_down": false,
-          "effective_approval_mode": "policy",
+          "effective_approval_mode": "plan",
           "messages": [
             {
               "role": "user",

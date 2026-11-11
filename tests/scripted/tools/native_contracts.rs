@@ -16,8 +16,7 @@ use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::PreflightOutcome;
 use rustx::tools::types::{
-    ToolCall, ToolExecutionPolicy, ToolExecutionStatus, ToolInvocationMode,
-    ToolInvocationPolicy,
+    ToolCall, ToolExecutionPolicy, ToolExecutionStatus, ToolInvocationMode, ToolInvocationPolicy,
 };
 use std::sync::Arc;
 
@@ -44,8 +43,8 @@ const NATIVE_TOOL_NAMES: [&str; 12] = [
 
 #[test]
 fn product_native_defaults_are_independent_and_bash_keeps_background_admission() {
-        use ToolExecutionPolicy::{ForegroundOnly, ModelSelectable};
-        let fixture = common::native_fixture();
+    use ToolExecutionPolicy::{ForegroundOnly, ModelSelectable};
+    let fixture = common::native_fixture();
     for (name, execution) in [
         ("read", ForegroundOnly),
         ("write", ForegroundOnly),
@@ -985,7 +984,7 @@ async fn main_no_direct_tools_coexists_with_independent_workflow_terminal_author
 
 #[tokio::test]
 async fn native_admission_pins_policy_axes_and_exposure_across_candidate_changes() {
-        let fixture = common::native_fixture_without_extensions();
+    let fixture = common::native_fixture_without_extensions();
     let coordinator = selected_capabilities(
         &fixture,
         rustx::capabilities::AgentActivation {

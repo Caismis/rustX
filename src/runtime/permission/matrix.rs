@@ -71,10 +71,9 @@ pub const fn builtin_action_for(
         (OtherFileMutation | BashOther | GoalCreate | ScheduleMutation | JobControl, Plan) => {
             Elevate
         }
-        (
-            OtherFileMutation | BashOther | GoalCreate | ScheduleMutation | JobControl,
-            Automatic,
-        ) => Review,
+        (OtherFileMutation | BashOther | GoalCreate | ScheduleMutation | JobControl, Automatic) => {
+            Review
+        }
         (
             OtherFileMutation | BashOther | GoalCreate | ScheduleMutation | JobControl,
             FullAccess,

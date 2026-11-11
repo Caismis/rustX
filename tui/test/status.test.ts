@@ -320,7 +320,7 @@ describe("footer", () => {
   it("defers whole model detail when essential facts cannot fit, never inventing a shorter identity", () => {
     const rendered = footer(stateOf({
       model: sessionModel("provider/" + "long-model-identity".repeat(5)),
-      effective_approval_mode: "policy",
+      effective_approval_mode: "plan",
     }), "connected", 24);
     assert.equal(rendered, "POLICY\nmodel: /settings");
   });
@@ -393,7 +393,7 @@ describe("footer", () => {
 
   it("names the generation-owned effective approval mode", () => {
     assert.match(
-      footer(stateOf({ effective_approval_mode: "policy" }), "connected"),
+      footer(stateOf({ effective_approval_mode: "plan" }), "connected"),
       /approval POLICY/,
     );
     assert.match(
@@ -889,7 +889,7 @@ it("an unavailable selection is named as configured, never shown through a fallb
 });
 
 it("unknown context window is omitted and snapshot replacement rebuilds approval/model truth", () => {
-  const before = stateOf({ model: sessionModel("old/model"), effective_approval_mode: "policy" });
+  const before = stateOf({ model: sessionModel("old/model"), effective_approval_mode: "plan" });
   const after = stateOf({ model: sessionModel("new/model"), effective_approval_mode: "full_access" });
   assert.match(footer(before, "connected"), /approval POLICY/);
   assert.match(footer(after, "connected"), /new\/model.*approval FULL ACCESS/);

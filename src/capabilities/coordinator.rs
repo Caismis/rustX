@@ -1426,7 +1426,11 @@ impl CapabilityCoordinator {
                     if discovery.capabilities.resources {
                         resource_bindings.insert(
                             source_id.clone(),
-                            crate::tools::mcp::McpResourceBinding::new(generation.binding()).with_permissions(binding.permissions, binding.tool_permissions.clone()),
+                            crate::tools::mcp::McpResourceBinding::new(generation.binding())
+                                .with_permissions(
+                                    binding.permissions,
+                                    binding.tool_permissions.clone(),
+                                ),
                         );
                     }
                     mcp_tools.extend(
@@ -1938,7 +1942,8 @@ impl CapabilityCoordinator {
                 }
                 resource_bindings.insert(
                     source_id.clone(),
-                    crate::tools::mcp::McpResourceBinding::new(generation.binding()).with_permissions(binding.permissions, binding.tool_permissions.clone()),
+                    crate::tools::mcp::McpResourceBinding::new(generation.binding())
+                        .with_permissions(binding.permissions, binding.tool_permissions.clone()),
                 );
             }
             let selected: Vec<_> = plan
@@ -1956,9 +1961,7 @@ impl CapabilityCoordinator {
                 Ok(definitions) => {
                     mcp_epochs.insert(server_id.clone(), epoch);
                     registrations.extend(definitions.into_iter().map(|(definition, executor)| {
-                        crate::tools::mcp::with_binding_permissions(
-                            definition, executor, binding,
-                        )
+                        crate::tools::mcp::with_binding_permissions(definition, executor, binding)
                     }));
                     mcp_runtimes.push(generation);
                 }
@@ -3071,8 +3074,7 @@ body
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
                 permissions: None,
                 tool_permissions: Default::default(),
-            
-};
+            };
             candidate
                 .resource_inputs
                 .mcp_servers
@@ -4180,8 +4182,7 @@ mod mcp_race_tests {
                     policy: crate::tools::types::ToolInvocationPolicy::default(),
                     permissions: None,
                     tool_permissions: Default::default(),
-                
-},
+                },
             )]),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
@@ -4229,8 +4230,7 @@ mod mcp_race_tests {
                         policy: crate::tools::types::ToolInvocationPolicy::default(),
                         permissions: None,
                         tool_permissions: Default::default(),
-                    
-},
+                    },
                 )
             })
             .collect();

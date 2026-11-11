@@ -149,8 +149,7 @@ impl Fixture {
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
                 permissions: None,
                 tool_permissions: Default::default(),
-            
-},
+            },
             server,
             shutdown,
             _temp: temp,

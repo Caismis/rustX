@@ -89,7 +89,7 @@ function sessionApplication(state: string): ConfigurationApplication {
 // A draft conversation needs the native Session model catalog and prospective
 // permission; ordinary Settings references deliberately do not publish these.
 if (variant.get('conversation') === 'ready') {
-  source.prospective_approval_mode = 'policy';
+  source.prospective_approval_mode = 'plan';
   const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
   source.session_models = { kind: 'available', default_model: { model: 'fixture/model' }, catalog: { models: [{
     model: 'fixture/model', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192,

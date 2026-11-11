@@ -131,7 +131,8 @@ async fn t08_t12_t18_t19_tool_inspection_uses_real_child_live_and_cold_original_
         common::tool_policies(
             "inspect_tool",
             "tool-inspect",
-            crate::tools::types::ToolExecutionPolicy::ForegroundOnly),
+            crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
+        ),
         support::fake::success_result("original Child inspection result"),
     )
     .register(&mut tools);

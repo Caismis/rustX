@@ -67,8 +67,7 @@ use rustx::runtime_client::{
 };
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{
-    ToolCancellationPhase, ToolExecutionPolicy, ToolExecutionStatus,
-    ToolOrigin,
+    ToolCancellationPhase, ToolExecutionPolicy, ToolExecutionStatus, ToolOrigin,
 };
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 
@@ -1605,10 +1604,7 @@ pub async fn foreground_tool_lifecycle(factory: &dyn DriverFactory) {
     }));
     let mut tools = ToolRegistry::new();
     FakeTool::new(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     )
     .register(&mut tools);
@@ -1731,17 +1727,11 @@ pub async fn parallel_tools_keep_independent_identities(factory: &dyn DriverFact
     }));
 
     let (tool_a, release_a) = FakeTool::parking(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let (tool_b, release_b) = FakeTool::parking(
-        common::tool_policies(
-            "beta",
-            "tool-beta",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("beta", "tool-beta", ToolExecutionPolicy::ForegroundOnly),
         success_result("b"),
     );
     let mut started_a = tool_a.started();
@@ -1864,10 +1854,7 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
     }));
 
     let (tool, _release) = FakeTool::parking(
-        common::tool_policies(
-            "bg",
-            "tool-bg",
-            ToolExecutionPolicy::ModelSelectable),
+        common::tool_policies("bg", "tool-bg", ToolExecutionPolicy::ModelSelectable),
         success_result("bg"),
     );
     let mut tools = ToolRegistry::new();
@@ -2127,10 +2114,7 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
 pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory) {
     let mut base = ToolRegistry::new();
     FakeTool::new(
-        common::tool_policies(
-            "ls",
-            "tool-ls",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("ls", "tool-ls", ToolExecutionPolicy::ForegroundOnly),
         success_result("listed"),
     )
     .register(&mut base);
@@ -2393,8 +2377,7 @@ pub async fn capability_projection_covers_mcp_origins(
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
             permissions: None,
             tool_permissions: Default::default(),
-        
-},
+        },
     )]);
     let fixture = ConformanceFixture::builder(&conversation(factory, "mcp"))
         .mcp_servers(servers)

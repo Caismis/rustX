@@ -6,7 +6,7 @@ use crate::capabilities::ToolSourceId;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::McpServerId;
 use crate::runtime::types::ConversationLifecycle;
-use crate::tools::executor::{ToolRegistration, ToolRegistry};
+use crate::tools::executor::ToolRegistry;
 use crate::tools::mcp::{
     McpInvalidationState, McpRuntimeGeneration, McpRuntimeRetirementRegistry, McpServerBindings,
     McpServerRuntime,

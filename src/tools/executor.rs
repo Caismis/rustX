@@ -43,8 +43,8 @@ use crate::tools::schema::{
 };
 use crate::tools::todo::TodoWriter;
 use crate::tools::types::{
-    ModelToolDefinition, ToolCall, ToolDefinition,
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolProgress,
+    ModelToolDefinition, ToolCall, ToolDefinition, ToolExecutionResult, ToolExecutionStatus,
+    ToolInvocation, ToolOrigin, ToolProgress,
 };
 use crate::tools::workspace::Workspace;
 
@@ -1052,23 +1052,6 @@ impl ToolRegistry {
         Ok(())
     }
 
-    /// Registers one tool together with its authored resource permission object.
-    pub(crate) fn register_with_resource_permissions(
-        &mut self,
-        definition: ToolDefinition,
-        executor: Arc<dyn ToolExecutor>,
-        permissions: crate::runtime::permission::ResourcePermissionSet,
-    ) -> Result<(), ToolRegistryError> {
-        self.register(definition, executor)?;
-        let last = self
-            .entries
-            .last_mut()
-            .expect("register always pushes one entry");
-        last.resource_permissions = Some(permissions);
-        last.resource_permission_targets.clear();
-        Ok(())
-    }
-
     /// Composes a new registry from this immutable base and additional
     /// definitions. The base entries retain their deterministic order and
     /// external callers must provide their entries in their canonical order.
@@ -1358,9 +1341,8 @@ mod tests {
     use crate::tools::deadline::ToolProgressCapability;
     use crate::tools::environment::ToolEnvironment;
     use crate::tools::types::{
-        ToolCall, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-        ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolProgress,
-        ToolReplayPolicy,
+        ToolCall, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
+        ToolInvocation, ToolInvocationMode, ToolOrigin, ToolProgress, ToolReplayPolicy,
     };
     use crate::tools::workspace::Workspace;
     use futures_util::FutureExt;

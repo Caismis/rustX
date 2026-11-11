@@ -62,8 +62,7 @@ use rustx::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
 };
 use rustx::tools::types::{
-    ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
-    ToolInvocation,
+    ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
 };
 use tokio::sync::watch;
 
@@ -163,10 +162,7 @@ impl SpyTool {
         id: &str,
     ) -> Arc<Mutex<Vec<ToolInvocation>>> {
         let invocations = Arc::new(Mutex::new(Vec::new()));
-        let definition = common::tool_policies(
-            name,
-            id,
-            ToolExecutionPolicy::ForegroundOnly);
+        let definition = common::tool_policies(name, id, ToolExecutionPolicy::ForegroundOnly);
         registry
             .register(
                 definition,

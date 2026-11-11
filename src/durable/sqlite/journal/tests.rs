@@ -165,8 +165,7 @@ fn agent_authorities_reopen_from_private_capture_without_journal_secrets() {
             policy: crate::tools::ToolInvocationPolicy::default(),
             permissions: None,
             tool_permissions: Default::default(),
-        
-},
+        },
     );
     authority
         .resolved
@@ -184,8 +183,7 @@ fn agent_authorities_reopen_from_private_capture_without_journal_secrets() {
             policy: crate::tools::ToolInvocationPolicy::default(),
             permissions: None,
             tool_permissions: Default::default(),
-        
-},
+        },
     );
     let canaries = [
         "private-literal",

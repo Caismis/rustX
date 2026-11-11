@@ -2240,8 +2240,10 @@ agents = ["role", "role"]
 #[test]
 fn workspace_authors_global_tool_policies_without_granting_root_tools() {
     let f = Fixture::new();
-    f.user(json!({"approval_mode":"full_access", "native_tools":{"bash":{"approval":"always", "execution":"background_only"}}, "agent":{"model":{"model":"host/one"}}}));
-    f.project(json!({"approval_mode":"policy", "native_tools":{"bash":{"approval":"never"}}}));
+    f.user(json!({"approval_mode":"full_access", "native_tools":{"bash":{"execution":"background_only"}}, "agent":{"model":{"model":"host/one"}}}));
+    f.project(
+        json!({"approval_mode":"plan", "native_tools":{"bash":{"execution":"model_selectable"}}}),
+    );
     let resolved = f.resolve();
     assert_eq!(
         resolved.config.approval_mode,
@@ -2249,8 +2251,10 @@ fn workspace_authors_global_tool_policies_without_granting_root_tools() {
     );
     assert!(resolved.config.agent.tools.builtin.is_empty());
     let value = serde_json::to_value(resolved.config()).unwrap();
-    assert_eq!(value["nativeTools"]["bash"]["approval"], "never");
-    assert_ne!(value["nativeTools"]["bash"]["execution"], "background_only");
+    assert_eq!(
+        value["nativeTools"]["bash"]["execution"],
+        "model_selectable"
+    );
     assert!(matches!(
         resolved.provenance["native_tools.bash"],
         Origin::Workspace { .. }

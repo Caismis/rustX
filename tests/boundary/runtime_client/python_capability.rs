@@ -21,9 +21,7 @@ use std::sync::Arc;
 
 use rustx::runtime::identity::ToolId;
 use rustx::runtime_client::RuntimeClientRequest;
-use rustx::tools::types::{
-    ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-};
+use rustx::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 
 /// A capability view covering native + Managed Python + Skill origins: the revision, deterministic ordering, origin
 /// metadata, and Skill identity/version/name/description/exact virtual

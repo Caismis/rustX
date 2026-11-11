@@ -17,8 +17,8 @@ use crate::tools::background::{
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
-    ToolDefinition, ToolExecutionPolicy,
-    ToolExecutionResult, ToolInvocation, ToolOrigin, ToolReplayPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolInvocation, ToolOrigin,
+    ToolReplayPolicy,
 };
 
 use super::input::decode;

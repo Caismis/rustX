@@ -940,10 +940,7 @@ mod tests {
     };
     use crate::runtime::subagent::catalog::SubagentName;
     use crate::runtime::subagent::resolver::ResolvedSubagentTool;
-    use crate::tools::types::{
-        ToolDefinition, ToolExecutionPolicy, ToolOrigin,
-        ToolReplayPolicy,
-    };
+    use crate::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 
     fn pair() -> (tokio::net::UnixStream, tokio::net::UnixStream) {
         tokio::net::UnixStream::pair().expect("control socket pair")
@@ -1063,8 +1060,7 @@ mod tests {
                         policy: crate::tools::types::ToolInvocationPolicy::default(),
                         permissions: None,
                         tool_permissions: Default::default(),
-                    
-},
+                    },
                 )]
                 .into_iter()
                 .collect(),

@@ -221,4 +221,3 @@ async fn resource_candidate_epoch_and_last_good_publication_are_atomic() {
     coordinator.settle_ready_mcp_runtimes().await.unwrap();
     assert_eq!(coordinator.pending_mcp_retirements(), 0);
 }
-

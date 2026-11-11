@@ -595,9 +595,7 @@ use rustx::tools::background::{
     BackgroundDispatchOutcome, BackgroundLifecycle, ConversationBackgroundRegistry,
 };
 use rustx::tools::executor::ToolRegistry;
-use rustx::tools::types::{
-    ToolExecutionPolicy, ToolInvocation, ToolInvocationMode,
-};
+use rustx::tools::types::{ToolExecutionPolicy, ToolInvocation, ToolInvocationMode};
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, success_result, tool_call_events,
 };
@@ -944,10 +942,7 @@ async fn ext256_an_empty_extension_composition_changes_nothing_but_agent_status(
         let extensions = composition(document);
         let fixture = common::native_fixture();
         let tool = FakeTool::new(
-            common::tool_policies(
-                "worker",
-                "ext256-tool",
-                ToolExecutionPolicy::ForegroundOnly),
+            common::tool_policies("worker", "ext256-tool", ToolExecutionPolicy::ForegroundOnly),
             success_result("worker"),
         );
         let mut tools = fixture.ordinary_registry.clone();
@@ -1009,10 +1004,7 @@ async fn ext256_a_disabled_agent_status_extension_emits_nothing_anywhere() {
     let call = scripted("ext256-none", "ext256-tool", "worker");
     let fixture = common::native_fixture();
     let tool = FakeTool::new(
-        common::tool_policies(
-            "worker",
-            "ext256-tool",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("worker", "ext256-tool", ToolExecutionPolicy::ForegroundOnly),
         success_result("worker"),
     );
     let mut tools = fixture.ordinary_registry.clone();
@@ -1160,7 +1152,8 @@ async fn seed_detached_execution(
         common::tool_policies(
             "detached",
             "ext256-detached",
-            ToolExecutionPolicy::ModelSelectable),
+            ToolExecutionPolicy::ModelSelectable,
+        ),
         success_result("detached"),
     );
     let mut started = tool.started();
@@ -1654,10 +1647,7 @@ async fn ext259_todo_and_agent_status_are_independent_and_change_no_loop_semanti
         }
 
         let tool = FakeTool::new(
-            common::tool_policies(
-                "worker",
-                "ext259-tool",
-                ToolExecutionPolicy::ForegroundOnly),
+            common::tool_policies("worker", "ext259-tool", ToolExecutionPolicy::ForegroundOnly),
             success_result("worker"),
         );
         let mut tools = fixture.ordinary_registry.clone();
@@ -2603,10 +2593,7 @@ fn goal_inspection_tools() -> ToolRegistry {
         ("bash", "goal-bash", "Tests need further work"),
     ] {
         FakeTool::new(
-            common::tool_policies(
-                name,
-                id,
-                ToolExecutionPolicy::ForegroundOnly),
+            common::tool_policies(name, id, ToolExecutionPolicy::ForegroundOnly),
             success_result(output),
         )
         .register(&mut tools);

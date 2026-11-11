@@ -548,9 +548,7 @@ impl AgentExecution<'_> {
                     // then drain their outcomes so InteractionCoordinator never
                     // keeps orphan pending approvals after this group stops.
                     if remaining_auth > 0 {
-                        if let Some(coordinator) =
-                            self.lifecycle.native_interaction_coordinator()
-                        {
+                        if let Some(coordinator) = self.lifecycle.native_interaction_coordinator() {
                             coordinator
                                 .cancel_pending_async(self.cancellation.reason())
                                 .await;
@@ -645,10 +643,9 @@ impl AgentExecution<'_> {
                                     ));
                                 }
                             }
-                            deferred_interaction_error =
-                                Some(CanonicalCommitError::Interaction(
-                                    InteractionFailure::ControlLost,
-                                ));
+                            deferred_interaction_error = Some(CanonicalCommitError::Interaction(
+                                InteractionFailure::ControlLost,
+                            ));
                         } else {
                             return Err(CanonicalCommitError::Interaction(
                                 InteractionFailure::ControlLost,
@@ -813,41 +810,6 @@ impl AgentExecution<'_> {
             return Err(error);
         }
         Ok(settled)
-    }
-
-    /// Resolves the typed pre-tool decision of one preflight-ready call.
-    ///
-    /// The policy sees only an immutable view of the exact registry-resolved
-    /// facts. `Ask` delegates the wait to the attempt's concrete native
-    /// interaction binding, while the Agent Loop remains the owner of
-    /// execution and cancellation. A provider-unavailable interaction and a
-    /// policy error fail closed as `Denied` only when no post-await
-    /// cancellation is observable; an owner cancellation produces the
-    /// existing cancelled result slot and closes the later tool-start
-    /// frontier.
-    async fn authorize_slot(&self, slot: &mut CallSlot) -> Result<(), InteractionFailure> {
-        if slot.result.is_some() {
-            return Ok(());
-        }
-        if self.cancellation.is_cancelled() {
-            slot.result = Some(cancelled_result(self.cancellation.reason()));
-            return Ok(());
-        }
-        slot.result = self.authorize_prepared(slot).await?;
-        Ok(())
-    }
-
-    async fn authorize_prepared(
-        &self,
-        slot: &CallSlot,
-    ) -> Result<Option<ToolExecutionResult>, InteractionFailure> {
-        let facts = ParallelAuthFacts::from_execution(0, self, slot);
-        authorize_owned(
-            &self.lifecycle,
-            &self.cancellation.execution_cancellation(),
-            &facts,
-        )
-        .await
     }
 
     /// Runs the immutable tool-result observation pass of one structurally

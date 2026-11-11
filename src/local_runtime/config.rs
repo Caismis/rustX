@@ -706,7 +706,8 @@ pub(super) fn resolve_mcp_bindings(
                         .tools
                         .iter()
                         .filter_map(|(name, tool)| {
-                            tool.permissions.map(|permissions| (name.clone(), permissions))
+                            tool.permissions
+                                .map(|permissions| (name.clone(), permissions))
                         })
                         .collect(),
                 },

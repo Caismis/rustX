@@ -25,8 +25,8 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExec
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::native::support::{cancelled_result, failed_result, success_json};
 use crate::tools::types::{
-    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-    ToolInvocation, ToolOrigin, ToolReplayPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolInvocation, ToolOrigin,
+    ToolReplayPolicy,
 };
 
 /// The canonical model-facing name of the native questionnaire tool.

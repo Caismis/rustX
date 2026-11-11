@@ -7,9 +7,7 @@ use crate::capabilities::{CapabilitySourceState, ToolSourceId};
 use crate::runtime::agent_profile::{AgentProfileAuthority, AgentScope, resolve_agent_profile};
 use crate::runtime::identity::McpServerId;
 use crate::tools::mcp::{McpServerBinding, McpTransportConfig, source_server_id};
-use crate::tools::types::{
-    ToolExecutionPolicy, ToolInvocationPolicy,
-};
+use crate::tools::types::{ToolExecutionPolicy, ToolInvocationPolicy};
 
 fn sources() -> [ToolSourceId; 2] {
     [
@@ -37,8 +35,8 @@ fn binding(source: &ToolSourceId) -> McpServerBinding {
             },
         },
         policy: ToolInvocationPolicy::default(),
-    permissions: None,
-    tool_permissions: Default::default(),
+        permissions: None,
+        tool_permissions: Default::default(),
     }
 }
 
@@ -128,18 +126,18 @@ fn resource_only_child_profile_digest_excludes_physical_binding_and_tool_schedul
     ];
     for source in sources() {
         let original_binding = binding(&source);
-            let base = resource_only_spec(&source, original_binding.clone());
-            for (field, mutate) in mutations {
-                let mut changed_binding = original_binding.clone();
-                mutate(&mut changed_binding);
-                assert_ne!(changed_binding, original_binding, "{field} really changed");
-                let changed = resource_only_spec(&source, changed_binding);
-                assert_eq!(
-                    changed.profile_digest(),
-                    base.profile_digest(),
-                    "{field} does not affect resource behavior for {source}"
-                );
-            }
+        let base = resource_only_spec(&source, original_binding.clone());
+        for (field, mutate) in mutations {
+            let mut changed_binding = original_binding.clone();
+            mutate(&mut changed_binding);
+            assert_ne!(changed_binding, original_binding, "{field} really changed");
+            let changed = resource_only_spec(&source, changed_binding);
+            assert_eq!(
+                changed.profile_digest(),
+                base.profile_digest(),
+                "{field} does not affect resource behavior for {source}"
+            );
+        }
     }
 }
 

@@ -111,7 +111,7 @@ version is `schema_version = 12`.
 | `models` | Independently named Model definitions |
 | `agent` | Root capability profile and model default |
 | `agent_id` | Root runtime Agent identity label |
-| `approval_mode` | Global `policy` or `full_access` execution approval mode |
+| `approval_mode` | Global `plan`, `automatic`, or `full_access` execution approval mode |
 | `context` | Context reserve, recent-history retention and summary cap |
 | `model_timeout_policy` | Response-start and stream-idle deadlines |
 | `tool_deadline_policy` | Tool hard deadline and optional idle-liveness window |

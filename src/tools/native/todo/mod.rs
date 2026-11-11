@@ -52,9 +52,8 @@ use crate::tools::todo::{
     TODO_TOOL_ID, TodoMutationError, TodoSnapshot, TodoStatus, TodoTask, TodoUpdate, TodoWriter,
 };
 use crate::tools::types::{
-    ToolDefinition, ToolExecutionPolicy,
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
-    ToolResultContent,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolOrigin, ToolReplayPolicy, ToolResultContent,
 };
 
 use input::{TodoAction, TodoInput};

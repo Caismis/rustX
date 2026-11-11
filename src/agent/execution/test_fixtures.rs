@@ -20,8 +20,8 @@ use crate::runtime::inbound::InitialTurnTrigger;
 use crate::scripted_suites::support::model::scripted_session_model;
 use crate::tools::executor::ToolExecutor;
 use crate::tools::types::{
-    ToolCall, ToolCallStart, ToolDefinition, ToolExecutionPolicy,
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
+    ToolCall, ToolCallStart, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
+    ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};

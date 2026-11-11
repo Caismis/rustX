@@ -316,7 +316,6 @@ pub(crate) fn definitions_owned(
         .collect()
 }
 
-
 /// Applies the binding's exact-tool or source permission object onto a plain registration.
 pub(crate) fn with_binding_permissions(
     definition: crate::tools::types::ToolDefinition,

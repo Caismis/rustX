@@ -2,7 +2,7 @@ import { SettingsNotice } from '../SettingsFeedback';
 import { useTranslation } from '../../../locale/react';
 import { useState } from 'react';
 import type {
-  ApprovalMode, NativePolicyOverrideDocument, NativeTool,
+  ExecutionPermissionMode as ApprovalMode, NativePolicyOverrideDocument, NativeTool,
   RuntimeLayer, SourceScope, SourceSettings, SourceToolSelection,
 } from '../../../../../protocol/app-server/v78';
 import { Button } from '../../../presentation/primitives/Button';

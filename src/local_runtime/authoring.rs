@@ -970,7 +970,7 @@ tokens = 1024
     #[test]
     fn both_scopes_author_runtime_policies_but_process_bindings_are_not_config() {
         for text in [
-            "approval_mode = 'policy'",
+            "approval_mode = 'plan'",
             "native_tools = {}",
             "mcp_tool_policies = {}",
         ] {

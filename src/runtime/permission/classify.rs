@@ -25,9 +25,7 @@ pub fn classify_tool_kind(
     hints: &ClassificationHints<'_>,
 ) -> (BuiltinToolKind, Option<BashReadonlyClass>) {
     match origin {
-        ToolOrigin::Mcp { .. }
-        | ToolOrigin::ManagedPython { .. }
-        | ToolOrigin::Host { .. } => {
+        ToolOrigin::Mcp { .. } | ToolOrigin::ManagedPython { .. } | ToolOrigin::Host { .. } => {
             return (BuiltinToolKind::ExternalOrDelegated, None);
         }
         ToolOrigin::Builtin => {}

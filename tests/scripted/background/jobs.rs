@@ -50,10 +50,7 @@ async fn job_status_is_immediate_and_wait_captures_one_finite_job() {
     let mut releases = Vec::new();
     for _ in 0..2 {
         let (tool, release) = support::fake::FakeTool::parking(
-            common::tool_policies(
-                "bash",
-                "tool-bash",
-                ToolExecutionPolicy::ModelSelectable),
+            common::tool_policies("bash", "tool-bash", ToolExecutionPolicy::ModelSelectable),
             support::fake::success_result("done"),
         );
         let mut started = tool.started();
@@ -279,10 +276,7 @@ async fn job_list_reports_newest_bounded_results_and_all_omission_metadata() {
     let mut ids = Vec::new();
     for _ in 0..rustx::tools::background::MAX_JOB_LIST_LIMIT + 3 {
         let (tool, release) = support::fake::FakeTool::parking(
-            common::tool_policies(
-                "bash",
-                "tool-bash",
-                ToolExecutionPolicy::ModelSelectable),
+            common::tool_policies("bash", "tool-bash", ToolExecutionPolicy::ModelSelectable),
             support::fake::success_result("done"),
         );
         let executor: Arc<dyn ToolExecutor> = Arc::new(tool);

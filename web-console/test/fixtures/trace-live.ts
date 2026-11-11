@@ -49,7 +49,7 @@ export function liveTrace(server: Server) {
   const sources = new Map([[native.page.read_cut.revision, native]]);
   const saved = server.snapshots.get('A')!;
   saved.trace = { records: [record], next_cursor: null };
-  saved.attempt = { attempt_id: 'attempt-a', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } };
+  saved.attempt = { attempt_id: 'attempt-a', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'plan' } };
   server.handlers.set('session/traceDetail', () => ({ type: 'domain_page', page: native.page }));
   server.handlers.set('session/trace', () => ({ type: 'trace', page: { read_cut: native.page.read_cut, records: [record], next_cursor: null } }));
   server.handlers.set('conversation/checkpointPage', request => {

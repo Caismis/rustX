@@ -642,7 +642,7 @@ describe('typed native operations and continuation fencing', () => {
     navigation.invalidate(); const count = server.requests.length;
     server.socket.deliver(response); await work;
     expect(server.requests).toHaveLength(count);
-    expect(server.client.getSnapshot().views.B.snapshot?.effective_approval_mode).toBe('policy');
+    expect(server.client.getSnapshot().views.B.snapshot?.effective_approval_mode).toBe('plan');
     if (method === 'session/setModel') expect(fixture.model()).toBe('fixture/second');
   });
   it.each(['fork', 'branch', 'retry'] as const)('%s commit/held response/navigation/release leaves the mutation valid without continuation', async action => {

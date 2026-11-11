@@ -80,9 +80,8 @@ use crate::tools::background::{
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use crate::tools::types::{
-    ToolCall, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
-    ToolResultContent,
+    ToolCall, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
+    ToolInvocation, ToolInvocationMode, ToolOrigin, ToolReplayPolicy, ToolResultContent,
 };
 
 fn test_resources(

@@ -275,7 +275,7 @@ export function snapshot(
     workflows: { revision: "0", runs: [], omitted_runs: 0 },
     conversation_id: "conv_01900000-0000-7000-8000-000000000002",
     shutting_down: false,
-    effective_approval_mode: "policy",
+    effective_approval_mode: "plan",
     messages,
     transcript,
     inbound: { pending: [] },

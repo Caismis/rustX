@@ -1025,7 +1025,7 @@ fn agent_permission_projection_uses_native_resolution_and_source_cas() {
     let (host, request) = sources(
         root.path(),
         &format!("approval_mode = \"full_access\"\n{PROVIDER}{MODEL}{ROOT}"),
-        "approval_mode = \"policy\"\n",
+        "approval_mode = \"plan\"\n",
     );
     let (owner, input) = request.session_input(&host).unwrap();
     let before = owner

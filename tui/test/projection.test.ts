@@ -479,7 +479,7 @@ describe("presentation projection", () => {
     ]);
 
     assert.deepEqual(state.pendingInteractions, [question]);
-    assert.equal(state.effectiveApprovalMode, "policy");
+    assert.equal(state.effectiveApprovalMode, "plan");
   });
 
   it("folds committed compaction diagnostics and rebuilds them from a snapshot", () => {

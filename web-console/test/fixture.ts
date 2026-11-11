@@ -19,7 +19,7 @@ export const capabilities: ServerCapabilities = rustHello.result.capabilities;
 export function snapshot(id = 'A'): RuntimeClientSnapshot {
   return {
     settings_evidence: 'live_session',
-    conversation_id: `conversation-${id}`, shutting_down: false, effective_approval_mode: 'policy',
+    conversation_id: `conversation-${id}`, shutting_down: false, effective_approval_mode: 'plan',
     workflows: { revision: '0', runs: [], omitted_runs: 0 }, messages: [], transcript: { entries: [] }, trace_updates: [], trace: { records: [] },
     message_descriptors:[], publication_settlements:[], inbound: {}, capabilities: { configured_tools: [], revision: '0' }, pending_interactions: [],
   };

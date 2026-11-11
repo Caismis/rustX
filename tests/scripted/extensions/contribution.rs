@@ -1,8 +1,8 @@
 use super::*;
 use crate::extensions::probe::{Behavior, ProbeConfig};
 use crate::runtime::identity::{ContextContributorIdentity, NativeContextContributor};
+use rustx::tools::types::ToolExecutionPolicy;
 use std::sync::atomic::Ordering;
-use rustx::tools::types::{ToolExecutionPolicy};
 
 fn composed(probes: Vec<ProbeConfig>) -> NativeAgentExtensions {
     let mut composition = NativeAgentExtensions::none();
@@ -76,10 +76,7 @@ async fn issue383_native_deferred_and_request_time_share_registered_provenance()
     let (_dir, runtime) =
         todo_tool_runtime("conv_e676044a-be02-7f84-92a4-1d66bc24ce9e", &composition);
     let tool = FakeTool::new(
-        common::tool_policies(
-            "worker",
-            "worker",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("worker", "worker", ToolExecutionPolicy::ForegroundOnly),
         success_result("done"),
     );
     let mut tools = ToolRegistry::new();
@@ -172,7 +169,8 @@ async fn issue383_retry_and_corrective_requests_freeze_goal_and_native_receipts(
             common::tool_policies(
                 "worker",
                 "probe-worker",
-                ToolExecutionPolicy::ForegroundOnly),
+                ToolExecutionPolicy::ForegroundOnly,
+            ),
             success_result("done"),
         );
         let mut tools = ToolRegistry::new();
@@ -343,7 +341,8 @@ async fn issue383_domain_changes_after_capture_only_reach_the_next_logical_step(
         common::tool_policies(
             "worker",
             "probe-worker",
-            ToolExecutionPolicy::ForegroundOnly),
+            ToolExecutionPolicy::ForegroundOnly,
+        ),
         success_result("done"),
     );
     let mut tools = ToolRegistry::new();

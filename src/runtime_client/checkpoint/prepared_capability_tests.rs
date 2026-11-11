@@ -3,9 +3,7 @@ use crate::observation::bounded::prepare_capture_item;
 use crate::observation::capability_source::{CapabilityReadSource, PreparedCapabilityHead};
 use crate::observation::capability_source::{CapabilityView, RuntimeClientTool};
 use crate::observation::capture::Capture;
-use crate::tools::types::{
-    ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-};
+use crate::tools::types::{ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 
 fn tool() -> RuntimeClientTool {
     RuntimeClientTool {

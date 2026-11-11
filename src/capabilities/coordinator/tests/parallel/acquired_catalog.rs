@@ -47,8 +47,7 @@ async fn stdio_preparation(dir: &tempfile::TempDir, test: &str) -> StdioPreparat
         policy: crate::tools::types::ToolInvocationPolicy::default(),
         permissions: None,
         tool_permissions: Default::default(),
-    
-};
+    };
     let pause = Arc::new(ConnectOwnershipPause::default());
     let _release = ReleasePause(pause.clone());
     coordinator.install_connect_ownership_pause(pause.clone());

@@ -282,7 +282,8 @@ async fn t02_later_tool_batch_and_model_step_keep_admitted_registry_policy() {
             ConfigMutation::NativePolicy {
                 id: crate::local_runtime::configuration::settings::NativeTool::Read,
                 authored: Some(
-                    serde_json::from_value(serde_json::json!({"execution":"background_only"})).unwrap(),
+                    serde_json::from_value(serde_json::json!({"execution":"background_only"}))
+                        .unwrap(),
                 ),
             },
         )

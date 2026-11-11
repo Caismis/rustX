@@ -27,8 +27,7 @@ use rustx::durable::CanonicalStore;
 
 use rustx::tools::todo::{TodoSnapshot, TodoStatus};
 use rustx::tools::types::{
-    ToolExecutionPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolOrigin, ToolResultContent,
+    ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolOrigin, ToolResultContent,
 };
 
 fn summary(result: &ToolExecutionResult) -> String {
@@ -84,7 +83,7 @@ fn todo_is_registered_as_a_fixed_policy_builtin() {
         ToolExecutionPolicy::ForegroundOnly,
         "one list cannot be mutated by a detached execution"
     );
-    
+
     assert_eq!(definition.input_schema["type"], "object");
     assert_eq!(definition.input_schema["additionalProperties"], false);
     assert_eq!(

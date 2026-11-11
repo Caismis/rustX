@@ -266,9 +266,6 @@ mod tests {
             None,
         );
         f.bash = Some(BashReadonlyClass::Readonly);
-        assert_eq!(
-            evaluate_permission(&f).kind,
-            PermissionDecisionKind::Allow
-        );
+        assert_eq!(evaluate_permission(&f).kind, PermissionDecisionKind::Allow);
     }
 }

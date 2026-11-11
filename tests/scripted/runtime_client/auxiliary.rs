@@ -530,7 +530,7 @@ async fn btw_runs_while_the_primary_tool_is_physically_parked_without_changing_i
         common,
         support::fake::{FakeTool, ScriptedCall, await_started, success_result, tool_call_events},
     };
-    use crate::tools::types::{ToolExecutionPolicy};
+    use crate::tools::types::ToolExecutionPolicy;
     let call = ScriptedCall {
         id: "primary-call",
         tool_id: "primary-tool",
@@ -547,7 +547,8 @@ async fn btw_runs_while_the_primary_tool_is_physically_parked_without_changing_i
         common::tool_policies(
             "primary_tool",
             "primary-tool",
-            ToolExecutionPolicy::ForegroundOnly),
+            ToolExecutionPolicy::ForegroundOnly,
+        ),
         success_result("Primary Tool complete"),
     );
     let mut started = tool.started();

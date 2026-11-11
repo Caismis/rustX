@@ -211,9 +211,7 @@ async fn review_with_auxiliary(
     let prompt = build_prompt(view, matrix_reason);
     let request = match AuxiliaryOutputFormat::JsonSchema(review_schema()).prepare(ModelRequest {
         response_schema: None,
-        response_byte_limit: Some(
-            crate::model::adapter::response_budget::AUXILIARY_RESPONSE_BYTES,
-        ),
+        response_byte_limit: Some(crate::model::adapter::response_budget::AUXILIARY_RESPONSE_BYTES),
         images: Default::default(),
         invocation: reviewer.invocation.invocation_config(),
         messages: vec![crate::model::ModelInputMessage::RequestOnly(
@@ -247,8 +245,7 @@ async fn review_with_auxiliary(
         purpose: AuxiliaryAttribution::new("permission_review").expect("native attribution"),
         trigger: AuxiliaryAttribution::new("pre_tool_policy").expect("native attribution"),
         business_source: AuxiliaryBusinessSource::Business {
-            namespace: AuxiliaryAttribution::new("permission_review")
-                .expect("native namespace"),
+            namespace: AuxiliaryAttribution::new("permission_review").expect("native namespace"),
             reference: AuxiliaryAttribution::new(reference).expect("bounded reference"),
         },
         input: AuxiliaryInputEvidence::Temporary,
@@ -360,32 +357,34 @@ pub(crate) fn decision_after_review(
     use crate::agent::lifecycle::PreToolDecision;
     match verdict {
         PermissionReviewVerdict::Allow { .. } => PreToolDecision::Allow,
-        PermissionReviewVerdict::Deny { explanation } => match ElevationEscalation::from(elevation_reason)
-        {
-            ElevationEscalation::Present(reason) => PreToolDecision::Ask {
-                reason: format!(
-                    "Auxiliary permission review denied this call ({explanation}); human approval requested: {reason}"
-                ),
-            },
-            ElevationEscalation::Absent => PreToolDecision::Deny {
-                reason: format!(
-                    "{explanation}; provide elevation_reason to request human approval after review denial"
-                ),
-            },
-        },
-        PermissionReviewVerdict::Failed { explanation } => match ElevationEscalation::from(elevation_reason)
-        {
-            ElevationEscalation::Present(reason) => PreToolDecision::Ask {
-                reason: format!(
-                    "Auxiliary permission reviewer failed ({explanation}); human approval requested: {reason}"
-                ),
-            },
-            ElevationEscalation::Absent => PreToolDecision::Deny {
-                reason: format!(
-                    "Auxiliary permission review failed closed ({explanation}); provide elevation_reason to request human approval"
-                ),
-            },
-        },
+        PermissionReviewVerdict::Deny { explanation } => {
+            match ElevationEscalation::from(elevation_reason) {
+                ElevationEscalation::Present(reason) => PreToolDecision::Ask {
+                    reason: format!(
+                        "Auxiliary permission review denied this call ({explanation}); human approval requested: {reason}"
+                    ),
+                },
+                ElevationEscalation::Absent => PreToolDecision::Deny {
+                    reason: format!(
+                        "{explanation}; provide elevation_reason to request human approval after review denial"
+                    ),
+                },
+            }
+        }
+        PermissionReviewVerdict::Failed { explanation } => {
+            match ElevationEscalation::from(elevation_reason) {
+                ElevationEscalation::Present(reason) => PreToolDecision::Ask {
+                    reason: format!(
+                        "Auxiliary permission reviewer failed ({explanation}); human approval requested: {reason}"
+                    ),
+                },
+                ElevationEscalation::Absent => PreToolDecision::Deny {
+                    reason: format!(
+                        "Auxiliary permission review failed closed ({explanation}); provide elevation_reason to request human approval"
+                    ),
+                },
+            }
+        }
     }
 }
 
@@ -422,9 +421,7 @@ mod tests {
     #[test]
     fn reject_prose_and_unknown_decision() {
         assert!(accept_permission_review("allow it").is_err());
-        assert!(
-            accept_permission_review(r#"{"decision":"maybe","explanation":"x"}"#).is_err()
-        );
+        assert!(accept_permission_review(r#"{"decision":"maybe","explanation":"x"}"#).is_err());
     }
 
     #[test]
@@ -435,7 +432,10 @@ mod tests {
             },
             Some("need write"),
         );
-        assert!(matches!(decision, crate::agent::lifecycle::PreToolDecision::Ask { .. }));
+        assert!(matches!(
+            decision,
+            crate::agent::lifecycle::PreToolDecision::Ask { .. }
+        ));
     }
 
     #[test]
@@ -446,7 +446,9 @@ mod tests {
             },
             None,
         );
-        assert!(matches!(decision, crate::agent::lifecycle::PreToolDecision::Deny { .. }));
+        assert!(matches!(
+            decision,
+            crate::agent::lifecycle::PreToolDecision::Deny { .. }
+        ));
     }
-
 }

@@ -526,8 +526,7 @@ fn scheduled_workflow_source_identity_excludes_native_credential_values() {
         policy: ToolInvocationPolicy::default(),
         permissions: None,
         tool_permissions: Default::default(),
-    
-};
+    };
     first
         .credentials
         .capture(crate::credentials::CredentialSnapshot::new([(

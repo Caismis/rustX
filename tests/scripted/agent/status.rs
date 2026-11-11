@@ -36,11 +36,11 @@ use rustx::runtime::inbound::InitialTurnTrigger;
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::todo::TODO_TOOL_ID;
+use rustx::tools::types::ToolExecutionPolicy;
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, fake_model, success_result,
     tool_call_events,
 };
-use rustx::tools::types::{ToolExecutionPolicy};
 
 #[derive(Debug, Clone, Copy)]
 struct FixedStatusClock;
@@ -451,17 +451,11 @@ async fn sibling_completion_order_cannot_split_post_tool_opportunity() {
         call_b.clone(),
     ]));
     let (tool_a, release_a) = FakeTool::parking(
-        common::tool_policies(
-            "a",
-            "tool-a",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("a", "tool-a", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let (tool_b, release_b) = FakeTool::parking(
-        common::tool_policies(
-            "b",
-            "tool-b",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("b", "tool-b", ToolExecutionPolicy::ForegroundOnly),
         success_result("b"),
     );
     let mut started_a = tool_a.started();
@@ -531,7 +525,8 @@ async fn fresh_inbound_and_post_tool_batch_are_one_combined_set() {
         common::tool_policies(
             "combined",
             "tool-combined",
-            ToolExecutionPolicy::ForegroundOnly),
+            ToolExecutionPolicy::ForegroundOnly,
+        ),
         success_result("combined"),
     );
     let mut tools = ToolRegistry::new();
@@ -674,7 +669,8 @@ async fn todo_cooldown_uses_later_primary_starts_and_repeats_at_four() {
         common::tool_policies(
             "progress-noop",
             "tool-progress-noop",
-            ToolExecutionPolicy::ForegroundOnly),
+            ToolExecutionPolicy::ForegroundOnly,
+        ),
         success_result("noop"),
     );
     let mut tools = fixture.ordinary_registry.clone();

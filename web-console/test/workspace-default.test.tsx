@@ -17,7 +17,7 @@ async function fixture({ held = false, current = false, history = true, preserve
   server.workspaceHost.classifyLocations = async paths => { await classify.promise; return paths.map(cwd => ({ authorized: true, workspaceId: cwd === '/workspace/B' ? 'workspace-b' : 'workspace-a' } satisfies SessionLocation)); };
   server.workspaceHost.resolveWorkspace = async id => ({ cwd: id === 'workspace-b' ? '/workspace/B' : '/workspace/A' });
   const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
-  server.workspaceHost.configureWorkspace = async id => ({ kind: 'read', projection: { ...cfg3Source(), target: { kind: 'workspace', directory: id === 'workspace-b' ? '/workspace/B' : '/workspace/A' }, prospective_approval_mode: 'policy',
+  server.workspaceHost.configureWorkspace = async id => ({ kind: 'read', projection: { ...cfg3Source(), target: { kind: 'workspace', directory: id === 'workspace-b' ? '/workspace/B' : '/workspace/A' }, prospective_approval_mode: 'plan',
     session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [{ model: 'fixture/native', protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] }] } } } });
   if (current) { await server.attached('A'); localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] })); } else await server.connect();
   const ui = render(<App client={server.client} workspaceHost={server.workspaceHost}/>);

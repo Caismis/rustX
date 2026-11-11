@@ -637,11 +637,10 @@ impl HttpFixture {
                 headers,
             },
             policy: crate::tools::types::ToolInvocationPolicy::default(),
-        permissions: None,
-        tool_permissions: Default::default(),
+            permissions: None,
+            tool_permissions: Default::default(),
         }
-    
-}
+    }
 
     /// Cancels the server and joins its task.
     pub async fn shutdown(self) {

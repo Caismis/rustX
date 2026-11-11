@@ -205,8 +205,7 @@ impl Fixture {
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
                 permissions: None,
                 tool_permissions: Default::default(),
-            
-},
+            },
             cancellation,
             server,
         }
@@ -948,8 +947,7 @@ async fn cancelled_catalog_reconnect_retains_ownership_until_physical_settlement
         policy: crate::tools::types::ToolInvocationPolicy::default(),
         permissions: None,
         tool_permissions: Default::default(),
-    
-};
+    };
     let generation = coordinator
         .inner
         .mcp_owner

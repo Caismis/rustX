@@ -524,8 +524,7 @@ pub fn bind_accepted_continuation_source(
 /// One canonical tool definition used by adapter tests.
 pub fn tool(name: &str, id: &str) -> rustx::tools::types::ToolDefinition {
     use rustx::runtime::identity::ToolId;
-    use rustx::tools::types::{
-        ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
+    use rustx::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
     ToolDefinition {
         id: ToolId::new(id),
         name: name.to_owned(),
@@ -1316,9 +1315,7 @@ pub fn model_tool(name: &str, id: &str) -> rustx::tools::types::ModelToolDefinit
 pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::ModelToolDefinition {
     use rustx::runtime::identity::ToolId;
     use rustx::tools::compile_model_definition;
-    use rustx::tools::types::{
-        ToolDefinition, ToolExecutionPolicy, ToolOrigin,
-        ToolReplayPolicy};
+    use rustx::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
     compile_model_definition(&ToolDefinition {
         id: ToolId::new(id),
         name: name.to_owned(),

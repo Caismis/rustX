@@ -470,11 +470,8 @@ impl PreToolPolicy for ConfiguredApprovalPolicy {
         view: &'a PreToolView<'a>,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
         Box::pin(async move {
-            let mutation_target = mutation_target_from_arguments(
-                view.tool_name,
-                view.arguments,
-                view.workspace_root,
-            );
+            let mutation_target =
+                mutation_target_from_arguments(view.tool_name, view.arguments, view.workspace_root);
             let bash_command = view
                 .arguments
                 .get("command")
@@ -490,9 +487,7 @@ impl PreToolPolicy for ConfiguredApprovalPolicy {
                 mode: self.mode,
                 kind,
                 resource: view.resource_permission,
-                elevation_reason: view
-                    .elevation_reason
-                    .and_then(ElevationReason::new),
+                elevation_reason: view.elevation_reason.and_then(ElevationReason::new),
                 bash,
             };
             let decision = evaluate_permission(&facts);
@@ -509,8 +504,9 @@ impl PreToolPolicy for ConfiguredApprovalPolicy {
                         Some(reviewer) => reviewer.review(view, &decision.reason).await,
                         None => {
                             crate::runtime::permission::review::PermissionReviewVerdict::Failed {
-                                explanation: "Auxiliary permission reviewer is not bound on this execution"
-                                    .into(),
+                                explanation:
+                                    "Auxiliary permission reviewer is not bound on this execution"
+                                        .into(),
                             }
                         }
                     };
@@ -813,6 +809,7 @@ impl AttemptLifecycle {
     /// Applies the runtime's effective approval mode to the built-in
     /// pre-tool policy. Test/custom policies can still replace this seam
     /// explicitly with [`Self::with_pre_tool_policy`].
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn with_approval_mode(mut self, mode: ApprovalMode) -> Self {
         self.approval_mode = mode;
         self.pre_tool = Arc::new(ConfiguredApprovalPolicy::new(mode));

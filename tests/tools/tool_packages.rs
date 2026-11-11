@@ -11,8 +11,8 @@ use rustx::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
 };
 use rustx::tools::types::{
-    ToolDefinition, ToolExecutionPolicy,
-    ToolExecutionResult, ToolInvocation, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolInvocation, ToolInvocationPolicy,
+    ToolOrigin, ToolReplayPolicy,
 };
 
 struct NoopExecutor;

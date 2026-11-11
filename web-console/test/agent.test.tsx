@@ -40,7 +40,7 @@ function Control() {
  const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
  return <AgentControls client={server.client} view={state.views.A}/>;
 }
-const running = (): RuntimeClientSnapshot => ({ ...snapshot(), attempt: { attempt_id: 'native-attempt', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } } });
+const running = (): RuntimeClientSnapshot => ({ ...snapshot(), attempt: { attempt_id: 'native-attempt', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'plan' } } });
 function modelFixture() {
  const model = cfg3Effective().effective_model;
  model.configured.model = model.effective!.model = 'exact/model';

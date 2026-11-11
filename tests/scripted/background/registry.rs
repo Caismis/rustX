@@ -43,8 +43,8 @@ use rustx::tools::executor::{
 };
 use rustx::tools::runtime::ConversationToolRuntime;
 use rustx::tools::types::{
-    ToolCall, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
-    ToolInvocation, ToolInvocationMode, ToolProgress, ToolResultContent,
+    ToolCall, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolInvocationMode, ToolProgress, ToolResultContent,
 };
 use rustx::tools::workspace::Workspace;
 use support::fake::{
@@ -902,10 +902,7 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
     // The background executor parks until the test releases it; the
     // attempt must never wait for the detached terminal.
     let (tool, release_bg) = FakeTool::parking(
-        common::tool_policies(
-            "bg",
-            "tool-bg",
-            ToolExecutionPolicy::ModelSelectable),
+        common::tool_policies("bg", "tool-bg", ToolExecutionPolicy::ModelSelectable),
         success_result("bg"),
     );
     let mut tools = ToolRegistry::new();
@@ -1022,17 +1019,11 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
         ],
     ]);
     let (tool_fg, release_fg) = FakeTool::parking(
-        common::tool_policies(
-            "fg",
-            "tool-fg",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("fg", "tool-fg", ToolExecutionPolicy::ForegroundOnly),
         success_result("fg"),
     );
     let (tool_bg, release_bg) = FakeTool::parking(
-        common::tool_policies(
-            "bg",
-            "tool-bg",
-            ToolExecutionPolicy::ModelSelectable),
+        common::tool_policies("bg", "tool-bg", ToolExecutionPolicy::ModelSelectable),
         success_result("bg"),
     );
     let mut bg_started = tool_bg.started();
@@ -1429,17 +1420,11 @@ async fn assert_terminal_inbound_status(reverse_order: bool) {
         ],
     ]);
     let (tool_b1, release_b1) = FakeTool::parking(
-        common::tool_policies(
-            "b1",
-            "tool-b1",
-            ToolExecutionPolicy::ModelSelectable),
+        common::tool_policies("b1", "tool-b1", ToolExecutionPolicy::ModelSelectable),
         success_result("b1"),
     );
     let (tool_b2, _never_released) = FakeTool::parking(
-        common::tool_policies(
-            "b2",
-            "tool-b2",
-            ToolExecutionPolicy::ModelSelectable),
+        common::tool_policies("b2", "tool-b2", ToolExecutionPolicy::ModelSelectable),
         success_result("b2"),
     );
     let mut started_b1 = tool_b1.started();
@@ -1608,10 +1593,7 @@ async fn foreground_tool_continuation_has_no_agent_status() {
         ],
     ]);
     let tool = FakeTool::new(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("ok"),
     );
     let mut tools = ToolRegistry::new();

@@ -18,7 +18,7 @@
               },
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
-              "effective_approval_mode": "policy",
+              "effective_approval_mode": "plan",
               "messages": [],
               "message_descriptors": [],
               "publication_settlements": [],
@@ -763,7 +763,7 @@
               },
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
-              "effective_approval_mode": "policy",
+              "effective_approval_mode": "plan",
               "messages": [
                 {
                   "role": "user",
@@ -1211,7 +1211,7 @@
               },
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
-              "effective_approval_mode": "policy",
+              "effective_approval_mode": "plan",
               "messages": [
                 {
                   "role": "user",
@@ -2101,7 +2101,7 @@
               },
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
-              "effective_approval_mode": "policy",
+              "effective_approval_mode": "plan",
               "messages": [
                 {
                   "role": "user",
@@ -2623,7 +2623,7 @@
               },
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
-              "effective_approval_mode": "policy",
+              "effective_approval_mode": "plan",
               "messages": [],
               "message_descriptors": [],
               "publication_settlements": [],
@@ -2998,7 +2998,7 @@
                       },
                       "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
                       "shutting_down": false,
-                      "effective_approval_mode": "policy",
+                      "effective_approval_mode": "plan",
                       "messages": [
                         {
                           "role": "user",
@@ -3563,7 +3563,7 @@
               },
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
-              "effective_approval_mode": "policy",
+              "effective_approval_mode": "plan",
               "messages": [
                 {
                   "role": "user",
@@ -4085,7 +4085,7 @@
               },
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
-              "effective_approval_mode": "policy",
+              "effective_approval_mode": "plan",
               "messages": [
                 {
                   "role": "assistant",
@@ -5585,7 +5585,7 @@
               },
               "conversation_id": "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
               "shutting_down": false,
-              "effective_approval_mode": "policy",
+              "effective_approval_mode": "plan",
               "messages": [
                 {
                   "role": "assistant",

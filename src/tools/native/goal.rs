@@ -5,9 +5,8 @@ use crate::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistration,
 };
 use crate::tools::types::{
-    ToolDefinition, ToolExecutionPolicy,
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
-    ToolResultContent,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolOrigin, ToolReplayPolicy, ToolResultContent,
 };
 use serde::Deserialize;
 use std::sync::Arc;

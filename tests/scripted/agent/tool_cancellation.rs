@@ -30,6 +30,7 @@ use rustx::tools::ToolProgressCapability;
 use rustx::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
 };
+use rustx::tools::types::ToolExecutionPolicy;
 use rustx::tools::types::{
     ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
 };
@@ -38,7 +39,6 @@ use support::fake::{
     tool_call_events,
 };
 use tokio::sync::watch;
-use rustx::tools::types::{ToolExecutionPolicy};
 
 fn request(model: &Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {
@@ -855,7 +855,8 @@ async fn issue136_mixed_batch_preserves_order_and_phases() {
         common::tool_policies(
             "b",
             "tool-b",
-            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly),
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+        ),
         success_result("B not complete"),
     );
     let b_calls = tool_b.calls();
@@ -864,7 +865,8 @@ async fn issue136_mixed_batch_preserves_order_and_phases() {
         common::tool_policies(
             "c",
             "tool-c",
-            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly),
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+        ),
         success_result("C must not start"),
     );
     let c_calls = tool_c.calls();

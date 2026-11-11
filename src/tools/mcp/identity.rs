@@ -104,13 +104,7 @@ pub fn mcp_tool_identity(
     input_schema: &serde_json::Value,
     execution: ToolExecutionPolicy,
 ) -> SourceToolIdentity {
-    let frame = identity_frame(
-        server_id,
-        name,
-        description,
-        input_schema,
-        execution,
-    );
+    let frame = identity_frame(server_id, name, description, input_schema, execution);
     let digest = sha2::Sha256::digest(&frame);
     let mut hex = String::with_capacity(71);
     hex.push_str("sha256:");
@@ -174,8 +168,6 @@ const fn execution_token(policy: ToolExecutionPolicy) -> &'static str {
         ToolExecutionPolicy::ModelSelectable => "execution=model_selectable",
     }
 }
-
-
 
 /// Serializes one JSON value into the rustX canonical form.
 ///

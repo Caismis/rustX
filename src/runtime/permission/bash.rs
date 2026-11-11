@@ -69,7 +69,10 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
             reason: "redirects are not proven read-only".to_owned(),
         };
     }
-    if command.contains('|') || command.contains("&&") || command.contains("||") || command.contains(';')
+    if command.contains('|')
+        || command.contains("&&")
+        || command.contains("||")
+        || command.contains(';')
     {
         // Pipelines/chains require every member to be proven; until the AST
         // walker lands, treat them as unproven rather than partially trusting
@@ -93,9 +96,9 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
 
     match executable {
         "ls" | "pwd" | "echo" | "printf" | "true" | "false" | "test" | "[" | "cat" | "head"
-        | "tail" | "wc" | "stat" | "file" | "which" | "type" | "basename" | "dirname" | "realpath"
-        | "readlink" | "uname" | "date" | "id" | "whoami" | "env" | "printenv" | "grep" | "rg"
-        | "find" | "fd" | "jq" | "yq" | "sleep" => {
+        | "tail" | "wc" | "stat" | "file" | "which" | "type" | "basename" | "dirname"
+        | "realpath" | "readlink" | "uname" | "date" | "id" | "whoami" | "env" | "printenv"
+        | "grep" | "rg" | "find" | "fd" | "jq" | "yq" | "sleep" => {
             if executable == "find" && tokens.any(|token| is_find_write_option(token)) {
                 return BashReadonlyClass::Unproven {
                     reason: "find write/action options are not read-only".to_owned(),
@@ -114,7 +117,9 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
         }
         "git" => classify_git(tokens.collect::<Vec<_>>().as_slice()),
         _ => BashReadonlyClass::Unproven {
-            reason: format!("executable `{executable}` is not on the conservative read-only allowlist"),
+            reason: format!(
+                "executable `{executable}` is not on the conservative read-only allowlist"
+            ),
         },
     }
 }
@@ -158,13 +163,12 @@ fn classify_git(args: &[&str]) -> BashReadonlyClass {
         let rest = &args[index + 1..];
         return match arg {
             "status" | "log" | "show" | "diff" | "ls-files" | "ls-tree" | "rev-parse"
-            | "describe" | "blame" | "shortlog" | "version" | "help" => {
-                BashReadonlyClass::Readonly
-            }
+            | "describe" | "blame" | "shortlog" | "version" | "help" => BashReadonlyClass::Readonly,
             "config" => {
-                if rest.iter().any(|a| {
-                    matches!(*a, "--list" | "-l" | "--get" | "--get-all" | "--get-regexp")
-                }) {
+                if rest
+                    .iter()
+                    .any(|a| matches!(*a, "--list" | "-l" | "--get" | "--get-all" | "--get-regexp"))
+                {
                     BashReadonlyClass::Readonly
                 } else {
                     BashReadonlyClass::Unproven {
@@ -177,13 +181,7 @@ fn classify_git(args: &[&str]) -> BashReadonlyClass {
                 if rest.iter().any(|a| {
                     matches!(
                         *a,
-                        "-d" | "-D"
-                            | "--delete"
-                            | "add"
-                            | "rename"
-                            | "set-url"
-                            | "-m"
-                            | "--move"
+                        "-d" | "-D" | "--delete" | "add" | "rename" | "set-url" | "-m" | "--move"
                     )
                 }) {
                     BashReadonlyClass::Unproven {
@@ -209,7 +207,13 @@ mod tests {
 
     #[test]
     fn allows_simple_readonly_commands() {
-        for command in ["ls -la", "pwd", "git status", "git log --oneline", "cat README.md"] {
+        for command in [
+            "ls -la",
+            "pwd",
+            "git status",
+            "git log --oneline",
+            "cat README.md",
+        ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
                 matches!(analysis.class, BashReadonlyClass::Readonly),
@@ -221,7 +225,13 @@ mod tests {
 
     #[test]
     fn rejects_writes_and_unknowns() {
-        for command in ["rm -rf /", "echo hi > file", "ls | rm", "curl http://x", "git commit -am x"] {
+        for command in [
+            "rm -rf /",
+            "echo hi > file",
+            "ls | rm",
+            "curl http://x",
+            "git commit -am x",
+        ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
                 matches!(analysis.class, BashReadonlyClass::Unproven { .. }),

@@ -9,7 +9,7 @@ it("CFG3 reconnect reconstructs published and admitted generations without repla
   const native = snapshot({
     model: sessionModel("ses_5f9678b9-a001-7a5a-ba04-f2df4d59b899"),
     resources: { inspection: { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] }, revision: "8", context_files: [], agent_profile: false },
-    attempt: attemptView({ model: attemptModel("admitted-model"), execution_settings: { resource_revision: "7", approval_mode: "policy" } }),
+    attempt: attemptView({ model: attemptModel("admitted-model"), execution_settings: { resource_revision: "7", approval_mode: "plan" } }),
     effective_plugins: { goal: null, todo: {}, agent_status: null },
   });
   const live = replaceFromSnapshot(native, runtimeCursor(50));

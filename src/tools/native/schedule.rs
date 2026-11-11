@@ -2,9 +2,8 @@
 use super::registration::{NativeToolRegistration, input_schema};
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
-    ToolDefinition, ToolExecutionPolicy,
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
-    ToolResultContent,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolOrigin, ToolReplayPolicy, ToolResultContent,
 };
 use serde::Deserialize;
 use std::sync::Arc;

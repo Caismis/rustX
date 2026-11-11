@@ -1116,11 +1116,10 @@ impl PreparedPythonPackage {
                 environment,
             },
             policy: ToolInvocationPolicy::default(),
-        permissions: None,
-        tool_permissions: Default::default(),
+            permissions: None,
+            tool_permissions: Default::default(),
         }
-    
-}
+    }
 }
 
 /// The prepared virtualenv's interpreter: the launch executable of a

@@ -546,7 +546,9 @@ fn is_flat_decoratable_object_root(schema: &serde_json::Value) -> bool {
         return false;
     };
     root.get("type").and_then(serde_json::Value::as_str) == Some("object")
-        && root.keys().all(|keyword| is_decoratable_root_keyword(keyword))
+        && root
+            .keys()
+            .all(|keyword| is_decoratable_root_keyword(keyword))
 }
 
 fn root_claims_property(schema: &serde_json::Value, name: &str) -> bool {
@@ -775,12 +777,8 @@ pub fn resolve_invocation_metadata(
 ) -> Result<(ToolInvocationMode, Option<String>, serde_json::Value), SchemaError> {
     reject_reserved_invocation_properties(arguments)?;
     let (mode, mut stripped) = match policy {
-        ToolExecutionPolicy::ForegroundOnly => {
-            (ToolInvocationMode::Foreground, arguments.clone())
-        }
-        ToolExecutionPolicy::BackgroundOnly => {
-            (ToolInvocationMode::Background, arguments.clone())
-        }
+        ToolExecutionPolicy::ForegroundOnly => (ToolInvocationMode::Foreground, arguments.clone()),
+        ToolExecutionPolicy::BackgroundOnly => (ToolInvocationMode::Background, arguments.clone()),
         ToolExecutionPolicy::ModelSelectable => {
             let Some(object) = arguments.as_object() else {
                 return Err(SchemaError::MissingExecutionMode);
@@ -877,8 +875,7 @@ mod tests {
     };
     use crate::runtime::identity::ToolId;
     use crate::tools::types::{
-        ToolDefinition, ToolExecutionPolicy, ToolInvocationMode, ToolOrigin,
-        ToolReplayPolicy,
+        ToolDefinition, ToolExecutionPolicy, ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
     };
     use serde_json::json;
 

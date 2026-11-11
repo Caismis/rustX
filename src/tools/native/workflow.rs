@@ -13,8 +13,7 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExec
 use crate::tools::native::registration::NativeToolRegistration;
 use crate::tools::native::support::{failed_result, success_json};
 use crate::tools::types::{
-    ToolDefinition, ToolExecutionPolicy, ToolInvocation,
-    ToolOrigin, ToolReplayPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 
 /// Only enabled programs can contribute executable Workflow registrations.

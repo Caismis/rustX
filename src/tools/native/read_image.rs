@@ -25,7 +25,7 @@ struct Input {
 }
 
 pub(super) fn definition() -> ToolDefinition {
-    use crate::tools::types::{ToolExecutionPolicy};
+    use crate::tools::types::ToolExecutionPolicy;
     native_definition::<Input>(
         "tool-read-image",
         "read_image",

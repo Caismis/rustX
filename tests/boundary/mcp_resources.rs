@@ -58,8 +58,7 @@ async fn resource_body_enters_context_only_after_one_committed_normal_tool_resul
                 ),
             ]),
         },
-    
-};
+    };
     let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
         conversation_id: fixture.runtime.conversation_id().clone(),
         workspace: fixture.runtime.workspace().clone(),

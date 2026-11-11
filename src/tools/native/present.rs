@@ -3,8 +3,7 @@ use super::registration::{NativeToolRegistration, native_definition};
 use super::support::{cancelled_result, failed_result, success_text};
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
-    ToolDefinition, ToolExecutionPolicy, ToolInvocation,
-    ToolInvocationPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolInvocation, ToolInvocationPolicy,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
