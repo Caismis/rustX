@@ -346,7 +346,7 @@ fn s1_mcp_literal_environment_and_headers_stay_redacted() {
         cwd: None,
 
         permissions: None,
-        tools: Default::default(),
+        tools: std::collections::BTreeMap::new(),
     };
     let rejected = manager
         .write_source_settings(

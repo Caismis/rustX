@@ -204,7 +204,7 @@ impl Fixture {
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
                 permissions: None,
-                tool_permissions: Default::default(),
+                tool_permissions: std::collections::BTreeMap::new(),
             },
             cancellation,
             server,
@@ -946,7 +946,7 @@ async fn cancelled_catalog_reconnect_retains_ownership_until_physical_settlement
         },
         policy: crate::tools::types::ToolInvocationPolicy::default(),
         permissions: None,
-        tool_permissions: Default::default(),
+        tool_permissions: std::collections::BTreeMap::new(),
     };
     let generation = coordinator
         .inner

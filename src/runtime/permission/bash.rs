@@ -99,7 +99,7 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
         | "tail" | "wc" | "stat" | "file" | "which" | "type" | "basename" | "dirname"
         | "realpath" | "readlink" | "uname" | "date" | "id" | "whoami" | "env" | "printenv"
         | "grep" | "rg" | "find" | "fd" | "jq" | "yq" | "sleep" => {
-            if executable == "find" && tokens.any(|token| is_find_write_option(token)) {
+            if executable == "find" && tokens.any(is_find_write_option) {
                 return BashReadonlyClass::Unproven {
                     reason: "find write/action options are not read-only".to_owned(),
                 };

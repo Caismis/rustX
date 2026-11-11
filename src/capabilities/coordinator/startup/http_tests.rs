@@ -129,7 +129,7 @@ impl HttpFixture {
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
                 permissions: None,
-                tool_permissions: Default::default(),
+                tool_permissions: std::collections::BTreeMap::new(),
             },
             server,
             shutdown,

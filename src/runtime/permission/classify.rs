@@ -41,13 +41,12 @@ pub fn classify_tool_kind(
             }
         }
         "bash" => {
-            let class = hints
-                .bash_command
-                .map(analyze_bash_readonly)
-                .map(|analysis| analysis.class)
-                .unwrap_or(BashReadonlyClass::Unproven {
+            let class = hints.bash_command.map_or(
+                BashReadonlyClass::Unproven {
                     reason: "missing Bash command".to_owned(),
-                });
+                },
+                |command| analyze_bash_readonly(command).class,
+            );
             let kind = match &class {
                 BashReadonlyClass::Readonly => BuiltinToolKind::BashReadonly,
                 BashReadonlyClass::Unproven { .. } => BuiltinToolKind::BashOther,
@@ -65,7 +64,6 @@ pub fn classify_tool_kind(
         "job_list" | "job_status" | "job_wait" => (BuiltinToolKind::JobObserve, None),
         "job_cancel" | "interrupt_agent" => (BuiltinToolKind::JobControl, None),
         "list_agents" | "wait_agent" => (BuiltinToolKind::AgentObserve, None),
-        "subagent" | "send_message" | "workflow" => (BuiltinToolKind::ExternalOrDelegated, None),
         _ => (BuiltinToolKind::ExternalOrDelegated, None),
     }
 }

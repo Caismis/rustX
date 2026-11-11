@@ -458,17 +458,15 @@ impl AgentExecution<'_> {
                     // Review waiters without cancel_pending_async tearing down
                     // interactions already owned by started sibling tools.
                     let mut auth_cancels = std::collections::BTreeMap::new();
-                    for slot_index in index..end {
-                        if slots[slot_index].result.is_some() {
+                    for (slot_index, slot) in slots.iter_mut().enumerate().take(end).skip(index) {
+                        if slot.result.is_some() {
                             continue;
                         }
                         if self.cancellation.is_cancelled() {
-                            slots[slot_index].result =
-                                Some(cancelled_result(self.cancellation.reason()));
+                            slot.result = Some(cancelled_result(self.cancellation.reason()));
                             continue;
                         }
-                        let facts =
-                            ParallelAuthFacts::from_execution(slot_index, self, &slots[slot_index]);
+                        let facts = ParallelAuthFacts::from_execution(slot_index, self, slot);
                         let lifecycle = self.lifecycle.clone();
                         let (auth_trigger, cancellation) =
                             self.cancellation.execution_cancellation().child_execution();
@@ -569,18 +567,12 @@ impl AgentExecution<'_> {
                             if slots[slot_index].result.is_some() {
                                 continue;
                             }
-                            match outcome {
-                                Ok(Some(result)) => {
-                                    slots[slot_index].result = Some(result);
-                                }
-                                Ok(None) | Err(_) => {
-                                    // Allowed-but-not-started and aborted Ask /
-                                    // Review waiters leave the slot unset so the
-                                    // group-error / cancellation fill owns the
-                                    // canonical text. Do not claim sibling
-                                    // execution started unless an executor did.
-                                }
+                            if let Ok(Some(result)) = outcome {
+                                slots[slot_index].result = Some(result);
                             }
+                            // Allowed-but-not-started and aborted Ask / Review
+                            // waiters leave the slot unset so the group-error /
+                            // cancellation fill owns the canonical text.
                         }
                     }
                     drop(auth_futures);
@@ -671,9 +663,9 @@ impl AgentExecution<'_> {
                         ));
                     }
                 }
-                deferred_group_error.get_or_insert_with(|| {
-                    CanonicalCommitError::Interaction(InteractionFailure::ControlLost)
-                });
+                deferred_group_error.get_or_insert(CanonicalCommitError::Interaction(
+                    InteractionFailure::ControlLost,
+                ));
             } else {
                 return Err(CanonicalCommitError::Interaction(
                     InteractionFailure::ControlLost,

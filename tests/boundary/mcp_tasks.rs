@@ -202,7 +202,7 @@ impl Harness {
             },
             policy: ToolInvocationPolicy::default(),
             permissions: None,
-            tool_permissions: Default::default(),
+            tool_permissions: std::collections::BTreeMap::new(),
         };
         let workspace = Workspace::new(&workspace_root).expect("workspace");
         let runtime = McpServerRuntime::connect(

@@ -1901,7 +1901,7 @@ mod tests {
             },
             policy: crate::tools::types::ToolInvocationPolicy::default(),
             permissions: None,
-            tool_permissions: Default::default(),
+            tool_permissions: std::collections::BTreeMap::new(),
         };
         let configured: crate::tools::mcp::McpServerBindings =
             [(github.clone(), binding()), (unrelated.clone(), binding())]
@@ -1997,7 +1997,7 @@ mod tests {
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
                 permissions: None,
-                tool_permissions: Default::default(),
+                tool_permissions: std::collections::BTreeMap::new(),
             };
             let mut configured = [(server.clone(), binding.clone())].into();
             let frozen =
@@ -2742,10 +2742,10 @@ mod tests {
         model_selected.execution_policy = ToolExecutionPolicy::ModelSelectable;
         variants.push(spec_with_builtin(model_selected));
 
-        let mut parallel = base.clone();
+        let parallel = base.clone();
         variants.push(spec_with_builtin(parallel));
 
-        let mut gated = base.clone();
+        let gated = base.clone();
         variants.push(spec_with_builtin(gated));
 
         // `replay_policy` participates deliberately: it is the frozen
@@ -2884,7 +2884,7 @@ mod tests {
         );
 
         // A field the cross-process identity does cover moves both.
-        let mut gated = definition.clone();
+        let gated = definition.clone();
         assert_ne!(identity_of(&definition), identity_of(&gated));
         assert_ne!(
             spec_with(definition.clone()).profile_digest(),
@@ -2946,7 +2946,7 @@ mod tests {
             },
             policy: crate::tools::types::ToolInvocationPolicy::default(),
             permissions: None,
-            tool_permissions: Default::default(),
+            tool_permissions: std::collections::BTreeMap::new(),
         };
         let plane = |command: &str| {
             let mut spec = frozen_spec();

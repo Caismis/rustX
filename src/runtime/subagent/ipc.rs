@@ -1059,7 +1059,7 @@ mod tests {
                         },
                         policy: crate::tools::types::ToolInvocationPolicy::default(),
                         permissions: None,
-                        tool_permissions: Default::default(),
+                        tool_permissions: std::collections::BTreeMap::new(),
                     },
                 )]
                 .into_iter()

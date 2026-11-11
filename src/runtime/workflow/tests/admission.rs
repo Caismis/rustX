@@ -41,7 +41,7 @@ fn cfg274_admit_child(
             },
             policy: crate::tools::types::ToolInvocationPolicy::default(),
             permissions: None,
-            tool_permissions: Default::default(),
+            tool_permissions: std::collections::BTreeMap::new(),
         },
     )]
     .into();

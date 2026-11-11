@@ -113,6 +113,11 @@ struct ReviewAnswer {
 }
 
 /// Accepts only a complete JSON object `{decision, explanation}`.
+///
+/// # Errors
+///
+/// Returns a static diagnostic when the payload is not a JSON object, cannot be
+/// decoded, or uses a `decision` other than `allow` / `deny`.
 pub fn accept_permission_review(text: &str) -> Result<PermissionReviewVerdict, &'static str> {
     let trimmed = text.trim();
     if !trimmed.starts_with('{') {
@@ -196,6 +201,7 @@ arguments_json: {args}\n",
     )
 }
 
+#[allow(clippy::too_many_lines)]
 async fn review_with_auxiliary(
     reviewer: &AuxiliaryPermissionReviewer,
     view: &PreToolView<'_>,
@@ -241,7 +247,7 @@ async fn review_with_auxiliary(
     let request = match AuxiliaryOutputFormat::JsonSchema(review_schema()).prepare(ModelRequest {
         response_schema: None,
         response_byte_limit: Some(crate::model::adapter::response_budget::AUXILIARY_RESPONSE_BYTES),
-        images: Default::default(),
+        images: crate::model::images::ResolvedImages::new(),
         invocation: reviewer.invocation.invocation_config(),
         messages: vec![crate::model::ModelInputMessage::RequestOnly(
             crate::model::RequestOnlyModelContext::AuxiliaryQuestion { text: prompt },
@@ -303,7 +309,7 @@ async fn review_with_auxiliary(
         },
         selected_message_ids: Vec::new(),
     };
-    let consumer = Arc::new(ReviewConsumer::default());
+    let consumer = Arc::new(ReviewConsumer);
     let join = match reservation.with_consumer(consumer).submit(FrozenCall {
         start,
         request,
@@ -378,7 +384,7 @@ impl AuxiliaryConsumer for ReviewConsumer {
     fn settled(&self, _: &Result<ConfirmedExecution, ContextError>) {}
 }
 
-/// Maps a review verdict into Allow / Deny / Ask using elevation_reason.
+/// Maps a review verdict into Allow / Deny / Ask using `elevation_reason`.
 pub(crate) fn decision_after_review(
     verdict: PermissionReviewVerdict,
     elevation_reason: Option<&str>,

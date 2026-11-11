@@ -50,7 +50,7 @@ pub struct PermissionFacts {
 pub enum PermissionDecisionKind {
     /// Continue to the cancellation / tool-start frontier.
     Allow,
-    /// Hard or mode-default denial; settle a typed denied ToolResult.
+    /// Hard or mode-default denial; settle a typed denied `ToolResult`.
     Deny,
     /// Require Auxiliary permission review before continuing.
     Review,

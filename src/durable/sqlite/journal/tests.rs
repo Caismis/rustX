@@ -164,7 +164,7 @@ fn agent_authorities_reopen_from_private_capture_without_journal_secrets() {
             },
             policy: crate::tools::ToolInvocationPolicy::default(),
             permissions: None,
-            tool_permissions: Default::default(),
+            tool_permissions: std::collections::BTreeMap::new(),
         },
     );
     authority
@@ -182,7 +182,7 @@ fn agent_authorities_reopen_from_private_capture_without_journal_secrets() {
             },
             policy: crate::tools::ToolInvocationPolicy::default(),
             permissions: None,
-            tool_permissions: Default::default(),
+            tool_permissions: std::collections::BTreeMap::new(),
         },
     );
     let canaries = [

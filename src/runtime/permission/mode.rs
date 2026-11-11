@@ -27,7 +27,7 @@ pub enum ExecutionPermissionMode {
 }
 
 impl ExecutionPermissionMode {
-    /// Stable snake_case spelling used in TOML, protocol, and diagnostics.
+    /// Stable `snake_case` spelling used in TOML, protocol, and diagnostics.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {

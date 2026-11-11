@@ -34,7 +34,7 @@ async fn sibling_mcp_settlement_failures_aggregate_through_one_runtime_drain() {
             },
             policy: crate::tools::types::ToolInvocationPolicy::default(),
             permissions: None,
-            tool_permissions: Default::default(),
+            tool_permissions: std::collections::BTreeMap::new(),
         }
     };
     let alpha = crate::runtime::identity::McpServerId::new("sibling-alpha");

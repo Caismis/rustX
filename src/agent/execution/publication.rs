@@ -459,11 +459,11 @@ impl AgentExecution<'_> {
     }
 
     pub(super) fn emit(&mut self, event: RuntimeEvent) {
-        if let Err(error) = self.emit_shared(event) {
-            if self.durable_failure.is_none() {
-                self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
-                self.durable_failure = Some(error);
-            }
+        if let Err(error) = self.emit_shared(event)
+            && self.durable_failure.is_none()
+        {
+            self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
+            self.durable_failure = Some(error);
         }
     }
 

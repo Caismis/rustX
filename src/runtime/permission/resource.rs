@@ -26,7 +26,7 @@ pub enum ResourcePermissionValue {
 }
 
 impl ResourcePermissionValue {
-    /// Stable snake_case spelling.
+    /// Stable `snake_case` spelling.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {

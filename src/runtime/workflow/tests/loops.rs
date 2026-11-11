@@ -161,7 +161,7 @@ async fn run(
     input: Value,
 ) -> Result<Value, WorkflowRunError> {
     // Parallel rounds may call the Tool at once.
-    let mut tool = definition();
+    let tool = definition();
     let context = context_with_registration(
         plane,
         ToolRegistration::plain(tool, executor),

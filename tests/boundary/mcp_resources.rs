@@ -38,7 +38,7 @@ async fn resource_body_enters_context_only_after_one_committed_normal_tool_resul
         credentials: crate::credentials::SourceCredentials::default(),
         policy: crate::tools::types::ToolInvocationPolicy::default(),
         permissions: None,
-        tool_permissions: Default::default(),
+        tool_permissions: std::collections::BTreeMap::new(),
         transport: McpTransportConfig::Stdio {
             program: std::env::current_exe()
                 .unwrap()

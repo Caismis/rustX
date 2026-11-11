@@ -3073,7 +3073,7 @@ body
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
                 permissions: None,
-                tool_permissions: Default::default(),
+                tool_permissions: std::collections::BTreeMap::new(),
             };
             candidate
                 .resource_inputs
@@ -4181,7 +4181,7 @@ mod mcp_race_tests {
                     },
                     policy: crate::tools::types::ToolInvocationPolicy::default(),
                     permissions: None,
-                    tool_permissions: Default::default(),
+                    tool_permissions: std::collections::BTreeMap::new(),
                 },
             )]),
             base_environment: ToolEnvironment::new(),
@@ -4229,7 +4229,7 @@ mod mcp_race_tests {
                         },
                         policy: crate::tools::types::ToolInvocationPolicy::default(),
                         permissions: None,
-                        tool_permissions: Default::default(),
+                        tool_permissions: std::collections::BTreeMap::new(),
                     },
                 )
             })

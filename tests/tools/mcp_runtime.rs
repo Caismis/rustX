@@ -84,7 +84,7 @@ chat_reasoning_replay = "omit"
             },
             policy: ToolInvocationPolicy::default(),
             permissions: None,
-            tool_permissions: Default::default(),
+            tool_permissions: std::collections::BTreeMap::new(),
         }
     }
 
@@ -352,7 +352,7 @@ chat_reasoning_replay = "omit"
             },
             policy: ToolInvocationPolicy::default(),
             permissions: None,
-            tool_permissions: Default::default(),
+            tool_permissions: std::collections::BTreeMap::new(),
         };
 
         let runtime = McpServerRuntime::connect(
@@ -535,7 +535,7 @@ chat_reasoning_replay = "omit"
             },
             policy: ToolInvocationPolicy::default(),
             permissions: None,
-            tool_permissions: Default::default(),
+            tool_permissions: std::collections::BTreeMap::new(),
         };
 
         let runtime = McpServerRuntime::connect(
@@ -627,7 +627,7 @@ chat_reasoning_replay = "omit"
             },
             policy: ToolInvocationPolicy::default(),
             permissions: None,
-            tool_permissions: Default::default(),
+            tool_permissions: std::collections::BTreeMap::new(),
         };
         let error = McpServerRuntime::connect(
             &McpServerId::new("legacy-no-overlap"),
@@ -945,7 +945,7 @@ chat_reasoning_replay = "omit"
                 },
                 policy: ToolInvocationPolicy::default(),
                 permissions: None,
-                tool_permissions: Default::default(),
+                tool_permissions: std::collections::BTreeMap::new(),
             },
             &workspace,
             Arc::new(McpInvalidationState::new()),
@@ -1021,7 +1021,7 @@ chat_reasoning_replay = "omit"
             },
             policy: ToolInvocationPolicy::default(),
             permissions: None,
-            tool_permissions: Default::default(),
+            tool_permissions: std::collections::BTreeMap::new(),
         }
     }
 
@@ -1469,7 +1469,7 @@ chat_reasoning_replay = "omit"
                 },
                 policy: ToolInvocationPolicy::default(),
                 permissions: None,
-                tool_permissions: Default::default(),
+                tool_permissions: std::collections::BTreeMap::new(),
             }
         }
 
@@ -1920,7 +1920,7 @@ async fn measure_configured_http_mcp() {
         },
         policy: rustx::tools::types::ToolInvocationPolicy::default(),
         permissions: None,
-        tool_permissions: Default::default(),
+        tool_permissions: std::collections::BTreeMap::new(),
     };
     for sample in 1..=3 {
         let started = Instant::now();

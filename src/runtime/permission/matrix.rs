@@ -59,28 +59,22 @@ pub const fn builtin_action_for(
     mode: ExecutionPermissionMode,
 ) -> BuiltinPermissionAction {
     use BuiltinPermissionAction::{Allow, Elevate, Review};
-    use BuiltinToolKind::*;
+    use BuiltinToolKind::{
+        AgentObserve, BashOther, BashReadonly, ExternalOrDelegated, GoalCreate, GoalRead,
+        GoalStatusUpdate, Interaction, JobControl, JobObserve, NativeRead, OtherFileMutation,
+        PlanFileMutation, ScheduleMutation, ScheduleRead, Todo,
+    };
     use ExecutionPermissionMode::{Automatic, FullAccess, Plan};
 
-    match (kind, mode) {
-        (
-            NativeRead | PlanFileMutation | BashReadonly | Interaction | Todo | GoalRead
-            | GoalStatusUpdate | ScheduleRead | JobObserve | AgentObserve,
-            _,
-        ) => Allow,
-        (OtherFileMutation | BashOther | GoalCreate | ScheduleMutation | JobControl, Plan) => {
-            Elevate
-        }
-        (OtherFileMutation | BashOther | GoalCreate | ScheduleMutation | JobControl, Automatic) => {
-            Review
-        }
-        (
-            OtherFileMutation | BashOther | GoalCreate | ScheduleMutation | JobControl,
-            FullAccess,
-        ) => Allow,
-        (ExternalOrDelegated, Plan) => Elevate,
-        (ExternalOrDelegated, Automatic) => Review,
-        (ExternalOrDelegated, FullAccess) => Allow,
+    match kind {
+        NativeRead | PlanFileMutation | BashReadonly | Interaction | Todo | GoalRead
+        | GoalStatusUpdate | ScheduleRead | JobObserve | AgentObserve => Allow,
+        OtherFileMutation | BashOther | GoalCreate | ScheduleMutation | JobControl
+        | ExternalOrDelegated => match mode {
+            Plan => Elevate,
+            Automatic => Review,
+            FullAccess => Allow,
+        },
     }
 }
 

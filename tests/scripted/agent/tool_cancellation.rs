@@ -30,7 +30,6 @@ use rustx::tools::ToolProgressCapability;
 use rustx::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
 };
-use rustx::tools::types::ToolExecutionPolicy;
 use rustx::tools::types::{
     ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
 };

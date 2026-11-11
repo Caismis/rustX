@@ -77,7 +77,7 @@ fn recovery_binding(
         },
         policy: rustx::tools::types::ToolInvocationPolicy::default(),
         permissions: None,
-        tool_permissions: Default::default(),
+        tool_permissions: std::collections::BTreeMap::new(),
     }
 }
 
@@ -2522,7 +2522,7 @@ async fn a_policy_change_failure_preserves_the_published_generation() {
     let before = capability.coordinator.current_snapshot();
     assert_eq!(published_mcp_tools(&before, &capability.server_id).len(), 3);
 
-    let mut b2 = recovery_binding(test_name, &control, &script);
+    let b2 = recovery_binding(test_name, &control, &script);
     assert_ne!(
         before.mcp_servers().get(&capability.server_id),
         Some(&b2),
@@ -2611,7 +2611,7 @@ async fn concurrent_mcp_progress_refreshes_every_idle_watchdog_above_the_old_rou
     // The batch must actually run in parallel, so the binding's own
     // concurrency policy — an execution-relevant field of the binding — says
     // so for every tool of this server.
-    let mut binding = server.binding();
+    let binding = server.binding();
     let capability = http_capability(
         &fixture.runtime,
         &McpServerId::new("http-progress"),
@@ -3035,7 +3035,7 @@ async fn progress_that_beats_every_subscription_still_refreshes_every_idle_watch
     let fixture = common::native_fixture_without_extensions();
     let server =
         streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
-    let mut binding = server.binding();
+    let binding = server.binding();
     let capability = http_capability(
         &fixture.runtime,
         &McpServerId::new("http-pre-subscription"),

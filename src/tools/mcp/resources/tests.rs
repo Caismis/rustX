@@ -57,7 +57,7 @@ impl HttpPeer {
                 credentials: crate::credentials::SourceCredentials::default(),
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
                 permissions: None,
-                tool_permissions: Default::default(),
+                tool_permissions: std::collections::BTreeMap::new(),
                 transport: McpTransportConfig::StreamableHttp {
                     endpoint: format!("http://{address}/mcp"),
                     headers: BTreeMap::new(),
@@ -463,7 +463,7 @@ async fn resource_only_stdio_negotiates_modern_and_legacy_without_tools_list() {
             credentials: crate::credentials::SourceCredentials::default(),
             policy: crate::tools::types::ToolInvocationPolicy::default(),
             permissions: None,
-            tool_permissions: Default::default(),
+            tool_permissions: std::collections::BTreeMap::new(),
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .unwrap()
@@ -819,7 +819,7 @@ async fn opaque_http_diagnostics_never_replay_debug_escaped_response_headers() {
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
                 permissions: None,
-                tool_permissions: Default::default(),
+                tool_permissions: std::collections::BTreeMap::new(),
             },
             tools.workspace().clone(),
             Arc::default(),
