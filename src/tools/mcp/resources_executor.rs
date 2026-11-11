@@ -70,21 +70,48 @@ enum ResourceTool {
 #[derive(Clone, Debug)]
 pub(crate) struct McpResourceBinding {
     runtime: McpRuntimeBinding,
+    /// Source-default three-mode permission object from the owning MCP binding.
+    permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+    /// Exact-tool permission exceptions keyed by resource helper name.
+    tool_permissions:
+        BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
 }
 
 impl McpResourceBinding {
     pub(crate) fn new(runtime: McpRuntimeBinding) -> Self {
-        Self { runtime }
+        Self {
+            runtime,
+            permissions: None,
+            tool_permissions: BTreeMap::new(),
+        }
+    }
+
+    /// Attaches the owning MCP server's authored permission objects.
+    #[must_use]
+    pub(crate) fn with_permissions(
+        mut self,
+        permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+        tool_permissions: BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
+    ) -> Self {
+        self.permissions = permissions;
+        self.tool_permissions = tool_permissions;
+        self
     }
 }
 
 /// Exactly one group, regardless of the number of eligible sources.
 pub(crate) fn resource_definitions(
     sources: BTreeMap<ToolSourceId, McpResourceBinding>,
-) -> Vec<(ToolDefinition, Arc<dyn ToolExecutor>)> {
+) -> Vec<crate::tools::executor::ToolRegistration> {
     if sources.is_empty() {
         return Vec::new();
     }
+    // Single-source catalogs can freeze the authored source/exact permission
+    // object onto the helper registration. Multi-source aggregates keep matrix
+    // defaults until a later per-target authorize path owns argument routing.
+    let frozen_permissions = (sources.len() == 1)
+        .then(|| sources.values().next().cloned())
+        .flatten();
     let sources = Arc::new(sources);
     let servers: Vec<_> = sources.keys().map(source_server_id).collect();
     let servers = serde_json::to_string(&servers).expect("server identities serialize");
@@ -111,7 +138,21 @@ pub(crate) fn resource_definitions(
             origin: ToolOrigin::Builtin,
         };
         let executor = ResourceExecutor { operation, sources: Arc::clone(&sources) };
-        (definition, Arc::new(executor) as Arc<dyn ToolExecutor>)
+        let mut registration = crate::tools::executor::ToolRegistration::plain(
+            definition,
+            Arc::new(executor) as Arc<dyn ToolExecutor>,
+        );
+        if let Some(binding) = frozen_permissions.as_ref() {
+            if let Some(set) = binding
+                .tool_permissions
+                .get(name)
+                .copied()
+                .or(binding.permissions)
+            {
+                registration = registration.with_resource_permissions(set);
+            }
+        }
+        registration
     })
     .collect()
 }

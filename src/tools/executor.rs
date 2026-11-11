@@ -1094,12 +1094,20 @@ impl ToolRegistry {
     ) -> Result<Self, ToolRegistryError> {
         let mut registry = Self::new();
         for registration in registrations {
+            let permissions = registration.resource_permissions;
             registry.register_with_execution_metadata(
                 registration.definition,
                 registration.executor,
                 registration.normalizer,
                 registration.foreground,
             )?;
+            if let Some(permissions) = permissions {
+                registry
+                    .entries
+                    .last_mut()
+                    .expect("register always pushes one entry")
+                    .resource_permissions = Some(permissions);
+            }
         }
         Ok(registry)
     }

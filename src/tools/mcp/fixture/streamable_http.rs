@@ -615,10 +615,7 @@ impl HttpFixture {
     #[must_use]
     pub fn binding(&self) -> crate::tools::mcp::McpServerBinding {
         self.binding_with_header(None)
-    
-        permissions: None,
-        tool_permissions: Default::default(),
-}
+    }
 
     /// The same binding with one extra static request header.
     ///

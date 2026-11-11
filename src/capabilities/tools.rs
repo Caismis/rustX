@@ -341,11 +341,7 @@ pub(crate) fn select_tools(
                 .filter(|registration| plugin_tools.contains(&registration.definition.name))
                 .cloned(),
         )
-        .chain(
-            resource_tools
-                .into_iter()
-                .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
-        );
+        .chain(resource_tools);
     let active = ToolRegistry::from_registrations(registrations)
         .map_err(|error| format!("active Tool selection is invalid: {error}"))?;
     Ok((available_catalog, active, profile))

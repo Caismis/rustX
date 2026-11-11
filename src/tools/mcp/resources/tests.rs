@@ -570,24 +570,21 @@ fn resource_decoding_and_metadata_limits_reject_excess_without_allocating_decode
 }
 
 async fn run_helper(
-    entry: &(
-        crate::tools::types::ToolDefinition,
-        Arc<dyn crate::tools::executor::ToolExecutor>,
-    ),
+    entry: &crate::tools::executor::ToolRegistration,
     arguments: serde_json::Value,
     tools: &crate::tools::runtime::ConversationToolRuntime,
 ) -> ToolExecutionResult {
     use crate::tools::types::{ToolInvocation, ToolInvocationId, ToolInvocationMode};
     let progress = NoProgress;
     entry
-        .1
+        .executor
         .start(
             ToolInvocation {
                 id: ToolInvocationId::Agent {
                     call_id: crate::runtime::identity::ToolCallId::new("resource-helper"),
                 },
-                tool_id: entry.0.id.clone(),
-                tool_name: entry.0.name.clone(),
+                tool_id: entry.definition.id.clone(),
+                tool_name: entry.definition.name.clone(),
                 mode: ToolInvocationMode::Foreground,
                 arguments,
             },
@@ -640,7 +637,7 @@ async fn native_resource_helpers_route_only_frozen_sources_with_one_identity_ord
     assert_eq!(
         helpers
             .iter()
-            .map(|entry| entry.0.name.as_str())
+            .map(|entry| entry.definition.name.as_str())
             .collect::<Vec<_>>(),
         vec![
             "list_mcp_resources",
@@ -903,7 +900,12 @@ async fn repeated_redaction_keeps_tool_and_resource_final_diagnostics_bounded() 
         peer.binding.policy,
         &generation.binding(),
         catalog,
-    );
+    )
+    .into_iter()
+    .map(|(definition, executor)| {
+        crate::tools::executor::ToolRegistration::plain(definition, executor)
+    })
+    .collect::<Vec<_>>();
     let resource = crate::tools::mcp::resource_definitions(BTreeMap::from([(
         ToolSourceId::Mcp(McpServerId::new("bounded")),
         McpResourceBinding::new(generation.binding()),

@@ -1426,7 +1426,7 @@ impl CapabilityCoordinator {
                     if discovery.capabilities.resources {
                         resource_bindings.insert(
                             source_id.clone(),
-                            crate::tools::mcp::McpResourceBinding::new(generation.binding()),
+                            crate::tools::mcp::McpResourceBinding::new(generation.binding()).with_permissions(binding.permissions, binding.tool_permissions.clone()),
                         );
                     }
                     mcp_tools.extend(
@@ -1938,7 +1938,7 @@ impl CapabilityCoordinator {
                 }
                 resource_bindings.insert(
                     source_id.clone(),
-                    crate::tools::mcp::McpResourceBinding::new(generation.binding()),
+                    crate::tools::mcp::McpResourceBinding::new(generation.binding()).with_permissions(binding.permissions, binding.tool_permissions.clone()),
                 );
             }
             let selected: Vec<_> = plan
@@ -1956,7 +1956,9 @@ impl CapabilityCoordinator {
                 Ok(definitions) => {
                     mcp_epochs.insert(server_id.clone(), epoch);
                     registrations.extend(definitions.into_iter().map(|(definition, executor)| {
-                        ToolRegistration::plain(definition, executor)
+                        crate::tools::mcp::with_binding_permissions(
+                            definition, executor, binding,
+                        )
                     }));
                     mcp_runtimes.push(generation);
                 }
@@ -1979,11 +1981,9 @@ impl CapabilityCoordinator {
         // ordinary selection, and never from a document it reads itself.
         let available_tools = AvailableToolCatalog::new(registrations.clone())
             .with_resource_sources(resource_bindings.keys().cloned().collect());
-        registrations.extend(
-            crate::tools::mcp::resource_definitions(resource_bindings.clone())
-                .into_iter()
-                .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
-        );
+        registrations.extend(crate::tools::mcp::resource_definitions(
+            resource_bindings.clone(),
+        ));
         let candidate_registry = match ToolRegistry::from_registrations(
             registrations
                 .into_iter()
