@@ -114,15 +114,6 @@ fn classify_allowlisted_executable(executable: &str, args: &[&str]) -> BashReado
         | "tail" | "wc" | "stat" | "file" | "which" | "type" | "basename" | "dirname"
         | "realpath" | "readlink" | "uname" | "id" | "whoami" | "printenv" | "grep" | "rg"
         | "jq" | "sleep" => BashReadonlyClass::Readonly,
-        "fd" => {
-            if args.iter().copied().any(is_fd_exec_option) {
-                BashReadonlyClass::Unproven {
-                    reason: "fd exec options are not proven read-only".to_owned(),
-                }
-            } else {
-                BashReadonlyClass::Readonly
-            }
-        }
         "date" => {
             // Conservative: only bare `date` is proven display-only.
             if args.is_empty() {
@@ -152,18 +143,9 @@ fn classify_allowlisted_executable(executable: &str, args: &[&str]) -> BashReado
                 BashReadonlyClass::Readonly
             }
         }
-        "yq" => {
-            if args
-                .iter()
-                .any(|token| *token == "-i" || *token == "--inplace")
-            {
-                BashReadonlyClass::Unproven {
-                    reason: "yq in-place edits are not read-only".to_owned(),
-                }
-            } else {
-                BashReadonlyClass::Readonly
-            }
-        }
+        // `fd` and `yq` stay off the proven-readonly path: short-option
+        // clustering/gluing can hide exec and in-place forms without full
+        // clap/cobra argv analysis.
         "git" => classify_git(args),
         _ => BashReadonlyClass::Unproven {
             reason: format!(
@@ -186,12 +168,6 @@ fn is_find_write_option(token: &str) -> bool {
             | "-fls"
             | "-fprintf"
     ) || token.starts_with("-exec")
-}
-
-fn is_fd_exec_option(token: &str) -> bool {
-    // Spaced and glued forms (`-x rm`, `-xrm`, `-Xrm`, `--execrm`, `--exec-batch=…`).
-    // `-X` is fd's short `--exec-batch` flag.
-    token.starts_with("-x") || token.starts_with("-X") || token.starts_with("--exec")
 }
 
 fn classify_git(args: &[&str]) -> BashReadonlyClass {
@@ -334,7 +310,6 @@ mod tests {
             "git branch -a",
             "env",
             "date",
-            "yq .x file.yaml",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
@@ -358,7 +333,12 @@ mod tests {
             "git tag v1.0.0",
             "git branch -- -foo",
             "git tag -- -v1",
-            "yq -i '.x=1' file.yaml",
+            "yq -i .x=1 file.yaml",
+            "yq -iy .x=1 file.yaml",
+            "yq .x file.yaml",
+            "fd .",
+            "fd -ex rm",
+            "fd -eXrm",
             "date -s 12:00:00",
             "date -s12:00:00",
             "date \"-s\" 12:00:00",
@@ -378,14 +358,6 @@ mod tests {
             "find . '-delete'",
             "yq '-i' .x=1 file.yaml",
             "yq '.x' file.yaml",
-            "fd -x rm",
-            "fd --exec rm {}",
-            "fd --exec-batch rm",
-            "fd -xrm",
-            "fd -X rm",
-            "fd -Xrm",
-            "fd --execrm",
-            "fd --exec-batch=rm",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
