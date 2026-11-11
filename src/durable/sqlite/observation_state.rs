@@ -37,7 +37,7 @@ pub(super) fn goal(
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     connection
         .execute(
-            "DELETE FROM content_frontiers WHERE source_kind='observation_goal'",
+            "DELETE FROM content_frontiers INDEXED BY content_frontiers_goal_idx WHERE source_kind='observation_goal'",
             [],
         )
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
