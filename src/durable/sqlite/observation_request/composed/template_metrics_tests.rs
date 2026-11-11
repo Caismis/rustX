@@ -50,14 +50,14 @@ fn fixture(templates: &[Template]) -> (Connection, Leaf) {
     (connection, leaf)
 }
 
-fn assert_legacy_geometry(templates: &[Template]) {
+fn assert_legacy_geometry(templates: &[Template], expected_encodes: usize) {
     let (connection, leaf) = fixture(templates);
     take_work();
     let geometry = leaf_geometry(&connection, &leaf).unwrap();
     let work = take_work();
     assert_eq!(work.leaf_width_calls, 1);
     assert_eq!(work.template_loads, templates.len());
-    assert_eq!(work.width_hole_encodes, templates.len());
+    assert_eq!(work.width_hole_encodes, expected_encodes);
     let expected: Vec<_> = leaf
         .variants
         .iter()
@@ -80,12 +80,78 @@ fn assert_legacy_geometry(templates: &[Template]) {
 
 #[test]
 fn single_template_load_and_hole_encode_cover_all_eighty_widths() {
-    assert_legacy_geometry(&[template(47, u64::MAX)]);
+    assert_legacy_geometry(&[template(47, u64::MAX)], 1);
 }
 
 #[test]
 fn multiple_templates_keep_each_width_class_exact() {
-    assert_legacy_geometry(&[template(47, 9), template(501, 10000), template(1, u64::MAX)]);
+    assert_legacy_geometry(
+        &[template(47, 9), template(501, 10000), template(1, u64::MAX)],
+        3,
+    );
+}
+
+#[test]
+fn repeated_provenance_encodes_once_for_adjacent_templates() {
+    assert_legacy_geometry(&[template(47, 9), template(501, 9), template(1, 9)], 1);
+    assert_legacy_geometry(&[template(47, 9), template(501, 10), template(1, 9)], 3);
+}
+
+#[test]
+fn prepared_hole_length_is_reused_only_for_matching_provenance() {
+    let (connection, leaf) = fixture(&[template(47, 9), template(501, 9)]);
+    let expected = leaf_geometry(&connection, &leaf).unwrap();
+    let length = hole(1, 0, 9).unwrap().len() as u64;
+    take_work();
+    let actual = leaf_geometry_reusing(&connection, &leaf, Vec::new(), Some((9, length))).unwrap();
+    let work = take_work();
+    assert_eq!((work.width_hole_encodes, work.width_hole_reuses), (0, 2));
+    for class in 0..weights::CLASSES {
+        assert_eq!(
+            actual.0.length(class).unwrap(),
+            expected.0.length(class).unwrap()
+        );
+    }
+    take_work();
+    let _ = leaf_geometry_reusing(&connection, &leaf, Vec::new(), Some((10, 0))).unwrap();
+    let work = take_work();
+    assert_eq!((work.width_hole_encodes, work.width_hole_reuses), (1, 1));
+}
+
+#[test]
+fn completed_turn_hole_work() {
+    use crate::durable::CanonicalStore;
+    for tool in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::durable::SqliteConversationStore::open(
+            crate::runtime::identity::ConversationId::generate(),
+            &dir.path().join("conversation.sqlite"),
+        )
+        .unwrap();
+        store.initialize(&[]).unwrap();
+        crate::durable::sqlite::append_completed_turns(&store, 0, 8, tool);
+        take_work();
+        store.begin_query_work();
+        crate::durable::sqlite::append_completed_turns(&store, 8, 1, tool);
+        let sql = store.finish_query_work();
+        let work = take_work();
+        let calls: usize = sql.values().map(|entry| entry.0).sum();
+        let steps: i64 = sql.values().map(|entry| entry.2).sum();
+        let commits: usize = sql
+            .iter()
+            .filter(|(query, _)| query.starts_with("COMMIT"))
+            .map(|(_, entry)| entry.0)
+            .sum();
+        eprintln!(
+            "TURN_HOLE_WORK tool={tool} encodes={} reuses={} leaves={} sql_calls={calls} vm_steps={steps} commits={commits}",
+            work.width_hole_encodes, work.width_hole_reuses, work.leaf_width_calls
+        );
+        for (query, (calls, rows, steps)) in sql {
+            eprintln!("TURN_SQL tool={tool} calls={calls} rows={rows} steps={steps} sql={query:?}");
+        }
+        assert_eq!(work.width_hole_encodes, 0);
+        assert!(work.width_hole_reuses > 0);
+    }
 }
 
 #[test]

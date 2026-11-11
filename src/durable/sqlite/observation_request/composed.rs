@@ -67,9 +67,10 @@ pub(crate) struct Work {
     pub node_reuses: usize,
     pub leaf_width_calls: usize,
     pub width_hole_encodes: usize,
+    pub width_hole_reuses: usize,
 }
 #[cfg(test)]
-thread_local! {static WORK:std::cell::Cell<Work>=const{std::cell::Cell::new(Work{index_pages:0,index_bytes:0,max_index_page:0,native_nodes:0,source_nodes:0,source_metadata_bytes:0,max_source_metadata:0,new_leaves:0,new_nodes:0,new_fragment_bytes:0,scalar_encodes:0,scalar_captures:0,scalar_reuses:0,header_decodes:0,template_loads:0,template_decodes:0,template_reuses:0,node_decodes:0,node_reuses:0,leaf_width_calls:0,width_hole_encodes:0})};}
+thread_local! {static WORK:std::cell::Cell<Work>=const{std::cell::Cell::new(Work{index_pages:0,index_bytes:0,max_index_page:0,native_nodes:0,source_nodes:0,source_metadata_bytes:0,max_source_metadata:0,new_leaves:0,new_nodes:0,new_fragment_bytes:0,scalar_encodes:0,scalar_captures:0,scalar_reuses:0,header_decodes:0,template_loads:0,template_decodes:0,template_reuses:0,node_decodes:0,node_reuses:0,leaf_width_calls:0,width_hole_encodes:0,width_hole_reuses:0})};}
 #[cfg(test)]
 pub(in crate::durable::sqlite) fn take_work() -> Work {
     WORK.with(|work| work.replace(Work::default()))
@@ -220,8 +221,12 @@ fn root_checksum(root: &[u8]) -> index::Hash {
     sha.update(root);
     sha.finalize().into()
 }
+/// `trigger_free` is the caller's proof, inside this transaction, that the
+/// schema has no SQL program which could rewrite rows this capture stores.
+#[allow(clippy::too_many_arguments)] // The native request start plus its trigger proof.
 pub(super) fn index_selection(
     connection: &Connection,
+    trigger_free: bool,
     sequence: u64,
     scope: &crate::runtime::identity::ConversationId,
     input: &crate::model::SelectedModelInput,
@@ -241,7 +246,7 @@ pub(super) fn index_selection(
         let _timer = crate::agent::execution::attribution::Timer::new(
             crate::agent::execution::attribution::Phase::SourceCapture,
         );
-        nodes::capture(connection, scope, input, snapshot, selection)?
+        nodes::capture(connection, trigger_free, scope, input, snapshot, selection)?
     };
     let source_hash = captured_root.as_ref().map(|node| node.digest);
     let captured = {
@@ -265,7 +270,7 @@ pub(super) fn index_selection(
                 // Scalar capture writes can trigger changes to the root. Check
                 // actual storage now, then share the path/width traversal.
                 // All path errors still precede deferred length errors.
-                let node = captured.into_node(connection, native)?;
+                let node = captured.into_node(connection, native, trigger_free)?;
                 add(nodes::geometry(connection, &node, 0, sequence)?, 2)?
             }
             (None, None) => 2,

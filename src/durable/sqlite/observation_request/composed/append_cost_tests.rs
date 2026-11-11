@@ -52,6 +52,7 @@ fn append_source_cost_is_bounded_at_every_history_size() {
             let selected = manifest::persist(&transaction, &input, &owner).unwrap();
             nodes::capture(
                 &transaction,
+                false,
                 &scope,
                 &input.messages(),
                 &snapshot,
@@ -74,10 +75,16 @@ fn append_source_cost_is_bounded_at_every_history_size() {
             let transaction = connection.transaction().unwrap();
             take_work();
             let selected = manifest::persist(&transaction, &next, &owner).unwrap();
-            let captured =
-                nodes::capture(&transaction, &scope, &next.messages(), &snapshot, &selected)
-                    .unwrap()
-                    .unwrap();
+            let captured = nodes::capture(
+                &transaction,
+                false,
+                &scope,
+                &next.messages(),
+                &snapshot,
+                &selected,
+            )
+            .unwrap()
+            .unwrap();
             let work = take_work();
             assert_eq!(work.new_leaves, 1);
             assert!(work.new_nodes <= 4, "H={history}: {work:?}");

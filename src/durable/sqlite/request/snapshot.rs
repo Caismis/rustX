@@ -316,7 +316,7 @@ pub(in crate::durable::sqlite) fn has_request_journal_fact_tx(
     );
 
     transaction
-        .query_row(
+        .query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_request_id_kind_idx
              WHERE json_extract(event_json, '$.event.request_id')=?1 LIMIT 1)",
             [request_id.as_str()],
