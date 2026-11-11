@@ -19,6 +19,7 @@ versioned pages/complete bytes and converted PDF results; document runtimes unmo
 | `.docx`, `.pptx` | Artifact, Session file | Product Host converts a private authorized snapshot to PDF, then the same PDF viewer | Linux with Bubblewrap/systemd and system LibreOffice; macOS with Seatbelt and the bundled LibreOffice kit | Encrypted ZIP/OOXML rejected | Fonts, layout and pagination can differ from native Office |
 | `.xlsx`, `.csv`, `.tsv` | Artifact, Session file, Workbench | Shared browser spreadsheet viewer and disposable parser Worker; XLSX uses admitted ExcelJS input | Browser | Encrypted packages rejected | Stored values, formulas, formatting and worksheet layout; no recalculation or editing; unsupported drawings produce a notice |
 | `.html`, `.htm` | Artifact, Session file | Opaque-origin sandbox plus inert UTF-8 source inspection | Browser | Not applicable | External resources, active content, links and forms removed/blocked |
+| `.glb`, `.stl`, `.step`, `.stp`, `.iges`, `.igs`, `.brep` | Artifact, Session file, Workbench | Shared read-only 3D viewer with fixed-copy semantics | Browser WebGL 2; disposable STL/CAD Workers, local OCCT WASM | Unsupported variants rejected | Static geometry, parts/colors and explicit units; see [geometry previews](geometry-previews.md) for format and resource limits |
 
 Legacy `.doc`, `.ppt`, `.xls`, `.xlsm` and arbitrary archives have no new
 viewer. Text, Markdown and code use line pages; raster viewers retain their decoded-pixel policy.
@@ -40,6 +41,7 @@ retires every incompatible active occurrence lease, including its original URL.
 | --- | --- |
 | Original Artifact bytes | 256 KiB, existing owner policy |
 | Complete Session-file preview / Download | 32 MiB |
+| Geometry source assembly | 200 MiB through existing bounded byte windows; complete-copy version checks, separate decoded/render budgets |
 | Session-file text page / byte window | 2 MiB; text pages have at most 5,000 lines |
 | Office source bytes | 50 MiB, read directly by the Host |
 | Private Host reads / ordinary Artifact transfers | 2 private permits per Host authority / 2 public transfers per ArtifactResources owner; independent physical domains |

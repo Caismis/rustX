@@ -1,5 +1,7 @@
+import { threadFor } from '../../protocol/app-server/testing';
 import type { ScheduleHeader, ScheduleSnapshot, ScheduleCommandResult, ScheduledWorkflowRecovery } from '../../protocol/app-server/v77';
-import { Server } from './fixture';
+import { Server, snapshot } from './fixture';
+import { cfg3Source } from './cfg3-data';
 export const nodeA = 'node_00000000-0000-7000-8000-000000000001';
 export const nodeB = 'node_00000000-0000-7000-8000-000000000002';
 export function task(title = 'Review repository changes', session = 'A', node = nodeA, ordinal = '9007199254740993'): ScheduleSnapshot {
@@ -14,6 +16,20 @@ export function header(value: ScheduleSnapshot): ScheduleHeader {
 export function schedulerFixture(values = [task()]) {
   const server = new Server(), rows = new Map(values.map(value => [value.id.ordinal, value]));
   const commands = new Map<string, ScheduleCommandResult>();
+  const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
+  server.workspaceHost.resolveWorkspace = async id => ({ cwd: id === 'workspace-b' ? '/workspace/B' : '/workspace' });
+  server.workspaceHost.configureWorkspace = async id => ({ kind: 'read', projection: { ...cfg3Source(), target: { kind: 'workspace', directory: id === 'workspace-b' ? '/workspace/B' : '/workspace' }, prospective_approval_mode: 'policy',
+    session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024,
+      credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'medium' }, { id: 'high' }], defaultProfile: 'medium' })) } } } });
+  let sessionSequence = 0;
+  server.handlers.set('thread/start', request => {
+    if (request.method !== 'thread/start') throw Error('create');
+    const id = 'scheduled-' + ++sessionSequence;
+    server.snapshots.set(id, snapshot(id));
+    server.summaries.set(id, { cwd: request.params.settings.cwd, active_node: 'node-' + id });
+    const session = { id, active_node: 'node-' + id, active_conversation_id: 'conversation-' + id, node_count: 1, created_at: '0', updated_at: '0' };
+    return { type: 'session_transition', thread: threadFor(session), session };
+  });
   server.handlers.set('schedule/catalog', request => {
     if (request.method !== 'schedule/catalog') throw Error('catalog');
     const query = request.params.query?.toLocaleLowerCase();
@@ -32,7 +48,20 @@ export function schedulerFixture(values = [task()]) {
     if (request.method !== 'schedule/command') throw Error('command');
     const command = request.params.command, mutation = command.mutation;
     const held = commands.get(command.command_id); if (held) return { type: 'schedule_command', result: held };
-    if (!('id' in mutation)) throw Error('Only existing tasks are edited here');
+    if (mutation.type === 'create') {
+      const ordinal = String([...rows.values()].reduce((max, value) => BigInt(value.id.ordinal) > max ? BigInt(value.id.ordinal) : max, 0n) + 1n);
+      const next = task(mutation.title, request.params.session_id, request.params.node_id, ordinal);
+      next.target = { type: 'conversation_inbound', text: mutation.text };
+      const timing = mutation.timing;
+      if (timing.type === 'at') { next.spec = { type: 'at', at_utc: timing.at }; next.next_due_utc = timing.at; }
+      if (timing.type === 'cron') next.spec = { type: 'cron', expression: timing.expression, time_zone: timing.time_zone };
+      if (timing.type === 'interval') next.spec = { type: 'interval', every_seconds: timing.every_seconds, anchor_utc: new Date().toISOString() };
+      rows.set(ordinal, next);
+      const result: ScheduleCommandResult = { status: 'applied', receipt: { id: next.id, revision: next.revision, spec: next.spec, state: next.state, next_due_utc: next.next_due_utc } };
+      commands.set(command.command_id, result);
+      return { type: 'schedule_command', result };
+    }
+    if (!('id' in mutation)) throw Error('Unsupported task mutation');
     const row = rows.get(mutation.id.ordinal);
     let result: ScheduleCommandResult;
     if (!row) result = { status: 'not_found' };

@@ -1,0 +1,317 @@
+{
+  "checkedDate": "2026-11-04 Asia/Shanghai",
+  "baselineHead": "54ef383f7a988d4eb84a1eb3ae83e94ea5a186cd",
+  "baseHead": "b0aa75fe110ca53a1dfc0637280f2f08508c8b7e",
+  "sourceSha256": {
+    "web-console/playwright.geometry-performance.config.ts": "caddddea1cea686875a88130a1bb4a3cc9f091d03846f4af4d6adb8ebb0ea925",
+    "web-console/src/app/components/documents/geometry/GeometryPreview.module.css": "d06aa549f302cbfdab1556a8cee4590648e2afb4fc9d2037274de60d3d5eaa89",
+    "web-console/src/app/components/documents/geometry/GeometryPreview.tsx": "a9138faf02509e3b121ca3f702b045d5eec00baca89997f6c8f8e27468c14419",
+    "web-console/src/app/components/documents/geometry/PartsTree.module.css": "385799e5cdbd9cd270b04315e74b687e7a4cbedcf5eca14f58214f1fc881afae",
+    "web-console/src/app/components/documents/geometry/PartsTree.tsx": "afaeec4cccb23720e060afdc3d6914ca401495bbdd7e166f2314fcfbb7a32f15",
+    "web-console/src/app/components/documents/geometry/outlines.ts": "6f18ecbb41aa3b677d23549f2ecbd5db698feb2bf30a558a3a483f186f5b758d",
+    "web-console/src/app/components/documents/geometry/viewport.ts": "bb53a8ed9ceca9c46e522dc981d15daf21ff391d3ac95a3289e78c20c17bb294",
+    "web-console/src/locale/dictionaries/geometry.ts": "5b7d6c26c2f3604367a2cf6637d886f33a8aa1ce590e88b1c0d4185881ff56a0",
+    "web-console/src/presentation/right-panel/preview-view-state.ts": "163d022ef29d694411b22adb330785fa5029ab6fa87d5cbf79379195dac9669e",
+    "web-console/test/e2e/geometry-code.spec.ts": "06292f2424737ac147c7e725e0381b3584d7464798f9fb8fd3ebf99a76cb6a21",
+    "web-console/test/e2e/geometry-parts-search.spec.ts": "9955bdea495f0872c2257506812397db5aa3502da049d4b13593615f2119ec5a",
+    "web-console/test/e2e/geometry-requests.ts": "3469bd320aff512de94027eca5538f0bb3b705cf692337fb6c85d41ee891e8e6",
+    "web-console/test/e2e/geometry-roadmap.spec.ts": "b03ae252d6b6e45dc32cb2fe563e21de14d1d836e056981e22b8a9a03016099b",
+    "web-console/test/e2e/geometry.spec.ts": "0b5e8d688cf3581614eb0e9c4342f25549a958c3c6bcada33dc0cc591f0cba40",
+    "web-console/test/geometry-orbit-input.test.ts": "50427926e521d2438709c94811a82407f03dac6207da3cdf54f752651b1f778b",
+    "web-console/test/geometry-outlines.test.ts": "56abe8d3cbcb26455936b6bde0f11ffd3e954e583cfefe1356649e28ed701009",
+    "web-console/test/geometry-parts-tree.test.tsx": "7d743dd52845aec9d7879d09cec941a33b14cbb9f2bcbc09b55e86d5964598da",
+    "web-console/test/geometry-requests.test.ts": "0d76292fa3df717ba2996e1ab34d50b4a78161126b427ee15690b25d0555e36d",
+    "web-console/test/geometry-retirement.test.tsx": "e3a70bc8ea80aa258c47c87c31c91b1144b819b75860b6ebe4cad08e367e2727",
+    "web-console/test/geometry-view.test.tsx": "55211c3d12d2a5c7ea8d75625a8e4a3b153a89fb6ea83c3a4b05217bac11ceca",
+    "web-console/test/geometry-viewport.test.ts": "3a1e7347c6a3f33f32c9ac0813727b0a999fab6ae42d2b91facef2cc970efd30",
+    "web-console/test/preview-workspace.test.tsx": "2622d9361e9a5b86cf81055bb76ca8383a603f51ff4d1e7c1ce497794459d5e1",
+    "web-console/test/session-files.test.tsx": "4d40208a565f2b58480fb39a37da11fe3715b2163705aee4c163fba1f54fe940"
+  },
+  "captureSha256": {
+    "takeover-orthographic-menu.png": "489dd5c264ee6bd7c40958bed4de3ec7064ab58a4c590e63bd30376cae479d41",
+    "takeover-parts-search-en.png": "0bc8725e038784d5223a92daa93d7183e55505074bc6d7b85b47acd81184bc47",
+    "takeover-parts-search-zh.png": "f0eb4efd34566b0e9bf607faedf7f376ff25b5a37e1024d10100c00b4d1ee6ea"
+  },
+  "environment": {
+    "node": "v24.21.0",
+    "host": "Linux-6.14.0-37-generic-x86_64-with-glibc2.39",
+    "playwright": "1.63.0",
+    "browser": {
+      "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "vendor": "Google Inc. (Google)",
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "devicePixelRatio": 1
+    },
+    "transport": "Existing pinned OCI filesystem/browser server through Bubblewrap; loopback forwarding"
+  },
+  "webHostSuite": {
+    "passed": 4141,
+    "skipped": 4,
+    "filesPassed": 275,
+    "filesSkipped": 1,
+    "stdoutSha256": "879a2fb283d349c7001c724b94adb77502db9546e1443d8bff6ceb549835b5a1"
+  },
+  "defaultDevelopmentFixture": {
+    "passed": 43,
+    "failed": 0,
+    "flaky": 0,
+    "cases": [
+      {
+        "case": "test/e2e/geometry-code.spec.ts:26:1 › cancelled CAD code wait retires its idle Worker and the retained copy reuses only compiled code",
+        "elapsedMs": 10900.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-code.spec.ts:56:1 › two actual split CAD owners share code and allocate fresh import Workers after retirement",
+        "elapsedMs": 12600.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-parts-search.spec.ts:23:1 › Parts search reveals only matching admitted paths, preserves view state and expansion, and stays independently scrollable in Chinese",
+        "elapsedMs": 3500.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-review.spec.ts:33:57 › empty selected GLB scene fails before renderer admission and retains original Download",
+        "elapsedMs": 2200.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-review.spec.ts:33:57 › degenerate selected GLB scene fails before renderer admission and retains original Download",
+        "elapsedMs": 2300.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-review.spec.ts:45:70 › parts from unequal-depth unnamed branches remain independent siblings",
+        "elapsedMs": 2100.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-review.spec.ts:45:70 › parts from numeric-sibling unnamed branches remain independent siblings",
+        "elapsedMs": 2200.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:35:48 › roadmap structure, focus and source-coordinate properties: delivery",
+        "elapsedMs": 3200.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:35:48 › roadmap structure, focus and source-coordinate properties: workspace",
+        "elapsedMs": 3300.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:62:1 › all six axis endpoints match menu directions, stay separate and never pick the model",
+        "elapsedMs": 4100.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:93:1 › projection switches preserve framing and resources, persist orthographic wheel zoom, and reset in the chosen projection",
+        "elapsedMs": 3300.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:118:1 › mesh outlines start enabled, can be disabled, restore the option and add no idle loop",
+        "elapsedMs": 6000.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:144:95 › Perspective thin occluded outlines remain hidden at model scale 0.000001",
+        "elapsedMs": 4200.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:144:95 › Perspective thin occluded outlines remain hidden at model scale 1",
+        "elapsedMs": 4200.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:144:95 › Perspective thin occluded outlines remain hidden at model scale 1000000",
+        "elapsedMs": 4200.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:144:95 › Orthographic thin occluded outlines remain hidden at model scale 0.000001",
+        "elapsedMs": 4200.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:144:95 › Orthographic thin occluded outlines remain hidden at model scale 1",
+        "elapsedMs": 4300.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:144:95 › Orthographic thin occluded outlines remain hidden at model scale 1000000",
+        "elapsedMs": 4400.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:185:95 › Perspective generated thin occluded outlines remain hidden at model scale 0.000001",
+        "elapsedMs": 4600.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:185:95 › Perspective generated thin occluded outlines remain hidden at model scale 1",
+        "elapsedMs": 4600.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:185:95 › Perspective generated thin occluded outlines remain hidden at model scale 1000000",
+        "elapsedMs": 4500.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:185:95 › Orthographic generated thin occluded outlines remain hidden at model scale 0.000001",
+        "elapsedMs": 4500.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:185:95 › Orthographic generated thin occluded outlines remain hidden at model scale 1",
+        "elapsedMs": 4500.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:185:95 › Orthographic generated thin occluded outlines remain hidden at model scale 1000000",
+        "elapsedMs": 4600.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:204:1 › outline gate preserves a near-limit shaded STL and keeps original Download",
+        "elapsedMs": 3600.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:214:1 › curved outline capture contains silhouettes rather than a triangle wireframe",
+        "elapsedMs": 3200.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:229:69 › two-pane outline resource and interaction capture: planar-outline-envelope",
+        "elapsedMs": 9200.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:229:69 › two-pane outline resource and interaction capture: cad-96-parts",
+        "elapsedMs": 10600.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-roadmap.spec.ts:286:3 › scaled coordinate navigation › uses CSS hit areas after DPR/resize and preserves selection",
+        "elapsedMs": 2300.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-sidebar.spec.ts:37:1 › delivery CAD occupies the existing document sidebar without clipping on a short window",
+        "elapsedMs": 6400.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry-sidebar.spec.ts:114:1 › Workbench CAD uses the shared document body and defaults to revealing the original file",
+        "elapsedMs": 5400.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry.spec.ts:24:4 › actual Worker retains near-limit dense closed STL under its original deadline",
+        "elapsedMs": 3800.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry.spec.ts:24:4 › actual Worker retains plane with disconnected tiny zero-normal solid under its original deadline",
+        "elapsedMs": 3000.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry.spec.ts:38:1 › all geometry formats render through actual delivery and Workspace entry points",
+        "elapsedMs": 20100.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry.spec.ts:61:1 › production startup defers geometry and the STL envelope remains responsive",
+        "elapsedMs": 5000.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry.spec.ts:97:1 › fixed copies survive source changes and hide/show; Refresh and original Download reauthorize",
+        "elapsedMs": 4200.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry.spec.ts:113:1 › selection, visibility, keyboard views, split/fullscreen and narrow localized layouts preserve ownership",
+        "elapsedMs": 5000.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry.spec.ts:132:1 › GLB external resources and lost WebGL contexts fail without requests or retained graphics",
+        "elapsedMs": 3000.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry.spec.ts:152:1 › a decoded texture arriving after close is released without mounting a stale scene",
+        "elapsedMs": 1900.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry.spec.ts:180:1 › failed embedded-image decodes release generated URLs and physical import slots",
+        "elapsedMs": 1800.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry.spec.ts:196:39 › Top horizontal orbit uses the selected up axis before and after restoration",
+        "elapsedMs": 3900.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry.spec.ts:196:39 › Bottom horizontal orbit uses the selected up axis before and after restoration",
+        "elapsedMs": 3800.0,
+        "status": "passed"
+      },
+      {
+        "case": "test/e2e/geometry.spec.ts:213:1 › a burst of camera changes is coalesced and immediate hide saves its final pose",
+        "elapsedMs": 3100.0,
+        "status": "passed"
+      }
+    ],
+    "caseSource": "Playwright list reporter stdout",
+    "stdoutSha256": "184d346e83677038f4299bff108db23be12b722d17ea6689ee402b19da570849",
+    "config": "playwright.config.ts with equivalent direct Node server entry points, isolated ports5373/5374 and external evidence paths"
+  },
+  "productionFixture": {
+    "stats": {
+      "startTime": "2026-11-04T07:26:36.105Z",
+      "duration": 11171.6,
+      "expected": 3,
+      "skipped": 0,
+      "unexpected": 0,
+      "flaky": 0
+    },
+    "reportSha256": "bd75d9a320e28207ea6d4ad985f0748e1c10898f707276cebaf9cdd8fb6ac5e2",
+    "command": "RUSTX_BROWSER_WS_ENDPOINT=ws://127.0.0.1:5277/ RUSTX_E2E_PREVIEW_PORT=5373 RUSTX_E2E_FIXTURE_PORT=5374 bash scripts/geometry-performance.sh geometry-code.spec.ts geometry.spec.ts --repeat-each 1 --grep 'cancelled CAD code wait|two actual split CAD owners|production startup defers geometry'",
+    "stdoutSha256": "da253892ca4f7a6079e7fc5bddc1261c04fd285a3029203f9db3b26ac3002bf0"
+  },
+  "workflowEditorRegression": {
+    "stats": {
+      "startTime": "2026-11-04T07:27:54.135Z",
+      "duration": 8924.684000000001,
+      "expected": 1,
+      "skipped": 0,
+      "unexpected": 0,
+      "flaky": 0
+    },
+    "reportSha256": "584e502281580a2b51e7cb6420016b3fa95382b502d4c1ac6ad7fd095f460b76",
+    "case": "keyboard selection and node-move undo"
+  },
+  "checks": [
+    "TypeScript",
+    "production application build",
+    "production fixture build",
+    "localization ownership",
+    "336 source records",
+    "345 dependency notices",
+    "exact geometry runtime assets and 2048MiB WASM maximum",
+    "cargo fmt --all -- --check",
+    "git diff --check"
+  ],
+  "limits": "Functional/resource validation only. Case elapsed times are whole-test durations, not interaction or first-display latency. The prior50ms/200ms performance acceptance gap remains; no new physical-presentation claim or full pushed-head CI certification."
+}

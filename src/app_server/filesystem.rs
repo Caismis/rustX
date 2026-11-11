@@ -133,6 +133,8 @@ impl Watches {
                         ignored_access(&authorized);
                         return;
                     }
+                    #[cfg(test)]
+                    let observed_change = native_change(&authorized, event.as_ref().expect("native event"));
                     match native.try_metadata(authorized.to_str().expect("validated UTF-8 path")) {
                         Ok(metadata) if metadata.identity==expected=>{},
                         Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=> {
@@ -143,22 +145,19 @@ impl Watches {
                             #[cfg(test)]
                             recheck_scheduled(&authorized);
                             publish_change(&publication, &stopped, &output, Changed {watch_id:identity.clone(),changed_paths:Vec::new(),resync_required:true,retired:false});
+                            #[cfg(test)]
+                            if let Some(completed) = observed_change { let _ = completed.send(()); }
                             return;
                         },
                         _=> {invalidated.cancel();return;},
                     }
                     #[cfg(test)]
                     let publication_completed = before_publication(&authorized);
-                    let (changed_paths, resync_required) = match event {
-                        Ok(event) => {
-                            let rescan = event.need_rescan() || event.paths.len() > 16 || event.paths.iter().any(|path|path.to_str().is_none() || !path.starts_with(&authorized));
-                            (event.paths.into_iter().filter(|path| path.to_str().is_some() && path.starts_with(&authorized)).take(16).collect(), rescan)
-                        },
-                        Err(_) => (Vec::new(), true),
-                    };
-                    publish_change(&publication, &stopped, &output, Changed { watch_id: identity.clone(), changed_paths, resync_required, retired: false });
+                    publish_change(&publication, &stopped, &output, event_hint(identity.clone(), &authorized, event.expect("native event")));
                     #[cfg(test)]
                     if let Some(completed) = publication_completed { let _ = completed.send(()); }
+                    #[cfg(test)]
+                    if let Some(completed) = observed_change { let _ = completed.send(()); }
                 }, #[cfg(target_os = "macos")] environment.watch_files.clone())?;
                 #[cfg(test)]
                 registration_phase(absolute, 2);
@@ -188,6 +187,27 @@ impl Watches {
                 Ok(())
             }).map_err(super::connection::environment_error)
         }).await.map_err(|_| domain(ErrorData::OutcomeUnknown))?
+    }
+}
+
+fn event_hint(watch_id: String, source: &std::path::Path, event: notify::Event) -> Changed {
+    let resync_required = event.need_rescan()
+        || event.paths.len() > 16
+        || event
+            .paths
+            .iter()
+            .any(|path| path.to_str().is_none() || !path.starts_with(source));
+    let changed_paths = event
+        .paths
+        .into_iter()
+        .filter(|path| path.to_str().is_some() && path.starts_with(source))
+        .take(16)
+        .collect();
+    Changed {
+        watch_id,
+        changed_paths,
+        resync_required,
+        retired: false,
     }
 }
 
@@ -347,6 +367,37 @@ fn before_publication(path: &std::path::Path) -> Option<tokio::sync::oneshot::Se
     // Dropping a failed test's sender also releases the physical callback.
     let _ = pause.release.recv();
     Some(pause.completed)
+}
+
+#[cfg(test)]
+type NativeChanges =
+    BTreeMap<std::path::PathBuf, (std::path::PathBuf, tokio::sync::oneshot::Sender<()>)>;
+#[cfg(test)]
+static NATIVE_CHANGES: std::sync::LazyLock<Mutex<NativeChanges>> =
+    std::sync::LazyLock::new(Mutex::default);
+#[cfg(test)]
+pub(crate) fn observe_native_change(
+    source: std::path::PathBuf,
+    changed: std::path::PathBuf,
+) -> tokio::sync::oneshot::Receiver<()> {
+    let (published, publication) = tokio::sync::oneshot::channel();
+    NATIVE_CHANGES
+        .lock()
+        .unwrap()
+        .insert(source, (changed, published));
+    publication
+}
+#[cfg(test)]
+fn native_change(
+    source: &std::path::Path,
+    event: &notify::Event,
+) -> Option<tokio::sync::oneshot::Sender<()>> {
+    let mut observers = NATIVE_CHANGES.lock().unwrap();
+    let (expected_path, _) = observers.get(source)?;
+    if !event.paths.contains(expected_path) {
+        return None;
+    }
+    observers.remove(source).map(|(_, published)| published)
 }
 
 #[cfg(test)]

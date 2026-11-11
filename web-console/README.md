@@ -242,10 +242,15 @@ attaching or cold-loading the Session to discover the outcome. Only a later
 explicit **Open Session** sets wanted intent again. A fresh attach
 cannot by itself prove the previous mutation's outcome, so uncertainty remains.
 
-The endpoint/openViews navigation hints order the last Home Session first and
-retain only wanted views for automatic
-page-reload restoration only at the same normalized endpoint; they never choose
-connection material. Replacing App Server authority closes active browser views
+The v3 endpoint/openViews/route navigation hints retain only wanted views and
+the last safe selected page for reload restoration at the same normalized
+endpoint; they never choose connection material. Open-view order is not the
+selected Session. Cold Session restoration still requires native attachment;
+new explicit navigation supersedes an unfinished startup restore. Workflows,
+Schedules and New Conversation retain their own safe route hints. Uncommitted
+Session drafts, input, commands and observations are not persisted. Only native
+`unknown_session` can remove a missing saved identity; a partial catalog cannot.
+Replacing App Server authority closes active browser views
 and focus instead of reinterpreting their IDs against the new server. Old uncertain
 operations and unresolved deletion obligations remain detached, read-only evidence;
 they do not block replacement except at the explicit diagnostic capacity bound. See [connection ownership](CONNECTION.md).
@@ -656,9 +661,16 @@ never imports these addons. The
 workbench HTTP route uses the same authenticated carrier and native Session/node
 admission as the existing desktop workspace action.
 
+Workspace files and committed Session-file deliveries also open read-only GLB,
+STL, STEP/STP, IGES/IGS and Open CASCADE BREP previews. The shared 3D viewer
+supports orbit, pan, zoom, standard views, part selection and visibility. Geometry
+keeps its authorized fixed copy and view state while parked in another tab;
+Download retains the original source. See [geometry previews](../docs/geometry-previews.md)
+for units, supported variants and resource limits.
+
 ### Temporary questions
 
-Use **Ask a side question** in the Conversation header while Agent work continues. It reads a committed snapshot, which may exclude streaming work. Closing the panel keeps execution running; **Cancel question** explicitly cancels that Call. **Check status** recovers an uncertain receipt or incomplete display without submitting again. Temporary answers expire after five minutes and are never canonical conversation messages. Settings → Models exposes independent Classification and BTW model policies. See [native semantics and limits](../docs/auxiliary-consumers.md).
+Use **Ask a side question** in the Conversation header to open a right Workbench tab while Agent work continues. It reads a committed snapshot, which may exclude streaming work. Closing the panel keeps execution running; **Cancel question** explicitly cancels that Call. **Check status** recovers an uncertain receipt or incomplete display without submitting again. Temporary answers expire after five minutes and are never canonical conversation messages. Settings → Models exposes independent Classification and BTW model policies. See [native semantics and limits](../docs/auxiliary-consumers.md).
 
 
 ## Visual Workflow editing

@@ -5,7 +5,7 @@ import { parse } from 'yaml';
 import { rootBlock } from '../workflow-root';
 import { setNodePresentation } from '../../src/app/workflows/document/geometry';
 import type { WorkflowDocument } from '../../src/app/workflows/document/model';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
@@ -124,7 +124,7 @@ test('structured output uses transactional Dify-style visual and JSON editors wi
     expect(await dialog.locator('[data-schema-field]').evaluateAll(elements => elements.map(element => element.getAttribute('data-schema-field')))).toEqual(['structured_output', 'rating', 'tags', 'details', 'approved']);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 
@@ -167,7 +167,7 @@ test('structured output rename preserves a preceding Iteration with an independe
     await page.screenshot({ path: '/tmp/rustx-scoped-schema-rename.png' });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 
@@ -221,5 +221,5 @@ test('cross-workflow paste rejects incomplete groups and preserves local and inh
     await page.screenshot({ path: '/tmp/rustx-scoped-workflow-paste.png' });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });

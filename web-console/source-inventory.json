@@ -226,7 +226,7 @@
       "destination": "web-console/src/app/agent/AgentComposer.tsx",
       "upstream_sha256": "6e627be2ae8990290e94fc9d35d36802695c457fd98a8655fd73e52c4ce1d2db",
       "classification": "B",
-      "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. Runtime and slot/store authority excluded. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative. Issue #406: Resident input/editor and launcher interaction adapted to native textarea, native first-submit transactions and upload receipts. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. #439: compact browser preference and focused-editor Escape arbitration reuse the submission policy and native cancellation owner. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. Composer add menu: grouped native command discovery and integrated file intake; upstream baseline unchanged. Child capabilities: one shared input component, native scoped upload receipts and task titles; native child cursor cuts and preview ownership replace committed-only child input paths. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. PR #458 editor settlement: stable revisioned Composer owner consumes known native acceptance independently of rendering; successful Discard replaces its persistent local incarnation. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. PR #478 review: exact live Root attachment enables an explicit cancellation-only focused editor during unavailable observation; ordinary disabled, draft editing and Child controls retain their existing behavior. No native cancellation is inferred for a new Conversation; upstream pin and imports are unchanged. Attachment alignment: DSH file picker entry, document drop overlay and attachment rail/cards; removed invented generic file limits while retaining native upload settlement and first-submit ownership. Child view alignment: continuable child keeps Send and independent Stop; native admission, cancellation and read recovery preserve their exact owners. Review repair: bind file-drop ownership to the retained composer DOM scope. Issue #487: client contract, error and first-submission owner import paths only; upstream reference unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained. Workflow data nodes: mandatory App Server v69 generated-protocol imports; retained presentation and upstream baseline unchanged. PR #521 revision: mandatory App Server v69 imports and reviewed presentation corrections; upstream baseline unchanged.am baseline retained. Issue #518: mandatory App Server v72 imports and automatic Session configuration commit; upstream source pin unchanged.",
+      "treatment": "Harness one-primary-seat and toolbar interaction adapted to rustX typed commands/uploads and pure submission policy; measured native textarea replaces Lexical. Runtime and slot/store authority excluded. Issue #394: generated App Server v20 type import only. Issue #402: generated App Server v21 import. PR #404 review correction: preserve draft recovery and gate first submission on the shared Workspace approval transaction; native membership and anchors remain authoritative. Issue #406: Resident input/editor and launcher interaction adapted to native textarea, native first-submit transactions and upload receipts. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. #439: compact browser preference and focused-editor Escape arbitration reuse the submission policy and native cancellation owner. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. Composer add menu: grouped native command discovery and integrated file intake; upstream baseline unchanged. Child capabilities: one shared input component, native scoped upload receipts and task titles; native child cursor cuts and preview ownership replace committed-only child input paths. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. PR #458 Shell navigation: one XState route owner, independent native lifecycle settlement and read-only Fork history; upstream reference unchanged. PR #458 editor settlement: stable revisioned Composer owner consumes known native acceptance independently of rendering; successful Discard replaces its persistent local incarnation. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. PR #478 review: exact live Root attachment enables an explicit cancellation-only focused editor during unavailable observation; ordinary disabled, draft editing and Child controls retain their existing behavior. No native cancellation is inferred for a new Conversation; upstream pin and imports are unchanged. Attachment alignment: DSH file picker entry, document drop overlay and attachment rail/cards; removed invented generic file limits while retaining native upload settlement and first-submit ownership. Child view alignment: continuable child keeps Send and independent Stop; native admission, cancellation and read recovery preserve their exact owners. Review repair: bind file-drop ownership to the retained composer DOM scope. Issue #487: client contract, error and first-submission owner import paths only; upstream reference unchanged. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained. Workflow data nodes: mandatory App Server v69 generated-protocol imports; retained presentation and upstream baseline unchanged. PR #521 revision: mandatory App Server v69 imports and reviewed presentation corrections; upstream baseline unchanged.am baseline retained. Issue #518: mandatory App Server v72 imports and automatic Session configuration commit; upstream source pin unchanged. Workspace permission preparation: reuse the primary spinner while configuration is reading, keep draft editing available and preserve native submission and Stop ownership.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
         "../../../../protocol/app-server/v77",
@@ -261,7 +261,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "adeb752c89e6c92bd674447c9935c486119df28accef4d7b2667d337ee6556b0",
+      "local_sha256": "ba73680b070ad7d6e902b4ee2b64922e818d0a21665eb904fac6a78d73249c25",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -1288,7 +1288,7 @@
       "destination": "web-console/src/presentation/agent/Composer.module.css",
       "upstream_sha256": "dda4354ed278a20a2eda4e18fcde289d9c9ba21d2c039bc400f84237cd7ac2a1",
       "classification": "A",
-      "treatment": "Harness card width, 22px radius, elevation, 36px floor and toolbar rhythm retained. Native textarea alone owns measured growth and capped overflow; subdued file accessory and bounded responsive control groups. #439: quiet 24px preference footer and keyboard focus treatment using existing visual primitives. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. Card and send circle rasterize on their own compositing layers (opacity / transform hint), so partial repaints never re-antialias their rounded edges. Pane-resize repair: toolbar query container restored, viewport caps removed, measured model collapse and container-relative spacing follow current Harness. The card rasterizes at an explicit zero transform; its native selectors portal and editor menus anchor to the card. Attachment alignment: DSH file picker entry, document drop overlay and attachment rail/cards; removed invented generic file limits while retaining native upload settlement and first-submit ownership.",
+      "treatment": "Harness card width, 22px radius, elevation, 36px floor and toolbar rhythm retained. Native textarea alone owns measured growth and capped overflow; subdued file accessory and bounded responsive control groups. #439: quiet 24px preference footer and keyboard focus treatment using existing visual primitives. UI repair: busy-Enter Queue/Steer preference moved from below the Composer card to the General Settings row, matching Harness composer-enter. Card and send circle rasterize on their own compositing layers (opacity / transform hint), so partial repaints never re-antialias their rounded edges. Pane-resize repair: toolbar query container restored, viewport caps removed, measured model collapse and container-relative spacing follow current Harness. The card rasterizes at an explicit zero transform; its native selectors portal and editor menus anchor to the card. Attachment alignment: DSH file picker entry, document drop overlay and attachment rail/cards; removed invented generic file limits while retaining native upload settlement and first-submit ownership. Workspace permission preparation: reuse the primary spinner while configuration is reading, keep draft editing available and preserve native submission and Stop ownership.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -1297,7 +1297,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "2d93ff4be44dff73d0b90dc308eb86cae17c682ae349f530836874ffec8a66f3",
+      "local_sha256": "03e4c7c5e9f5277f1ebd6feeb401afd9e85db9ecf955ea75c7ecde01dc3b1833",
       "additional_sources": [
         {
           "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
@@ -1325,7 +1325,7 @@
       "destination": "web-console/src/presentation/agent/Conversation.module.css",
       "upstream_sha256": "03880a4702978e8403a882f9036205ab7ff791f80cc06e47fdafa4fef6971c67",
       "classification": "A",
-      "treatment": "Pinned Harness styles; native textarea environment adaptation where required. Issue #406: Resident hero centering and composer seat geometry; no lifecycle masking. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Trajectory composer fade repair: full-height overlay with measured seat clearance and fixed 36px theme fade, matching local Harness ConversationRoot and TrajectoryView layout.",
+      "treatment": "Pinned Harness styles; native textarea environment adaptation where required. Issue #406: Resident hero centering and composer seat geometry; no lifecycle masking. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Trajectory composer fade repair: full-height overlay with measured seat clearance and fixed 36px theme fade, matching local Harness ConversationRoot and TrajectoryView layout. Narrow conversation headers reduce utility spacing to retain child title space.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -1334,7 +1334,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "79913b1544ae5113d7563ab652997451adef985b71109bde2b13c1b241294835",
+      "local_sha256": "f8a3d24438c6bb514be0cb0ed132e4dd17719a1a364fb7c5539a6cf9681e5a1a",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/ConversationRoot.module.css",
@@ -2254,7 +2254,7 @@
       "destination": "web-console/src/presentation/primitives/HoverCard.module.css",
       "upstream": "packages/client/ui-primitives/src/HoverCard.module.css",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation PR #517: opt-in file-change preview uses a themed 720px reading surface bounded to viewport and 640px height; unrelated previews retain compact design width.",
       "upstream_sha256": "4d8fbf2368bd9f232f09422af94bf3527b4c9715445deaae18cf04fc1306475b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2263,7 +2263,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "a398f2a0ba9ffd9f15b10197918e7ce7d3475c04bdbfaf58e9b11d586251ca8d",
+      "local_sha256": "260cc359c58bb1066b5163cb0e014f7edc7ce6587953e96b4054c65a0f9c1989",
       "retained_dependencies": [],
       "classification": "A",
       "additional_sources": [
@@ -2279,7 +2279,7 @@
       "destination": "web-console/src/presentation/primitives/HoverCard.tsx",
       "upstream": "packages/client/ui-primitives/src/HoverCard.tsx",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation #393: a comment no longer cites the removed Menu portal mode. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts.",
+      "treatment": "A: direct reuse; local imports, attribution and bounded accessibility/environment adaptation #393: a comment no longer cites the removed Menu portal mode. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. PR #517: existing Floating UI fixed positioning replaces hand-written geometry with side flipping, viewport shifting, bounded sizing and live anchor/content updates; file-change previews opt into a wider surface.",
       "upstream_sha256": "e4fcb43d12de00d011717b033b496f5f57fb00c297f34e0a2f03206befd03e13",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -2293,10 +2293,11 @@
         "./HoverCard.module.css",
         "./clipboard.ts",
         "./pointer-grace.ts",
+        "@floating-ui/react-dom",
         "react",
         "react-dom"
       ],
-      "local_sha256": "8f5a33f622f82ddfac845f51c21327966377118472d117560479cdaa41584a3b",
+      "local_sha256": "610da056ebf0022acf7796129b75aac306328d0cecab4ead0304e827dcdde12c",
       "classification": "A",
       "additional_sources": [
         {
@@ -3549,7 +3550,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "87001a37ce925340c9f1e6edf7b41d0cc974bd4692322ef345bf77af77308cdf",
+      "local_sha256": "78280a7c0e4926962ee63e6388b334cce6ab784cd52699996ce5c3a028ccb174",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
@@ -3803,7 +3804,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "eda41494bea5e09e93b8f2454a028ec03c303fb2f7171a328cf1a0983a67c71b"
+      "local_sha256": "62a24439659760f574106ade3e4e670d24dc2c12e091fe5d725f38874c54f9bf"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
@@ -4044,7 +4045,7 @@
           "treatment": "Add the English/Chinese pending-message label for the Harness-style sending progress, driven by rustX native admission state."
         }
       ],
-      "local_sha256": "484fdf5f29919433f6b8ad86ab9edc03eaf264e08d7d40c7a604dd7625c2580d"
+      "local_sha256": "97d3f7931dec3f5286efa74774b15584907d585869f27dd766342b41252633e8"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -4060,7 +4061,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "retained_dependencies": [],
-      "local_sha256": "badb5b0524b3956d32f0d3b6ea0567b789316326975fc3cbeb2a26ab1547283c",
+      "local_sha256": "01a8b4096821c83856c5640743100c30368dde7a338bde152d9c8175542e6154",
       "classification": "B",
       "additional_sources": [
         {
@@ -4122,7 +4123,7 @@
           "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
         }
       ],
-      "local_sha256": "2ffca30297e48d47874611ba52ab3a215968bf75278673adc2d2ec3a67a8a313"
+      "local_sha256": "b2d1eb92527a5c759a6e3da41cf573fab06160532756245e5373908f74c56a8e"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4642,7 +4643,7 @@
         "Harness slot registry",
         "Harness terminal Host and Session store"
       ],
-      "local_sha256": "d7596aec3e01f5a3797151ef3aecf29dd41411b3d2dc204ef28560c1f9781620",
+      "local_sha256": "1784e060b7a9d1f06d9158afc24b79258aeb403818a6957cb3530f74edaf5853",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-sidebar-terminal/src/client/TerminalGuide.tsx",
@@ -4948,7 +4949,7 @@
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.tsx",
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream_sha256": "52ac73a7a921b9702096331c29dd4a8b7f559da6e9d92ea3a225a62f826f52ee",
-      "treatment": "Harness files tree, suffix-selected viewer toolbar and text-page presentation adapted to native workspace descriptors and the shared logical preview owner. Versioned cached results, physical refresh serialization, scroll restoration and targeted observations remain under exact native scope.",
+      "treatment": "Harness files tree, suffix-selected viewer toolbar and text-page presentation adapted to native workspace descriptors and the shared logical preview owner. Versioned cached results, physical refresh serialization, scroll restoration and targeted observations remain under exact native scope. Sampled STEP envelope plumbing removed; existing native read authority unchanged.",
       "destination": "web-console/src/app/components/WorkbenchFiles.tsx",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -4957,6 +4958,7 @@
       "retained_dependencies": [
         "../../../shared/file-observation.ts",
         "../../../shared/file-preview",
+        "../../client/geometry-source",
         "../../client/preview-content",
         "../../locale/react",
         "../../presentation/markdown/CodeBlock",
@@ -4974,6 +4976,8 @@
         "../../presentation/right-panel/use-view-scroll",
         "../../workspaces/desktop",
         "../../workspaces/workbench",
+        "./documents/GeometryDocument",
+        "./documents/GeometryLoading",
         "./documents/errors",
         "./workbench-documents/DocumentBody",
         "./workbench-documents/definitions",
@@ -4999,7 +5003,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "e5d1cf93e56dc66028a955f24e7d9af4fabc11cd0c1979aa0a6ea0f95ef1f36e"
+      "local_sha256": "f9bcee3e71fe10e241dbc13347eb3e51b70d578b69926cca6cbbd5e0093513c9"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -5957,6 +5961,7 @@
         "../../../presentation/markdown/MarkdownText",
         "../../../presentation/primitives/LoadingIndicator",
         "../WorkbenchFiles",
+        "../documents/GeometryDocument",
         "../documents/ImagePreview",
         "../documents/PdfPreview",
         "./MarkdownBody.module.css",
@@ -5970,7 +5975,7 @@
         "./resources",
         "react"
       ],
-      "local_sha256": "3074173a425a80e0bdb21bea6e822ac6329fccd4703763d9aa3249a52d217ff5"
+      "local_sha256": "65d2d3f72851d4d6e4f3b51e8c7e5144ce65f442947576b0850e9dff31cc2c85"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/locales.ts",
@@ -6000,7 +6005,7 @@
         "../../presentation/dockkit/engine/operations",
         "../../presentation/dockkit/engine/sequence"
       ],
-      "local_sha256": "59505b1f21f148efe96a20b7943458dcba81d12e0ec618b7b65471cb21588190"
+      "local_sha256": "fc2f094b3ffe3185f56532a5252ae5b66a5d98b6b7d822e5101251d751294f4f"
     },
     {
       "upstream": "packages/client/ui-dockkit/tests/apply.client.spec.ts",
@@ -7673,7 +7678,7 @@
       "local_sha256": "1234691990484299bd9f21ba5bba945db51158d282118aa9a0d93fb2f204669b",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "classification": "A",
-      "treatment": "Adapted completed-turn single/multiple changed-files card, four-row fold, counts and deferred hover preview. RustX native snapshots, immutable comparisons and DockKit review tabs own data and navigation.",
+      "treatment": "Adapted completed-turn single/multiple changed-files card, four-row fold, counts and deferred hover preview. RustX native snapshots, immutable comparisons and DockKit review tabs own data and navigation. PR #517: changed-file row previews opt into file-change HoverCard sizing while preserving native full-review activation and lazy preview mounting.",
       "retained_dependencies": [
         "../../locale/react",
         "../primitives/FileTypeIcon",
@@ -8088,7 +8093,7 @@
           "treatment": "Selected English and Chinese frequency descriptions; no external runtime."
         }
       ],
-      "local_sha256": "d0404be6ac53bc8911dc81322e7c7099fa88dc15ecf7e61032e667076b8cdb25"
+      "local_sha256": "bfbbe25d514113779f494656dd2bc9f64a4dd0274fb83c2c9c9863b11e14d7ad"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -8104,9 +8109,13 @@
         "../../presentation/primitives/Button",
         "../../presentation/primitives/Input",
         "../../presentation/primitives/icons",
+        "../../workspaces/authority",
+        "../../workspaces/host",
+        "./TaskCreateDialog",
         "./TaskDetail",
         "./TaskManager.module.css",
         "./copy",
+        "./creation",
         "./model",
         "./scheduler.module.css",
         "./timing",
@@ -8119,7 +8128,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "7f2d1ad504bb87d3803491ed446428c4f03fd1e07c49306b6acc1ad24053e320"
+      "local_sha256": "c6ca4e5449b6249e72d44612e14acfac22e21cb911ff0a78ce082f9961e73707"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -8170,7 +8179,7 @@
       "excluded_dependencies": [
         "Cordis, Remote, plugin slots/store and resource-address authority"
       ],
-      "local_sha256": "63f923ce19e2a23baffcdbb6065b8ac1b9ce8a9971cbba0596adaa3a9836f8cf"
+      "local_sha256": "bcdfce3846b161314ce6f34e4ee248732f5a8a0365cad0e4d923fcf4b9122507"
     },
     {
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
@@ -8316,7 +8325,7 @@
           "treatment": "Pane-owned navigator toggle, width clamps, push/overlay/fill layout and accessible resize adapted to native workspace tree."
         }
       ],
-      "local_sha256": "de22c18a99b165e06cb854371477f41963b413998122eaa19ea07da5b75606bc"
+      "local_sha256": "a7fbced3488db7207ea47eda906e531b170e0bf56920e8e5de16d146c39db7bc"
     },
     {
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",

@@ -3,7 +3,7 @@ import { ConnectionController } from '../src/connection/controller';
 import { Server, TOKEN, endpoint } from './fixture';
 function bootstrap() { return Promise.resolve(new Response(JSON.stringify({ connectionMode: 'local', appServerEndpoint: endpoint, appServerTransportToken: TOKEN }), { headers: { 'content-type': 'application/json' } })); }
 it('local bootstrap is the only local material source; no remembered remote fallback', async () => {
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'wss://remembered.example/' }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'wss://remembered.example/' }));
   const server = new Server(), fetcher = vi.fn(bootstrap), owner = new ConnectionController(server.client, fetcher);
   await owner.start(); expect(server.sockets).toHaveLength(1);
   await owner.reconnect(); expect(server.sockets).toHaveLength(2); expect(server.sockets[0].closed).toBe(true);

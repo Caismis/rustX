@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import { dataNodesDocument } from '../workflow-data-document';
 import { viewId } from '../../src/app/workflows/ui/editor/selection';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession, choose } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -125,6 +125,6 @@ for (const width of [1440,390]) test.describe(`classifier panel ${width}`,()=>{
       await card.focus();await card.press('Enter');
       await expect(panel.getByRole('button',{name:'重命名售后支持',exact:true})).toBeVisible();
       expect(errors).toEqual([]);
-    } finally {await fixture.stop(false);}
+    } finally {await stopDogfoodPage(page, fixture, false);}
   });
 });

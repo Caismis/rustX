@@ -134,10 +134,21 @@ and 128 per process. Full/closed observers retire without blocking execution.
 A missing reset/chunk means incomplete display. Only an authorized retained final
 result repairs it; late fragments cannot overwrite that completed answer.
 
-The Web client retains at most 16 question entries across visible and hidden
-views. Each retains at most 16 KiB input, 8 KiB output and bounded identity/error
-metadata; capacity refusal occurs before submission. There is one observation
-owner and one sequential read in flight. Panel close aborts reads only. Exact
+The Web client retains at most 16 shared question/draft slots across visible and
+hidden views. Each retains at most 16 KiB submitted input, 16 KiB editable draft,
+8 KiB output and bounded identity/error metadata; capacity refusal occurs before
+draft retention or submission. Drafts remain in memory, keyed by authority,
+Session and Conversation. Explicit release, deletion and authority/Conversation
+replacement retire drafts; transport loss does not. There is one observation
+owner and one sequential read in flight. First admission acknowledgement consumes
+only a draft that still matches that question and exact authority/Conversation,
+including while closed. A delayed or repeated receipt cannot erase a newer edit.
+The question form lives in an existing
+Workbench sidebar tab, alongside file and CAD tabs. Sidebar chrome provides the
+entry even while collapsed. Closing, switching or reopening the tab never
+submits or cancels a question; reopening observes the retained execution/result.
+Only inert tab layout is persisted, never question text or drafts. Panel close
+aborts reads only. Exact
 Call cancellation uses retained attachment observation identity even while Source
 readiness is unavailable or a checkpoint is blocked; native checks enforce the
 exact live attachment and connection-owned Call scope. Source
@@ -233,7 +244,7 @@ With `C` admitted physical connections, auxiliary-only outbound encoding adds
 candidate, acceptance, frame and writer-buffer copy accounting. Mixed traffic
 keeps the existing 1 MiB general-record transport envelope. In-flight input
 records and manager/read owners retain their existing finite host budgets.
-Browser retention adds at most `16 * 26 KiB = 416 KiB` logical UTF-8 payload,
+Browser retention adds at most `16 * 42 KiB = 672 KiB` logical UTF-8 payload,
 up to twice that for UTF-16 strings, plus one response parse and transient
 concatenation; one observation owner prevents parallel unbounded read copies.
 

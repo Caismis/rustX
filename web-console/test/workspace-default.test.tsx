@@ -7,22 +7,27 @@ import { Server, endpoint } from './fixture';
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); localStorage.clear(); vi.restoreAllMocks(); });
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
-async function fixture({ held = false, current = false, history = true, preservePreferences = false, hostAuthority = 'fixture-host' } = {}) {
+async function fixture({ held = false, current = false, history = true, preservePreferences = false, hostAuthority = 'fixture-host', holdHistory = false } = {}) {
   if (!preservePreferences) localStorage.clear(); server = new Server();
   const listWorkspaces = server.workspaceHost.listWorkspaces;
   server.workspaceHost.listWorkspaces = async () => ({ ...await listWorkspaces(), authorityId: hostAuthority });
   server.summaries.set('A', { updated_at: '2026-11-01T00:00:00Z' }); server.summaries.set('B', { updated_at: '2026-11-06T00:00:00Z' });
   if (!history) server.snapshots.clear();
-  const classify = gate<void>(); if (!held) classify.resolve();
-  server.workspaceHost.classifyLocations = async paths => { await classify.promise; return paths.map(cwd => ({ authorized: true, workspaceId: cwd === '/workspace/B' ? 'workspace-b' : 'workspace-a' } satisfies SessionLocation)); };
+  const classify = gate<void>(), initialClassification = gate<readonly string[]>(); if (!held) classify.resolve();
+  server.workspaceHost.classifyLocations = async paths => {
+    initialClassification.resolve([...paths]);
+    // Hold history association separately from Home's fresh single-Session authorization.
+    if (!holdHistory || paths.length > 1) await classify.promise;
+    return paths.map(cwd => ({ authorized: true, workspaceId: cwd === '/workspace/B' ? 'workspace-b' : 'workspace-a' } satisfies SessionLocation));
+  };
   server.workspaceHost.resolveWorkspace = async id => ({ cwd: id === 'workspace-b' ? '/workspace/B' : '/workspace/A' });
   const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
   server.workspaceHost.configureWorkspace = async id => ({ kind: 'read', projection: { ...cfg3Source(), target: { kind: 'workspace', directory: id === 'workspace-b' ? '/workspace/B' : '/workspace/A' }, prospective_approval_mode: 'policy',
     session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [{ model: 'fixture/native', protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] }] } } } });
-  if (current) { await server.attached('A'); localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] })); } else await server.connect();
+  if (current) { await server.attached('A'); localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } })); } else await server.connect();
   const ui = render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
   const picker = () => ui.getByRole('button', { name: 'Choose Workspace' });
-  return { ui, picker, classify };
+  return { ui, picker, classify, initialClassification };
 }
 it('startup selects the most recently active registered Workspace and Send uses it without opening a picker', async () => {
   const f = await fixture();
@@ -66,10 +71,13 @@ it('New Conversation retains the current Session origin until classification can
   await waitFor(() => expect(f.picker().textContent).toContain('Workspace A'));
   expect((editor as HTMLTextAreaElement).value).toBe('New conversation in A');
 });
-it('New from Scheduled Tasks inherits the retained Home Session while Workspace classification is pending', async () => {
-  const f = await fixture({ held: true, current: true });
+it('New Conversation after returning from Scheduled Tasks inherits the retained Home Session while Workspace classification is pending', async () => {
+  const f = await fixture({ held: true, current: true, holdHistory: true });
+  expect(await f.initialClassification.promise).toEqual(expect.arrayContaining(['/workspace/A', '/workspace/B']));
   fireEvent.click(within(f.ui.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Scheduled Tasks' }));
-  fireEvent.click(await f.ui.findByRole('button', { name: 'New' }));
+  await f.ui.findByRole('region', { name: 'Automation tasks' });
+  fireEvent.click(within(f.ui.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Home' }));
+  fireEvent.click((await f.ui.findAllByRole('button', { name: 'New Conversation' }))[0]);
   const editor = f.ui.getByRole('textbox', { name: 'Message' });
   fireEvent.change(editor, { target: { value: 'Keep the Home Workspace origin' } });
   expect(server.requests.filter(row => ['thread/start', 'mcp/draftPrepare'].includes(row.request.method))).toHaveLength(0);

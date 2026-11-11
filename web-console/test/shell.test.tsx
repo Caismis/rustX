@@ -33,7 +33,11 @@ it('collapse, rail expansion and Settings appearance gestures emit no native ope
   theme('Light');
   expect(document.body.hasAttribute('data-ds-dark-theme')).toBe(false);
   expect(server.requests.slice(baseline).every(row => ['configuration/sourcesRead', 'schedule/list', 'schedule/catalog'].includes(row.request.method))).toBe(true);
-  expect(JSON.stringify(localStorage)).not.toMatch(/workspaceId|cwd|snapshot|interaction/);
+  expect(JSON.stringify(localStorage)).not.toMatch(/cwd|snapshot|interaction/);
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v3')!)).toEqual({
+    endpoint: 'ws://127.0.0.1:8080/', openViews: [],
+    route: { kind: 'new-conversation', workspaceId: 'workspace-a' },
+  });
 });
 it('Extensions remain reachable through Settings without a sidebar shortcut', async () => {
   await server.connect();
@@ -70,5 +74,5 @@ it('native paging sends offsets and does not create browser-owned Session member
   expect(server.requests.filter(row => row.request.method === 'session/list').map(row => row.request.params)).toEqual([
     { offset: 0, limit: 32, query: '' }, { offset: 32, limit: 32, query: '' }, { offset: 0, limit: 32, query: '' },
   ]);
-  expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!)).toEqual({ endpoint: 'ws://127.0.0.1:8080/', openViews: [], draft: true });
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v3')!)).toEqual({ endpoint: 'ws://127.0.0.1:8080/', openViews: [], route: { kind: 'new-conversation', workspaceId: 'workspace-a' } });
 });

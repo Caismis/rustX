@@ -1,6 +1,7 @@
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { TaskManagerPage } from '../src/app/scheduler/TaskManagerPage';
+import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { schedulerFixture, task } from './scheduler-fixture';
 const originalScrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo');
 beforeEach(() => {
@@ -14,7 +15,7 @@ it('keeps differently sized mounted task measurements with their identities afte
   short.next_due_utc = '2028-11-02T01:00:00Z';
   const f = schedulerFixture([tall, short]); await f.server.connect();
   try {
-    const ui = render(<TaskManagerPage client={f.server.client} newTask={() => {}} openSession={() => {}}/>);
+    const ui = render(<TaskManagerPage client={f.server.client} host={f.server.workspaceHost} authority={new WorkspaceAuthority(f.server.workspaceHost)} openSession={() => {}}/>);
     await waitFor(() => expect(ui.container.querySelectorAll('li')).toHaveLength(2));
     const row = (title: string) => ui.getByRole('button', { name: new RegExp(title) }).closest('li')!;
     const tallNode = row('Tall task'), shortNode = row('Short task');

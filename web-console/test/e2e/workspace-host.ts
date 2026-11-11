@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import type { Page, Request } from '@playwright/test';
+import type { Page, Request, Route } from '@playwright/test';
 import { LocalWorkspaceHost, type LocalHostConfig } from '../../host/workspaces.ts';
 import { workspaceHandler } from '../../host/http.ts';
 export async function startWorkspaceHost(config: LocalHostConfig) {
@@ -20,12 +20,33 @@ export async function startWorkspaceHost(config: LocalHostConfig) {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Host address missing');
-  return { host, url: `http://127.0.0.1:${address.port}`, stop: () => { host.close(); return !server.listening ? Promise.resolve() : new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); } };
+  return { host, url: `http://127.0.0.1:${address.port}`, stop: async () => {
+    await Promise.all([host.close(), !server.listening ? Promise.resolve() : new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))]);
+  } };
 }
 export type WorkspaceHostResponse = { status: number; headers: Record<string, string>; body: Buffer };
+const proxies = new WeakMap<Page, { retiring: boolean; pending: Set<Promise<void>> }>();
+
+/** Keep interception installed until every Node callback has delivered its reply.
+ * Playwright 1.63 can update empty patterns after the first callback completes
+ * inside unrouteAll(wait), continuing other intercepted requests prematurely. */
+export async function drainWorkspaceHostRoutes(page: Page) {
+  const proxy = proxies.get(page); if (!proxy) return;
+  proxy.retiring = true;
+  const failures: unknown[] = [];
+  while (proxy.pending.size) {
+    const settled = await Promise.allSettled([...proxy.pending]);
+    for (const result of settled) if (result.status === 'rejected') failures.push(result.reason);
+  }
+  proxies.delete(page);
+  if (failures.length) throw failures[0];
+}
+
 /** Same-origin deployment proxy to the actual isolated Node Product Host fixture. */
 export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl: string }, writeGate?: { before: () => Promise<void>; observed: () => Promise<void> }, observeResponse?: (request: Request, response: WorkspaceHostResponse) => void) {
-  await page.route('**/product-host/*', async route => {
+  const proxy = { retiring: false, pending: new Set<Promise<void>>() }; proxies.set(page, proxy);
+  const forward = async (route: Route) => {
+    if (proxy.retiring) { await route.fulfill({ status: 503, body: 'Fixture proxy retired' }); return; }
     // Observation is an open NDJSON response. Preserve its streaming transport;
     // buffering route.fulfill would withhold readiness until the watch closes.
     if (route.request().url().endsWith('/file-observe-events')) {
@@ -42,5 +63,9 @@ export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl
     // synthetic response body through Chromium's resource cache.
     observeResponse?.(route.request(), buffered);
     await route.fulfill(buffered);
+  };
+  await page.route('**/product-host/*', route => {
+    const forwarding = forward(route); proxy.pending.add(forwarding);
+    return forwarding.finally(() => { proxy.pending.delete(forwarding); });
   });
 }

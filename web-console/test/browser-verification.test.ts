@@ -36,6 +36,18 @@ describe('sharded browser coverage', () => {
     expect(coverage).toMatchObject({ total: 3, passed: 2, skipped: ['title c'] });
     expect(coverage.shards.map(({ index, tests }) => [index, tests])).toEqual([[1, 1], [2, 2]]);
   });
+  it('FULL covers all discovered tests exactly once in three shards and requires the third report, including intentional skips', () => {
+    const three = { ...complete, shards: [['first.spec.ts'], ['second.spec.ts'], ['third.spec.ts']] };
+    const runs = [shard(1, report({ id: 'a' }), { total: 3 }), shard(2, report({ id: 'b' }), { total: 3 }), shard(3, report(skippedC), { total: 3 })];
+    const coverage = verify(three, runs, three.shards.length);
+    expect(coverage.errors).toEqual([]);
+    expect(coverage).toMatchObject({ total: 3, passed: 2, skipped: ['title c'] });
+    expect(coverage.shards.map(({ index, tests }) => [index, tests])).toEqual([[1, 1], [2, 1], [3, 1]]);
+    expect(verify(three, runs.slice(0, 2), three.shards.length).errors).toEqual([
+      'shard 3/3: missing its report', 'title c: never executed by any shard', 'shard 3/3: executed no test',
+    ]);
+    expect(verify(three, [...runs, runs[2]], three.shards.length).errors).toEqual(expect.arrayContaining(['shard 3/3: reported more than once']));
+  });
   it('fails when a shard or its report is missing', () => {
     expect(verify(complete, [passing[0]], 2).errors).toEqual(['shard 2/2: missing its report', 'title b: never executed by any shard', 'title c: never executed by any shard', 'shard 2/2: executed no test']);
     expect(verify(complete, [passing[0], shard(2)], 2).errors).toEqual(expect.arrayContaining(['shard 2/2: missing its report']));
@@ -87,8 +99,10 @@ describe('browser selections', () => {
   const discovered = [found('smoke.spec.ts', 'boots', ['@smoke']), found('chat.spec.ts', 'sends'), found('chat.spec.ts', 'settles'), found('shell.spec.ts', 'frame'), found('other.spec.ts', 'x'),
     found('retry-presentation.spec.ts', 'en light 1440', ['@presentation']), found('retry-presentation.spec.ts', 'zh dark 390', ['@presentation'])];
   const identityOf = { commit: identity.commit, prepared: 'p' };
-  it('FULL selects every discovered test and splits whole files over two shards', () => {
-    const full = inventoryOf(identityOf, discovered, { selection: 'full', shards: [1, 2], specs: [], presentation: false }, ['shell.spec.ts'], {});
+  it('FULL selects every discovered test and splits whole files over three shards', () => {
+    const full = inventoryOf(identityOf, discovered, { selection: 'full', shards: [1, 2, 3], specs: [], presentation: false }, ['shell.spec.ts'], {});
+    expect(full.shards).toHaveLength(3);
+    expect(full.shards.every(files => files.length > 0)).toBe(true);
     expect(full.tests).toHaveLength(discovered.length);
     expect(full.discovered).toBe(discovered.length);
     expect(full.shards.flat().sort()).toEqual(['chat.spec.ts', 'other.spec.ts', 'retry-presentation.spec.ts', 'shell.spec.ts', 'smoke.spec.ts']);
@@ -130,7 +144,7 @@ describe('presentation contracts in the discovered suite', () => {
   });
   it('keeps the mandatory smoke tests in every FAST selection and every test in FULL', () => {
     for (const presentation of [false, true]) expect(inventoryOf(identityOf, discovered, { selection: 'fast', shards: [1], specs: [], presentation }, [], {}).tests.some(test => test.smoke)).toBe(true);
-    expect(inventoryOf(identityOf, discovered, { selection: 'full', shards: [1, 2], specs: [], presentation: false }, [], {}).tests).toHaveLength(discovered.length);
+    expect(inventoryOf(identityOf, discovered, { selection: 'full', shards: [1, 2, 3], specs: [], presentation: false }, [], {}).tests).toHaveLength(discovered.length);
   });
 });
 

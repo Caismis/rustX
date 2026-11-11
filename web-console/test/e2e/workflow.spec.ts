@@ -3,7 +3,7 @@ import { openEmptySession, returnHome, openResourceModule, openWorkspaceSettings
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { wireProbe } from './wire-probe';
 
@@ -136,5 +136,5 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     expect(wire.requests.filter(request => request.method === 'agent/sendMessage' || request.method === 'agent/interrupt' || request.method === 'agent/wait')).toHaveLength(0);
     expect(errors).toEqual([]); passed = true;
   } catch (error) { console.error(fixture.diagnostics()); throw error; }
-  finally { await page.close(); await fixture.stop(passed); }
+  finally { await stopDogfoodPage(page, fixture, passed); }
 });
