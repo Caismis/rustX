@@ -468,8 +468,31 @@ macro_rules! string_key_reject {
 // Only built-in strings use this probe; every custom/numeric key retains the
 // original finite serializer, including its callback count and error behavior.
 struct StringKey;
-impl serde::Serializer for StringKey {
-    type Ok = Option<String>;
+trait StringProbe {
+    type Output;
+    fn capture(self, value: &str) -> Self::Output;
+}
+impl StringProbe for StringKey {
+    type Output = Option<String>;
+    fn capture(self, value: &str) -> Self::Output {
+        if value.len() > 256 {
+            return None;
+        }
+        let mut remaining = 256_usize;
+        for byte in value.bytes() {
+            let bytes = match byte {
+                b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
+                0..=0x1f => 6,
+                _ => 1,
+            };
+            remaining = remaining.checked_sub(bytes)?;
+        }
+        Some(value.to_owned())
+    }
+}
+struct StringSerializer<P>(P);
+impl<P: StringProbe> serde::Serializer for StringSerializer<P> {
+    type Ok = P::Output;
     type Error = serde::de::value::Error;
     type SerializeSeq = serde::ser::Impossible<Self::Ok, Self::Error>;
     type SerializeTuple = Self::SerializeSeq;
@@ -479,22 +502,7 @@ impl serde::Serializer for StringKey {
     type SerializeStruct = Self::SerializeSeq;
     type SerializeStructVariant = Self::SerializeSeq;
     fn serialize_str(self, value: &str) -> Result<Self::Ok, Self::Error> {
-        if value.len() > 256 {
-            return Ok(None);
-        }
-        let mut remaining = 256_usize;
-        for byte in value.bytes() {
-            let bytes = match byte {
-                b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
-                0..=0x1f => 6,
-                _ => 1,
-            };
-            let Some(left) = remaining.checked_sub(bytes) else {
-                return Ok(None);
-            };
-            remaining = left;
-        }
-        Ok(Some(value.to_owned()))
+        Ok(self.0.capture(value))
     }
     string_key_reject! {
         serialize_bool(value: bool) -> Ok;
@@ -560,7 +568,7 @@ fn captured_key<T: Serialize + ?Sized>(key: &T) -> Option<String> {
     if builtin_string {
         #[cfg(test)]
         STRING_KEY_WORK.with(|work| work.set(work.get() + 1));
-        if let Ok(value) = key.serialize(StringKey) {
+        if let Ok(value) = key.serialize(StringSerializer(StringKey)) {
             return value;
         }
     }
@@ -573,6 +581,17 @@ fn captured_key<T: Serialize + ?Sized>(key: &T) -> Option<String> {
             Value::Number(key) => Some(key.to_string()),
             _ => None,
         })
+}
+
+struct WireTag<'a, 'k> {
+    schema: View<'a>,
+    key: &'k str,
+}
+impl<'a> StringProbe for WireTag<'a, '_> {
+    type Output = Option<View<'a>>;
+    fn capture(self, value: &str) -> Self::Output {
+        self.schema.wire_variant_str(self.key, value)
+    }
 }
 
 struct Mapping<'a, S> {
@@ -594,6 +613,18 @@ impl<'a, S> Mapping<'a, S> {
     }
     fn wire_tag<T: Serialize + ?Sized>(&mut self, key: &str, value: &T) {
         if !self.schema.has_wire_tag(key) {
+            return;
+        }
+        if matches!(
+            std::any::type_name::<T>().trim_start_matches('&'),
+            "str" | "alloc::string::String"
+        ) {
+            if let Ok(Some(branch)) = value.serialize(StringSerializer(WireTag {
+                schema: self.schema,
+                key,
+            })) {
+                self.select_schema(branch);
+            }
             return;
         }
         if let Ok(value) = serde_json::to_value(value)
