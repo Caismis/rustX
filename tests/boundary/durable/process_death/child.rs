@@ -1195,7 +1195,9 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 tool_id: "tool-bash",
                 name: "bash",
                 arguments: serde_json::json!({
-                    "command": "true",
+                    // `true` is proven read-only and would Allow under Plan;
+                    // a mutating command stays Unproven so elevation Asks.
+                    "command": "touch approval-probe.flag",
                     "description": "Process-death approval probe",
                     "elevation_reason": "process-death approval interaction fixture"
                 }),
