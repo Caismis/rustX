@@ -1070,8 +1070,18 @@ impl ObservationStore for SqliteConversationStore {
         cut: &crate::durable::observation::ObservationReadCut,
         through: u64,
         limit: usize,
+        retired: &dyn Fn() -> bool,
     ) -> Result<crate::durable::observation::CheckpointHead, ConversationStoreError> {
         let mut connection = self.lock()?;
+        if retired() {
+            #[cfg(test)]
+            drop(crate::durable::sqlite::query_work::scope(
+                "retired_checkpoint_head",
+            ));
+            return Err(ConversationStoreError::ObservationCutExpired);
+        }
+        #[cfg(test)]
+        let _scope = crate::durable::sqlite::query_work::scope("checkpoint_head");
         let transaction = connection
             .transaction()
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;

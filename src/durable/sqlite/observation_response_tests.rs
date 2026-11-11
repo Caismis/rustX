@@ -27,7 +27,7 @@ fn assert_response_page_oracle(
         .unwrap();
     assert_eq!(current, original);
     let head = store
-        .observation_checkpoint_head(cut, cut.read.journal, 32)
+        .observation_checkpoint_head(cut, cut.read.journal, 32, &|| false)
         .unwrap();
     assert_eq!(head.transcript, current);
     assert_eq!(
