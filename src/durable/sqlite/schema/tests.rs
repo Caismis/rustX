@@ -451,12 +451,68 @@ fn file_writer_uses_normal_wal_with_two_kib_pages() {
     for (sql, expected) in [
         ("PRAGMA synchronous", 1),
         ("PRAGMA page_size", 2048),
-        ("PRAGMA wal_autocheckpoint", 1000),
+        ("PRAGMA wal_autocheckpoint", 2000),
     ] {
         let actual: i64 = connection.query_row(sql, [], |row| row.get(0)).unwrap();
         assert_eq!(actual, expected, "{sql}");
     }
-    eprintln!("SQLite {version} WAL/NORMAL, 2048-byte pages, 1000-frame autocheckpoint");
+    eprintln!("SQLite {version} WAL/NORMAL, 2048-byte pages, 2000-frame autocheckpoint");
+}
+
+#[test]
+fn checkpoint_window_preserves_a_slow_reader_and_closes_cleanly() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("slow-reader.sqlite");
+    let id = ConversationId::generate();
+    let writer = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    let accepted = writer.accept_inbound(draft("initial")).unwrap();
+    writer.adopt_pending_batch(accepted.sequence, None).unwrap();
+    let reader = Connection::open(&path).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    let count = || {
+        reader
+            .query_row("SELECT count(*) FROM message_ledger", [], |row| {
+                row.get::<_, u64>(0)
+            })
+            .unwrap()
+    };
+    assert_eq!(count(), 1);
+    let body = "x".repeat(64 * 1024);
+    for _ in 0..32 {
+        let accepted = writer.accept_inbound(draft(&body)).unwrap();
+        writer.adopt_pending_batch(accepted.sequence, None).unwrap();
+    }
+    assert_eq!(count(), 1, "the reader keeps its original snapshot");
+    let head = writer.load_head().unwrap();
+    assert_eq!(head.active_message_ids.len(), 33);
+    {
+        let connection = writer.conn.lock().unwrap();
+        let (_, frames, checkpointed): (u64, u64, u64) = connection
+            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap();
+        assert!(
+            frames > 2000,
+            "a reader can retain WAL beyond the threshold"
+        );
+        assert!(checkpointed < frames);
+    }
+    reader.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(count(), 33);
+    {
+        let connection = writer.conn.lock().unwrap();
+        let checkpoint: (u64, u64, u64) = connection
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(checkpoint, (0, 0, 0));
+    }
+    drop(reader);
+    drop(writer);
+    let reopened = SqliteConversationStore::open_existing(id, &path).unwrap();
+    assert_eq!(reopened.load_head().unwrap(), head);
 }
 
 #[test]
