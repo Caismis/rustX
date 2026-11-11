@@ -515,6 +515,10 @@ pub(crate) struct PendingObservations {
     state: Mutex<PendingState>,
     /// Wakes the worker task on every push and on close.
     notify: tokio::sync::Notify,
+    /// Set with every wake, cleared by a Journal drain before it reads. A
+    /// drain with nothing signaled since the previous one has no new source
+    /// to read: every commit, readiness release and queued fact signals.
+    source_signaled: AtomicBool,
     #[cfg(test)]
     diagnostic: Mutex<QueueDiagnostic>,
     journal: std::sync::OnceLock<std::sync::Weak<dyn crate::durable::ConversationStore>>,
@@ -1032,6 +1036,7 @@ impl PendingObservations {
                 fixture_progress_counts: (0, 0),
             }),
             notify: tokio::sync::Notify::new(),
+            source_signaled: AtomicBool::new(true),
             #[cfg(test)]
             diagnostic: Mutex::new(QueueDiagnostic::default()),
             journal: std::sync::OnceLock::new(),
@@ -1114,7 +1119,7 @@ impl PendingObservations {
         if let ConversationObservation::PendingReceipt(receipt) = observation {
             state.pending_head = Some(receipt);
             drop(state);
-            self.notify.notify_one();
+            self.signal();
             return;
         }
         let observation = if let ConversationObservation::Published {
@@ -1134,7 +1139,7 @@ impl PendingObservations {
                     ConversationObservation::JournalSourceReady
                 ) {
                     drop(state);
-                    self.notify.notify_one();
+                    self.signal();
                     return;
                 }
                 ConversationObservation::Published {
@@ -1169,7 +1174,7 @@ impl PendingObservations {
                     observation,
                 );
                 drop(state);
-                self.notify.notify_one();
+                self.signal();
                 return;
             }
             if let ConversationObservation::SubagentLifecycle { snapshot, .. } = inner.as_ref() {
@@ -1178,7 +1183,7 @@ impl PendingObservations {
         }
         Self::enqueue(&mut state, observation, self.journal.get().is_some());
         drop(state);
-        self.notify.notify_one();
+        self.signal();
     }
 
     fn coalesce_native_activity(
@@ -1461,6 +1466,7 @@ impl PendingObservations {
     ) -> Vec<ConversationObservation> {
         #[cfg(test)]
         self.drain_stage("window");
+        let signaled = self.source_signaled.swap(false, Ordering::AcqRel);
         let (after, through) = match self.journal_source_window() {
             Ok(Some(window)) => window,
             Ok(None) => return Vec::new(),
@@ -1471,6 +1477,9 @@ impl PendingObservations {
                 }];
             }
         };
+        if !signaled {
+            return Vec::new();
+        }
         #[cfg(test)]
         {
             let mut diagnostic = self.diagnostic.lock().unwrap();
@@ -1504,6 +1513,7 @@ impl PendingObservations {
         self.drain_stage("cursor");
         let mut state = self.state.lock().expect("native source cursor");
         if state.journal_read != after {
+            self.source_signaled.store(true, Ordering::Release);
             return Vec::new();
         }
         // Admission is still capped at 32. Reserve only the possible work at
@@ -1594,7 +1604,7 @@ impl PendingObservations {
                     || state.latest_offhead_activity.is_some()));
         drop(state);
         if more {
-            self.notify.notify_one();
+            self.signal();
         }
         #[cfg(test)]
         self.drain_stage("idle");
@@ -1634,6 +1644,11 @@ impl PendingObservations {
             .lock()
             .expect("native source read state")
             .journal_failed = true;
+    }
+
+    fn signal(&self) {
+        self.source_signaled.store(true, Ordering::Release);
+        self.notify.notify_one();
     }
 
     /// Waits for the next push or for close.
@@ -1698,7 +1713,7 @@ impl PendingObservations {
         #[cfg(test)]
         state.fixture_progress.clear();
         drop(state);
-        self.notify.notify_one();
+        self.signal();
     }
 
     /// Test-only: removes and returns the single oldest queued
@@ -1785,7 +1800,7 @@ impl PendingObservations {
                 .expect("pending observation queue lock poisoned");
             self.parked.store(false, Ordering::Release);
         }
-        self.notify.notify_one();
+        self.signal();
     }
 
     /// Test-only: whether nothing is left to fold now or once the journal
@@ -1916,7 +1931,7 @@ impl crate::durable::presentation::JournalObserver for PendingObservations {
         {
             self.diagnostic.lock().unwrap().committed = Some((through, std::time::Instant::now()));
         }
-        self.notify.notify_one();
+        self.signal();
     }
     fn ready(&self, through: u64) {
         #[cfg(not(test))]
@@ -1929,7 +1944,7 @@ impl crate::durable::presentation::JournalObserver for PendingObservations {
         {
             self.diagnostic.lock().unwrap().ready = Some((through, std::time::Instant::now()));
         }
-        self.notify.notify_one();
+        self.signal();
     }
 }
 #[cfg(test)]
@@ -2009,7 +2024,7 @@ impl PendingObservations {
             *cursor = envelope.sequence;
             if let Some(attempt_id) = envelope.attempt_id {
                 if *cursor < recorder.admitted_through() {
-                    self.notify.notify_one();
+                    self.signal();
                 }
                 return Some(ConversationObservation::Event {
                     attempt_id,
@@ -2018,7 +2033,7 @@ impl PendingObservations {
             }
         }
         if *cursor < recorder.admitted_through() {
-            self.notify.notify_one();
+            self.signal();
             return None;
         }
         drop(cursor);
@@ -2063,7 +2078,7 @@ impl PendingObservations {
         if let Some(last) = events.last() {
             *cursor = last.sequence;
             if last.sequence < recorder.admitted_through() {
-                self.notify.notify_one();
+                self.signal();
             }
         }
         drop(cursor);
@@ -2400,6 +2415,52 @@ mod tests {
         assert!(empty.is_empty());
         // An idle drain allocates no observation page.
         assert_eq!(empty.capacity(), 0);
+    }
+
+    /// A drain with nothing signaled since the previous drain has no new
+    /// committed or released source, so it reads nothing.
+    #[test]
+    fn unsignaled_journal_drain_reads_no_source() {
+        use crate::durable::{ConversationStore, SqliteConversationStore};
+        use crate::runtime::identity::EventId;
+        let conversation = ConversationId::new("conv_0f0e81d1-5a52-7c1e-9d38-0c9f3a7b2e44");
+        let sqlite = Arc::new(SqliteConversationStore::in_memory(conversation.clone()).unwrap());
+        let store: Arc<dyn ConversationStore> = sqlite.clone();
+        let queue = Arc::new(PendingObservations::new());
+        queue.bind_journal(&store, 0);
+        assert_eq!(store.observe_journal(queue.clone()).unwrap(), 0);
+        let commit = |ordinal: usize| {
+            let event = store
+                .append_event(RuntimeEventEnvelope {
+                    schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
+                    tool_occurrence: None,
+                    observation: None,
+                    event_id: EventId::new(format!("signal-{ordinal}")),
+                    sequence: 0,
+                    conversation_id: conversation.clone(),
+                    attempt_id: Some(AttemptId::new(format!("attempt-{ordinal}"))),
+                    turn_id: None,
+                    timestamp: chrono::DateTime::UNIX_EPOCH,
+                    event: RuntimeEvent::AttemptStarted {
+                        attempt_id: AttemptId::new(format!("attempt-{ordinal}")),
+                    },
+                })
+                .unwrap();
+            store
+                .mark_observation_ready(event.sequence, event.sequence)
+                .unwrap();
+            queue.push(ConversationObservation::Published {
+                journal_sequence: event.sequence,
+                observation: Box::new(ConversationObservation::JournalSourceReady),
+            });
+        };
+        commit(0);
+        assert_eq!(queue.drain().len(), 1);
+        sqlite.begin_query_work();
+        assert!(queue.drain().is_empty());
+        assert!(sqlite.finish_query_work().is_empty());
+        commit(1);
+        assert_eq!(queue.drain().len(), 1);
     }
 
     #[test]

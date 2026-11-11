@@ -236,6 +236,23 @@ async fn fixed_turn_observation_work() {
     for (kind, tool) in [("text", false), ("tool", true)] {
         let work = measure_turns(tool).await;
         report(kind, &work);
+        let events: usize = work
+            .sql
+            .values()
+            .flat_map(|scope| &scope.by_sql)
+            .filter(|(sql, _)| sql.starts_with("INSERT INTO events("))
+            .map(|(_, work)| work.0)
+            .sum();
+        let drains = work
+            .sql
+            .get("prepared_lock")
+            .map_or(0, |scope| scope.transactions);
+        // A Journal drain reads its sources only after a new signal, so the
+        // drains that read cannot outnumber the committed events.
+        assert!(
+            drains <= events,
+            "{kind}: {drains} source read transactions for {events} events"
+        );
         // Each live read-back that runs is current when it owns the
         // connection; retired ones run no SQL.
         assert_eq!(
