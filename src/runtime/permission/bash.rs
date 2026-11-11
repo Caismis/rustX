@@ -172,6 +172,18 @@ fn is_find_write_option(token: &str) -> bool {
 }
 
 fn classify_git(args: &[&str]) -> BashReadonlyClass {
+    // Whitespace splitting keeps quote/escape characters in tokens, so a form
+    // like `'--output'` never matches the literal `--output` guard while the
+    // real shell still invokes Git with a write. Unsupported quoting stays
+    // unproven until full argv analysis exists.
+    if args
+        .iter()
+        .any(|arg| arg.contains('\'') || arg.contains('"') || arg.contains('\\'))
+    {
+        return BashReadonlyClass::Unproven {
+            reason: "quoted or escaped git arguments require full shell argv analysis".to_owned(),
+        };
+    }
     if args
         .iter()
         .any(|arg| *arg == "-c" || arg.starts_with("--exec-path") || *arg == "--paginate")
@@ -348,6 +360,9 @@ mod tests {
             "git diff --no-index --output=/tmp/written.patch a b",
             "git diff --output /tmp/written.patch",
             "git show --output=patch HEAD",
+            "git diff --no-index '--output' /tmp/result.patch /tmp/input-a /tmp/input-b",
+            "git diff \"--output=/tmp/written.patch\" a b",
+            "git diff --output\\=/tmp/written.patch",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
