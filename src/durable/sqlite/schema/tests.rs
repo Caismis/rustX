@@ -433,7 +433,7 @@ fn schema_102_text_kind_indexes_are_refused_without_rewriting_the_store() {
 }
 
 #[test]
-fn file_writer_uses_normal_wal_with_two_kib_pages() {
+fn file_writer_uses_normal_wal_with_512_byte_pages() {
     let directory = tempfile::tempdir().unwrap();
     let store = SqliteConversationStore::open(
         ConversationId::generate(),
@@ -450,13 +450,113 @@ fn file_writer_uses_normal_wal_with_two_kib_pages() {
     assert_eq!(journal, "wal");
     for (sql, expected) in [
         ("PRAGMA synchronous", 1),
-        ("PRAGMA page_size", 2048),
-        ("PRAGMA wal_autocheckpoint", 2000),
+        ("PRAGMA cache_size", -2000),
+        ("PRAGMA page_size", 512),
+        ("PRAGMA wal_autocheckpoint", 7825),
     ] {
         let actual: i64 = connection.query_row(sql, [], |row| row.get(0)).unwrap();
         assert_eq!(actual, expected, "{sql}");
     }
-    eprintln!("SQLite {version} WAL/NORMAL, 2048-byte pages, 2000-frame autocheckpoint");
+    eprintln!("SQLite {version} WAL/NORMAL, 512-byte pages, 7825-frame autocheckpoint");
+}
+
+#[test]
+fn incompatible_page_geometry_is_rejected_without_modifying_the_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("wrong-page-size.sqlite");
+    let id = ConversationId::generate();
+    drop(SqliteConversationStore::open(id.clone(), &path).unwrap());
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA journal_mode=DELETE; PRAGMA page_size=2048; VACUUM; PRAGMA journal_mode=WAL;",
+        )
+        .unwrap();
+    let page_size: i64 = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(page_size, 2048);
+    drop(connection);
+    let before = std::fs::read(&path).unwrap();
+    for open in [
+        SqliteConversationStore::open_existing,
+        SqliteConversationStore::open,
+    ] {
+        assert!(
+            matches!(open(id.clone(), &path), Err(ConversationStoreError::IncompatibleSchema(detail)) if detail.contains("page size"))
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
+#[allow(unsafe_code)]
+fn physical_pages_preserve_blob_limits_and_overflow_payloads() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("overflow.sqlite");
+    let store = SqliteConversationStore::open(ConversationId::generate(), &path).unwrap();
+    let connection = store.conn.lock().unwrap();
+    // This only queries the connection's configured limit; it does not change it.
+    let length_limit = unsafe {
+        rusqlite::ffi::sqlite3_limit(connection.handle(), rusqlite::ffi::SQLITE_LIMIT_LENGTH, -1)
+    };
+    assert!(length_limit > 64 * 1024 * 1024 + 4096);
+    let header = vec![b'h'; 16 * 1024];
+    let segment = vec![b's'; 64 * 1024];
+    connection
+        .execute(
+            "INSERT INTO transcript_entries(position,header_json) VALUES(1,?1)",
+            [&header],
+        )
+        .unwrap();
+    connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES('canonical',1,0,'j',0,?1)", [&segment]).unwrap();
+    let restored_header: Vec<u8> = connection
+        .query_row(
+            "SELECT header_json FROM transcript_entries WHERE position=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let restored_segment: Vec<u8> = connection
+        .query_row(
+            "SELECT bytes FROM content_segments WHERE source_kind='canonical' AND source_id=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(restored_header, header);
+    assert_eq!(restored_segment, segment);
+    assert!(
+        connection
+            .execute(
+                "UPDATE transcript_entries SET header_json=?1 WHERE position=1",
+                [vec![0u8; 16 * 1024 + 1]]
+            )
+            .is_err()
+    );
+    assert!(connection.execute("UPDATE content_segments SET bytes=?1 WHERE source_kind='canonical' AND source_id=1", [vec![0u8; 64 * 1024 + 1]]).is_err());
+    for table in ["transcript_entries", "content_segments"] {
+        let overflow: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM dbstat WHERE name=?1 AND pagetype='overflow'",
+                [table],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(overflow > 0, "{table} should use overflow pages");
+    }
+    let integrity: String = connection
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    drop(connection);
+    drop(store);
+    let reopened = Connection::open(path).unwrap();
+    let restored: (Vec<u8>, Vec<u8>) = reopened.query_row(
+        "SELECT (SELECT header_json FROM transcript_entries WHERE position=1), (SELECT bytes FROM content_segments WHERE source_kind='canonical' AND source_id=1)",
+        [], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap();
+    assert_eq!(restored, (header, segment));
 }
 
 #[test]
@@ -493,7 +593,7 @@ fn checkpoint_window_preserves_a_slow_reader_and_closes_cleanly() {
             })
             .unwrap();
         assert!(
-            frames > 2000,
+            frames > 7825,
             "a reader can retain WAL beyond the threshold"
         );
         assert!(checkpointed < frames);

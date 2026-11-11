@@ -14,7 +14,10 @@ macro_rules! table {
                 reading_mutation_revision INTEGER NOT NULL DEFAULT 0 CHECK(reading_mutation_revision >= 0),
                 logical_step_sequence INTEGER NOT NULL CHECK(logical_step_sequence >= 0),
                 pending_unresolved_output_stream_id TEXT,
-                bootstrap_initialized INTEGER NOT NULL DEFAULT 0 CHECK(bootstrap_initialized IN (0,1))
+                bootstrap_initialized INTEGER NOT NULL DEFAULT 0 CHECK(bootstrap_initialized IN (0,1)),
+                surface_revision INTEGER,
+                surface_compaction_generation INTEGER,
+                CHECK((surface_revision IS NULL) = (surface_compaction_generation IS NULL))
             )"
     };
 }

@@ -249,7 +249,7 @@ native row splits its range within the same transaction. Reopen or epoch
 replacement establishes the committed baseline and retires process-local
 direct evidence.
 
-The current SQLite development schema is 105, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Version 83 added original Workflow node input/output Journal facts and their data-node kinds; version 84 requires exact Workflow run/instance indexes so terminal and missing-I/O reads do not scan unrelated history. Schema 99 scopes the Agent request kind index to Agent-owned facts. Schema 100 adds shared-control inbox semantics to that layout. Schema 101 uses 8 KiB physical segments for live suffixes and their copy-through audit and raw argument representations. The public 64 KiB range bound remains in place. Schema 102 narrows auxiliary event indexes and removes the unused broad Trace-kind index. Schema 105 keeps the independent native and observation global kind indexes but stores compact typed keys for common lifecycle kinds; public kinds and all scoped query indexes remain unchanged. Older schemas are refused without migration.
+The current SQLite development schema is 110, defined by `SQLITE_SCHEMA_VERSION`. Schema 110 uses 512-byte pages, groups the Surface head with the store root, and orders Content frontier keys by source ID. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Version 83 added original Workflow node input/output Journal facts and their data-node kinds; version 84 requires exact Workflow run/instance indexes so terminal and missing-I/O reads do not scan unrelated history. Schema 99 scopes the Agent request kind index to Agent-owned facts. Schema 100 adds shared-control inbox semantics to that layout. Schema 101 uses 8 KiB physical segments for live suffixes and their copy-through audit and raw argument representations. The public 64 KiB range bound remains in place. Schema 102 narrows auxiliary event indexes and removes the unused broad Trace-kind index. Schema 105 keeps the independent native and observation global kind indexes but stores compact typed keys for common lifecycle kinds; public kinds and all scoped query indexes remain unchanged. Older schemas are refused without migration.
 
 Version 78 adds the `WorkflowNodeWaiting` Journal vocabulary: native node identity,
 wait reason and an optional reserved Auxiliary Call identity. A confirmed append
@@ -341,7 +341,7 @@ Committed facts survive process termination while the OS/filesystem remains heal
 Power loss or OS failure may lose recent transactions; there is no promised time
 window or per-commit stable-media guarantee. Ordinary accepted model output commits P, U and C together, including its no-tool inbox/terminal boundary.
 Known write/commit failures remain errors. SQLite owns WAL/SHM recovery and the
-2,000-page automatic checkpoint; no per-turn forced checkpoint is added.
+7,825-frame automatic checkpoint (approximately 4 MiB including frame headers); no per-turn forced checkpoint is added. The connection page cache is limited to approximately 2,000 KiB independently of page size.
 See [the durability audit](issue-480/durability.md) for connection and lifetime rules.
 
 Version 9 froze the durable **answer obligation** (Issue #111): adoption
@@ -362,17 +362,16 @@ The physical tables are deliberately semantic rather than generic:
 
 | Table | Purpose and constraints |
 | --- | --- |
-| `rustx_store` | One-row conversation binding, schema version, durable next `InboundSequence` / Event Journal / transcript position counters, the Todo-specific logical-primary-start progress sequence, and the pending unresolved-output `PublicationStreamId` pointer. |
+| `rustx_store` | One-row conversation binding, schema version, durable next `InboundSequence` / Event Journal / transcript position counters, the Todo-specific logical-primary-start progress sequence, and the pending unresolved-output `PublicationStreamId` pointer, and the nullable canonical Surface revision and compaction generation. |
 | `pending_inbound` | Pending deliveries keyed by `InboundSequence`, with unique `MessageId`, serialized User body, and optional correlation. |
 | `inbound_correlation` | Exactly-once correlation mapping to the accepted sequence and unique `MessageId`. |
 | `message_ledger` | Append-only canonical bodies keyed by commit `position` and unique `MessageId`. |
 | `bootstrap_identity` | Immutable initial-history count and digest, including an explicit empty bootstrap. |
 | `surface_ops` | Canonical `Append` bookkeeping only. No replacement operation exists. |
-| `surface_head` | Ordinary canonical cache metadata; historical context is compiled from the projection head and bounded post-base Tail. |
 | `projection_checkpoints` | Immutable typed candidate bodies, candidate fingerprints and independently validated trusted summary metadata. |
 | `projection_activations` / `projection_head` | Ordered historical installations, separate source origins/destination installations, and current head. |
 | `compaction_operations` | Stable OperationId + candidate fingerprint and immutable commit receipt. |
-| `context_checkpoints` | Current structural/index checkpoint matching `surface_head`; it is not message history. |
+| `context_checkpoints` | Current structural/index checkpoint matching the Surface head in `rustx_store`; it is not message history. |
 | `request_snapshots` | One immutable non-history snapshot per `RequestId`, its frozen provisional Assistant identity, Surface revision, committed start sequence, and optional request-only carryover source/representation/anchor. |
 | `events` | Append-only typed envelopes keyed by per-conversation Event Journal sequence and unique `EventId`. |
 | `contribution_emission_heads` | One materialized latest-emission record per `(producer identity, semantic key)`, including the store-assigned logical-step origin, maintained only by the combined model-turn-start transaction. |

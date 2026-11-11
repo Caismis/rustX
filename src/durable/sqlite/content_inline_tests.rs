@@ -701,7 +701,7 @@ fn stream_layout_work(width: usize, suffix_size: usize) -> LayoutWork {
     let page_size: u64 = connection
         .query_row("PRAGMA page_size", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(page_size, 2048);
+    assert_eq!(page_size, 512);
     assert_eq!((wal_bytes - 32) % (page_size + 24), 0);
     let revisions = OUTPUT / suffix_size;
     assert_eq!(
@@ -854,10 +854,13 @@ fn frontier_write_cost(history: u64, tool: bool) -> (usize, usize, i32) {
         }
     }
     let wal = std::fs::read(path.with_file_name("frontier.sqlite-wal")).unwrap();
+    let page_size: usize = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .unwrap();
+    let frame_size = page_size + 24;
+    assert_eq!((wal.len() - 32) % frame_size, 0);
     let pages: Vec<u32> = wal[32..]
-        .as_chunks::<2072>()
-        .0
-        .iter()
+        .chunks_exact(frame_size)
         .map(|frame| u32::from_be_bytes(frame[..4].try_into().unwrap()))
         .collect();
     assert!(
