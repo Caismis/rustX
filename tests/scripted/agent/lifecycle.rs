@@ -2370,11 +2370,11 @@ async fn approval_deny_emits_one_denied_result_without_starting_executor() {
     ));
 }
 
-/// The strong parallel-batch contract resolves every approval in canonical
-/// call order before any executor start frontier advances. A denied sibling
-/// receives a result slot but never receives an executor future.
+/// P15: an allowed call may start while a sibling still waits for Ask. Denial
+/// of the sibling fills its result slot without an executor future. Committed
+/// ToolMessages stay in original call order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn parallel_batch_resolves_approvals_before_any_tool_start() {
+async fn parallel_batch_allows_independent_work_while_sibling_awaits_ask() {
     let policy = Arc::new(ScriptedPreToolPolicy::new(vec![
         PreToolDecision::Ask {
             reason: "first".to_owned(),
@@ -2421,10 +2421,13 @@ async fn parallel_batch_resolves_approvals_before_any_tool_start() {
         })
     };
 
+    // Both Ask requests may publish concurrently; wait until both are pending.
     request_count
-        .wait_for(|count| *count == 1)
+        .wait_for(|count| *count == 2)
         .await
-        .expect("first approval request");
+        .expect("both approval requests");
+    assert!(!*alpha_handle.started.borrow());
+    assert!(!*beta_handle.started.borrow());
     first_tx
         .send(InteractionOutcome::Responded {
             response: InteractionResponse::Approval {
@@ -2432,12 +2435,12 @@ async fn parallel_batch_resolves_approvals_before_any_tool_start() {
             },
         })
         .expect("first approval waiter");
-    request_count
-        .wait_for(|count| *count == 2)
-        .await
-        .expect("second approval request");
-    assert!(!*alpha_handle.started.borrow());
-    assert!(!*beta_handle.started.borrow());
+    // Allowed work progresses without waiting for the sibling Ask.
+    alpha_handle.await_started().await;
+    assert!(
+        !*beta_handle.started.borrow(),
+        "pending Ask sibling never starts"
+    );
     second_tx
         .send(InteractionOutcome::Responded {
             response: InteractionResponse::Approval {
@@ -2447,7 +2450,6 @@ async fn parallel_batch_resolves_approvals_before_any_tool_start() {
             },
         })
         .expect("second approval waiter");
-    alpha_handle.await_started().await;
     assert!(
         !*beta_handle.started.borrow(),
         "denied sibling never starts"
