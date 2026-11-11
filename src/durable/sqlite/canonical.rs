@@ -56,6 +56,152 @@ use std::sync::atomic::Ordering;
 
 pub(super) mod first_human;
 
+/// Resolves the exact canonical result's committing Assistant/Attempt from
+/// primary canonical and Journal evidence, validating the native result.
+pub(super) fn tool_result_owner(
+    connection: &Connection,
+    message: &MessageId,
+    call: &crate::runtime::identity::ToolCallId,
+    through: u64,
+) -> Result<
+    Option<crate::durable::store::canonical::CanonicalToolResultOwner>,
+    ConversationStoreError,
+> {
+    type Row = (
+        String,
+        Option<String>,
+        String,
+        Option<u64>,
+        u32,
+        String,
+        bool,
+    );
+    // The occurrence index is derived from the primary ToolResult.
+    // Use the existing native decoder to retain its JSON, numeric and
+    // duplicate-field rules before trusting this row's Journal owner.
+    let (assistant, owner, stored_call, sequence, block, tool, valid_position): Row = connection
+        .query_row_cached(
+            "SELECT t.assistant_message_id,t.attempt_id,t.call_id,t.commit_sequence,
+                    t.block_index,t.tool_id,coalesce(m.position=t.result_ledger_position,0)
+                 FROM canonical_tool_calls t
+                 JOIN message_ledger m ON m.message_id=t.result_message_id
+                 WHERE t.result_message_id=?1",
+            [message.as_str()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
+        .ok_or_else(|| {
+            ConversationStoreError::InvalidReference("missing native ToolResult ownership".into())
+        })?;
+    let body = load_message(connection, message)?;
+    if stored_call != call.as_str()
+        || !valid_position
+        || !matches!(body, MessageBlock::Tool(result)
+            if result.occurrence.assistant_message_id.as_str() == assistant.as_str()
+                && result.occurrence.block_index.get() == block
+                && result.tool_call_id.as_str() == stored_call.as_str()
+                && result.tool_id.as_str() == tool.as_str())
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "native ToolResult correlation or owner differs".into(),
+        ));
+    }
+    let Some(sequence) = sequence else {
+        if owner.is_some() {
+            return Err(ConversationStoreError::InvalidReference(
+                "native ToolResult has owner without commit".into(),
+            ));
+        }
+        return Ok(None);
+    };
+    if sequence > through {
+        return Err(ConversationStoreError::InvalidReference(
+            "native Assistant commit is after the recovery fact".into(),
+        ));
+    }
+    let assistant = MessageId::new(assistant);
+    let attempt = verified_assistant_commit(connection, &assistant, sequence, owner.as_deref())?;
+    Ok(attempt.map(
+        |attempt_id| crate::durable::store::canonical::CanonicalToolResultOwner {
+            assistant_message_id: assistant,
+            attempt_id,
+        },
+    ))
+}
+
+/// The attempt that committed a canonical Assistant with physical Tool calls,
+/// from the canonical Tool-call index verified against its exact Journal
+/// `AssistantMessageCommitted` fact.
+pub(super) fn assistant_owner(
+    connection: &Connection,
+    assistant: &MessageId,
+) -> Result<Option<crate::runtime::identity::AttemptId>, ConversationStoreError> {
+    let row: Option<(Option<String>, Option<u64>)> = connection
+        .query_row_cached(
+            "SELECT attempt_id,commit_sequence FROM canonical_tool_calls
+             WHERE assistant_message_id=?1 ORDER BY block_index LIMIT 1",
+            [assistant.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    match row {
+        None | Some((None, None)) => Ok(None),
+        Some((Some(_), None)) => Err(ConversationStoreError::InvalidReference(
+            "native Assistant has owner without commit".into(),
+        )),
+        Some((owner, Some(sequence))) => {
+            verified_assistant_commit(connection, assistant, sequence, owner.as_deref())
+        }
+    }
+}
+
+fn verified_assistant_commit(
+    connection: &Connection,
+    assistant: &MessageId,
+    sequence: u64,
+    owner: Option<&str>,
+) -> Result<Option<crate::runtime::identity::AttemptId>, ConversationStoreError> {
+    let json: Option<String> = connection
+        .query_row_cached(
+            "SELECT event_json FROM events WHERE sequence=?1",
+            [crate::durable::sqlite::seq_to_i64(sequence)?],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    let Some(json) = json else {
+        return Err(ConversationStoreError::InvalidReference(
+            "missing native Assistant commit".into(),
+        ));
+    };
+    let event: RuntimeEventEnvelope = crate::durable::sqlite::decode(&json, "Assistant commit")?;
+    if event.sequence != sequence
+        || event
+            .attempt_id
+            .as_ref()
+            .map(crate::runtime::identity::AttemptId::as_str)
+            != owner
+        || !matches!(&event.event, crate::events::RuntimeEvent::AssistantMessageCommitted { message_id } if message_id == assistant)
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "native ToolResult owner disagrees with Journal".into(),
+        ));
+    }
+    Ok(event.attempt_id)
+}
+
 impl CanonicalStore for SqliteConversationStore {
     fn recovery_tool_result_owner(
         &self,
@@ -66,108 +212,16 @@ impl CanonicalStore for SqliteConversationStore {
         Option<crate::durable::store::canonical::CanonicalToolResultOwner>,
         ConversationStoreError,
     > {
-        type Row = (
-            String,
-            Option<String>,
-            String,
-            Option<u64>,
-            u32,
-            String,
-            bool,
-        );
-        let (assistant, owner, sequence) = {
-            let connection = self.lock()?;
-            // The occurrence index is derived from the primary ToolResult.
-            // Use the existing native decoder to retain its JSON, numeric and
-            // duplicate-field rules before trusting this row's Journal owner.
-            let (assistant, owner, stored_call, sequence, block, tool, valid_position): Row =
-                connection
-                    .query_row_cached(
-                        "SELECT t.assistant_message_id,t.attempt_id,t.call_id,t.commit_sequence,
-                    t.block_index,t.tool_id,coalesce(m.position=t.result_ledger_position,0)
-                 FROM canonical_tool_calls t
-                 JOIN message_ledger m ON m.message_id=t.result_message_id
-                 WHERE t.result_message_id=?1",
-                        [message.as_str()],
-                        |row| {
-                            Ok((
-                                row.get(0)?,
-                                row.get(1)?,
-                                row.get(2)?,
-                                row.get(3)?,
-                                row.get(4)?,
-                                row.get(5)?,
-                                row.get(6)?,
-                            ))
-                        },
-                    )
-                    .optional()
-                    .map_err(|error| {
-                        crate::durable::sqlite::sqlite_error(&error, error.to_string())
-                    })?
-                    .ok_or_else(|| {
-                        ConversationStoreError::InvalidReference(
-                            "missing native ToolResult ownership".into(),
-                        )
-                    })?;
-            let body = load_message(&connection, message)?;
-            if stored_call != call.as_str()
-                || !valid_position
-                || !matches!(body, MessageBlock::Tool(result)
-                    if result.occurrence.assistant_message_id.as_str() == assistant.as_str()
-                        && result.occurrence.block_index.get() == block
-                        && result.tool_call_id.as_str() == stored_call.as_str()
-                        && result.tool_id.as_str() == tool.as_str())
-            {
-                return Err(ConversationStoreError::InvalidReference(
-                    "native ToolResult correlation or owner differs".into(),
-                ));
-            }
-            (assistant, owner, sequence)
-        };
-        let Some(sequence) = sequence else {
-            if owner.is_some() {
-                return Err(ConversationStoreError::InvalidReference(
-                    "native ToolResult has owner without commit".into(),
-                ));
-            }
-            return Ok(None);
-        };
-        if sequence > through {
-            return Err(ConversationStoreError::InvalidReference(
-                "native Assistant commit is after the recovery fact".into(),
-            ));
-        }
-        let after = sequence.checked_sub(1).ok_or_else(|| {
-            ConversationStoreError::InvalidReference(
-                "invalid native Assistant commit sequence".into(),
-            )
-        })?;
-        let page = crate::durable::JournalStore::read_events(self, Some(after), 1)?;
-        let Some(event) = page.events.first() else {
-            return Err(ConversationStoreError::InvalidReference(
-                "missing native Assistant commit".into(),
-            ));
-        };
-        let assistant = MessageId::new(assistant);
-        if event.sequence != sequence
-            || event
-                .attempt_id
-                .as_ref()
-                .map(crate::runtime::identity::AttemptId::as_str)
-                != owner.as_deref()
-            || !matches!(&event.event, crate::events::RuntimeEvent::AssistantMessageCommitted { message_id } if *message_id == assistant)
-        {
-            return Err(ConversationStoreError::InvalidReference(
-                "native ToolResult owner disagrees with Journal".into(),
-            ));
-        }
-        Ok(event.attempt_id.as_ref().map(|attempt| {
-            crate::durable::store::canonical::CanonicalToolResultOwner {
-                assistant_message_id: assistant,
-                attempt_id: attempt.clone(),
-            }
-        }))
+        let connection = self.lock()?;
+        tool_result_owner(&connection, message, call, through)
+    }
+
+    fn canonical_assistant_owner(
+        &self,
+        assistant: &MessageId,
+    ) -> Result<Option<crate::runtime::identity::AttemptId>, ConversationStoreError> {
+        let connection = self.lock()?;
+        assistant_owner(&connection, assistant)
     }
 
     fn canonical_bodies(&self) -> Arc<crate::conversation::bodies::CanonicalBodies> {
@@ -632,10 +686,7 @@ impl CanonicalStore for SqliteConversationStore {
         })
     }
     fn validate_head(&self) -> Result<(), ConversationStoreError> {
-        self.read_transaction(|transaction| {
-            ledger::append_head(transaction)?;
-            Ok(())
-        })
+        self.read_transaction(|transaction| ledger::validate_head(transaction))
     }
     fn messages_are_human_inputs(&self, ids: &[MessageId]) -> Result<bool, ConversationStoreError> {
         let connection = self.lock()?;

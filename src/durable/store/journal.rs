@@ -86,6 +86,14 @@ pub trait JournalStore: Send + Sync + 'static {
         &self,
         query: &crate::durable::presentation::FactQuery,
     ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError>;
+    /// The durable recovery frontier: the Journal fold through one exact
+    /// sequence, advanced atomically with every Journal append. Its anchor
+    /// row is verified; a frontier ahead of the Journal or naming another row
+    /// is rejected.
+    fn recovery_frontier(
+        &self,
+    ) -> Result<crate::runtime::recovery::RecoveryFrontier, ConversationStoreError>;
+
     /// Reads a bounded Event Journal page in stable sequence order.
     fn read_events(
         &self,

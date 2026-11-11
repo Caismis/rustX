@@ -767,6 +767,15 @@ pub trait CanonicalStore: Send + Sync + 'static {
         through: u64,
     ) -> Result<Option<CanonicalToolResultOwner>, ConversationStoreError>;
 
+    /// The attempt that committed one canonical Assistant with physical Tool
+    /// calls, from the native Tool-call index verified against its exact
+    /// `AssistantMessageCommitted` Journal fact. `None` when no attempt
+    /// committed it (a supplied bootstrap turn).
+    fn canonical_assistant_owner(
+        &self,
+        assistant: &MessageId,
+    ) -> Result<Option<crate::runtime::identity::AttemptId>, ConversationStoreError>;
+
     /// Native canonical allocation registry. Independent observation domains
     /// never read or populate it.
     fn canonical_bodies(&self) -> std::sync::Arc<crate::conversation::bodies::CanonicalBodies>;

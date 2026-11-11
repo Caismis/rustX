@@ -468,6 +468,12 @@ impl JournalStore for SqliteConversationStore {
         }
         Ok(events)
     }
+    fn recovery_frontier(
+        &self,
+    ) -> Result<crate::runtime::recovery::RecoveryFrontier, ConversationStoreError> {
+        let connection = self.lock()?;
+        super::recovery_frontier::authenticated(&connection)
+    }
     fn read_events(
         &self,
         after_sequence: Option<u64>,
@@ -768,7 +774,7 @@ pub(in crate::durable::sqlite) fn persist_event_tx_with_requests(
         ));
     }
     let json = encode(&event, "runtime event")?;
-    if let Some(inserted) = event_insert::prepared(
+    let persisted = if let Some(inserted) = event_insert::prepared(
         guard,
         transaction,
         conversation_id,
@@ -779,19 +785,23 @@ pub(in crate::durable::sqlite) fn persist_event_tx_with_requests(
         publication,
         previous_members,
     )? {
-        return Ok(PersistedEvent {
+        PersistedEvent {
             event,
             transcript_cursor: inserted.transcript_cursor,
             facts: inserted.facts,
-        });
-    }
-    persist_event_isolated(
-        transaction,
-        conversation_id,
-        event,
-        &json,
-        prepare_observation,
-    )
+        }
+    } else {
+        persist_event_isolated(
+            transaction,
+            conversation_id,
+            event,
+            &json,
+            prepare_observation,
+        )?
+    };
+    // The recovery frontier covers this fact in the same transaction.
+    super::recovery_frontier::advance(transaction, conversation_id, &persisted.event)?;
+    Ok(persisted)
 }
 
 /// Storage failure isolation uses the same current schema and domain builders.

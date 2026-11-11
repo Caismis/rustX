@@ -177,9 +177,8 @@ pub(in crate::durable::sqlite) fn take_head_materializations() -> usize {
 
 /// Appending needs the frontier, not an owned copy of every active identity.
 /// Without a checkpoint the ledger UNIQUE identity constraint supplies the
-/// uniqueness proof. Still visit the bounded suffix and validate each borrowed
-/// UTF-8 value: this preserves corruption/resource checks without allocating an
-/// identity vector and tree. This is a bounded scan, not constant-time context.
+/// uniqueness proof, and the durable identity frontier records how far every
+/// identity has already been validated; only the tail after it is visited.
 pub(in crate::durable::sqlite) fn append_head(
     connection: &Connection,
 ) -> Result<(SurfaceRevision, u64), ConversationStoreError> {
@@ -190,24 +189,90 @@ pub(in crate::durable::sqlite) fn append_head(
         let head = materialize_head(connection, ledger, checkpoint)?;
         return Ok((head.revision, head.compaction_generation));
     }
-    validate_append_identities(connection, ledger)?;
+    let count = validate_append_identities(connection, ledger, false)?;
+    record_identity_frontier(connection, ledger, count)?;
     Ok((
         SurfaceRevision::new(nonnegative(ledger, "canonical frontier")?),
         0,
     ))
 }
 
+/// Read-only validation of the same head an append would use.
+pub(in crate::durable::sqlite) fn validate_head(
+    connection: &Connection,
+) -> Result<(), ConversationStoreError> {
+    let (ledger, checkpoint) = head_frontier(connection)?;
+    if checkpoint.is_some() {
+        materialize_head(connection, ledger, checkpoint)?;
+    } else {
+        validate_append_identities(connection, ledger, false)?;
+    }
+    Ok(())
+}
+
+/// Records that every identity through `ledger` was validated, inside the
+/// writer transaction that validated them.
+pub(in crate::durable::sqlite) fn record_identity_frontier(
+    connection: &Connection,
+    ledger: i64,
+    count: usize,
+) -> Result<(), ConversationStoreError> {
+    connection
+        .execute_cached(
+            "UPDATE rustx_store SET canonical_identity_through=?1,canonical_identity_count=?2 WHERE id=1 AND (canonical_identity_through!=?1 OR canonical_identity_count!=?2)",
+            params![ledger, i64::try_from(count).map_err(|_| storage("canonical identity count"))?],
+        )
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("record canonical identity frontier: {error}"),
+            )
+        })?;
+    Ok(())
+}
+
+/// Validates every canonical identity through `ledger` and returns their
+/// count.
+///
+/// The store root records the Ledger position through which identities were
+/// validated when they were appended, and how many there are. That frontier
+/// must name an existing row at or before the Ledger frontier; only the rows
+/// after it are read, with the same per-identity and working-set bounds.
+/// `from_start` ignores the frontier and validates every row.
 pub(in crate::durable::sqlite) fn validate_append_identities(
     connection: &Connection,
     ledger: i64,
+    from_start: bool,
 ) -> Result<usize, ConversationStoreError> {
+    let (through, validated): (i64, i64) = if from_start {
+        (0, 0)
+    } else {
+        connection
+        .query_row_cached(
+            "SELECT canonical_identity_through,canonical_identity_count FROM rustx_store WHERE id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| storage(e.to_string()))?
+    };
+    if through > ledger || (through > 0 && !ledger_position_exists(connection, through)?) {
+        return Err(ConversationStoreError::InvalidReference(
+            "canonical identity frontier disagrees with the Ledger".into(),
+        ));
+    }
+    let mut count =
+        usize::try_from(validated).map_err(|_| storage("negative canonical identity count"))?;
+    if count > 8192 {
+        return Err(crate::context::resources::bound(
+            "canonical working set exceeds bounded projection size",
+        ));
+    }
     let mut statement = connection
         .prepare_cached(CANONICAL_SUFFIX_IDS)
         .map_err(|e| storage(e.to_string()))?;
     let mut rows = statement
-        .query(params![0, ledger])
+        .query(params![through, ledger])
         .map_err(|e| storage(e.to_string()))?;
-    let mut count = 0;
     while let Some(row) = rows.next().map_err(|e| storage(e.to_string()))? {
         if count >= 8192 {
             return Err(crate::context::resources::bound(
@@ -224,6 +289,45 @@ pub(in crate::durable::sqlite) fn validate_append_identities(
         count += 1;
     }
     Ok(count)
+}
+
+fn ledger_position_exists(
+    connection: &Connection,
+    position: i64,
+) -> Result<bool, ConversationStoreError> {
+    connection
+        .query_row_cached(
+            "SELECT EXISTS(SELECT 1 FROM message_ledger WHERE position=?1)",
+            [position],
+            |row| row.get(0),
+        )
+        .map_err(|e| storage(e.to_string()))
+}
+
+/// Advances the durable identity frontier over one appended identity that
+/// directly follows it. An identity over the bound is never covered, so the
+/// next validation reaches it and rejects the head as before.
+fn advance_identity_frontier(
+    transaction: &Transaction<'_>,
+    previous: SurfaceRevision,
+    appended: SurfaceRevision,
+    id: &MessageId,
+) -> Result<(), ConversationStoreError> {
+    if id.as_str().len() > 4096 {
+        return Ok(());
+    }
+    transaction
+        .execute_cached(
+            "UPDATE rustx_store SET canonical_identity_through=?2,canonical_identity_count=canonical_identity_count+1 WHERE id=1 AND canonical_identity_through=?1",
+            params![seq_to_i64(previous.get())?, seq_to_i64(appended.get())?],
+        )
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("advance canonical identity frontier: {error}"),
+            )
+        })?;
+    Ok(())
 }
 
 pub(in crate::durable::sqlite) fn update_surface_head(
@@ -319,6 +423,7 @@ pub(in crate::durable::sqlite) fn append_message_with_head(
         publication_header,
     )?;
     let revision = head_revision.next();
+    advance_identity_frontier(transaction, head_revision, revision, &id)?;
     append_surface_op(
         transaction,
         revision,
