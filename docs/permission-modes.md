@@ -44,7 +44,13 @@ grant.
 
 Bash classification is conservative and fail-closed. Parse failures,
 unsupported constructs, and unresolved behavior are `unproven`, not proven
-read-only. Plan elevates unproven Bash; Automatic reviews it.
+read-only. Plan elevates unproven Bash; Automatic reviews it. The ZCode AST /
+argv corpus port (acceptance P06) is tracked separately; see
+`docs/permission-modes-p01-p22.md`.
+
+## Acceptance evidence
+
+P01–P22 mapping and remaining gaps: `docs/permission-modes-p01-p22.md`.
 
 ## Auxiliary permission review
 
