@@ -735,7 +735,7 @@ impl<'a> AgentExecution<'a> {
             Ok(settled) => settled,
             Err(error) => {
                 // Cancellation may win only over deferred Interaction failures
-                // (e.g. ControlLost after a committed sibling batch). Durable
+                // (for example ControlLost after a committed sibling batch). Durable
                 // and conversation commit errors must still record through
                 // `commit_failure_terminal` so the coordinator keeps the
                 // durable-authority failure.
