@@ -388,12 +388,18 @@ fn system_prompt(durable: &Durable, index: usize) -> String {
 }
 
 /// Resource-generation comparisons ignore the sparse permission reminder
-/// (Issue #544 §10): it is injected only on first/change/compaction request
-/// starts and is not part of the frozen resource generation under test.
+/// (Issue #544 §10): it is injected on first/change/compaction request starts
+/// and is not part of the frozen resource generation under test.
 fn system_prompt_without_permission_reminder(prompt: &str) -> &str {
-    match prompt.find("\n\nExecution permission mode:") {
-        Some(index) => &prompt[..index],
-        None => prompt,
+    const MARKER: &str = "Execution permission mode:";
+    if let Some(index) = prompt.find("\n\nExecution permission mode:") {
+        &prompt[..index]
+    } else if let Some(index) = prompt.find(&format!("\n{MARKER}")) {
+        &prompt[..index]
+    } else if prompt.starts_with(MARKER) {
+        ""
+    } else {
+        prompt
     }
 }
 
@@ -1845,8 +1851,14 @@ fn live_external_edits_never_expose_a_new_generation() {
     let first = system_prompt(&durable, 0);
     assert!(first.contains("R1 project instructions."));
     assert!(first.contains("R1 alpha summary"));
+    assert!(
+        first.contains("Execution permission mode:"),
+        "first request carries the sparse permission reminder"
+    );
     let first_generation = system_prompt_without_permission_reminder(&first);
     for index in 1..snapshots.len() {
+        // Later requests may still carry a reminder when they open a new
+        // Attempt admission; compare only the resource-derived System body.
         assert_eq!(
             system_prompt_without_permission_reminder(&system_prompt(&durable, index)),
             first_generation,
