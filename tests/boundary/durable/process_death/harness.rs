@@ -167,6 +167,20 @@ impl Lab {
         );
     }
 
+    /// Rewrites the on-disk runtime config to a different Full Access document.
+    ///
+    /// Used by live external-edit proofs: the file must change, but flipping to
+    /// Plan would conflate permission-mode migration with generation freezing.
+    pub(crate) fn write_divergent_full_access_config(&self) {
+        let mut document: serde_json::Value =
+            rustx::toml_authoring::parse(runtime_json(false, false).as_bytes()).unwrap();
+        document["subagents"]["max_concurrent"] = serde_json::json!(5);
+        crate::launch_fixture::write_document(
+            &self.root().join("rustx.toml"),
+            &toml::to_string_pretty(&document).unwrap(),
+        );
+    }
+
     /// Replaces the loaded `AGENTS.md` project-instruction file.
     pub(crate) fn write_project_instructions(&self, body: &str) {
         std::fs::write(self.workspace().join("AGENTS.md"), format!("{body}\n")).expect("AGENTS.md");

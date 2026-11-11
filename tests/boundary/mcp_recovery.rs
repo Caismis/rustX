@@ -488,7 +488,7 @@ where
         },
         context_runtime,
         &fixture.runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
 
@@ -520,7 +520,13 @@ where
     let result = tokio::time::timeout(Duration::from_mins(2), execution.run())
         .await
         .expect("anti-hang guard: the manual-clock lifecycle always settles");
-    driver.await.expect("boundary controller");
+    // Fail closed if the controller is still waiting on a frontier the run
+    // never crossed (for example Plan denied before dispatch). Without this
+    // bound the suite can block the Boundary job after the run itself settles.
+    tokio::time::timeout(Duration::from_secs(30), driver)
+        .await
+        .expect("anti-hang guard: the boundary controller always finishes")
+        .expect("boundary controller");
     common::durable_agent_result(result, fixture.store.as_ref())
 }
 

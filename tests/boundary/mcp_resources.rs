@@ -168,7 +168,7 @@ async fn resource_body_enters_context_only_after_one_committed_normal_tool_resul
         support::default_execution_policy(),
         context,
         &fixture.runtime,
-        crate::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .unwrap();
     let mut run = Box::pin(execution.run());

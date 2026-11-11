@@ -108,7 +108,7 @@ fn prepared_execution<'a>(
         support::default_execution_policy(),
         runtime(model),
         tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime")
 }

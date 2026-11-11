@@ -759,7 +759,7 @@ async fn run(
         execution_policy(policy, clock.clone()),
         context_runtime(model, clock.clone()),
         &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     let started = std::time::Instant::now();
@@ -1445,7 +1445,7 @@ async fn issue204_physical_completion_winner_never_fires_a_deadline() {
         execution_policy(deadline_policy(5_000, None), clock.clone()),
         context_runtime(&model, clock),
         &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     execution.install_tool_physical_settlement_pause(pause);
@@ -1661,7 +1661,7 @@ async fn issue204_batch_siblings_settle_exactly_once_in_model_order() {
         execution_policy(deadline_policy(10_000, None), clock.clone()),
         context_runtime(&model, clock),
         &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     execution.install_tool_physical_settlement_pause(pause);
@@ -2066,7 +2066,7 @@ async fn issue204_remote_frontier_settlement_settles_unconfirmed() {
         execution_policy(deadline_policy(20_000, None), clock.clone()),
         context_runtime(&model, clock),
         &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     let result = tokio::time::timeout(GUARD, execution.run())

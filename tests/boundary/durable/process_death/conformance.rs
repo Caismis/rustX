@@ -1824,7 +1824,7 @@ fn live_external_edits_never_expose_a_new_generation() {
     process.wait_note("first-attempt-settled");
     lab.write_project_instructions("R2 project instructions.");
     lab.write_skill("alpha", "R2 alpha summary", "R2 alpha body");
-    lab.write_runtime_config(true);
+    lab.write_divergent_full_access_config();
     process.resume();
     process.wait_note("settled");
     process.sigkill();

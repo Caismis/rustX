@@ -121,7 +121,7 @@ async fn make_execution<'a>(
         },
         runtime(),
         tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     execution.install_publication_policy(
@@ -766,7 +766,7 @@ async fn publication_flush_wins_before_timeout_at_the_same_cut_and_does_not_rese
         },
         runtime(),
         &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     execution.install_publication_policy(
@@ -866,7 +866,7 @@ async fn provider_progress_wins_when_ready_with_response_timeout() {
         },
         runtime(),
         &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     execution.install_publication_policy(
@@ -956,7 +956,7 @@ async fn cancellation_wins_same_cut_and_retains_cancellation_provenance() {
         },
         runtime(),
         &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     execution.install_publication_policy(

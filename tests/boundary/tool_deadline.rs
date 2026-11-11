@@ -202,7 +202,7 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
         },
         context_runtime,
         &fixture.runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     let (started_sender, mut started) = watch::channel(false);

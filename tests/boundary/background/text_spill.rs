@@ -373,7 +373,7 @@ async fn adopted_textual_terminal_inbound_reaches_the_provider_for_a_text_only_m
         support::default_execution_policy(),
         context_runtime,
         &fixture.runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -538,7 +538,7 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
         support::default_execution_policy(),
         context_runtime,
         &fixture.runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -730,7 +730,7 @@ async fn a_genuine_file_block_is_still_rejected_locally_for_a_text_only_model() 
         support::default_execution_policy(),
         context_runtime,
         &fixture.runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()

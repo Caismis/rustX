@@ -131,7 +131,8 @@ timezone = "UTC"
 ` : '';
     // Lifecycle/UI fixtures are not permission-mode tests: Full Access lets
     // Write/Edit/Bash/workflow/subagent proceed without an unanswered Ask.
-    const writeSettings = (model = primaryModel, modelFields = '') => writeFileSync(settings, (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + 'approval_mode = "full_access"\n' + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n[agent.model]\nmodel = "fixture/${model}"\n${modelFields}` + imageSource);
+    // Root approval_mode must precede any [context] table header.
+    const writeSettings = (model = primaryModel, modelFields = '') => writeFileSync(settings, 'approval_mode = "full_access"\n' + (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n[agent.model]\nmodel = "fixture/${model}"\n${modelFields}` + imageSource);
     writeSettings();
     if (['web_child_capabilities', 'web_large_write'].includes(scenario)) writeFileSync(settings, readFileSync(settings, 'utf8') + '\n');
     // Automatically repairable sources (#464): the App Server repairs the User

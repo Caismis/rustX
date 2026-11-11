@@ -193,7 +193,7 @@ async fn make_execution(setup: ExecutionSetup<'_>) -> AgentExecution<'_> {
         },
         context_runtime(),
         tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     execution.install_publication_policy(
