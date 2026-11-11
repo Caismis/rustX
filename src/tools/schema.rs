@@ -87,6 +87,17 @@ pub const EXECUTION_MODE_FIELD: &str = "execution_mode";
 /// The accepted values of [`EXECUTION_MODE_FIELD`].
 pub const EXECUTION_MODE_VALUES: [&str; 2] = ["foreground", "background"];
 
+/// Optional runtime-owned elevation reason on every model-facing tool schema
+/// (Issue #544). Stripped before business-argument validation and never
+/// forwarded to executors.
+pub const ELEVATION_REASON_FIELD: &str = "elevation_reason";
+
+/// Model-facing description of [`ELEVATION_REASON_FIELD`].
+pub const ELEVATION_REASON_DESCRIPTION: &str = "Optional reason requesting human escalation for \
+     this exact tool call under Plan or Automatic permission modes. Omit or leave null when no \
+     escalation is requested. This is a reason only — never approval evidence — and it never \
+     reaches the tool's business executor.";
+
 /// The model-facing description of the injected [`EXECUTION_MODE_FIELD`]
 /// property. It states the semantic decision instead of listing the enum,
 /// and it deliberately rejects a duration-based heuristic: the distinction
@@ -513,12 +524,55 @@ pub fn compile_model_definition(
         decorate_execution_mode(&mut input_schema);
         description = with_execution_mode_reminder(&description);
     }
+    // Flat elevation_reason decoration is sound for the same decoratable
+    // object roots ModelSelectable already requires. Non-decoratable roots
+    // keep their canonical schema until the wrapping compiler lands; models
+    // can still omit the field.
+    if is_flat_decoratable_object_root(&input_schema)
+        && !root_claims_property(&input_schema, ELEVATION_REASON_FIELD)
+    {
+        decorate_elevation_reason(&mut input_schema);
+    }
     Ok(ModelToolDefinition {
         id: definition.id.clone(),
         name: definition.name.clone(),
         description,
         input_schema,
     })
+}
+
+fn is_flat_decoratable_object_root(schema: &serde_json::Value) -> bool {
+    let Some(root) = schema.as_object() else {
+        return false;
+    };
+    root.get("type").and_then(serde_json::Value::as_str) == Some("object")
+        && root.keys().all(|keyword| is_decoratable_root_keyword(keyword))
+}
+
+fn root_claims_property(schema: &serde_json::Value, name: &str) -> bool {
+    schema
+        .as_object()
+        .and_then(|root| root.get("properties"))
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|properties| properties.contains_key(name))
+}
+
+fn decorate_elevation_reason(schema: &mut serde_json::Value) {
+    let object = schema
+        .as_object_mut()
+        .expect("decoratable schemas are root object schemas");
+    object
+        .entry("properties")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .expect("properties is an object")
+        .insert(
+            ELEVATION_REASON_FIELD.to_owned(),
+            serde_json::json!({
+                "type": ["string", "null"],
+                "description": ELEVATION_REASON_DESCRIPTION,
+            }),
+        );
 }
 
 /// Appends the runtime-owned `execution_mode` reminder to a compiled
@@ -718,14 +772,14 @@ fn escape_pointer_token(token: &str) -> String {
 pub fn resolve_invocation_metadata(
     policy: ToolExecutionPolicy,
     arguments: &serde_json::Value,
-) -> Result<(ToolInvocationMode, serde_json::Value), SchemaError> {
+) -> Result<(ToolInvocationMode, Option<String>, serde_json::Value), SchemaError> {
     reject_reserved_invocation_properties(arguments)?;
-    match policy {
+    let (mode, mut stripped) = match policy {
         ToolExecutionPolicy::ForegroundOnly => {
-            Ok((ToolInvocationMode::Foreground, arguments.clone()))
+            (ToolInvocationMode::Foreground, arguments.clone())
         }
         ToolExecutionPolicy::BackgroundOnly => {
-            Ok((ToolInvocationMode::Background, arguments.clone()))
+            (ToolInvocationMode::Background, arguments.clone())
         }
         ToolExecutionPolicy::ModelSelectable => {
             let Some(object) = arguments.as_object() else {
@@ -746,9 +800,25 @@ pub fn resolve_invocation_metadata(
                 .as_object_mut()
                 .expect("ModelSelectable arguments are objects")
                 .remove(EXECUTION_MODE_FIELD);
-            Ok((mode, stripped))
+            (mode, stripped)
         }
-    }
+    };
+    let elevation_reason = stripped
+        .as_object_mut()
+        .and_then(|object| object.remove(ELEVATION_REASON_FIELD))
+        .and_then(|value| match value {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(text) => {
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_owned())
+                }
+            }
+            other => Some(other.to_string()),
+        });
+    Ok((mode, elevation_reason, stripped))
 }
 
 /// Rejects any reserved `__rustx_*` property in the invocation arguments.
@@ -1242,7 +1312,7 @@ mod tests {
         ] {
             for mode in super::EXECUTION_MODE_VALUES {
                 let call = json!({"command": "ls", "execution_mode": mode});
-                let (_, stripped) =
+                let (_, _, stripped) =
                     resolve_invocation_metadata(ToolExecutionPolicy::ModelSelectable, &call)
                         .expect("a correct call resolves");
                 assert!(
@@ -1593,7 +1663,7 @@ mod tests {
                     );
                     // And the round trip: stripping recovers exactly the
                     // business arguments the canonical schema judged.
-                    let (_, stripped) = resolve_invocation_metadata(
+                    let (_, _, stripped) = resolve_invocation_metadata(
                         ToolExecutionPolicy::ModelSelectable,
                         &invocation,
                     )
@@ -1683,7 +1753,7 @@ mod tests {
 
     #[test]
     fn valid_foreground_selection_is_extracted_and_stripped() {
-        let (mode, stripped) = resolve_invocation_metadata(
+        let (mode, _, stripped) = resolve_invocation_metadata(
             ToolExecutionPolicy::ModelSelectable,
             &json!({"execution_mode": "foreground", "path": "a.txt"}),
         )
@@ -1694,7 +1764,7 @@ mod tests {
 
     #[test]
     fn valid_background_selection_is_extracted_and_stripped() {
-        let (mode, stripped) = resolve_invocation_metadata(
+        let (mode, _, stripped) = resolve_invocation_metadata(
             ToolExecutionPolicy::ModelSelectable,
             &json!({"execution_mode": "background", "command": "sleep 1"}),
         )
@@ -1800,7 +1870,7 @@ mod tests {
             ),
         ] {
             let arguments = json!({"execution_mode": "whatever the tool means"});
-            let (mode, stripped) =
+            let (mode, _, stripped) =
                 resolve_invocation_metadata(policy, &arguments).expect("resolve");
             assert_eq!(mode, expected);
             assert_eq!(

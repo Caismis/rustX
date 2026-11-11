@@ -2522,7 +2522,7 @@ export type IdleLiveness =
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ApprovalMode".
  */
-export type ApprovalMode = 'policy' | 'full_access';
+export type ApprovalMode = 'plan' | 'automatic' | 'full_access';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "NativeTool".
@@ -13776,7 +13776,7 @@ export interface RuntimeClientSnapshot {
    * never changes availability, activation, execution ownership, concurrency,
    * or tool authority.
    */
-  effective_approval_mode: 'policy' | 'full_access';
+  effective_approval_mode: 'plan' | 'automatic' | 'full_access';
   /**
    * The runtime's durable-authority failure, when it has entered the
    * explicit degraded state. While set, no new durable admission/execution

@@ -220,7 +220,7 @@ impl WorkflowRuntime {
             arguments: &prepared.invocation.arguments,
             audit_arguments: &prepared.invocation.arguments,
             approval_policy: prepared.approval,
-            elevation_reason: None,
+            elevation_reason: prepared.elevation_reason.as_deref(),
             workspace_root: None,
             resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,
         };

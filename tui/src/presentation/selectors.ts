@@ -368,5 +368,7 @@ export function unavailableInputModalities(
 
 /** Product labels for native-supported modes; no desired/effective state is owned here. */
 export function approvalLabel(mode: ApprovalMode): string {
-  return mode === "full_access" ? "Full access" : "Policy";
+  if (mode === "full_access") return "Full access";
+  if (mode === "automatic") return "Automatic";
+  return "Plan";
 }

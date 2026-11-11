@@ -40,10 +40,10 @@ export function ToolsPage({ source, document, scope, revision }: {
   return <section aria-label={tx('settings:tools-page.tools-permissions')}>
     <h3>{tx('settings:tools-page.tools-amp-permissions')}</h3>
 
-    <UnitForm<ApprovalMode> title={tx('settings:tools-page.approval-mode')} authored={document.approval_mode ?? undefined} blank="policy" revision={revision}
+    <UnitForm<ApprovalMode> title={tx('settings:tools-page.approval-mode')} authored={document.approval_mode ?? undefined} blank="plan" revision={revision}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'approval', authored } })}>
       {(value, change) => <Choice label={tx('settings:tools-page.approval-mode')} value={value}
-        options={[['policy', tx('settings:copy.policy')], ['full_access', tx('settings:copy.full-access')]]} onChange={change} />}
+        options={[['plan', tx('settings:copy.plan')], ['automatic', tx('settings:copy.automatic')], ['full_access', tx('settings:copy.full-access')]]} onChange={change} />}
     </UnitForm>
 
     <UnitForm<string[]> title={tx('settings:extension-detail.native-tools')} authored={agent?.tools?.builtin ?? undefined} blank={[]} revision={revision}

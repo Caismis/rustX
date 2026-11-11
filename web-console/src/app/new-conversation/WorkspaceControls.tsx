@@ -26,7 +26,7 @@ function useWorkspaceApproval(source?: SourceSettings) {
   const actor = useSettingsActor();
   const readError = useSelector(actor, s => s.context.readError);
   const revision = source?.workspace?.revision ?? '';
-  const unit = useUnitEditing<ApprovalMode>({ authored: source?.workspace?.authored?.approval_mode ?? undefined, blank: 'policy', revision, mutation: approvalMutation });
+  const unit = useUnitEditing<ApprovalMode>({ authored: source?.workspace?.authored?.approval_mode ?? undefined, blank: 'plan', revision, mutation: approvalMutation });
   return { actor, revision, unit, loading: !source && !readError, block: () => { const reason = workspaceApprovalBlock(actor); return reason && message(reason); } };
 }
 type WorkspaceApproval = ReturnType<typeof useWorkspaceApproval>;
@@ -44,7 +44,7 @@ export function WorkspacePermission({ source, approval, disabled = false }: { so
     unit.edit(value);
     actor.send({ type: 'UNIT.SUBMIT', identity: unit.identity, selector: revisionSelector(mutation(null)), revision, mutation: mutation(value) });
   }}/>
-    {unit.draft && <small>{tx('workspace:workspace-controls.requested')}{' '}{unit.displayed === 'full_access' ? tx('workspace:workspace-controls.full-access') : tx('workspace:workspace-controls.policy')}</small>}
+    {unit.draft && <small>{tx('workspace:workspace-controls.requested')}{' '}{unit.displayed === 'full_access' ? tx('workspace:workspace-controls.full-access') : unit.displayed === 'automatic' ? tx('workspace:workspace-controls.automatic') : tx('workspace:workspace-controls.plan')}</small>}
     {outcome.kind === 'conflict' && <small role="alert">{tx('workspace:workspace-controls.workspace-changed-your-selection-is-preserved')}</small>}
     {outcome.kind === 'rejected' && <small role="alert">{outcome.detail}</small>}
     {outcome.kind === 'uncertain' && <small role="alert">{tx('workspace:workspace-controls.outcome-uncertain-reread-before-another-change-no-replay')}</small>}

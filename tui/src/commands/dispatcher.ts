@@ -580,7 +580,7 @@ export class CommandDispatcher {
 
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
-    const usage = transient("error", 'usage: /settings [repairs] | [user | workspace ["<canonical absolute path>"]] [repairs | rescan | approval policy|full_access|inherit]');
+    const usage = transient("error", 'usage: /settings [repairs] | [user | workspace ["<canonical absolute path>"]] [repairs | rescan | approval plan|automatic|full_access|inherit]');
     if (words.length === 1 && words[0] === "repairs") return this.#repairs("current");
     const owner = words.shift() ?? "user";
     let target: import("../../../protocol/app-server/v78.ts").SourceTarget;
@@ -598,7 +598,7 @@ export class CommandDispatcher {
     if (action === "rescan") await client.call("configuration/reconcile", { target }, "configuration_receipt");
     else if (action === "approval") {
       const mode = words.shift();
-      if (mode !== "policy" && mode !== "full_access" && mode !== "inherit") return transient("error", "approval expects policy, full_access, or inherit");
+      if (mode !== "plan" && mode !== "automatic" && mode !== "full_access" && mode !== "inherit") return transient("error", "approval expects plan, automatic, full_access, or inherit");
       await client.call("configuration/sourceWrite", { target, expected_revision: source[target.kind]!.revision,
         mutation: { kind: "config", mutation: { unit: "approval", authored: mode === "inherit" ? null : mode } } }, "sources_written");
     } else if (action) return transient("error", "Unknown Settings action");

@@ -94,7 +94,7 @@ export function emptyPresentationState(
     goal: null,
     runtimeShutdown: false,
     durabilityFailure: null,
-    effectiveApprovalMode: "policy",
+    effectiveApprovalMode: "plan",
   };
 }
 

@@ -174,16 +174,21 @@
       "type": "object"
     },
     "ApprovalMode": {
-      "description": "The runtime-wide control state for tool approval behavior.\n\n`Policy` consults each resolved Tool's\n[`ToolApprovalPolicy`](crate::tools::types::ToolApprovalPolicy).\n`FullAccess` changes only the effective approval result to `Never`; it\nnever changes availability, activation, execution ownership, concurrency,\nor tool authority.",
+      "description": "The runtime-wide execution-permission mode.\n\nModes are built into Rust and are not extensible through TOML presets.\nChanging mode never changes Tool Registry membership, model-facing names,\ntool Schema, MCP discovery, or capability selection.",
       "oneOf": [
         {
-          "const": "policy",
-          "description": "Use each Tool's configured approval policy.",
+          "const": "plan",
+          "description": "Native reads and approved bookkeeping are allowed; Write/Edit may\nautomatically change only workspace-root `PLAN.md`; Bash requires a\nproven read-only classification. Other defaults refuse without a\nnonblank `elevation_reason`.",
+          "type": "string"
+        },
+        {
+          "const": "automatic",
+          "description": "Retain Plan's deterministic fast paths. Remaining defaults go through\nthe shared Auxiliary permission reviewer. Denied calls may escalate\nwith `elevation_reason`.",
           "type": "string"
         },
         {
           "const": "full_access",
-          "description": "Bypass approval prompts for eligible tool calls only.",
+          "description": "Default calls are allowed without Auxiliary or ordinary human review.\nEffective explicit `deny` and `ask` resource settings still apply.",
           "type": "string"
         }
       ]

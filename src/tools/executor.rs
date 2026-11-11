@@ -734,6 +734,8 @@ pub struct PreparedInvocation {
     pub concurrency: ToolConcurrencyPolicy,
     /// The effective approval policy frozen from the definition and invocation.
     pub approval: ToolApprovalPolicy,
+    /// Optional elevation reason stripped from model-facing metadata.
+    pub elevation_reason: Option<String>,
     /// The canonical registry-resolved origin of the tool.
     ///
     /// It is taken from the same resolved [`ToolDefinition`] that produced
@@ -840,7 +842,9 @@ impl ToolRegistration {
         }
         if arguments.as_object().is_some_and(|fields| {
             fields.keys().any(|key| {
-                crate::tools::schema::is_reserved_property(key) || key == EXECUTION_MODE_FIELD
+                crate::tools::schema::is_reserved_property(key)
+                    || key == EXECUTION_MODE_FIELD
+                    || key == crate::tools::schema::ELEVATION_REASON_FIELD
             })
         }) {
             return Ok(PreflightOutcome::Rejected {
@@ -853,6 +857,7 @@ impl ToolRegistration {
             entry,
             id,
             crate::tools::types::ToolInvocationMode::Foreground,
+            None,
             arguments,
         ))
     }
@@ -1187,7 +1192,7 @@ impl ToolRegistry {
     /// executor.
     pub fn preflight(&self, call: &ToolCall) -> Result<PreflightOutcome, ToolPreflightError> {
         let entry = self.resolve_entry(call)?;
-        let (mode, stripped) =
+        let (mode, elevation_reason, stripped) =
             match resolve_invocation_metadata(entry.definition.execution_policy, &call.arguments) {
                 Ok(value) => value,
                 Err(error) => {
@@ -1204,6 +1209,7 @@ impl ToolRegistry {
                 call_id: call.id.clone(),
             },
             mode,
+            elevation_reason,
             &stripped,
         ))
     }
@@ -1212,6 +1218,7 @@ impl ToolRegistry {
         entry: &ToolRegistration,
         id: crate::tools::types::ToolInvocationId,
         mode: crate::tools::types::ToolInvocationMode,
+        elevation_reason: Option<String>,
         arguments: &serde_json::Value,
     ) -> PreflightOutcome {
         let normalized = match (entry.normalizer)(arguments) {
@@ -1260,6 +1267,7 @@ impl ToolRegistry {
             },
             concurrency: entry.definition.concurrency_policy,
             approval,
+            elevation_reason,
             origin: entry.definition.origin.clone(),
             // The executor's declared progress capability is captured here,
             // at invocation resolution, so the admitted call's effective
