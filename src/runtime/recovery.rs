@@ -84,16 +84,19 @@
 //!
 //! # Bounded working set
 //!
-//! The evidence fold pages the Event Journal
-//! ([`JournalStore::read_events`]) and retains only the *unresolved*
-//! state. Reads are O(history); hot memory is O(unresolved work):
+//! The evidence fold starts at the durable [`RecoveryFrontier`] — the same
+//! fold through one Journal sequence, advanced by every Journal append in its
+//! own transaction — and pages only the Journal facts after it
+//! ([`JournalStore::read_events`]), retaining only the *unresolved* state.
+//! Reads are O(facts after the frontier + unresolved work), normally
+//! O(unresolved work); hot memory is O(unresolved work):
 //!
 //! ```text
 //! recovery hot memory =
 //!     O(nonterminal attempt summaries)      (<= 1 by the admission invariant)
 //!   + O(canonical tool repairs outstanding) (only while a ToolResult is missing)
 //!   + O(unpublished background executions)  (bounded by background policy)
-//!   + O(unresolved Assistant attribution)   (plus one leased recovery owner)
+//!   + O(unresolved Assistant attribution)   (read from the native index)
 //! ```
 //!
 //! The tool plane is split across two owners on purpose. [`AttemptEvidence`]
