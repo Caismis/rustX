@@ -494,7 +494,12 @@ pub(super) fn presentation_statements(
         } else {
             "json_extract(event_json, '$.event.type')"
         };
-        let sql = format!("SELECT event_json FROM events INDEXED BY {index} WHERE sequence <= ?1 AND sequence < ?2{scope}
+        let columns = if matches!(query.scope, FactScope::All) {
+            "sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json"
+        } else {
+            "event_json"
+        };
+        let sql = format!("SELECT {columns} FROM events INDEXED BY {index} WHERE sequence <= ?1 AND sequence < ?2{scope}
                 AND {kind_column} = ?{kind_param} AND sequence > ?{after_param}
                 ORDER BY sequence {direction} LIMIT ?{}", params.len());
         statements.push((sql, params));

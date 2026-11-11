@@ -1116,3 +1116,103 @@ async fn t15_t20_recovered_agent_installs_its_selected_source_before_any_publica
     assert_eq!(plane.store.observation_read_cut().unwrap(), original_cut);
     assert_eq!(plane.store.read_events(None, 32).unwrap(), original_journal);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn indexed_restoration_checks_selected_metadata_and_preserves_journal_order() {
+    use crate::durable::{CanonicalStore, ConversationStoreError, presentation::all_facts};
+    use rusqlite::Connection;
+
+    let plane = plane_with_storage(4, true);
+    plane.store.initialize(&[]).unwrap();
+    for index in 0..3 {
+        crate::durable::sqlite::append_completed_turns(&plane.store, index * 2, 1, false);
+        let child = stage_exit0(&plane);
+        let accepted = start(&plane, &spec(&format!("indexed child {index}"))).await;
+        child
+            .complete(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+        crate::durable::sqlite::append_completed_turns(&plane.store, index * 2 + 1, 1, true);
+    }
+
+    let kinds = super::super::agents::SUBAGENT_LIFECYCLE_KINDS;
+    let indexed = all_facts(plane.store.as_ref(), kinds).unwrap();
+    let mut cursor = None;
+    let mut full = Vec::new();
+    loop {
+        let page = plane.store.read_events(cursor, 7).unwrap();
+        if page.events.is_empty() {
+            break;
+        }
+        cursor = page.next_sequence;
+        full.extend(page.events.into_iter().filter(|event| {
+            let value = serde_json::to_value(&event.event).unwrap();
+            kinds.contains(&value["type"].as_str().unwrap())
+        }));
+    }
+    assert!(indexed.len() >= 6);
+    assert_eq!(indexed, full);
+    let expected = recovered_registry(&plane).all_snapshots();
+    assert_eq!(expected.len(), 3);
+    assert_eq!(recovered_registry(&plane).all_snapshots(), expected);
+
+    let db = Connection::open(plane.dir.path().join("parent.sqlite")).unwrap();
+    db.pragma_update(None, "foreign_keys", false).unwrap();
+    let sequence = indexed
+        .iter()
+        .find(|event| {
+            matches!(
+                event.event,
+                crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { .. }
+            )
+        })
+        .unwrap()
+        .sequence;
+    for (column, replacement) in [
+        ("sequence", "sequence + 1000000"),
+        ("event_id", "'tampered-event'"),
+        ("schema_version", "2"),
+        ("conversation_id", "'tampered-conversation'"),
+        ("attempt_id", "'tampered-attempt'"),
+        ("turn_id", "'tampered-turn'"),
+    ] {
+        let original: rusqlite::types::Value = db
+            .query_row(
+                &format!("SELECT {column} FROM events WHERE sequence = ?1"),
+                [sequence],
+                |row| row.get(0),
+            )
+            .unwrap();
+        db.execute(
+            &format!("UPDATE events SET {column} = {replacement} WHERE sequence = ?1"),
+            [sequence],
+        )
+        .unwrap();
+        let old_error = plane.store.read_events(None, 10000).unwrap_err();
+        let restored = SubagentRegistry::new(plane.registry.config.clone());
+        let new_error = restored.restore_agents(plane.store.as_ref()).unwrap_err();
+        assert!(
+            matches!(old_error, ConversationStoreError::InvalidReference(_)),
+            "{column}: {old_error:?}"
+        );
+        assert!(
+            matches!(new_error, ConversationStoreError::InvalidReference(_)),
+            "{column}: {new_error:?}"
+        );
+        let changed_sequence = if column == "sequence" {
+            sequence + 1_000_000
+        } else {
+            sequence
+        };
+        db.execute(
+            &format!("UPDATE events SET {column} = ?1 WHERE sequence = ?2"),
+            rusqlite::params![original, changed_sequence],
+        )
+        .unwrap();
+    }
+    assert_eq!(recovered_registry(&plane).all_snapshots(), expected);
+}

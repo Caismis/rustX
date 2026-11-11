@@ -46,6 +46,54 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::Ordering;
 
+fn decode_journal_row(
+    row: &rusqlite::Row<'_>,
+    conversation_id: &ConversationId,
+) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    let sequence: i64 = row
+        .get(0)
+        .map_err(|error| storage(format!("event sequence: {error}")))?;
+    let stored_event_id: String = row
+        .get(1)
+        .map_err(|error| storage(format!("event identity: {error}")))?;
+    let stored_schema_version: i64 = row
+        .get(2)
+        .map_err(|error| storage(format!("event schema version: {error}")))?;
+    let stored_conversation_id: String = row
+        .get(3)
+        .map_err(|error| storage(format!("event conversation identity: {error}")))?;
+    let stored_attempt_id: Option<String> = row
+        .get(4)
+        .map_err(|error| storage(format!("event attempt identity: {error}")))?;
+    let stored_turn_id: Option<String> = row
+        .get(5)
+        .map_err(|error| storage(format!("event turn identity: {error}")))?;
+    let json: String = row
+        .get(6)
+        .map_err(|error| storage(format!("event json: {error}")))?;
+    let event: RuntimeEventEnvelope = decode(&json, "event page")?;
+    let sequence = u64::try_from(sequence).map_err(|_| storage("negative event sequence"))?;
+    let stored_schema_version = u16::try_from(stored_schema_version).map_err(|_| {
+        ConversationStoreError::InvalidReference(
+            "Event Journal row has an invalid schema version".to_owned(),
+        )
+    })?;
+    if event.sequence != sequence
+        || event.event_id.as_str() != stored_event_id
+        || event.schema_version != stored_schema_version
+        || event.schema_version != EVENT_SCHEMA_VERSION
+        || event.conversation_id.as_str() != stored_conversation_id
+        || event.conversation_id != *conversation_id
+        || event.attempt_id.as_ref().map(ToString::to_string) != stored_attempt_id
+        || event.turn_id.as_ref().map(ToString::to_string) != stored_turn_id
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "Event Journal row metadata disagrees with its envelope".to_owned(),
+        ));
+    }
+    Ok(event)
+}
+
 impl JournalStore for SqliteConversationStore {
     fn load_agent_authority(
         &self,
@@ -437,20 +485,24 @@ impl JournalStore for SqliteConversationStore {
                     "presentation query preparation failed",
                 )
             })?;
-            let rows = statement
-                .query_map(rusqlite::params_from_iter(params), |row| {
-                    row.get::<_, String>(0)
-                })
+            let mut rows = statement
+                .query(rusqlite::params_from_iter(params))
                 .map_err(|error| {
                     crate::durable::sqlite::sqlite_error(&error, "presentation query failed")
                 })?;
-            for row in rows {
+            while let Some(row) = rows.next().map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, "presentation row failed")
+            })? {
                 #[cfg(test)]
                 observation_statistics::original_read();
-                events.push(decode(
-                    &row.map_err(|_| storage("presentation row failed"))?,
-                    "presentation fact",
-                )?);
+                let event = if matches!(query.scope, crate::durable::presentation::FactScope::All) {
+                    decode_journal_row(row, &self.conversation_id)?
+                } else {
+                    let json: String =
+                        row.get(0).map_err(|_| storage("presentation row failed"))?;
+                    decode(&json, "presentation fact")?
+                };
+                events.push(event);
             }
         }
         events.sort_by_key(|event| event.sequence);
@@ -496,48 +548,8 @@ impl JournalStore for SqliteConversationStore {
         while let Some(row) = rows.next().map_err(|error| {
             crate::durable::sqlite::sqlite_error(&error, format!("event page row: {error}"))
         })? {
-            let sequence: i64 = row
-                .get(0)
-                .map_err(|error| storage(format!("event sequence: {error}")))?;
-            let stored_event_id: String = row
-                .get(1)
-                .map_err(|error| storage(format!("event identity: {error}")))?;
-            let stored_schema_version: i64 = row
-                .get(2)
-                .map_err(|error| storage(format!("event schema version: {error}")))?;
-            let stored_conversation_id: String = row
-                .get(3)
-                .map_err(|error| storage(format!("event conversation identity: {error}")))?;
-            let stored_attempt_id: Option<String> = row
-                .get(4)
-                .map_err(|error| storage(format!("event attempt identity: {error}")))?;
-            let stored_turn_id: Option<String> = row
-                .get(5)
-                .map_err(|error| storage(format!("event turn identity: {error}")))?;
-            let json: String = row
-                .get(6)
-                .map_err(|error| storage(format!("event json: {error}")))?;
-            let event: RuntimeEventEnvelope = decode(&json, "event page")?;
-            let sequence =
-                u64::try_from(sequence).map_err(|_| storage("negative event sequence"))?;
-            let stored_schema_version = u16::try_from(stored_schema_version).map_err(|_| {
-                ConversationStoreError::InvalidReference(
-                    "Event Journal row has an invalid schema version".to_owned(),
-                )
-            })?;
-            if event.sequence != sequence
-                || event.event_id.as_str() != stored_event_id
-                || event.schema_version != stored_schema_version
-                || event.schema_version != EVENT_SCHEMA_VERSION
-                || event.conversation_id.as_str() != stored_conversation_id
-                || event.conversation_id != self.conversation_id
-                || event.attempt_id.as_ref().map(ToString::to_string) != stored_attempt_id
-                || event.turn_id.as_ref().map(ToString::to_string) != stored_turn_id
-            {
-                return Err(ConversationStoreError::InvalidReference(
-                    "Event Journal row metadata disagrees with its envelope".to_owned(),
-                ));
-            }
+            let event = decode_journal_row(row, &self.conversation_id)?;
+            let sequence = event.sequence;
             events.push(event);
             next = Some(sequence);
         }
