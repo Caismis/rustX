@@ -5122,7 +5122,7 @@ chat_reasoning_replay = "omit"
             resources,
             SessionModelConfig::of(model),
             models,
-            ApprovalMode::Policy,
+            ApprovalMode::Plan,
         )
     }
 

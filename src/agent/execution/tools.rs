@@ -768,6 +768,9 @@ impl AgentExecution<'_> {
                 arguments: &invocation.arguments,
                 audit_arguments: &slot.call.arguments,
                 approval_policy: prepared.approval,
+                elevation_reason: None,
+                workspace_root: None,
+                resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,
             };
             slot.result = crate::tools::invocation::authorize(
                 &self.lifecycle,

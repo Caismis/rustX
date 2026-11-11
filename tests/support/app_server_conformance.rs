@@ -188,8 +188,8 @@ pub async fn representative_scenario(
     let snapshot_b = checkpoint_b.snapshot;
     assert_eq!(snapshot_a.conversation_id, a.conversation_id);
     assert_eq!(snapshot_b.conversation_id, b.conversation_id);
-    assert_eq!(snapshot_a.effective_approval_mode, ApprovalMode::Policy);
-    assert_eq!(snapshot_b.effective_approval_mode, ApprovalMode::Policy);
+    assert_eq!(snapshot_a.effective_approval_mode, ApprovalMode::Plan);
+    assert_eq!(snapshot_b.effective_approval_mode, ApprovalMode::Plan);
 
     // Every carrier validates exact parent authority before native child lookup.
     let child_id = rustx::runtime::identity::AgentId::new(a.conversation_id.as_str());
@@ -335,7 +335,7 @@ pub async fn representative_scenario(
         .await
         .snapshot;
     assert_eq!(snapshot.conversation_id, a.conversation_id);
-    assert_eq!(snapshot.effective_approval_mode, ApprovalMode::Policy);
+    assert_eq!(snapshot.effective_approval_mode, ApprovalMode::Plan);
     assert_eq!(
         snapshot.resources.revision.get(),
         snapshot_a.resources.revision.get()
@@ -356,7 +356,7 @@ pub async fn representative_scenario(
     };
     let snapshot = checkpoint_1.snapshot;
     assert_eq!(snapshot.conversation_id, b.conversation_id);
-    assert_eq!(snapshot.effective_approval_mode, ApprovalMode::Policy);
+    assert_eq!(snapshot.effective_approval_mode, ApprovalMode::Plan);
     assert_eq!(
         snapshot.resources.revision.get(),
         snapshot_b.resources.revision.get()

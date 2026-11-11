@@ -758,7 +758,7 @@ async fn admitted_attempt_executes_under_the_frozen_tool_deadline_policy() {
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter),
-        approval_mode: ApprovalMode::Policy,
+        approval_mode: ApprovalMode::Plan,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
             std::time::Duration::from_secs(10),

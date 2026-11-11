@@ -2143,7 +2143,7 @@ fn conversation_runtime_over_model(
             explicit_model: true,
             agent_id: rustx::runtime::identity::AgentId::new("agent-extension-composition"),
             model: support::model::scripted_session_model(model),
-            approval_mode: rustx::runtime::ApprovalMode::Policy,
+            approval_mode: rustx::runtime::ApprovalMode::Plan,
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: rustx::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: rustx::runtime::ConversationContextConfig {

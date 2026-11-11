@@ -105,7 +105,7 @@ fn try_config(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: support::model::scripted_session_model(model),
-        approval_mode: rustx::runtime::ApprovalMode::Policy,
+        approval_mode: rustx::runtime::ApprovalMode::Plan,
         model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {

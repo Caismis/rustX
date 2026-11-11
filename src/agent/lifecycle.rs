@@ -159,6 +159,10 @@ use crate::runtime::interaction::{
     ApprovalFacts, InteractionCoordinator, InteractionFailure, InteractionOutcome,
     QuestionnaireRequester,
 };
+use crate::runtime::permission::{
+    ClassificationHints, ElevationReason, PermissionDecisionKind, PermissionFacts,
+    ResourcePermissionValue, classify_tool_kind, evaluate_permission,
+};
 use crate::runtime::types::ApprovalMode;
 use crate::tools::types::{
     ToolApprovalPolicy, ToolExecutionResult, ToolInvocationMode, ToolOrigin,
@@ -315,7 +319,16 @@ pub struct PreToolView<'a> {
     /// This is descriptive evidence, never a policy replacement channel.
     pub audit_arguments: &'a serde_json::Value,
     /// The tool-owned approval policy resolved by preflight.
+    ///
+    /// Retained only while authored never/always axes are being removed
+    /// (Issue #544); the built-in mode matrix is the authority.
     pub approval_policy: ToolApprovalPolicy,
+    /// Optional runtime-owned elevation reason extracted from invocation metadata.
+    pub elevation_reason: Option<&'a str>,
+    /// Workspace root for PLAN.md authorization, when known.
+    pub workspace_root: Option<&'a std::path::Path>,
+    /// Effective resource permission for the active mode.
+    pub resource_permission: ResourcePermissionValue,
 }
 
 impl PreToolView<'_> {
@@ -419,11 +432,11 @@ pub trait PreToolPolicy: Send + Sync {
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>>;
 }
 
-/// The runtime-owned effective approval evaluator.
+/// The runtime-owned effective permission evaluator (Issue #544).
 ///
-/// This policy only selects whether the already-preflighted invocation enters
-/// the existing approval rendezvous. It never changes availability, arguments,
-/// execution ownership, or concurrency.
+/// Modes and resource overrides decide whether an already-preflighted
+/// invocation may start. Availability, arguments, execution ownership, and
+/// schema remain unchanged.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ConfiguredApprovalPolicy {
     mode: ApprovalMode,
@@ -441,17 +454,58 @@ impl PreToolPolicy for ConfiguredApprovalPolicy {
         view: &'a PreToolView<'a>,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
         Box::pin(async move {
-            if self.mode == ApprovalMode::FullAccess
-                || view.approval_policy == ToolApprovalPolicy::Never
-            {
-                Ok(PreToolDecision::Allow)
-            } else {
-                Ok(PreToolDecision::Ask {
-                    reason: "tool approval policy requires approval".to_owned(),
-                })
-            }
+            let mutation_target = mutation_target_from_arguments(view.tool_name, view.arguments);
+            let bash_command = view
+                .arguments
+                .get("command")
+                .and_then(|value| value.as_str())
+                .filter(|_| view.tool_name == "bash");
+            let hints = ClassificationHints {
+                workspace_root: view.workspace_root,
+                mutation_target: mutation_target.as_deref(),
+                bash_command,
+            };
+            let (kind, bash) = classify_tool_kind(view.tool_name, view.origin, &hints);
+            let facts = PermissionFacts {
+                mode: self.mode,
+                kind,
+                resource: view.resource_permission,
+                elevation_reason: view
+                    .elevation_reason
+                    .and_then(ElevationReason::new),
+                bash,
+            };
+            let decision = evaluate_permission(&facts);
+            Ok(match decision.kind {
+                PermissionDecisionKind::Allow => PreToolDecision::Allow,
+                PermissionDecisionKind::Deny => PreToolDecision::Deny {
+                    reason: decision.reason,
+                },
+                PermissionDecisionKind::Ask => PreToolDecision::Ask {
+                    reason: decision.reason,
+                },
+                // Auxiliary review is wired through the same Ask channel until
+                // the dedicated permission-review consumer lands; fail closed
+                // without a reason-bearing escalation remains Deny above.
+                PermissionDecisionKind::Review => PreToolDecision::Ask {
+                    reason: decision.reason,
+                },
+            })
         })
     }
+}
+
+fn mutation_target_from_arguments(
+    tool_name: &str,
+    arguments: &serde_json::Value,
+) -> Option<std::path::PathBuf> {
+    if !matches!(tool_name, "write" | "edit") {
+        return None;
+    }
+    arguments
+        .get("path")
+        .and_then(|value| value.as_str())
+        .map(std::path::PathBuf::from)
 }
 
 /// The immutable invocation facts of one call that reached invocation
@@ -690,7 +744,7 @@ impl AttemptLifecycle {
     pub fn inert() -> Self {
         Self {
             pre_step: Arc::new(AlwaysEnter),
-            pre_tool: Arc::new(ConfiguredApprovalPolicy::new(ApprovalMode::Policy)),
+            pre_tool: Arc::new(ConfiguredApprovalPolicy::new(ApprovalMode::Plan)),
             interaction: InteractionBinding::Unavailable,
             tool_results: Vec::new(),
         }
@@ -884,6 +938,7 @@ mod tests {
     use super::{ConfiguredApprovalPolicy, PreToolDecision, PreToolPolicy, PreToolView};
     use crate::runtime::ApprovalMode;
     use crate::runtime::identity::{AttemptId, ConversationId, ToolCallId, ToolId};
+    use crate::runtime::permission::ResourcePermissionValue;
     use crate::tools::types::{ToolApprovalPolicy, ToolInvocationMode, ToolOrigin};
 
     fn view<'a>(
@@ -892,8 +947,8 @@ mod tests {
         invocation_id: &'a crate::tools::types::ToolInvocationId,
         tool_id: &'a ToolId,
         origin: &'a ToolOrigin,
+        tool_name: &'a str,
         arguments: &'a serde_json::Value,
-        approval_policy: ToolApprovalPolicy,
     ) -> PreToolView<'a> {
         PreToolView {
             conversation_id,
@@ -903,17 +958,20 @@ mod tests {
             },
             invocation_id,
             tool_id,
-            tool_name: "write",
+            tool_name,
             origin,
             mode: ToolInvocationMode::Foreground,
             arguments,
             audit_arguments: arguments,
-            approval_policy,
+            approval_policy: ToolApprovalPolicy::Never,
+            elevation_reason: None,
+            workspace_root: None,
+            resource_permission: ResourcePermissionValue::Default,
         }
     }
 
     #[tokio::test]
-    async fn approval_mode_changes_only_the_effective_approval_decision() {
+    async fn permission_mode_changes_only_the_execution_decision() {
         let conversation_id = ConversationId::new("conv_6ae353db-f482-746d-8f8d-b42ad2fef7a7");
         let attempt_id = AttemptId::new("approval-policy-attempt");
         let call_id = crate::tools::types::ToolInvocationId::Agent {
@@ -921,49 +979,56 @@ mod tests {
         };
         let tool_id = ToolId::new("tool-write");
         let origin = ToolOrigin::Builtin;
-        let arguments = serde_json::json!({"path": "same.txt", "content": "same"});
+        let read_arguments = serde_json::json!({"path": "same.txt"});
+        let write_arguments = serde_json::json!({"path": "same.txt", "content": "same"});
 
-        let never = view(
+        let read = view(
             &conversation_id,
             &attempt_id,
             &call_id,
             &tool_id,
             &origin,
-            &arguments,
-            ToolApprovalPolicy::Never,
+            "read",
+            &read_arguments,
         );
         assert!(matches!(
-            ConfiguredApprovalPolicy::new(ApprovalMode::Policy)
-                .evaluate(&never)
+            ConfiguredApprovalPolicy::new(ApprovalMode::Plan)
+                .evaluate(&read)
                 .await
-                .expect("policy evaluation"),
+                .expect("plan read"),
             PreToolDecision::Allow
         ));
 
-        let always = view(
+        let write = view(
             &conversation_id,
             &attempt_id,
             &call_id,
             &tool_id,
             &origin,
-            &arguments,
-            ToolApprovalPolicy::Always,
+            "write",
+            &write_arguments,
         );
         assert!(matches!(
-            ConfiguredApprovalPolicy::new(ApprovalMode::Policy)
-                .evaluate(&always)
+            ConfiguredApprovalPolicy::new(ApprovalMode::Plan)
+                .evaluate(&write)
                 .await
-                .expect("policy evaluation"),
-            PreToolDecision::Ask { .. }
+                .expect("plan write"),
+            PreToolDecision::Deny { .. }
         ));
         assert!(matches!(
             ConfiguredApprovalPolicy::new(ApprovalMode::FullAccess)
-                .evaluate(&always)
+                .evaluate(&write)
                 .await
-                .expect("full access evaluation"),
+                .expect("full access write"),
             PreToolDecision::Allow
         ));
-        assert_eq!(always.arguments, &arguments);
-        assert_eq!(always.approval_policy, ToolApprovalPolicy::Always);
+        assert!(matches!(
+            ConfiguredApprovalPolicy::new(ApprovalMode::Automatic)
+                .evaluate(&write)
+                .await
+                .expect("automatic write"),
+            PreToolDecision::Ask { .. }
+        ));
+        assert_eq!(write.arguments, &write_arguments);
     }
 }

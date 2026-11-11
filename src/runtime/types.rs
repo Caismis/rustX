@@ -11,23 +11,12 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// The runtime-wide control state for tool approval behavior.
+/// The runtime-wide execution-permission mode (Issue #544).
 ///
-/// `Policy` consults each resolved Tool's
-/// [`ToolApprovalPolicy`](crate::tools::types::ToolApprovalPolicy).
-/// `FullAccess` changes only the effective approval result to `Never`; it
-/// never changes availability, activation, execution ownership, concurrency,
-/// or tool authority.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum ApprovalMode {
-    /// Use each Tool's configured approval policy.
-    #[default]
-    Policy,
-    /// Bypass approval prompts for eligible tool calls only.
-    FullAccess,
-}
+/// Re-exported from [`crate::runtime::permission`] so existing runtime
+/// modules keep a short path while the closed three-mode contract lives with
+/// the permission owner.
+pub use crate::runtime::permission::ExecutionPermissionMode as ApprovalMode;
 
 /// The authoritative lifecycle state of one conversation runtime.
 ///

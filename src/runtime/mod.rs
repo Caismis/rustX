@@ -36,6 +36,9 @@ pub mod continuation;
 pub mod conversation_runtime;
 pub mod identity;
 pub mod inbound;
+/// Fixed execution-permission modes, resource overrides, and the built-in
+/// permission matrix (Issue #544).
+pub mod permission;
 /// The native provider-independent human interaction rendezvous and pending
 /// interaction projection facts (Issue #100). Internal ownership primitives
 /// stay behind the runtime facade; the public domain values are re-exported

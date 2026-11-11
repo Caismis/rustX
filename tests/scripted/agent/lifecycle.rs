@@ -2105,7 +2105,7 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
             let mode = if decision == "full_access" {
                 ApprovalMode::FullAccess
             } else {
-                ApprovalMode::Policy
+                ApprovalMode::Plan
             };
             let task = {
                 let model = model.clone();

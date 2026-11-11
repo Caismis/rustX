@@ -2245,7 +2245,7 @@ fn workspace_authors_global_tool_policies_without_granting_root_tools() {
     let resolved = f.resolve();
     assert_eq!(
         resolved.config.approval_mode,
-        crate::runtime::ApprovalMode::Policy
+        crate::runtime::ApprovalMode::Plan
     );
     assert!(resolved.config.agent.tools.builtin.is_empty());
     let value = serde_json::to_value(resolved.config()).unwrap();

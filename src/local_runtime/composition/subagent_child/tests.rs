@@ -195,7 +195,7 @@ fn spec_with_extensions(
                 crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
             extensions,
         },
-        approval_mode: crate::runtime::ApprovalMode::Policy,
+        approval_mode: crate::runtime::ApprovalMode::Plan,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: crate::context::SessionContextPolicy {

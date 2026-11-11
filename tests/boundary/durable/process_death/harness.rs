@@ -84,7 +84,7 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
         "providers": {"fixture": {"protocol":"openai_chat_completions","base_url": "https://fixture.invalid/v1", "api_key": "fixture-key-fixture"}},
         "models": {MODEL: {"provider": "fixture", "id": "fnd06", "context_window": 1_000_000, "max_output_tokens": 4096, "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"]}, "compat": {"chat_reasoning_replay": "omit"}}},
         "agent": {"model": {"model": MODEL}, "tools": {"builtin": builtin_tools}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": include_todo}}, "agents": ["explore"], "skills": "all"},
-        "approval_mode": "policy",
+        "approval_mode": "plan",
         "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
         "native_tools": {
             "read": {"approval": read_approval},

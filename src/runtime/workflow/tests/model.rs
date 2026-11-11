@@ -428,7 +428,7 @@ fn setup_with_executor(
         ordinary.resources().clone(),
         SessionModelConfig::of(ModelRef::parse("fixture/primary").unwrap()),
         models,
-        ApprovalMode::Policy,
+        ApprovalMode::Plan,
     )
     .with_workflow_models(executor.clone())
     .with_test_workflow(program);

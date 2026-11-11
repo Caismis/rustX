@@ -222,7 +222,7 @@ impl Lab {
                     extensions: crate::extensions::NativeAgentExtensionsDocument::default()
                         .resolve(),
                 },
-                approval_mode: crate::runtime::ApprovalMode::Policy,
+                approval_mode: crate::runtime::ApprovalMode::Plan,
             },
             admission: crate::runtime::subagent::ActivationAdmission {
                 attachments: Vec::new(),

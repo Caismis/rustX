@@ -1338,7 +1338,7 @@ model = "p/m"
     #[test]
     fn minimal_configuration_parses() {
         let config = CurrentRuntimeConfig::from_toml_slice(MINIMAL.as_bytes()).expect("valid");
-        assert_eq!(config.approval_mode, crate::runtime::ApprovalMode::Policy);
+        assert_eq!(config.approval_mode, crate::runtime::ApprovalMode::Plan);
         assert_eq!(config.context_policy().reserve_tokens, 1024);
         assert!(config.agent.extensions.agent_status.time.enabled);
         assert!(config.agent.extensions.agent_status.background.enabled);

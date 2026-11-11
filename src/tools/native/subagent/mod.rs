@@ -669,7 +669,7 @@ chat_reasoning_replay = "omit"
                 resources,
                 SessionModelConfig::of(model),
                 models,
-                ApprovalMode::Policy,
+                ApprovalMode::Plan,
             ),
             workspace: crate::tools::workspace::Workspace::new(&workspace_root).expect("workspace"),
             artifacts: crate::tools::artifacts::ArtifactStore::new(

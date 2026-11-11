@@ -250,7 +250,7 @@ async fn runtime_with_manual_clock(
             explicit_model: true,
             agent_id: AgentId::new("agent-135-shared-clock"),
             model: support::model::scripted_session_model(adapter),
-            approval_mode: rustx::runtime::ApprovalMode::Policy,
+            approval_mode: rustx::runtime::ApprovalMode::Plan,
             model_timeout_policy: policy,
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {

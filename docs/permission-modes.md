@@ -1,0 +1,43 @@
+# Fixed execution-permission modes (Issue #544)
+
+rustX ships exactly three built-in execution-permission modes: `plan`,
+`automatic`, and `full_access`. They are Rust-owned, not TOML presets, and
+never change Tool Registry membership, model-facing names, schemas, MCP
+discovery, or capability selection.
+
+## Modes
+
+| Mode | Default behavior |
+| --- | --- |
+| `plan` | Native reads and approved bookkeeping allowed; Write/Edit may change only workspace-root `PLAN.md`; Bash requires a proven read-only classification; other defaults refuse without `elevation_reason`. |
+| `automatic` | Keep Plan's deterministic fast paths; remaining defaults go through the shared Auxiliary permission reviewer; denied calls may escalate with `elevation_reason`. |
+| `full_access` | Defaults allowed without Auxiliary or ordinary human review. Effective explicit `deny` / `ask` resource settings still apply. |
+
+Session stores the selected mode. Child Agents inherit the invoking
+execution's frozen mode; they do not own a separate mode picker.
+
+## Resource overrides
+
+A resource may omit permissions or declare all three mode entries with values
+`default`, `allow`, `ask`, or `deny`. Exact-tool objects replace source
+defaults. Workspace completely shadows Global for the same canonical resource.
+Effective `deny` cannot be overridden by elevation, review, or Full Access.
+
+## Elevation
+
+`elevation_reason` is optional runtime metadata on every model-facing tool
+schema. A nonblank reason requests human escalation for the exact frozen
+invocation. It never reaches business executors and never becomes a persistent
+grant.
+
+## Bash analysis
+
+Bash classification is conservative and fail-closed. Parse failures,
+unsupported constructs, and unresolved behavior are `unproven`, not proven
+read-only. Plan elevates unproven Bash; Automatic reviews it.
+
+## Settlement
+
+Permission decides whether a prepared invocation may start. Independent
+authorized calls may run concurrently; ToolResults still commit atomically in
+original model call order.

@@ -196,7 +196,7 @@ fn context_with_environment(
         resources,
         SessionModelConfig::of(model),
         models,
-        ApprovalMode::Policy,
+        ApprovalMode::Plan,
     );
     context.native = Some(Arc::new(NativeInvocationServices {
         lifecycle,

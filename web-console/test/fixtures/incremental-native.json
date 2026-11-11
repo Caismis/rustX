@@ -1388,7 +1388,7 @@
                     "execution_settings": {
                       "read_image_active": false,
                       "resource_revision": "1",
-                      "approval_mode": "policy"
+                      "approval_mode": "plan"
                     }
                   },
                   "inbound": {
@@ -1934,7 +1934,7 @@
               "execution_settings": {
                 "read_image_active": false,
                 "resource_revision": "1",
-                "approval_mode": "policy"
+                "approval_mode": "plan"
               }
             }
           ],
@@ -18357,7 +18357,7 @@
             "execution_settings": {
               "read_image_active": false,
               "resource_revision": "1",
-              "approval_mode": "policy"
+              "approval_mode": "plan"
             }
           },
           "inbound": {

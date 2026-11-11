@@ -1031,7 +1031,7 @@ fn agent_permission_projection_uses_native_resolution_and_source_cas() {
     let before = owner
         .read_source_settings(&rustx_target(&input.cwd))
         .unwrap();
-    assert_eq!(before.prospective_approval_mode, Some(ApprovalMode::Policy));
+    assert_eq!(before.prospective_approval_mode, Some(ApprovalMode::Plan));
     let mutation = SourceMutation::Config {
         mutation: ConfigMutation::Approval {
             authored: Some(ApprovalMode::FullAccess),

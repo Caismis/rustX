@@ -316,7 +316,7 @@ async fn run_case(
         context,
         &fixture.runtime,
         AttemptLifecycle::inert()
-            .with_approval_mode(ApprovalMode::Policy)
+            .with_approval_mode(ApprovalMode::Plan)
             .with_test_interaction_rendezvous(gate.clone()),
     )
     .unwrap();

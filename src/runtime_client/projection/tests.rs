@@ -5355,7 +5355,7 @@ fn t14_native_admission_publishes_frozen_model_before_execution_starts() {
             attempt_id: attempt(),
             model,
             resource_revision: crate::runtime::identity::RuntimeResourceRevision::new(7),
-            approval_mode: crate::runtime::types::ApprovalMode::Policy,
+            approval_mode: crate::runtime::types::ApprovalMode::Plan,
         });
     });
     let current = projection.checkpoint_candidate().unwrap();

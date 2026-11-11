@@ -107,7 +107,7 @@ async fn subagent_settlement_commits_the_current_staged_configuration() {
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Policy,
+                            approval_mode: crate::runtime::ApprovalMode::Plan,
                         },
                         admission: crate::runtime::subagent::ActivationAdmission {
                             attachments: Vec::new(),

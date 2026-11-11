@@ -298,7 +298,7 @@ async fn child_fixture_scoped_at(
             explicit_model: true,
             agent_id: AgentId::new("agent-child-138"),
             model: support::model::scripted_session_model(adapter),
-            approval_mode: rustx::runtime::ApprovalMode::Policy,
+            approval_mode: rustx::runtime::ApprovalMode::Plan,
             model_timeout_policy: inherited_policy(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
@@ -636,7 +636,7 @@ async fn compose_parent_runtime_plane(
         explicit_model: true,
         agent_id: AgentId::new("agent-parent-138"),
         model: support::model::scripted_session_model(adapter),
-        approval_mode: rustx::runtime::ApprovalMode::Policy,
+        approval_mode: rustx::runtime::ApprovalMode::Plan,
         model_timeout_policy: inherited_policy(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -810,7 +810,7 @@ async fn launch_wired_child_full(
                     title: "Explore task".into(),
                     execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: resolved_child_spec("conformance"),
-                    approval_mode: rustx::runtime::ApprovalMode::Policy,
+                    approval_mode: rustx::runtime::ApprovalMode::Plan,
                 },
                 admission: crate::runtime::subagent::ActivationAdmission {
                     attachments: Vec::new(),
@@ -1286,7 +1286,7 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
         &AgentId::new("agent-child"),
         &AgentId::new("agent-parent"),
         &resolved_child_spec("conformance"),
-        rustx::runtime::ApprovalMode::Policy,
+        rustx::runtime::ApprovalMode::Plan,
         rustx::runtime::subagent::InheritedExecutionPolicy {
             model_timeout: inherited_policy(),
             tool_deadline: inherited_tool_deadline_policy(),

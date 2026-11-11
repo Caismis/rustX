@@ -1601,7 +1601,7 @@ mod tests {
             explicit_model: true,
             agent_id: crate::runtime::identity::AgentId::new("agent-a"),
             model: crate::scripted_suites::support::model::scripted_session_model(adapter.clone()),
-            approval_mode: crate::runtime::ApprovalMode::Policy,
+            approval_mode: crate::runtime::ApprovalMode::Plan,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {

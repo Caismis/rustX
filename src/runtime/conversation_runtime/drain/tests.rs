@@ -1312,7 +1312,7 @@ async fn shutdown_drains_after_settlement_control_plane_failure() {
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter),
-        approval_mode: ApprovalMode::Policy,
+        approval_mode: ApprovalMode::Plan,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
             std::time::Duration::from_secs(10),
@@ -1828,7 +1828,7 @@ async fn runtime_shutdown_waits_for_workflow_child_native_quiescence() {
                     title: "Explore task".into(),
                     execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: test_resolved_subagent("reviewer"),
-                    approval_mode: ApprovalMode::Policy,
+                    approval_mode: ApprovalMode::Plan,
                 },
                 admission: crate::runtime::subagent::ActivationAdmission {
                     attachments: Vec::new(),
@@ -1965,7 +1965,7 @@ async fn abandoned_subagent_publication_cannot_hide_unproven_physical_settlement
                     title: "Explore task".into(),
                     resolved: test_resolved_subagent("reviewer"),
                     execution_policy: InheritedExecutionPolicy::default(),
-                    approval_mode: ApprovalMode::Policy,
+                    approval_mode: ApprovalMode::Plan,
                 },
                 admission: ActivationAdmission {
                     attachments: Vec::new(),
@@ -2070,7 +2070,7 @@ async fn runtime_shutdown_rejects_unproven_child_physical_settlement() {
                     title: "Explore task".into(),
                     resolved: test_resolved_subagent("reviewer"),
                     execution_policy: InheritedExecutionPolicy::default(),
-                    approval_mode: ApprovalMode::Policy,
+                    approval_mode: ApprovalMode::Plan,
                 },
                 admission: ActivationAdmission {
                     attachments: Vec::new(),
@@ -2835,7 +2835,7 @@ async fn shutdown_waits_for_reserved_resume_physical_and_durable_rollback() {
             title: "Explore task".into(),
             execution_policy: InheritedExecutionPolicy::default(),
             resolved: test_resolved_subagent("explore"),
-            approval_mode: ApprovalMode::Policy,
+            approval_mode: ApprovalMode::Plan,
         },
         admission: ActivationAdmission {
             attachments: Vec::new(),

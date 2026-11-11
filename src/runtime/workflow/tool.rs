@@ -220,6 +220,9 @@ impl WorkflowRuntime {
             arguments: &prepared.invocation.arguments,
             audit_arguments: &prepared.invocation.arguments,
             approval_policy: prepared.approval,
+            elevation_reason: None,
+            workspace_root: None,
+            resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,
         };
         self.read_model.node(node, |view| {
             view.state = super::read_model::WorkflowState::Waiting {
