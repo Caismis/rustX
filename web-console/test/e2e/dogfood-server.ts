@@ -141,7 +141,12 @@ timezone = "UTC"
     if (['web_agent_continuation', 'web_child_capabilities'].includes(scenario)) {
       mkdirSync(join(workspaceA, '.agents/agents'), { recursive: true });
       writeFileSync(join(workspaceA, '.agents/agents/reviewer.toml'), 'description = "Continuable reviewer"\ninstructions = "Review requests carefully."\n' + (scenario === 'web_child_capabilities' ? '[tools]\nbuiltin = ["read", "write", "present"]\n[tools.sources]\nimage_fixture = ["render_image"]\n' : ''));
-      writeFileSync(join(workspaceA, 'rustx.toml'), '[agent]\nagents = ["reviewer"]\n');
+      // Lifecycle/UI fixtures are not permission tests: Full Access lets the
+      // elevated tool calls proceed without hanging on an unanswered Ask.
+      writeFileSync(join(workspaceA, 'rustx.toml'), 'approval_mode = "full_access"\n[agent]\nagents = ["reviewer"]\n');
+    }
+    if (scenario === 'web_large_write') {
+      writeFileSync(join(workspaceA, 'rustx.toml'), 'approval_mode = "full_access"\n');
     }
     if (['web_workflow_conformance', 'web_workflow_observation', 'web_workflow_review'].includes(scenario)) {
       mkdirSync(join(workspaceA, '.agents/agents'), { recursive: true });

@@ -195,7 +195,20 @@ fn classify_git(args: &[&str]) -> BashReadonlyClass {
         let rest = &args[index + 1..];
         return match arg {
             "status" | "log" | "show" | "diff" | "ls-files" | "ls-tree" | "rev-parse"
-            | "describe" | "blame" | "shortlog" | "version" | "help" => BashReadonlyClass::Readonly,
+            | "describe" | "blame" | "shortlog" | "version" | "help" => {
+                // Diff-family options such as `--output=` write a file without
+                // shell redirects; keep those unproven under the conservative
+                // checker.
+                if git_writes_output(rest) {
+                    BashReadonlyClass::Unproven {
+                        reason: format!(
+                            "git {arg} forms that write output files are not proven read-only"
+                        ),
+                    }
+                } else {
+                    BashReadonlyClass::Readonly
+                }
+            }
             "config" => {
                 if rest
                     .iter()
@@ -228,6 +241,11 @@ fn classify_git(args: &[&str]) -> BashReadonlyClass {
     BashReadonlyClass::Unproven {
         reason: "git command missing a subcommand is not proven read-only".to_owned(),
     }
+}
+
+fn git_writes_output(rest: &[&str]) -> bool {
+    rest.iter()
+        .any(|arg| *arg == "--output" || arg.starts_with("--output="))
 }
 
 /// True only for listing/query forms with no positional ref name that could
@@ -327,6 +345,9 @@ mod tests {
             "pwd\r\nrm -rf /",
             "pwd & rm -rf /",
             "true && rm -rf /",
+            "git diff --no-index --output=/tmp/written.patch a b",
+            "git diff --output /tmp/written.patch",
+            "git show --output=patch HEAD",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
