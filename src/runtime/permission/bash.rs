@@ -189,9 +189,8 @@ fn is_find_write_option(token: &str) -> bool {
 }
 
 fn is_fd_exec_option(token: &str) -> bool {
-    matches!(token, "-x" | "--exec" | "--exec-batch")
-        || token.starts_with("--exec=")
-        || token.starts_with("--exec-batch=")
+    // Spaced and glued forms (`-x rm`, `-xrm`, `--execrm`, `--exec-batch=…`).
+    token.starts_with("-x") || token.starts_with("--exec")
 }
 
 fn classify_git(args: &[&str]) -> BashReadonlyClass {
@@ -381,6 +380,9 @@ mod tests {
             "fd -x rm",
             "fd --exec rm {}",
             "fd --exec-batch rm",
+            "fd -xrm",
+            "fd --execrm",
+            "fd --exec-batch=rm",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
