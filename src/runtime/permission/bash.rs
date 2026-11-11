@@ -101,9 +101,11 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
         | "realpath" | "readlink" | "uname" | "id" | "whoami" | "printenv" | "grep" | "rg"
         | "fd" | "jq" | "sleep" => BashReadonlyClass::Readonly,
         "date" => {
+            // GNU date accepts both `date -s 12:00:00` and the glued form
+            // `date -s12:00:00` as clock-setting.
             if args
                 .iter()
-                .any(|token| *token == "-s" || token.starts_with("--set"))
+                .any(|token| token.starts_with("-s") || token.starts_with("--set"))
             {
                 BashReadonlyClass::Unproven {
                     reason: "date clock-setting forms are not read-only".to_owned(),
@@ -254,10 +256,24 @@ fn git_ref_query_only(subcommand: &str, rest: &[&str]) -> bool {
     }) {
         return false;
     }
-    // Any non-flag positional argument can name a new ref (`git branch foo`,
-    // `git tag v1`). Listing flags alone remain readonly.
+    // Any positional operand can name a new ref (`git branch foo`,
+    // `git tag v1`). After `--`, even dash-prefixed tokens are operands
+    // (`git branch -- -foo`), so they are never treated as flags.
     let _ = subcommand;
-    !rest.iter().any(|a| !a.starts_with('-'))
+    let mut end_of_options = false;
+    for arg in rest {
+        if end_of_options {
+            return false;
+        }
+        if *arg == "--" {
+            end_of_options = true;
+            continue;
+        }
+        if !arg.starts_with('-') {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -298,8 +314,11 @@ mod tests {
             "env rm -rf /",
             "git branch feature",
             "git tag v1.0.0",
+            "git branch -- -foo",
+            "git tag -- -v1",
             "yq -i '.x=1' file.yaml",
             "date -s 12:00:00",
+            "date -s12:00:00",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
