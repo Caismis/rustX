@@ -2,6 +2,8 @@
 //!
 //! Upstream pin: zai-org/ZCode@b95ebaffeab641907b38652f45c1502bd762972d (Apache-2.0).
 
+#![allow(dead_code)]
+
 use super::flags::*;
 use super::types::{BashReadonlyCommandPolicy, DangerCallbackId, SafeFlagValue};
 use std::collections::{HashMap, HashSet};
@@ -9,14 +11,6 @@ use std::sync::{Arc, LazyLock};
 
 fn flags_arc(map: &LazyLock<HashMap<&'static str, SafeFlagValue>>) -> Arc<HashMap<&'static str, SafeFlagValue>> {
     Arc::new((**map).clone())
-}
-
-fn merge_flags(maps: &[&LazyLock<HashMap<&'static str, SafeFlagValue>>]) -> Arc<HashMap<&'static str, SafeFlagValue>> {
-    let mut out = HashMap::new();
-    for map in maps {
-        out.extend((**map).iter().map(|(k, v)| (*k, *v)));
-    }
-    Arc::new(out)
 }
 
 pub static READONLY_ALLOW_ANY_ARG_COMMANDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
@@ -209,4 +203,3 @@ pub fn sorted_multiword_policies() -> Vec<(&'static str, BashReadonlyCommandPoli
     entries.sort_by(|left, right| right.0.split_whitespace().count().cmp(&left.0.split_whitespace().count()));
     entries
 }
-
