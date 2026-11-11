@@ -196,34 +196,10 @@ fn prefix(text: &str) -> &str {
     }
     &text[..end]
 }
-/// Derive's internal tag is emitted first. Stop serialization at its first
-/// separator, before any opaque value can be visited or copied.
-pub(super) fn native_kind(value: &impl serde::Serialize) -> Result<String, ConversationStoreError> {
-    struct Tag(Vec<u8>);
-    impl std::io::Write for Tag {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            if self.0.len() + bytes.len() > 128 || bytes.contains(&b',') {
-                return Err(std::io::Error::other("native tag captured"));
-            }
-            self.0.extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut writer = Tag(Vec::with_capacity(128));
-    let _ = serde_json::to_writer(&mut writer, value);
-    if !writer.0.ends_with(b"}") {
-        writer.0.push(b'}');
-    }
-    let value: serde_json::Value =
-        serde_json::from_slice(&writer.0).map_err(|error| storage(error.to_string()))?;
-    value
-        .get("type")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| storage("native tag missing"))
+/// The static name is derived from the same event vocabulary as the native
+/// tag. No event payload is encoded merely to identify its variant.
+pub(super) fn native_kind(value: &crate::events::types::RuntimeEvent) -> &str {
+    value.as_ref()
 }
 fn tool_status(status: &crate::tools::types::ToolExecutionStatus) -> serde_json::Value {
     use crate::tools::types::ToolExecutionStatus as Status;
@@ -345,7 +321,7 @@ fn mandatory_capture(
     execution: Option<&super::observation_execution::Captured>,
     pending: Option<&super::append_facts::PendingEvent<'_>>,
 ) -> Result<(bool, Captured), ConversationStoreError> {
-    let event_kind = native_kind(&event.event)?;
+    let event_kind = native_kind(&event.event);
     let mut value = serde_json::json!({"type":event_kind});
     terminal_fields(connection, event, &mut value, execution, pending.is_some())?;
     let occupancy =
@@ -387,7 +363,7 @@ fn mandatory_capture(
             .map(crate::durable::observation::RequestOwnerKind::from),
         auxiliary_call_id: event.event.auxiliary_call_id().cloned(),
         timestamp: event.timestamp,
-        event_kind,
+        event_kind: event_kind.to_owned(),
         tool_occurrence: event.tool_occurrence.clone(),
         result_ledger_position: result_position(connection, event)?,
         value,
@@ -619,7 +595,7 @@ fn direct_value(
         _ => return Ok(None),
     };
     let mut value = serde_json::Map::new();
-    value.insert("type".into(), native_kind(&event.event)?.into());
+    value.insert("type".into(), native_kind(&event.event).into());
     if let Some(finish) = finish {
         value.insert(
             "finish_reason".into(),
@@ -1142,4 +1118,31 @@ fn indexed_field_previews(
         insert(value, &path[1..], decoded);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod native_kind_tests {
+    use super::*;
+    use crate::events::types::RuntimeEvent;
+    use strum::VariantNames;
+
+    #[test]
+    fn static_event_names_match_every_native_schema_tag() {
+        let schema = serde_json::to_value(schemars::schema_for!(RuntimeEvent)).unwrap();
+        let tags: Vec<_> = schema["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|variant| variant["properties"]["type"]["const"].as_str().unwrap())
+            .collect();
+        assert_eq!(tags.as_slice(), RuntimeEvent::VARIANTS);
+
+        let event = RuntimeEvent::AttemptStarted {
+            attempt_id: crate::runtime::identity::AttemptId::new("attempt-test"),
+        };
+        assert_eq!(
+            native_kind(&event),
+            serde_json::to_value(&event).unwrap()["type"]
+        );
+    }
 }

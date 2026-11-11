@@ -833,7 +833,7 @@ pub(in crate::durable::sqlite) fn prepare_event(
         return Ok(None);
     }
     let Some(kind) =
-        TraceFactKind::parse(&super::super::observation_event::native_kind(&event.event)?)
+        TraceFactKind::parse(super::super::observation_event::native_kind(&event.event))
     else {
         return Ok(None);
     };

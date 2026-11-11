@@ -522,10 +522,7 @@ pub(super) fn required(event: &crate::events::types::RuntimeEventEnvelope) -> bo
         | crate::events::types::RuntimeEvent::AuxiliaryCallSettled { .. } => return false,
         _ => {}
     }
-    super::observation_event::native_kind(&event.event)
-        .ok()
-        .and_then(|kind| TraceFactKind::parse(&kind))
-        .is_some()
+    TraceFactKind::parse(super::observation_event::native_kind(&event.event)).is_some()
 }
 
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
