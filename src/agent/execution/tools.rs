@@ -544,9 +544,38 @@ impl AgentExecution<'_> {
                             }
                         }
                     }
-                    // Drop unfinished auth futures without starting them; started
-                    // run futures below must still settle before any group_error
-                    // is returned.
+                    // Abort unfinished Ask waiters before releasing auth futures,
+                    // then drain their outcomes so InteractionCoordinator never
+                    // keeps orphan pending approvals after this group stops.
+                    if remaining_auth > 0 {
+                        if let Some(coordinator) =
+                            self.lifecycle.native_interaction_coordinator()
+                        {
+                            coordinator
+                                .cancel_pending_async(self.cancellation.reason())
+                                .await;
+                        }
+                        while let Some((slot_index, outcome)) = auth_futures.next().await {
+                            remaining_auth = remaining_auth.saturating_sub(1);
+                            if slots[slot_index].result.is_some() {
+                                continue;
+                            }
+                            match outcome {
+                                Ok(Some(result)) => {
+                                    slots[slot_index].result = Some(result);
+                                }
+                                Ok(None) => {
+                                    // Allowed but not started: leave unset so the
+                                    // group-error / cancellation fill owns it.
+                                }
+                                Err(_) => {
+                                    slots[slot_index].result = Some(failed_result(
+                                        "tool authorization aborted after sibling execution started",
+                                    ));
+                                }
+                            }
+                        }
+                    }
                     drop(auth_futures);
                     if group_error.is_none()
                         && let Some(error) = self.durable_failure_commit_error()
