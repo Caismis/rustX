@@ -62,7 +62,7 @@ pub(crate) fn default_execution_policy() -> crate::agent::execution::AgentExecut
 /// Non-interactive fixture lifecycle with Full Access pre-tool policy.
 ///
 /// Equivalent to [`rustx::agent::AttemptLifecycle::inert`] after #544: both
-/// authorize Full Access. Prefer this name at AgentExecution construction
+/// authorize Full Access. Prefer this name at `AgentExecution` construction
 /// sites so permission intent stays explicit.
 #[must_use]
 pub(crate) fn full_access_lifecycle() -> rustx::agent::AttemptLifecycle {
