@@ -147,7 +147,7 @@ pub(super) fn canonical_position(
                 return Err(invalid());
             }
             let exists: bool = connection
-                .query_row(
+                .query_row_cached(
                     "SELECT EXISTS(SELECT 1 FROM message_ledger WHERE position=?1)",
                     [*position],
                     |row| row.get(0),
@@ -493,7 +493,7 @@ fn read_bytes_at_position(
         validate_source(connection, &reference.source)?
     };
     let (kind, id, block) = storage_key(&reference.source, position);
-    let frontier:Option<u64>=connection.query_row("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision=?5",params![kind, keys::read(connection, kind, &id)?,block,reference.representation.key(),reference.content_revision],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
+    let frontier:Option<u64>=connection.query_row_cached("SELECT readable_end FROM content_frontiers WHERE source_kind=?1 AND source_id=?2 AND block_index=?3 AND representation=?4 AND revision=?5",params![kind, keys::read(connection, kind, &id)?,block,reference.representation.key(),reference.content_revision],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
     if frontier != Some(reference.readable_end) {
         return Err(invalid());
     }
