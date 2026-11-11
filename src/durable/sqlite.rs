@@ -1432,3 +1432,5 @@ pub(crate) use bounded_work_tests::{MeasuredStatements, append_completed_turns};
 mod compact_lookup_tests;
 #[cfg(test)]
 mod query_work;
+#[cfg(test)]
+mod turn_write_work_tests;
