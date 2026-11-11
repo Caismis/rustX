@@ -35,6 +35,76 @@ fn native_tool_page_resolves_once_without_argument_base64_round_trip() {
 }
 
 #[test]
+fn native_tool_page_reuses_plans_and_bounds_vm_work_across_history() {
+    use rusqlite::StatementStatus;
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let store = store();
+    complete_tool_row_fixture(&store);
+    let cut = store.observation_read_cut().unwrap();
+    let locator = crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
+        position: 1,
+    };
+    let expected = store.transcript_tool_headers(&cut, &locator, 0, 32).unwrap();
+    let sql = [
+        super::super::observation_tools::TOOL_NAME_SQL,
+        super::super::observation_tools::TOOL_WITNESS_SQL,
+        super::super::observation_tools::TOOL_RESULT_SQL,
+    ];
+    let mut previous = 0;
+    let mut reference = None;
+    for history in [8, 64, 512] {
+        for index in previous..history {
+            let attempt = response_start(&store, &format!("plan-history-{index}"));
+            response_message(&store, &attempt, &format!("plan-message-{index}"));
+            response_complete(&store, &attempt);
+        }
+        previous = history;
+        let prepares = Arc::new(AtomicUsize::new(0));
+        {
+            let connection = store.lock().unwrap();
+            connection.flush_prepared_statement_cache();
+            let count = Arc::clone(&prepares);
+            connection.authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(context.action,
+                    AuthAction::Read { table_name: "canonical_tool_calls", column_name: "observation_name" }
+                    | AuthAction::Read { table_name: "events", column_name: "observation_tool_phase" }
+                    | AuthAction::Read { table_name: "transcript_entries", column_name: "tool_result_json" }) {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
+                Authorization::Allow
+            })).unwrap();
+        }
+        assert_eq!(store.transcript_tool_headers(&cut, &locator, 0, 32).unwrap(), expected);
+        assert!(prepares.swap(0, Ordering::SeqCst) > 0);
+        let counts = |reset: bool| {
+            let connection = store.lock().unwrap();
+            sql.map(|query| {
+                let statement = connection.prepare_cached(query).unwrap();
+                let values = (statement.get_status(StatementStatus::Run), statement.get_status(StatementStatus::VmStep));
+                if reset {
+                    statement.reset_status(StatementStatus::Run);
+                    statement.reset_status(StatementStatus::VmStep);
+                }
+                values
+            })
+        };
+        let cold = counts(true);
+        assert_eq!([cold[0].0, cold[1].0, cold[2].0], [1, 2, 1]);
+        assert_eq!(store.transcript_tool_headers(&cut, &locator, 0, 32).unwrap(), expected);
+        assert_eq!(prepares.swap(0, Ordering::SeqCst), 0, "H={history}");
+        assert_eq!(counts(true), cold, "H={history}");
+        if let Some(reference) = reference {
+            assert_eq!(cold, reference, "H={history}");
+        } else {
+            reference = Some(cold);
+        }
+        store.lock().unwrap().authorizer(None::<fn(AuthContext<'_>) -> Authorization>).unwrap();
+    }
+}
+
+#[test]
 fn native_tool_page_keeps_one_snapshot_and_rechecks_after_external_changes() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("native-tool-content-snapshot.sqlite");
