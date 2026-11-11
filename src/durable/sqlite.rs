@@ -1427,7 +1427,7 @@ mod final_settlement;
 #[cfg(test)]
 mod bounded_work_tests;
 #[cfg(test)]
-pub(crate) use bounded_work_tests::append_completed_turns;
+pub(crate) use bounded_work_tests::{MeasuredStatements, append_completed_turns};
 #[cfg(test)]
 mod compact_lookup_tests;
 #[cfg(test)]

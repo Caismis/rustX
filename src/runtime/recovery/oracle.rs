@@ -12,6 +12,19 @@ use crate::runtime::identity::ConversationId;
 
 thread_local! { static ENABLED: Cell<bool> = const { Cell::new(true) }; }
 
+/// Suspends the full-fold oracle on this thread while the guard lives, for
+/// tests that measure the bounded work of the release open path itself.
+#[cfg(test)]
+pub(crate) fn suspend_frontier_oracle() -> impl Drop {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ENABLED.with(|enabled| enabled.set(self.0));
+        }
+    }
+    Restore(ENABLED.with(|enabled| enabled.replace(false)))
+}
+
 pub(super) fn assert_matches_full_fold(
     store: &dyn ConversationStore,
     conversation_id: &ConversationId,

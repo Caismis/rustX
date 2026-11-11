@@ -135,6 +135,8 @@ mod frontier;
 mod oracle;
 
 pub use frontier::RecoveryFrontier;
+#[cfg(test)]
+pub(crate) use oracle::suspend_frontier_oracle;
 
 /// The Event Journal page size of the recovery fold.
 ///

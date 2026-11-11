@@ -1210,3 +1210,22 @@ pub(crate) fn append_completed_turns(
         response_complete(store, &attempt);
     }
 }
+
+/// The executed SQL of one measured operation: statement text to (calls,
+/// returned rows, summed VM steps).
+pub(crate) type MeasuredStatements = BTreeMap<String, (usize, usize, i64)>;
+
+impl SqliteConversationStore {
+    /// Starts tracing every statement this store's connection executes.
+    pub(crate) fn begin_query_work(&self) {
+        query_work::capture(&self.lock().unwrap());
+    }
+
+    /// Stops tracing and returns what executed since [`Self::begin_query_work`].
+    pub(crate) fn finish_query_work(&self) -> MeasuredStatements {
+        query_work::finish(&self.lock().unwrap())
+            .into_iter()
+            .map(|(sql, work)| (sql, (work.calls, work.rows, work.total_steps)))
+            .collect()
+    }
+}

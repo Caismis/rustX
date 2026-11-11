@@ -351,6 +351,8 @@ mod attempt;
 pub mod auxiliary;
 mod bootstrap;
 mod child;
+#[cfg(test)]
+mod cold_attach_work_tests;
 mod compaction;
 mod configuration;
 mod controls;
