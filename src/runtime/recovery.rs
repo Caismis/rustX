@@ -487,7 +487,6 @@ impl RecoveryEvidence {
     /// read coherently. Recovery then fails closed.
     pub fn reconstruct(store: &dyn ConversationStore) -> Result<Self, RecoveryError> {
         let conversation_id = store.conversation_id().clone();
-        let head = store.load_head()?;
         let unsettled = store.unsettled_canonical_tool_calls(8192)?;
         let mut active = Vec::new();
         let mut missing = unsettled
@@ -497,11 +496,17 @@ impl RecoveryEvidence {
         // Preserve the original Surface order, then the retired occurrence
         // order. The head also validates the native frontier before recovery
         // can plan any writes; only unresolved Assistant bodies are loaded.
-        let mut ordered = head
-            .active_message_ids
-            .into_iter()
-            .filter(|id| missing.remove(id))
-            .collect::<Vec<_>>();
+        let mut ordered = if missing.is_empty() {
+            store.validate_head()?;
+            Vec::new()
+        } else {
+            store
+                .load_head()?
+                .active_message_ids
+                .into_iter()
+                .filter(|id| missing.remove(id))
+                .collect::<Vec<_>>()
+        };
         ordered.extend(missing);
         for ids in ordered.chunks(64) {
             // Native keyed reads preserve the canonical record's own size

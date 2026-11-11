@@ -3525,14 +3525,36 @@ fn ordinary_recovery_reads_no_completed_canonical_bodies_at_8_64_512_4096() {
         let messages: Vec<_> = (1..=h).map(message).collect();
         store.initialize(&messages).unwrap();
         super::super::canonical::ledger::take_body_loads();
+        super::super::canonical::ledger::take_head_materializations();
         super::super::compaction_resources::take_body_decodes();
         let evidence = crate::runtime::recovery::RecoveryEvidence::reconstruct(&store).unwrap();
         assert!(evidence.tool_repair_messages().is_empty());
+        assert_eq!(
+            super::super::canonical::ledger::take_head_materializations(),
+            0,
+            "{h}"
+        );
         assert_eq!(super::super::canonical::ledger::take_body_loads(), 0, "{h}");
         assert_eq!(
             super::super::compaction_resources::take_body_decodes(),
             0,
             "{h}"
+        );
+    }
+}
+
+#[test]
+fn recovery_rejects_corrupt_canonical_identity_without_pending_tools() {
+    for expression in ["zeroblob(4097)", "x'ff'", "CAST(x'ff' AS TEXT)"] {
+        let store = store();
+        store.initialize(&[message(1)]).unwrap();
+        store.lock().unwrap().execute_batch(&format!(
+            "PRAGMA foreign_keys=OFF; UPDATE message_ledger SET message_id={expression}; PRAGMA foreign_keys=ON"
+        )).unwrap();
+        assert!(store.load_head().is_err(), "{expression}");
+        assert!(
+            crate::runtime::recovery::RecoveryEvidence::reconstruct(&store).is_err(),
+            "{expression}"
         );
     }
 }

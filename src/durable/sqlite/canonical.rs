@@ -631,6 +631,12 @@ impl CanonicalStore for SqliteConversationStore {
             load_head(transaction)
         })
     }
+    fn validate_head(&self) -> Result<(), ConversationStoreError> {
+        self.read_transaction(|transaction| {
+            ledger::append_head(transaction)?;
+            Ok(())
+        })
+    }
     fn messages_are_human_inputs(&self, ids: &[MessageId]) -> Result<bool, ConversationStoreError> {
         let connection = self.lock()?;
         let mut query = connection

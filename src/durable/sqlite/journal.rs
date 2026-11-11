@@ -477,7 +477,7 @@ impl JournalStore for SqliteConversationStore {
         let after = after_sequence.unwrap_or(0);
         let limit = i64::try_from(limit).map_err(|_| storage("event page limit is too large"))?;
         let mut statement = connection
-            .prepare(
+            .prepare_cached(
                 "SELECT sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json
                  FROM events WHERE sequence > ?1 ORDER BY sequence LIMIT ?2",
             )
