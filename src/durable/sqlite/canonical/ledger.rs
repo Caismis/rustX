@@ -368,7 +368,7 @@ pub(in crate::durable::sqlite) fn associate_canonical_tool_result(
     };
     let owner = &tool.occurrence;
     let association: Option<(String, String, Option<String>)> = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT call_id,tool_id,result_message_id FROM canonical_tool_calls
          WHERE assistant_message_id=?1 AND block_index=?2",
             params![owner.assistant_message_id.as_str(), owner.block_index.get()],
@@ -396,7 +396,7 @@ pub(in crate::durable::sqlite) fn associate_canonical_tool_result(
             "canonical Tool occurrence already has a result".into(),
         ));
     }
-    transaction.execute("UPDATE canonical_tool_calls SET result_message_id=?1,result_ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1) WHERE assistant_message_id=?2 AND block_index=?3", params![tool.id.as_str(), owner.assistant_message_id.as_str(), owner.block_index.get()])
+    transaction.execute_cached("UPDATE canonical_tool_calls SET result_message_id=?1,result_ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1) WHERE assistant_message_id=?2 AND block_index=?3", params![tool.id.as_str(), owner.assistant_message_id.as_str(), owner.block_index.get()])
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("canonical Tool result index: {error}")))?;
     Ok(())
 }
@@ -539,7 +539,7 @@ fn append_message_ledger_with_capture(
                 let block_index =
                     u32::try_from(index).map_err(|_| storage("Tool block index overflow"))?;
                 transaction
-                    .execute(
+                    .execute_cached(
                         "INSERT INTO canonical_tool_calls(assistant_message_id,block_index,call_id,tool_id,observation_ledger,observation_call_id,observation_tool_id,observation_tool_ordinal,observation_name)
                          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
                         params![assistant.id.as_str(), block_index, call.id.as_str(), call.tool_id.as_str(),position,(call.id.as_str().len()<=256).then_some(call.id.as_str()),(call.tool_id.as_str().len()<=256).then_some(call.tool_id.as_str()),tool_ordinal, observation_tools::name_preview(&call.name)],

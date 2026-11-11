@@ -1404,7 +1404,7 @@ pub(super) fn complete_canonical_scalars(
         "SELECT opening_preview FROM message_ledger INDEXED BY message_ledger_opening_idx WHERE ordinary_user=1 AND position<=?1 ORDER BY position LIMIT 1",
         [cut.ledger_through], |row| row.get(0),
     ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
-    let first_human_position = connection.query_row("SELECT position FROM message_ledger INDEXED BY message_ledger_first_human_idx WHERE ordinary_human=1 AND position<=?1 ORDER BY position LIMIT 1",[cut.ledger_through],|row|row.get::<_,u64>(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let first_human_position = connection.query_row_cached("SELECT position FROM message_ledger INDEXED BY message_ledger_first_human_idx WHERE ordinary_human=1 AND position<=?1 ORDER BY position LIMIT 1",[cut.ledger_through],|row|row.get::<_,u64>(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(CanonicalSourceScalars {
         human_activity_at: activity
             .map(|(seconds, nanos)| {

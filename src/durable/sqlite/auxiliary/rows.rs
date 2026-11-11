@@ -1,6 +1,7 @@
 //! Typed auxiliary index rows and their bounded queries.
 
 use super::super::sqlite_error;
+use crate::durable::sqlite::statements::FixedStatements;
 
 use super::{
     AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX, AuxiliaryCallId, AuxiliaryCallOutcome,
@@ -243,7 +244,7 @@ pub(super) fn owner_row_query(
         Option<i64>,
         Option<String>,
     )> = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT owner_kind,attempt_id,turn_id,retry_number,call_id,
                     auxiliary_ordinal,start_sequence,terminal_sequence,terminal_kind
              FROM request_owners WHERE request_id=?1",
