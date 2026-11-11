@@ -13,6 +13,50 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[test]
+fn frontier_schema_rejects_fake_primary_index_and_damaged_goal_index() {
+    for damage in ["partial", "descending", "missing_goal", "wrong_goal"] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("frontier-schema.sqlite");
+        let id = ConversationId::generate();
+        drop(SqliteConversationStore::open(id.clone(), &path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        match damage {
+            "partial" | "descending" => {
+                let key = if damage == "partial" {
+                    "source_kind,source_id,block_index,representation,revision"
+                } else {
+                    "source_id DESC,source_kind,block_index,representation,revision"
+                };
+                connection.execute_batch(&format!(
+                    "DROP TABLE content_frontiers;
+                     CREATE TABLE content_frontiers (
+                        source_kind TEXT NOT NULL, source_id INTEGER NOT NULL CHECK(typeof(source_id)='integer' AND source_id>-9223372036854775808),
+                        block_index INTEGER NOT NULL, representation TEXT NOT NULL, revision INTEGER NOT NULL, readable_end INTEGER NOT NULL,
+                        bytes BLOB CHECK(bytes IS NULL OR length(bytes)<=65536), PRIMARY KEY({key}));
+                     CREATE UNIQUE INDEX fake_frontier ON content_frontiers(source_id,source_kind,block_index,representation,revision) WHERE source_kind='observation_goal';
+                     CREATE INDEX content_frontiers_goal_idx ON content_frontiers(source_kind) WHERE source_kind='observation_goal';"
+                )).unwrap();
+            }
+            "missing_goal" => connection
+                .execute_batch("DROP INDEX content_frontiers_goal_idx")
+                .unwrap(),
+            "wrong_goal" => connection.execute_batch(
+                "DROP INDEX content_frontiers_goal_idx; CREATE INDEX content_frontiers_goal_idx ON content_frontiers(source_kind) WHERE source_kind='canonical';"
+            ).unwrap(),
+            _ => unreachable!(),
+        }
+        drop(connection);
+        assert!(
+            matches!(
+                SqliteConversationStore::open_existing(id, &path),
+                Err(ConversationStoreError::IncompatibleSchema(_))
+            ),
+            "{damage}"
+        );
+    }
+}
+
+#[test]
 fn wal_management_head_is_one_snapshot_while_another_writer_commits() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("conversation.sqlite");

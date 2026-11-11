@@ -1786,20 +1786,67 @@ pub(super) fn settle_audit(
 /// finite BLOB constraint, so these are development-schema requirements.
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
     keys::verify_schema(connection)?;
+    // A partial or unrelated unique index cannot establish the frontier's
+    // physical primary-key order. Inspect the actual primary index, including
+    // its collation and direction, rather than any unique index with the names.
+    let mut primary = connection
+        .prepare(
+            "SELECT CASE WHEN length(CAST(name AS BLOB))<=32 THEN name END, \"desc\", \
+         CASE WHEN length(CAST(coll AS BLOB))<=16 THEN coll END \
+         FROM pragma_index_xinfo((SELECT name FROM pragma_index_list('content_frontiers') \
+         WHERE origin='pk' AND \"unique\"=1 AND partial=0 LIMIT 1)) \
+         WHERE key=1 ORDER BY seqno LIMIT 6",
+        )
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    let columns = primary
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    let expected = [
+        "source_id",
+        "source_kind",
+        "block_index",
+        "representation",
+        "revision",
+    ];
+    if columns.len() != expected.len()
+        || columns
+            .iter()
+            .zip(expected)
+            .any(|((name, descending, collation), expected)| {
+                name.as_deref() != Some(expected)
+                    || *descending != 0
+                    || collation.as_deref() != Some("BINARY")
+            })
+    {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "invalid content_frontiers primary key".into(),
+        ));
+    }
     for (table, last) in [
         ("content_segments", "segment"),
         ("content_frontiers", "revision"),
     ] {
-        let first = if table == "content_frontiers" {
-            ["source_id", "source_kind"]
-        } else {
-            ["source_kind", "source_id"]
-        };
-        super::schema::shape::verify_unique_columns(
-            connection,
-            table,
-            &[first[0], first[1], "block_index", "representation", last],
-        )?;
+        if table == "content_segments" {
+            super::schema::shape::verify_unique_columns(
+                connection,
+                table,
+                &[
+                    "source_kind",
+                    "source_id",
+                    "block_index",
+                    "representation",
+                    last,
+                ],
+            )?;
+        }
         let sql: String = connection
             .query_row(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
