@@ -301,23 +301,11 @@ pub(crate) async fn watch_recheck() {
         })
     });
     bounded(locked).await.unwrap();
-    let published =
-        crate::app_server::filesystem::observe_native_change(directory.clone(), next.clone());
-    std::fs::write(&next, b"still observed").unwrap();
-    bounded(published).await.unwrap();
-    loop {
-        if let NotificationMethod::FsChanged(change) =
-            bounded(connection.next_notification()).await.notification
-        {
-            assert!(!change.retired);
-            if change.watch_id == "directory"
-                && change.resync_required
-                && change.changed_paths.is_empty()
-            {
-                break;
-            }
-        }
-    }
+    let change = super::observed_mutation_hint(&connection, "directory", &directory, &next, || {
+        std::fs::write(&next, b"still observed").unwrap();
+    })
+    .await;
+    assert!(change.changed_paths.is_empty());
     release.send(()).unwrap();
     bounded(lock).await.unwrap().unwrap();
     let MethodResult::FileChunk { chunk } = call(
