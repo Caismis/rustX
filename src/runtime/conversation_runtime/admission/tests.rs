@@ -163,8 +163,6 @@ async fn headless_tool_cycle_with_zero_attachments() {
         description: "echoes the call arguments".to_owned(),
         input_schema: serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: crate::tools::types::ToolConcurrencyPolicy::default(),
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };
@@ -543,8 +541,6 @@ async fn automatic_compaction_keeps_attempt_pinned_resources_after_external_edit
             description: description.to_owned(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::default(),
-            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         };

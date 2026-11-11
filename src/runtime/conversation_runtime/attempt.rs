@@ -152,6 +152,7 @@ impl RuntimeInner {
                     .with_workflow_models(self.auxiliary.clone())
                 }),
             workflow_output: self.workflow_output.clone(),
+            approval_mode,
         };
         let workspace_changes = execution_policy.workspace_changes.clone();
         let auxiliary_invocation = model.summary_invocation().clone();

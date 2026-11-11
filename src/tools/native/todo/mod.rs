@@ -52,7 +52,7 @@ use crate::tools::todo::{
     TODO_TOOL_ID, TodoMutationError, TodoSnapshot, TodoStatus, TodoTask, TodoUpdate, TodoWriter,
 };
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+    ToolDefinition, ToolExecutionPolicy,
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
     ToolResultContent,
 };
@@ -94,8 +94,6 @@ pub(super) fn definition() -> ToolDefinition {
         .to_owned(),
         input_schema: input_schema::<TodoInput>(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }

@@ -312,16 +312,13 @@ impl AgentExecution<'_> {
         &self.admitted_tools
     }
 
-    /// Executes the turn's tool calls through deterministic scheduling
-    /// phases and commits the structurally complete result batch.
+    /// Executes the turn's tool calls concurrently and commits the
+    /// structurally complete result batch in original call order.
     ///
-    /// Scheduling interprets [`ToolConcurrencyPolicy`] per registered tool:
-    /// a `Sequential` invocation is an exclusive scheduling barrier, and
-    /// adjacent `Parallel` invocations execute concurrently as one group.
-    /// A background call is settled for the originating attempt when its
-    /// background dispatch is accepted, not when the detached work
-    /// terminates, so a sequential background call blocks later scheduling
-    /// only through its dispatch-acceptance point.
+    /// Prepared slots may authorize and start independently. A background
+    /// call is settled for the originating attempt when its background
+    /// dispatch is accepted, not when the detached work terminates. Domain
+    /// owners (Todo, Goal, Scheduler) keep their own synchronization.
     ///
     /// The structural invariant: once the valid Assistant tool-call message is
     /// committed, its entire tool-result batch is settled exactly once.
@@ -1206,7 +1203,6 @@ struct ParallelAuthFacts {
     mode: ToolInvocationMode,
     arguments: serde_json::Value,
     audit_arguments: serde_json::Value,
-    approval_policy: crate::tools::types::ToolApprovalPolicy,
     elevation_reason: Option<String>,
     workspace_root: std::path::PathBuf,
 }
@@ -1229,7 +1225,6 @@ impl ParallelAuthFacts {
             mode: prepared.invocation.mode,
             arguments: prepared.invocation.arguments.clone(),
             audit_arguments: slot.call.arguments.clone(),
-            approval_policy: prepared.approval,
             elevation_reason: prepared.elevation_reason.clone(),
             workspace_root: execution.tool_runtime.workspace().root().to_path_buf(),
         }
@@ -1254,7 +1249,6 @@ async fn authorize_owned(
         mode: facts.mode,
         arguments: &facts.arguments,
         audit_arguments: &facts.audit_arguments,
-        approval_policy: facts.approval_policy,
         elevation_reason: facts.elevation_reason.as_deref(),
         workspace_root: Some(facts.workspace_root.as_path()),
         resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,

@@ -17,7 +17,7 @@ use crate::tools::background::{
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+    ToolDefinition, ToolExecutionPolicy,
     ToolExecutionResult, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 
@@ -52,8 +52,6 @@ pub(super) fn definitions() -> Vec<ToolDefinition> {
         description: description.to_owned(),
         input_schema,
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }).collect()

@@ -8,7 +8,7 @@ use crate::runtime::agent_profile::{AgentProfileAuthority, AgentScope, resolve_a
 use crate::runtime::identity::McpServerId;
 use crate::tools::mcp::{McpServerBinding, McpTransportConfig, source_server_id};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy,
+    ToolExecutionPolicy, ToolInvocationPolicy,
 };
 
 fn sources() -> [ToolSourceId; 2] {
@@ -18,7 +18,7 @@ fn sources() -> [ToolSourceId; 2] {
     ]
 }
 
-fn binding(source: &ToolSourceId, approval: ToolApprovalPolicy) -> McpServerBinding {
+fn binding(source: &ToolSourceId) -> McpServerBinding {
     McpServerBinding {
         credentials: serde_json::from_value(serde_json::json!({
             "environment": { "API_KEY": "$SOURCE_KEY" }
@@ -36,10 +36,7 @@ fn binding(source: &ToolSourceId, approval: ToolApprovalPolicy) -> McpServerBind
                 environment: BTreeMap::new(),
             },
         },
-        policy: ToolInvocationPolicy {
-            approval,
-            ..Default::default()
-        },
+        policy: ToolInvocationPolicy::default(),
     }
 }
 
@@ -85,26 +82,16 @@ fn resource_only_spec(source: &ToolSourceId, binding: McpServerBinding) -> Resol
 }
 
 #[test]
-fn resource_only_child_profile_digest_includes_frozen_approval() {
+fn resource_only_child_profile_digest_includes_frozen_execution_policy() {
     for source in sources() {
-        let never = resource_only_spec(&source, binding(&source, ToolApprovalPolicy::Never));
-        let always = resource_only_spec(&source, binding(&source, ToolApprovalPolicy::Always));
-        let mut only_approval_changed = never.clone();
-        only_approval_changed
-            .materialization
-            .sources
-            .get_mut(&source)
-            .unwrap()
-            .policy
-            .approval = ToolApprovalPolicy::Always;
-        assert_eq!(
-            only_approval_changed, always,
-            "the two real frozen contracts differ only in source approval"
-        );
+        let foreground = resource_only_spec(&source, binding(&source));
+        let mut background_binding = binding(&source);
+        background_binding.policy = ToolInvocationPolicy::new(ToolExecutionPolicy::BackgroundOnly);
+        let background = resource_only_spec(&source, background_binding);
         assert_ne!(
-            never.profile_digest(),
-            always.profile_digest(),
-            "resource approval changes the effective profile for {source} even without Tools"
+            foreground.profile_digest(),
+            background.profile_digest(),
+            "resource execution policy changes the effective profile for {source}"
         );
     }
 }
@@ -112,7 +99,7 @@ fn resource_only_child_profile_digest_includes_frozen_approval() {
 #[test]
 fn resource_only_child_profile_digest_excludes_physical_binding_and_tool_scheduling() {
     type BindingMutation = fn(&mut McpServerBinding);
-    let mutations: [(&str, BindingMutation); 5] = [
+    let mutations: [(&str, BindingMutation); 3] = [
         ("transport", |binding| match &mut binding.transport {
             McpTransportConfig::StreamableHttp { endpoint, .. } => {
                 *endpoint = "https://relocated.invalid/resources".into();
@@ -136,16 +123,9 @@ fn resource_only_child_profile_digest_excludes_physical_binding_and_tool_schedul
                     "test-only-rotated-secret".into(),
                 )]));
         }),
-        ("tool execution mode", |binding| {
-            binding.policy.execution = ToolExecutionPolicy::BackgroundOnly;
-        }),
-        ("tool concurrency", |binding| {
-            binding.policy.concurrency = ToolConcurrencyPolicy::Parallel;
-        }),
     ];
     for source in sources() {
-        for approval in [ToolApprovalPolicy::Never, ToolApprovalPolicy::Always] {
-            let original_binding = binding(&source, approval);
+        let original_binding = binding(&source);
             let base = resource_only_spec(&source, original_binding.clone());
             for (field, mutate) in mutations {
                 let mut changed_binding = original_binding.clone();
@@ -155,32 +135,20 @@ fn resource_only_child_profile_digest_excludes_physical_binding_and_tool_schedul
                 assert_eq!(
                     changed.profile_digest(),
                     base.profile_digest(),
-                    "{field} does not affect resource behavior for {source} with {approval:?} approval"
+                    "{field} does not affect resource behavior for {source}"
                 );
             }
-        }
     }
 }
 
 #[test]
 fn resource_only_child_profile_digest_survives_frozen_spec_serde_roundtrip() {
     for source in sources() {
-        let digests = [ToolApprovalPolicy::Never, ToolApprovalPolicy::Always].map(|approval| {
-            let original = resource_only_spec(&source, binding(&source, approval));
-            let encoded = serde_json::to_vec(&original).expect("encode frozen child");
-            let restored: ResolvedSubagentSpec =
-                serde_json::from_slice(&encoded).expect("decode frozen child");
-            assert_eq!(restored, original);
-            assert_eq!(
-                restored.materialization.sources[&source].policy.approval,
-                approval
-            );
-            assert_eq!(restored.profile_digest(), original.profile_digest());
-            restored.profile_digest()
-        });
-        assert_ne!(
-            digests[0], digests[1],
-            "the child recomputes distinct approval profiles from frozen bytes for {source}"
-        );
+        let original = resource_only_spec(&source, binding(&source));
+        let encoded = serde_json::to_vec(&original).expect("encode frozen child");
+        let restored: ResolvedSubagentSpec =
+            serde_json::from_slice(&encoded).expect("decode frozen child");
+        assert_eq!(restored, original);
+        assert_eq!(restored.profile_digest(), original.profile_digest());
     }
 }

@@ -92,7 +92,7 @@ pub(super) use crate::scripted_suites::support::fake::{
 pub(super) use crate::scripted_suites::support::model::scripted_session_model;
 pub(super) use crate::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 pub(super) use crate::tools::types::{
-    ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionStatus,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionStatus,
     ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 pub(super) use futures_util::future::BoxFuture;
@@ -1197,7 +1197,7 @@ pub(super) fn cause_probe_registry_and_script(
     tool: Arc<dyn ToolExecutor>,
 ) -> (crate::tools::executor::ToolRegistry, Vec<FakeStep>) {
     use crate::tools::types::{
-        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
+        ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
     };
     let definition = ToolDefinition {
         id: crate::runtime::identity::ToolId::new("tool-cause-probe"),
@@ -1209,8 +1209,6 @@ pub(super) fn cause_probe_registry_and_script(
             "additionalProperties": false
         }),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };

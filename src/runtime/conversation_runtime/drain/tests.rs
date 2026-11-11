@@ -135,8 +135,6 @@ async fn shutdown_propagates_existing_user_cancellation_to_pending_interaction()
             "required": ["text"]
         }),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::default(),
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };
@@ -2206,7 +2204,7 @@ async fn runtime_shutdown_waits_for_foreground_process_terminality() {
     use crate::tools::executor::ToolRegistry;
     use crate::tools::native::{BashTestControl, BashTool};
     use crate::tools::types::{
-        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
+        ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
     };
 
     let control = BashTestControl::new().hold_terminal_event();
@@ -2229,8 +2227,6 @@ async fn runtime_shutdown_waits_for_foreground_process_terminality() {
             "additionalProperties": false
         }),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };
@@ -2349,7 +2345,7 @@ async fn runtime_shutdown_closes_parallel_foreground_start_frontier() {
     use crate::agent::execution::test_sync::ToolStartPause;
     use crate::tools::executor::ToolRegistry;
     use crate::tools::types::{
-        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
+        ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
     };
 
     let definition = |id: &str, name: &str| ToolDefinition {
@@ -2358,8 +2354,6 @@ async fn runtime_shutdown_closes_parallel_foreground_start_frontier() {
         description: String::new(),
         input_schema: serde_json::json!({"type": "object"}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Parallel,
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };

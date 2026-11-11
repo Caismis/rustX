@@ -85,7 +85,7 @@ async fn t05_complete_policy_registry_publishes_independently_of_instructions() 
         ConfigMutation::NativePolicy {
             id: crate::local_runtime::configuration::settings::NativeTool::Read,
             authored: Some(
-                serde_json::from_value(serde_json::json!({"approval":"always"})).unwrap(),
+                serde_json::from_value(serde_json::json!({"execution":"background_only"})).unwrap(),
             ),
         },
     )
@@ -113,12 +113,12 @@ async fn t05_complete_policy_registry_publishes_independently_of_instructions() 
             .into_iter()
             .find(|tool| tool.name == "read")
             .unwrap()
-            .approval_policy
+            .execution_policy
     };
     assert_ne!(read(&old), read(&current));
     assert_eq!(
         read(&current),
-        crate::tools::types::ToolApprovalPolicy::Always
+        crate::tools::types::ToolExecutionPolicy::BackgroundOnly
     );
     assert_eq!(
         crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
@@ -127,7 +127,7 @@ async fn t05_complete_policy_registry_publishes_independently_of_instructions() 
             .iter()
             .find(|tool| tool.name == "read")
             .unwrap()
-            .approval_policy,
+            .execution_policy,
         read(&current)
     );
     fixture.close().await;
@@ -282,7 +282,7 @@ async fn t02_later_tool_batch_and_model_step_keep_admitted_registry_policy() {
             ConfigMutation::NativePolicy {
                 id: crate::local_runtime::configuration::settings::NativeTool::Read,
                 authored: Some(
-                    serde_json::from_value(serde_json::json!({"approval":"always"})).unwrap(),
+                    serde_json::from_value(serde_json::json!({"execution":"background_only"})).unwrap(),
                 ),
             },
         )
@@ -579,7 +579,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         ConfigMutation::NativePolicy {
             id: crate::local_runtime::configuration::settings::NativeTool::Read,
             authored: Some(
-                serde_json::from_value(serde_json::json!({"approval":"always"})).unwrap(),
+                serde_json::from_value(serde_json::json!({"execution":"background_only"})).unwrap(),
             ),
         },
     )
@@ -760,9 +760,9 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         .iter()
         .find(|tool| tool["name"] == "read")
         .unwrap();
-    let approval = |state: &str| read[state]["definition"]["approval_policy"].clone();
+    let execution = |state: &str| read[state]["definition"]["execution_policy"].clone();
     assert_eq!(
-        approval("before"),
+        execution("before"),
         serde_json::to_value(
             before
                 .capability()
@@ -771,12 +771,12 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
                 .into_iter()
                 .find(|tool| tool.name == "read")
                 .unwrap()
-                .approval_policy
+                .execution_policy
         )
         .unwrap(),
         "{read}"
     );
-    assert_ne!(approval("before"), approval("after"), "{read}");
+    assert_ne!(execution("before"), execution("after"), "{read}");
     // Retry the same authored C2: it prepares and every resident Session
     // commits it automatically, while new Sessions bind C2 as well.
     fixture

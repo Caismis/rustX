@@ -80,7 +80,7 @@ use crate::tools::background::{
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use crate::tools::types::{
-    ToolCall, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
+    ToolCall, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
     ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
     ToolResultContent,
 };
@@ -261,8 +261,6 @@ impl ParkingBackgroundTool {
                     description: String::new(),
                     input_schema: serde_json::json!({"type": "object"}),
                     execution_policy: ToolExecutionPolicy::ModelSelectable,
-                    concurrency_policy: ToolConcurrencyPolicy::Sequential,
-                    approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
                     replay_policy: ToolReplayPolicy::Never,
                     origin: ToolOrigin::Builtin,
                 },
@@ -6592,14 +6590,12 @@ async fn safe_boundary_keeps_sibling_tool_results_together() {
         id: ToolId::new("tool-a"),
         name: "a".to_owned(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Parallel,
         ..tool_a.definition.clone()
     };
     let definition_b = ToolDefinition {
         id: ToolId::new("tool-b"),
         name: "b".to_owned(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Parallel,
         ..tool_b.definition.clone()
     };
     let mut tools = ToolRegistry::new();

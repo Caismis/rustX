@@ -17,9 +17,8 @@ use crate::runtime::identity::ToolId;
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolCancellationPhase, ToolConcurrencyPolicy, ToolDefinition,
-    ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin,
-    ToolReplayPolicy,
+    ToolCancellationPhase, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
+    ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 
 use super::generation::McpRuntimeBinding;
@@ -71,12 +70,11 @@ enum ResourceTool {
 #[derive(Clone, Debug)]
 pub(crate) struct McpResourceBinding {
     runtime: McpRuntimeBinding,
-    approval: ToolApprovalPolicy,
 }
 
 impl McpResourceBinding {
-    pub(crate) fn new(runtime: McpRuntimeBinding, approval: ToolApprovalPolicy) -> Self {
-        Self { runtime, approval }
+    pub(crate) fn new(runtime: McpRuntimeBinding) -> Self {
+        Self { runtime }
     }
 }
 
@@ -109,10 +107,6 @@ pub(crate) fn resource_definitions(
             description: format!("{description} Authorized servers: {servers}."),
             input_schema,
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Parallel,
-            // The target source's frozen policy is resolved per invocation,
-            // before the ordinary approval boundary, by `invocation_approval`.
-            approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         };
@@ -128,24 +122,6 @@ struct ResourceExecutor {
 }
 
 impl ToolExecutor for ResourceExecutor {
-    fn invocation_approval(
-        &self,
-        arguments: &serde_json::Value,
-    ) -> Result<ToolApprovalPolicy, String> {
-        let (server, _) = self.decode(arguments.clone())?;
-        let sources = self.selected_sources(server.as_deref())?;
-        Ok(
-            if sources
-                .iter()
-                .any(|(_, source)| source.approval == ToolApprovalPolicy::Always)
-            {
-                ToolApprovalPolicy::Always
-            } else {
-                ToolApprovalPolicy::Never
-            },
-        )
-    }
-
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,

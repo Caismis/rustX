@@ -173,41 +173,6 @@
       },
       "type": "object"
     },
-    "ApprovalMode": {
-      "description": "The runtime-wide execution-permission mode.\n\nModes are built into Rust and are not extensible through TOML presets.\nChanging mode never changes Tool Registry membership, model-facing names,\ntool Schema, MCP discovery, or capability selection.",
-      "oneOf": [
-        {
-          "const": "plan",
-          "description": "Native reads and approved bookkeeping are allowed; Write/Edit may\nautomatically change only workspace-root `PLAN.md`; Bash requires a\nproven read-only classification. Other defaults refuse without a\nnonblank `elevation_reason`.",
-          "type": "string"
-        },
-        {
-          "const": "automatic",
-          "description": "Retain Plan's deterministic fast paths. Remaining defaults go through\nthe shared Auxiliary permission reviewer. Denied calls may escalate\nwith `elevation_reason`.",
-          "type": "string"
-        },
-        {
-          "const": "full_access",
-          "description": "Default calls are allowed without Auxiliary or ordinary human review.\nEffective explicit `deny` and `ask` resource settings still apply.",
-          "type": "string"
-        }
-      ]
-    },
-    "ApprovalPolicyDocument": {
-      "description": "The configurable HITL approval policy of one Tool.",
-      "oneOf": [
-        {
-          "const": "never",
-          "description": "Execute without an approval interaction.",
-          "type": "string"
-        },
-        {
-          "const": "always",
-          "description": "Require an approval interaction before execution.",
-          "type": "string"
-        }
-      ]
-    },
     "AuxiliaryModelAuthoring": {
       "oneOf": [
         {
@@ -470,21 +435,6 @@
       },
       "type": "object"
     },
-    "ConcurrencyPolicyDocument": {
-      "description": "The configurable in-batch scheduling policy of one tool.",
-      "oneOf": [
-        {
-          "const": "sequential",
-          "description": "Calls within one batch run one at a time.",
-          "type": "string"
-        },
-        {
-          "const": "parallel",
-          "description": "Calls within one batch may run concurrently.",
-          "type": "string"
-        }
-      ]
-    },
     "ContextLayer": {
       "additionalProperties": false,
       "properties": {
@@ -515,6 +465,26 @@
     "CredentialSource": {
       "description": "The declared source of one provider credential.\n\nThe syntax is exactly two forms and is never extended implicitly: a\nliteral string, or `$ENV_VAR`.",
       "type": "string"
+    },
+    "ExecutionPermissionMode": {
+      "description": "The runtime-wide execution-permission mode.\n\nModes are built into Rust and are not extensible through TOML presets.\nChanging mode never changes Tool Registry membership, model-facing names,\ntool Schema, MCP discovery, or capability selection.",
+      "oneOf": [
+        {
+          "const": "plan",
+          "description": "Native reads and approved bookkeeping are allowed; Write/Edit may\nautomatically change only workspace-root `PLAN.md`; Bash requires a\nproven read-only classification. Other defaults refuse without a\nnonblank `elevation_reason`.",
+          "type": "string"
+        },
+        {
+          "const": "automatic",
+          "description": "Retain Plan's deterministic fast paths. Remaining defaults go through\nthe shared Auxiliary permission reviewer. Denied calls may escalate\nwith `elevation_reason`.",
+          "type": "string"
+        },
+        {
+          "const": "full_access",
+          "description": "Default calls are allowed without Auxiliary or ordinary human review.\nEffective explicit `deny` and `ask` resource settings still apply.",
+          "type": "string"
+        }
+      ]
     },
     "ExecutionPolicyDocument": {
       "description": "The configurable execution-ownership policy of one tool.",
@@ -587,16 +557,6 @@
       "additionalProperties": false,
       "description": "One tool invocation policy document.",
       "properties": {
-        "approval": {
-          "$ref": "#/$defs/ApprovalPolicyDocument",
-          "default": "never",
-          "description": "Human approval behavior for otherwise eligible calls."
-        },
-        "concurrency": {
-          "$ref": "#/$defs/ConcurrencyPolicyDocument",
-          "default": "sequential",
-          "description": "In-batch scheduling policy."
-        },
         "execution": {
           "$ref": "#/$defs/ExecutionPolicyDocument",
           "default": "foreground_only",
@@ -821,14 +781,6 @@
       "additionalProperties": false,
       "description": "Explicit native policy axes, resolved over that tool's product default.\nAbsence never applies the generic external-tool policy to a native tool.",
       "properties": {
-        "approval": {
-          "$ref": "#/$defs/ApprovalPolicyDocument",
-          "description": "Tool approval override."
-        },
-        "concurrency": {
-          "$ref": "#/$defs/ConcurrencyPolicyDocument",
-          "description": "In-batch scheduling override."
-        },
         "execution": {
           "$ref": "#/$defs/ExecutionPolicyDocument",
           "description": "Foreground/background ownership override."
@@ -1179,7 +1131,7 @@
     "approval_mode": {
       "anyOf": [
         {
-          "$ref": "#/$defs/ApprovalMode"
+          "$ref": "#/$defs/ExecutionPermissionMode"
         }
       ]
     },

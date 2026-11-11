@@ -498,8 +498,6 @@ mod tests {
             description: "check".into(),
             input_schema: serde_json::json!({"type":"object","additionalProperties":false}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin,
         }

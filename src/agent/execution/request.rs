@@ -288,7 +288,8 @@ impl AgentExecution<'_> {
         // model-visible dynamic-context admission path: an observer has no
         // privileged committer role and cannot bypass the policy below.
         let deferred = core::mem::take(&mut self.deferred_context);
-        let native = self.context_runtime.native_system.clone();
+        let mut native = self.context_runtime.native_system.clone();
+        native.permission_reminder = self.permission_reminder.pending_text();
         self.pending_post_tool_batch = None;
         let accepted = self
             .context_runtime

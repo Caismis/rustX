@@ -2,7 +2,7 @@
 use super::registration::{NativeToolRegistration, input_schema};
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+    ToolDefinition, ToolExecutionPolicy,
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
     ToolResultContent,
 };
@@ -42,8 +42,6 @@ pub(crate) fn definitions() -> Vec<ToolDefinition> {
     ].into_iter().map(|(name,description,input_schema)| ToolDefinition {
         id: crate::runtime::identity::ToolId::new(format!("native.{name}")), name: name.into(), description: description.into(), input_schema,
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }).collect()

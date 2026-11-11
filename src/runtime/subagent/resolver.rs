@@ -1372,17 +1372,13 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
     for (source, binding) in &framing.materialization.sources {
         field(&mut hasher, "materialization_source", &source.to_string());
         if framing.resource_sources.contains(source) {
-            // Resource helpers inherit only approval from the source policy.
-            // Physical transport/credentials never enter the semantic identity.
-            let crate::tools::types::ToolInvocationPolicy {
-                approval,
-                execution: _,
-                concurrency: _,
-            } = binding.policy;
+            // Resource helpers inherit execution ownership from the source
+            // policy. Physical transport/credentials never enter the semantic
+            // identity; permission is owned by the Issue #544 mode matrix.
             field(
                 &mut hasher,
-                "materialization_source.resource_approval_policy",
-                &format!("{approval:?}"),
+                "materialization_source.resource_execution_policy",
+                &format!("{:?}", binding.policy.execution),
             );
         }
     }
@@ -1410,7 +1406,7 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
 /// # The classification
 ///
 /// Every field of [`ToolDefinition`] is destructured, so adding one is a
-/// compile error until it is decided. All nine are **included**:
+/// compile error until it is decided. All seven are **included**:
 ///
 /// ```text
 /// id                  the capability identity the child resolves against
@@ -1421,11 +1417,13 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
 /// input_schema        the accepted-argument contract, framed through the
 ///                     rustX-owned canonical JSON writer
 /// execution_policy    attempt-owned vs conversation-owned vs model-selected
-/// concurrency_policy  in-batch sequential barrier vs parallel group
-/// approval_policy     whether an eligible invocation stops for a human
 /// replay_policy       whether the runtime may re-execute after an unknown
 ///                     outcome
 /// ```
+///
+/// Permission is decided by the built-in mode matrix and resource overrides,
+/// never by a per-tool authoring axis on the frozen definition. Batch slots
+/// may run concurrently; domain owners keep their own synchronization.
 ///
 /// `replay_policy` is included deliberately rather than by omission. It is
 /// today's frozen declaration of whether automatic re-execution after a crash
@@ -1450,8 +1448,6 @@ fn frame_tool_definition(hasher: &mut Sha256, prefix: &str, definition: &ToolDef
         description,
         input_schema,
         execution_policy,
-        concurrency_policy,
-        approval_policy,
         replay_policy,
         origin,
     } = definition;
@@ -1493,16 +1489,6 @@ fn frame_tool_definition(hasher: &mut Sha256, prefix: &str, definition: &ToolDef
         hasher,
         &key("execution_policy"),
         &format!("{execution_policy:?}"),
-    );
-    field(
-        hasher,
-        &key("concurrency_policy"),
-        &format!("{concurrency_policy:?}"),
-    );
-    field(
-        hasher,
-        &key("approval_policy"),
-        &format!("{approval_policy:?}"),
     );
     field(hasher, &key("replay_policy"), &format!("{replay_policy:?}"));
 }
@@ -1683,7 +1669,7 @@ mod tests {
     use crate::runtime::identity::{McpServerId, ToolId};
     use crate::runtime::subagent::catalog::{AgentCatalog, NamedAgentDefinition, SubagentName};
     use crate::tools::types::{
-        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
+        ToolDefinition, ToolExecutionPolicy, ToolOrigin,
         ToolReplayPolicy,
     };
 
@@ -1694,8 +1680,6 @@ mod tests {
             description: format!("{name} tool"),
             input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin,
         }
@@ -2012,10 +1996,7 @@ mod tests {
                     cwd: None,
                     environment: std::collections::BTreeMap::new(),
                 },
-                policy: crate::tools::types::ToolInvocationPolicy {
-                    approval: crate::tools::types::ToolApprovalPolicy::Always,
-                    ..Default::default()
-                },
+                policy: crate::tools::types::ToolInvocationPolicy::default(),
             };
             let mut configured = [(server.clone(), binding.clone())].into();
             let frozen =
@@ -2027,11 +2008,13 @@ mod tests {
                 frozen.materialization.sources,
                 [(source.clone(), binding)].into()
             );
-            configured.get_mut(&server).unwrap().policy.approval =
-                crate::tools::types::ToolApprovalPolicy::Never;
+            configured.get_mut(&server).unwrap().policy =
+                crate::tools::types::ToolInvocationPolicy::new(
+                    crate::tools::types::ToolExecutionPolicy::BackgroundOnly,
+                );
             assert_eq!(
-                frozen.materialization.sources[&source].policy.approval,
-                crate::tools::types::ToolApprovalPolicy::Always,
+                frozen.materialization.sources[&source].policy,
+                crate::tools::types::ToolInvocationPolicy::default(),
                 "resource-only MCP and managed Python children retain the captured source policy"
             );
             configured.clear();
@@ -2704,8 +2687,6 @@ mod tests {
                 "required": ["path"]
             }),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         }
@@ -2761,11 +2742,9 @@ mod tests {
         variants.push(spec_with_builtin(model_selected));
 
         let mut parallel = base.clone();
-        parallel.concurrency_policy = ToolConcurrencyPolicy::Parallel;
         variants.push(spec_with_builtin(parallel));
 
         let mut gated = base.clone();
-        gated.approval_policy = ToolApprovalPolicy::Always;
         variants.push(spec_with_builtin(gated));
 
         // `replay_policy` participates deliberately: it is the frozen
@@ -2867,8 +2846,6 @@ mod tests {
             description: "Reads one issue.".to_owned(),
             input_schema: serde_json::json!({"type": "object"}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Mcp {
                 server_id: server.clone(),
@@ -2907,7 +2884,6 @@ mod tests {
 
         // A field the cross-process identity does cover moves both.
         let mut gated = definition.clone();
-        gated.approval_policy = ToolApprovalPolicy::Always;
         assert_ne!(identity_of(&definition), identity_of(&gated));
         assert_ne!(
             spec_with(definition.clone()).profile_digest(),

@@ -18,15 +18,11 @@ use crate::runtime::types::CancellationReason;
 /// The canonical runtime/tool contract of one registered tool.
 ///
 /// The definition is owned by the tool plane's registry, which pairs it with
-/// an executor. The three policy axes are independent:
-///
-/// - [`ToolExecutionPolicy`] decides who owns the execution: foreground work
-///   is attempt-owned and settles before the attempt continues, background
-///   work is conversation-owned and detached after accepted dispatch.
-/// - [`ToolConcurrencyPolicy`] decides how calls of one batch are scheduled
-///   relative to each other.
-/// - [`ToolApprovalPolicy`] decides whether an eligible invocation needs a
-///   native human approval before the executor starts.
+/// an executor. Execution ownership is tool-declared; permission (whether an
+/// eligible invocation may start) is decided by the built-in mode matrix and
+/// resource overrides, never by a per-tool never/always authoring axis.
+/// Prepared slots in one batch may run concurrently; domain owners keep their
+/// own synchronization.
 ///
 /// The `input_schema` is the original canonical JSON Schema document owned by
 /// the tool. The runtime validates it at registration and never mutates it:
@@ -47,12 +43,6 @@ pub struct ToolDefinition {
     /// conversation (background). Required: a missing policy is never
     /// silently interpreted.
     pub execution_policy: ToolExecutionPolicy,
-    /// How calls of this tool within one batch are scheduled relative to
-    /// each other.
-    pub concurrency_policy: ToolConcurrencyPolicy,
-    /// Whether execution requires a native approval interaction.
-    #[serde(default)]
-    pub approval_policy: ToolApprovalPolicy,
     /// Replay policy; `Never` is the safe default.
     #[serde(default)]
     pub replay_policy: ToolReplayPolicy,
@@ -62,7 +52,7 @@ pub struct ToolDefinition {
 
 /// Who owns one execution of a tool.
 ///
-/// This axis decides ownership and settlement, never scheduling:
+/// This axis decides ownership and settlement, never batch scheduling:
 ///
 /// - `ForegroundOnly` — every invocation settles before the current agent
 ///   attempt may continue past that tool result. The execution is
@@ -75,10 +65,8 @@ pub struct ToolDefinition {
 ///   background execution for each invocation through the required
 ///   `execution_mode` invocation field. That field is reserved by the
 ///   runtime only under this policy; registration rejects a `ModelSelectable`
-///   tool whose canonical schema already defines it.
-///
-/// Foreground/background is orthogonal to sequential/parallel scheduling
-/// ([`ToolConcurrencyPolicy`]).
+///   tool whose canonical schema already defines it. Only Bash retains this
+///   authored selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
@@ -91,78 +79,28 @@ pub enum ToolExecutionPolicy {
     ModelSelectable,
 }
 
-/// How calls of one tool within one batch are scheduled.
-///
-/// A `Sequential` invocation is an exclusive scheduling barrier; adjacent
-/// `Parallel` invocations may execute concurrently as one group. This axis
-/// describes concurrency only, never foreground/background ownership
-/// ([`ToolExecutionPolicy`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum ToolConcurrencyPolicy {
-    /// Calls execute one at a time in the order issued.
-    #[default]
-    Sequential,
-    /// Multiple adjacent calls may execute concurrently.
-    Parallel,
-}
-
-/// The three origin-independent policy axes attached to an external tool
-/// configuration. Native tools use the concrete `NativeToolPolicies` table;
-/// MCP servers and Python manifests carry this value directly.
+/// Foreground/background ownership attached to an external tool configuration.
+/// Native tools use the concrete `NativeToolPolicies` table; MCP servers and
+/// Python manifests carry this value directly. Permission is not part of this
+/// policy: the built-in mode matrix and resource overrides own that decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolInvocationPolicy {
     /// Foreground/background ownership policy.
     pub execution: ToolExecutionPolicy,
-    /// In-batch scheduling policy.
-    pub concurrency: ToolConcurrencyPolicy,
-    /// Whether a human approval is required before execution.
-    #[serde(default)]
-    pub approval: ToolApprovalPolicy,
 }
 
 impl Default for ToolInvocationPolicy {
     fn default() -> Self {
-        Self::new(
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-            ToolApprovalPolicy::Never,
-        )
+        Self::new(ToolExecutionPolicy::ForegroundOnly)
     }
 }
 
 impl ToolInvocationPolicy {
-    /// Creates a policy from the three canonical axes.
+    /// Creates a policy from the execution-ownership axis.
     #[must_use]
-    pub const fn new(
-        execution: ToolExecutionPolicy,
-        concurrency: ToolConcurrencyPolicy,
-        approval: ToolApprovalPolicy,
-    ) -> Self {
-        Self {
-            execution,
-            concurrency,
-            approval,
-        }
+    pub const fn new(execution: ToolExecutionPolicy) -> Self {
+        Self { execution }
     }
-}
-
-/// Whether a resolved tool invocation requires a native approval interaction.
-///
-/// Denial is intentionally not part of this policy. A tool that is not
-/// eligible belongs to availability/authorization and is rejected before
-/// approval; HITL only decides whether an otherwise eligible invocation needs
-/// a human decision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum ToolApprovalPolicy {
-    /// Execute without an approval interaction.
-    #[default]
-    Never,
-    /// Publish an approval interaction before execution.
-    Always,
 }
 
 /// The resolved execution ownership of one canonical invocation.
@@ -1146,9 +1084,8 @@ pub struct ModelToolDefinition {
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolApprovalPolicy, ToolCall, ToolCallStart, ToolCancellationPhase, ToolDefinition,
-        ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolReplayPolicy,
-        TruncationState,
+        ToolCall, ToolCallStart, ToolCancellationPhase, ToolDefinition, ToolExecutionPolicy,
+        ToolExecutionResult, ToolExecutionStatus, ToolReplayPolicy, TruncationState,
     };
     use crate::runtime::identity::{McpServerId, ToolCallId, ToolId};
     use serde_json::json;
@@ -1157,16 +1094,6 @@ mod tests {
     #[test]
     fn replay_policy_default_is_never() {
         assert_eq!(ToolReplayPolicy::default(), ToolReplayPolicy::Never);
-    }
-
-    /// The conservative concurrency default is sequential, never parallel.
-    #[test]
-    fn concurrency_default_is_sequential() {
-        use super::ToolConcurrencyPolicy;
-        assert_eq!(
-            ToolConcurrencyPolicy::default(),
-            ToolConcurrencyPolicy::Sequential
-        );
     }
 
     /// A missing execution policy must not silently deserialize.
@@ -1187,18 +1114,16 @@ mod tests {
         );
     }
 
-    /// A definition with explicit policies round-trips.
+    /// A definition with an explicit execution policy round-trips.
     #[test]
     fn tool_definition_with_explicit_policies_round_trips() {
-        use super::{ToolConcurrencyPolicy, ToolInvocationMode};
+        use super::ToolInvocationMode;
         let definition = ToolDefinition {
             id: ToolId::new("tool-bash"),
             name: "bash".to_owned(),
             description: "Run a shell command".to_owned(),
             input_schema: json!({"type": "object"}),
             execution_policy: ToolExecutionPolicy::ModelSelectable,
-            concurrency_policy: ToolConcurrencyPolicy::Parallel,
-            approval_policy: ToolApprovalPolicy::Always,
             replay_policy: ToolReplayPolicy::Never,
             origin: crate::tools::types::ToolOrigin::Mcp {
                 server_id: McpServerId::new("mcp-fs"),

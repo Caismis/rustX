@@ -27,7 +27,7 @@ use rustx::durable::CanonicalStore;
 
 use rustx::tools::todo::{TodoSnapshot, TodoStatus};
 use rustx::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult,
+    ToolExecutionPolicy, ToolExecutionResult,
     ToolExecutionStatus, ToolOrigin, ToolResultContent,
 };
 
@@ -84,12 +84,7 @@ fn todo_is_registered_as_a_fixed_policy_builtin() {
         ToolExecutionPolicy::ForegroundOnly,
         "one list cannot be mutated by a detached execution"
     );
-    assert_eq!(
-        definition.concurrency_policy,
-        ToolConcurrencyPolicy::Sequential,
-        "two concurrent mutations would publish racing snapshots"
-    );
-    assert_eq!(definition.approval_policy, ToolApprovalPolicy::Never);
+    
     assert_eq!(definition.input_schema["type"], "object");
     assert_eq!(definition.input_schema["additionalProperties"], false);
     assert_eq!(

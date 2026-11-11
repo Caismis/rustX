@@ -218,8 +218,6 @@ chat_reasoning_replay = "omit"
         description: input.tool_description.into(),
         input_schema: empty,
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };

@@ -525,16 +525,13 @@ pub fn bind_accepted_continuation_source(
 pub fn tool(name: &str, id: &str) -> rustx::tools::types::ToolDefinition {
     use rustx::runtime::identity::ToolId;
     use rustx::tools::types::{
-        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-    };
+        ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
     ToolDefinition {
         id: ToolId::new(id),
         name: name.to_owned(),
         description: format!("Tool {name}"),
         input_schema: serde_json::json!({"type": "object", "properties": {}}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Idempotent,
         origin: ToolOrigin::Builtin,
     }
@@ -961,14 +958,12 @@ pub fn tool_runtime(conversation_id: &str) -> ToolRuntimeFixture {
     tool_runtime_with_store(conversation_id, None)
 }
 
-/// A canonical tool definition with explicit execution/concurrency
-/// policies.
+/// A canonical tool definition with an explicit execution-ownership policy.
 #[must_use]
 pub fn tool_policies(
     name: &str,
     id: &str,
     execution: rustx::tools::types::ToolExecutionPolicy,
-    concurrency: rustx::tools::types::ToolConcurrencyPolicy,
 ) -> rustx::tools::types::ToolDefinition {
     use rustx::runtime::identity::ToolId;
     use rustx::tools::types::{ToolDefinition, ToolOrigin, ToolReplayPolicy};
@@ -978,8 +973,6 @@ pub fn tool_policies(
         description: format!("Tool {name}"),
         input_schema: serde_json::json!({"type": "object", "properties": {}}),
         execution_policy: execution,
-        concurrency_policy: concurrency,
-        approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }
@@ -1045,15 +1038,11 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
 /// preflight into the native executor.
 #[must_use]
 pub fn model_selectable_native_fixture() -> NativeFixture {
-    use rustx::tools::types::{
-        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy,
-    };
+    use rustx::tools::types::{ToolExecutionPolicy, ToolInvocationPolicy};
     native_fixture_with(
         Vec::new(),
         rustx::tools::native::NativeToolPolicies::uniform(ToolInvocationPolicy::new(
             ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Sequential,
-            ToolApprovalPolicy::Never,
         )),
     )
 }
@@ -1328,9 +1317,8 @@ pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::Model
     use rustx::runtime::identity::ToolId;
     use rustx::tools::compile_model_definition;
     use rustx::tools::types::{
-        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
-        ToolReplayPolicy,
-    };
+        ToolDefinition, ToolExecutionPolicy, ToolOrigin,
+        ToolReplayPolicy};
     compile_model_definition(&ToolDefinition {
         id: ToolId::new(id),
         name: name.to_owned(),
@@ -1341,8 +1329,6 @@ pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::Model
             "required": ["command"],
         }),
         execution_policy: ToolExecutionPolicy::ModelSelectable,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     })

@@ -2520,7 +2520,6 @@ async fn a_policy_change_failure_preserves_the_published_generation() {
     assert_eq!(published_mcp_tools(&before, &capability.server_id).len(), 3);
 
     let mut b2 = recovery_binding(test_name, &control, &script);
-    b2.policy.approval = rustx::tools::types::ToolApprovalPolicy::Always;
     assert_ne!(
         before.mcp_servers().get(&capability.server_id),
         Some(&b2),
@@ -2610,7 +2609,6 @@ async fn concurrent_mcp_progress_refreshes_every_idle_watchdog_above_the_old_rou
     // concurrency policy — an execution-relevant field of the binding — says
     // so for every tool of this server.
     let mut binding = server.binding();
-    binding.policy.concurrency = rustx::tools::types::ToolConcurrencyPolicy::Parallel;
     let capability = http_capability(
         &fixture.runtime,
         &McpServerId::new("http-progress"),
@@ -3035,7 +3033,6 @@ async fn progress_that_beats_every_subscription_still_refreshes_every_idle_watch
     let server =
         streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
     let mut binding = server.binding();
-    binding.policy.concurrency = rustx::tools::types::ToolConcurrencyPolicy::Parallel;
     let capability = http_capability(
         &fixture.runtime,
         &McpServerId::new("http-pre-subscription"),

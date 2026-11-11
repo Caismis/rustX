@@ -328,6 +328,8 @@ pub(crate) struct AgentExecutionRuntimePolicy {
     /// belongs to a Workflow-owned child. It is consumed before ordinary
     /// Tool Plane preflight and dispatch.
     pub(crate) workflow_output: Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>>,
+    /// Frozen execution-permission mode for sparse reminders (Issue #544).
+    pub(crate) approval_mode: crate::runtime::types::ApprovalMode,
 }
 
 /// One agent attempt execution.
@@ -462,6 +464,8 @@ pub struct AgentExecution<'a> {
     pauses: test_sync::ExecutionPauses,
     turn: u32,
     terminal_emitted: bool,
+    /// Sparse permission-mode reminder eligibility for this attempt.
+    permission_reminder: crate::runtime::permission::PermissionReminderState,
 }
 
 #[cfg(test)]

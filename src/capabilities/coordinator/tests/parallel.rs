@@ -301,8 +301,6 @@ fn selected_plan(fixtures: &[Fixture]) -> SelectedCapabilityPlan {
                         tool.description.as_deref().unwrap_or_default(),
                         &serde_json::Value::Object((*tool.input_schema).clone()),
                         policy.execution,
-                        policy.concurrency,
-                        policy.approval,
                     ),
                 }
             })

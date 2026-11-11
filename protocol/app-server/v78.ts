@@ -2289,7 +2289,7 @@ export type ConfigMutation =
       unit: 'capacity';
     }
   | {
-      authored?: ApprovalMode | null;
+      authored?: ExecutionPermissionMode | null;
       unit: 'approval';
     }
   | {
@@ -2511,18 +2511,16 @@ export type IdleLiveness =
       mode: 'window';
     };
 /**
- * The runtime-wide control state for tool approval behavior.
+ * The runtime-wide execution-permission mode.
  *
- * `Policy` consults each resolved Tool's
- * [`ToolApprovalPolicy`](crate::tools::types::ToolApprovalPolicy).
- * `FullAccess` changes only the effective approval result to `Never`; it
- * never changes availability, activation, execution ownership, concurrency,
- * or tool authority.
+ * Modes are built into Rust and are not extensible through TOML presets.
+ * Changing mode never changes Tool Registry membership, model-facing names,
+ * tool Schema, MCP discovery, or capability selection.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ApprovalMode".
+ * via the `definition` "ExecutionPermissionMode".
  */
-export type ApprovalMode = 'plan' | 'automatic' | 'full_access';
+export type ExecutionPermissionMode = 'plan' | 'automatic' | 'full_access';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "NativeTool".
@@ -3839,7 +3837,8 @@ export type NativeContextContributor =
   | 'agent_status'
   | 'core_system_identity'
   | 'agent_profile'
-  | 'runtime_tool_observation';
+  | 'runtime_tool_observation'
+  | 'permission_reminder';
 /**
  * The stable logical key of one certified extension.
  *
@@ -5980,7 +5979,7 @@ export type RuntimeClientEvent =
       plugins?: EffectivePlugins | null;
       model?: SessionModelView | null;
       model_status: RuntimeClientModelStatus;
-      approval_mode: ApprovalMode;
+      approval_mode: ExecutionPermissionMode;
       capabilities: CapabilityView2;
       resources: RuntimeClientResourcesView1;
       type: 'resource_generation_updated';
@@ -8933,7 +8932,7 @@ export type SubagentWaitReason =
 /**
  * Who owns one execution of a tool.
  *
- * This axis decides ownership and settlement, never scheduling:
+ * This axis decides ownership and settlement, never batch scheduling:
  *
  * - `ForegroundOnly` — every invocation settles before the current agent
  *   attempt may continue past that tool result. The execution is
@@ -8946,39 +8945,13 @@ export type SubagentWaitReason =
  *   background execution for each invocation through the required
  *   `execution_mode` invocation field. That field is reserved by the
  *   runtime only under this policy; registration rejects a `ModelSelectable`
- *   tool whose canonical schema already defines it.
- *
- * Foreground/background is orthogonal to sequential/parallel scheduling
- * ([`ToolConcurrencyPolicy`]).
+ *   tool whose canonical schema already defines it. Only Bash retains this
+ *   authored selector.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ToolExecutionPolicy".
  */
 export type ToolExecutionPolicy = 'foreground_only' | 'background_only' | 'model_selectable';
-/**
- * How calls of one tool within one batch are scheduled.
- *
- * A `Sequential` invocation is an exclusive scheduling barrier; adjacent
- * `Parallel` invocations may execute concurrently as one group. This axis
- * describes concurrency only, never foreground/background ownership
- * ([`ToolExecutionPolicy`]).
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ToolConcurrencyPolicy".
- */
-export type ToolConcurrencyPolicy = 'sequential' | 'parallel';
-/**
- * Whether a resolved tool invocation requires a native approval interaction.
- *
- * Denial is intentionally not part of this policy. A tool that is not
- * eligible belongs to availability/authorization and is rejected before
- * approval; HITL only decides whether an otherwise eligible invocation needs
- * a human decision.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ToolApprovalPolicy".
- */
-export type ToolApprovalPolicy = 'never' | 'always';
 /**
  * Whether the runtime may automatically re-execute a tool after a crash.
  *
@@ -9245,20 +9218,6 @@ export type InteractionOutcome =
  * via the `definition` "ExecutionPolicyDocument".
  */
 export type ExecutionPolicyDocument = 'foreground_only' | 'background_only' | 'model_selectable';
-/**
- * The configurable in-batch scheduling policy of one tool.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ConcurrencyPolicyDocument".
- */
-export type ConcurrencyPolicyDocument = 'sequential' | 'parallel';
-/**
- * The configurable HITL approval policy of one Tool.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ApprovalPolicyDocument".
- */
-export type ApprovalPolicyDocument = 'never' | 'always';
 /**
  * Whether the native compiler admits the candidate's structure.
  *
@@ -10219,14 +10178,6 @@ export interface NativePolicyOverrideDocument {
    * Foreground/background ownership override.
    */
   execution?: 'foreground_only' | 'background_only' | 'model_selectable';
-  /**
-   * In-batch scheduling override.
-   */
-  concurrency?: 'sequential' | 'parallel';
-  /**
-   * Tool approval override.
-   */
-  approval?: 'never' | 'always';
 }
 /**
  * One tool invocation policy document.
@@ -10239,14 +10190,6 @@ export interface InvocationPolicyDocument {
    * Foreground/background ownership policy.
    */
   execution?: 'foreground_only' | 'background_only' | 'model_selectable';
-  /**
-   * In-batch scheduling policy.
-   */
-  concurrency?: 'sequential' | 'parallel';
-  /**
-   * Human approval behavior for otherwise eligible calls.
-   */
-  approval?: 'never' | 'always';
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -13768,13 +13711,11 @@ export interface RuntimeClientSnapshot {
    */
   shutting_down: boolean;
   /**
-   * The runtime-wide control state for tool approval behavior.
+   * The runtime-wide execution-permission mode.
    *
-   * `Policy` consults each resolved Tool's
-   * [`ToolApprovalPolicy`](crate::tools::types::ToolApprovalPolicy).
-   * `FullAccess` changes only the effective approval result to `Never`; it
-   * never changes availability, activation, execution ownership, concurrency,
-   * or tool authority.
+   * Modes are built into Rust and are not extensible through TOML presets.
+   * Changing mode never changes Tool Registry membership, model-facing names,
+   * tool Schema, MCP discovery, or capability selection.
    */
   effective_approval_mode: 'plan' | 'automatic' | 'full_access';
   /**
@@ -14750,7 +14691,7 @@ export interface AdmittedSettings {
    */
   read_image_active?: boolean | null;
   resource_revision: RuntimeResourceRevision;
-  approval_mode: ApprovalMode;
+  approval_mode: ExecutionPermissionMode;
 }
 /**
  * The inbound mailbox diagnostics (pending items and the latest
@@ -15713,14 +15654,6 @@ export interface RuntimeClientTool {
    * (background).
    */
   execution_policy: 'foreground_only' | 'background_only' | 'model_selectable';
-  /**
-   * How calls within one batch are scheduled.
-   */
-  concurrency_policy: 'sequential' | 'parallel';
-  /**
-   * Whether execution requires a native approval interaction.
-   */
-  approval_policy: 'never' | 'always';
   /**
    * The replay policy.
    */
@@ -17038,7 +16971,7 @@ export interface RuntimeClientProtocolEvent {
         plugins?: EffectivePlugins | null;
         model?: SessionModelView | null;
         model_status: RuntimeClientModelStatus;
-        approval_mode: ApprovalMode;
+        approval_mode: ExecutionPermissionMode;
         capabilities: CapabilityView2;
         resources: RuntimeClientResourcesView1;
         type: 'resource_generation_updated';
@@ -18529,7 +18462,7 @@ export interface EffectiveConfiguration {
   model_timeout: ModelTimeoutPolicyDocument;
   tool_deadline: ToolDeadlinePolicyDocument;
   child_capacity: SubagentsDocument;
-  approval_mode: ApprovalMode;
+  approval_mode: ExecutionPermissionMode;
   provenance: {
     [k: string]: Origin;
   };
@@ -18596,7 +18529,7 @@ export interface RuntimeLayer {
   schema_version?: number | null;
   app_server?: AppServerPolicy | null;
   agent_id?: AgentId | null;
-  approval_mode?: ApprovalMode | null;
+  approval_mode?: ExecutionPermissionMode | null;
   agent?: AgentProfileLayer | null;
   context?: ContextLayer | null;
   model_timeout_policy?: TimeoutLayer | null;
@@ -18834,15 +18767,11 @@ export interface SubagentsDocument {
  * The canonical runtime/tool contract of one registered tool.
  *
  * The definition is owned by the tool plane's registry, which pairs it with
- * an executor. The three policy axes are independent:
- *
- * - [`ToolExecutionPolicy`] decides who owns the execution: foreground work
- *   is attempt-owned and settles before the attempt continues, background
- *   work is conversation-owned and detached after accepted dispatch.
- * - [`ToolConcurrencyPolicy`] decides how calls of one batch are scheduled
- *   relative to each other.
- * - [`ToolApprovalPolicy`] decides whether an eligible invocation needs a
- *   native human approval before the executor starts.
+ * an executor. Execution ownership is tool-declared; permission (whether an
+ * eligible invocation may start) is decided by the built-in mode matrix and
+ * resource overrides, never by a per-tool never/always authoring axis.
+ * Prepared slots in one batch may run concurrently; domain owners keep their
+ * own synchronization.
  *
  * The `input_schema` is the original canonical JSON Schema document owned by
  * the tool. The runtime validates it at registration and never mutates it:
@@ -18879,15 +18808,6 @@ export interface ToolDefinition {
    */
   execution_policy: 'foreground_only' | 'background_only' | 'model_selectable';
   /**
-   * How calls of this tool within one batch are scheduled relative to
-   * each other.
-   */
-  concurrency_policy: 'sequential' | 'parallel';
-  /**
-   * Whether execution requires a native approval interaction.
-   */
-  approval_policy?: 'never' | 'always';
-  /**
    * Replay policy; `Never` is the safe default.
    */
   replay_policy?: 'never' | 'idempotent';
@@ -18918,7 +18838,7 @@ export interface ToolDefinition {
  * via the `definition` "AdmittedConfiguration".
  */
 export interface AdmittedConfiguration {
-  approval_mode: ApprovalMode;
+  approval_mode: ExecutionPermissionMode;
   model_timeout?: ModelTimeoutPolicyDocument | null;
   tool_deadline?: ToolDeadlinePolicyDocument | null;
   attempt: AttemptId;
@@ -19086,7 +19006,7 @@ export interface SourceSettings {
   /**
    * Native current-file approval resolution. None when prospective configuration is invalid.
    */
-  prospective_approval_mode?: ApprovalMode | null;
+  prospective_approval_mode?: ExecutionPermissionMode | null;
   /**
    * Current-file analysis, separate from the published runtime. Never prepares sources.
    */

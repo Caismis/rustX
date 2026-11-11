@@ -13,7 +13,7 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExec
 use crate::tools::native::registration::NativeToolRegistration;
 use crate::tools::native::support::{failed_result, success_json};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolInvocation,
+    ToolDefinition, ToolExecutionPolicy, ToolInvocation,
     ToolOrigin, ToolReplayPolicy,
 };
 
@@ -83,8 +83,6 @@ pub(crate) fn definition(program: &WorkflowProgram) -> ToolDefinition {
         description: program.description().to_owned(),
         input_schema: program.input_schema().clone(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }

@@ -220,7 +220,6 @@ impl WorkflowRuntime {
             mode: prepared.invocation.mode,
             arguments: &prepared.invocation.arguments,
             audit_arguments: &prepared.invocation.arguments,
-            approval_policy: prepared.approval,
             elevation_reason: prepared.elevation_reason.as_deref(),
             workspace_root: Some(workspace_root),
             resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,
@@ -238,24 +237,10 @@ impl WorkflowRuntime {
         {
             result
         } else {
-            enum Permit<'a> {
-                Read {
-                    _guard: tokio::sync::RwLockReadGuard<'a, ()>,
-                },
-                Write {
-                    _guard: tokio::sync::RwLockWriteGuard<'a, ()>,
-                },
-            }
-            let acquire = async {
-                match prepared.concurrency {
-                    crate::tools::types::ToolConcurrencyPolicy::Parallel => Permit::Read {
-                        _guard: services.scheduling.read().await,
-                    },
-                    crate::tools::types::ToolConcurrencyPolicy::Sequential => Permit::Write {
-                        _guard: services.scheduling.write().await,
-                    },
-                }
-            };
+            // Batch slots run concurrently; domain owners keep their own
+            // synchronization. The shared lock only participates as a
+            // non-exclusive capacity gate.
+            let acquire = async { services.scheduling.read().await };
             self.read_model.node(node, |view| {
                 view.state = super::read_model::WorkflowState::Waiting {
                     reason: super::read_model::WorkflowWait::Capacity,

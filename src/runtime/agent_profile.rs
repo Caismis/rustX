@@ -723,7 +723,6 @@ mod tests {
             .find(|tool| tool.name == "read")
             .unwrap();
         definition.id = ToolId::new("frozen-read");
-        definition.approval_policy = crate::tools::types::ToolApprovalPolicy::Always;
         let first = resolve(
             &profile(&["read"]),
             &AvailableToolCatalog::metadata([definition.clone()]),
@@ -732,7 +731,6 @@ mod tests {
         );
         assert_eq!(first.tools, [definition.clone()]);
         definition.description = "later publication".into();
-        definition.approval_policy = crate::tools::types::ToolApprovalPolicy::Never;
         let later = resolve(
             &profile(&["read"]),
             &AvailableToolCatalog::metadata([definition]),
@@ -741,8 +739,8 @@ mod tests {
         );
         assert_ne!(first.tools, later.tools);
         assert_eq!(
-            first.tools[0].approval_policy,
-            crate::tools::types::ToolApprovalPolicy::Always
+            first.tools[0].execution_policy,
+            crate::tools::types::ToolExecutionPolicy::ForegroundOnly
         );
     }
 }

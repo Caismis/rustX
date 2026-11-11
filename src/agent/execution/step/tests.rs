@@ -20,7 +20,7 @@ use crate::scripted_suites::common::{capability_lease, tool_runtime, tool_runtim
 use crate::scripted_suites::support::fake::inbound_message;
 use crate::tools::executor::{ToolExecutor, ToolRegistry};
 use crate::tools::types::{
-    ToolCall, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
+    ToolCall, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
     ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 use std::sync::Arc;
@@ -833,8 +833,6 @@ impl ParkingBackgroundTool {
                     description: String::new(),
                     input_schema: serde_json::json!({"type": "object"}),
                     execution_policy: ToolExecutionPolicy::ModelSelectable,
-                    concurrency_policy: ToolConcurrencyPolicy::Sequential,
-                    approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
                     replay_policy: ToolReplayPolicy::Never,
                     origin: ToolOrigin::Builtin,
                 },

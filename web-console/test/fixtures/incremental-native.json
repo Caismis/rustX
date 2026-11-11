@@ -95,8 +95,6 @@
                   "type": "object"
                 },
                 "execution_policy": "foreground_only",
-                "concurrency_policy": "sequential",
-                "approval_policy": "never",
                 "replay_policy": "never",
                 "origin": "builtin"
               }
@@ -111,8 +109,6 @@
                   "type": "object"
                 },
                 "execution_policy": "foreground_only",
-                "concurrency_policy": "sequential",
-                "approval_policy": "never",
                 "replay_policy": "never",
                 "origin": "builtin"
               }
@@ -126,8 +122,6 @@
                   "type": "object"
                 },
                 "execution_policy": "foreground_only",
-                "concurrency_policy": "sequential",
-                "approval_policy": "never",
                 "replay_policy": "never",
                 "origin": "builtin"
               }
@@ -1416,8 +1410,6 @@
                           "type": "object"
                         },
                         "execution_policy": "foreground_only",
-                        "concurrency_policy": "sequential",
-                        "approval_policy": "never",
                         "replay_policy": "never",
                         "origin": "builtin"
                       }
@@ -1432,8 +1424,6 @@
                           "type": "object"
                         },
                         "execution_policy": "foreground_only",
-                        "concurrency_policy": "sequential",
-                        "approval_policy": "never",
                         "replay_policy": "never",
                         "origin": "builtin"
                       }
@@ -1447,8 +1437,6 @@
                           "type": "object"
                         },
                         "execution_policy": "foreground_only",
-                        "concurrency_policy": "sequential",
-                        "approval_policy": "never",
                         "replay_policy": "never",
                         "origin": "builtin"
                       }
@@ -18445,8 +18433,6 @@
                   "type": "object"
                 },
                 "execution_policy": "foreground_only",
-                "concurrency_policy": "sequential",
-                "approval_policy": "never",
                 "replay_policy": "never",
                 "origin": "builtin"
               }
@@ -18461,8 +18447,6 @@
                   "type": "object"
                 },
                 "execution_policy": "foreground_only",
-                "concurrency_policy": "sequential",
-                "approval_policy": "never",
                 "replay_policy": "never",
                 "origin": "builtin"
               }
@@ -18476,8 +18460,6 @@
                   "type": "object"
                 },
                 "execution_policy": "foreground_only",
-                "concurrency_policy": "sequential",
-                "approval_policy": "never",
                 "replay_policy": "never",
                 "origin": "builtin"
               }

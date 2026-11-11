@@ -7,8 +7,7 @@ use crate::runtime::subagent::{AgentControlError, MAX_AGENT_LIST_LIMIT, Subagent
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolInvocation,
-    ToolOrigin, ToolReplayPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -45,9 +44,13 @@ pub(super) fn definitions() -> Vec<ToolDefinition> {
         (NAMES[2], "Wait for the reserved or current activation captured by this operation to physically settle. A later resumed activation cannot extend this wait. Inactive returns immediately.", input_schema::<TargetInput>()),
         (NAMES[3], "Interrupt the exact reserved admission or current activation captured by this operation and wait for physical settlement. The durable Agent remains available for later send_message.", input_schema::<TargetInput>()),
     ].into_iter().map(|(name, description, input_schema)| ToolDefinition {
-        id: super::agent_control_tool_id(name), name: name.into(), description: description.into(), input_schema,
-        execution_policy: ToolExecutionPolicy::ForegroundOnly, concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never, replay_policy: ToolReplayPolicy::Never, origin: ToolOrigin::Builtin,
+        id: super::agent_control_tool_id(name),
+        name: name.into(),
+        description: description.into(),
+        input_schema,
+        execution_policy: ToolExecutionPolicy::ForegroundOnly,
+        replay_policy: ToolReplayPolicy::Never,
+        origin: ToolOrigin::Builtin,
     }).collect()
 }
 

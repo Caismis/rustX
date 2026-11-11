@@ -68,7 +68,6 @@ keep_recent_tokens = 8192
 [native_tools]
 [native_tools.bash]
 execution = "model_selectable"
-concurrency = "sequential"
 
 
 [environment]

@@ -941,7 +941,7 @@ mod tests {
     use crate::runtime::subagent::catalog::SubagentName;
     use crate::runtime::subagent::resolver::ResolvedSubagentTool;
     use crate::tools::types::{
-        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
+        ToolDefinition, ToolExecutionPolicy, ToolOrigin,
         ToolReplayPolicy,
     };
 
@@ -956,8 +956,6 @@ mod tests {
             description: format!("{name} tool"),
             input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin,
         }

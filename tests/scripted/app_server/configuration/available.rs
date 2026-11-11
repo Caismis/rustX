@@ -362,7 +362,7 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
     // preparation; the old Session cannot bind this catalog to its selection.
     document.as_table_mut().unwrap().insert(
         "native_tools".into(),
-        toml::toml! { read = { approval = "always" } }.into(),
+        toml::toml! { read = { execution = "background_only" } }.into(),
     );
     std::fs::write(&source.user.path, toml::to_string(&document).unwrap()).unwrap();
     fixture
@@ -425,8 +425,8 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
             .into_iter()
             .find(|tool| tool.name == "read")
             .unwrap()
-            .approval_policy,
-        crate::tools::types::ToolApprovalPolicy::Always
+            .execution_policy,
+        crate::tools::types::ToolExecutionPolicy::BackgroundOnly
     );
     // The commit published the capabilities; the old Session keeps its
     // configured selection, still unavailable, and the published catalog.

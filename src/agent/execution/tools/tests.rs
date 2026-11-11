@@ -12,7 +12,7 @@ use crate::scripted_suites::common::{capability_lease, tool_runtime_with_store};
 use crate::tools::executor::{ProgressReporter, ToolExecutor, ToolRegistry};
 use crate::tools::limits::{MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL, MAX_PROGRESS_MESSAGE_BYTES};
 use crate::tools::types::{
-    ToolCall, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
+    ToolCall, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
     ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 use std::sync::Arc;
@@ -167,8 +167,6 @@ impl ParkedProgressTool {
             description: String::new(),
             input_schema: serde_json::json!({"type": "object"}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         }

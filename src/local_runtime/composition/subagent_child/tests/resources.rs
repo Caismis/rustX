@@ -64,7 +64,7 @@ fn assert_resource_helpers_require_approval(snapshot: &crate::capabilities::Capa
         else {
             panic!("the frozen resource helper arguments are valid")
         };
-        assert_eq!(prepared.approval, ToolApprovalPolicy::Always);
+        assert!(prepared.elevation_reason.is_none());
     }
 }
 
@@ -78,7 +78,6 @@ async fn resource_only_child_uses_frozen_binding_despite_new_settings_and_siblin
         "local_runtime::composition::subagent_child::tests::resources::resource_only_child_uses_frozen_binding_despite_new_settings_and_sibling",
         true,
     );
-    binding.policy.approval = ToolApprovalPolicy::Always;
     let observation = root.path().join("resource-requests.jsonl");
     let McpTransportConfig::Stdio { environment, .. } = &mut binding.transport else {
         unreachable!("the fixture always uses stdio")

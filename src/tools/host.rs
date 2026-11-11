@@ -155,8 +155,6 @@ pub(crate) fn register(
                     ),
                     input_schema: definition.input_schema.clone(),
                     execution_policy: super::ToolExecutionPolicy::ForegroundOnly,
-                    concurrency_policy: super::ToolConcurrencyPolicy::Parallel,
-                    approval_policy: super::ToolApprovalPolicy::Never,
                     replay_policy: super::ToolReplayPolicy::Never,
                     origin: ToolOrigin::Host {
                         namespace: definition.namespace.clone(),

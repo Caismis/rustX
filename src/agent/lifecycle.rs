@@ -164,9 +164,7 @@ use crate::runtime::permission::{
     ResourcePermissionValue, classify_tool_kind, evaluate_permission,
 };
 use crate::runtime::types::ApprovalMode;
-use crate::tools::types::{
-    ToolApprovalPolicy, ToolExecutionResult, ToolInvocationMode, ToolOrigin,
-};
+use crate::tools::types::{ToolExecutionResult, ToolInvocationMode, ToolOrigin};
 
 /// The bounded failure of one lifecycle extension invocation.
 ///
@@ -318,11 +316,6 @@ pub struct PreToolView<'a> {
     /// before normalization, or Workflow's exact prepared arguments.
     /// This is descriptive evidence, never a policy replacement channel.
     pub audit_arguments: &'a serde_json::Value,
-    /// The tool-owned approval policy resolved by preflight.
-    ///
-    /// Retained only while authored never/always axes are being removed
-    /// (Issue #544); the built-in mode matrix is the authority.
-    pub approval_policy: ToolApprovalPolicy,
     /// Optional runtime-owned elevation reason extracted from invocation metadata.
     pub elevation_reason: Option<&'a str>,
     /// Workspace root for PLAN.md authorization, when known.
@@ -981,7 +974,7 @@ mod tests {
     use crate::runtime::ApprovalMode;
     use crate::runtime::identity::{AttemptId, ConversationId, ToolCallId, ToolId};
     use crate::runtime::permission::ResourcePermissionValue;
-    use crate::tools::types::{ToolApprovalPolicy, ToolInvocationMode, ToolOrigin};
+    use crate::tools::types::{ToolInvocationMode, ToolOrigin};
 
     fn view<'a>(
         conversation_id: &'a ConversationId,
@@ -1005,7 +998,6 @@ mod tests {
             mode: ToolInvocationMode::Foreground,
             arguments,
             audit_arguments: arguments,
-            approval_policy: ToolApprovalPolicy::Never,
             elevation_reason: None,
             workspace_root: None,
             resource_permission: ResourcePermissionValue::Default,

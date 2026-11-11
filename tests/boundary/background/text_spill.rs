@@ -37,7 +37,7 @@ use rustx::tools::executor::{PreflightOutcome, ToolExecutor, ToolRegistry};
 use rustx::tools::native::{NativeToolPolicies, NativeToolResources, register_native_tools};
 use rustx::tools::runtime::ConversationToolRuntime;
 use rustx::tools::types::{
-    ToolCall, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
+    ToolCall, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
     ToolInvocation, ToolInvocationMode, ToolInvocationPolicy,
 };
 
@@ -73,11 +73,7 @@ fn fixture() -> IssueFixture {
             background: runtime.background().clone(),
             subagents: None,
         },
-        NativeToolPolicies::uniform(ToolInvocationPolicy::new(
-            ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Sequential,
-            rustx::tools::types::ToolApprovalPolicy::Never,
-        )),
+        NativeToolPolicies::uniform(ToolInvocationPolicy::new(ToolExecutionPolicy::ModelSelectable),
     )
     .expect("native tools");
     IssueFixture {

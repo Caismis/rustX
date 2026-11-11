@@ -215,7 +215,7 @@ function appendToolGroups(
     for (const tool of group.tools) {
       lines.push(
         `- \`${tool.name}\` — ${tool.description}`,
-        `  - execution: ${tool.execution_policy}, concurrency: ${tool.concurrency_policy}, approval: ${tool.approval_policy}, replay: ${tool.replay_policy}`,
+        `  - execution: ${tool.execution_policy}, replay: ${tool.replay_policy}`,
         `  - origin: ${originLabel(tool.origin)}`,
       );
     }

@@ -295,20 +295,14 @@ pub struct NativeToolPolicies {
 
 impl Default for NativeToolPolicies {
     fn default() -> Self {
-        use crate::tools::types::{
-            ToolApprovalPolicy::{Always, Never},
-            ToolConcurrencyPolicy::{Parallel, Sequential},
-            ToolExecutionPolicy::{ForegroundOnly, ModelSelectable},
-        };
-        // Read/search executors own their buffers, decoders, matchers and
-        // collectors per invocation; no shared mutation requires a barrier.
+        use crate::tools::types::ToolExecutionPolicy::{ForegroundOnly, ModelSelectable};
         Self {
-            read: ToolInvocationPolicy::new(ForegroundOnly, Parallel, Never),
-            write: ToolInvocationPolicy::new(ForegroundOnly, Sequential, Always),
-            edit: ToolInvocationPolicy::new(ForegroundOnly, Sequential, Always),
-            glob: ToolInvocationPolicy::new(ForegroundOnly, Parallel, Never),
-            grep: ToolInvocationPolicy::new(ForegroundOnly, Parallel, Never),
-            bash: ToolInvocationPolicy::new(ModelSelectable, Sequential, Always),
+            read: ToolInvocationPolicy::new(ForegroundOnly),
+            write: ToolInvocationPolicy::new(ForegroundOnly),
+            edit: ToolInvocationPolicy::new(ForegroundOnly),
+            glob: ToolInvocationPolicy::new(ForegroundOnly),
+            grep: ToolInvocationPolicy::new(ForegroundOnly),
+            bash: ToolInvocationPolicy::new(ModelSelectable),
         }
     }
 }
@@ -584,11 +578,7 @@ pub fn register_subagent_child_tools(
     frozen: &[crate::tools::types::ToolDefinition],
 ) -> Result<(), ToolRegistryError> {
     for definition in frozen {
-        let policy = ToolInvocationPolicy::new(
-            definition.execution_policy,
-            definition.concurrency_policy,
-            definition.approval_policy,
-        );
+        let policy = ToolInvocationPolicy::new(definition.execution_policy);
         let Some(registration) = subagent_child_registration(&definition.name, policy) else {
             return Err(ToolRegistryError::InvalidIdentity(format!(
                 "the subagent child plane does not implement the built-in capability {:?}",
@@ -643,7 +633,7 @@ mod tests {
     use super::{register_subagent_child_tools, subagent_child_definition};
     use crate::tools::executor::ToolRegistry;
     use crate::tools::types::{
-        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+        ToolDefinition, ToolExecutionPolicy,
         ToolInvocationPolicy,
     };
 
@@ -735,11 +725,7 @@ mod tests {
     /// semantics under the same tool name.
     #[test]
     fn a_non_default_frozen_policy_survives_child_registration_exactly() {
-        let policy = ToolInvocationPolicy::new(
-            ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Parallel,
-            ToolApprovalPolicy::Always,
-        );
+        let policy = ToolInvocationPolicy::new(ToolExecutionPolicy::ModelSelectable);
         let frozen_definitions = frozen(&["grep"], policy);
         let frozen_grep = &frozen_definitions[0];
         assert_ne!(
@@ -766,11 +752,6 @@ mod tests {
             registered.execution_policy,
             ToolExecutionPolicy::ModelSelectable
         );
-        assert_eq!(
-            registered.concurrency_policy,
-            ToolConcurrencyPolicy::Parallel
-        );
-        assert_eq!(registered.approval_policy, ToolApprovalPolicy::Always);
     }
 
     /// A frozen definition this build cannot reproduce faithfully fails
@@ -797,8 +778,7 @@ mod tests {
         let mut conflicting =
             subagent_child_definition("ask_user", ToolInvocationPolicy::default())
                 .expect("ask_user exists");
-        assert_eq!(conflicting.approval_policy, ToolApprovalPolicy::Never);
-        conflicting.approval_policy = ToolApprovalPolicy::Always;
+        conflicting.execution_policy = ToolExecutionPolicy::ModelSelectable;
         let mut registry = ToolRegistry::new();
         assert!(
             register_subagent_child_tools(&mut registry, &[conflicting]).is_err(),

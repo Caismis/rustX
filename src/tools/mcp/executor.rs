@@ -267,8 +267,6 @@ pub fn definitions(
                 description: tool.description,
                 input_schema: tool.input_schema,
                 execution_policy: policy.execution,
-                concurrency_policy: policy.concurrency,
-                approval_policy: policy.approval,
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Mcp {
                     server_id: server_id.clone(),
@@ -308,8 +306,6 @@ pub(crate) fn definitions_owned(
                 description: tool.description,
                 input_schema: tool.input_schema,
                 execution_policy: policy.execution,
-                concurrency_policy: policy.concurrency,
-                approval_policy: policy.approval,
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Mcp {
                     server_id: server_id.clone(),
@@ -370,8 +366,6 @@ pub fn source_tool_identity(
         &definition.description,
         &definition.input_schema,
         definition.execution_policy,
-        definition.concurrency_policy,
-        definition.approval_policy,
     )
 }
 

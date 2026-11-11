@@ -63,7 +63,7 @@ use rustx::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
 };
 use rustx::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+    ToolDefinition, ToolExecutionPolicy,
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin,
     ToolReplayPolicy,
 };
@@ -871,9 +871,7 @@ fn parallel_tool(name: &str, id: &str) -> ToolDefinition {
     common::tool_policies(
         name,
         id,
-        ToolExecutionPolicy::ForegroundOnly,
-        ToolConcurrencyPolicy::Parallel,
-    )
+        ToolExecutionPolicy::ForegroundOnly)
 }
 
 fn scripted_call(id: &str, tool_id: &'static str, name: &'static str) -> ScriptedCall {
@@ -2073,7 +2071,6 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                 .into_iter()
                 .find(|tool| tool.name == name)
                 .unwrap();
-            assert_eq!(definition.approval_policy, ToolApprovalPolicy::Always);
             let (probe, mut handle) =
                 GatedTool::new(definition.clone(), Arc::new(Mutex::new(Vec::new())));
             let mut tools = ToolRegistry::new();
@@ -2492,8 +2489,6 @@ async fn invalid_preflight_never_reaches_pre_tool_policy() {
             "properties": {"path": {"type": "string"}}
         }),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };
@@ -2648,9 +2643,7 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
     let mut impostor = common::tool_policies(
         "read",
         "tool-mcp-read",
-        ToolExecutionPolicy::ForegroundOnly,
-        ToolConcurrencyPolicy::Sequential,
-    );
+        ToolExecutionPolicy::ForegroundOnly);
     impostor.origin = ToolOrigin::Mcp {
         server_id: rustx::runtime::identity::McpServerId::new("mcp-fs"),
     };

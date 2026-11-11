@@ -596,7 +596,7 @@ use rustx::tools::background::{
 };
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{
-    ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocation, ToolInvocationMode,
+    ToolExecutionPolicy, ToolInvocation, ToolInvocationMode,
 };
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, success_result, tool_call_events,
@@ -947,9 +947,7 @@ async fn ext256_an_empty_extension_composition_changes_nothing_but_agent_status(
             common::tool_policies(
                 "worker",
                 "ext256-tool",
-                ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
-            ),
+                ToolExecutionPolicy::ForegroundOnly),
             success_result("worker"),
         );
         let mut tools = fixture.ordinary_registry.clone();
@@ -1014,9 +1012,7 @@ async fn ext256_a_disabled_agent_status_extension_emits_nothing_anywhere() {
         common::tool_policies(
             "worker",
             "ext256-tool",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+            ToolExecutionPolicy::ForegroundOnly),
         success_result("worker"),
     );
     let mut tools = fixture.ordinary_registry.clone();
@@ -1164,9 +1160,7 @@ async fn seed_detached_execution(
         common::tool_policies(
             "detached",
             "ext256-detached",
-            ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+            ToolExecutionPolicy::ModelSelectable),
         success_result("detached"),
     );
     let mut started = tool.started();
@@ -1663,9 +1657,7 @@ async fn ext259_todo_and_agent_status_are_independent_and_change_no_loop_semanti
             common::tool_policies(
                 "worker",
                 "ext259-tool",
-                ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
-            ),
+                ToolExecutionPolicy::ForegroundOnly),
             success_result("worker"),
         );
         let mut tools = fixture.ordinary_registry.clone();
@@ -2614,9 +2606,7 @@ fn goal_inspection_tools() -> ToolRegistry {
             common::tool_policies(
                 name,
                 id,
-                ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
-            ),
+                ToolExecutionPolicy::ForegroundOnly),
             success_result(output),
         )
         .register(&mut tools);

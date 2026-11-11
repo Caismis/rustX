@@ -6,7 +6,6 @@ use rustx::model::session::AuxiliaryModelPolicy;
 use rustx::model::types::ModelProtocol;
 use rustx::skills::{SkillDiscovery, SkillDiscoveryConfig};
 use rustx::tools::Workspace;
-use rustx::tools::types::{ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy};
 
 fn examples_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime")
@@ -169,15 +168,12 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
 
     let policies = config.native_tools.to_policies();
     assert_eq!(policies.read.execution, ToolExecutionPolicy::ForegroundOnly);
-    assert_eq!(policies.read.concurrency, ToolConcurrencyPolicy::Parallel);
     assert_eq!(
         policies.bash.execution,
         ToolExecutionPolicy::ModelSelectable
     );
     assert_eq!(policies.grep.execution, ToolExecutionPolicy::ForegroundOnly);
-    assert_eq!(policies.edit.approval, ToolApprovalPolicy::Always);
-    assert_eq!(policies.bash.concurrency, ToolConcurrencyPolicy::Sequential);
-    assert_eq!(policies.bash.approval, ToolApprovalPolicy::Always);
+    assert_eq!(policies.edit.execution, ToolExecutionPolicy::ForegroundOnly);
 }
 
 #[test]

@@ -67,7 +67,7 @@ use rustx::runtime_client::{
 };
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{
-    ToolCancellationPhase, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus,
+    ToolCancellationPhase, ToolExecutionPolicy, ToolExecutionStatus,
     ToolOrigin,
 };
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
@@ -1608,9 +1608,7 @@ pub async fn foreground_tool_lifecycle(factory: &dyn DriverFactory) {
         common::tool_policies(
             "alpha",
             "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+            ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     )
     .register(&mut tools);
@@ -1736,18 +1734,14 @@ pub async fn parallel_tools_keep_independent_identities(factory: &dyn DriverFact
         common::tool_policies(
             "alpha",
             "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+            ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let (tool_b, release_b) = FakeTool::parking(
         common::tool_policies(
             "beta",
             "tool-beta",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+            ToolExecutionPolicy::ForegroundOnly),
         success_result("b"),
     );
     let mut started_a = tool_a.started();
@@ -1873,9 +1867,7 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
         common::tool_policies(
             "bg",
             "tool-bg",
-            ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+            ToolExecutionPolicy::ModelSelectable),
         success_result("bg"),
     );
     let mut tools = ToolRegistry::new();
@@ -2138,9 +2130,7 @@ pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory)
         common::tool_policies(
             "ls",
             "tool-ls",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+            ToolExecutionPolicy::ForegroundOnly),
         success_result("listed"),
     )
     .register(&mut base);

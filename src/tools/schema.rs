@@ -877,7 +877,7 @@ mod tests {
     };
     use crate::runtime::identity::ToolId;
     use crate::tools::types::{
-        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolInvocationMode, ToolOrigin,
+        ToolDefinition, ToolExecutionPolicy, ToolInvocationMode, ToolOrigin,
         ToolReplayPolicy,
     };
     use serde_json::json;
@@ -889,8 +889,6 @@ mod tests {
             description: String::new(),
             input_schema: schema,
             execution_policy: policy,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         }

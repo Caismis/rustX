@@ -98,17 +98,9 @@ request_params = '''
 # These global policies apply to every admitted Agent's native invocation.
 [native_tools.read]
 execution = "foreground_only"
-concurrency = "parallel"
-approval = "never"
 [native_tools.grep]
 execution = "foreground_only"
-concurrency = "parallel"
-approval = "never"
 [native_tools.edit]
 execution = "foreground_only"
-concurrency = "sequential"
-approval = "always"
 [native_tools.bash]
 execution = "model_selectable"
-concurrency = "sequential"
-approval = "always"

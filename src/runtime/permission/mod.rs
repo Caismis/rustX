@@ -13,6 +13,7 @@ mod classify;
 mod decision;
 mod matrix;
 mod mode;
+mod reminder;
 mod resource;
 pub(crate) mod review;
 
@@ -24,6 +25,7 @@ pub use decision::{
 };
 pub use matrix::{BuiltinPermissionAction, BuiltinToolKind, builtin_action_for};
 pub use mode::ExecutionPermissionMode;
+pub use reminder::{PermissionReminderState, permission_reminder_text};
 pub use resource::{
     ResourcePermissionSet, ResourcePermissionValue, resolve_resource_permission,
 };

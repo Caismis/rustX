@@ -255,10 +255,7 @@ impl CapabilityCoordinator {
             if state.snapshot.resource_sources().contains(source) {
                 resource_bindings.insert(
                     source.clone(),
-                    crate::tools::mcp::McpResourceBinding::new(
-                        generation.binding(),
-                        bindings[id].policy.approval,
-                    ),
+                    crate::tools::mcp::McpResourceBinding::new(generation.binding()),
                 );
             }
             if let Some((epoch, Ok(discovery))) = generation.connection().catalog_snapshot() {
@@ -267,10 +264,7 @@ impl CapabilityCoordinator {
                 if discovery.capabilities.resources {
                     resource_bindings.insert(
                         source.clone(),
-                        crate::tools::mcp::McpResourceBinding::new(
-                            generation.binding(),
-                            bindings[id].policy.approval,
-                        ),
+                        crate::tools::mcp::McpResourceBinding::new(generation.binding()),
                     );
                 } else {
                     resource_bindings.remove(source);
@@ -406,10 +400,7 @@ impl CapabilityCoordinator {
             if snapshot.resource_sources().contains(&source) {
                 resource_bindings.insert(
                     source.clone(),
-                    crate::tools::mcp::McpResourceBinding::new(
-                        generation.binding(),
-                        snapshot.mcp_servers()[id].policy.approval,
-                    ),
+                    crate::tools::mcp::McpResourceBinding::new(generation.binding()),
                 );
             }
             if let Some((epoch, Ok(discovery))) = generation.connection().catalog_snapshot() {
@@ -418,10 +409,7 @@ impl CapabilityCoordinator {
                 if discovery.capabilities.resources {
                     resource_bindings.insert(
                         source.clone(),
-                        crate::tools::mcp::McpResourceBinding::new(
-                            generation.binding(),
-                            snapshot.mcp_servers()[id].policy.approval,
-                        ),
+                        crate::tools::mcp::McpResourceBinding::new(generation.binding()),
                     );
                 } else {
                     resource_bindings.remove(&source);

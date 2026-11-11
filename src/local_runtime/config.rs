@@ -25,7 +25,7 @@ use crate::runtime::workflow::WorkflowId;
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentError};
 use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
 use crate::tools::native::NativeToolPolicies;
-use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy};
+use crate::tools::types::{ToolExecutionPolicy, ToolInvocationPolicy};
 
 /// The only current runtime configuration schema version this runtime accepts.
 pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 12;
@@ -811,14 +811,14 @@ impl Default for ContextPolicyDocument {
     }
 }
 
-/// The per-tool execution, concurrency, and approval policies of the native
-/// tool plane.
+/// The per-tool execution-ownership policies of the native tool plane.
 ///
 /// `execution` and `ask_user` are deliberately outside this set: they own
-/// fixed foreground-only, sequential, approval-never policies, and the
-/// registry enforces the intrinsic ones itself. The extension-provided `todo`
-/// Tool is outside it for a stronger reason — it is not an ordinary native
-/// capability at all (Issue #259).
+/// fixed foreground-only execution, and the registry enforces the intrinsic
+/// ones itself. The extension-provided `todo` Tool is outside it for a
+/// stronger reason — it is not an ordinary native capability at all
+/// (Issue #259). Permission is owned by the Issue #544 mode matrix and
+/// resource overrides, never by these native policy documents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
@@ -863,14 +863,6 @@ pub struct NativePolicyOverrideDocument {
     #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
     #[schemars(with = "ExecutionPolicyDocument")]
     pub execution: Option<ExecutionPolicyDocument>,
-    /// In-batch scheduling override.
-    #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "ConcurrencyPolicyDocument")]
-    pub concurrency: Option<ConcurrencyPolicyDocument>,
-    /// Tool approval override.
-    #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "ApprovalPolicyDocument")]
-    pub approval: Option<ApprovalPolicyDocument>,
 }
 
 // Shared with launch documents: omission preserves absence, while an explicit
@@ -886,10 +878,6 @@ impl NativePolicyOverrideDocument {
         ToolInvocationPolicy::new(
             self.execution
                 .map_or(base.execution, ExecutionPolicyDocument::to_policy),
-            self.concurrency
-                .map_or(base.concurrency, ConcurrencyPolicyDocument::to_policy),
-            self.approval
-                .map_or(base.approval, ApprovalPolicyDocument::to_policy),
         )
     }
 }
@@ -899,62 +887,40 @@ mod native_policy_defaults_tests {
     use super::*;
 
     #[test]
-    fn partial_native_documents_resolve_each_axis_over_its_own_product_default() {
+    fn partial_native_documents_resolve_execution_over_its_own_product_default() {
         let base = NativeToolPolicies::default();
         let empty: NativeToolPoliciesDocument = serde_json::from_str("{}").unwrap();
         assert_eq!(empty.to_policies(), base);
-        for axis in ["execution", "concurrency", "approval"] {
-            assert!(
-                serde_json::from_value::<NativeToolPoliciesDocument>(
-                    serde_json::json!({"read":{axis:null}})
-                )
-                .is_err(),
-                "an explicit null must not silently select a default"
-            );
-        }
+        assert!(
+            serde_json::from_value::<NativeToolPoliciesDocument>(
+                serde_json::json!({"read":{"execution":null}})
+            )
+            .is_err(),
+            "an explicit null must not silently select a default"
+        );
         for name in ["read", "write", "edit", "glob", "grep", "bash"] {
-            for mask in 0..8 {
-                let mut axes = serde_json::Map::new();
-                if mask & 1 != 0 {
-                    axes.insert("execution".into(), serde_json::json!("background_only"));
+            let document: NativeToolPoliciesDocument = serde_json::from_value(serde_json::json!({
+                name: {"execution": "background_only"}
+            }))
+            .unwrap();
+            let resolved = document.to_policies();
+            for (tool, original, actual) in [
+                ("read", base.read, resolved.read),
+                ("write", base.write, resolved.write),
+                ("edit", base.edit, resolved.edit),
+                ("glob", base.glob, resolved.glob),
+                ("grep", base.grep, resolved.grep),
+                ("bash", base.bash, resolved.bash),
+            ] {
+                let mut expected = original;
+                if tool == name {
+                    expected.execution = crate::tools::types::ToolExecutionPolicy::BackgroundOnly;
                 }
-                if mask & 2 != 0 {
-                    axes.insert("concurrency".into(), serde_json::json!("sequential"));
-                }
-                if mask & 4 != 0 {
-                    axes.insert("approval".into(), serde_json::json!("always"));
-                }
-                let document: NativeToolPoliciesDocument =
-                    serde_json::from_value(serde_json::json!({name: axes})).unwrap();
-                let resolved = document.to_policies();
-                for (tool, original, actual) in [
-                    ("read", base.read, resolved.read),
-                    ("write", base.write, resolved.write),
-                    ("edit", base.edit, resolved.edit),
-                    ("glob", base.glob, resolved.glob),
-                    ("grep", base.grep, resolved.grep),
-                    ("bash", base.bash, resolved.bash),
-                ] {
-                    let mut expected = original;
-                    if tool == name {
-                        if mask & 1 != 0 {
-                            expected.execution =
-                                crate::tools::types::ToolExecutionPolicy::BackgroundOnly;
-                        }
-                        if mask & 2 != 0 {
-                            expected.concurrency =
-                                crate::tools::types::ToolConcurrencyPolicy::Sequential;
-                        }
-                        if mask & 4 != 0 {
-                            expected.approval = crate::tools::types::ToolApprovalPolicy::Always;
-                        }
-                    }
-                    assert_eq!(actual, expected, "{name} axes {mask}: {tool}");
-                }
-                let roundtrip: NativeToolPoliciesDocument =
-                    serde_json::from_value(serde_json::to_value(document).unwrap()).unwrap();
-                assert_eq!(roundtrip, document);
+                assert_eq!(actual, expected, "{name}: {tool}");
             }
+            let roundtrip: NativeToolPoliciesDocument =
+                serde_json::from_value(serde_json::to_value(document).unwrap()).unwrap();
+            assert_eq!(roundtrip, document);
         }
     }
 }
@@ -966,44 +932,13 @@ mod native_policy_defaults_tests {
 pub struct InvocationPolicyDocument {
     /// Foreground/background ownership policy.
     pub execution: ExecutionPolicyDocument,
-    /// In-batch scheduling policy.
-    pub concurrency: ConcurrencyPolicyDocument,
-    /// Human approval behavior for otherwise eligible calls.
-    pub approval: ApprovalPolicyDocument,
 }
 
 impl InvocationPolicyDocument {
     /// The runtime policy this document expresses.
     #[must_use]
     pub const fn to_policy(self) -> ToolInvocationPolicy {
-        ToolInvocationPolicy::new(
-            self.execution.to_policy(),
-            self.concurrency.to_policy(),
-            self.approval.to_policy(),
-        )
-    }
-}
-
-/// The configurable HITL approval policy of one Tool.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum ApprovalPolicyDocument {
-    /// Execute without an approval interaction.
-    #[default]
-    Never,
-    /// Require an approval interaction before execution.
-    Always,
-}
-
-impl ApprovalPolicyDocument {
-    /// The runtime policy this document expresses.
-    #[must_use]
-    pub const fn to_policy(self) -> crate::tools::types::ToolApprovalPolicy {
-        match self {
-            Self::Never => crate::tools::types::ToolApprovalPolicy::Never,
-            Self::Always => crate::tools::types::ToolApprovalPolicy::Always,
-        }
+        ToolInvocationPolicy::new(self.execution.to_policy())
     }
 }
 
@@ -1029,29 +964,6 @@ impl ExecutionPolicyDocument {
             Self::ForegroundOnly => ToolExecutionPolicy::ForegroundOnly,
             Self::BackgroundOnly => ToolExecutionPolicy::BackgroundOnly,
             Self::ModelSelectable => ToolExecutionPolicy::ModelSelectable,
-        }
-    }
-}
-
-/// The configurable in-batch scheduling policy of one tool.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum ConcurrencyPolicyDocument {
-    /// Calls within one batch run one at a time.
-    #[default]
-    Sequential,
-    /// Calls within one batch may run concurrently.
-    Parallel,
-}
-
-impl ConcurrencyPolicyDocument {
-    /// The runtime policy this document expresses.
-    #[must_use]
-    pub const fn to_policy(self) -> ToolConcurrencyPolicy {
-        match self {
-            Self::Sequential => ToolConcurrencyPolicy::Sequential,
-            Self::Parallel => ToolConcurrencyPolicy::Parallel,
         }
     }
 }

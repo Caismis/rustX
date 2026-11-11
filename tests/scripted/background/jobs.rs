@@ -8,7 +8,6 @@ use super::super::{common, support};
 use rustx::runtime::CancellationSignal;
 use rustx::tools::background::BackgroundDispatchOutcome;
 use rustx::tools::executor::ToolExecutor;
-use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus};
 
 struct GatedSettlement {
     started: tokio::sync::watch::Sender<bool>,
@@ -53,9 +52,7 @@ async fn job_status_is_immediate_and_wait_captures_one_finite_job() {
             common::tool_policies(
                 "bash",
                 "tool-bash",
-                ToolExecutionPolicy::ModelSelectable,
-                ToolConcurrencyPolicy::Sequential,
-            ),
+                ToolExecutionPolicy::ModelSelectable),
             support::fake::success_result("done"),
         );
         let mut started = tool.started();
@@ -284,9 +281,7 @@ async fn job_list_reports_newest_bounded_results_and_all_omission_metadata() {
             common::tool_policies(
                 "bash",
                 "tool-bash",
-                ToolExecutionPolicy::ModelSelectable,
-                ToolConcurrencyPolicy::Sequential,
-            ),
+                ToolExecutionPolicy::ModelSelectable),
             support::fake::success_result("done"),
         );
         let executor: Arc<dyn ToolExecutor> = Arc::new(tool);

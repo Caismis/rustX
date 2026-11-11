@@ -264,8 +264,6 @@ fn select_verified_mcp_tools(
             &candidate.description,
             &candidate.input_schema,
             binding.policy.execution,
-            binding.policy.concurrency,
-            binding.policy.approval,
         );
         if observed != wanted.identity {
             return Err(SelectedMaterializationError::SourceIdentityMismatch {
@@ -1428,10 +1426,7 @@ impl CapabilityCoordinator {
                     if discovery.capabilities.resources {
                         resource_bindings.insert(
                             source_id.clone(),
-                            crate::tools::mcp::McpResourceBinding::new(
-                                generation.binding(),
-                                binding.policy.approval,
-                            ),
+                            crate::tools::mcp::McpResourceBinding::new(generation.binding()),
                         );
                     }
                     mcp_tools.extend(crate::tools::mcp::definitions_owned_for_source(
@@ -1939,10 +1934,7 @@ impl CapabilityCoordinator {
                 }
                 resource_bindings.insert(
                     source_id.clone(),
-                    crate::tools::mcp::McpResourceBinding::new(
-                        generation.binding(),
-                        binding.policy.approval,
-                    ),
+                    crate::tools::mcp::McpResourceBinding::new(generation.binding()),
                 );
             }
             let selected: Vec<_> = plan
@@ -3599,8 +3591,6 @@ body
                                 description: (*name).into(),
                                 input_schema: serde_json::json!({"type":"object"}),
                                 execution_policy: ToolExecutionPolicy::ForegroundOnly,
-                                concurrency_policy: ToolConcurrencyPolicy::Sequential,
-                                approval_policy: ToolApprovalPolicy::Never,
                                 replay_policy: ToolReplayPolicy::Never,
                                 origin: match &source {
                                     ToolSourceId::Mcp(id) => ToolOrigin::Mcp {

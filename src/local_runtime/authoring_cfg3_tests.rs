@@ -1,7 +1,7 @@
 //! Contract tests for atomic semantic overlay, independent of source I/O.
 use super::*;
 use crate::local_runtime::config::{
-    ConcurrencyPolicyDocument, McpStartupPolicyDocument, ModelTimeoutPolicyDocument,
+    McpStartupPolicyDocument, ModelTimeoutPolicyDocument,
     SubagentsDocument, ToolDeadlinePolicyDocument,
 };
 
@@ -59,10 +59,8 @@ idle_liveness_ms = { mode = "window", milliseconds = 8765 }
 max_concurrent = 17
 [native_tools.bash]
 execution = "foreground_only"
-concurrency = "sequential"
-approval = "always"
 [native_tools.read]
-approval = "always"
+execution = "foreground_only"
 [environment]
 A = "lower"
 B = "retained"
@@ -296,17 +294,26 @@ fn plugin_omission_empty_and_explicit_enable_are_distinct_without_splicing() {
 
 #[test]
 fn native_policy_is_atomic_per_tool() {
-    let (config, origins) = effective(LOWER, "[native_tools.bash]\napproval = 'never'");
-    assert_eq!(config.native_tools.bash.execution, None);
-    assert_eq!(config.native_tools.bash.concurrency, None);
-    assert!(config.native_tools.read.approval.is_some());
+    let (config, origins) =
+        effective(LOWER, "[native_tools.bash]\nexecution = 'background_only'");
+    assert_eq!(
+        config.native_tools.bash.execution,
+        Some(crate::local_runtime::config::ExecutionPolicyDocument::BackgroundOnly)
+    );
+    assert_eq!(
+        config.native_tools.read.execution,
+        Some(crate::local_runtime::config::ExecutionPolicyDocument::ForegroundOnly)
+    );
     assert_eq!(origins["native_tools.bash"], workspace());
     let (config, _) = effective(LOWER, "[native_tools.bash]");
     assert_eq!(
         config.native_tools.bash,
         NativePolicyOverrideDocument::default()
     );
-    assert!(config.native_tools.read.approval.is_some());
+    assert_eq!(
+        config.native_tools.read.execution,
+        Some(crate::local_runtime::config::ExecutionPolicyDocument::ForegroundOnly)
+    );
 }
 
 #[test]
@@ -315,8 +322,8 @@ fn empty_identity_maps_do_not_erase_unmentioned_identities() {
     assert_eq!(config.environment["A"], "lower");
     assert_eq!(config.environment["B"], "retained");
     assert_eq!(
-        config.native_tools.bash.concurrency,
-        Some(ConcurrencyPolicyDocument::Sequential)
+        config.native_tools.bash.execution,
+        Some(crate::local_runtime::config::ExecutionPolicyDocument::ForegroundOnly)
     );
     let (config, _) = effective(LOWER, "[environment]\nA = ''");
     assert_eq!(config.environment["A"], "");

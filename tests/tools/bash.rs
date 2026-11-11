@@ -1755,7 +1755,7 @@ async fn description_changes_neither_native_bash_execution_nor_registry_approval
         .into_iter()
         .find(|tool| tool.name == "bash")
         .unwrap();
-    assert_eq!(before.approval_policy, after.approval_policy);
+    
     assert_eq!(before.execution_policy, after.execution_policy);
     assert_eq!(before.id, after.id);
 }

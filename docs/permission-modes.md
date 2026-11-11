@@ -54,9 +54,22 @@ object (`allow`|`deny`). Invalid, timed-out, or unavailable review fails closed.
 A nonblank `elevation_reason` may escalate a denial or reviewer failure to
 human Ask for the exact frozen invocation.
 
+## Sparse reminders
+
+A bounded permission-mode reminder is appended to native context only:
+
+1. before the first model request of a new admitted execution;
+2. before the first request after a successfully committed compaction;
+3. when a changed mode becomes effective at the next independent admission
+   (covered by (1) for that new admission).
+
+Eligibility is consumed only at successful model-request-start commit, so
+pre-start cancellation cannot lose it and retries do not duplicate it.
+
 ## Settlement
 
 Permission decides whether a prepared invocation may start. Independent
 authorized calls may start as soon as their own decision is Allow, without
 waiting for unrelated Ask/Review siblings. ToolResults still commit atomically
-in original model call order.
+in original model call order. Tool-level Sequential/Parallel authoring is
+removed; Bash still selects foreground|background via `execution_mode`.

@@ -253,7 +253,6 @@ sandbox = "off"
 allow = ["*"]
 
 [native_tools.bash]
-approval = "always"
 allow_unsandboxed = true
 
 [agent.plugins.goal]
@@ -272,7 +271,6 @@ max_concurrent = 2
 isolation = "none"
 
 [mcp_tool_policies.docs]
-approval = "never"
 trust_all = true
 "#;
     let repaired = candidate(text);
@@ -300,12 +298,7 @@ trust_all = true
         assert!(!repaired.contains(gone), "{gone} survived:\n{repaired}");
     }
     // Known policy values stay exactly as authored.
-    for kept in [
-        "approval = \"always\"",
-        "approval = \"never\"",
-        "max_concurrent = 2",
-        "tokens = 512",
-    ] {
+    for kept in ["max_concurrent = 2", "tokens = 512"] {
         assert!(repaired.contains(kept), "{kept} was lost:\n{repaired}");
     }
     let layer: RuntimeLayer = crate::toml_authoring::parse(repaired.as_bytes()).unwrap();
@@ -327,7 +320,6 @@ CUSTOM_TOKEN = "SECRET_ENV"
 "weird.name" = "v"
 
 [mcp_tool_policies."docs"]
-approval = "always"
 "#
     );
     assert!(changes(&text).is_empty(), "{:?}", changes(&text));
@@ -3417,7 +3409,6 @@ request_params = '{"zsecretz_param":"zsecretz-value"}'
 zsecretz_profile_key = true
 
 [mcp_tool_policies."zsecretz-mcp"]
-approval = "always"
 trust_all = true
 
 [environment]

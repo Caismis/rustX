@@ -623,10 +623,7 @@ async fn native_resource_helpers_route_only_frozen_sources_with_one_identity_ord
         if name != "excluded" {
             authorized.insert(
                 ToolSourceId::Mcp(McpServerId::new(name)),
-                crate::tools::mcp::McpResourceBinding::new(
-                    generation.binding(),
-                    crate::tools::types::ToolApprovalPolicy::Never,
-                ),
+                crate::tools::mcp::McpResourceBinding::new(generation.binding()),
             );
         }
         generations.push(generation);
@@ -900,10 +897,7 @@ async fn repeated_redaction_keeps_tool_and_resource_final_diagnostics_bounded() 
     );
     let resource = crate::tools::mcp::resource_definitions(BTreeMap::from([(
         ToolSourceId::Mcp(McpServerId::new("bounded")),
-        McpResourceBinding::new(
-            generation.binding(),
-            crate::tools::types::ToolApprovalPolicy::Never,
-        ),
+        McpResourceBinding::new(generation.binding()),
     )]));
     for (entry, arguments) in [
         (&ordinary[0], serde_json::json!({})),
@@ -1076,10 +1070,7 @@ async fn resource_error_redaction_survives_named_helpers_and_aggregate_spills() 
         );
         sources.insert(
             ToolSourceId::Mcp(McpServerId::new(name)),
-            McpResourceBinding::new(
-                generation.binding(),
-                crate::tools::types::ToolApprovalPolicy::Never,
-            ),
+            McpResourceBinding::new(generation.binding()),
         );
         generations.push(generation);
         peers.push((peer, connection));

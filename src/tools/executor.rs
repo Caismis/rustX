@@ -43,7 +43,7 @@ use crate::tools::schema::{
 };
 use crate::tools::todo::TodoWriter;
 use crate::tools::types::{
-    ModelToolDefinition, ToolApprovalPolicy, ToolCall, ToolConcurrencyPolicy, ToolDefinition,
+    ModelToolDefinition, ToolCall, ToolDefinition,
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolProgress,
 };
 use crate::tools::workspace::Workspace;
@@ -336,22 +336,6 @@ impl<'a> ToolExecutionContext<'a> {
 ///
 /// [`ToolExecutionStatus::Failed`]: crate::tools::types::ToolExecutionStatus::Failed
 pub trait ToolExecutor: Send + Sync {
-    /// Resolves additional approval requirements from validated business
-    /// arguments and immutable executor authority. This synchronous preflight
-    /// step performs no I/O and cannot weaken the definition's policy. The
-    /// ordinary invocation owner consumes the frozen result before `start`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a preflight rejection when the arguments cannot resolve to
-    /// authorized immutable invocation authority.
-    fn invocation_approval(
-        &self,
-        _arguments: &serde_json::Value,
-    ) -> Result<ToolApprovalPolicy, String> {
-        Ok(ToolApprovalPolicy::Never)
-    }
-
     /// Constructs the handle of one caller-neutral native invocation.
     ///
     /// This method must not dispatch physical work. Dispatch and its cleanup
@@ -725,15 +709,11 @@ pub enum PreflightOutcome {
 }
 
 /// A fully preflighted invocation: the canonical invocation plus its
-/// scheduling policy and resolved origin.
+/// resolved origin.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedInvocation {
     /// The stripped, validated canonical invocation.
     pub invocation: ToolInvocation,
-    /// The tool's concurrency policy for batch scheduling.
-    pub concurrency: ToolConcurrencyPolicy,
-    /// The effective approval policy frozen from the definition and invocation.
-    pub approval: ToolApprovalPolicy,
     /// Optional elevation reason stripped from model-facing metadata.
     pub elevation_reason: Option<String>,
     /// The canonical registry-resolved origin of the tool.
@@ -1002,24 +982,20 @@ impl ToolRegistry {
                 reason: error.to_string(),
             })?;
         if crate::tools::native::is_domain_control(&definition.name)
-            && (definition.execution_policy
+            && definition.execution_policy
                 != crate::tools::types::ToolExecutionPolicy::ForegroundOnly
-                || definition.concurrency_policy != ToolConcurrencyPolicy::Sequential)
         {
             return Err(ToolRegistryError::InvalidPolicy(format!(
-                "the runtime intrinsic {} is fixed to foreground-only sequential execution",
+                "the runtime intrinsic {} is fixed to foreground-only execution",
                 definition.name
             )));
         }
         if definition.name == ASK_USER_TOOL_NAME
-            && (definition.execution_policy
+            && definition.execution_policy
                 != crate::tools::types::ToolExecutionPolicy::ForegroundOnly
-                || definition.concurrency_policy != ToolConcurrencyPolicy::Sequential
-                || definition.approval_policy != ToolApprovalPolicy::Never)
         {
             return Err(ToolRegistryError::InvalidPolicy(format!(
-                "the runtime intrinsic {ASK_USER_TOOL_NAME} is fixed to foreground-only, \
-                 sequential execution with approval disabled"
+                "the runtime intrinsic {ASK_USER_TOOL_NAME} is fixed to foreground-only execution"
             )));
         }
         if let crate::tools::deadline::ForegroundPolicy::Composite { total } = foreground
@@ -1239,24 +1215,6 @@ impl ToolRegistry {
                 error: error.to_string(),
             };
         }
-        let approval = match entry.executor.invocation_approval(&normalized) {
-            Ok(policy) => {
-                if entry.definition.approval_policy == ToolApprovalPolicy::Always
-                    || policy == ToolApprovalPolicy::Always
-                {
-                    ToolApprovalPolicy::Always
-                } else {
-                    ToolApprovalPolicy::Never
-                }
-            }
-            Err(error) => {
-                return PreflightOutcome::Rejected {
-                    tool_id: entry.definition.id.clone(),
-                    origin: entry.definition.origin.clone(),
-                    error,
-                };
-            }
-        };
         PreflightOutcome::Ready(PreparedInvocation {
             invocation: ToolInvocation {
                 id,
@@ -1265,8 +1223,6 @@ impl ToolRegistry {
                 mode,
                 arguments: normalized,
             },
-            concurrency: entry.definition.concurrency_policy,
-            approval,
             elevation_reason,
             origin: entry.definition.origin.clone(),
             // The executor's declared progress capability is captured here,
@@ -1342,7 +1298,7 @@ mod tests {
     use crate::tools::deadline::ToolProgressCapability;
     use crate::tools::environment::ToolEnvironment;
     use crate::tools::types::{
-        ToolCall, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
+        ToolCall, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
         ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolProgress,
         ToolReplayPolicy,
     };
@@ -1356,7 +1312,6 @@ mod tests {
         id: &str,
         name: &str,
         execution: ToolExecutionPolicy,
-        concurrency: ToolConcurrencyPolicy,
         schema: serde_json::Value,
     ) -> ToolDefinition {
         ToolDefinition {
@@ -1365,8 +1320,6 @@ mod tests {
             description: String::new(),
             input_schema: schema,
             execution_policy: execution,
-            concurrency_policy: concurrency,
-            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         }
@@ -1442,7 +1395,6 @@ mod tests {
                 "tool-a",
                 "alpha",
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
                 object_schema(),
             ),
         )
@@ -1453,7 +1405,6 @@ mod tests {
                 "tool-a",
                 "beta",
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
                 object_schema(),
             ),
         )
@@ -1471,7 +1422,6 @@ mod tests {
                 "tool-a",
                 "alpha",
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
                 object_schema(),
             ),
         )
@@ -1482,7 +1432,6 @@ mod tests {
                 "tool-b",
                 "alpha",
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
                 object_schema(),
             ),
         )
@@ -1510,7 +1459,6 @@ mod tests {
                     "remote-tool",
                     name,
                     ToolExecutionPolicy::ForegroundOnly,
-                    ToolConcurrencyPolicy::Sequential,
                     object_schema(),
                 );
                 definition.origin = origin;
@@ -1535,7 +1483,6 @@ mod tests {
                     "",
                     "alpha",
                     ToolExecutionPolicy::ForegroundOnly,
-                    ToolConcurrencyPolicy::Sequential,
                     object_schema()
                 ),
             )
@@ -1548,7 +1495,6 @@ mod tests {
                     "tool-a",
                     "",
                     ToolExecutionPolicy::ForegroundOnly,
-                    ToolConcurrencyPolicy::Sequential,
                     object_schema()
                 ),
             )
@@ -1567,7 +1513,6 @@ mod tests {
                     "tool-a",
                     "alpha",
                     ToolExecutionPolicy::ForegroundOnly,
-                    ToolConcurrencyPolicy::Sequential,
                     json!(42)
                 ),
             )
@@ -1580,7 +1525,6 @@ mod tests {
                     "tool-a",
                     "alpha",
                     ToolExecutionPolicy::ForegroundOnly,
-                    ToolConcurrencyPolicy::Sequential,
                     json!({"type": "object", "properties": {"__rustx_secret": {"type": "string"}}})
                 ),
             )
@@ -1605,7 +1549,6 @@ mod tests {
                 &format!("tool-workflow-output-{index}"),
                 WORKFLOW_OUTPUT_TOOL_NAME,
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
                 object_schema(),
             );
             candidate.origin = origin;
@@ -1628,7 +1571,6 @@ mod tests {
                 crate::tools::native::jobs::NAMES[0],
                 crate::tools::native::jobs::NAMES[0],
                 ToolExecutionPolicy::BackgroundOnly,
-                ToolConcurrencyPolicy::Sequential,
                 object_schema(),
             ),
         )
@@ -1640,7 +1582,6 @@ mod tests {
                 crate::tools::native::jobs::NAMES[0],
                 crate::tools::native::jobs::NAMES[0],
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Parallel,
                 object_schema(),
             ),
         )
@@ -1652,7 +1593,6 @@ mod tests {
                 crate::tools::native::jobs::NAMES[0],
                 crate::tools::native::jobs::NAMES[0],
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
                 object_schema(),
             ),
         )
@@ -1741,7 +1681,6 @@ mod tests {
                     "tool-sel",
                     "sel",
                     ToolExecutionPolicy::ModelSelectable,
-                    ToolConcurrencyPolicy::Sequential,
                     schema.clone(),
                 ),
             ) else {
@@ -1784,7 +1723,6 @@ mod tests {
                         &format!("tool-fixed-{index}-{offset}"),
                         &format!("fixed-{index}-{offset}"),
                         policy,
-                        ToolConcurrencyPolicy::Sequential,
                         schema.clone(),
                     ),
                 )
@@ -1811,7 +1749,6 @@ mod tests {
                 "tool-sel",
                 "sel",
                 ToolExecutionPolicy::ModelSelectable,
-                ToolConcurrencyPolicy::Sequential,
                 json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": false}),
             ),
         )
@@ -1848,7 +1785,6 @@ mod tests {
                 "tool-sel",
                 "sel",
                 ToolExecutionPolicy::ModelSelectable,
-                ToolConcurrencyPolicy::Sequential,
                 json!({"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"], "additionalProperties": false}),
             ),
         )
@@ -1878,7 +1814,6 @@ mod tests {
                 "tool-sel",
                 "sel",
                 ToolExecutionPolicy::ModelSelectable,
-                ToolConcurrencyPolicy::Sequential,
                 json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": false}),
             ),
         )
@@ -1929,7 +1864,6 @@ mod tests {
                 "tool-read",
                 "read",
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
                 json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": false}),
             ),
         )
@@ -1958,7 +1892,6 @@ mod tests {
                 "tool-a",
                 "alpha",
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
                 object_schema(),
             ),
         )
@@ -1987,7 +1920,6 @@ mod tests {
                 "tool-a",
                 "alpha",
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Parallel,
                 object_schema(),
             ),
         )
@@ -1998,7 +1930,6 @@ mod tests {
                 "tool-b",
                 "beta",
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
                 object_schema(),
             ),
         )
@@ -2022,7 +1953,6 @@ mod tests {
                 "tool-sel",
                 "sel",
                 ToolExecutionPolicy::ModelSelectable,
-                ToolConcurrencyPolicy::Sequential,
                 schema.clone(),
             ),
         )
@@ -2054,7 +1984,6 @@ mod tests {
                 "tool-a",
                 "alpha",
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
                 object_schema(),
             ),
         )
@@ -2126,7 +2055,6 @@ mod tests {
                     "tool-sel",
                     "sel",
                     ToolExecutionPolicy::ModelSelectable,
-                    ToolConcurrencyPolicy::Sequential,
                     json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": false}),
                 ),
                 Arc::new(CaptureExecutor { received: received.clone() }),

@@ -305,7 +305,6 @@ async fn fixed_admission_rejects_orchestration_background_and_composite_leaves()
         leaf.id = crate::runtime::identity::ToolId::new(format!("tool-{name}"));
         if crate::tools::native::is_domain_control(name) {
             leaf.execution_policy = ToolExecutionPolicy::ForegroundOnly;
-            leaf.concurrency_policy = crate::tools::types::ToolConcurrencyPolicy::Sequential;
         }
         if name == "background" {
             leaf.execution_policy = ToolExecutionPolicy::BackgroundOnly;

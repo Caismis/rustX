@@ -673,8 +673,7 @@ async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_o
                     mutation: ConfigMutation::McpPolicy {
                         id: McpServerId::new("service"),
                         authored: Some(crate::local_runtime::config::InvocationPolicyDocument {
-                            approval: crate::local_runtime::config::ApprovalPolicyDocument::Always,
-                            ..Default::default()
+                                                        ..Default::default()
                         }),
                     },
                 },

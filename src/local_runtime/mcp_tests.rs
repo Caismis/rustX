@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use crate::local_runtime::config::CurrentRuntimeConfigError;
 use crate::runtime::identity::McpServerId;
 use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
-use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy};
+use crate::tools::types::{ToolExecutionPolicy};
 
 /// Fixtures author independent resource definitions and global policy documents.
 /// Native readers own both; no MCP fields are accepted by rustx.toml.
@@ -419,10 +419,6 @@ fn absent_policy_entry_uses_the_deterministic_default() {
         binding.policy.execution,
         ToolExecutionPolicy::ForegroundOnly
     );
-    assert_eq!(
-        binding.policy.concurrency,
-        ToolConcurrencyPolicy::Sequential
-    );
 }
 
 /// The keyed policy overlay applies exactly, and only to the named server.
@@ -430,14 +426,12 @@ fn absent_policy_entry_uses_the_deterministic_default() {
 fn policy_overlay_applies_to_exactly_the_named_server() {
     let bindings = bindings(
         r#"mcp_servers = { "exa" = { "url" = "https://exa" }, "local" = { "command" = "npx" } }
-mcp_tool_policies = { "exa" = { "execution" = "background_only", "concurrency" = "parallel" } }"#,
+mcp_tool_policies = { "exa" = { "execution" = "background_only" } }"#,
     );
     let exa = &bindings[&McpServerId::new("exa")];
     assert_eq!(exa.policy.execution, ToolExecutionPolicy::BackgroundOnly);
-    assert_eq!(exa.policy.concurrency, ToolConcurrencyPolicy::Parallel);
     let local = &bindings[&McpServerId::new("local")];
     assert_eq!(local.policy.execution, ToolExecutionPolicy::ForegroundOnly);
-    assert_eq!(local.policy.concurrency, ToolConcurrencyPolicy::Sequential);
 }
 
 /// A policy for a server that does not exist is a configuration error, never

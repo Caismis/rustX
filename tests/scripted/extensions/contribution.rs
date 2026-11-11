@@ -78,9 +78,7 @@ async fn issue383_native_deferred_and_request_time_share_registered_provenance()
         common::tool_policies(
             "worker",
             "worker",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+            ToolExecutionPolicy::ForegroundOnly),
         success_result("done"),
     );
     let mut tools = ToolRegistry::new();
@@ -173,9 +171,7 @@ async fn issue383_retry_and_corrective_requests_freeze_goal_and_native_receipts(
             common::tool_policies(
                 "worker",
                 "probe-worker",
-                ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
-            ),
+                ToolExecutionPolicy::ForegroundOnly),
             success_result("done"),
         );
         let mut tools = ToolRegistry::new();
@@ -346,9 +342,7 @@ async fn issue383_domain_changes_after_capture_only_reach_the_next_logical_step(
         common::tool_policies(
             "worker",
             "probe-worker",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+            ToolExecutionPolicy::ForegroundOnly),
         success_result("done"),
     );
     let mut tools = ToolRegistry::new();

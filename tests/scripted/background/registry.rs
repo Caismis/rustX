@@ -43,7 +43,7 @@ use rustx::tools::executor::{
 };
 use rustx::tools::runtime::ConversationToolRuntime;
 use rustx::tools::types::{
-    ToolCall, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
+    ToolCall, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
     ToolInvocation, ToolInvocationMode, ToolProgress, ToolResultContent,
 };
 use rustx::tools::workspace::Workspace;
@@ -905,9 +905,7 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
         common::tool_policies(
             "bg",
             "tool-bg",
-            ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+            ToolExecutionPolicy::ModelSelectable),
         success_result("bg"),
     );
     let mut tools = ToolRegistry::new();
@@ -1027,18 +1025,14 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
         common::tool_policies(
             "fg",
             "tool-fg",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+            ToolExecutionPolicy::ForegroundOnly),
         success_result("fg"),
     );
     let (tool_bg, release_bg) = FakeTool::parking(
         common::tool_policies(
             "bg",
             "tool-bg",
-            ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+            ToolExecutionPolicy::ModelSelectable),
         success_result("bg"),
     );
     let mut bg_started = tool_bg.started();
@@ -1363,18 +1357,18 @@ async fn agent_status_active_snapshot_excludes_terminal_entries() {
 /// showing the remaining active tasks only.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
-    assert_terminal_inbound_status(ToolConcurrencyPolicy::Parallel, false).await;
+    assert_terminal_inbound_status(false).await;
 }
 
 /// Serial background admission in reversed call order makes allocation order
 /// deterministically differ from which task completes first.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn terminal_inbound_status_survives_reversed_background_allocation() {
-    assert_terminal_inbound_status(ToolConcurrencyPolicy::Sequential, true).await;
+    assert_terminal_inbound_status(true).await;
 }
 
 #[allow(clippy::too_many_lines)]
-async fn assert_terminal_inbound_status(concurrency: ToolConcurrencyPolicy, reverse_order: bool) {
+async fn assert_terminal_inbound_status(reverse_order: bool) {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
@@ -1438,18 +1432,14 @@ async fn assert_terminal_inbound_status(concurrency: ToolConcurrencyPolicy, reve
         common::tool_policies(
             "b1",
             "tool-b1",
-            ToolExecutionPolicy::ModelSelectable,
-            concurrency,
-        ),
+            ToolExecutionPolicy::ModelSelectable),
         success_result("b1"),
     );
     let (tool_b2, _never_released) = FakeTool::parking(
         common::tool_policies(
             "b2",
             "tool-b2",
-            ToolExecutionPolicy::ModelSelectable,
-            concurrency,
-        ),
+            ToolExecutionPolicy::ModelSelectable),
         success_result("b2"),
     );
     let mut started_b1 = tool_b1.started();
@@ -1621,9 +1611,7 @@ async fn foreground_tool_continuation_has_no_agent_status() {
         common::tool_policies(
             "alpha",
             "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+            ToolExecutionPolicy::ForegroundOnly),
         success_result("ok"),
     );
     let mut tools = ToolRegistry::new();

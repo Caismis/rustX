@@ -1,5 +1,4 @@
 //! A real resource-only MCP source enters context solely through a committed Tool call.
-mod approval;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

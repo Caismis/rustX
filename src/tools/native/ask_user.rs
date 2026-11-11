@@ -25,7 +25,7 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExec
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::native::support::{cancelled_result, failed_result, success_json};
 use crate::tools::types::{
-    ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
     ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 
@@ -262,8 +262,6 @@ pub(super) fn definition() -> ToolDefinition {
         description: "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.".to_owned(),
         input_schema: input_schema::<AskUserInput>(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }

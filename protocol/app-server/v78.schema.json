@@ -3473,7 +3473,8 @@
         "agent_status",
         "core_system_identity",
         "agent_profile",
-        "runtime_tool_observation"
+        "runtime_tool_observation",
+        "permission_reminder"
       ]
     },
     "CertifiedExtensionIdentity": {
@@ -17418,7 +17419,7 @@
         },
         "effective_approval_mode": {
           "description": "The authoritative mode used by the current attempt boundary.",
-          "$ref": "#/$defs/ApprovalMode"
+          "$ref": "#/$defs/ExecutionPermissionMode"
         },
         "durability_failure": {
           "description": "The runtime's durable-authority failure, when it has entered the\nexplicit degraded state. While set, no new durable admission/execution\nwork may begin.",
@@ -18051,16 +18052,21 @@
         }
       ]
     },
-    "ApprovalMode": {
-      "description": "The runtime-wide control state for tool approval behavior.\n\n`Policy` consults each resolved Tool's\n[`ToolApprovalPolicy`](crate::tools::types::ToolApprovalPolicy).\n`FullAccess` changes only the effective approval result to `Never`; it\nnever changes availability, activation, execution ownership, concurrency,\nor tool authority.",
+    "ExecutionPermissionMode": {
+      "description": "The runtime-wide execution-permission mode.\n\nModes are built into Rust and are not extensible through TOML presets.\nChanging mode never changes Tool Registry membership, model-facing names,\ntool Schema, MCP discovery, or capability selection.",
       "oneOf": [
         {
-          "description": "Use each Tool's configured approval policy.",
+          "description": "Native reads and approved bookkeeping are allowed; Write/Edit may\nautomatically change only workspace-root `PLAN.md`; Bash requires a\nproven read-only classification. Other defaults refuse without a\nnonblank `elevation_reason`.",
           "type": "string",
-          "const": "policy"
+          "const": "plan"
         },
         {
-          "description": "Bypass approval prompts for eligible tool calls only.",
+          "description": "Retain Plan's deterministic fast paths. Remaining defaults go through\nthe shared Auxiliary permission reviewer. Denied calls may escalate\nwith `elevation_reason`.",
+          "type": "string",
+          "const": "automatic"
+        },
+        {
+          "description": "Default calls are allowed without Auxiliary or ordinary human review.\nEffective explicit `deny` and `ask` resource settings still apply.",
           "type": "string",
           "const": "full_access"
         }
@@ -19109,7 +19115,7 @@
           "$ref": "#/$defs/RuntimeResourceRevision"
         },
         "approval_mode": {
-          "$ref": "#/$defs/ApprovalMode"
+          "$ref": "#/$defs/ExecutionPermissionMode"
         }
       },
       "additionalProperties": false,
@@ -20106,14 +20112,6 @@
           "description": "Who owns an invocation: attempt (foreground) or conversation\n(background).",
           "$ref": "#/$defs/ToolExecutionPolicy"
         },
-        "concurrency_policy": {
-          "description": "How calls within one batch are scheduled.",
-          "$ref": "#/$defs/ToolConcurrencyPolicy"
-        },
-        "approval_policy": {
-          "description": "Whether execution requires a native approval interaction.",
-          "$ref": "#/$defs/ToolApprovalPolicy"
-        },
         "replay_policy": {
           "description": "The replay policy.",
           "$ref": "#/$defs/ToolReplayPolicy"
@@ -20130,14 +20128,12 @@
         "description",
         "input_schema",
         "execution_policy",
-        "concurrency_policy",
-        "approval_policy",
         "replay_policy",
         "origin"
       ]
     },
     "ToolExecutionPolicy": {
-      "description": "Who owns one execution of a tool.\n\nThis axis decides ownership and settlement, never scheduling:\n\n- `ForegroundOnly` — every invocation settles before the current agent\n  attempt may continue past that tool result. The execution is\n  attempt-owned and observable attempt cancellation physically reaches\n  it.\n- `BackgroundOnly` — every invocation is detached from the current\n  attempt after successful background dispatch; the conversation owns the\n  execution.\n- `ModelSelectable` — the model must explicitly choose foreground or\n  background execution for each invocation through the required\n  `execution_mode` invocation field. That field is reserved by the\n  runtime only under this policy; registration rejects a `ModelSelectable`\n  tool whose canonical schema already defines it.\n\nForeground/background is orthogonal to sequential/parallel scheduling\n([`ToolConcurrencyPolicy`]).",
+      "description": "Who owns one execution of a tool.\n\nThis axis decides ownership and settlement, never batch scheduling:\n\n- `ForegroundOnly` — every invocation settles before the current agent\n  attempt may continue past that tool result. The execution is\n  attempt-owned and observable attempt cancellation physically reaches\n  it.\n- `BackgroundOnly` — every invocation is detached from the current\n  attempt after successful background dispatch; the conversation owns the\n  execution.\n- `ModelSelectable` — the model must explicitly choose foreground or\n  background execution for each invocation through the required\n  `execution_mode` invocation field. That field is reserved by the\n  runtime only under this policy; registration rejects a `ModelSelectable`\n  tool whose canonical schema already defines it. Only Bash retains this\n  authored selector.",
       "oneOf": [
         {
           "description": "Every invocation settles before the attempt continues; attempt-owned.",
@@ -20153,36 +20149,6 @@
           "description": "The model selects foreground or background per invocation.",
           "type": "string",
           "const": "model_selectable"
-        }
-      ]
-    },
-    "ToolConcurrencyPolicy": {
-      "description": "How calls of one tool within one batch are scheduled.\n\nA `Sequential` invocation is an exclusive scheduling barrier; adjacent\n`Parallel` invocations may execute concurrently as one group. This axis\ndescribes concurrency only, never foreground/background ownership\n([`ToolExecutionPolicy`]).",
-      "oneOf": [
-        {
-          "description": "Calls execute one at a time in the order issued.",
-          "type": "string",
-          "const": "sequential"
-        },
-        {
-          "description": "Multiple adjacent calls may execute concurrently.",
-          "type": "string",
-          "const": "parallel"
-        }
-      ]
-    },
-    "ToolApprovalPolicy": {
-      "description": "Whether a resolved tool invocation requires a native approval interaction.\n\nDenial is intentionally not part of this policy. A tool that is not\neligible belongs to availability/authorization and is rejected before\napproval; HITL only decides whether an otherwise eligible invocation needs\na human decision.",
-      "oneOf": [
-        {
-          "description": "Execute without an approval interaction.",
-          "type": "string",
-          "const": "never"
-        },
-        {
-          "description": "Publish an approval interaction before execution.",
-          "type": "string",
-          "const": "always"
         }
       ]
     },
@@ -23402,7 +23368,7 @@
               "$ref": "#/$defs/RuntimeClientModelStatus"
             },
             "approval_mode": {
-              "$ref": "#/$defs/ApprovalMode"
+              "$ref": "#/$defs/ExecutionPermissionMode"
             },
             "capabilities": {
               "description": "The active capability projection this generation was composed\nagainst.",
@@ -24985,7 +24951,7 @@
           "$ref": "#/$defs/SubagentsDocument"
         },
         "approval_mode": {
-          "$ref": "#/$defs/ApprovalMode"
+          "$ref": "#/$defs/ExecutionPermissionMode"
         },
         "provenance": {
           "type": "object",
@@ -25292,7 +25258,7 @@
         "approval_mode": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ApprovalMode"
+              "$ref": "#/$defs/ExecutionPermissionMode"
             },
             {
               "type": "null"
@@ -26383,16 +26349,6 @@
           "description": "Foreground/background ownership policy.",
           "$ref": "#/$defs/ExecutionPolicyDocument",
           "default": "foreground_only"
-        },
-        "concurrency": {
-          "description": "In-batch scheduling policy.",
-          "$ref": "#/$defs/ConcurrencyPolicyDocument",
-          "default": "sequential"
-        },
-        "approval": {
-          "description": "Human approval behavior for otherwise eligible calls.",
-          "$ref": "#/$defs/ApprovalPolicyDocument",
-          "default": "never"
         }
       },
       "additionalProperties": false
@@ -26414,36 +26370,6 @@
           "description": "The model selects the execution mode per invocation.",
           "type": "string",
           "const": "model_selectable"
-        }
-      ]
-    },
-    "ConcurrencyPolicyDocument": {
-      "description": "The configurable in-batch scheduling policy of one tool.",
-      "oneOf": [
-        {
-          "description": "Calls within one batch run one at a time.",
-          "type": "string",
-          "const": "sequential"
-        },
-        {
-          "description": "Calls within one batch may run concurrently.",
-          "type": "string",
-          "const": "parallel"
-        }
-      ]
-    },
-    "ApprovalPolicyDocument": {
-      "description": "The configurable HITL approval policy of one Tool.",
-      "oneOf": [
-        {
-          "description": "Execute without an approval interaction.",
-          "type": "string",
-          "const": "never"
-        },
-        {
-          "description": "Require an approval interaction before execution.",
-          "type": "string",
-          "const": "always"
         }
       ]
     },
@@ -26520,14 +26446,6 @@
         "execution": {
           "description": "Foreground/background ownership override.",
           "$ref": "#/$defs/ExecutionPolicyDocument"
-        },
-        "concurrency": {
-          "description": "In-batch scheduling override.",
-          "$ref": "#/$defs/ConcurrencyPolicyDocument"
-        },
-        "approval": {
-          "description": "Tool approval override.",
-          "$ref": "#/$defs/ApprovalPolicyDocument"
         }
       },
       "additionalProperties": false
@@ -26858,7 +26776,7 @@
       ]
     },
     "ToolDefinition": {
-      "description": "The canonical runtime/tool contract of one registered tool.\n\nThe definition is owned by the tool plane's registry, which pairs it with\nan executor. The three policy axes are independent:\n\n- [`ToolExecutionPolicy`] decides who owns the execution: foreground work\n  is attempt-owned and settles before the attempt continues, background\n  work is conversation-owned and detached after accepted dispatch.\n- [`ToolConcurrencyPolicy`] decides how calls of one batch are scheduled\n  relative to each other.\n- [`ToolApprovalPolicy`] decides whether an eligible invocation needs a\n  native human approval before the executor starts.\n\nThe `input_schema` is the original canonical JSON Schema document owned by\nthe tool. The runtime validates it at registration and never mutates it:\nmodel-selectable invocation metadata is added only to the compiled\nmodel-facing definition.",
+      "description": "The canonical runtime/tool contract of one registered tool.\n\nThe definition is owned by the tool plane's registry, which pairs it with\nan executor. Execution ownership is tool-declared; permission (whether an\neligible invocation may start) is decided by the built-in mode matrix and\nresource overrides, never by a per-tool never/always authoring axis.\nPrepared slots in one batch may run concurrently; domain owners keep their\nown synchronization.\n\nThe `input_schema` is the original canonical JSON Schema document owned by\nthe tool. The runtime validates it at registration and never mutates it:\nmodel-selectable invocation metadata is added only to the compiled\nmodel-facing definition.",
       "type": "object",
       "properties": {
         "id": {
@@ -26880,15 +26798,6 @@
           "description": "Who owns an invocation of this tool: the attempt (foreground) or the\nconversation (background). Required: a missing policy is never\nsilently interpreted.",
           "$ref": "#/$defs/ToolExecutionPolicy"
         },
-        "concurrency_policy": {
-          "description": "How calls of this tool within one batch are scheduled relative to\neach other.",
-          "$ref": "#/$defs/ToolConcurrencyPolicy"
-        },
-        "approval_policy": {
-          "description": "Whether execution requires a native approval interaction.",
-          "$ref": "#/$defs/ToolApprovalPolicy",
-          "default": "never"
-        },
         "replay_policy": {
           "description": "Replay policy; `Never` is the safe default.",
           "$ref": "#/$defs/ToolReplayPolicy",
@@ -26905,7 +26814,6 @@
         "description",
         "input_schema",
         "execution_policy",
-        "concurrency_policy",
         "origin"
       ]
     },
@@ -26913,7 +26821,7 @@
       "type": "object",
       "properties": {
         "approval_mode": {
-          "$ref": "#/$defs/ApprovalMode"
+          "$ref": "#/$defs/ExecutionPermissionMode"
         },
         "model_timeout": {
           "anyOf": [
@@ -27440,7 +27348,7 @@
           "description": "Native current-file approval resolution. None when prospective configuration is invalid.",
           "anyOf": [
             {
-              "$ref": "#/$defs/ApprovalMode"
+              "$ref": "#/$defs/ExecutionPermissionMode"
             },
             {
               "type": "null"
@@ -38840,7 +38748,7 @@
             "authored": {
               "anyOf": [
                 {
-                  "$ref": "#/$defs/ApprovalMode"
+                  "$ref": "#/$defs/ExecutionPermissionMode"
                 },
                 {
                   "type": "null"

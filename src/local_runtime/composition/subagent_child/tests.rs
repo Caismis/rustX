@@ -14,7 +14,7 @@ use crate::runtime::subagent::catalog::SubagentName;
 use crate::runtime::subagent::ipc::{SUBAGENT_IPC_VERSION, SubagentChildSpec};
 use crate::runtime::subagent::resolver::{ResolvedSubagentSpec, ResolvedSubagentTool};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+    ToolDefinition, ToolExecutionPolicy,
     ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,
 };
 
@@ -1352,8 +1352,6 @@ async fn frozen_fixture_tool(
         description: tool.description,
         input_schema: tool.input_schema,
         execution_policy: binding.policy.execution,
-        concurrency_policy: binding.policy.concurrency,
-        approval_policy: binding.policy.approval,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
             server_id: server_id.clone(),
@@ -1514,8 +1512,6 @@ async fn a_missing_mcp_definition_fails_before_the_child_is_ready() {
         description: "a tool the server does not publish".to_owned(),
         input_schema: serde_json::json!({"type": "object"}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
             server_id: server_id.clone(),
@@ -1568,8 +1564,6 @@ async fn an_unreachable_required_mcp_server_fails_child_composition() {
         description: "issue".to_owned(),
         input_schema: serde_json::json!({"type": "object"}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
             server_id: server_id.clone(),
@@ -1627,8 +1621,6 @@ async fn a_missing_frozen_mcp_binding_is_never_rediscovered() {
         description: "issue".to_owned(),
         input_schema: serde_json::json!({"type": "object"}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
             server_id: server_id.clone(),

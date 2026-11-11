@@ -14,7 +14,7 @@ use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::types::{
-    ToolCancellationPhase, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+    ToolCancellationPhase, ToolDefinition, ToolExecutionPolicy,
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 
@@ -87,8 +87,6 @@ pub(super) fn definition(catalog: &AgentCatalog) -> ToolDefinition {
         ),
         input_schema: input_schema::<SubagentInput>(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }
@@ -531,7 +529,7 @@ chat_reasoning_replay = "omit"
         };
         use crate::tools::mcp::McpRuntimeLeaseAuthority;
         use crate::tools::types::{
-            ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+            ToolDefinition, ToolExecutionPolicy,
             ToolOrigin, ToolReplayPolicy,
         };
 
@@ -555,8 +553,6 @@ chat_reasoning_replay = "omit"
             description: format!("{name} capability"),
             input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         };

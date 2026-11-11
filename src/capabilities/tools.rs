@@ -443,7 +443,7 @@ mod tests {
         ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistration, ToolRegistry,
     };
     use crate::tools::types::{
-        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionResult, ToolExecutionStatus,
+        ToolDefinition, ToolExecutionResult, ToolExecutionStatus,
         ToolInvocation, ToolOrigin, ToolReplayPolicy,
     };
 
@@ -488,8 +488,6 @@ mod tests {
                 "additionalProperties": false
             }),
             execution_policy: crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin,
         }

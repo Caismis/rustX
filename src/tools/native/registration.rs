@@ -105,8 +105,8 @@ fn identity_arguments(arguments: &serde_json::Value) -> Result<serde_json::Value
 /// Builds a canonical native tool definition whose input schema is
 /// generated from the tool's typed input contract `I`.
 ///
-/// Native tools are always builtin-origin and never replayable; the three
-/// policy axes come from the composed [`ToolInvocationPolicy`].
+/// Native tools are always builtin-origin and never replayable; execution
+/// ownership comes from the composed [`ToolInvocationPolicy`].
 pub(crate) fn native_definition<I: JsonSchema>(
     id: &str,
     name: &str,
@@ -119,8 +119,6 @@ pub(crate) fn native_definition<I: JsonSchema>(
         description: description.to_owned(),
         input_schema: input_schema::<I>(),
         execution_policy: policy.execution,
-        concurrency_policy: policy.concurrency,
-        approval_policy: policy.approval,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }

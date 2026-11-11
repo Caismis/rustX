@@ -3,7 +3,7 @@
 use crate::capabilities::{CapabilityAvailability, CapabilitySnapshot};
 use crate::runtime::identity::{CapabilityRevision, SkillId, SkillVersionId, ToolId};
 use crate::tools::types::{
-    ToolConcurrencyPolicy, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
+    ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
 };
 use serde::ser::{SerializeSeq, SerializeStruct};
 use serde::{Deserialize, Serialize};
@@ -494,10 +494,6 @@ pub struct RuntimeClientTool {
     /// Who owns an invocation: attempt (foreground) or conversation
     /// (background).
     pub execution_policy: ToolExecutionPolicy,
-    /// How calls within one batch are scheduled.
-    pub concurrency_policy: ToolConcurrencyPolicy,
-    /// Whether execution requires a native approval interaction.
-    pub approval_policy: crate::tools::types::ToolApprovalPolicy,
     /// The replay policy.
     pub replay_policy: ToolReplayPolicy,
     /// Where the tool comes from.

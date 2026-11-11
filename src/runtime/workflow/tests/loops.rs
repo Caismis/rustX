@@ -162,7 +162,6 @@ async fn run(
 ) -> Result<Value, WorkflowRunError> {
     // Parallel rounds may call the Tool at once.
     let mut tool = definition();
-    tool.concurrency_policy = ToolConcurrencyPolicy::Parallel;
     let context = context_with_registration(
         plane,
         ToolRegistration::plain(tool, executor),

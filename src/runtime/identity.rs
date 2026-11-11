@@ -538,6 +538,8 @@ pub enum NativeContextContributor {
     /// this owner explains the native ones inside the accepted context
     /// generation; no observer supplies its own provenance or identity.
     RuntimeToolObservation,
+    /// Sparse execution-permission mode reminder (Issue #544).
+    PermissionReminder,
 }
 
 impl schemars::JsonSchema for NativeContextContributor {
@@ -559,7 +561,7 @@ impl NativeContextContributor {
     /// Every native semantic owner, in contract order. This is the source
     /// used by the compatibility manifest and reserved-identity validation;
     /// callers must not maintain a second list of native slots.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::GoalStatus,
         Self::WorkspaceInstructions,
         Self::SkillGuidance,
@@ -567,6 +569,7 @@ impl NativeContextContributor {
         Self::CoreSystemIdentity,
         Self::AgentProfile,
         Self::RuntimeToolObservation,
+        Self::PermissionReminder,
     ];
 
     /// The canonical extension-key spelling reserved for this native owner.
@@ -584,6 +587,7 @@ impl NativeContextContributor {
             Self::CoreSystemIdentity => "core-runtime-identity",
             Self::AgentProfile => "agent-profile",
             Self::RuntimeToolObservation => "runtime-tool-observation",
+            Self::PermissionReminder => "permission-reminder",
         }
     }
 
@@ -602,6 +606,7 @@ impl NativeContextContributor {
             Self::CoreSystemIdentity => "core_runtime_identity",
             Self::AgentProfile => "agent_profile",
             Self::RuntimeToolObservation => "runtime_tool_observation",
+            Self::PermissionReminder => "permission_reminder",
         }
     }
 }

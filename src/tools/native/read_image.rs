@@ -25,16 +25,12 @@ struct Input {
 }
 
 pub(super) fn definition() -> ToolDefinition {
-    use crate::tools::types::{ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy};
+    use crate::tools::types::{ToolExecutionPolicy};
     native_definition::<Input>(
         "tool-read-image",
         "read_image",
         "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
-        ToolInvocationPolicy::new(
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-            ToolApprovalPolicy::Never,
-        ),
+        ToolInvocationPolicy::new(ToolExecutionPolicy::ForegroundOnly),
     )
 }
 pub(super) fn registration() -> NativeToolRegistration {

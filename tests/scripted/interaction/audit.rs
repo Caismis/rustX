@@ -62,7 +62,7 @@ use rustx::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
 };
 use rustx::tools::types::{
-    ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
+    ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
     ToolInvocation,
 };
 use tokio::sync::watch;
@@ -166,9 +166,7 @@ impl SpyTool {
         let definition = common::tool_policies(
             name,
             id,
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        );
+            ToolExecutionPolicy::ForegroundOnly);
         registry
             .register(
                 definition,

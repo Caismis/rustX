@@ -256,6 +256,10 @@ impl<'a> AgentExecution<'a> {
             pauses: test_sync::ExecutionPauses::default(),
             turn: 0,
             terminal_emitted: false,
+            permission_reminder:
+                crate::runtime::permission::PermissionReminderState::for_admission(
+                    runtime_policy.approval_mode,
+                ),
         })
     }
 

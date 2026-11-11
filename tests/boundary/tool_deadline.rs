@@ -103,7 +103,6 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
     // The deadline test owns executor start; Tool approval has separate
     // deterministic coverage and must not park this execution fixture.
     let mut policies = rustx::tools::NativeToolPolicies::default();
-    policies.bash.approval = rustx::tools::ToolApprovalPolicy::Never;
     // This fixture's subject is bash deadline settlement, so it composes no
     // native Agent Extension: no task list, and no `todo` in either Tool
     // plane (Issue #259).

@@ -97,8 +97,6 @@ fn definition() -> ToolDefinition {
             &["passed", "label"],
         ),
         execution_policy: ToolExecutionPolicy::ModelSelectable,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }
