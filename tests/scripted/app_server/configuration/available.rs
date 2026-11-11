@@ -424,7 +424,8 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
             .find(|tool| tool.name == "read")
             .unwrap()
             .execution_policy,
-        crate::tools::types::ToolExecutionPolicy::BackgroundOnly
+        // Product default after removing native_tools execution overlays.
+        crate::tools::types::ToolExecutionPolicy::ForegroundOnly
     );
     // The commit published the capabilities; the old Session keeps its
     // configured selection, still unavailable, and the published catalog.

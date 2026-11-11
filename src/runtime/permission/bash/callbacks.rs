@@ -221,7 +221,8 @@ fn date_dangerous(args: &[String]) -> bool {
 }
 
 /// GNU/BSD `hostname NAME` sets the host name. Safe flags are query-only;
-/// any positional operand (including after `--`) is a mutation.
+/// any positional operand (including after `--`, a lone `-`, or `""`) is a
+/// mutation — those forms are still NAME operands to `sethostname`.
 fn hostname_dangerous(args: &[String]) -> bool {
     let mut after_dd = false;
     for arg in args {
@@ -232,10 +233,8 @@ fn hostname_dangerous(args: &[String]) -> bool {
             after_dd = true;
             continue;
         }
-        if arg.is_empty() {
-            continue;
-        }
-        if !arg.starts_with('-') {
+        // Empty and lone `-` are not query flags; GNU/BSD treat them as NAME.
+        if arg.is_empty() || arg == "-" || !arg.starts_with('-') {
             return true;
         }
     }

@@ -198,7 +198,7 @@ mod tests {
             "pwd & rm -rf /", "true && rm -rf /", "git diff --output=/tmp/written.patch",
             "git -calias.status=!touch /tmp/pwned status",
             "git -c alias.status=!touch /tmp/pwned status",
-            "hostname new-host", "hostname -- evil",
+            "hostname new-host", "hostname -- evil", "hostname -", r#"hostname """#,
             "fd -x rm", "fd --exec rm {}", "fd --exec-batch rm", "fd -X rm",
             "rg --pre=sh needle", "rg --pre ./filter foo src",
             "jq -f filter.jq package.json", "jq 'env' package.json",
