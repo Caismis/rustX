@@ -408,7 +408,7 @@ fn normal_configured_server_ids_remain_accepted() {
     }
 }
 
-/// MCP bindings always use the product-default ForegroundOnly invocation
+/// MCP bindings always use the product-default `ForegroundOnly` invocation
 /// policy; tool-level execution overlays are obsolete (Issue #544).
 #[test]
 fn bindings_use_the_product_default_invocation_policy() {
@@ -423,7 +423,7 @@ fn bindings_use_the_product_default_invocation_policy() {
     }
 }
 
-/// Obsolete mcp_tool_policies authoring is rejected, never silently ignored.
+/// Obsolete `mcp_tool_policies` authoring is rejected, never silently ignored.
 #[test]
 fn obsolete_mcp_tool_policies_overlay_is_rejected() {
     let error = rejection(

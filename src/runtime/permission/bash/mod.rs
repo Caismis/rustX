@@ -1,23 +1,53 @@
 //! ZCode-derived Bash read-only analysis (Issue #544 P06).
 //!
 //! Upstream pin: `zai-org/ZCode@b95ebaffeab641907b38652f45c1502bd762972d`
-//! (Apache-2.0). Parser: `brush-parser` 0.4.x (MIT), used instead of ZCode's
+//! (Apache-2.0). Parser: `brush-parser` 0.4.x (MIT), used instead of `ZCode`'s
 //! TypeScript `unbash`.
 //!
 //! Parse failures, unsupported constructs, dynamic executable names, and
 //! unresolved behavior never count as proven read-only. Unproven is distinct
 //! from known-malicious: Plan elevates and Automatic reviews.
 
-mod callbacks;
-mod commands;
-mod direct;
-mod flags;
-mod flags_walk;
-mod git;
-mod io;
-mod parse;
-mod policy;
-mod types;
+// Dense ZCode table/callback ports trip pedantic Clippy; keep the port
+// structure close to upstream rather than reshaping for lint style.
+#![allow(
+    clippy::assigning_clones,
+    clippy::collapsible_if,
+    clippy::doc_markdown,
+    clippy::manual_let_else,
+    clippy::map_unwrap_or,
+    clippy::redundant_closure_for_method_calls,
+    clippy::similar_names,
+    clippy::single_match_else,
+    clippy::struct_excessive_bools,
+    clippy::too_many_lines,
+    clippy::wildcard_imports
+)]
+
+macro_rules! zcode_port_mod {
+    ($($name:ident),+ $(,)?) => {
+        $(
+            #[allow(
+                clippy::assigning_clones,
+                clippy::collapsible_if,
+                clippy::doc_markdown,
+                clippy::manual_let_else,
+                clippy::map_unwrap_or,
+                clippy::redundant_closure_for_method_calls,
+                clippy::similar_names,
+                clippy::single_match_else,
+                clippy::struct_excessive_bools,
+                clippy::too_many_lines,
+                clippy::wildcard_imports
+            )]
+            mod $name;
+        )+
+    };
+}
+
+zcode_port_mod!(
+    callbacks, commands, direct, flags, flags_walk, git, io, parse, policy, types
+);
 
 use parse::analyze_bash_command;
 use policy::{
