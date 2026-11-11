@@ -567,12 +567,20 @@ impl AgentExecution<'_> {
                             if slots[slot_index].result.is_some() {
                                 continue;
                             }
+                            // Keep only decisive Deny/TimedOut outcomes from
+                            // aborted waiters. Cancelled placeholders from the
+                            // child_execution abort must stay unset so the
+                            // group-error / attempt-cancellation fill owns the
+                            // canonical ToolMessage text.
                             if let Ok(Some(result)) = outcome {
-                                slots[slot_index].result = Some(result);
+                                let aborted_cancel = matches!(
+                                    result.status,
+                                    crate::tools::types::ToolExecutionStatus::Cancelled { .. }
+                                );
+                                if !aborted_cancel {
+                                    slots[slot_index].result = Some(result);
+                                }
                             }
-                            // Allowed-but-not-started and aborted Ask / Review
-                            // waiters leave the slot unset so the group-error /
-                            // cancellation fill owns the canonical text.
                         }
                     }
                     drop(auth_futures);
@@ -650,6 +658,12 @@ impl AgentExecution<'_> {
                         }
                     }
                     index = end;
+                    // A durable/auth failure after a sibling started closes the
+                    // start frontier: later groups must not admit new side
+                    // effects before the deferred error is returned.
+                    if deferred_group_error.is_some() {
+                        break;
+                    }
                 }
             }
         }

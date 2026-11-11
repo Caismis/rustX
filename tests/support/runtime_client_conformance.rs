@@ -1404,6 +1404,7 @@ impl PreToolPolicy for BeforeStartPolicy {
     fn evaluate<'a>(
         &'a self,
         _view: &'a PreToolView<'a>,
+        _cancellation: &'a rustx::runtime::cancellation::ExecutionCancellation,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
         let entered = self.entered.clone();
         let mut release = self.release.clone();

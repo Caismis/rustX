@@ -419,9 +419,14 @@ pub enum PreToolDecision {
 /// The required typed pre-tool policy seam of one attempt.
 pub trait PreToolPolicy: Send + Sync {
     /// Evaluates one already-preflighted invocation.
+    ///
+    /// `cancellation` is the per-slot authorization signal so Automatic-mode
+    /// Review can cancel and settle its Auxiliary call when a sibling aborts
+    /// the concurrent auth batch.
     fn evaluate<'a>(
         &'a self,
         view: &'a PreToolView<'a>,
+        cancellation: &'a ExecutionCancellation,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>>;
 }
 
@@ -468,6 +473,7 @@ impl PreToolPolicy for ConfiguredApprovalPolicy {
     fn evaluate<'a>(
         &'a self,
         view: &'a PreToolView<'a>,
+        cancellation: &'a ExecutionCancellation,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
         Box::pin(async move {
             let mutation_target =
@@ -501,7 +507,11 @@ impl PreToolPolicy for ConfiguredApprovalPolicy {
                 },
                 PermissionDecisionKind::Review => {
                     let verdict = match &self.reviewer {
-                        Some(reviewer) => reviewer.review(view, &decision.reason).await,
+                        Some(reviewer) => {
+                            reviewer
+                                .review(view, &decision.reason, cancellation.signal())
+                                .await
+                        }
                         None => {
                             crate::runtime::permission::review::PermissionReviewVerdict::Failed {
                                 explanation:
@@ -992,8 +1002,10 @@ impl AttemptLifecycle {
 mod tests {
     use super::{ConfiguredApprovalPolicy, PreToolDecision, PreToolPolicy, PreToolView};
     use crate::runtime::ApprovalMode;
+    use crate::runtime::cancellation::{CancellationSignal, ExecutionCancellation};
     use crate::runtime::identity::{AttemptId, ConversationId, ToolCallId, ToolId};
     use crate::runtime::permission::ResourcePermissionValue;
+    use crate::runtime::types::CancellationReason;
     use crate::tools::types::{ToolInvocationMode, ToolOrigin};
 
     fn view<'a>(
@@ -1036,6 +1048,10 @@ mod tests {
         let read_arguments = serde_json::json!({"path": "same.txt"});
         let write_arguments = serde_json::json!({"path": "same.txt", "content": "same"});
 
+        let cancellation = ExecutionCancellation::detached(
+            CancellationSignal::new(),
+            CancellationReason::UserRequested,
+        );
         let read = view(
             &conversation_id,
             &attempt_id,
@@ -1047,7 +1063,7 @@ mod tests {
         );
         assert!(matches!(
             ConfiguredApprovalPolicy::new(ApprovalMode::Plan)
-                .evaluate(&read)
+                .evaluate(&read, &cancellation)
                 .await
                 .expect("plan read"),
             PreToolDecision::Allow
@@ -1064,21 +1080,21 @@ mod tests {
         );
         assert!(matches!(
             ConfiguredApprovalPolicy::new(ApprovalMode::Plan)
-                .evaluate(&write)
+                .evaluate(&write, &cancellation)
                 .await
                 .expect("plan write"),
             PreToolDecision::Deny { .. }
         ));
         assert!(matches!(
             ConfiguredApprovalPolicy::new(ApprovalMode::FullAccess)
-                .evaluate(&write)
+                .evaluate(&write, &cancellation)
                 .await
                 .expect("full access write"),
             PreToolDecision::Allow
         ));
         assert!(matches!(
             ConfiguredApprovalPolicy::new(ApprovalMode::Automatic)
-                .evaluate(&write)
+                .evaluate(&write, &cancellation)
                 .await
                 .expect("automatic write without reviewer fails closed"),
             PreToolDecision::Deny { .. }
@@ -1093,7 +1109,7 @@ mod tests {
         assert!(matches!(
             ConfiguredApprovalPolicy::new(ApprovalMode::Automatic)
                 .with_reviewer(scripted)
-                .evaluate(&write)
+                .evaluate(&write, &cancellation)
                 .await
                 .expect("automatic write with scripted reviewer"),
             PreToolDecision::Allow

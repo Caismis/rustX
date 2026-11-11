@@ -172,6 +172,7 @@ impl PreToolPolicy for RuntimeAskPolicy {
     fn evaluate<'a>(
         &'a self,
         _view: &'a PreToolView<'a>,
+        _cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
         Box::pin(async {
             Ok(PreToolDecision::Ask {

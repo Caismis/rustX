@@ -39,6 +39,7 @@ pub(crate) trait PermissionReviewPort: Send + Sync {
         &'a self,
         view: &'a PreToolView<'a>,
         matrix_reason: &'a str,
+        cancellation: &'a CancellationSignal,
     ) -> BoxFuture<'a, PermissionReviewVerdict>;
 }
 
@@ -82,8 +83,11 @@ impl PermissionReviewPort for AuxiliaryPermissionReviewer {
         &'a self,
         view: &'a PreToolView<'a>,
         matrix_reason: &'a str,
+        cancellation: &'a CancellationSignal,
     ) -> BoxFuture<'a, PermissionReviewVerdict> {
-        Box::pin(async move { review_with_auxiliary(self, view, matrix_reason).await })
+        Box::pin(
+            async move { review_with_auxiliary(self, view, matrix_reason, cancellation).await },
+        )
     }
 }
 
@@ -99,6 +103,7 @@ impl PermissionReviewPort for ScriptedPermissionReviewer {
         &'a self,
         _view: &'a PreToolView<'a>,
         _matrix_reason: &'a str,
+        _cancellation: &'a CancellationSignal,
     ) -> BoxFuture<'a, PermissionReviewVerdict> {
         let verdict = self.verdict.clone();
         Box::pin(async move { verdict })
@@ -206,8 +211,12 @@ async fn review_with_auxiliary(
     reviewer: &AuxiliaryPermissionReviewer,
     view: &PreToolView<'_>,
     matrix_reason: &str,
+    cancellation: &CancellationSignal,
 ) -> PermissionReviewVerdict {
-    if reviewer.cancellation.is_cancelled() {
+    // Prefer the per-slot authorization signal so concurrent sibling abort
+    // cancels this review's Auxiliary scope. Attempt cancellation still
+    // propagates because the slot signal is a child of the attempt signal.
+    if cancellation.is_cancelled() || reviewer.cancellation.is_cancelled() {
         return PermissionReviewVerdict::Failed {
             explanation: "permission review cancelled before start".into(),
         };
@@ -217,6 +226,11 @@ async fn review_with_auxiliary(
     // because more than three slots decided Review at once.
     let review_slot = tokio::select! {
         biased;
+        () = cancellation.cancelled() => {
+            return PermissionReviewVerdict::Failed {
+                explanation: "permission review cancelled before start".into(),
+            };
+        }
         () = reviewer.cancellation.cancelled() => {
             return PermissionReviewVerdict::Failed {
                 explanation: "permission review cancelled before start".into(),
@@ -231,7 +245,7 @@ async fn review_with_auxiliary(
             }
         },
     };
-    let scope = reviewer.executor.general_scope(3, &reviewer.cancellation);
+    let scope = reviewer.executor.general_scope(3, cancellation);
     let reservation = match reviewer.executor.reserve_general(&scope) {
         Ok(reservation) => reservation,
         Err(error) => {
@@ -241,7 +255,8 @@ async fn review_with_auxiliary(
             };
         }
     };
-    // Keep the queue slot until this review finishes releasing capacity.
+    // Keep the queue slot until physical Auxiliary settlement finishes so
+    // aborted reviews do not release conversation-general capacity early.
     let _review_slot = review_slot;
     let prompt = build_prompt(view, matrix_reason);
     let request = match AuxiliaryOutputFormat::JsonSchema(review_schema()).prepare(ModelRequest {
@@ -310,7 +325,7 @@ async fn review_with_auxiliary(
         selected_message_ids: Vec::new(),
     };
     let consumer = Arc::new(ReviewConsumer);
-    let join = match reservation.with_consumer(consumer).submit(FrozenCall {
+    let mut join = match reservation.with_consumer(consumer).submit(FrozenCall {
         start,
         request,
         invocation: reviewer.invocation.clone(),
@@ -326,7 +341,21 @@ async fn review_with_auxiliary(
             };
         }
     };
-    let completed = match join.await {
+    let completed = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => None,
+        () = reviewer.cancellation.cancelled() => None,
+        completed = &mut join => Some(completed),
+    };
+    let Some(completed) = completed else {
+        // Slot/attempt cancellation already reached the Auxiliary scope child.
+        // Await physical settlement before dropping the review queue permit.
+        let _ = join.await;
+        return PermissionReviewVerdict::Failed {
+            explanation: "permission review cancelled".into(),
+        };
+    };
+    let completed = match completed {
         Ok(Ok(completed)) => completed,
         Ok(Err(error)) => {
             return PermissionReviewVerdict::Failed {

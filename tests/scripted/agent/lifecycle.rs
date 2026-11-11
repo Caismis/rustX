@@ -193,6 +193,7 @@ impl PreToolPolicy for ScriptedPreToolPolicy {
     fn evaluate<'a>(
         &'a self,
         view: &'a PreToolView<'a>,
+        _cancellation: &'a rustx::runtime::cancellation::ExecutionCancellation,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
         self.observed
             .lock()

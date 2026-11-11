@@ -85,11 +85,11 @@ pub(crate) async fn authorize(
         return Ok(Some(cancelled()));
     }
     let policy = lifecycle.pre_tool_policy();
-    let raw = tokio::select! {
-        biased;
-        () = cancellation.cancelled() => return Ok(Some(cancelled())),
-        decision = policy.evaluate(view) => decision,
-    };
+    // Await evaluate to completion so Automatic Review can cancel and settle
+    // its Auxiliary worker before this future returns Cancelled. Racing the
+    // signal here would drop the review join and orphan conversation-general
+    // capacity while a sibling already started.
+    let raw = policy.evaluate(view, cancellation).await;
     if cancellation.is_cancelled() {
         return Ok(Some(cancelled()));
     }

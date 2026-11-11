@@ -94,28 +94,57 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
         };
     }
 
+    let args: Vec<&str> = tokens.collect();
     match executable {
         "ls" | "pwd" | "echo" | "printf" | "true" | "false" | "test" | "[" | "cat" | "head"
         | "tail" | "wc" | "stat" | "file" | "which" | "type" | "basename" | "dirname"
-        | "realpath" | "readlink" | "uname" | "date" | "id" | "whoami" | "env" | "printenv"
-        | "grep" | "rg" | "find" | "fd" | "jq" | "yq" | "sleep" => {
-            if executable == "find" && tokens.any(is_find_write_option) {
-                return BashReadonlyClass::Unproven {
-                    reason: "find write/action options are not read-only".to_owned(),
-                };
+        | "realpath" | "readlink" | "uname" | "id" | "whoami" | "printenv" | "grep" | "rg"
+        | "fd" | "jq" | "sleep" => BashReadonlyClass::Readonly,
+        "date" => {
+            if args
+                .iter()
+                .any(|token| *token == "-s" || token.starts_with("--set"))
+            {
+                BashReadonlyClass::Unproven {
+                    reason: "date clock-setting forms are not read-only".to_owned(),
+                }
+            } else {
+                BashReadonlyClass::Readonly
             }
-            if executable == "env" {
-                // `env` wrappers need argv walking; treat non-trivial env as unproven.
-                let rest: Vec<_> = command.split_whitespace().skip(1).collect();
-                if rest.iter().any(|token| token.contains('=')) || rest.is_empty() {
-                    return BashReadonlyClass::Unproven {
-                        reason: "env wrappers require full argv analysis".to_owned(),
-                    };
+        }
+        "env" => {
+            // Bare `env` prints the environment. Any wrapper (`env rm`,
+            // `env FOO=1 cmd`) needs full argv walking before it can be proven.
+            if args.is_empty() {
+                BashReadonlyClass::Readonly
+            } else {
+                BashReadonlyClass::Unproven {
+                    reason: "env wrappers require full argv analysis".to_owned(),
                 }
             }
-            BashReadonlyClass::Readonly
         }
-        "git" => classify_git(tokens.collect::<Vec<_>>().as_slice()),
+        "find" => {
+            if args.iter().copied().any(is_find_write_option) {
+                BashReadonlyClass::Unproven {
+                    reason: "find write/action options are not read-only".to_owned(),
+                }
+            } else {
+                BashReadonlyClass::Readonly
+            }
+        }
+        "yq" => {
+            if args
+                .iter()
+                .any(|token| *token == "-i" || *token == "--inplace")
+            {
+                BashReadonlyClass::Unproven {
+                    reason: "yq in-place edits are not read-only".to_owned(),
+                }
+            } else {
+                BashReadonlyClass::Readonly
+            }
+        }
+        "git" => classify_git(args.as_slice()),
         _ => BashReadonlyClass::Unproven {
             reason: format!(
                 "executable `{executable}` is not on the conservative read-only allowlist"
@@ -178,17 +207,14 @@ fn classify_git(args: &[&str]) -> BashReadonlyClass {
                 }
             }
             "branch" | "tag" | "remote" => {
-                if rest.iter().any(|a| {
-                    matches!(
-                        *a,
-                        "-d" | "-D" | "--delete" | "add" | "rename" | "set-url" | "-m" | "--move"
-                    )
-                }) {
-                    BashReadonlyClass::Unproven {
-                        reason: format!("git {arg} mutation forms are not read-only"),
-                    }
-                } else {
+                if git_ref_query_only(arg, rest) {
                     BashReadonlyClass::Readonly
+                } else {
+                    BashReadonlyClass::Unproven {
+                        reason: format!(
+                            "git {arg} forms that may create or mutate refs are not proven read-only"
+                        ),
+                    }
                 }
             }
             _ => BashReadonlyClass::Unproven {
@@ -199,6 +225,39 @@ fn classify_git(args: &[&str]) -> BashReadonlyClass {
     BashReadonlyClass::Unproven {
         reason: "git command missing a subcommand is not proven read-only".to_owned(),
     }
+}
+
+/// True only for listing/query forms with no positional ref name that could
+/// create a branch, tag, or remote.
+fn git_ref_query_only(subcommand: &str, rest: &[&str]) -> bool {
+    if rest.iter().any(|a| {
+        matches!(
+            *a,
+            "-d" | "-D"
+                | "--delete"
+                | "add"
+                | "rename"
+                | "set-url"
+                | "-m"
+                | "--move"
+                | "-c"
+                | "--copy"
+                | "--edit-description"
+                | "-f"
+                | "--force"
+                | "-u"
+                | "--set-upstream-to"
+                | "--unset-upstream"
+                | "-i"
+                | "--stdin"
+        ) || a.starts_with("--set-upstream-to=")
+    }) {
+        return false;
+    }
+    // Any non-flag positional argument can name a new ref (`git branch foo`,
+    // `git tag v1`). Listing flags alone remain readonly.
+    let _ = subcommand;
+    !rest.iter().any(|a| !a.starts_with('-'))
 }
 
 #[cfg(test)]
@@ -213,6 +272,11 @@ mod tests {
             "git status",
             "git log --oneline",
             "cat README.md",
+            "git branch",
+            "git branch -a",
+            "env",
+            "date",
+            "yq '.x' file.yaml",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
@@ -231,6 +295,11 @@ mod tests {
             "ls | rm",
             "curl http://x",
             "git commit -am x",
+            "env rm -rf /",
+            "git branch feature",
+            "git tag v1.0.0",
+            "yq -i '.x=1' file.yaml",
+            "date -s 12:00:00",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
