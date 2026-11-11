@@ -915,7 +915,7 @@ fn append_canonical_raw(
     block: u32,
     bytes: &[u8],
 ) -> Result<(), ConversationStoreError> {
-    let prior: u64 = connection.query_row(
+    let prior: u64 = connection.query_row_cached(
         "SELECT COALESCE((SELECT readable_end FROM content_frontiers WHERE source_kind='canonical' AND source_id=?1 AND block_index=?2 AND representation='r' AND revision=1),0)",
         params![keys::read(connection,"canonical",id)?, block], |row| row.get(0),
     ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
@@ -926,7 +926,7 @@ fn append_canonical_raw(
         bytes,
         STREAM_SEGMENT_BYTES,
     )?;
-    connection.execute(
+    connection.execute_cached(
         "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical',?1,?2,'r',1,?3) ON CONFLICT(source_kind,source_id,block_index,representation,revision) DO UPDATE SET readable_end=excluded.readable_end",
         params![keys::read(connection,"canonical",id)?, block, end],
     ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
