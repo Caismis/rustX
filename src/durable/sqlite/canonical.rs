@@ -216,6 +216,24 @@ impl CanonicalStore for SqliteConversationStore {
         tool_result_owner(&connection, message, call, through)
     }
 
+    fn latest_human_activity(
+        &self,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let activity: Option<(i64, u32)> = connection
+            .query_row_cached(HUMAN_ACTIVITY_SQL, [i64::MAX], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .optional()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        activity
+            .map(|(seconds, nanos)| {
+                chrono::DateTime::from_timestamp(seconds, nanos)
+                    .ok_or_else(|| storage("native human activity timestamp unavailable"))
+            })
+            .transpose()
+    }
+
     fn latest_todo_publication(&self) -> Result<Option<MessageBlock>, ConversationStoreError> {
         let connection = self.lock()?;
         let row: Option<(String, String)> = connection

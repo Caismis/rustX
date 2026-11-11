@@ -767,6 +767,12 @@ pub trait CanonicalStore: Send + Sync + 'static {
         through: u64,
     ) -> Result<Option<CanonicalToolResultOwner>, ConversationStoreError>;
 
+    /// The greatest timestamp of any ordinary Human message in the whole
+    /// Ledger, by its index.
+    fn latest_human_activity(
+        &self,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, ConversationStoreError>;
+
     /// The newest successful `todo` result in the whole Ledger, by its index.
     fn latest_todo_publication(&self) -> Result<Option<MessageBlock>, ConversationStoreError>;
 
