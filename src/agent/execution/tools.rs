@@ -435,10 +435,10 @@ impl AgentExecution<'_> {
         // siblings. Denied/cancelled slots settle their own result only.
         // The original PreparedInvocation remains unchanged in every slot.
         //
-        // If an Interaction failure arrives after siblings already started,
-        // finish a structurally complete result batch before surfacing the
-        // failure so Allow side effects cannot outlive missing ToolMessages.
-        let mut deferred_interaction_error: Option<CanonicalCommitError> = None;
+        // If a group failure arrives after siblings already started, finish a
+        // structurally complete result batch before surfacing the failure so
+        // Allow side effects cannot outlive missing ToolMessages.
+        let mut deferred_group_error: Option<CanonicalCommitError> = None;
         let mut index = 0;
         while index < slots.len() {
             if self.cancellation.is_cancelled() {
@@ -614,7 +614,7 @@ impl AgentExecution<'_> {
                     }
                     if let Some(error) = group_error {
                         let started = slots[index..end].iter().any(|slot| slot.executor_started);
-                        if matches!(error, CanonicalCommitError::Interaction(_)) && started {
+                        if started {
                             for slot in &mut slots[index..end] {
                                 if slot.result.is_none() {
                                     slot.result = Some(failed_result(
@@ -622,7 +622,7 @@ impl AgentExecution<'_> {
                                     ));
                                 }
                             }
-                            deferred_interaction_error = Some(error);
+                            deferred_group_error = Some(error);
                         } else {
                             return Err(error);
                         }
@@ -637,7 +637,7 @@ impl AgentExecution<'_> {
                                     ));
                                 }
                             }
-                            deferred_interaction_error = Some(CanonicalCommitError::Interaction(
+                            deferred_group_error = Some(CanonicalCommitError::Interaction(
                                 InteractionFailure::ControlLost,
                             ));
                         } else {
@@ -660,7 +660,7 @@ impl AgentExecution<'_> {
                         ));
                     }
                 }
-                deferred_interaction_error.get_or_insert_with(|| {
+                deferred_group_error.get_or_insert_with(|| {
                     CanonicalCommitError::Interaction(InteractionFailure::ControlLost)
                 });
             } else {
@@ -679,7 +679,7 @@ impl AgentExecution<'_> {
                 }
             }
         }
-        if deferred_interaction_error.is_some() {
+        if deferred_group_error.is_some() {
             for slot in &mut slots {
                 if slot.result.is_none() {
                     slot.result = Some(failed_result(
@@ -798,7 +798,7 @@ impl AgentExecution<'_> {
         if let Some(error) = self.durable_failure_commit_error() {
             return Err(error);
         }
-        if let Some(error) = deferred_interaction_error {
+        if let Some(error) = deferred_group_error {
             return Err(error);
         }
         Ok(settled)
