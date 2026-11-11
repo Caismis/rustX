@@ -10,7 +10,7 @@ use serde_json::Value;
 pub(crate) mod plan;
 #[cfg(test)]
 mod plan_tests;
-use plan::{Unsigned, View};
+use plan::{Unsigned, View, WireNumber};
 
 #[cfg(test)]
 thread_local! {
@@ -181,6 +181,27 @@ pub(crate) fn serialize_wire<T: Serialize + ?Sized, S: serde::Serializer>(
         wire: true,
     })
 }
+
+// serde_json formats an integer into its stack buffer; the longest u64 has
+// twenty digits. Keep serialize_str so every serializer sees the same value.
+fn serialize_decimal<S: serde::Serializer>(value: u64, serializer: S) -> Result<S::Ok, S::Error> {
+    let mut bytes = [0; 20];
+    let mut remaining = &mut bytes[..];
+    serde_json::to_writer(&mut remaining, &value).expect("u64 fits in twenty JSON bytes");
+    let written = 20 - remaining.len();
+    let text = std::str::from_utf8(&bytes[..written]).expect("JSON integer is ASCII");
+    serializer.serialize_str(text)
+}
+
+fn serialize_wire_number<S: serde::Serializer>(
+    value: WireNumber,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        WireNumber::Native(value) => value.serialize(serializer),
+        WireNumber::Decimal(value) => serialize_decimal(value, serializer),
+    }
+}
 macro_rules! scalar {
     ($($method:ident($ty:ty)),*) => {$ (fn $method(self, value: $ty) -> Result<Self::Ok, Self::Error> { self.serializer.$method(value) })*};
 }
@@ -252,11 +273,11 @@ impl<'a, S: serde::Serializer> serde::Serializer for Encoder<'a, S> {
     }
     fn serialize_i64(self, value: i64) -> Result<S::Ok, S::Error> {
         if self.wire {
-            return self
+            let value = self
                 .schema
-                .wire_number(Value::from(value))
-                .map_err(serde::ser::Error::custom)?
-                .serialize(self.serializer);
+                .wire_number(WireNumber::Native(Value::from(value)))
+                .map_err(serde::ser::Error::custom)?;
+            return serialize_wire_number(value, self.serializer);
         }
         if self.schema.signed_safe() && value.unsigned_abs() > 9_007_199_254_740_991 {
             return Err(serde::ser::Error::custom(
@@ -267,14 +288,14 @@ impl<'a, S: serde::Serializer> serde::Serializer for Encoder<'a, S> {
     }
     fn serialize_u64(self, value: u64) -> Result<S::Ok, S::Error> {
         if self.wire {
-            return self
+            let value = self
                 .schema
-                .wire_number(Value::from(value))
-                .map_err(serde::ser::Error::custom)?
-                .serialize(self.serializer);
+                .wire_number(WireNumber::Native(Value::from(value)))
+                .map_err(serde::ser::Error::custom)?;
+            return serialize_wire_number(value, self.serializer);
         }
         match self.schema.unsigned() {
-            Unsigned::Decimal => self.serializer.serialize_str(&value.to_string()),
+            Unsigned::Decimal => serialize_decimal(value, self.serializer),
             Unsigned::Safe if value > 9_007_199_254_740_991 => Err(serde::ser::Error::custom(
                 "native quantity exceeds safe JSON integer range",
             )),
@@ -468,8 +489,31 @@ macro_rules! string_key_reject {
 // Only built-in strings use this probe; every custom/numeric key retains the
 // original finite serializer, including its callback count and error behavior.
 struct StringKey;
-impl serde::Serializer for StringKey {
-    type Ok = Option<String>;
+trait StringProbe {
+    type Output;
+    fn capture(self, value: &str) -> Self::Output;
+}
+impl StringProbe for StringKey {
+    type Output = Option<String>;
+    fn capture(self, value: &str) -> Self::Output {
+        if value.len() > 256 {
+            return None;
+        }
+        let mut remaining = 256_usize;
+        for byte in value.bytes() {
+            let bytes = match byte {
+                b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
+                0..=0x1f => 6,
+                _ => 1,
+            };
+            remaining = remaining.checked_sub(bytes)?;
+        }
+        Some(value.to_owned())
+    }
+}
+struct StringSerializer<P>(P);
+impl<P: StringProbe> serde::Serializer for StringSerializer<P> {
+    type Ok = P::Output;
     type Error = serde::de::value::Error;
     type SerializeSeq = serde::ser::Impossible<Self::Ok, Self::Error>;
     type SerializeTuple = Self::SerializeSeq;
@@ -479,22 +523,7 @@ impl serde::Serializer for StringKey {
     type SerializeStruct = Self::SerializeSeq;
     type SerializeStructVariant = Self::SerializeSeq;
     fn serialize_str(self, value: &str) -> Result<Self::Ok, Self::Error> {
-        if value.len() > 256 {
-            return Ok(None);
-        }
-        let mut remaining = 256_usize;
-        for byte in value.bytes() {
-            let bytes = match byte {
-                b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
-                0..=0x1f => 6,
-                _ => 1,
-            };
-            let Some(left) = remaining.checked_sub(bytes) else {
-                return Ok(None);
-            };
-            remaining = left;
-        }
-        Ok(Some(value.to_owned()))
+        Ok(self.0.capture(value))
     }
     string_key_reject! {
         serialize_bool(value: bool) -> Ok;
@@ -560,7 +589,7 @@ fn captured_key<T: Serialize + ?Sized>(key: &T) -> Option<String> {
     if builtin_string {
         #[cfg(test)]
         STRING_KEY_WORK.with(|work| work.set(work.get() + 1));
-        if let Ok(value) = key.serialize(StringKey) {
+        if let Ok(value) = key.serialize(StringSerializer(StringKey)) {
             return value;
         }
     }
@@ -573,6 +602,17 @@ fn captured_key<T: Serialize + ?Sized>(key: &T) -> Option<String> {
             Value::Number(key) => Some(key.to_string()),
             _ => None,
         })
+}
+
+struct WireTag<'a, 'k> {
+    schema: View<'a>,
+    key: &'k str,
+}
+impl<'a> StringProbe for WireTag<'a, '_> {
+    type Output = Option<View<'a>>;
+    fn capture(self, value: &str) -> Self::Output {
+        self.schema.wire_variant_str(self.key, value)
+    }
 }
 
 struct Mapping<'a, S> {
@@ -594,6 +634,18 @@ impl<'a, S> Mapping<'a, S> {
     }
     fn wire_tag<T: Serialize + ?Sized>(&mut self, key: &str, value: &T) {
         if !self.schema.has_wire_tag(key) {
+            return;
+        }
+        if matches!(
+            std::any::type_name::<T>().trim_start_matches('&'),
+            "str" | "alloc::string::String"
+        ) {
+            if let Ok(Some(branch)) = value.serialize(StringSerializer(WireTag {
+                schema: self.schema,
+                key,
+            })) {
+                self.select_schema(branch);
+            }
             return;
         }
         if let Ok(value) = serde_json::to_value(value)
@@ -886,6 +938,16 @@ pub(crate) fn decode<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decimal_integers_use_string_callbacks_at_u64_boundaries() {
+        for value in [0, 9, 10, 9_007_199_254_740_993, u64::MAX] {
+            assert_eq!(
+                serialize_decimal(value, StringSerializer(StringKey)).unwrap(),
+                Some(value.to_string())
+            );
+        }
+    }
 
     type PropertyEncoding = (
         Result<Vec<u8>, String>,

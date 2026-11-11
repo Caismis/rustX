@@ -1,6 +1,40 @@
 use super::*;
 use crate::app_server::protocol::{self, JsonRpcVersion, Method, Request, RequestId, Response};
 
+#[allow(unsafe_code)]
+mod allocation_count {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        static COUNT: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+    struct Allocator;
+    #[global_allocator]
+    static ALLOCATOR: Allocator = Allocator;
+    // The system allocator owns every pointer; the thread-local counter only
+    // observes allocation calls and never allocates itself.
+    unsafe impl GlobalAlloc for Allocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let _ = COUNT.try_with(|count| count.set(count.get().map(|n| n + 1)));
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            let _ = COUNT.try_with(|count| count.set(count.get().map(|n| n + 1)));
+            unsafe { System.realloc(ptr, layout, size) }
+        }
+    }
+    pub(super) fn start() {
+        COUNT.with(|count| count.set(Some(0)));
+    }
+    pub(super) fn finish() -> usize {
+        COUNT.with(|count| count.replace(None).unwrap())
+    }
+}
+
 trait Native: Serialize + schemars::JsonSchema {
     fn native(&self) -> Value;
 }
@@ -35,6 +69,153 @@ fn assert_wire<T: Native>(value: &T) {
         serde_json::to_vec(value).map_err(|error| error.to_string()),
         legacy_bytes(value)
     );
+}
+
+#[test]
+fn notification_tag_probe_work() {
+    use crate::app_server::protocol::{NotificationMethod, ProtocolMessage};
+    use crate::observation::structural_json::plan::{take_property_work, take_tag_probes};
+    use crate::observation::{
+        content::ContentRef, cut::ContentBinding, transcript::RuntimeClientTranscriptPage,
+    };
+    use crate::runtime_client::RuntimeClientEvent;
+    let template = super::super::schema::fixtures()
+        .into_iter()
+        .find_map(|fixture| match fixture {
+            ProtocolMessage::Notification(value)
+                if matches!(value.notification, NotificationMethod::Event { .. }) =>
+            {
+                Some(value)
+            }
+            _ => None,
+        })
+        .unwrap();
+    for count in [4, 16] {
+        let mut notification = template.clone();
+        if let NotificationMethod::Event { target, event, .. } = &mut notification.notification {
+            let reference = std::sync::Arc::new(ContentRef::configuration_instructions(
+                target.conversation_id.clone(),
+                12,
+                73,
+            ));
+            let page = RuntimeClientTranscriptPage {
+                content: (0..count)
+                    .map(|index| ContentBinding {
+                        source_path: None,
+                        path: vec!["entries".into(), index.to_string(), "content".into()],
+                        content_ref: reference.clone(),
+                        deferred: false,
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+                ..Default::default()
+            };
+            *event = std::sync::Arc::new(RuntimeClientEvent::ReadDomainsUpdated {
+                projection_head: None,
+                transcript: Box::new(page),
+                trace: None,
+                occupancy: None,
+                todos: None,
+            });
+        }
+        let _ =
+            super::super::transport::serialize_record(&bounded_envelope(&notification)).unwrap();
+        take_tag_probes();
+        take_property_work();
+        take_native_passes();
+        allocation_count::start();
+        let bytes =
+            super::super::transport::serialize_record(&bounded_envelope(&notification)).unwrap();
+        let allocations = allocation_count::finish();
+        let probes = take_tag_probes();
+        let (lookups, comparisons) = take_property_work();
+        let passes = take_native_passes();
+        let decoded: Value = serde_json::from_str(&bytes).unwrap();
+        let page = &decoded["params"]["event"]["transcript"];
+        assert!(page.is_object());
+        assert!(page["content"][0]["content_ref"].is_object());
+        let page_bytes = serde_json::to_vec(page).unwrap().len();
+        let reference_bytes = serde_json::to_vec(&page["content"][0]["content_ref"])
+            .unwrap()
+            .len();
+        println!(
+            "bindings={count} notifications=1 bytes={} page_bytes={page_bytes} repeated_reference_bytes={} native_passes={passes} allocations={allocations} tag_probes={probes} property_lookups={lookups} property_comparisons={comparisons}",
+            bytes.len(),
+            reference_bytes * count
+        );
+        assert_eq!(passes, 1);
+        assert_eq!(
+            bytes.as_bytes(),
+            legacy_bytes(&notification).unwrap().as_slice()
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires locally captured notification frames"]
+fn captured_notification_work() {
+    use crate::observation::structural_json::plan::{take_property_work, take_tag_probes};
+    use std::io::BufRead;
+    let root = std::path::PathBuf::from(std::env::var_os("RUSTX_T1_CAPTURE").unwrap());
+    for scenario in ["text", "tool"] {
+        let directory = root.join(scenario);
+        let windows: Value =
+            serde_json::from_slice(&std::fs::read(directory.join("windows.json")).unwrap())
+                .unwrap();
+        let total = |window: usize| -> usize {
+            windows[window]["notifications"]
+                .as_object()
+                .unwrap()
+                .values()
+                .map(|n| usize::try_from(n.as_u64().unwrap()).unwrap())
+                .sum()
+        };
+        let (start, end) = (total(0), total(1));
+        let input = std::io::BufReader::new(
+            std::fs::File::open(directory.join("server-1.client.jsonl")).unwrap(),
+        );
+        let mut count = 0;
+        let (mut bytes, mut allocations, mut probes, mut lookups, mut comparisons, mut passes) =
+            (0, 0, 0, 0, 0, 0);
+        for line in input.lines() {
+            let line = line.unwrap();
+            let value: Value = serde_json::from_str(&line).unwrap();
+            if value.get("method").is_none() {
+                continue;
+            }
+            if count == end {
+                break;
+            }
+            let notification: protocol::Notification = serde_json::from_str(&line).unwrap();
+            take_tag_probes();
+            take_property_work();
+            take_native_passes();
+            allocation_count::start();
+            let encoded =
+                super::super::transport::serialize_record(&bounded_envelope(&notification))
+                    .unwrap();
+            let n = allocation_count::finish();
+            let branch_work = take_tag_probes();
+            let (property_lookups, property_comparisons) = take_property_work();
+            let native_passes = take_native_passes();
+            assert_eq!(encoded.as_bytes(), line.as_bytes());
+            if count >= start {
+                bytes += encoded.len();
+                allocations += n;
+                probes += branch_work;
+                lookups += property_lookups;
+                comparisons += property_comparisons;
+                passes += native_passes;
+            }
+            count += 1;
+        }
+        assert_eq!(count, end);
+        assert_eq!(passes, end - start);
+        println!(
+            "{scenario} turns=32 notifications={} bytes={bytes} native_passes={passes} allocations={allocations} tag_probes={probes} property_lookups={lookups} property_comparisons={comparisons}",
+            end - start
+        );
+    }
 }
 fn request(name: String) -> Request {
     Request {
