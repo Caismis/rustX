@@ -608,7 +608,7 @@ fn an_identity_frontier_that_disagrees_with_the_ledger_fails_closed() {
     // An anchor at a missing Ledger position is equally rejected.
     {
         let connection = store.conn.lock().unwrap();
-        connection.execute_batch("PRAGMA foreign_keys=OFF; UPDATE message_ledger SET position=5 WHERE position=2; UPDATE surface_head SET revision=5; UPDATE rustx_store SET canonical_identity_through=2,canonical_identity_count=2; PRAGMA foreign_keys=ON").unwrap();
+        connection.execute_batch("PRAGMA foreign_keys=OFF; UPDATE message_ledger SET position=5 WHERE position=2; UPDATE rustx_store SET surface_revision=5,canonical_identity_through=2,canonical_identity_count=2; PRAGMA foreign_keys=ON").unwrap();
     }
     assert!(matches!(
         store.validate_head(),
