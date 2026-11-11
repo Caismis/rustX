@@ -101,17 +101,16 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
         | "realpath" | "readlink" | "uname" | "id" | "whoami" | "printenv" | "grep" | "rg"
         | "fd" | "jq" | "sleep" => BashReadonlyClass::Readonly,
         "date" => {
-            // GNU date accepts both `date -s 12:00:00` and the glued form
-            // `date -s12:00:00` as clock-setting.
-            if args
-                .iter()
-                .any(|token| token.starts_with("-s") || token.starts_with("--set"))
-            {
-                BashReadonlyClass::Unproven {
-                    reason: "date clock-setting forms are not read-only".to_owned(),
-                }
-            } else {
+            // Conservative: only bare `date` is proven display-only. GNU glued
+            // `-s…`, quoted `-s`, BSD positional set-time, and display flags
+            // that take operands need full argv analysis before they can be
+            // trusted as read-only.
+            if args.is_empty() {
                 BashReadonlyClass::Readonly
+            } else {
+                BashReadonlyClass::Unproven {
+                    reason: "date with arguments is not proven read-only".to_owned(),
+                }
             }
         }
         "env" => {
@@ -319,6 +318,9 @@ mod tests {
             "yq -i '.x=1' file.yaml",
             "date -s 12:00:00",
             "date -s12:00:00",
+            "date \"-s\" 12:00:00",
+            "date 1234567890",
+            "date -u",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
