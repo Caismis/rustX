@@ -5,7 +5,13 @@ use super::{
 use crate::durable::observation::{
     NativeToolObservationHeader, NativeToolObservationPage, ObservationReadCut,
 };
+use crate::durable::sqlite::statements::FixedStatements as _;
 use crate::observation::content::CanonicalContentLocator;
+
+pub(super) const TOOL_NAME_SQL: &str = "SELECT observation_name FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 AND block_index=?2";
+pub(super) const TOOL_WITNESS_SQL: &str = "SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_phase IS NOT NULL AND observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=?3 AND sequence<=?4 ORDER BY sequence DESC LIMIT 1";
+pub(super) const TOOL_RESULT_SQL: &str =
+    "SELECT tool_result_json FROM transcript_entries WHERE ledger_position=?1";
 
 /// Exact inputs already encoded by the native page's mandatory admission pass.
 /// The cut is deliberately separate: the transcript reader records the actual
@@ -104,7 +110,9 @@ fn page_at(
     let mut headers = Vec::new();
     for mut association in page.headers {
         let block = association.block_index.get();
-        let name = connection.query_row("SELECT observation_name FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 AND block_index=?2",params![ledger,block],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        let name = connection
+            .query_row_cached(TOOL_NAME_SQL, params![ledger, block], |row| row.get(0))
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let argument_ref = argument_reference(connection, conversation, ledger, block)?;
         if let Some(reference) = &argument_ref
             && !association
@@ -189,10 +197,14 @@ fn witness(
     block: u32,
     phase: u8,
 ) -> Result<Option<crate::durable::observation::ObservationEventWitness>, ConversationStoreError> {
-    let sequence: Option<u64> = connection.query_row(
-        "SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_phase IS NOT NULL AND observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=?3 AND sequence<=?4 ORDER BY sequence DESC LIMIT 1",
-        params![ledger,block,phase,cut.read.journal], |row| row.get(0),
-    ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let sequence: Option<u64> = connection
+        .query_row_cached(
+            TOOL_WITNESS_SQL,
+            params![ledger, block, phase, cut.read.journal],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     sequence
         .map(|sequence| {
             super::observation_event::witness(connection, sequence, cut.read.journal)?
@@ -226,11 +238,7 @@ fn committed_result(
     ledger: u64,
 ) -> Result<crate::durable::observation::NativeToolResultHeader, ConversationStoreError> {
     let bytes: Option<Vec<u8>> = connection
-        .query_row(
-            "SELECT tool_result_json FROM transcript_entries WHERE ledger_position=?1",
-            [ledger],
-            |row| row.get(0),
-        )
+        .query_row_cached(TOOL_RESULT_SQL, [ledger], |row| row.get(0))
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let bytes = bytes.ok_or_else(|| storage("native Tool result summary unavailable"))?;
     if bytes.len() > 16_384 {
