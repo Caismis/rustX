@@ -1408,7 +1408,13 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             let authored = config.join("rustx.toml");
             let mut source: toml::Value = toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
             source["agent"].as_table_mut().unwrap().insert("skills".into(), "all".into());
-            source.as_table_mut().unwrap().insert("native_tools".into(), toml::Value::try_from(serde_json::json!({"bash": {"approval": "never"}})).unwrap());
+            // Host isolation / crash recovery is not a permission-mode test.
+            // Full Access admits write/bash so the fixture reaches process
+            // death and cold recovery without Ask stalls under Plan.
+            source.as_table_mut().unwrap().insert(
+                "approval_mode".into(),
+                toml::Value::String("full_access".into()),
+            );
             std::fs::write(&authored, toml::to_string_pretty(&source).unwrap()).unwrap();
             let mut text = std::fs::read_to_string(&authored).unwrap();
             write!(text, "\n[environment]\nRUSTX_HOST_MARKER = \"{identity}\"\n").unwrap();

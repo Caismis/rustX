@@ -51,6 +51,10 @@ async fn host_effect_is_unknown_after_process_death_and_is_never_automatically_r
         std::fs::create_dir_all(&workspace).unwrap();std::fs::create_dir(root.path().join("home")).unwrap();
         std::fs::write(root.path().join("token"),"trusted-host-test").unwrap();
         std::fs::write(root.path().join("rustx.toml"),toml::to_string_pretty(&serde_json::json!({
+            // Host crash recovery is not a permission-mode test; Full Access
+            // admits Host tools without Ask so the fixture reaches the
+            // SIGKILL / OutcomeUnknown boundary.
+            "approval_mode":"full_access",
             "agent":{"model":{"model":"emulator/chat-model"},"tools":{"builtin":[]}},
             "providers":{"emulator":{"protocol":"openai_chat_completions","base_url":provider.openai_base_url(),"api_key":"$HOST_TEST_KEY"}},
             "models":{"emulator/chat-model":{"provider":"emulator","id":"chat-model","context_window":128_000,"max_output_tokens":1024,"capabilities":{"input_modalities":["text"],"output_modalities":["text"]},"compat":{"chat_reasoning_replay":"omit"}}}
