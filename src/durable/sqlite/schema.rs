@@ -613,8 +613,9 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 source_kind TEXT NOT NULL, source_id INTEGER NOT NULL CHECK(typeof(source_id)='integer' AND source_id>-9223372036854775808), block_index INTEGER NOT NULL,
                 representation TEXT NOT NULL, revision INTEGER NOT NULL, readable_end INTEGER NOT NULL,
                 bytes BLOB CHECK(bytes IS NULL OR length(bytes)<=65536),
-                PRIMARY KEY(source_kind,source_id,block_index,representation,revision)
+                PRIMARY KEY(source_id,source_kind,block_index,representation,revision)
             );
+            CREATE INDEX IF NOT EXISTS content_frontiers_goal_idx ON content_frontiers(source_kind) WHERE source_kind='observation_goal';
             CREATE TABLE IF NOT EXISTS publication_metadata_segments (
                 stream_id TEXT NOT NULL,block_index INTEGER NOT NULL,revision INTEGER NOT NULL,
                 segment INTEGER NOT NULL,bytes BLOB NOT NULL CHECK(length(bytes)<=65536),

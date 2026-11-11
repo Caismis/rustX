@@ -792,3 +792,134 @@ fn streaming_segment_layout_balances_wal_work_and_bounded_reads() {
         }
     }
 }
+
+// This isolates the physical Content index, not the other objects a turn writes.
+fn frontier_write_cost(history: u64, tool: bool) -> (usize, usize, i32) {
+    use rusqlite::StatementStatus;
+    use std::collections::BTreeSet;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("frontier.sqlite");
+    let mut connection = Connection::open(&path).unwrap();
+    crate::durable::sqlite::schema::configure_connection(&mut connection, false).unwrap();
+    crate::durable::sqlite::schema::create_schema(&mut connection).unwrap();
+    connection
+        .execute_batch("PRAGMA wal_autocheckpoint=0")
+        .unwrap();
+    let insert = |connection: &Connection, turn: u64, start: usize, end: usize| {
+        let kinds = [
+            "trace_terminal",
+            "trace_terminal",
+            "canonical",
+            "cb",
+            "cm",
+            "response_identity",
+            "attempt_model",
+            "trace_request",
+        ];
+        for (ordinal, kind) in kinds.iter().enumerate().take(end).skip(start) {
+            let multiplier =
+                if matches!(*kind, "trace_terminal" | "trace_request" | "attempt_model") {
+                    8
+                } else {
+                    2
+                };
+            let source = turn * multiplier + (ordinal % 2) as u64;
+            connection.execute(
+                "INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end,bytes) VALUES(?1,?2,?3,'j',1,16,?4)",
+                params![kind,source,(ordinal % 3) as u64,b"0123456789abcdef".as_slice()],
+            ).unwrap();
+        }
+    };
+    let transaction = connection.transaction().unwrap();
+    for turn in 0..history {
+        insert(&transaction, turn, 0, 8);
+    }
+    transaction.commit().unwrap();
+    connection
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .unwrap();
+    let goal_root: u32 = connection
+        .query_row(
+            "SELECT rootpage FROM sqlite_schema WHERE name='content_frontiers_goal_idx'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    for turn in history..history + if tool { 2 } else { 1 } {
+        for start in (0..8).step_by(2) {
+            let transaction = connection.transaction().unwrap();
+            insert(&transaction, turn, start, start + 2);
+            transaction.commit().unwrap();
+        }
+    }
+    let wal = std::fs::read(path.with_file_name("frontier.sqlite-wal")).unwrap();
+    let pages: Vec<u32> = wal[32..]
+        .as_chunks::<2072>()
+        .0
+        .iter()
+        .map(|frame| u32::from_be_bytes(frame[..4].try_into().unwrap()))
+        .collect();
+    assert!(
+        !pages.contains(&goal_root),
+        "ordinary content must not write the goal-only index"
+    );
+    let distinct = pages.iter().copied().collect::<BTreeSet<_>>().len();
+    let mut query = connection.prepare("SELECT readable_end FROM content_frontiers WHERE source_kind='canonical' AND source_id=?1 AND block_index=2 AND representation='j' AND revision=1").unwrap();
+    assert_eq!(
+        query
+            .query_row([history * 2], |row| row.get::<_, u64>(0))
+            .unwrap(),
+        16
+    );
+    assert_eq!(query.get_status(StatementStatus::FullscanStep), 0);
+    assert_eq!(query.get_status(StatementStatus::Sort), 0);
+    (
+        pages.len(),
+        distinct,
+        query.get_status(StatementStatus::VmStep),
+    )
+}
+
+#[test]
+fn frontier_index_writes_and_lookup_stay_bounded_with_history() {
+    for tool in [false, true] {
+        let costs: Vec<_> = [64, 512, 2048]
+            .into_iter()
+            .map(|h| frontier_write_cost(h, tool))
+            .collect();
+        eprintln!("frontier index tool={tool}, H=64/512/2048: {costs:?}");
+        let (min_frames, max_frames) = costs
+            .iter()
+            .map(|c| c.0)
+            .fold((usize::MAX, 0), |(min, max), n| (min.min(n), max.max(n)));
+        let (min_pages, max_pages) = costs
+            .iter()
+            .map(|c| c.1)
+            .fold((usize::MAX, 0), |(min, max), n| (min.min(n), max.max(n)));
+        assert!(max_frames - min_frames <= 12, "{costs:?}");
+        assert!(max_pages - min_pages <= 8, "{costs:?}");
+        assert!(costs.iter().all(|c| c.2 == costs[0].2), "{costs:?}");
+    }
+}
+
+#[test]
+fn goal_cleanup_uses_its_partial_index_without_touching_other_sources() {
+    use rusqlite::StatementStatus;
+
+    let connection = connection();
+    for id in 0..2048 {
+        connection.execute("INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('canonical',?1,0,'j',1,1)", [id]).unwrap();
+    }
+    connection.execute("INSERT INTO content_frontiers(source_kind,source_id,block_index,representation,revision,readable_end) VALUES('observation_goal',-1,0,'j',1,1)", []).unwrap();
+    let mut statement = connection.prepare("DELETE FROM content_frontiers INDEXED BY content_frontiers_goal_idx WHERE source_kind='observation_goal'").unwrap();
+    assert_eq!(statement.execute([]).unwrap(), 1);
+    assert_eq!(statement.get_status(StatementStatus::FullscanStep), 0);
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM content_frontiers", [], |row| row
+                .get::<_, u64>(0))
+            .unwrap(),
+        2048
+    );
+}
