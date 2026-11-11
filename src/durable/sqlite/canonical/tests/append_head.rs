@@ -457,3 +457,68 @@ fn read_only_rollback_preserves_committed_append_proof_but_write_rollback_fences
     assert_eq!(append_validation::take_work(), (1, 0));
     assert_eq!(store.load_head().unwrap().active_message_ids.len(), 5);
 }
+
+fn identity_frontier(store: &SqliteConversationStore) -> (i64, i64) {
+    store
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT canonical_identity_through,canonical_identity_count FROM rustx_store WHERE id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
+}
+
+#[test]
+fn the_identity_frontier_advances_with_each_validated_append() {
+    let store = store();
+    store
+        .initialize(&[user_message("a", "A"), user_message("b", "B")])
+        .unwrap();
+    // Seeded identities are validated by the first native append.
+    store.append_canonical(&user_message("c", "C")).unwrap();
+    assert_eq!(identity_frontier(&store), (3, 3));
+    store.append_canonical(&user_message("d", "D")).unwrap();
+    assert_eq!(identity_frontier(&store), (4, 4));
+    // An identity over the bound is admitted but never covered: the next
+    // validation still reaches and rejects it.
+    store
+        .append_canonical(&user_message(&"x".repeat(4097), "oversized"))
+        .unwrap();
+    assert_eq!(identity_frontier(&store), (4, 4));
+    assert!(store.validate_head().is_err());
+}
+
+#[test]
+fn an_identity_frontier_that_disagrees_with_the_ledger_fails_closed() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    store.append_canonical(&user_message("a", "A")).unwrap();
+    store.append_canonical(&user_message("b", "B")).unwrap();
+    store.validate_head().unwrap();
+    // A frontier ahead of the Ledger is rejected.
+    store
+        .conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE rustx_store SET canonical_identity_through=9,canonical_identity_count=2 WHERE id=1",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.validate_head(),
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
+    // An anchor at a missing Ledger position is equally rejected.
+    {
+        let connection = store.conn.lock().unwrap();
+        connection.execute_batch("PRAGMA foreign_keys=OFF; UPDATE message_ledger SET position=5 WHERE position=2; UPDATE surface_head SET revision=5; UPDATE rustx_store SET canonical_identity_through=2,canonical_identity_count=2; PRAGMA foreign_keys=ON").unwrap();
+    }
+    assert!(matches!(
+        store.validate_head(),
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
+}

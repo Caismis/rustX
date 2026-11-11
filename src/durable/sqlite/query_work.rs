@@ -71,6 +71,10 @@ pub(super) fn assert_flat(
 pub(super) struct Executions {
     pub calls: usize,
     pub steps: i32,
+    /// VM steps summed over every execution.
+    pub total_steps: i64,
+    /// Rows returned, summed over every execution.
+    pub rows: usize,
     pub scans: i32,
     pub sorts: i32,
     pub automatic: i32,
@@ -107,10 +111,15 @@ fn record(event: TraceEvent<'_>) {
                 let execution = trace.completed.entry(sql).or_default();
                 execution.calls += 1;
                 execution.steps = execution.steps.max(after[0] - before[0]);
+                execution.total_steps += i64::from(after[0] - before[0]);
                 execution.scans = execution.scans.max(after[1] - before[1]);
                 execution.sorts = execution.sorts.max(after[2] - before[2]);
                 execution.automatic = execution.automatic.max(after[3] - before[3]);
             }
+        }
+        TraceEvent::Row(statement) => {
+            let sql = statement.sql().into_owned();
+            trace.completed.entry(sql).or_default().rows += 1;
         }
         _ => {}
     });
@@ -122,7 +131,9 @@ fn record(event: TraceEvent<'_>) {
 pub(super) fn capture(connection: &Connection) {
     TRACE.with_borrow_mut(|trace| *trace = Trace::default());
     connection.trace_v2(
-        TraceEventCodes::SQLITE_TRACE_STMT | TraceEventCodes::SQLITE_TRACE_PROFILE,
+        TraceEventCodes::SQLITE_TRACE_STMT
+            | TraceEventCodes::SQLITE_TRACE_PROFILE
+            | TraceEventCodes::SQLITE_TRACE_ROW,
         Some(record),
     );
 }

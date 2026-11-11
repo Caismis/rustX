@@ -1027,3 +1027,186 @@ fn bounded_work_new_reads_preserve_typed_cancellation_and_rollback() {
         );
     }
 }
+
+/// Appends `turns` completed turns through the production append path: one
+/// adopted inbound, one completed model request and its final Assistant per
+/// turn, plus one executed read Tool call and its canonical result before the
+/// final request when `tool` is set.
+#[allow(clippy::too_many_lines)] // One fixture for both completed turn shapes.
+pub(crate) fn append_completed_turns(
+    store: &SqliteConversationStore,
+    first: usize,
+    turns: usize,
+    tool: bool,
+) {
+    use crate::durable::InboxStore;
+    use crate::durable::sqlite::tests::observation_response_tests::{
+        response_complete, response_message, response_start,
+    };
+    use crate::message::types::{
+        AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, ToolMessageBlock,
+    };
+    use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
+    use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
+
+    fn model_step(
+        store: &SqliteConversationStore,
+        attempt: &AttemptId,
+        turn: &str,
+        tools: bool,
+    ) -> RequestSnapshot {
+        let mut snapshot = progress_request_snapshot(
+            attempt.as_str(),
+            turn,
+            0,
+            store.load_head().unwrap().revision,
+            vec![],
+        );
+        let history = store.projected_history().unwrap();
+        let request = crate::model::ModelRequest {
+            response_schema: None,
+            response_byte_limit: None,
+            continuation_source: None,
+            images: snapshot.images.clone(),
+            invocation: snapshot.invocation.clone(),
+            messages: history.messages.clone(),
+            tools: snapshot.tool_definitions.clone(),
+            effective_system_prompt: snapshot.effective_system_prompt.clone(),
+            continuation: snapshot.continuation.clone(),
+        };
+        snapshot.history_cut = history.cut.clone();
+        snapshot.tool_associations = crate::model::occurrence::freeze_associations(
+            &history,
+            &snapshot.request_id,
+            &request,
+            None,
+        )
+        .unwrap();
+        snapshot
+            .freeze_selected_input(store.conversation_id(), &request, &history.input_manifest)
+            .unwrap();
+        store
+            .commit_model_turn_start(&[], &snapshot, Utc::now())
+            .unwrap();
+        let mut event = envelope(
+            store.conversation_id(),
+            "",
+            Some(attempt.clone()),
+            RuntimeEvent::ModelRequestCompleted {
+                owner: crate::model::ModelRequestOwner::Agent {
+                    identity: snapshot.identity.clone(),
+                },
+                request_id: snapshot.request_id.clone(),
+                finish_reason: if tools {
+                    crate::model::ModelFinishReason::ToolCalls
+                } else {
+                    crate::model::ModelFinishReason::Stop
+                },
+                usage: None,
+                generation: None,
+            },
+        );
+        event.turn_id = Some(snapshot.identity.turn.clone());
+        store.append_event(event).unwrap();
+        snapshot
+    }
+
+    for ordinal in first..first + turns {
+        let accepted = store.accept_inbound(draft("turn growth")).unwrap();
+        store.adopt_pending_batch(accepted.sequence, None).unwrap();
+        let attempt = response_start(store, &format!("frontier-{ordinal}"));
+        let first_request = model_step(store, &attempt, "1", tool);
+        let final_request = if tool {
+            let call = ToolCall {
+                id: ToolCallId::new(format!("call-{ordinal}")),
+                tool_id: ToolId::new("read"),
+                name: "read".into(),
+                arguments: serde_json::json!({"path":"fixture.txt"}),
+            };
+            let proposal = MessageBlock::Assistant(AssistantMessageBlock {
+                id: first_request.provisional_message_id.clone(),
+                content: vec![AssistantContentBlock::ToolCall(call.clone())],
+            });
+            store
+                .append_canonical_with_event(
+                    &proposal,
+                    envelope(
+                        store.conversation_id(),
+                        "",
+                        Some(attempt.clone()),
+                        RuntimeEvent::AssistantMessageCommitted {
+                            message_id: proposal.id().clone(),
+                        },
+                    ),
+                )
+                .unwrap();
+            store
+                .append_event(envelope(
+                    store.conversation_id(),
+                    "",
+                    Some(attempt.clone()),
+                    RuntimeEvent::ToolExecutionStarted {
+                        tool_call_id: call.id.clone(),
+                        tool_id: call.tool_id.clone(),
+                    },
+                ))
+                .unwrap();
+            let result = ToolExecutionResult {
+                status: ToolExecutionStatus::Success,
+                content: vec![],
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: vec![],
+                deliveries: vec![],
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            };
+            store
+                .append_event(envelope(
+                    store.conversation_id(),
+                    "",
+                    Some(attempt.clone()),
+                    RuntimeEvent::ToolExecutionCompleted {
+                        tool_call_id: call.id.clone(),
+                        tool_id: call.tool_id.clone(),
+                        result: result.clone().into(),
+                    },
+                ))
+                .unwrap();
+            let message = MessageBlock::Tool(ToolMessageBlock {
+                id: MessageId::new(format!("result-{ordinal}")),
+                occurrence: crate::message::types::ToolCallOccurrenceRef::new(
+                    proposal.id().clone(),
+                    ContentBlockIndex::new(0),
+                ),
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id,
+                result: result.into(),
+            });
+            store
+                .append_canonical_with_event(
+                    &message,
+                    envelope(
+                        store.conversation_id(),
+                        "",
+                        Some(attempt.clone()),
+                        RuntimeEvent::ToolMessageCommitted {
+                            message_id: message.id().clone(),
+                            tool_call_id: call.id,
+                        },
+                    ),
+                )
+                .unwrap();
+            model_step(store, &attempt, "2", false)
+        } else {
+            first_request
+        };
+        response_message(
+            store,
+            &attempt,
+            final_request.provisional_message_id.as_str(),
+        );
+        response_complete(store, &attempt);
+    }
+}

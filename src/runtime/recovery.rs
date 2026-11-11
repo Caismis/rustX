@@ -130,10 +130,17 @@ use crate::runtime::identity::{
 use crate::runtime::types::{CancellationReason, RuntimeClock, RuntimeError};
 use crate::tools::types::{ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus};
 
+mod frontier;
+#[cfg(debug_assertions)]
+mod oracle;
+
+pub use frontier::RecoveryFrontier;
+
 /// The Event Journal page size of the recovery fold.
 ///
-/// The fold is O(history) in reads and O(unresolved work) in memory; the page
-/// size only bounds how much of the journal is decoded at once.
+/// The fold reads only the facts after the durable recovery frontier and is
+/// O(unresolved work) in memory; the page size only bounds how much of that
+/// Journal tail is decoded at once.
 const RECOVERY_PAGE: usize = 256;
 
 /// A startup recovery failure.
@@ -181,7 +188,7 @@ impl From<ConversationStoreError> for RecoveryError {
 /// attempt starts its own request by re-entering `StartedOutcomeUnknown`
 /// with the new request identity; the earlier request's durable outcome
 /// remains in the Event Journal.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum ExternalRequestLifecycle {
     /// No `ModelRequestStarted` ever committed for this attempt. Only this
     /// state is eligible for the Class-B "no external start" continuation.
@@ -207,7 +214,7 @@ enum ExternalRequestLifecycle {
 }
 
 /// The durably known provider outcome of one model request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RequestOutcome {
     /// `ModelRequestCompleted` committed durably.
     Completed,
@@ -225,7 +232,8 @@ pub enum RequestOutcome {
 /// ([`RecoveryEvidence::tool_repairs`]) and are released as soon as the
 /// canonical `ToolResult` commits, while this summary survives until the
 /// attempt terminalizes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AttemptEvidence {
     /// The durable model-request lifecycle of this attempt.
     request: ExternalRequestLifecycle,
@@ -275,7 +283,7 @@ enum ToolExternalLifecycle {
 /// historical `ToolExecutionResult`. It is monotonic during the fold:
 /// `NeverStarted` can move into a started state, but a started state can
 /// never move back to "never externally started".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 enum ToolExternalSummary {
     /// No `ToolExecutionStarted` and no durable tool outcome ever committed
     /// for this attempt. Only this state is consistent with Class B's "no
@@ -322,7 +330,8 @@ struct ToolRepairEvidence {
 
 /// What durable evidence says about one detached background execution whose
 /// terminal publication is not committed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BackgroundEvidence {
     /// Durable event sequence is the semantic acceptance order.
     pub sequence: u64,
@@ -342,7 +351,8 @@ pub struct BackgroundEvidence {
 /// A v1 child is one-shot process-local work: the evidence exists so a
 /// restart can settle the ownership honestly as interrupted, never to
 /// reattach to or replay the old child process.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SubagentEvidence {
     /// The owned subagent identity.
     pub subagent_id: SubagentId,
@@ -417,9 +427,10 @@ pub struct RecoveryEvidence {
     /// historical external execution, so releasing this detail never regresses
     /// the attempt to "never externally started".
     tool_repairs: BTreeMap<(AttemptId, ToolCallId), ToolRepairEvidence>,
-    /// Native attribution for unresolved Assistants. A historical recovery
-    /// result temporarily leases its exact primary owner while that fact folds.
-    /// Same-named calls of different attempts never share attribution.
+    /// Native attribution for unresolved Assistants, read from the canonical
+    /// Tool-call index and verified against its `AssistantMessageCommitted`
+    /// Journal fact. Same-named calls of different attempts never share
+    /// attribution.
     assistant_attempts: BTreeMap<MessageId, AttemptId>,
     /// The unresolved Assistant identities, for the bounded attribution above.
     active_ids: std::collections::BTreeSet<MessageId>,
@@ -472,6 +483,9 @@ pub struct RecoveryEvidence {
     /// resources, nor the workspace: a stream's settlement follows from its
     /// own frozen historical request and nothing else.
     unsettled_publications: Vec<PublicationStreamRecord>,
+    /// The facts folded by the in-memory fold regressions.
+    #[cfg(test)]
+    test_journal: Vec<RuntimeEventEnvelope>,
 }
 
 impl RecoveryEvidence {
@@ -481,10 +495,16 @@ impl RecoveryEvidence {
     /// process, fabricates no observation, and executes no context
     /// contributor.
     ///
+    /// The Journal fold starts at the durable [`RecoveryFrontier`], which the
+    /// Journal append transaction advances atomically with every fact, so
+    /// only the facts after it are read (normally none). The frontier is
+    /// verified against the Journal rows it names before it is trusted.
+    ///
     /// # Errors
     ///
     /// Returns [`RecoveryError::Durable`] when the durable authority cannot be
-    /// read coherently. Recovery then fails closed.
+    /// read coherently, including a frontier that disagrees with the Journal.
+    /// Recovery then fails closed.
     pub fn reconstruct(store: &dyn ConversationStore) -> Result<Self, RecoveryError> {
         let conversation_id = store.conversation_id().clone();
         let unsettled = store.unsettled_canonical_tool_calls(8192)?;
@@ -515,35 +535,42 @@ impl RecoveryEvidence {
             active.extend(store.load_messages(ids)?);
         }
         let pending = store.load_pending()?;
-        let mut evidence = Self {
-            conversation_id,
+        let frontier = Self::fold_journal(store, &conversation_id, store.recovery_frontier()?)?;
+        #[cfg(debug_assertions)]
+        let checked = frontier.clone();
+        let mut evidence = Self::from_frontier(
+            conversation_id.clone(),
+            frontier,
             active,
-            unsettled_canonical_calls: unsettled.into_iter().map(|(o, _)| o).collect(),
+            unsettled.into_iter().map(|(o, _)| o).collect(),
             pending,
-            unsettled_attempts: BTreeMap::new(),
-            tool_repairs: BTreeMap::new(),
-            unsettled_background: Vec::new(),
-            unsettled_subagents: Vec::new(),
-            assistant_attempts: BTreeMap::new(),
-            active_ids: std::collections::BTreeSet::new(),
-            highest_attempt_ordinal: None,
-            highest_subagent_ordinal: 0,
-            saw_any_attempt: false,
-            unanswered_adopted_turn: None,
-            unadopted_goal_round: None,
-            unsettled_publications: store.load_unsettled_publication_streams()?,
-        };
-        evidence.active_ids = evidence
-            .active
-            .iter()
-            .map(crate::conversation::message_id_of)
-            .collect();
+            store.load_unsettled_publication_streams()?,
+            |sequence| Self::journal_fact(store, sequence),
+        )?;
+        // After the release verification, the debug oracle recomputes the
+        // whole fold and requires the persisted frontier to equal it.
+        #[cfg(debug_assertions)]
+        oracle::assert_matches_full_fold(store, &conversation_id, &checked);
+        // Native attribution of the unresolved Assistants: the canonical
+        // Tool-call index records the committing attempt, verified against
+        // the exact `AssistantMessageCommitted` Journal fact.
+        for id in evidence.active_ids.clone() {
+            if let Some(attempt) = store.canonical_assistant_owner(&id)? {
+                evidence.assistant_attempts.insert(id, attempt);
+            }
+        }
+        Ok(evidence)
+    }
 
+    /// Folds every Journal fact after `frontier` into it.
+    fn fold_journal(
+        store: &dyn ConversationStore,
+        conversation_id: &ConversationId,
+        mut frontier: RecoveryFrontier,
+    ) -> Result<RecoveryFrontier, RecoveryError> {
         // The bounded fold. Each page is decoded, folded, and dropped; only
         // the unresolved working set survives a page boundary.
-        let mut cursor = None;
-        let mut background: BTreeMap<ToolExecutionId, BackgroundEvidence> = BTreeMap::new();
-        let mut subagents: BTreeMap<SubagentId, SubagentEvidence> = BTreeMap::new();
+        let mut cursor = Some(frontier.through());
         loop {
             let page = store.read_events(cursor, RECOVERY_PAGE)?;
             if page.events.is_empty() {
@@ -551,515 +578,156 @@ impl RecoveryEvidence {
             }
             for envelope in &page.events {
                 // A previous recovery may have committed an unknown ToolResult
-                // before its attempt terminal. Its Assistant is already settled
-                // now, but that exact primary ownership still proves an
-                // irreversible external outcome during this fold.
-                let transient_owner = match (&envelope.attempt_id, &envelope.event) {
-                    (
-                        None,
-                        RuntimeEvent::ToolMessageCommitted {
-                            message_id,
-                            tool_call_id,
-                        },
-                    ) => store
-                        .recovery_tool_result_owner(message_id, tool_call_id, envelope.sequence)?
-                        .filter(|owner| !evidence.active_ids.contains(&owner.assistant_message_id)),
-                    _ => None,
+                // before its attempt terminal. That exact primary ownership
+                // still proves an irreversible external outcome.
+                let owner = match RecoveryFrontier::owner_query(envelope) {
+                    Some((message, call)) => {
+                        store.recovery_tool_result_owner(message, call, envelope.sequence)?
+                    }
+                    None => None,
                 };
-                if let Some(owner) = &transient_owner {
-                    evidence
-                        .assistant_attempts
-                        .insert(owner.assistant_message_id.clone(), owner.attempt_id.clone());
-                }
-                evidence.fold(envelope, &mut background, &mut subagents);
-                if let Some(owner) = transient_owner {
-                    evidence
-                        .assistant_attempts
-                        .remove(&owner.assistant_message_id);
-                }
+                frontier.fold(conversation_id, envelope, owner.as_ref());
             }
             cursor = page.next_sequence;
             if cursor.is_none() {
                 break;
             }
         }
-        evidence.unsettled_background = background.into_values().collect();
-        evidence
-            .unsettled_background
-            .sort_by_key(|entry| entry.sequence);
-        evidence.unsettled_subagents = subagents.into_values().collect();
-        Ok(evidence)
+        Ok(frontier)
     }
 
-    /// Folds one durable event into the unresolved working set.
-    #[allow(clippy::too_many_lines)] // One event vocabulary, one fold, one place.
-    fn fold(
-        &mut self,
-        envelope: &RuntimeEventEnvelope,
-        background: &mut BTreeMap<ToolExecutionId, BackgroundEvidence>,
-        subagents: &mut BTreeMap<SubagentId, SubagentEvidence>,
-    ) {
-        match &envelope.event {
-            RuntimeEvent::AttemptStarted { attempt_id } => {
-                self.note_attempt(attempt_id);
-                self.unsettled_attempts
-                    .entry(attempt_id.clone())
-                    .or_insert(AttemptEvidence {
-                        request: ExternalRequestLifecycle::NeverStarted,
-                        last_started_request: None,
-                        tools: ToolExternalSummary::default(),
-                        last_accepted_assistant: None,
-                    });
+    /// Reads the one Journal fact at `sequence`.
+    fn journal_fact(
+        store: &dyn ConversationStore,
+        sequence: u64,
+    ) -> Result<RuntimeEventEnvelope, RecoveryError> {
+        let page = store.read_events(sequence.checked_sub(1), 1)?;
+        page.events
+            .into_iter()
+            .next()
+            .filter(|event| event.sequence == sequence)
+            .ok_or_else(|| {
+                RecoveryError::Durable(format!(
+                    "recovery frontier names missing Journal fact {sequence}"
+                ))
+            })
+    }
+
+    /// Materializes the evidence of a complete fold, verifying every Journal
+    /// fact the frontier names for its open work.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // The fold plus the native reads of Phase 1.
+    fn from_frontier(
+        conversation_id: ConversationId,
+        frontier: RecoveryFrontier,
+        active: Vec<MessageBlock>,
+        unsettled_canonical_calls: std::collections::BTreeSet<
+            crate::message::types::ToolCallOccurrenceRef,
+        >,
+        pending: Vec<PendingInboundItem>,
+        unsettled_publications: Vec<PublicationStreamRecord>,
+        mut fact: impl FnMut(u64) -> Result<RuntimeEventEnvelope, RecoveryError>,
+    ) -> Result<Self, RecoveryError> {
+        let disagrees = |what: &str| {
+            RecoveryError::Durable(format!(
+                "recovery frontier disagrees with the Journal: {what}"
+            ))
+        };
+        let mut unsettled_attempts = BTreeMap::new();
+        for (attempt_id, open) in frontier.attempts {
+            let started = fact(open.started)?;
+            if !matches!(&started.event, RuntimeEvent::AttemptStarted { attempt_id: id } if *id == attempt_id)
+            {
+                return Err(disagrees("open attempt start"));
             }
-            RuntimeEvent::Goal {
-                fact:
-                    crate::goal::GoalFact::RoundAdmitted {
-                        message_id,
-                        current,
-                        ..
-                    },
-            } => {
-                self.unadopted_goal_round = Some((message_id.clone(), current.clone()));
-            }
-            RuntimeEvent::InboundTurnAdopted { message_ids } => {
-                // The adoption transaction opened an answer obligation. Only
-                // the trailing identity and any exactly correlated Goal
-                // authority are retained, never the batch.
-                if let Some(last) = message_ids.last() {
-                    let goal = self
-                        .unadopted_goal_round
-                        .as_ref()
-                        .and_then(|(id, goal)| message_ids.contains(id).then(|| goal.clone()));
-                    if goal.is_some() {
-                        self.unadopted_goal_round = None;
-                    }
-                    self.unanswered_adopted_turn = Some((last.clone(), goal));
-                }
-                // Adoption is the durable boundary of a new logical model
-                // step. An existing attempt may have already completed a
-                // previous request and then accepted fresh inbound at a safe
-                // boundary; that previous request must not be used as the
-                // carryover selector input if this process dies before the
-                // new step crosses model start.
-                for attempt in self.unsettled_attempts.values_mut() {
-                    attempt.last_started_request = None;
-                }
-            }
-            RuntimeEvent::AttemptCompleted { attempt_id, .. }
-            | RuntimeEvent::AttemptCancelled { attempt_id, .. }
-            | RuntimeEvent::AttemptTimedOut { attempt_id }
-            | RuntimeEvent::AttemptLimitExceeded { attempt_id, .. }
-            | RuntimeEvent::AttemptFailed { attempt_id, .. } => {
-                self.note_attempt(attempt_id);
-                // A **decided** terminal concluded the turn the attempt
-                // owned. A live runtime starts nothing further for it — a
-                // cancelled turn stays unanswered — so the obligation is
-                // consumed here exactly as it is live.
-                //
-                // A recovery-generated terminal is not such a decision (see
-                // [`Self::decides_the_turn`]): it records that a process
-                // died, and the very recovery that writes it is the one still
-                // permitting the turn to continue. Consuming the obligation
-                // there would let recovery destroy its own permission, and a
-                // second death before the successor attempt reached its
-                // request start would strand the turn forever.
-                if Self::decides_the_turn(&envelope.event) {
-                    self.unanswered_adopted_turn = None;
-                }
-                // A durable terminal is absorbing: the attempt leaves the
-                // unresolved working set and never returns to it. Its tool
-                // repair evidence survives independently: an incomplete
-                // canonical turn that outlived its owning attempt (Class D)
-                // must stay repairable from its durable outcome, and entries
-                // are released only by their own `ToolMessageCommitted`.
-                self.unsettled_attempts.remove(attempt_id);
-            }
-            RuntimeEvent::ModelRequestStarted {
-                owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
-                request_id,
-                ..
-            } => {
-                // The adopted turn was carried to the provider. From here the
-                // external-outcome plane owns it: whether it is answered,
-                // indeterminate, or known-and-unsettled is the attempt
-                // classification's question, never the obligation's.
-                self.unanswered_adopted_turn = None;
-                if let Some(attempt) = self.current_attempt_mut(envelope) {
-                    // The newest start is the in-flight request. The
-                    // transition is monotonic: a started request can never
-                    // become "never started" again.
-                    attempt.request = ExternalRequestLifecycle::StartedOutcomeUnknown {
-                        request_id: request_id.clone(),
-                    };
-                    attempt.last_started_request = Some(request_id.clone());
-                }
-            }
-            RuntimeEvent::ModelRequestCompleted {
-                owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
-                ..
-            }
-            | RuntimeEvent::ModelRequestFailed {
-                owner: crate::model::snapshot::ModelRequestOwner::Agent { .. },
-                ..
-            } => {
-                if let Some(attempt) = self.current_attempt_mut(envelope) {
-                    let completed =
-                        matches!(&envelope.event, RuntimeEvent::ModelRequestCompleted { .. });
-                    let outcome = if completed {
-                        RequestOutcome::Completed
-                    } else {
-                        RequestOutcome::Failed
-                    };
-                    // The provider outcome is durably known, whatever it
-                    // was. This transition is **monotonic**: the known
-                    // outcome is never converted back into "never started".
-                    attempt.request = match &attempt.request {
-                        ExternalRequestLifecycle::StartedOutcomeUnknown { request_id } => {
-                            ExternalRequestLifecycle::StartedOutcomeKnown {
-                                request_id: Some(request_id.clone()),
-                                outcome,
-                            }
-                        }
-                        ExternalRequestLifecycle::StartedOutcomeKnown {
-                            request_id,
-                            outcome: _,
-                        } => ExternalRequestLifecycle::StartedOutcomeKnown {
-                            request_id: request_id.clone(),
-                            outcome,
-                        },
-                        // A durable outcome with no start fact is a journal
-                        // anomaly; the outcome is still durably known and
-                        // still proves external work happened.
-                        ExternalRequestLifecycle::NeverStarted => {
-                            ExternalRequestLifecycle::StartedOutcomeKnown {
-                                request_id: None,
-                                outcome,
-                            }
-                        }
-                    };
-                }
-            }
-            RuntimeEvent::AssistantMessageCommitted { message_id } => {
-                if let Some(attempt) = envelope.attempt_id.as_ref()
-                    && let Some(evidence) = self.unsettled_attempts.get_mut(attempt)
-                {
-                    evidence.last_accepted_assistant = Some(message_id.clone());
-                }
-                // Attribute every **active** Assistant message to the attempt
-                // that committed it. A message retired from the Surface is
-                // not retained, so the map is bounded by the active working
-                // set.
-                if let Some(attempt) = envelope.attempt_id.clone()
-                    && self.active_ids.contains(message_id)
-                {
-                    self.assistant_attempts.insert(message_id.clone(), attempt);
-                }
-            }
-            RuntimeEvent::ToolExecutionStarted {
-                tool_call_id,
-                tool_id,
-            } => {
-                if let Some(attempt) = envelope.attempt_id.clone() {
-                    // Attempt summary: external tool execution happened, and
-                    // this call's external outcome is unknown until a durable
-                    // outcome fact follows.
-                    if let Some(evidence) = self.unsettled_attempts.get_mut(&attempt) {
-                        evidence.tools = match evidence.tools {
-                            // A new unknown call makes the summary unknown.
-                            ToolExternalSummary::NeverStarted
-                            | ToolExternalSummary::AllOutcomesKnown => {
-                                ToolExternalSummary::UnknownOutstanding
-                            }
-                            // Already unknown (outstanding or irreversible):
-                            // one more started call changes nothing.
-                            other => other,
-                        };
-                    }
-                    // Per-call repair evidence: the call needs its missing
-                    // canonical `ToolResult`, which only the exact durable
-                    // outcome (or the honest unknown) can produce.
-                    self.tool_repairs.insert(
-                        (attempt.clone(), tool_call_id.clone()),
-                        ToolRepairEvidence {
-                            tool_id: tool_id.clone(),
-                            lifecycle: ToolExternalLifecycle::StartedOutcomeUnknown,
-                        },
-                    );
-                }
-            }
-            RuntimeEvent::ToolExecutionCompleted {
-                tool_call_id,
-                tool_id,
-                result,
-            } => {
-                if let Some(attempt) = envelope.attempt_id.clone() {
-                    self.tool_repairs.insert(
-                        (attempt.clone(), tool_call_id.clone()),
-                        ToolRepairEvidence {
-                            tool_id: tool_id.clone(),
-                            lifecycle: ToolExternalLifecycle::OutcomeKnown(Box::new(
-                                result.as_ref().clone(),
-                            )),
-                        },
-                    );
-                    self.note_known_tool_outcome(&attempt);
-                }
-            }
-            RuntimeEvent::ToolExecutionFailed {
-                tool_call_id,
-                tool_id,
-                error,
-            } => {
-                if let Some(attempt) = envelope.attempt_id.clone() {
-                    self.tool_repairs.insert(
-                        (attempt.clone(), tool_call_id.clone()),
-                        ToolRepairEvidence {
-                            tool_id: tool_id.clone(),
-                            lifecycle: ToolExternalLifecycle::OutcomeKnown(Box::new(
-                                ToolExecutionResult {
-                                    deliveries: Vec::new(),
-                                    status: ToolExecutionStatus::Failed {
-                                        error: error.clone(),
-                                    },
-                                    content: Vec::new(),
-                                    duration_ms: 0,
-                                    exit_code: None,
-                                    artifacts: Vec::new(),
-                                    truncation: None,
-                                    workflow: None,
-                                    managed_output: None,
-                                },
-                            )),
-                        },
-                    );
-                    self.note_known_tool_outcome(&attempt);
-                }
-            }
-            RuntimeEvent::ToolMessageCommitted {
-                message_id,
-                tool_call_id,
-            } => {
-                // Canonical repair state and attempt external-history summary
-                // are separate axes, owned separately. A committed `ToolResult`
-                // means the Surface no longer needs this repair: the per-call
-                // repair entry is released here and now, whatever the owning
-                // attempt's terminal state. The attempt summary independently
-                // keeps proving the historical external execution; releasing
-                // the detailed entry must never erase it.
-                let owning = if let Some(attempt) = &envelope.attempt_id {
-                    // A live commit names its owning attempt exactly.
-                    Some(attempt.clone())
-                } else {
-                    // A recovery-generated repair commit carries no attempt
-                    // identity. The recovery message identity is
-                    // "{assistant_id}-recovered-tool-{call_id}", so the
-                    // owning attempt resolves through the active assistant
-                    // attribution — never through a bare call-id scan that
-                    // could mark a historical leftover.
-                    let mut owned_by = None;
-                    for (assistant_id, attempt) in &self.assistant_attempts {
-                        let expected = format!("{assistant_id}-recovered-tool-{tool_call_id}");
-                        if message_id.as_str() == expected {
-                            owned_by = Some(attempt.clone());
-                            break;
-                        }
-                    }
-                    owned_by
-                };
-                if let Some(attempt) = owning {
-                    let key = (attempt.clone(), tool_call_id.clone());
-                    // A call whose external outcome was still unknown when its
-                    // canonical result committed has an outcome that can never
-                    // become durably known: the recovery `OutcomeUnknown`
-                    // shape is the canonical representation of "still
-                    // unknowable", not evidence of a known outcome. The owning
-                    // non-terminal attempt therefore keeps an unknown external
-                    // outcome until it terminalizes.
-                    let was_unknown = matches!(
-                        self.tool_repairs.get(&key).map(|repair| &repair.lifecycle),
-                        Some(ToolExternalLifecycle::StartedOutcomeUnknown)
-                    );
-                    // The canonical repair is settled: detailed per-call
-                    // evidence is released whether the owner is terminal or
-                    // not.
-                    self.tool_repairs.remove(&key);
-                    if was_unknown && let Some(evidence) = self.unsettled_attempts.get_mut(&attempt)
-                    {
-                        // The released call's external outcome can never
-                        // become durably known.
-                        evidence.tools = ToolExternalSummary::UnknownIrreversible;
-                    }
-                }
-            }
-            RuntimeEvent::BackgroundExecutionCommitted {
-                execution_id,
-                tool_call_id,
-                tool_id,
-                tool_name,
-            } => {
-                background.insert(
-                    execution_id.clone(),
-                    BackgroundEvidence {
-                        sequence: envelope.sequence,
-                        execution_id: execution_id.clone(),
-                        tool_call_id: tool_call_id.clone(),
-                        tool_id: tool_id.clone(),
-                        tool_name: tool_name.clone(),
-                    },
-                );
-            }
-            RuntimeEvent::BackgroundTerminalPublished { execution_id, .. } => {
-                // The terminal publication is absorbing.
-                background.remove(execution_id);
-            }
-            RuntimeEvent::AgentActivationAdmission { activation_id, .. } => {
-                if let Some(ordinal) = activation_id.conversation_ordinal(&self.conversation_id) {
-                    self.highest_subagent_ordinal = self.highest_subagent_ordinal.max(ordinal);
-                }
-            }
-            RuntimeEvent::SubagentOwnershipCommitted {
-                admitted_authority: _,
-                parent_agent_id: _,
-                subagent_id,
-                child_agent_id,
-                child_conversation_id,
-                origin,
-                agent,
-                definition_digest,
-                profile_digest,
-                ownership,
-                workspace,
-            } => {
-                if let Some(ordinal) = subagent_id.conversation_ordinal(&self.conversation_id) {
-                    self.highest_subagent_ordinal = self.highest_subagent_ordinal.max(ordinal);
-                }
-                subagents.insert(
-                    subagent_id.clone(),
-                    SubagentEvidence {
-                        subagent_id: subagent_id.clone(),
-                        child_agent_id: child_agent_id.clone(),
-                        child_conversation_id: child_conversation_id.clone(),
-                        origin: origin.clone(),
-                        agent: agent.clone(),
-                        definition_digest: definition_digest.clone(),
-                        profile_digest: profile_digest.clone(),
-                        ownership: *ownership,
-                        started_at: envelope.timestamp,
-                        workspace: workspace.clone(),
-                    },
-                );
-            }
-            RuntimeEvent::SubagentTerminalPublished { subagent_id, .. }
-            | RuntimeEvent::SubagentTerminalSettled { subagent_id, .. } => {
-                if let Some(ordinal) = subagent_id.conversation_ordinal(&self.conversation_id) {
-                    self.highest_subagent_ordinal = self.highest_subagent_ordinal.max(ordinal);
-                }
-                // The terminal fact is absorbing: it closes the native child
-                // lifecycle. A Workflow terminal settlement never creates a
-                // parent notification and the Workflow itself is never
-                // replayed.
-                subagents.remove(subagent_id);
-            }
-            // Every remaining fact contributes its attempt identity watermark
-            // and nothing else.
-            //
-            // The interaction audit facts (Issue #109) land here deliberately,
-            // and their absence from every arm above *is* the invariant: they
-            // are evidence, never authority. Recovery reconstructs no pending
-            // waiter, republishes no prompt, and never treats a historical
-            // `InteractionSettled(Approved)` as permission to run the tool it
-            // referred to. A call whose `ToolExecutionStarted` is absent is
-            // simply a call that never started, exactly as if no approval had
-            // ever been asked for.
-            _ => {
-                if let Some(attempt_id) = envelope.attempt_id.as_ref() {
-                    self.note_attempt(attempt_id);
-                }
-            }
+            unsettled_attempts.insert(attempt_id, open.evidence);
         }
-    }
-
-    /// Whether this attempt terminal was a **decision about the turn**, and
-    /// therefore consumes the durable answer obligation.
-    ///
-    /// Every terminal a live runtime commits is one: completion, cancellation,
-    /// timeout, limit exhaustion, and an ordinary runtime or model failure all
-    /// mean the runtime finished with the turn, answered or not.
-    ///
-    /// [`RuntimeError::RestartInterrupted`] is the one terminal no live
-    /// runtime ever commits. Recovery writes it, about an attempt whose
-    /// process-local execution state is gone, and it is a statement about the
-    /// *attempt* rather than about the *turn*: the turn's canonical
-    /// `UserMessage` is untouched and nothing was ever sent for it. The
-    /// obligation therefore survives it and transfers to whichever attempt
-    /// continues the turn next, until a `ModelRequestStarted` finally carries
-    /// it to the provider or a decided terminal concludes it.
-    ///
-    /// Without this, the recovery reconciliation that terminalizes the
-    /// interrupted attempt would durably erase the very obligation the same
-    /// recovery reported as continuable, and the turn would be stranded by the
-    /// next process death before its successor attempt reached a request
-    /// start.
-    fn decides_the_turn(event: &RuntimeEvent) -> bool {
-        !matches!(
-            event,
-            RuntimeEvent::AttemptFailed {
-                error: AttemptFailure::Runtime {
-                    error: RuntimeError::RestartInterrupted { .. }
+        let mut tool_repairs = BTreeMap::new();
+        for repair in frontier.repairs {
+            let lifecycle = match repair.outcome {
+                None => ToolExternalLifecycle::StartedOutcomeUnknown,
+                Some(sequence) => {
+                    let outcome = fact(sequence)?;
+                    if outcome.attempt_id.as_ref() != Some(&repair.attempt) {
+                        return Err(disagrees("tool outcome owner"));
+                    }
+                    let result = match outcome.event {
+                        RuntimeEvent::ToolExecutionCompleted {
+                            tool_call_id,
+                            tool_id,
+                            result,
+                        } if tool_call_id == repair.call && tool_id == repair.tool_id => {
+                            result.as_ref().clone()
+                        }
+                        RuntimeEvent::ToolExecutionFailed {
+                            tool_call_id,
+                            tool_id,
+                            error,
+                        } if tool_call_id == repair.call && tool_id == repair.tool_id => {
+                            ToolExecutionResult {
+                                deliveries: Vec::new(),
+                                status: ToolExecutionStatus::Failed { error },
+                                content: Vec::new(),
+                                duration_ms: 0,
+                                exit_code: None,
+                                artifacts: Vec::new(),
+                                truncation: None,
+                                workflow: None,
+                                managed_output: None,
+                            }
+                        }
+                        _ => return Err(disagrees("tool outcome")),
+                    };
+                    ToolExternalLifecycle::OutcomeKnown(Box::new(result))
+                }
+            };
+            tool_repairs.insert(
+                (repair.attempt, repair.call),
+                ToolRepairEvidence {
+                    tool_id: repair.tool_id,
+                    lifecycle,
                 },
-                ..
-            }
-        )
-    }
-
-    /// Records that this attempt identity entered durable authority.
-    fn note_attempt(&mut self, attempt_id: &AttemptId) {
-        self.saw_any_attempt = true;
-        if let Some(ordinal) = attempt_id.conversation_ordinal(&self.conversation_id) {
-            self.highest_attempt_ordinal = Some(
-                self.highest_attempt_ordinal
-                    .map_or(ordinal, |seen| seen.max(ordinal)),
             );
         }
-    }
-
-    fn current_attempt_mut(
-        &mut self,
-        envelope: &RuntimeEventEnvelope,
-    ) -> Option<&mut AttemptEvidence> {
-        let attempt_id = envelope.attempt_id.clone()?;
-        self.note_attempt(&attempt_id);
-        self.unsettled_attempts.get_mut(&attempt_id)
-    }
-
-    /// Records a durably known tool outcome in the owning attempt's external
-    /// summary and recomputes the unknown state against the outstanding
-    /// repair evidence.
-    ///
-    /// A durable outcome makes exactly one call known; whether the attempt
-    /// still has an unknown outcome is recomputed from the repair map (any
-    /// other started call without a durable outcome), with the irreversible
-    /// state preserved — a call whose unknown outcome was already canonically
-    /// committed can never become known.
-    fn note_known_tool_outcome(&mut self, attempt_id: &AttemptId) {
-        let Some(evidence) = self.unsettled_attempts.get_mut(attempt_id) else {
-            return;
-        };
-        if evidence.tools == ToolExternalSummary::UnknownIrreversible {
-            return;
+        let mut unsettled_background = Vec::with_capacity(frontier.background.len());
+        for (execution_id, background) in frontier.background {
+            let committed = fact(background.sequence)?;
+            if background.execution_id != execution_id
+                || !matches!(&committed.event, RuntimeEvent::BackgroundExecutionCommitted {
+                    execution_id: id, tool_call_id, tool_id, tool_name,
+                } if *id == execution_id
+                    && *tool_call_id == background.tool_call_id
+                    && *tool_id == background.tool_id
+                    && *tool_name == background.tool_name)
+            {
+                return Err(disagrees("background execution"));
+            }
+            unsettled_background.push(background);
         }
-        let outstanding_unknown = self.tool_repairs.iter().any(|((owning, _), repair)| {
-            owning == attempt_id
-                && matches!(
-                    repair.lifecycle,
-                    ToolExternalLifecycle::StartedOutcomeUnknown
-                )
-        });
-        evidence.tools = if outstanding_unknown {
-            ToolExternalSummary::UnknownOutstanding
-        } else {
-            ToolExternalSummary::AllOutcomesKnown
-        };
+        unsettled_background.sort_by_key(|entry| entry.sequence);
+        let active_ids = active
+            .iter()
+            .map(crate::conversation::message_id_of)
+            .collect();
+        Ok(Self {
+            conversation_id,
+            active,
+            unsettled_canonical_calls,
+            pending,
+            unsettled_attempts,
+            tool_repairs,
+            assistant_attempts: BTreeMap::new(),
+            active_ids,
+            unsettled_background,
+            unsettled_subagents: frontier.subagents.into_values().collect(),
+            highest_attempt_ordinal: frontier.highest_attempt_ordinal,
+            highest_subagent_ordinal: frontier.highest_subagent_ordinal,
+            saw_any_attempt: frontier.saw_any_attempt,
+            unanswered_adopted_turn: frontier.unanswered_adopted_turn,
+            unadopted_goal_round: frontier.unadopted_goal_round,
+            unsettled_publications,
+            #[cfg(test)]
+            test_journal: Vec::new(),
+        })
     }
 
     /// The durable per-call repair evidence answering `call_id`, attributed
@@ -2351,20 +2019,64 @@ mod tests {
             unanswered_adopted_turn: None,
             unadopted_goal_round: None,
             unsettled_publications: Vec::new(),
+            test_journal: Vec::new(),
         }
     }
 
+    /// Folds `events` as consecutive Journal facts, with the native owner
+    /// attribution their `AssistantMessageCommitted` facts would record.
     fn fold_all(evidence: &mut RecoveryEvidence, events: &[RuntimeEventEnvelope]) {
-        let mut background = BTreeMap::new();
-        let mut subagents = BTreeMap::new();
-        for envelope in events {
-            evidence.fold(envelope, &mut background, &mut subagents);
+        let events: Vec<_> = evidence
+            .test_journal
+            .iter()
+            .chain(events)
+            .zip(1..)
+            .map(|(envelope, sequence)| {
+                let mut envelope = envelope.clone();
+                envelope.sequence = sequence;
+                envelope
+            })
+            .collect();
+        let mut owners: BTreeMap<MessageId, AttemptId> = BTreeMap::new();
+        let mut frontier = RecoveryFrontier::default();
+        for envelope in &events {
+            if let (Some(attempt), RuntimeEvent::AssistantMessageCommitted { message_id }) =
+                (&envelope.attempt_id, &envelope.event)
+            {
+                owners.insert(message_id.clone(), attempt.clone());
+            }
+            let owner = RecoveryFrontier::owner_query(envelope).and_then(|(message, call)| {
+                owners
+                    .iter()
+                    .find(|(assistant, _)| {
+                        message.as_str() == format!("{assistant}-recovered-tool-{call}")
+                    })
+                    .map(|(assistant, attempt)| {
+                        crate::durable::store::canonical::CanonicalToolResultOwner {
+                            assistant_message_id: assistant.clone(),
+                            attempt_id: attempt.clone(),
+                        }
+                    })
+            });
+            frontier.fold(&evidence.conversation_id, envelope, owner.as_ref());
         }
-        evidence.unsettled_background = background.into_values().collect();
-        evidence
-            .unsettled_background
-            .sort_by_key(|entry| entry.sequence);
-        evidence.unsettled_subagents = subagents.into_values().collect();
+        let previous = std::mem::replace(evidence, base_evidence());
+        *evidence = RecoveryEvidence::from_frontier(
+            previous.conversation_id,
+            frontier,
+            previous.active,
+            previous.unsettled_canonical_calls,
+            previous.pending,
+            previous.unsettled_publications,
+            |sequence| Ok(events[usize::try_from(sequence).unwrap() - 1].clone()),
+        )
+        .unwrap();
+        evidence.test_journal = events;
+        for id in evidence.active_ids.clone() {
+            if let Some(attempt) = owners.get(&id) {
+                evidence.assistant_attempts.insert(id, attempt.clone());
+            }
+        }
     }
 
     #[test]
