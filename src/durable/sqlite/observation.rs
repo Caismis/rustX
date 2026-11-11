@@ -1382,7 +1382,7 @@ pub(super) fn surface_boundaries(
     let limit = limit(requested)?;
     let actual: u64 = connection
         .query_row(
-            "SELECT COALESCE((SELECT revision FROM surface_head WHERE id=1),0)",
+            "SELECT COALESCE((SELECT surface_revision FROM rustx_store WHERE id=1),0)",
             [],
             |row| row.get(0),
         )

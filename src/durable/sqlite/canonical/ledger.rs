@@ -17,14 +17,19 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(in crate::durable::sqlite) fn ensure_surface_head(
     transaction: &Transaction<'_>,
 ) -> Result<(), ConversationStoreError> {
-    let exists: bool = transaction
+    let (has_revision, has_generation): (bool, bool) = transaction
         .query_row_cached(
-            "SELECT EXISTS(SELECT 1 FROM surface_head WHERE id=1)",
+            "SELECT surface_revision IS NOT NULL,surface_compaction_generation IS NOT NULL FROM rustx_store WHERE id=1",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|e| storage(e.to_string()))?;
-    if exists {
+    if has_revision != has_generation {
+        return Err(ConversationStoreError::InvalidReference(
+            "canonical frontier metadata is incomplete".into(),
+        ));
+    }
+    if has_revision {
         return Ok(());
     }
     let ledger: i64 = transaction
@@ -41,7 +46,7 @@ pub(in crate::durable::sqlite) fn ensure_surface_head(
     }
     transaction
         .execute(
-            "INSERT INTO surface_head(id,revision,compaction_generation) VALUES(1,0,0)",
+            "UPDATE rustx_store SET surface_revision=0,surface_compaction_generation=0 WHERE id=1",
             [],
         )
         .map_err(|e| storage(e.to_string()))?;
@@ -53,7 +58,7 @@ pub(in crate::durable::sqlite) fn read_surface_head(
 ) -> Result<Option<(i64, i64)>, ConversationStoreError> {
     connection
         .query_row(
-            "SELECT revision,compaction_generation FROM surface_head WHERE id=1",
+            "SELECT surface_revision,surface_compaction_generation FROM rustx_store WHERE id=1 AND (surface_revision IS NOT NULL OR surface_compaction_generation IS NOT NULL)",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -80,9 +85,14 @@ pub(in crate::durable::sqlite) fn head_frontier(
         )
         .map_err(|e| storage(e.to_string()))?;
     let revision: Option<i64> = connection
-        .query_row_cached("SELECT revision FROM surface_head WHERE id=1", [], |row| {
-            row.get(0)
-        })
+        .query_row_cached(
+            "SELECT surface_revision,surface_compaction_generation FROM rustx_store WHERE id=1 AND (surface_revision IS NOT NULL OR surface_compaction_generation IS NOT NULL)",
+            [],
+            |row| {
+                let _: i64 = row.get(1)?;
+                row.get(0)
+            },
+        )
         .optional()
         .map_err(|e| storage(e.to_string()))?;
     if revision.is_none_or(|revision| revision != ledger) && ledger != 0 {
@@ -223,7 +233,7 @@ pub(in crate::durable::sqlite) fn update_surface_head(
 ) -> Result<(), ConversationStoreError> {
     transaction
         .execute_cached(
-            "UPDATE surface_head SET revision=?1,compaction_generation=?2 WHERE id=1",
+            "UPDATE rustx_store SET surface_revision=?1,surface_compaction_generation=?2 WHERE id=1 AND surface_revision IS NOT NULL",
             params![seq_to_i64(revision.get())?, seq_to_i64(generation)?],
         )
         .map_err(|error| {

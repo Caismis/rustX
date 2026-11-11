@@ -46,6 +46,7 @@ pub(super) struct Owner {
     epoch: AtomicU64,
     installed_schema: u64,
     identity_columns: Option<[i32; 2]>,
+    surface_columns: Option<[i32; 2]>,
     committed: Mutex<Option<Certificate>>,
 }
 impl Owner {
@@ -60,10 +61,20 @@ impl Owner {
         let identity_columns = columns
             .try_into()
             .map_err(|_| storage("append identity columns unavailable"))?;
+        let mut statement = connection.prepare("SELECT cid FROM pragma_table_xinfo('rustx_store') WHERE name IN ('surface_revision','surface_compaction_generation') ORDER BY name")
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        let surface_columns = statement
+            .query_map([], |row| row.get::<_, i32>(0))
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| storage(error.to_string()))?
+            .try_into()
+            .map_err(|_| storage("Surface head columns unavailable"))?;
         Ok(Arc::new(Self {
             epoch: AtomicU64::new(0),
             installed_schema: Versions::read(connection)?.main_schema,
             identity_columns: Some(identity_columns),
+            surface_columns: Some(surface_columns),
             committed: Mutex::new(None),
         }))
     }
@@ -73,6 +84,7 @@ impl Owner {
             epoch: AtomicU64::new(0),
             installed_schema: 0,
             identity_columns: None,
+            surface_columns: None,
             committed: Mutex::new(None),
         })
     }
@@ -114,10 +126,27 @@ impl Owner {
                     }
                 })
             }),
+            (
+                "rustx_store",
+                PreUpdateCase::Update {
+                    old_value_accessor: old,
+                    new_value_accessor: new,
+                },
+            ) => self.surface_columns.is_none_or(|columns| {
+                columns.iter().any(|column| {
+                    match (
+                        old.get_old_column_value(*column),
+                        new.get_new_column_value(*column),
+                    ) {
+                        (Ok(a), Ok(b)) => a != b,
+                        _ => true,
+                    }
+                })
+            }),
             (_, PreUpdateCase::Unknown)
             | (
                 "message_ledger"
-                | "surface_head"
+                | "rustx_store"
                 | "projection_head"
                 | "projection_checkpoints"
                 | "projection_activations",
@@ -166,6 +195,7 @@ impl<'a> Batch<'a> {
             .as_ref()
             .map_or(0, |head| head.activation.activation.0);
         let reusable = self.owner.identity_columns.is_some()
+            && self.owner.surface_columns.is_some()
             && versions.main_schema == self.owner.installed_schema
             && epoch != u64::MAX;
         let count = if let Some(proof) = self.proof.filter(|proof| {

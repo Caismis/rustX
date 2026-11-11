@@ -83,6 +83,8 @@ fn register_native_functions(connection: &Connection) -> Result<(), Conversation
     content::register_tail_function(connection)
 }
 
+const SQLITE_PAGE_SIZE: i64 = 512;
+
 pub(super) fn configure_connection(
     connection: &mut Connection,
     in_memory: bool,
@@ -90,7 +92,7 @@ pub(super) fn configure_connection(
     register_native_functions(connection)?;
     connection
         .execute_batch(
-            "PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; PRAGMA page_size = 2048; PRAGMA wal_autocheckpoint = 2000;",
+            "PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; PRAGMA page_size = 512; PRAGMA cache_size = -2000; PRAGMA wal_autocheckpoint = 7825;",
         )
         .map_err(|error| {
             crate::durable::sqlite::sqlite_error(&error, format!("configure SQLite: {error}"))
@@ -205,6 +207,14 @@ pub(super) fn validate_existing_schema(
             stored: version,
             expected: SQLITE_SCHEMA_VERSION,
         });
+    }
+    let page_size: i64 = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .map_err(|error| storage(format!("read SQLite page size: {error}")))?;
+    if page_size != SQLITE_PAGE_SIZE {
+        return Err(ConversationStoreError::IncompatibleSchema(format!(
+            "SQLite page size {page_size} does not match {SQLITE_PAGE_SIZE}"
+        )));
     }
     verify_schema_shape(connection)
 }
@@ -762,11 +772,6 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 ledger_position INTEGER NOT NULL,
                 message_id TEXT NOT NULL,
                 FOREIGN KEY(ledger_position,message_id) REFERENCES message_ledger(position,message_id)
-            );
-            CREATE TABLE IF NOT EXISTS surface_head (
-                id INTEGER PRIMARY KEY CHECK(id=1),
-                revision INTEGER NOT NULL,
-                compaction_generation INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS projection_checkpoints (
                 checkpoint_id TEXT PRIMARY KEY,
