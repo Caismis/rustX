@@ -562,14 +562,12 @@ impl AgentExecution<'_> {
                                 Ok(Some(result)) => {
                                     slots[slot_index].result = Some(result);
                                 }
-                                Ok(None) => {
-                                    // Allowed but not started: leave unset so the
-                                    // group-error / cancellation fill owns it.
-                                }
-                                Err(_) => {
-                                    slots[slot_index].result = Some(failed_result(
-                                        "tool authorization aborted after sibling execution started",
-                                    ));
+                                Ok(None) | Err(_) => {
+                                    // Allowed-but-not-started and aborted Ask /
+                                    // Review waiters leave the slot unset so the
+                                    // group-error / cancellation fill owns the
+                                    // canonical text. Do not claim sibling
+                                    // execution started unless an executor did.
                                 }
                             }
                         }
@@ -615,9 +613,7 @@ impl AgentExecution<'_> {
                         slots[slot_index].execution_facts = facts;
                     }
                     if let Some(error) = group_error {
-                        let started = slots[index..end]
-                            .iter()
-                            .any(|slot| slot.executor_started || slot.result.is_some());
+                        let started = slots[index..end].iter().any(|slot| slot.executor_started);
                         if matches!(error, CanonicalCommitError::Interaction(_)) && started {
                             for slot in &mut slots[index..end] {
                                 if slot.result.is_none() {
@@ -632,9 +628,7 @@ impl AgentExecution<'_> {
                         }
                     }
                     if self.cancellation.interaction_failed() {
-                        let started = slots[index..end]
-                            .iter()
-                            .any(|slot| slot.executor_started || slot.result.is_some());
+                        let started = slots[index..end].iter().any(|slot| slot.executor_started);
                         if started {
                             for slot in &mut slots[index..end] {
                                 if slot.result.is_none() {
@@ -657,9 +651,7 @@ impl AgentExecution<'_> {
             }
         }
         if self.cancellation.interaction_failed() {
-            let started = slots
-                .iter()
-                .any(|slot| slot.executor_started || slot.result.is_some());
+            let started = slots.iter().any(|slot| slot.executor_started);
             if started {
                 for slot in &mut slots {
                     if slot.result.is_none() {
