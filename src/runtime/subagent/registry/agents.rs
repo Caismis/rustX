@@ -1140,7 +1140,7 @@ impl SubagentRegistry {
 }
 
 /// Every Journal fact kind the subagent registry restores from.
-const SUBAGENT_LIFECYCLE_KINDS: &[&str] = &[
+pub(super) const SUBAGENT_LIFECYCLE_KINDS: &[&str] = &[
     "agent_activation_admission",
     "subagent_ownership_committed",
     "subagent_terminal_published",

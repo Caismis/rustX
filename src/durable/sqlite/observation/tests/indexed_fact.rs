@@ -2386,7 +2386,7 @@ fn historical_fact_cuts_reuse_plans_without_changing_rows_or_scan_work() {
             .remove(0);
             let rows = statement
                 .query_map(rusqlite::params_from_iter(values), |row| {
-                    row.get::<_, String>(0)
+                    row.get::<_, String>(6)
                 })
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
