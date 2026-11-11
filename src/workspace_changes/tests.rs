@@ -718,7 +718,7 @@ async fn review_cancelling_a_snapshot_reaps_its_blocked_git_reader() {
     .unwrap();
     git(root, &["config", "include.path", fifo.to_str().unwrap()]);
     let record = start(root, &Arc::default(), "cancel-git-reader");
-    let scratch = record.directory.path().to_owned();
+    let scratch = record.directory.get().unwrap().path().to_owned();
     let _writer = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             match fs::OpenOptions::new()
@@ -1313,4 +1313,72 @@ fn snapshot_storage_shares_only_the_namespace_and_reclaims_attempt_directories()
         root,
         "later attempts reuse the same exact namespace"
     );
+}
+
+#[tokio::test]
+async fn repository_discovery_rechecks_markers_between_attempts() {
+    let dir = tempdir();
+    let root = dir.path();
+    let store = Arc::default();
+    let first = start(root, &store, "no-repository");
+    assert!(first.directory.get().is_none());
+    first.finish().await;
+    git(root, &["init", "-q"]);
+    let second = start(root, &store, "initialized");
+    assert!(second.directory.get().is_some());
+    second.before_tools().await;
+    assert!(second.baseline.lock().unwrap().is_some());
+    second.finish().await;
+    fs::remove_dir_all(root.join(".git")).unwrap();
+    let third = start(root, &store, "removed");
+    assert!(third.directory.get().is_none());
+    third.before_tools().await;
+    assert!(third.directory.get().is_none());
+    let target = root.join("new.txt");
+    third.capture(&target);
+    assert!(third.directory.get().is_some());
+    fs::write(&target, "new content\n").unwrap();
+    third.finish().await;
+    assert_eq!(store.summary(&AttemptId::new("removed")).unwrap().total, 1);
+}
+
+#[test]
+fn repository_discovery_respects_worktrees_bare_markers_and_config_changes() {
+    let repo = repository();
+    let dir = tempdir();
+    let worktree = dir.path().join("worktree");
+    assert!(!git::may_have_repository(dir.path()));
+    git(
+        repo.path(),
+        &["worktree", "add", "--detach", worktree.to_str().unwrap()],
+    );
+    assert!(git::may_have_repository(&worktree));
+    git(
+        &worktree,
+        &["config", "core.worktree", worktree.to_str().unwrap()],
+    );
+    assert!(git::may_have_repository(&worktree));
+    git(&worktree, &["config", "--unset", "core.worktree"]);
+    git(
+        repo.path(),
+        &["worktree", "remove", "--force", worktree.to_str().unwrap()],
+    );
+    fs::create_dir(&worktree).unwrap();
+    assert!(!git::may_have_repository(&worktree));
+    fs::write(worktree.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    assert!(git::may_have_repository(&worktree));
+}
+
+#[tokio::test]
+async fn non_repository_attempts_without_file_capture_do_not_start_git_or_allocate_scratch() {
+    let dir = tempdir();
+    let store = Arc::default();
+    for turn in 0..64 {
+        let record = start(dir.path(), &store, &format!("no-capture-{turn}"));
+        assert!(record.task.lock().await.is_none());
+        assert!(record.directory.get().is_none());
+        record.before_tools().await;
+        record.finish().await;
+        assert!(record.directory.get().is_none());
+    }
 }

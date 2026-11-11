@@ -137,6 +137,23 @@ enum GitContext<'a> {
     Snapshot(&'a Arc<SnapshotDirectory>),
 }
 
+/// A missing marker on every ancestor proves Git cannot discover a repository.
+/// Ambiguous filesystem results and possible bare repositories still use Git.
+pub(super) fn may_have_repository(cwd: &Path) -> bool {
+    let Ok(cwd) = cwd.canonicalize() else {
+        return true;
+    };
+    for directory in cwd.ancestors() {
+        for marker in [".git", "HEAD"] {
+            match std::fs::symlink_metadata(directory.join(marker)) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) | Err(_) => return true,
+            }
+        }
+    }
+    false
+}
+
 impl Repository {
     pub async fn locate(
         cwd: &Path,
