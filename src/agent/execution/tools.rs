@@ -454,6 +454,10 @@ impl AgentExecution<'_> {
                     // for unrelated Ask/Review siblings.
                     let end = concurrent_group_end(&slots, index);
                     let mut auth_futures = futures_util::stream::FuturesUnordered::new();
+                    // Per-slot auth cancellation: abort only unfinished Ask /
+                    // Review waiters without cancel_pending_async tearing down
+                    // interactions already owned by started sibling tools.
+                    let mut auth_cancels = std::collections::BTreeMap::new();
                     for slot_index in index..end {
                         if slots[slot_index].result.is_some() {
                             continue;
@@ -466,7 +470,9 @@ impl AgentExecution<'_> {
                         let facts =
                             ParallelAuthFacts::from_execution(slot_index, self, &slots[slot_index]);
                         let lifecycle = self.lifecycle.clone();
-                        let cancellation = self.cancellation.execution_cancellation();
+                        let (auth_trigger, cancellation) =
+                            self.cancellation.execution_cancellation().child_execution();
+                        auth_cancels.insert(slot_index, auth_trigger);
                         auth_futures.push(Box::pin(async move {
                             let outcome = authorize_owned(&lifecycle, &cancellation, &facts).await;
                             (facts.slot_index, outcome)
@@ -484,6 +490,7 @@ impl AgentExecution<'_> {
                             () = self.cancellation.cancelled() => break,
                             Some((slot_index, outcome)) = auth_futures.next() => {
                                 remaining_auth -= 1;
+                                auth_cancels.remove(&slot_index);
                                 match outcome {
                                     Ok(Some(result)) => {
                                         slots[slot_index].result = Some(result);
@@ -546,17 +553,19 @@ impl AgentExecution<'_> {
                             }
                         }
                     }
-                    // Abort unfinished Ask waiters before releasing auth futures,
-                    // then drain their outcomes so InteractionCoordinator never
-                    // keeps orphan pending approvals after this group stops.
+                    // Abort only unfinished auth waiters, then drain so their
+                    // Ask/Review interactions settle without orphaning and
+                    // without cancelling interactions owned by started tools.
                     if remaining_auth > 0 {
-                        if let Some(coordinator) = self.lifecycle.native_interaction_coordinator() {
-                            coordinator
-                                .cancel_pending_async(self.cancellation.reason())
-                                .await;
+                        let cause = crate::tools::deadline::ToolCancellationCause::Attempt(
+                            self.cancellation.reason(),
+                        );
+                        for trigger in auth_cancels.values() {
+                            trigger.cancel(cause);
                         }
                         while let Some((slot_index, outcome)) = auth_futures.next().await {
                             remaining_auth = remaining_auth.saturating_sub(1);
+                            auth_cancels.remove(&slot_index);
                             if slots[slot_index].result.is_some() {
                                 continue;
                             }
