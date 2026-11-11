@@ -2,6 +2,8 @@
 //!
 //! Upstream pin: zai-org/ZCode@b95ebaffeab641907b38652f45c1502bd762972d (Apache-2.0).
 
+#![allow(dead_code)]
+
 use super::types::SafeFlagValue;
 use std::collections::HashMap;
 use std::sync::LazyLock;

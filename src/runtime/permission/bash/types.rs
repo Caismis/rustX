@@ -1,5 +1,7 @@
 //! Shared types for ZCode-derived Bash read-only analysis.
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
