@@ -14,6 +14,7 @@ mod decision;
 mod matrix;
 mod mode;
 mod resource;
+pub(crate) mod review;
 
 pub use bash::{BashReadonlyAnalysis, BashReadonlyClass, analyze_bash_readonly};
 pub use classify::{ClassificationHints, classify_tool_kind, is_workspace_plan_file};
@@ -26,3 +27,4 @@ pub use mode::ExecutionPermissionMode;
 pub use resource::{
     ResourcePermissionSet, ResourcePermissionValue, resolve_resource_permission,
 };
+pub use review::{PermissionReviewVerdict, accept_permission_review};

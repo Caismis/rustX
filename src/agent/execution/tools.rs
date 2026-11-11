@@ -1263,6 +1263,7 @@ struct ParallelAuthFacts {
     audit_arguments: serde_json::Value,
     approval_policy: crate::tools::types::ToolApprovalPolicy,
     elevation_reason: Option<String>,
+    workspace_root: std::path::PathBuf,
 }
 
 impl ParallelAuthFacts {
@@ -1285,6 +1286,7 @@ impl ParallelAuthFacts {
             audit_arguments: slot.call.arguments.clone(),
             approval_policy: prepared.approval,
             elevation_reason: prepared.elevation_reason.clone(),
+            workspace_root: execution.tool_runtime.workspace().root().to_path_buf(),
         }
     }
 }
@@ -1309,7 +1311,7 @@ async fn authorize_owned(
         audit_arguments: &facts.audit_arguments,
         approval_policy: facts.approval_policy,
         elevation_reason: facts.elevation_reason.as_deref(),
-        workspace_root: None,
+        workspace_root: Some(facts.workspace_root.as_path()),
         resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,
     };
     crate::tools::invocation::authorize(lifecycle, &view, cancellation).await

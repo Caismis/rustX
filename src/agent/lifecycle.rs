@@ -436,15 +436,38 @@ pub trait PreToolPolicy: Send + Sync {
 ///
 /// Modes and resource overrides decide whether an already-preflighted
 /// invocation may start. Availability, arguments, execution ownership, and
-/// schema remain unchanged.
-#[derive(Debug, Clone, Copy)]
+/// schema remain unchanged. Automatic-mode `Review` uses the optional
+/// Auxiliary permission-review port (#543 shared selection); absence fails
+/// closed unless `elevation_reason` requests human Ask.
+#[derive(Clone)]
 pub(crate) struct ConfiguredApprovalPolicy {
     mode: ApprovalMode,
+    reviewer: Option<std::sync::Arc<dyn crate::runtime::permission::review::PermissionReviewPort>>,
+}
+
+impl std::fmt::Debug for ConfiguredApprovalPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfiguredApprovalPolicy")
+            .field("mode", &self.mode)
+            .field("reviewer", &self.reviewer.is_some())
+            .finish()
+    }
 }
 
 impl ConfiguredApprovalPolicy {
     pub(crate) const fn new(mode: ApprovalMode) -> Self {
-        Self { mode }
+        Self {
+            mode,
+            reviewer: None,
+        }
+    }
+
+    pub(crate) fn with_reviewer(
+        mut self,
+        reviewer: std::sync::Arc<dyn crate::runtime::permission::review::PermissionReviewPort>,
+    ) -> Self {
+        self.reviewer = Some(reviewer);
+        self
     }
 }
 
@@ -484,12 +507,21 @@ impl PreToolPolicy for ConfiguredApprovalPolicy {
                 PermissionDecisionKind::Ask => PreToolDecision::Ask {
                     reason: decision.reason,
                 },
-                // Auxiliary review is wired through the same Ask channel until
-                // the dedicated permission-review consumer lands; fail closed
-                // without a reason-bearing escalation remains Deny above.
-                PermissionDecisionKind::Review => PreToolDecision::Ask {
-                    reason: decision.reason,
-                },
+                PermissionDecisionKind::Review => {
+                    let verdict = match &self.reviewer {
+                        Some(reviewer) => reviewer.review(view, &decision.reason).await,
+                        None => {
+                            crate::runtime::permission::review::PermissionReviewVerdict::Failed {
+                                explanation: "Auxiliary permission reviewer is not bound on this execution"
+                                    .into(),
+                            }
+                        }
+                    };
+                    crate::runtime::permission::review::decision_after_review(
+                        verdict,
+                        view.elevation_reason,
+                    )
+                }
             })
         })
     }
@@ -772,6 +804,16 @@ impl AttemptLifecycle {
         self
     }
 
+    /// Applies the frozen mode together with the Auxiliary permission reviewer.
+    pub(crate) fn with_approval_mode_and_reviewer(
+        mut self,
+        mode: ApprovalMode,
+        reviewer: Arc<dyn crate::runtime::permission::review::PermissionReviewPort>,
+    ) -> Self {
+        self.pre_tool = Arc::new(ConfiguredApprovalPolicy::new(mode).with_reviewer(reviewer));
+        self
+    }
+
     /// Binds the conversation-owned native interaction coordinator used by an
     /// `Ask` decision. Only the runtime owner can install this production
     /// binding; callers cannot replace it with another rendezvous.
@@ -1026,8 +1068,23 @@ mod tests {
             ConfiguredApprovalPolicy::new(ApprovalMode::Automatic)
                 .evaluate(&write)
                 .await
-                .expect("automatic write"),
-            PreToolDecision::Ask { .. }
+                .expect("automatic write without reviewer fails closed"),
+            PreToolDecision::Deny { .. }
+        ));
+        let scripted = std::sync::Arc::new(
+            crate::runtime::permission::review::ScriptedPermissionReviewer {
+                verdict: crate::runtime::permission::review::PermissionReviewVerdict::Allow {
+                    explanation: "ordinary write".into(),
+                },
+            },
+        );
+        assert!(matches!(
+            ConfiguredApprovalPolicy::new(ApprovalMode::Automatic)
+                .with_reviewer(scripted)
+                .evaluate(&write)
+                .await
+                .expect("automatic write with scripted reviewer"),
+            PreToolDecision::Allow
         ));
         assert_eq!(write.arguments, &write_arguments);
     }

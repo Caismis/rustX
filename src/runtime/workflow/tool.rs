@@ -209,6 +209,7 @@ impl WorkflowRuntime {
                 },
             )?;
         }
+        let workspace_root = services.runtime.workspace().root();
         let view = crate::agent::PreToolView {
             conversation_id: &run.run_id.conversation_id,
             execution: services.execution.clone(),
@@ -221,7 +222,7 @@ impl WorkflowRuntime {
             audit_arguments: &prepared.invocation.arguments,
             approval_policy: prepared.approval,
             elevation_reason: prepared.elevation_reason.as_deref(),
-            workspace_root: None,
+            workspace_root: Some(workspace_root),
             resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,
         };
         self.read_model.node(node, |view| {

@@ -46,8 +46,17 @@ Bash classification is conservative and fail-closed. Parse failures,
 unsupported constructs, and unresolved behavior are `unproven`, not proven
 read-only. Plan elevates unproven Bash; Automatic reviews it.
 
+## Auxiliary permission review
+
+Automatic-mode `Review` uses the shared #543 Auxiliary model selection (default
+lowest Profile). The reviewer returns a strict `{decision, explanation}` JSON
+object (`allow`|`deny`). Invalid, timed-out, or unavailable review fails closed.
+A nonblank `elevation_reason` may escalate a denial or reviewer failure to
+human Ask for the exact frozen invocation.
+
 ## Settlement
 
 Permission decides whether a prepared invocation may start. Independent
-authorized calls may run concurrently; ToolResults still commit atomically in
-original model call order.
+authorized calls may start as soon as their own decision is Allow, without
+waiting for unrelated Ask/Review siblings. ToolResults still commit atomically
+in original model call order.

@@ -365,11 +365,27 @@ impl RuntimeInner {
             .execution_context(self.capability.clone(), id.clone())
             .with_workflow_models(self.auxiliary.clone())
             .with_workflow_deadline(self.monotonic_clock.clone(), deadline, trigger.clone());
+        let auxiliary_invocation = self
+            .lock_state()
+            .model
+            .snapshot()
+            .map_err(|error| error.to_string())?
+            .summary_invocation()
+            .clone();
+        let reviewer = Arc::new(
+            crate::runtime::permission::review::AuxiliaryPermissionReviewer::new(
+                self.auxiliary.clone(),
+                auxiliary_invocation,
+                policy.model_timeout,
+                resources.revision().get(),
+                execution_cancel.child_signal(),
+            ),
+        );
         context.native = Some(Arc::new(
             crate::tools::invocation::NativeInvocationServices {
                 lifecycle: crate::agent::AttemptLifecycle::inert()
                     .with_native_interaction(self.interaction.clone())
-                    .with_approval_mode(approval),
+                    .with_approval_mode_and_reviewer(approval, reviewer),
                 runtime: self.tool_runtime.clone(),
                 clock: self.monotonic_clock.clone(),
                 leaf_policy: policy.tool_deadline,

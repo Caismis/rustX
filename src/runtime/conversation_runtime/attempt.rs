@@ -154,6 +154,7 @@ impl RuntimeInner {
             workflow_output: self.workflow_output.clone(),
         };
         let workspace_changes = execution_policy.workspace_changes.clone();
+        let auxiliary_invocation = model.summary_invocation().clone();
         let request = AgentExecutionRequest {
             agent_id: self.agent_id.clone(),
             conversation_id: self.conversation_id.clone(),
@@ -165,9 +166,18 @@ impl RuntimeInner {
             },
             model,
         };
+        let reviewer = std::sync::Arc::new(
+            crate::runtime::permission::review::AuxiliaryPermissionReviewer::new(
+                self.auxiliary.clone(),
+                auxiliary_invocation,
+                model_timeout_policy,
+                resources.revision().get(),
+                cancellation.signal().child(),
+            ),
+        );
         let lifecycle = crate::agent::AttemptLifecycle::inert()
             .with_native_interaction(self.interaction.clone())
-            .with_approval_mode(approval_mode);
+            .with_approval_mode_and_reviewer(approval_mode, reviewer);
         #[cfg(test)]
         let lifecycle = {
             let test_policy = self
