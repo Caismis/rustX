@@ -38,6 +38,7 @@ use support::fake::{
     tool_call_events,
 };
 use tokio::sync::watch;
+use rustx::tools::types::{ToolExecutionPolicy};
 
 fn request(model: &Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {

@@ -31,6 +31,7 @@ use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, fake_model, success_result,
     tool_call_events,
 };
+use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 
 fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {

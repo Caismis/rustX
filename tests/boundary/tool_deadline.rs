@@ -198,6 +198,7 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
             monotonic_clock: clock.clone() as Arc<dyn MonotonicClock>,
             subagent_context: None,
             workflow_output: None,
+            approval_mode: rustx::runtime::ApprovalMode::default(),
         },
         context_runtime,
         &fixture.runtime,

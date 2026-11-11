@@ -44,6 +44,7 @@ pub(crate) fn default_monotonic_clock() -> Arc<dyn rustx::runtime::MonotonicCloc
 /// create two elapsed-time authorities.
 pub(crate) fn default_execution_policy() -> crate::agent::execution::AgentExecutionRuntimePolicy {
     crate::agent::execution::AgentExecutionRuntimePolicy {
+
         workspace_changes: None,
         model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
@@ -52,6 +53,7 @@ pub(crate) fn default_execution_policy() -> crate::agent::execution::AgentExecut
         // generation, so it hands out no subagent resolution authority.
         subagent_context: None,
         workflow_output: None,
+        approval_mode: rustx::runtime::ApprovalMode::default(),
     }
 }
 

@@ -32,11 +32,11 @@ use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::limits::MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL;
-use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, fake_model, success_result,
     tool_call_events,
 };
+use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 
 fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {

@@ -55,13 +55,7 @@ fn product_native_defaults_are_independent_and_bash_keeps_background_admission()
         ("bash", ModelSelectable),
     ] {
         let actual = definition(&fixture, name);
-        assert_eq!(
-            (
-                actual.execution_policy,
-            ),
-            (execution, concurrency, approval),
-            "{name}"
-        );
+        assert_eq!(actual.execution_policy, execution, "{name}");
     }
     for (mode, expected) in [
         ("foreground", ToolInvocationMode::Foreground),

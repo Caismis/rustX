@@ -51,6 +51,7 @@ use support::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, success_result, tool_call_events,
 };
+use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 
 const CONVERSATION: &str = "conv_2478d054-bec9-70c5-a4d2-7571989fe1a7";
 const MALFORMED_MARKER: &str = "no usable invocation id";

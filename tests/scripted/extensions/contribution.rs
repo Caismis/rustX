@@ -2,6 +2,7 @@ use super::*;
 use crate::extensions::probe::{Behavior, ProbeConfig};
 use crate::runtime::identity::{ContextContributorIdentity, NativeContextContributor};
 use std::sync::atomic::Ordering;
+use rustx::tools::types::{ToolExecutionPolicy};
 
 fn composed(probes: Vec<ProbeConfig>) -> NativeAgentExtensions {
     let mut composition = NativeAgentExtensions::none();

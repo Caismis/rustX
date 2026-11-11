@@ -1087,14 +1087,14 @@ async fn a_frozen_child_model_never_observes_a_later_rustx_toml_edit() {
 async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
     use rustx::tools::executor::ToolRegistry;
     use rustx::tools::native::register_subagent_child_tools;
-    use rustx::tools::types::{ToolExecutionPolicy};
+    use rustx::tools::types::ToolExecutionPolicy;
 
     let lab = Lab::new();
-    // The generation admits `grep` with a non-default policy on every axis.
+    // The generation admits `grep` with a non-default execution policy.
     let mut document = serde_json::json!({"schema_version": 12, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "native_tools": {
             "grep": {
                 "execution": "model_selectable",
-                                            }
+            }
         }, "subagents": explore(&["grep"]), "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": ["read"]}}});
     document["agent"]["agents"] = document["subagents"]
         .as_object_mut()

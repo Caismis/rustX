@@ -8,6 +8,7 @@ use super::super::{common, support};
 use rustx::runtime::CancellationSignal;
 use rustx::tools::background::BackgroundDispatchOutcome;
 use rustx::tools::executor::ToolExecutor;
+use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 
 struct GatedSettlement {
     started: tokio::sync::watch::Sender<bool>,
