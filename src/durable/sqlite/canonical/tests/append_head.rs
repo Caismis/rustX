@@ -194,18 +194,57 @@ fn partial_surface_head_is_rejected_without_repair() {
         "surface_compaction_generation=NULL",
     ] {
         let store = store();
-        store.initialize(&[]).unwrap();
+        store.initialize(&[user_message("existing", "X")]).unwrap();
         store.conn.lock().unwrap().execute_batch(&format!(
             "PRAGMA ignore_check_constraints=ON; UPDATE rustx_store SET {assignment} WHERE id=1; PRAGMA ignore_check_constraints=OFF"
         )).unwrap();
         assert!(store.load_head().is_err());
         assert!(store.append_canonical(&user_message("a", "A")).is_err());
         let connection = store.conn.lock().unwrap();
+        assert!(reading::cut(&connection, &store.conversation_id).is_err());
+        assert!(
+            observation::surface_boundaries(
+                &connection,
+                crate::conversation::SurfaceRevision::new(0),
+                0,
+                1,
+            )
+            .is_err()
+        );
         let incomplete: bool = connection.query_row(
             "SELECT (surface_revision IS NULL)!=(surface_compaction_generation IS NULL) FROM rustx_store WHERE id=1",
             [], |row| row.get(0),
         ).unwrap();
         assert!(incomplete, "corrupt head was silently repaired");
+    }
+}
+
+#[test]
+fn empty_surface_readers_accept_both_initialization_states() {
+    for initialized in [false, true] {
+        let store = store();
+        if initialized {
+            store.initialize(&[]).unwrap();
+        }
+        let connection = store.conn.lock().unwrap();
+        assert_eq!(
+            reading::cut(&connection, &store.conversation_id)
+                .unwrap()
+                .surface_revision
+                .get(),
+            0
+        );
+        assert_eq!(
+            observation::surface_boundaries(
+                &connection,
+                crate::conversation::SurfaceRevision::new(0),
+                0,
+                1,
+            )
+            .unwrap()
+            .total,
+            0
+        );
     }
 }
 

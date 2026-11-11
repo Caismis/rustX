@@ -341,7 +341,7 @@ Committed facts survive process termination while the OS/filesystem remains heal
 Power loss or OS failure may lose recent transactions; there is no promised time
 window or per-commit stable-media guarantee. Ordinary accepted model output commits P, U and C together, including its no-tool inbox/terminal boundary.
 Known write/commit failures remain errors. SQLite owns WAL/SHM recovery and the
-7,825-frame automatic checkpoint (approximately 4 MiB including frame headers); no per-turn forced checkpoint is added. The connection page cache is limited to approximately 2,000 KiB independently of page size.
+7,825-frame automatic checkpoint (approximately 4 MiB including frame headers); no per-turn forced checkpoint is added. SQLite uses a suggested page-cache size of approximately 2,000 KiB, not a hard memory limit; in-memory databases retain their contents in memory.
 See [the durability audit](issue-480/durability.md) for connection and lifetime rules.
 
 Version 9 froze the durable **answer obligation** (Issue #111): adoption
