@@ -236,5 +236,13 @@ async fn fixed_turn_observation_work() {
     for (kind, tool) in [("text", false), ("tool", true)] {
         let work = measure_turns(tool).await;
         report(kind, &work);
+        // Each live read-back that runs is current when it owns the
+        // connection; retired ones run no SQL.
+        assert_eq!(
+            work.sql
+                .get("retired_checkpoint_head")
+                .map_or(0, |scope| scope.statements),
+            0
+        );
     }
 }

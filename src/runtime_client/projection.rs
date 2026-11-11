@@ -423,6 +423,9 @@ pub(crate) struct RuntimeClientProjection {
     /// or a new invalidating revision, never by an obsolete read.
     read_failure: Option<String>,
     read_revision: u64,
+    /// Mirrors `read_revision` for off-lock readers: a read whose fence
+    /// revision is no longer current can never be installed.
+    latest_read_revision: Arc<std::sync::atomic::AtomicU64>,
     domain_sources: DomainSources,
     domain_source_bytes: usize,
     source_frontiers: imbl::OrdMap<String, crate::observation::cut::CollectionFrontier>,
@@ -583,6 +586,17 @@ pub(crate) struct ReadDomainCut {
     revision: u64,
     through: u64,
     source_cut: Option<crate::durable::observation::ObservationReadCut>,
+}
+
+/// Off-lock view of the newest read-domain revision. Revisions only grow, so a
+/// cut whose revision differs is already retired: installation rejects it.
+#[derive(Clone, Debug)]
+pub(crate) struct ReadSupersession(Arc<std::sync::atomic::AtomicU64>);
+
+impl ReadSupersession {
+    pub(crate) fn retires(&self, cut: &ReadDomainCut) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Acquire) != cut.revision
+    }
 }
 
 fn deferred_result_content(result: &ToolExecutionResult) -> ToolExecutionResult {
