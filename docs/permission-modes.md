@@ -44,9 +44,38 @@ grant.
 
 Bash classification is conservative and fail-closed. Parse failures,
 unsupported constructs, and unresolved behavior are `unproven`, not proven
-read-only. Plan elevates unproven Bash; Automatic reviews it. The ZCode AST /
-argv corpus port (acceptance P06) is tracked separately; see
-`docs/permission-modes-p01-p22.md`.
+read-only. Plan elevates unproven Bash; Automatic reviews it.
+
+### Upstream pin and provenance
+
+| Item | Value |
+| --- | --- |
+| Upstream | [zai-org/ZCode](https://github.com/zai-org/ZCode) |
+| Pinned commit | `b95ebaffeab641907b38652f45c1502bd762972d` (`chore: sync ZCode source v3.18.0`) |
+| Upstream license | Apache-2.0 |
+| Reference modules | `bash-command-parser.ts`, `bash-semantics.ts`, `bash-readonly-policy-argv.ts` (+ policy tables / callbacks) |
+| Rust parser | [`brush-parser`](https://crates.io/crates/brush-parser) 0.4.x (MIT) — POSIX/bash AST; replaces ZCode's TypeScript `unbash` |
+
+Adopted rules: bounded AST walk over simple commands / pipelines / `&&` `||` `;`
+sequences; dynamic expansions (command/process/parameter/arithmetic/brace) and
+unsupported compounds fail closed; data-driven per-command `safeFlags` /
+allow-any / multiword / git-subcommand policies; known write options (`sed -i`,
+`find -delete/-exec`, `tree -o`, dangerous git globals); safe env-assignment and
+input-redirect allowlists; `command` / `builtin` / `noglob` wrapper stripping;
+`cd`+`git` combination rejected.
+
+Intentional differences from ZCode:
+
+- `brush-parser` instead of `unbash` (Rust-native AST).
+- Unquoted globs (`*`, `?`, `[`) are unproven (post-expansion argv is unresolved).
+- Path-qualified executables (`/usr/bin/sed …`) are unproven.
+- brush `[[ … ]]` ExtendedTest / brace-group / subshell / function / loop /
+  conditional compounds are unsupported → unproven.
+- Optional ZCode git *runtime* FS probes (bare repo / redirected `.git`) are not
+  wired into `analyze_bash_readonly` yet; argv/flag policy still applies.
+- Windows CMD dialect handling is omitted (rustX Bash is POSIX).
+- Bare `env` is command-only read-only; `env …` wrappers stay unproven.
+
 
 ## Acceptance evidence
 

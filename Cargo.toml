@@ -78,6 +78,8 @@ jsonschema = "0.26"
 # model-facing tool contract.
 globset = "0.4.19"
 ignore = "0.4.33"
+# POSIX/bash AST for Issue #544 Bash read-only admission (ZCode semantic port).
+brush-parser = "0.4.0"
 grep-matcher = "0.1.9"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
