@@ -289,6 +289,7 @@ async fn child_fixture_scoped_at(
     .await
 }
 
+#[allow(clippy::too_many_arguments)] // Fixture matrix: mode × activation × artifacts.
 async fn child_fixture_scoped_at_with_mode(
     dir: &tempfile::TempDir,
     conversation_id: &ConversationId,
@@ -786,7 +787,7 @@ async fn launch_wired_child(plane: &ParentPlane, child: &ChildFixture, task: &st
     launch_wired_child_with_shell(plane, child, task, "true").await
 }
 
-/// Ask proofs: freeze Plan on the child activation so elevation_reason can Ask.
+/// Ask proofs: freeze Plan on the child activation so `elevation_reason` can Ask.
 async fn launch_wired_child_for_approval(
     plane: &ParentPlane,
     child: &ChildFixture,

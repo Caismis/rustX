@@ -2372,7 +2372,7 @@ async fn approval_deny_emits_one_denied_result_without_starting_executor() {
 
 /// P15: an allowed call may start while a sibling still waits for Ask. Denial
 /// of the sibling fills its result slot without an executor future. Committed
-/// ToolMessages stay in original call order.
+/// `ToolMessages` stay in original call order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parallel_batch_allows_independent_work_while_sibling_awaits_ask() {
     let policy = Arc::new(ScriptedPreToolPolicy::new(vec![
