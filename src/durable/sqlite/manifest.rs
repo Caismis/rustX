@@ -121,25 +121,36 @@ fn decoded_header(id: u64, row: HeaderRow) -> Result<NodeRef, ConversationStoreE
         height: row.2,
     })
 }
-fn header(connection: &Connection, id: u64) -> Result<NodeRef, ConversationStoreError> {
-    #[cfg(test)]
-    NODE_READ_WORK.with(|work| {
-        let (headers, shapes) = work.get();
-        work.set((headers + 1, shapes));
-        crate::agent::execution::attribution::record_native(
-            crate::agent::execution::attribution::NativeWork {
-                index_queries: 1,
-                ..Default::default()
-            },
-        );
-    });
-    let mut statement = connection
-        .prepare_cached("SELECT CASE WHEN typeof(digest)='blob' AND length(digest)=32 THEN digest END,count,height FROM native_input_nodes WHERE id=?1")
-        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
-    let row: HeaderRow = statement
-        .query_row([seq_to_i64(id)?], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-        .map_err(|e| storage(e.to_string()))?;
-    decoded_header(id, row)
+/// One node row joined with the actual rows of both children. Child headers
+/// still come from their own stored rows, never from the parent's copies.
+macro_rules! node_sql {
+    ($source:literal) => {
+        concat!(
+            "SELECT CASE WHEN typeof(n.digest)='blob' AND length(n.digest)=32 THEN n.digest END,n.count,n.height,",
+            "CASE WHEN typeof(n.item_digest)='blob' AND length(n.item_digest)=32 THEN n.item_digest END,n.left_id,n.right_id,",
+            "CASE WHEN typeof(n.left_digest)='blob' AND length(n.left_digest)=32 THEN n.left_digest END,",
+            "CASE WHEN typeof(n.right_digest)='blob' AND length(n.right_digest)=32 THEN n.right_digest END,",
+            "CASE WHEN typeof(n.item_id)='integer' AND n.item_id>0 THEN n.item_id END,",
+            "l.id,CASE WHEN typeof(l.digest)='blob' AND length(l.digest)=32 THEN l.digest END,l.count,l.height,",
+            "r.id,CASE WHEN typeof(r.digest)='blob' AND length(r.digest)=32 THEN r.digest END,r.count,r.height,",
+            $source,
+            " FROM native_input_nodes n LEFT JOIN native_input_nodes l ON l.id=n.left_id",
+            " LEFT JOIN native_input_nodes r ON r.id=n.right_id WHERE n.id=?1"
+        )
+    };
+}
+const NODE_SQL: &str = node_sql!("NULL");
+const NODE_SOURCE_SQL: &str = node_sql!(
+    "CASE WHEN typeof(n.source_metadata)='blob' AND length(n.source_metadata)<=65536 AND n.source_native_digest=?2 AND n.source_hash=?3 THEN n.source_metadata END"
+);
+type ChildRow = (Option<u64>, Option<Vec<u8>>, Option<u64>, Option<u8>);
+fn child_header(id: u64, row: ChildRow) -> Result<NodeRef, ConversationStoreError> {
+    match row {
+        (Some(actual), Some(digest), Some(count), Some(height)) if actual == id => {
+            decoded_header(id, (digest, count, height))
+        }
+        _ => Err(storage("native selected input child unavailable")),
+    }
 }
 type NodeRow = (
     Option<Vec<u8>>,
@@ -149,10 +160,27 @@ type NodeRow = (
     Option<Vec<u8>>,
     Option<u64>,
 );
+type JoinedRow = (HeaderRow, NodeRow, ChildRow, ChildRow, Option<Vec<u8>>);
 pub(super) fn node(
     connection: &Connection,
     expected: &NodeRef,
 ) -> Result<Node, ConversationStoreError> {
+    node_row(connection, expected, None).map(|(node, _)| node)
+}
+/// Reads a node and, in the same row, its optional Source metadata bytes,
+/// selected only while the row carries exactly `source_hash`.
+pub(super) fn node_with_source(
+    connection: &Connection,
+    expected: &NodeRef,
+    source_hash: &[u8; 32],
+) -> Result<(Node, Option<Vec<u8>>), ConversationStoreError> {
+    node_row(connection, expected, Some(source_hash))
+}
+fn node_row(
+    connection: &Connection,
+    expected: &NodeRef,
+    source_hash: Option<&[u8; 32]>,
+) -> Result<(Node, Option<Vec<u8>>), ConversationStoreError> {
     #[cfg(test)]
     NODE_READ_WORK.with(|work| {
         let (headers, shapes) = work.get();
@@ -165,19 +193,33 @@ pub(super) fn node(
         );
     });
     let id = seq_to_i64(expected.id)?;
-    // Read this node's identity and shape together. Child headers still come
-    // from their actual rows; no construction or historical proof is reused.
-    let (head, shape): (HeaderRow, NodeRow) = connection
-        .prepare_cached("SELECT CASE WHEN typeof(digest)='blob' AND length(digest)=32 THEN digest END,count,height,CASE WHEN typeof(item_digest)='blob' AND length(item_digest)=32 THEN item_digest END,left_id,right_id,CASE WHEN typeof(left_digest)='blob' AND length(left_digest)=32 THEN left_digest END,CASE WHEN typeof(right_digest)='blob' AND length(right_digest)=32 THEN right_digest END,CASE WHEN typeof(item_id)='integer' AND item_id>0 THEN item_id END FROM native_input_nodes WHERE id=?1")
-        .and_then(|mut statement| {
-            statement.query_row([id], |row| {
-                Ok((
-                    (row.get(0)?, row.get(1)?, row.get(2)?),
-                    (row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?,row.get(8)?),
-                ))
-            })
-        })
-        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let read = |row: &rusqlite::Row<'_>| -> rusqlite::Result<JoinedRow> {
+        Ok((
+            (row.get(0)?, row.get(1)?, row.get(2)?),
+            (
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+            ),
+            (row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?),
+            (row.get(13)?, row.get(14)?, row.get(15)?, row.get(16)?),
+            row.get(17)?,
+        ))
+    };
+    // Read this node's identity and shape together with its children's
+    // actual headers. No construction or historical proof is reused.
+    let (head, shape, left_row, right_row, source) = match source_hash {
+        None => connection.query_row_cached(NODE_SQL, [id], read),
+        Some(hash) => connection.query_row_cached(
+            NODE_SOURCE_SQL,
+            params![id, expected.digest.as_slice(), hash.as_slice()],
+            read,
+        ),
+    }
+    .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let actual = decoded_header(expected.id, head)?;
     if actual != *expected {
         return Err(invalid("native selected input node identity"));
@@ -197,8 +239,13 @@ pub(super) fn node(
             }
         }
         (None, Some(left), Some(right), Some(lh), Some(rh), None) => {
-            let left = header(connection, left)?;
-            let right = header(connection, right)?;
+            #[cfg(test)]
+            NODE_READ_WORK.with(|work| {
+                let (headers, shapes) = work.get();
+                work.set((headers + 2, shapes));
+            });
+            let left = child_header(left, left_row)?;
+            let right = child_header(right, right_row)?;
             if left.digest != bytes32(lh)?
                 || right.digest != bytes32(rh)?
                 || left.count.checked_add(right.count) != Some(actual.count)
@@ -211,7 +258,7 @@ pub(super) fn node(
         }
         _ => return Err(invalid("native selected node closed shape")),
     };
-    Ok(Node { kind })
+    Ok((Node { kind }, source))
 }
 // Use the item digest certified by the node shape to bind the exact body.
 // Keep the byte cap in SQL so a rejected leaf never allocates its body in Rust.
