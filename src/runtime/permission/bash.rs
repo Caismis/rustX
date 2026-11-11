@@ -109,7 +109,16 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
         "ls" | "pwd" | "echo" | "printf" | "true" | "false" | "test" | "[" | "cat" | "head"
         | "tail" | "wc" | "stat" | "file" | "which" | "type" | "basename" | "dirname"
         | "realpath" | "readlink" | "uname" | "id" | "whoami" | "printenv" | "grep" | "rg"
-        | "fd" | "jq" | "sleep" => BashReadonlyClass::Readonly,
+        | "jq" | "sleep" => BashReadonlyClass::Readonly,
+        "fd" => {
+            if args.iter().copied().any(is_fd_exec_option) {
+                BashReadonlyClass::Unproven {
+                    reason: "fd exec options are not proven read-only".to_owned(),
+                }
+            } else {
+                BashReadonlyClass::Readonly
+            }
+        }
         "date" => {
             // Conservative: only bare `date` is proven display-only. GNU glued
             // `-s…`, quoted `-s`, BSD positional set-time, and display flags
@@ -177,6 +186,12 @@ fn is_find_write_option(token: &str) -> bool {
             | "-fls"
             | "-fprintf"
     ) || token.starts_with("-exec")
+}
+
+fn is_fd_exec_option(token: &str) -> bool {
+    matches!(token, "-x" | "--exec" | "--exec-batch")
+        || token.starts_with("--exec=")
+        || token.starts_with("--exec-batch=")
 }
 
 fn classify_git(args: &[&str]) -> BashReadonlyClass {
@@ -363,6 +378,9 @@ mod tests {
             "find . '-delete'",
             "yq '-i' .x=1 file.yaml",
             "yq '.x' file.yaml",
+            "fd -x rm",
+            "fd --exec rm {}",
+            "fd --exec-batch rm",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
