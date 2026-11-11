@@ -78,7 +78,7 @@ fn has_dangerous_git_global_option_word(word: &str) -> bool {
     for flag in ["-c", "-C"] {
         if word.len() > flag.len()
             && word.starts_with(flag)
-            && (*flag == "-C" || word.as_bytes().get(flag.len()) != Some(&b'-'))
+            && (flag == "-C" || word.as_bytes().get(flag.len()) != Some(&b'-'))
         {
             return true;
         }

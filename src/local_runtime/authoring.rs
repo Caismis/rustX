@@ -1,8 +1,7 @@
 //! Strict TOML layers and explicit native composition. No dynamic value merge.
 use super::{
     config::{
-        ContextPolicyDocument, CurrentRuntimeConfig, InvocationPolicyDocument, McpServerDocument,
-        McpTransportType, NativePolicyOverrideDocument,
+        ContextPolicyDocument, CurrentRuntimeConfig, McpServerDocument, McpTransportType,
     },
     configuration::Origin,
 };
@@ -104,11 +103,6 @@ pub struct RuntimeLayer<P = crate::model::authoring::Provider, E = AuthoredEnvir
     pub tool_deadline_policy: Option<ToolDeadlineLayer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_startup_policy: Option<McpStartupPolicyLayer>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mcp_tool_policies:
-        Option<BTreeMap<crate::runtime::identity::McpServerId, InvocationPolicyDocument>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub native_tools: Option<NativeToolsLayer>,
     /// Tool environment entries. Native authoring holds the literal values
     /// ([`AuthoredEnvironment`]); every projection that leaves native authority
     /// holds the identities alone ([`EnvironmentIdentities`]), because a
@@ -133,8 +127,6 @@ impl<P, E> Default for RuntimeLayer<P, E> {
             model_timeout_policy: None,
             tool_deadline_policy: None,
             mcp_startup_policy: None,
-            mcp_tool_policies: None,
-            native_tools: None,
             environment: None,
             subagents: None,
         }
@@ -167,8 +159,6 @@ impl<P, E> RuntimeLayer<P, E> {
             model_timeout_policy: self.model_timeout_policy,
             tool_deadline_policy: self.tool_deadline_policy,
             mcp_startup_policy: self.mcp_startup_policy,
-            mcp_tool_policies: self.mcp_tool_policies,
-            native_tools: self.native_tools,
             environment: self.environment.map(environment),
             subagents: self.subagents,
         }
@@ -256,14 +246,6 @@ partial!(SubagentsLayer {
     max_concurrent: usize
 });
 
-partial!(NativeToolsLayer {
-    read: NativePolicyOverrideDocument,
-    write: NativePolicyOverrideDocument,
-    edit: NativePolicyOverrideDocument,
-    glob: NativePolicyOverrideDocument,
-    grep: NativePolicyOverrideDocument,
-    bash: NativePolicyOverrideDocument
-});
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ModelOutput {
@@ -528,16 +510,6 @@ impl AgentProfileLayer {
         }
     }
 }
-impl Copy for NativeToolsLayer {}
-
-impl NativeToolsLayer {
-    fn overlay(&mut self, layer: Self, origin: &Origin, origins: &mut Origins) {
-        replace_units!(self, layer, "native_tools.", origin, origins;
-            read, write, edit, glob, grep, bash
-        );
-    }
-}
-
 macro_rules! apply {
     ($layer:ident, $target:ident, $($field:ident),* $(,)?) => { $(if let Some(value) = $layer.$field { $target.$field = value; })* }
 }
@@ -643,12 +615,6 @@ impl RuntimeLayer {
             "subagents.max_concurrent",
             "agent.agents",
             "agent.workflows",
-            "native_tools.read",
-            "native_tools.write",
-            "native_tools.edit",
-            "native_tools.glob",
-            "native_tools.grep",
-            "native_tools.bash",
         ] {
             // An omitted member of a replaced object is defaulted within
             // the winning object. Its source is that object, never the
@@ -666,11 +632,6 @@ impl RuntimeLayer {
         }
         map(origins, "environment", config.environment.keys());
         map(origins, "mcp_servers", config.mcp_servers.keys());
-        map(
-            origins,
-            "mcp_tool_policies",
-            config.mcp_tool_policies.keys(),
-        );
     }
 
     pub fn overlay(&mut self, layer: Self, origin: &Origin, origins: &mut Origins) {
@@ -691,18 +652,6 @@ impl RuntimeLayer {
                 .get_or_insert_default()
                 .overlay(agent, origin, origins);
         }
-        if let Some(policies) = layer.native_tools {
-            self.native_tools
-                .get_or_insert_default()
-                .overlay(policies, origin, origins);
-        }
-        named(
-            &mut self.mcp_tool_policies,
-            layer.mcp_tool_policies,
-            "mcp_tool_policies",
-            origin,
-            origins,
-        );
         named(
             &mut self.environment,
             layer.environment,
@@ -739,15 +688,7 @@ impl RuntimeLayer {
                 .map(ModelLayer::resolve)
                 .transpose()?,
         );
-        apply!(
-            self,
-            config,
-            schema_version,
-            agent_id,
-            approval_mode,
-            mcp_tool_policies,
-            environment
-        );
+        apply!(self, config, schema_version, agent_id, approval_mode, environment);
         if let Some(layer) = self.agent {
             let mut profile = config.agent;
             apply!(layer, profile, description, agents, workflows, agents_md);
@@ -792,11 +733,6 @@ impl RuntimeLayer {
             let mut subagents = config.subagents;
             apply!(layer, subagents, max_concurrent);
             config.subagents = subagents;
-        }
-        if let Some(layer) = self.native_tools {
-            let mut policies = config.native_tools;
-            apply!(layer, policies, read, write, edit, glob, grep, bash);
-            config.native_tools = policies;
         }
         Ok(config)
     }
@@ -969,11 +905,7 @@ tokens = 1024
     }
     #[test]
     fn both_scopes_author_runtime_policies_but_process_bindings_are_not_config() {
-        for text in [
-            "approval_mode = 'plan'",
-            "native_tools = {}",
-            "mcp_tool_policies = {}",
-        ] {
+        for text in ["approval_mode = 'plan'"] {
             for workspace in [false, true] {
                 super::super::configuration::capture::parse_layer(
                     std::path::Path::new("rustx.toml"),
@@ -981,6 +913,25 @@ tokens = 1024
                     workspace,
                 )
                 .unwrap();
+            }
+        }
+        // Issue #544: tool-level execution overlays are obsolete and rejected.
+        for text in [
+            "native_tools = {}",
+            "mcp_tool_policies = {}",
+            "[native_tools.bash]\nexecution = 'model_selectable'",
+            "[mcp_tool_policies.docs]\nexecution = 'foreground_only'",
+        ] {
+            for workspace in [false, true] {
+                assert!(
+                    super::super::configuration::capture::parse_layer(
+                        std::path::Path::new("rustx.toml"),
+                        text.as_bytes(),
+                        workspace,
+                    )
+                    .is_err(),
+                    "obsolete execution authoring must fail: {text}"
+                );
             }
         }
         for text in [

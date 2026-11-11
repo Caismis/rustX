@@ -91,10 +91,7 @@ fn runtime_json(force_ask: bool, include_todo: bool) -> String {
         "agent": {"model": {"model": MODEL}, "tools": {"builtin": builtin_tools}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": include_todo}}, "agents": ["explore"], "skills": "all"},
         "approval_mode": if force_ask { "plan" } else { "full_access" },
         "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
-        "native_tools": {
-            // Process-death tests own execution gates, not approval interaction.
-            "bash": {"execution": "model_selectable"}
-        },
+        // Issue #544: Bash ModelSelectable is the product default; no native_tools overlay.
         "subagents": {"max_concurrent": 4}
     }))
     .unwrap()

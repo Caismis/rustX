@@ -127,7 +127,6 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     );
     assert!(config.agent.extensions.agent_status.background.enabled);
     assert!(config.mcp_servers.is_empty());
-    assert!(config.mcp_tool_policies.is_empty());
     assert_eq!(config.environment["RUSTX_EXAMPLE_MODE"], "local-runtime");
     assert!(
         config
@@ -167,7 +166,9 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
         vec!["parallel_review", "implement_and_review"]
     );
 
-    let policies = config.native_tools.to_policies();
+    // Issue #544: composition uses product-default NativeToolPolicies; Bash
+    // remains ModelSelectable without authored native_tools overlays.
+    let policies = rustx::tools::NativeToolPolicies::default();
     assert_eq!(policies.read.execution, ToolExecutionPolicy::ForegroundOnly);
     assert_eq!(
         policies.bash.execution,

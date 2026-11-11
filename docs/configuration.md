@@ -115,8 +115,6 @@ version is `schema_version = 12`.
 | `context` | Context reserve, recent-history retention and summary cap |
 | `model_timeout_policy` | Response-start and stream-idle deadlines |
 | `tool_deadline_policy` | Tool hard deadline and optional idle-liveness window |
-| `native_tools` | Global per-Native-Tool invocation policies |
-| `mcp_tool_policies` | Global per-MCP-source invocation policies |
 | `environment` | Literal Tool environment, keyed by variable; projections carry the identities only |
 | `subagents` | Runtime-global child capacity |
 | `app_server` | User-only process policy; changes require restart |
@@ -565,18 +563,14 @@ every projection that leaves native authority carries the identities alone, so a
 client can discover, attribute and override an environment variable without ever
 reading its value.
 
-Each `native_tools.<read|write|edit|glob|grep|bash>` object and each
-`mcp_tool_policies.<source>` object has `execution` (`foreground_only`,
-`background_only`, `model_selectable`), `concurrency` (`sequential`, `parallel`),
-and `approval` (`never`, `always`). Native defaults are Tool-specific:
-Read/Glob/Grep use foreground, parallel, never; Write/Edit use foreground,
-sequential, always; Bash uses model-selectable, sequential, always. MCP policy
-defaults are foreground, sequential, never. Omitted members of a replacement
-object use these product defaults, never lower-source values. Python uses the
-same invocation engine with native source policy; it has no separate authored
-policy engine. Runtime control and Plugin Tools keep their domain-owned policies.
-`read_image` has fixed foreground/parallel/approval-never policy; its selection
-still uses `agent.tools.builtin`.
+Native and MCP invocation policies are product defaults (Issue #544): Bash is
+`model_selectable`, other native tools and MCP bindings are `foreground_only`.
+Tool-level `native_tools` / `mcp_tool_policies` execution overlays are removed
+and rejected as unknown fields. Permission is owned by `approval_mode` plus
+resource three-mode overrides. Python uses the same invocation engine with
+native source policy; it has no separate authored policy engine. Runtime
+control and Plugin Tools keep their domain-owned policies. `read_image` has
+fixed foreground-only policy; its selection still uses `agent.tools.builtin`.
 
 `app_server` accepts positive bounded `max_resident_runtimes` (8),
 `max_connections` (32), `max_external_attachments` (64), `idle_grace_ms` (300000),
@@ -602,8 +596,6 @@ units; there is no recursive TOML merge.
 | Agent delegation | Complete `agent.agents` array | `[]` permits no named Agents and composes no Agent controls |
 | Workflow enablement | `agent.workflows` array, merged across User and Workspace | `[]` adds none; it never disables a Global Workflow |
 | Project guidance | Complete `agent.agents_md` object | `{}` uses inherit=true |
-| Native invocation policy | Complete `native_tools.<tool>` object | `{}` restores that Tool's product defaults |
-| MCP invocation policy | Complete `mcp_tool_policies.<server>` object | `{}` restores domain defaults |
 | Context | Complete `context` object | `{}` restores product defaults |
 | Model timeouts | Complete `model_timeout_policy` object | `{}` restores product defaults |
 | Tool deadlines | Complete `tool_deadline_policy` object | `{}` restores product defaults |
@@ -1075,7 +1067,7 @@ coerces or invents a value.
 | Unknown entry in `agent.tools.builtin` | That element is deleted |
 | Repeated ordinary `agent.tools.builtin` entry | Later occurrences are deleted; the first stays |
 | Agent control or Plugin-owned Tool in `agent.tools.builtin` | That element is deleted, with its classified reason |
-| Unsupported key under `native_tools` | That policy entry is deleted |
+| Obsolete `native_tools` / `mcp_tool_policies` overlay | That unknown top-level table is deleted |
 | Explicit `schema_version` other than the current version (older or newer) | Set to the current version, only if the whole candidate then validates |
 | Omitted `schema_version` | Stays omitted |
 | Invalid TOML syntax, wrong type or value of a known field, missing required facts, broken Provider/Model references, invalid `request_params` JSON, `app_server` in a Workspace, any other remaining failure | Nothing is edited; the source is unchanged and reported `unresolved` |
@@ -1083,14 +1075,14 @@ coerces or invents a value.
 Eligibility comes from the generated source schema of `RuntimeLayer`
 (`schemas/rustx.schema.json`): only keys of closed objects
 (`additionalProperties: false`) are fields. Declared open maps — Provider,
-Model and Profile identities, `agent.tools.sources`, `environment`,
-`mcp_tool_policies` — hold authored identities, never unknown fields, and the
-JSON inside `request_params` is an opaque string that is never entered. A union
-is entered only through the one alternative that admits the authored shape, so
-an unknown `mode` tag selects nothing and nothing beneath it is touched. Tool
-entries are classified by the native Tool domain itself (the Agent control
-vocabulary, the extension plane and the definitions a root profile can select),
-which is also the owner of the strict `agent.tools.builtin` validation.
+Model and Profile identities, `agent.tools.sources`, `environment` — hold
+authored identities, never unknown fields, and the JSON inside `request_params`
+is an opaque string that is never entered. A union is entered only through the
+one alternative that admits the authored shape, so an unknown `mode` tag
+selects nothing and nothing beneath it is touched. Tool entries are classified
+by the native Tool domain itself (the Agent control vocabulary, the extension
+plane and the definitions a root profile can select), which is also the owner
+of the strict `agent.tools.builtin` validation.
 
 Candidate construction uses `toml_edit` in one finite pass over one exact byte
 revision: comments, formatting, quoting, secrets and every unrelated value stay as
@@ -1125,9 +1117,9 @@ backup, and the source is unchanged. The source publication primitive fences the
 same bound for every write, so `configuration/sourceWrite` refuses an oversized
 document as invalid; nothing is published that its own reader would refuse.
 
-`.agents` resources (MCP servers named by `mcp_tool_policies`, Agents, Skills)
-are not source facts. Nothing here resolves credentials, connects MCP, prepares
-Python, creates a Session or calls a model.
+`.agents` resources (MCP servers, Agents, Skills) are not source facts. Nothing
+here resolves credentials, connects MCP, prepares Python, creates a Session or
+calls a model.
 
 A changed source is committed through the same native writer primitive as
 `configuration/sourceWrite`, under the same physical authority: the directory

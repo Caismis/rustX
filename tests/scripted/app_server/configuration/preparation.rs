@@ -82,11 +82,8 @@ async fn t05_complete_policy_registry_publishes_independently_of_instructions() 
     write(
         &fixture,
         0,
-        ConfigMutation::NativePolicy {
-            id: crate::local_runtime::configuration::settings::NativeTool::Read,
-            authored: Some(
-                serde_json::from_value(serde_json::json!({"execution":"background_only"})).unwrap(),
-            ),
+        ConfigMutation::NativeTools {
+            authored: Some(vec!["read".into(), "grep".into()]),
         },
     )
     .await;
@@ -105,30 +102,23 @@ async fn t05_complete_policy_registry_publishes_independently_of_instructions() 
         guidance(instructions.project_context_files()),
         guidance(current.project_context_files())
     );
-    let read = |resources: &crate::runtime::RuntimeResourceSnapshot| {
+    let names = |resources: &crate::runtime::RuntimeResourceSnapshot| {
         resources
             .capability()
             .tool_registry()
             .definitions()
             .into_iter()
-            .find(|tool| tool.name == "read")
-            .unwrap()
-            .execution_policy
+            .map(|tool| tool.name)
+            .collect::<std::collections::BTreeSet<_>>()
     };
-    assert_ne!(read(&old), read(&current));
-    assert_eq!(
-        read(&current),
-        crate::tools::types::ToolExecutionPolicy::BackgroundOnly
-    );
-    assert_eq!(
+    assert!(!names(&old).contains("grep"));
+    assert!(names(&current).contains("grep"));
+    assert!(
         crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
             .unwrap()
             .available_tools
             .iter()
-            .find(|tool| tool.name == "read")
-            .unwrap()
-            .execution_policy,
-        read(&current)
+            .any(|tool| tool.name == "grep")
     );
     fixture.close().await;
 }
@@ -279,16 +269,12 @@ async fn t02_later_tool_batch_and_model_step_keep_admitted_registry_policy() {
         write(
             &fixture,
             0,
-            ConfigMutation::NativePolicy {
-                id: crate::local_runtime::configuration::settings::NativeTool::Read,
-                authored: Some(
-                    serde_json::from_value(serde_json::json!({"execution":"background_only"}))
-                        .unwrap(),
-                ),
+            ConfigMutation::NativeTools {
+                authored: Some(vec!["read".into(), "grep".into()]),
             },
         )
         .await;
-        // The admitted Attempt owns its registry, so the policy is staged.
+        // The admitted Attempt owns its registry, so the capability change is staged.
         let staged = settled(&fixture, 0).await;
         assert_eq!(
             staged.units[&ApplyUnit::Capabilities],
@@ -297,7 +283,7 @@ async fn t02_later_tool_batch_and_model_step_keep_admitted_registry_policy() {
         assert_eq!(runtime.runtime_resources().revision(), captured.generation);
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         // Only now can the provider release the Tool proposal. The Tool batch
-        // and subsequent model Step are created after newer policy was saved.
+        // and subsequent model Step are created after newer selection was saved.
         fixture.gates[0].release();
         settlement.wait().await;
         let committed = applied(&fixture, 0).await;
@@ -310,7 +296,7 @@ async fn t02_later_tool_batch_and_model_step_keep_admitted_registry_policy() {
         assert_eq!(
             requests.len(),
             2,
-            "old policy executes the Tool without new approval and reaches the next Step"
+            "admitted registry executes the Tool and reaches the next Step"
         );
         let second: serde_json::Value = serde_json::from_str(&requests[1]).unwrap();
         assert!(
@@ -577,11 +563,8 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
     write(
         &fixture,
         0,
-        ConfigMutation::NativePolicy {
-            id: crate::local_runtime::configuration::settings::NativeTool::Read,
-            authored: Some(
-                serde_json::from_value(serde_json::json!({"execution":"background_only"})).unwrap(),
-            ),
+        ConfigMutation::NativeTools {
+            authored: Some(vec!["read".into(), "grep".into()]),
         },
     )
     .await;
@@ -624,8 +607,8 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         after.capability().tool_registry()
     ));
     assert_eq!(
-        before.configuration().unwrap().config.native_tools,
-        after.configuration().unwrap().config.native_tools
+        before.configuration().unwrap().config.agent.tools.builtin,
+        after.configuration().unwrap().config.agent.tools.builtin
     );
     let create = || {
         fixture.manager.create_session(SessionPersistentState {
@@ -723,8 +706,8 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         before.configuration().unwrap().authored.component_revisions[&ApplyUnit::Capabilities]
     );
     assert_eq!(
-        c1i2.config.native_tools,
-        before.configuration().unwrap().config.native_tools
+        c1i2.config.agent.tools.builtin,
+        before.configuration().unwrap().config.agent.tools.builtin
     );
     assert_eq!(
         c1i2.skill_discovery.packages,
@@ -734,8 +717,8 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
     // C2 is then prepared again for that allocation and commits as one
     // recorded reallocation whose `before` is exactly the retained C1 Tools.
     assert_eq!(
-        retained(&second).config.native_tools,
-        before.configuration().unwrap().config.native_tools
+        retained(&second).config.agent.tools.builtin,
+        before.configuration().unwrap().config.agent.tools.builtin
     );
     fixture.manager.load(&second, None).await.unwrap();
     session_applied(&fixture, &second).await;
@@ -749,35 +732,17 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         crate::runtime::configuration_commit::ConfigurationChangeReason::Reallocation
     );
     assert!(
-        change.tools.changed.names.contains(&"read".to_owned()),
+        change.tools.added.names.contains(&"grep".to_owned()),
         "{change:?}"
     );
     let catalog = configuration_catalogs(&second_runtime.tool_runtime().durable_store())
         .pop()
         .unwrap();
-    let read = catalog["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|tool| tool["name"] == "read")
-        .unwrap();
-    let execution = |state: &str| read[state]["definition"]["execution_policy"].clone();
-    assert_eq!(
-        execution("before"),
-        serde_json::to_value(
-            before
-                .capability()
-                .tool_registry()
-                .definitions()
-                .into_iter()
-                .find(|tool| tool.name == "read")
-                .unwrap()
-                .execution_policy
-        )
-        .unwrap(),
-        "{read}"
+    let tools = catalog["tools"].as_array().unwrap();
+    assert!(
+        tools.iter().any(|tool| tool["name"] == "grep"),
+        "{catalog}"
     );
-    assert_ne!(execution("before"), execution("after"), "{read}");
     // Retry the same authored C2: it prepares and every resident Session
     // commits it automatically, while new Sessions bind C2 as well.
     fixture
@@ -801,7 +766,10 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         c2i2.component_revisions[&ApplyUnit::Capabilities],
         c1i2.component_revisions[&ApplyUnit::Capabilities]
     );
-    assert_ne!(c2i2.config.native_tools, c1i2.config.native_tools);
+    assert_ne!(
+        c2i2.config.agent.tools.builtin,
+        c1i2.config.agent.tools.builtin
+    );
     assert_eq!(
         fixture
             .manager
@@ -811,8 +779,10 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
             .configuration()
             .unwrap()
             .config
-            .native_tools,
-        c2i2.config.native_tools
+            .agent
+            .tools
+            .builtin,
+        c2i2.config.agent.tools.builtin
     );
     assert_eq!(
         retained(&second).component_revisions[&ApplyUnit::Capabilities],

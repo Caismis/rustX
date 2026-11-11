@@ -57,10 +57,6 @@ hard_deadline_ms = 4321
 idle_liveness_ms = { mode = "window", milliseconds = 8765 }
 [subagents]
 max_concurrent = 17
-[native_tools.bash]
-execution = "foreground_only"
-[native_tools.read]
-execution = "foreground_only"
 [environment]
 A = "lower"
 B = "retained"
@@ -293,37 +289,26 @@ fn plugin_omission_empty_and_explicit_enable_are_distinct_without_splicing() {
 }
 
 #[test]
-fn native_policy_is_atomic_per_tool() {
-    let (config, origins) = effective(LOWER, "[native_tools.bash]\nexecution = 'background_only'");
-    assert_eq!(
-        config.native_tools.bash.execution,
-        Some(crate::local_runtime::config::ExecutionPolicyDocument::BackgroundOnly)
-    );
-    assert_eq!(
-        config.native_tools.read.execution,
-        Some(crate::local_runtime::config::ExecutionPolicyDocument::ForegroundOnly)
-    );
-    assert_eq!(origins["native_tools.bash"], workspace());
-    let (config, _) = effective(LOWER, "[native_tools.bash]");
-    assert_eq!(
-        config.native_tools.bash,
-        NativePolicyOverrideDocument::default()
-    );
-    assert_eq!(
-        config.native_tools.read.execution,
-        Some(crate::local_runtime::config::ExecutionPolicyDocument::ForegroundOnly)
-    );
+fn obsolete_native_and_mcp_execution_overlays_are_rejected() {
+    for text in [
+        "[native_tools.bash]\nexecution = 'background_only'",
+        "[native_tools]",
+        "native_tools = {}",
+        "[mcp_tool_policies.docs]\nexecution = 'foreground_only'",
+        "mcp_tool_policies = {}",
+    ] {
+        assert!(
+            crate::toml_authoring::parse::<RuntimeLayer>(text.as_bytes()).is_err(),
+            "obsolete execution authoring must fail: {text}"
+        );
+    }
 }
 
 #[test]
 fn empty_identity_maps_do_not_erase_unmentioned_identities() {
-    let (config, _) = effective(LOWER, "[environment]\n[native_tools]");
+    let (config, _) = effective(LOWER, "[environment]");
     assert_eq!(config.environment["A"], "lower");
     assert_eq!(config.environment["B"], "retained");
-    assert_eq!(
-        config.native_tools.bash.execution,
-        Some(crate::local_runtime::config::ExecutionPolicyDocument::ForegroundOnly)
-    );
     let (config, _) = effective(LOWER, "[environment]\nA = ''");
     assert_eq!(config.environment["A"], "");
     assert_eq!(config.environment["B"], "retained");

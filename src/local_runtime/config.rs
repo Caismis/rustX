@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use crate::capabilities::selection::ToolSelectionDocument;
 use crate::context::SessionContextPolicy;
@@ -24,8 +24,7 @@ use crate::runtime::subagent::{SubagentExecutionDeadline, SubagentName};
 use crate::runtime::workflow::WorkflowId;
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentError};
 use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
-use crate::tools::native::NativeToolPolicies;
-use crate::tools::types::{ToolExecutionPolicy, ToolInvocationPolicy};
+use crate::tools::types::ToolInvocationPolicy;
 
 /// The only current runtime configuration schema version this runtime accepts.
 pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 12;
@@ -80,14 +79,6 @@ pub struct CurrentRuntimeConfig {
     /// identity exactly as mainstream MCP clients spell it.
     #[serde(default)]
     pub mcp_servers: BTreeMap<McpServerId, McpServerDocument>,
-    /// Global invocation policy, atomically replaced per MCP source by User < Workspace.
-    /// Kept separate from inert `.agents/mcp.toml` connection definitions.
-    #[serde(default)]
-    pub mcp_tool_policies: BTreeMap<McpServerId, InvocationPolicyDocument>,
-    /// The per-tool execution, concurrency, and approval policies of the
-    /// Native Tool plane, atomically replaced per Tool by User < Workspace.
-    #[serde(default)]
-    pub native_tools: NativeToolPoliciesDocument,
     /// Literal Tool environment; User < Workspace replaces one variable at a time.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
@@ -418,8 +409,6 @@ impl CurrentRuntimeConfig {
             tool_deadline_policy: ToolDeadlinePolicyDocument::default(),
             mcp_startup_policy: McpStartupPolicyDocument::default(),
             mcp_servers: BTreeMap::default(),
-            mcp_tool_policies: BTreeMap::default(),
-            native_tools: NativeToolPoliciesDocument::default(),
             environment: BTreeMap::default(),
             subagents: SubagentsDocument::default(),
         }
@@ -657,16 +646,14 @@ impl CurrentRuntimeConfig {
     /// # Errors
     ///
     /// Returns [`CurrentRuntimeConfigError::Invalid`] when an entry is
-    /// ambiguous, contradictory, or incomplete, or when the policy overlay
-    /// names a server that `mcpServers` does not declare.
+    /// ambiguous, contradictory, or incomplete.
     pub fn mcp_bindings(&self) -> Result<McpServerBindings, CurrentRuntimeConfigError> {
-        resolve_mcp_bindings(&self.mcp_servers, &self.mcp_tool_policies)
+        resolve_mcp_bindings(&self.mcp_servers)
     }
 }
 
 pub(super) fn resolve_mcp_bindings(
     servers: &BTreeMap<McpServerId, McpServerDocument>,
-    policies: &BTreeMap<McpServerId, InvocationPolicyDocument>,
 ) -> Result<McpServerBindings, CurrentRuntimeConfigError> {
     if servers.len() > 128 {
         return Err(CurrentRuntimeConfigError::Invalid {
@@ -674,15 +661,6 @@ pub(super) fn resolve_mcp_bindings(
         });
     }
 
-    for server_id in policies.keys() {
-        if !servers.contains_key(server_id) {
-            return Err(CurrentRuntimeConfigError::Invalid {
-                detail: format!(
-                    "mcp_tool_policies names {server_id}, which mcp_servers does not declare"
-                ),
-            });
-        }
-    }
     servers
         .iter()
         .map(|(server_id, document)| {
@@ -696,11 +674,9 @@ pub(super) fn resolve_mcp_bindings(
                         ..Default::default()
                     },
                     transport,
-                    policy: policies
-                        .get(server_id)
-                        .copied()
-                        .unwrap_or_default()
-                        .to_policy(),
+                    // Issue #544: MCP invocation policy is product-default
+                    // ForegroundOnly; tool-level execution overlays are gone.
+                    policy: ToolInvocationPolicy::default(),
                     permissions: document.permissions,
                     tool_permissions: document
                         .tools
@@ -816,163 +792,6 @@ impl Default for ContextPolicyDocument {
             reserve_tokens: 1024,
             keep_recent_tokens: 4096,
             summary_output_cap: Some(1024),
-        }
-    }
-}
-
-/// The per-tool execution-ownership policies of the native tool plane.
-///
-/// `execution` and `ask_user` are deliberately outside this set: they own
-/// fixed foreground-only execution, and the registry enforces the intrinsic
-/// ones itself. The extension-provided `todo` Tool is outside it for a
-/// stronger reason — it is not an ordinary native capability at all
-/// (Issue #259). Permission is owned by the Issue #544 mode matrix and
-/// resource overrides, never by these native policy documents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-#[derive(schemars::JsonSchema)]
-pub struct NativeToolPoliciesDocument {
-    /// The policy of the native Read tool.
-    pub read: NativePolicyOverrideDocument,
-    /// The policy of the native Write tool.
-    pub write: NativePolicyOverrideDocument,
-    /// The policy of the native Edit tool.
-    pub edit: NativePolicyOverrideDocument,
-    /// The policy of the native Glob tool.
-    pub glob: NativePolicyOverrideDocument,
-    /// The policy of the native Grep tool.
-    pub grep: NativePolicyOverrideDocument,
-    /// The policy of the native Bash tool.
-    pub bash: NativePolicyOverrideDocument,
-}
-
-impl NativeToolPoliciesDocument {
-    /// The native tool policy table this document expresses.
-    #[must_use]
-    pub fn to_policies(self) -> NativeToolPolicies {
-        let base = NativeToolPolicies::default();
-        NativeToolPolicies {
-            read: self.read.resolve(base.read),
-            write: self.write.resolve(base.write),
-            edit: self.edit.resolve(base.edit),
-            glob: self.glob.resolve(base.glob),
-            grep: self.grep.resolve(base.grep),
-            bash: self.bash.resolve(base.bash),
-        }
-    }
-}
-
-/// Explicit native policy axes, resolved over that tool's product default.
-/// Absence never applies the generic external-tool policy to a native tool.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-#[derive(schemars::JsonSchema)]
-pub struct NativePolicyOverrideDocument {
-    /// Foreground/background ownership override.
-    #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "ExecutionPolicyDocument")]
-    pub execution: Option<ExecutionPolicyDocument>,
-}
-
-// Shared with launch documents: omission preserves absence, while an explicit
-// value (including null) must satisfy the concrete field's serde contract.
-pub(super) fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
-    d: D,
-) -> Result<Option<T>, D::Error> {
-    T::deserialize(d).map(Some)
-}
-
-impl NativePolicyOverrideDocument {
-    fn resolve(self, base: ToolInvocationPolicy) -> ToolInvocationPolicy {
-        ToolInvocationPolicy::new(
-            self.execution
-                .map_or(base.execution, ExecutionPolicyDocument::to_policy),
-        )
-    }
-}
-
-#[cfg(test)]
-mod native_policy_defaults_tests {
-    use super::*;
-
-    #[test]
-    fn partial_native_documents_resolve_execution_over_its_own_product_default() {
-        let base = NativeToolPolicies::default();
-        let empty: NativeToolPoliciesDocument = serde_json::from_str("{}").unwrap();
-        assert_eq!(empty.to_policies(), base);
-        assert!(
-            serde_json::from_value::<NativeToolPoliciesDocument>(
-                serde_json::json!({"read":{"execution":null}})
-            )
-            .is_err(),
-            "an explicit null must not silently select a default"
-        );
-        for name in ["read", "write", "edit", "glob", "grep", "bash"] {
-            let document: NativeToolPoliciesDocument = serde_json::from_value(serde_json::json!({
-                name: {"execution": "background_only"}
-            }))
-            .unwrap();
-            let resolved = document.to_policies();
-            for (tool, original, actual) in [
-                ("read", base.read, resolved.read),
-                ("write", base.write, resolved.write),
-                ("edit", base.edit, resolved.edit),
-                ("glob", base.glob, resolved.glob),
-                ("grep", base.grep, resolved.grep),
-                ("bash", base.bash, resolved.bash),
-            ] {
-                let mut expected = original;
-                if tool == name {
-                    expected.execution = crate::tools::types::ToolExecutionPolicy::BackgroundOnly;
-                }
-                assert_eq!(actual, expected, "{name}: {tool}");
-            }
-            let roundtrip: NativeToolPoliciesDocument =
-                serde_json::from_value(serde_json::to_value(document).unwrap()).unwrap();
-            assert_eq!(roundtrip, document);
-        }
-    }
-}
-
-/// One tool invocation policy document.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-#[derive(schemars::JsonSchema)]
-pub struct InvocationPolicyDocument {
-    /// Foreground/background ownership policy.
-    pub execution: ExecutionPolicyDocument,
-}
-
-impl InvocationPolicyDocument {
-    /// The runtime policy this document expresses.
-    #[must_use]
-    pub const fn to_policy(self) -> ToolInvocationPolicy {
-        ToolInvocationPolicy::new(self.execution.to_policy())
-    }
-}
-
-/// The configurable execution-ownership policy of one tool.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum ExecutionPolicyDocument {
-    /// Attempt-owned execution only.
-    #[default]
-    ForegroundOnly,
-    /// Conversation-owned execution only.
-    BackgroundOnly,
-    /// The model selects the execution mode per invocation.
-    ModelSelectable,
-}
-
-impl ExecutionPolicyDocument {
-    /// The runtime policy this document expresses.
-    #[must_use]
-    pub const fn to_policy(self) -> ToolExecutionPolicy {
-        match self {
-            Self::ForegroundOnly => ToolExecutionPolicy::ForegroundOnly,
-            Self::BackgroundOnly => ToolExecutionPolicy::BackgroundOnly,
-            Self::ModelSelectable => ToolExecutionPolicy::ModelSelectable,
         }
     }
 }

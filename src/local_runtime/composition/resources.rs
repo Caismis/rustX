@@ -83,7 +83,7 @@ impl LocalRuntimeResourceLoader {
                     subagent_catalog: main_catalog,
                     ..self.native_resources.clone()
                 },
-                config.native_tools.to_policies(),
+                crate::tools::NativeToolPolicies::default(),
             )
             .map_err(|error| {
                 RuntimeResourceLoadError::new(format!(

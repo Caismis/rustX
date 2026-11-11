@@ -486,26 +486,6 @@
         }
       ]
     },
-    "ExecutionPolicyDocument": {
-      "description": "The configurable execution-ownership policy of one tool.",
-      "oneOf": [
-        {
-          "const": "foreground_only",
-          "description": "Attempt-owned execution only.",
-          "type": "string"
-        },
-        {
-          "const": "background_only",
-          "description": "Conversation-owned execution only.",
-          "type": "string"
-        },
-        {
-          "const": "model_selectable",
-          "description": "The model selects the execution mode per invocation.",
-          "type": "string"
-        }
-      ]
-    },
     "GoalExtensionDocument": {
       "additionalProperties": false,
       "description": "Authored opt-in Goal composition.",
@@ -552,18 +532,6 @@
           "type": "object"
         }
       ]
-    },
-    "InvocationPolicyDocument": {
-      "additionalProperties": false,
-      "description": "One tool invocation policy document.",
-      "properties": {
-        "execution": {
-          "$ref": "#/$defs/ExecutionPolicyDocument",
-          "default": "foreground_only",
-          "description": "Foreground/background ownership policy."
-        }
-      },
-      "type": "object"
     },
     "McpStartupPolicyLayer": {
       "additionalProperties": false,
@@ -776,65 +744,6 @@
     "ModelRef": {
       "description": "An authored Model identity. Its spelling has no provider or wire semantics.",
       "type": "string"
-    },
-    "NativePolicyOverrideDocument": {
-      "additionalProperties": false,
-      "description": "Explicit native policy axes, resolved over that tool's product default.\nAbsence never applies the generic external-tool policy to a native tool.",
-      "properties": {
-        "execution": {
-          "$ref": "#/$defs/ExecutionPolicyDocument",
-          "description": "Foreground/background ownership override."
-        }
-      },
-      "type": "object"
-    },
-    "NativeToolsLayer": {
-      "additionalProperties": false,
-      "properties": {
-        "bash": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativePolicyOverrideDocument"
-            }
-          ]
-        },
-        "edit": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativePolicyOverrideDocument"
-            }
-          ]
-        },
-        "glob": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativePolicyOverrideDocument"
-            }
-          ]
-        },
-        "grep": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativePolicyOverrideDocument"
-            }
-          ]
-        },
-        "read": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativePolicyOverrideDocument"
-            }
-          ]
-        },
-        "write": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativePolicyOverrideDocument"
-            }
-          ]
-        }
-      },
-      "type": "object"
     },
     "PluginsLayer": {
       "additionalProperties": false,
@@ -1158,14 +1067,6 @@
         }
       ]
     },
-    "mcp_tool_policies": {
-      "additionalProperties": {
-        "$ref": "#/$defs/InvocationPolicyDocument"
-      },
-      "type": [
-        "object"
-      ]
-    },
     "model_timeout_policy": {
       "anyOf": [
         {
@@ -1179,13 +1080,6 @@
       },
       "type": [
         "object"
-      ]
-    },
-    "native_tools": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/NativeToolsLayer"
-        }
       ]
     },
     "providers": {

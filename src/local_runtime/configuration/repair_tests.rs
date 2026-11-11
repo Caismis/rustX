@@ -224,7 +224,8 @@ fn the_issue_example_converges_to_its_documented_result() {
         vec![
             ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 12 },
             removed("agent.plugins.todo"),
-            removed("native_tools"),
+            // Issue #544: the whole obsolete native_tools overlay is unknown.
+            removed(""),
             unknown_tool(1),
             tool(3, "read", NativeToolRemoval::Duplicate),
         ]
@@ -279,20 +280,23 @@ trust_all = true
         vec![
             removed(""),
             removed(""),
-            removed("native_tools.bash"),
+            // Issue #544: obsolete execution overlays are unknown top-level tables.
+            removed(""),
             removed("agent.plugins.goal"),
             removed("agent.model.max_output_tokens"),
             removed("subagents"),
-            removed("mcp_tool_policies.*"),
+            removed(""),
         ]
     );
     for gone in [
         "unknown_root",
         "security",
+        "native_tools",
         "allow_unsandboxed",
         "permissions",
         "bypass",
         "isolation",
+        "mcp_tool_policies",
         "trust_all",
     ] {
         assert!(!repaired.contains(gone), "{gone} survived:\n{repaired}");
@@ -302,7 +306,7 @@ trust_all = true
         assert!(repaired.contains(kept), "{kept} was lost:\n{repaired}");
     }
     let layer: RuntimeLayer = crate::toml_authoring::parse(repaired.as_bytes()).unwrap();
-    assert!(layer.native_tools.unwrap().bash.is_some());
+    assert!(layer.agent.is_some());
 }
 
 #[test]
@@ -318,8 +322,6 @@ request_params = '{{"unknown_vendor_key":{{"nested":[1,2]}},"x-api-key":"SECRET_
 [environment]
 CUSTOM_TOKEN = "SECRET_ENV"
 "weird.name" = "v"
-
-[mcp_tool_policies."docs"]
 "#
     );
     assert!(changes(&text).is_empty(), "{:?}", changes(&text));
@@ -337,6 +339,9 @@ CUSTOM_TOKEN = "SECRET_ENV"
     ] {
         assert!(repaired.contains(exact), "{exact}");
     }
+    // Issue #544: obsolete mcp_tool_policies is unknown, never a retained open map.
+    let with_obsolete = format!("{text}\n[mcp_tool_policies.\"docs\"]\nexecution = \"foreground_only\"\n");
+    assert_eq!(changes(&with_obsolete), vec![removed("")]);
 }
 
 #[test]
@@ -3409,7 +3414,7 @@ request_params = '{"zsecretz_param":"zsecretz-value"}'
 zsecretz_profile_key = true
 
 [mcp_tool_policies."zsecretz-mcp"]
-trust_all = true
+execution = "foreground_only"
 
 [environment]
 ZSECRETZ_ENV = "zsecretz-value"
@@ -3461,7 +3466,8 @@ fn receipts_never_carry_authored_identities_keys_or_tool_names() {
             removed("providers.*"),
             removed("models.*"),
             removed("models.*.profiles.*"),
-            removed("mcp_tool_policies.*"),
+            // Issue #544: obsolete mcp_tool_policies is an unknown top-level table.
+            removed(""),
             unknown_tool(1),
             tool(2, "read", NativeToolRemoval::Duplicate),
             unknown_tool(3),
@@ -3478,13 +3484,16 @@ fn receipts_never_carry_authored_identities_keys_or_tool_names() {
         "api_key = \"zsecretz-credential\"",
         "[models.\"zsecretz-provider/zsecretz-model\".profiles.\"zsecretz-profile\"]",
         "request_params = '{\"zsecretz_param\":\"zsecretz-value\"}'",
-        "[mcp_tool_policies.\"zsecretz-mcp\"]",
         "ZSECRETZ_ENV = \"zsecretz-value\"",
         "\"mcp:zsecretz-source\" = [\"zsecretz_search\"]",
         "builtin = [\"read\"]",
     ] {
         assert!(repaired.contains(kept), "{kept} was lost:\n{repaired}");
     }
+    assert!(
+        !repaired.contains("mcp_tool_policies"),
+        "obsolete overlay survived:\n{repaired}"
+    );
     for gone in [
         "zsecretz_root_key",
         "zsecretz_provider_key",
@@ -3565,7 +3574,7 @@ fn schema_paths_are_native_and_bounded() {
     for index in 0..(MAX_RECEIPT_CHANGES * 2) {
         writeln!(
             text,
-            "[mcp_tool_policies.\"zsecretz-{index}\"]\nzsecretz_{index} = 1"
+            "[providers.\"zsecretz-{index}\"]\nprotocol = \"openai_chat_completions\"\nbase_url = \"http://127.0.0.1:9/v1\"\napi_key = \"k\"\nzsecretz_{index} = 1"
         )
         .unwrap();
     }
@@ -3575,7 +3584,7 @@ fn schema_paths_are_native_and_bounded() {
         let ConfigRepairChange::RemovedField { object_path } = change else {
             panic!("a removed field");
         };
-        assert_eq!(object_path, "mcp_tool_policies.*");
+        assert_eq!(object_path, "providers.*");
         assert!(object_path.chars().count() <= MAX_PATH_CHARS);
     }
 }

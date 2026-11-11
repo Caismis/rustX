@@ -1084,18 +1084,14 @@ async fn a_frozen_child_model_never_observes_a_later_rustx_toml_edit() {
 /// non-default invocation policy on all three axes — is what the child's
 /// `ToolRegistry` ends up holding, across the serialization boundary.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
+async fn a_product_default_builtin_policy_survives_child_materialization_exactly() {
     use rustx::tools::executor::ToolRegistry;
     use rustx::tools::native::register_subagent_child_tools;
     use rustx::tools::types::ToolExecutionPolicy;
 
     let lab = Lab::new();
-    // The generation admits `grep` with a non-default execution policy.
-    let mut document = serde_json::json!({"schema_version": 12, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "native_tools": {
-            "grep": {
-                "execution": "model_selectable",
-            }
-        }, "subagents": explore(&["grep"]), "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": ["read"]}}});
+    // Issue #544: Bash keeps product-default ModelSelectable without config overlays.
+    let mut document = serde_json::json!({"schema_version": 12, "agent_id": "agent-issue144", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": explore(&["bash"]), "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": ["read"]}}});
     document["agent"]["agents"] = document["subagents"]
         .as_object_mut()
         .unwrap()
@@ -1128,7 +1124,7 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
     assert_eq!(
         frozen.execution_policy,
         ToolExecutionPolicy::ModelSelectable,
-        "the generation really admitted a non-default policy"
+        "Bash product default is ModelSelectable"
     );
 
     // Cross the real wire, then materialize the child registry.
@@ -1146,12 +1142,12 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
     let child_definition = registry
         .definitions()
         .into_iter()
-        .find(|definition| definition.name == "grep")
-        .expect("the child registered grep")
+        .find(|definition| definition.name == "bash")
+        .expect("the child registered bash")
         .clone();
     assert_eq!(
         child_definition, frozen,
-        "the child holds the whole parent-frozen definition, not a default-policy rebuild"
+        "the child holds the whole parent-frozen definition, not a rebuilt default"
     );
 }
 

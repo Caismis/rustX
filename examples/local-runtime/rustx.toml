@@ -95,12 +95,7 @@ request_params = '''
 '''
 
 # Protocol defaults are built in; no compat table is required.
-# These global policies apply to every admitted Agent's native invocation.
-[native_tools.read]
-execution = "foreground_only"
-[native_tools.grep]
-execution = "foreground_only"
-[native_tools.edit]
-execution = "foreground_only"
-[native_tools.bash]
-execution = "model_selectable"
+# Native/MCP invocation policies are product defaults (Issue #544): Bash stays
+# ModelSelectable, and MCP bindings stay ForegroundOnly. Permission lives on
+# approval_mode plus resource three-mode overrides, never tool-level execution
+# authoring.

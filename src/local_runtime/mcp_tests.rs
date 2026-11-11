@@ -2,8 +2,8 @@
 //!
 //! `mcp_servers` is a named map keyed by MCP server identity, spelled exactly
 //! in the canonical TOML authoring contract. This suite pins the complete
-//! accepted syntax surface, every rejection, the rustX policy overlay, and
-//! the determinism of the normalized runtime bindings.
+//! accepted syntax surface, every rejection, product-default invocation
+//! policy, and the determinism of the normalized runtime bindings.
 
 use std::collections::BTreeMap;
 
@@ -12,21 +12,19 @@ use crate::runtime::identity::McpServerId;
 use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
 use crate::tools::types::ToolExecutionPolicy;
 
-/// Fixtures author independent resource definitions and global policy documents.
-/// Native readers own both; no MCP fields are accepted by rustx.toml.
+/// Fixtures author independent resource definitions. Native readers own them;
+/// no MCP fields are accepted by rustx.toml, and tool-level execution overlays
+/// are gone (Issue #544).
 fn parse_bindings(fragment: &str) -> Result<McpServerBindings, CurrentRuntimeConfigError> {
-    let mut fixture: toml::Table =
+    let fixture: toml::Table =
         toml::from_str(fragment).map_err(|e| CurrentRuntimeConfigError::Syntax {
             detail: e.to_string(),
         })?;
-    let policies = fixture
-        .remove("mcp_tool_policies")
-        .map(toml::Value::try_into)
-        .transpose()
-        .map_err(|e: toml::de::Error| CurrentRuntimeConfigError::Syntax {
-            detail: e.to_string(),
-        })?
-        .unwrap_or_default();
+    if fixture.contains_key("mcp_tool_policies") {
+        return Err(CurrentRuntimeConfigError::Syntax {
+            detail: "unknown field `mcp_tool_policies`".into(),
+        });
+    }
     let document: super::mcp_resources::McpDocument = toml::Value::Table(fixture)
         .try_into()
         .map_err(|e| CurrentRuntimeConfigError::Syntax {
@@ -37,7 +35,7 @@ fn parse_bindings(fragment: &str) -> Result<McpServerBindings, CurrentRuntimeCon
         .into_iter()
         .map(|(id, entry)| (id, entry.resolve()))
         .collect();
-    super::config::resolve_mcp_bindings(&definitions, &policies)
+    super::config::resolve_mcp_bindings(&definitions)
 }
 
 fn bindings(fragment: &str) -> McpServerBindings {
@@ -410,42 +408,30 @@ fn normal_configured_server_ids_remain_accepted() {
     }
 }
 
-/// A server with no policy entry gets the deterministic default policy.
+/// MCP bindings always use the product-default ForegroundOnly invocation
+/// policy; tool-level execution overlays are obsolete (Issue #544).
 #[test]
-fn absent_policy_entry_uses_the_deterministic_default() {
-    let bindings = bindings(r#"mcp_servers = { "exa" = { "url" = "https://x" } }"#);
-    let (_, binding) = single(&bindings);
-    assert_eq!(
-        binding.policy.execution,
-        ToolExecutionPolicy::ForegroundOnly
-    );
-}
-
-/// The keyed policy overlay applies exactly, and only to the named server.
-#[test]
-fn policy_overlay_applies_to_exactly_the_named_server() {
+fn bindings_use_the_product_default_invocation_policy() {
     let bindings = bindings(
-        r#"mcp_servers = { "exa" = { "url" = "https://exa" }, "local" = { "command" = "npx" } }
-mcp_tool_policies = { "exa" = { "execution" = "background_only" } }"#,
+        r#"mcp_servers = { "exa" = { "url" = "https://exa" }, "local" = { "command" = "npx" } }"#,
     );
-    let exa = &bindings[&McpServerId::new("exa")];
-    assert_eq!(exa.policy.execution, ToolExecutionPolicy::BackgroundOnly);
-    let local = &bindings[&McpServerId::new("local")];
-    assert_eq!(local.policy.execution, ToolExecutionPolicy::ForegroundOnly);
+    for binding in bindings.values() {
+        assert_eq!(
+            binding.policy.execution,
+            ToolExecutionPolicy::ForegroundOnly
+        );
+    }
 }
 
-/// A policy for a server that does not exist is a configuration error, never
-/// a silently ignored entry.
+/// Obsolete mcp_tool_policies authoring is rejected, never silently ignored.
 #[test]
-fn policy_for_an_unknown_server_is_rejected() {
+fn obsolete_mcp_tool_policies_overlay_is_rejected() {
     let error = rejection(
         r#"mcp_servers = { "exa" = { "url" = "https://x" } }
-mcp_tool_policies = { "typo" = { "execution" = "background_only" } }"#,
+mcp_tool_policies = { "exa" = { "execution" = "background_only" } }"#,
     );
     assert!(
-        error
-            .to_string()
-            .contains("mcp_tool_policies names typo, which mcp_servers does not declare"),
+        error.to_string().contains("mcp_tool_policies"),
         "unexpected error: {error}"
     );
 }

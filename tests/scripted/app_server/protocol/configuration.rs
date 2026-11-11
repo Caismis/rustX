@@ -588,7 +588,7 @@ async fn c12_mcp_source_commit_is_independent_of_session_revision() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_owners() {
+async fn cfg332_workspace_mcp_definition_and_config_have_independent_authoring_owners() {
     use crate::local_runtime::configuration::settings::{ConfigMutation, McpWrite, SourceMutation};
     use crate::runtime::identity::McpServerId;
     bounded(async {
@@ -670,18 +670,15 @@ async fn cfg332_workspace_mcp_definition_and_policy_have_independent_authoring_o
                 },
                 expected_revision: definition.workspace.as_ref().unwrap().revision.clone(),
                 mutation: SourceMutation::Config {
-                    mutation: ConfigMutation::McpPolicy {
-                        id: McpServerId::new("service"),
-                        authored: Some(crate::local_runtime::config::InvocationPolicyDocument {
-                            ..Default::default()
-                        }),
+                    mutation: ConfigMutation::Approval {
+                        authored: Some(crate::runtime::ApprovalMode::Plan),
                     },
                 },
             },
         )
         .await
         else {
-            panic!("policy projection")
+            panic!("approval projection")
         };
         let MethodResult::SourceSettings {
             projection: policy, ..

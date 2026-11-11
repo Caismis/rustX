@@ -165,6 +165,7 @@ fn collect_command(
                 CompoundCommand::WhileClause(_) => "WhileClause",
                 CompoundCommand::UntilClause(_) => "UntilClause",
                 CompoundCommand::Arithmetic(_) => "Arithmetic",
+                CompoundCommand::Coprocess(_) => "Coprocess",
             };
             analysis.note_unsupported(name);
         }

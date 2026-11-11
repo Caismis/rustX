@@ -2293,16 +2293,6 @@ export type ConfigMutation =
       unit: 'approval';
     }
   | {
-      id: NativeTool;
-      authored?: NativePolicyOverrideDocument | null;
-      unit: 'native_policy';
-    }
-  | {
-      id: McpServerId;
-      authored?: InvocationPolicyDocument | null;
-      unit: 'mcp_policy';
-    }
-  | {
       name: string;
       authored?: string | null;
       unit: 'environment';
@@ -2521,11 +2511,6 @@ export type IdleLiveness =
  * via the `definition` "ExecutionPermissionMode".
  */
 export type ExecutionPermissionMode = 'plan' | 'automatic' | 'full_access';
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "NativeTool".
- */
-export type NativeTool = 'read' | 'write' | 'edit' | 'glob' | 'grep' | 'bash';
 /**
  * One whole-file Workflow mutation of the exact file the mutation names.
  *
@@ -9212,13 +9197,6 @@ export type InteractionOutcome =
       type: 'cancelled';
     };
 /**
- * The configurable execution-ownership policy of one tool.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ExecutionPolicyDocument".
- */
-export type ExecutionPolicyDocument = 'foreground_only' | 'background_only' | 'model_selectable';
-/**
  * One mode entry on a resource permission object.
  *
  * Automatic model review is never a resource enum value: it is Automatic
@@ -10214,31 +10192,6 @@ export interface ToolDeadlineLayer {
  */
 export interface SubagentsLayer {
   max_concurrent?: number | null;
-}
-/**
- * Explicit native policy axes, resolved over that tool's product default.
- * Absence never applies the generic external-tool policy to a native tool.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "NativePolicyOverrideDocument".
- */
-export interface NativePolicyOverrideDocument {
-  /**
-   * Foreground/background ownership override.
-   */
-  execution?: 'foreground_only' | 'background_only' | 'model_selectable';
-}
-/**
- * One tool invocation policy document.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "InvocationPolicyDocument".
- */
-export interface InvocationPolicyDocument {
-  /**
-   * Foreground/background ownership policy.
-   */
-  execution?: 'foreground_only' | 'background_only' | 'model_selectable';
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -18584,10 +18537,6 @@ export interface RuntimeLayer {
   model_timeout_policy?: TimeoutLayer | null;
   tool_deadline_policy?: ToolDeadlineLayer | null;
   mcp_startup_policy?: McpStartupPolicyLayer | null;
-  mcp_tool_policies?: {
-    [k: string]: InvocationPolicyDocument;
-  } | null;
-  native_tools?: NativeToolsLayer | null;
   /**
    * Tool environment entries. Native authoring holds the literal values
    * ([`AuthoredEnvironment`]); every projection that leaves native authority
@@ -18649,18 +18598,6 @@ export interface PluginsLayer {
  */
 export interface McpStartupPolicyLayer {
   wait_timeout_ms?: string | null;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "NativeToolsLayer".
- */
-export interface NativeToolsLayer {
-  read?: NativePolicyOverrideDocument | null;
-  write?: NativePolicyOverrideDocument | null;
-  edit?: NativePolicyOverrideDocument | null;
-  glob?: NativePolicyOverrideDocument | null;
-  grep?: NativePolicyOverrideDocument | null;
-  bash?: NativePolicyOverrideDocument | null;
 }
 /**
  * Root Agent profile. Only the root can delegate to named Agents.

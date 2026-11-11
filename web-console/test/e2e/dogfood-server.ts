@@ -115,7 +115,6 @@ export async function startDogfood(scenario = 'web_console_dogfood', measurement
       writeFileSync(join(agents, 'mcp.toml'), `[mcp_servers.image_fixture]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(resolve(root, 'web-console/test/e2e/image-mcp.py'))}]\n`);
     }
     const imageSource = ['web_chat_history', 'web_child_capabilities'].includes(scenario) ? `
-[mcp_tool_policies.image_fixture]
 [agent.tools.sources]
 image_fixture = ["render_image"]
 ` : ['web_composer_context', 'web_harness_convergence'].includes(scenario) ? `
