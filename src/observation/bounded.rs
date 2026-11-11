@@ -180,9 +180,7 @@ pub(crate) fn bounded_json_value(
             _ => true,
         }
     }
-    safe(value, &mut 512)
-        .then(|| bounded_clone(value, limit))
-        .flatten()
+    (safe(value, &mut 512) && bounded_len(value, limit).is_some()).then(|| value.clone())
 }
 
 impl std::io::Write for Length {
@@ -201,6 +199,38 @@ impl std::io::Write for Length {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_json_clone_matches_encoded_roundtrip_at_boundaries() {
+        let values = [
+            serde_json::json!(null),
+            serde_json::json!({"z": "水\n\\\"", "a": [-0.0, 0.1, 1.0e-300]}),
+            serde_json::json!([9_007_199_254_740_991_u64, -9_007_199_254_740_991_i64]),
+            serde_json::json!((0..CHECKPOINT_PAGE_ITEMS).collect::<Vec<_>>()),
+            serde_json::json!((0..=CHECKPOINT_PAGE_ITEMS).collect::<Vec<_>>()),
+        ];
+        for value in values {
+            let size = serde_json::to_vec(&value).unwrap().len();
+            for limit in [0, 1, size.saturating_sub(1), size, size + 1] {
+                let old = bounded_clone(&value, limit);
+                let new = bounded_json_value(&value, limit);
+                assert_eq!(new, old, "limit {limit}, value {value}");
+                assert_eq!(
+                    new.map(|item| serde_json::to_vec(&item).unwrap()),
+                    old.map(|item| serde_json::to_vec(&item).unwrap()),
+                );
+            }
+        }
+        assert!(bounded_json_value(&serde_json::json!(9_007_199_254_740_992_u64), 64).is_none());
+        assert!(bounded_json_value(&serde_json::json!(-9_007_199_254_740_992_i64), 64).is_none());
+
+        let value = serde_json::json!({"text": "escaped \n text", "numbers": [0.1, -0.0]});
+        crate::observation::capture::take_item_work();
+        assert_eq!(bounded_clone(&value, 1024), Some(value.clone()));
+        assert_eq!(crate::observation::capture::take_item_work(), [1, 1, 1]);
+        assert_eq!(bounded_json_value(&value, 1024), Some(value));
+        assert_eq!(crate::observation::capture::take_item_work(), [0, 0, 0]);
+    }
 
     #[test]
     fn t20_checkpoint_encoder_preserves_exact_bytes_at_small_budgets() {
