@@ -139,16 +139,23 @@ pub fn accept_permission_review(text: &str) -> Result<PermissionReviewVerdict, &
 }
 
 fn bound_explanation(raw: &str) -> String {
-    const MAX: usize = 512;
-    let trimmed = raw.trim();
-    if trimmed.len() <= MAX {
-        return trimmed.to_owned();
+    truncate_utf8(raw.trim(), 512)
+}
+
+/// Truncate `text` to at most `max_bytes` without splitting a UTF-8 character.
+///
+/// Returns the original string when it already fits. Otherwise appends `…`
+/// after the largest valid prefix so prompt construction cannot panic on a
+/// multi-byte cut (fail closed elsewhere if review later fails).
+fn truncate_utf8(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_owned();
     }
-    let mut end = MAX;
-    while end > 0 && !trimmed.is_char_boundary(end) {
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}…", &trimmed[..end])
+    format!("{}…", &text[..end])
 }
 
 fn review_schema() -> ResponseSchema {
@@ -176,12 +183,10 @@ fn review_schema() -> ResponseSchema {
 }
 
 fn build_prompt(view: &PreToolView<'_>, matrix_reason: &str) -> String {
-    let args = serde_json::to_string(view.arguments).unwrap_or_else(|_| "{}".into());
-    let args = if args.len() > 8_192 {
-        format!("{}…", &args[..8_192])
-    } else {
-        args
-    };
+    let args = truncate_utf8(
+        &serde_json::to_string(view.arguments).unwrap_or_else(|_| "{}".into()),
+        8_192,
+    );
     let elevation = view.elevation_reason.unwrap_or("");
     let workspace = view
         .workspace_root
@@ -514,5 +519,16 @@ mod tests {
             decision,
             crate::agent::lifecycle::PreToolDecision::Deny { .. }
         ));
+    }
+
+    #[test]
+    fn truncate_utf8_does_not_split_multibyte_characters() {
+        // "界" is three UTF-8 bytes; cutting at one byte inside it must back up.
+        let text = format!("{}界", "a".repeat(8_191));
+        let truncated = truncate_utf8(&text, 8_192);
+        assert!(truncated.is_char_boundary(truncated.len()));
+        assert!(truncated.ends_with('…'));
+        assert!(!truncated.contains('界'));
+        assert_eq!(truncated.chars().next_back(), Some('…'));
     }
 }

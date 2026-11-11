@@ -69,4 +69,15 @@ mod tests {
             ExecutionPermissionMode::Plan
         );
     }
+
+    #[test]
+    fn obsolete_policy_token_is_rejected_without_alias() {
+        // Issue #544 / AGENTS.md: no aliases or migrations for removed modes.
+        let err = serde_json::from_str::<ExecutionPermissionMode>(r#""policy""#)
+            .expect_err("obsolete policy must not deserialize");
+        assert!(
+            err.to_string().contains("policy") || err.is_data(),
+            "unexpected decode error: {err}"
+        );
+    }
 }

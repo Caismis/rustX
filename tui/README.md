@@ -813,12 +813,12 @@ the native coordinator applies independent policy automatically. Tool approval p
 remain runtime-owned interactions; answering one does not change global policy.
 
 The picker, confirmation and footer read native effective/pending facts. During a
-frozen Policy attempt, requesting Full access shows `Current attempt: Policy` and
+frozen Plan attempt, requesting Full access shows `Current attempt: Plan` and
 `Next attempt: Full access`; it does not change the admitted attempt. No optimistic
 mode is stored. Snapshot replacement closes stale overlays and reconstructs
 semantic display; it never replays a control request. With no admitted/running
 attempt (including a settled historical attempt), the picker says `Effective:
-Policy`. A published pending mode still appears separately as `Next attempt`; it
+Plan`. A published pending mode still appears separately as `Next attempt`; it
 does not itself prove a current attempt exists.
 
 ## The model invariant
