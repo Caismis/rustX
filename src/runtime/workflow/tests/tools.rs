@@ -124,6 +124,11 @@ fn program_definition() -> WorkflowDefinition {
     })).unwrap()
 }
 
+fn full_access_lifecycle() -> crate::agent::AttemptLifecycle {
+    crate::agent::AttemptLifecycle::default()
+        .with_approval_mode(crate::runtime::types::ApprovalMode::FullAccess)
+}
+
 fn context(
     plane: &WorkflowTestPlane,
     probe: Arc<Probe>,
@@ -224,7 +229,7 @@ async fn native_view_contains_only_the_selected_path_in_start_order() {
         let context = context(
             &plane,
             Probe::new(ToolExecutionStatus::Success),
-            crate::agent::AttemptLifecycle::default(),
+            full_access_lifecycle(),
         );
         let (_, cancellation) = workflow_cancellation();
         runtime
@@ -270,7 +275,7 @@ async fn goal84_workflow_completion_and_goal_completion_are_independent() {
     let context = context(
         &plane,
         Probe::new(ToolExecutionStatus::Success),
-        crate::agent::AttemptLifecycle::default(),
+        full_access_lifecycle(),
     );
     let (_, cancellation) = workflow_cancellation();
     let value = workflow_runtime(&plane)
@@ -300,7 +305,7 @@ async fn tool_only_inactive_capability_has_no_provider_or_canonical_history_and_
     let context = context(
         &plane,
         probe.clone(),
-        crate::agent::AttemptLifecycle::default(),
+        full_access_lifecycle(),
     );
     let frozen = context.resources().capability().clone();
     let (_, cancellation) = workflow_cancellation();
@@ -412,7 +417,7 @@ async fn cancellation_before_node_admission_starts_zero_executors() {
     let context = context(
         &plane,
         probe.clone(),
-        crate::agent::AttemptLifecycle::default(),
+        full_access_lifecycle(),
     );
     let (trigger, cancellation) = workflow_cancellation();
     trigger.cancel(); // cancellation is observable before execute_block's node frontier
@@ -442,7 +447,7 @@ async fn cancellation_during_execution_drains_native_settlement_before_node_term
     let context = context(
         &plane,
         probe.clone(),
-        crate::agent::AttemptLifecycle::default(),
+        full_access_lifecycle(),
     );
     let (trigger, cancellation) = workflow_cancellation();
     let mut started = probe.started.subscribe();
@@ -490,7 +495,7 @@ async fn native_observation_store_failure_has_no_permission_or_outcome_authority
     let context = context(
         &plane,
         probe.clone(),
-        crate::agent::AttemptLifecycle::default(),
+        full_access_lifecycle(),
     );
     // Fail every observation, including Prepared, Started, Progress and Completed.
     // The store's real append boundary consumes these injected failures.
@@ -628,7 +633,7 @@ async fn outer_total_deadline_survives_new_leaf_at_capacity_one_and_drains_settl
     let mut context = context(
         &plane,
         probe.clone(),
-        crate::agent::AttemptLifecycle::default(),
+        full_access_lifecycle(),
     );
     let clock = Arc::new(crate::runtime::ManualMonotonicClock::new());
     let services = Arc::make_mut(context.native.as_mut().unwrap());
@@ -723,7 +728,7 @@ async fn agent_tool_branch_return_uses_committed_typed_binding() {
     let context = context(
         &plane,
         probe.clone(),
-        crate::agent::AttemptLifecycle::default(),
+        full_access_lifecycle(),
     );
     let mut definition = program_definition();
     definition
@@ -901,7 +906,7 @@ async fn normalization_and_schema_rejection_start_zero_executors() {
         let context = context_with_registration(
             &plane,
             registration,
-            crate::agent::AttemptLifecycle::default(),
+            full_access_lifecycle(),
         );
         let (_, cancellation) = workflow_cancellation();
         let error = runtime
@@ -1086,7 +1091,7 @@ async fn run_flaky(
     let context = context_with_registration(
         &plane,
         ToolRegistration::plain(definition(), flaky.clone()),
-        crate::agent::AttemptLifecycle::default(),
+        full_access_lifecycle(),
     );
     let (_, cancellation) = workflow_cancellation();
     let value = workflow_runtime(&plane)
@@ -1164,7 +1169,7 @@ async fn aggregate_skips_failed_producers_even_when_their_diagnostics_match_the_
         let context = context(
             &plane,
             probe.clone(),
-            crate::agent::AttemptLifecycle::default(),
+            full_access_lifecycle(),
         );
         let (_, cancellation) = workflow_cancellation();
         let value = workflow_runtime(&plane)
