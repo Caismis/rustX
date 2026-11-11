@@ -69,10 +69,12 @@ pub(super) fn page_validated(
     locator: &CanonicalContentLocator,
     offset: u64,
     limit: usize,
+    known: Option<(&[u8], &super::observation::ToolOwner)>,
 ) -> Result<(NativeToolObservationPage, PageProof), ConversationStoreError> {
     let connection = validated.connection()?;
     let cut = validated.expected();
-    let page = super::observation::tools_by_locator_validated(validated, locator, offset, limit)?;
+    let page =
+        super::observation::tools_by_locator_validated(validated, locator, offset, limit, known)?;
     let mut headers = Vec::new();
     let page = page_at(
         connection,
