@@ -1170,8 +1170,36 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 note("settled");
             }
         }
-        TOOL_TURN | TOOL_APPROVAL | TOOL_APPROVAL_PENDING => {
+        TOOL_TURN => {
             let call = read_call("call-read-1", "note.txt");
+            let child = Child::require(
+                root,
+                vec![
+                    calling_turn(&call),
+                    vec![started(), text("continued"), done(ModelFinishReason::Stop)],
+                ],
+                false,
+                true,
+            )
+            .await;
+            child.submit("read the note");
+            child.log.wait_settled(1).await;
+            note("settled");
+        }
+        TOOL_APPROVAL | TOOL_APPROVAL_PENDING => {
+            // Native Read is always Allow under the built-in matrix; Ask for
+            // these approval-interaction proofs comes from Plan + elevation
+            // on an elevating tool (Bash other).
+            let call = ScriptedCall {
+                id: "call-bash-approval-1",
+                tool_id: "tool-bash",
+                name: "bash",
+                arguments: serde_json::json!({
+                    "command": "true",
+                    "description": "Process-death approval probe",
+                    "elevation_reason": "process-death approval interaction fixture"
+                }),
+            };
             let child = Child::require(
                 root,
                 vec![
@@ -1182,7 +1210,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 true,
             )
             .await;
-            child.submit("read the note");
+            child.submit("probe approval");
             if scenario == TOOL_APPROVAL_PENDING {
                 // The waiter is process-owned state that never settles here:
                 // the parent kills this child while the request is pending.

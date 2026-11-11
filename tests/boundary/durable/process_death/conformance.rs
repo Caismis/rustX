@@ -1519,7 +1519,7 @@ fn known_tool_outcome_is_preserved_into_the_canonical_slot() {
 #[test]
 fn a_pending_interaction_leaves_a_requested_audit_and_nothing_else() {
     let lab = Lab::new();
-    lab.write_runtime_config("always");
+    lab.write_runtime_config(true);
     let mut process = lab.spawn(child::TOOL_APPROVAL_PENDING, None);
     process.wait_note("interaction-pending");
     process.sigkill();
@@ -1570,7 +1570,7 @@ fn a_pending_interaction_leaves_a_requested_audit_and_nothing_else() {
 #[test]
 fn a_settled_approval_never_authorizes_a_later_execution() {
     let lab = Lab::new();
-    lab.write_runtime_config("always");
+    lab.write_runtime_config(true);
     let mut process = lab.spawn(
         child::TOOL_APPROVAL,
         Some("before:event:tool_execution_started"),
@@ -1824,7 +1824,7 @@ fn live_external_edits_never_expose_a_new_generation() {
     process.wait_note("first-attempt-settled");
     lab.write_project_instructions("R2 project instructions.");
     lab.write_skill("alpha", "R2 alpha summary", "R2 alpha body");
-    lab.write_runtime_config("always");
+    lab.write_runtime_config(true);
     process.resume();
     process.wait_note("settled");
     process.sigkill();
@@ -3049,7 +3049,7 @@ fn the_transcript_pages_every_durable_owner_after_process_death() {
 
     // The interaction audit.
     let interaction = Lab::new();
-    interaction.write_runtime_config("always");
+    interaction.write_runtime_config(true);
     let mut process = interaction.spawn(child::TOOL_APPROVAL, None);
     process.wait_note("settled");
     process.sigkill();
@@ -3241,7 +3241,7 @@ fn settled_tool_result_and_new_inbound_compose_with_an_indeterminate_request() {
 #[test]
 fn approval_settlement_and_the_tool_start_boundary_compose() {
     let lab = Lab::new();
-    lab.write_runtime_config("always");
+    lab.write_runtime_config(true);
     let mut process = lab.spawn(
         child::TOOL_APPROVAL,
         Some("after:event:tool_execution_started"),
@@ -3334,7 +3334,7 @@ fn recovered_adopted_interrupt(initial: &str, resumed: &str, disable_on_reopen: 
     if disable_on_reopen {
         // The ordinary configuration composes no Goal extension. Durable
         // history still proves that this already-adopted turn is Goal work.
-        lab.write_runtime_config("never");
+        lab.write_runtime_config(false);
     }
     let mut process = lab.spawn(resumed, None);
     process.wait_note("recovered-interrupt-proved");

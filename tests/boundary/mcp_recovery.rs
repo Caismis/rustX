@@ -484,7 +484,7 @@ where
             monotonic_clock: clock.clone() as Arc<dyn MonotonicClock>,
             subagent_context: None,
             workflow_output: None,
-            approval_mode: rustx::runtime::ApprovalMode::default(),
+            approval_mode: rustx::runtime::ApprovalMode::FullAccess,
         },
         context_runtime,
         &fixture.runtime,

@@ -129,7 +129,9 @@ enabled = true
 enabled = true
 timezone = "UTC"
 ` : '';
-    const writeSettings = (model = primaryModel, modelFields = '') => writeFileSync(settings, (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n[agent.model]\nmodel = "fixture/${model}"\n${modelFields}` + imageSource);
+    // Lifecycle/UI fixtures are not permission-mode tests: Full Access lets
+    // Write/Edit/Bash/workflow/subagent proceed without an unanswered Ask.
+    const writeSettings = (model = primaryModel, modelFields = '') => writeFileSync(settings, (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + 'approval_mode = "full_access"\n' + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n[agent.model]\nmodel = "fixture/${model}"\n${modelFields}` + imageSource);
     writeSettings();
     if (['web_child_capabilities', 'web_large_write'].includes(scenario)) writeFileSync(settings, readFileSync(settings, 'utf8') + '\n');
     // Automatically repairable sources (#464): the App Server repairs the User
@@ -155,7 +157,7 @@ timezone = "UTC"
       writeFileSync(join(workspaceA, '.agents/agents/reviewer.toml'), 'description = "Workflow-only reviewer"\ninstructions = "Review requests carefully."\n' + (scenario === 'web_workflow_observation' ? '[tools]\nbuiltin = ["read"]\n' : ''));
       writeFileSync(join(workspaceA, '.agents/workflows/review_pr.yaml'), readFileSync(resolve(root, scenario === 'web_workflow_review' ? 'web-console/test/e2e/workflow_review.yaml' : 'web-console/test/e2e/review_pr.yaml')));
       writeFileSync(join(workspaceA, '.agents/skills/acceptance/SKILL.md'), '---\nname: acceptance\ndescription: Inspect the native acceptance fixture.\n---\nUse native authority.\n');
-      writeFileSync(join(workspaceA, 'rustx.toml'), '[agent]\nworkflows = ["review_pr"]\n');
+      writeFileSync(join(workspaceA, 'rustx.toml'), 'approval_mode = "full_access"\n[agent]\nworkflows = ["review_pr"]\n');
     }
     const token = randomBytes(32).toString('base64url');
     const tokenFile = join(directory, 'socket-token'); writeFileSync(tokenFile, token, { mode: 0o600 });

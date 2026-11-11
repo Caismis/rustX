@@ -385,7 +385,7 @@ pub(crate) async fn live_model_child_inheritance_boundary_scenario() {
         .unwrap();
         std::fs::write(
             f.workspaces[0].join("rustx.toml"),
-            "[agent]\nagents=['reviewer']\n",
+            "approval_mode = \"full_access\"\n[agent]\nagents=['reviewer']\n",
         )
         .unwrap();
         let connection = AppServerConnection::new(f.host.clone());
