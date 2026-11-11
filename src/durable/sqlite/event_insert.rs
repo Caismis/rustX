@@ -281,10 +281,19 @@ fn prepare(
                 )
             })?;
     }
-    let readiness = optional_display_layout(transaction, || {
-        observation_readiness::prepare(transaction, event)
-    })?
-    .is_some();
+    // Readiness writes at most one row with one statement. SQLite rolls that
+    // statement back on failure and this guarded schema has no custom trigger,
+    // so it needs no savepoint of its own. As with a contained layout, only a
+    // failure that kept the owning transaction alive retires the domain.
+    let readiness = match observation_readiness::prepare(transaction, event) {
+        Ok(()) => true,
+        Err(
+            error @ (ConversationStoreError::OperationCancelled
+            | ConversationStoreError::TransactionInvalid(_)),
+        ) => return Err(error),
+        Err(error) if transaction.is_autocommit() => return Err(error),
+        Err(_) => false,
+    };
     let aggregate_required = observation_statistics::is_trace_anchor(&event.event)
         || observation_statistics::requires_statistics(event)
         || observation_members::requires_members(event);
