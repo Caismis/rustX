@@ -228,7 +228,9 @@ it('keeps automatically composed Agent controls out of settings', async () => {
   const whitelist = within(screen.getByRole('group', { name: 'Available tools' }));
   expect(whitelist.getByRole('checkbox', { name: 'read' })).toBeTruthy();
   for (const name of controls) expect(whitelist.queryByRole('checkbox', { name })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: 'Advanced Tool policies' }));
+  // Issue #544 removed per-tool execution-policy authoring; Agent controls stay
+  // out of both the whitelist and any obsolete policy card.
+  expect(screen.queryByRole('button', { name: 'Advanced Tool policies' })).toBeNull();
   for (const name of controls) expect(screen.queryByRole('form', { name: `${name} policy` })).toBeNull();
   expect(screen.queryByRole('note', { name: 'Agent controls' })).toBeNull();
   cleanup();

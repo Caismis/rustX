@@ -150,8 +150,9 @@ it('S2-04 Agent holds guidance; Tools & Permissions holds what the Agent may do'
   expect(forms()).toEqual(['Global instructions', 'Project guidance']);
   await openSettingsPage('Tools & Permissions');
   expect(forms()).toEqual(['Approval mode', 'Built-in tools']);
-  // Per-Tool policies are one task deeper, not scattered primary tabs.
-  expect(screen.getByRole('button', { name: 'Advanced Tool policies' }).getAttribute('aria-expanded')).toBe('false');
+  // Issue #544 removed per-tool execution-policy authoring; mode is the
+  // Tools & Permissions surface, not a nested Advanced disclosure.
+  expect(screen.queryByRole('button', { name: 'Advanced Tool policies' })).toBeNull();
   // The old native-unit tabs do not exist as navigation.
   for (const obsolete of ['Tool Policies', 'Skill access', 'Agents & Workflows', 'Plugins', 'Default model']) {
     expect(screen.queryByRole('tab', { name: obsolete })).toBeNull();
