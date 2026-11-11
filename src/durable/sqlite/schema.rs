@@ -83,6 +83,8 @@ fn register_native_functions(connection: &Connection) -> Result<(), Conversation
     content::register_tail_function(connection)
 }
 
+const SQLITE_PAGE_SIZE: i64 = 512;
+
 pub(super) fn configure_connection(
     connection: &mut Connection,
     in_memory: bool,
@@ -90,7 +92,7 @@ pub(super) fn configure_connection(
     register_native_functions(connection)?;
     connection
         .execute_batch(
-            "PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; PRAGMA page_size = 2048; PRAGMA wal_autocheckpoint = 2000;",
+            "PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; PRAGMA page_size = 512; PRAGMA cache_size = -2000; PRAGMA wal_autocheckpoint = 7825;",
         )
         .map_err(|error| {
             crate::durable::sqlite::sqlite_error(&error, format!("configure SQLite: {error}"))
@@ -205,6 +207,14 @@ pub(super) fn validate_existing_schema(
             stored: version,
             expected: SQLITE_SCHEMA_VERSION,
         });
+    }
+    let page_size: i64 = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .map_err(|error| storage(format!("read SQLite page size: {error}")))?;
+    if page_size != SQLITE_PAGE_SIZE {
+        return Err(ConversationStoreError::IncompatibleSchema(format!(
+            "SQLite page size {page_size} does not match {SQLITE_PAGE_SIZE}"
+        )));
     }
     verify_schema_shape(connection)
 }
@@ -764,11 +774,6 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 message_id TEXT NOT NULL,
                 FOREIGN KEY(ledger_position,message_id) REFERENCES message_ledger(position,message_id)
             );
-            CREATE TABLE IF NOT EXISTS surface_head (
-                id INTEGER PRIMARY KEY CHECK(id=1),
-                revision INTEGER NOT NULL,
-                compaction_generation INTEGER NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS projection_checkpoints (
                 checkpoint_id TEXT PRIMARY KEY,
                 candidate_fingerprint TEXT NOT NULL,
@@ -1121,6 +1126,13 @@ impl SqliteConversationStore {
                 format!("open {}: {error}", path.display()),
             )
         })?;
+        // A rejected WAL database must not be checkpointed when this handle closes.
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                true,
+            )
+            .map_err(|error| storage(format!("protect rejected SQLite: {error}")))?;
         // Refuse obsolete development state before changing journal settings.
         reject_legacy_schema(&connection)?;
         if has_table(&connection, "rustx_store")? {
@@ -1128,6 +1140,12 @@ impl SqliteConversationStore {
             validate_existing_schema(&connection)?;
             validate_existing_identity(&connection, &conversation_id)?;
         }
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                false,
+            )
+            .map_err(|error| storage(format!("restore SQLite checkpoint on close: {error}")))?;
         configure_connection(&mut connection, false)?;
         Self::from_connection(conversation_id, connection)
     }
@@ -1235,6 +1253,12 @@ impl SqliteConversationStore {
                 format!("open existing {}: {error}", path.display()),
             )
         })?;
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                true,
+            )
+            .map_err(|error| storage(format!("protect rejected SQLite: {error}")))?;
         if let Some(scope) = scope {
             scope.install(&connection)?;
         }
@@ -1256,6 +1280,12 @@ impl SqliteConversationStore {
         register_integrity_function(&connection)?;
         validate_existing_schema(&connection)?;
         validate_existing_identity(&connection, &conversation_id)?;
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                false,
+            )
+            .map_err(|error| storage(format!("restore SQLite checkpoint on close: {error}")))?;
         connection
             .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
             .map_err(|error| {

@@ -22,7 +22,10 @@ macro_rules! table {
                 bootstrap_initialized INTEGER NOT NULL DEFAULT 0 CHECK(bootstrap_initialized IN (0,1)),
                 recovery_frontier BLOB CHECK(recovery_frontier IS NULL OR typeof(recovery_frontier)='blob'),
                 canonical_identity_through INTEGER NOT NULL DEFAULT 0 CHECK(canonical_identity_through >= 0),
-                canonical_identity_count INTEGER NOT NULL DEFAULT 0 CHECK(canonical_identity_count BETWEEN 0 AND canonical_identity_through)
+                canonical_identity_count INTEGER NOT NULL DEFAULT 0 CHECK(canonical_identity_count BETWEEN 0 AND canonical_identity_through),
+                surface_revision INTEGER,
+                surface_compaction_generation INTEGER,
+                CHECK((surface_revision IS NULL) = (surface_compaction_generation IS NULL))
             )"
     };
 }

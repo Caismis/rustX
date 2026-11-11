@@ -38,10 +38,15 @@ fn request_layout(history: u64) -> (u64, i32, i32) {
         statement.get_status(StatementStatus::VmStep)
     };
     let wal = std::fs::read(directory.path().join("requests.sqlite-wal")).unwrap();
-    let frames = (wal.len() - 32) / 2072;
+    let page_size: usize = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .unwrap();
+    let frame_size = page_size + 24;
+    assert_eq!((wal.len() - 32) % frame_size, 0);
+    let frames = (wal.len() - 32) / frame_size;
     let payload_pages: std::collections::BTreeSet<_> =
         payload_before.iter().map(|(page, _)| *page).collect();
-    for frame in wal[32..].as_chunks::<2072>().0 {
+    for frame in wal[32..].chunks_exact(frame_size) {
         let page = u64::from(u32::from_be_bytes(frame[..4].try_into().unwrap()));
         assert!(
             !payload_pages.contains(&page),
@@ -222,25 +227,28 @@ fn an_unsettled_request_never_dirties_the_terminal_index() {
     )
     .unwrap();
     store.initialize(&[]).unwrap();
-    let root: u32 = {
+    let (root, frame_size): (u32, usize) = {
         let connection = store.lock().unwrap();
         connection
             .execute_batch("PRAGMA wal_autocheckpoint=0; PRAGMA wal_checkpoint(TRUNCATE)")
             .unwrap();
-        connection
+        let root = connection
             .query_row(
                 "SELECT rootpage FROM sqlite_schema WHERE name='request_owners_terminal_idx'",
                 [],
                 |row| row.get(0),
             )
-            .unwrap()
+            .unwrap();
+        let page_size: usize = connection
+            .query_row("PRAGMA page_size", [], |row| row.get(0))
+            .unwrap();
+        (root, page_size + 24)
     };
     let pages = || {
         let wal = std::fs::read(directory.path().join("terminal.sqlite-wal")).unwrap();
+        assert_eq!((wal.len() - 32) % frame_size, 0);
         wal[32..]
-            .as_chunks::<2072>()
-            .0
-            .iter()
+            .chunks_exact(frame_size)
             .map(|frame| u32::from_be_bytes(frame[..4].try_into().unwrap()))
             .collect::<Vec<_>>()
     };

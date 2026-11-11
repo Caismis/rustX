@@ -3566,7 +3566,7 @@ fn recovery_rejects_an_inconsistent_canonical_head_without_pending_tools() {
     store
         .lock()
         .unwrap()
-        .execute("UPDATE surface_head SET revision=0 WHERE id=1", [])
+        .execute("UPDATE rustx_store SET surface_revision=0 WHERE id=1", [])
         .unwrap();
     assert!(store.load_head().is_err());
     assert!(crate::runtime::recovery::RecoveryEvidence::reconstruct(&store).is_err());
