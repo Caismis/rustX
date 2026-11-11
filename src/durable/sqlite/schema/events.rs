@@ -74,17 +74,22 @@ pub(in crate::durable::sqlite) use table;
 pub(in crate::durable::sqlite) fn verify_schema(
     connection: &Connection,
 ) -> Result<(), ConversationStoreError> {
-    let exact: bool = connection
-        .query_row(
-            "SELECT sql=?1 FROM sqlite_schema WHERE type='table' AND name='events'",
-            [table!().replacen(" IF NOT EXISTS", "", 1)],
-            |row| row.get(0),
-        )
-        .map_err(|error| sqlite_error(&error, error.to_string()))?;
-    if !exact {
-        return Err(ConversationStoreError::IncompatibleSchema(
-            "invalid event identity table definition".into(),
-        ));
+    for (name, definition) in [
+        ("events", table!()),
+        ("rustx_store", super::store_root::table!()),
+    ] {
+        let exact: bool = connection
+            .query_row(
+                "SELECT sql=?2 FROM sqlite_schema WHERE type='table' AND name=?1",
+                [name, &definition.replacen(" IF NOT EXISTS", "", 1)],
+                |row| row.get(0),
+            )
+            .map_err(|error| sqlite_error(&error, error.to_string()))?;
+        if !exact {
+            return Err(ConversationStoreError::IncompatibleSchema(format!(
+                "invalid event identity table definition: {name}"
+            )));
+        }
     }
     Ok(())
 }
