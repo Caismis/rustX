@@ -1197,8 +1197,10 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 arguments: serde_json::json!({
                     // `true` is proven read-only and would Allow under Plan;
                     // a mutating command stays Unproven so elevation Asks.
+                    // Bash is ModelSelectable: execution_mode is required metadata.
                     "command": "touch approval-probe.flag",
                     "description": "Process-death approval probe",
+                    "execution_mode": "foreground",
                     "elevation_reason": "process-death approval interaction fixture"
                 }),
             };
@@ -1212,6 +1214,9 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 true,
             )
             .await;
+            // Connect control before the Ask wait so a missing InteractionPending
+            // surfaces as a note timeout rather than a silent accept hang.
+            note("approval-composed");
             child.submit("probe approval");
             if scenario == TOOL_APPROVAL_PENDING {
                 // The waiter is process-owned state that never settles here:

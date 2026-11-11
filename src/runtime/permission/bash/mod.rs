@@ -308,6 +308,7 @@ mod tests {
             "(ls)",
             "[[ -f x ]]",
             "cd /tmp && git status",
+            "touch approval-probe.flag",
         ] {
             assert_unproven(command);
         }

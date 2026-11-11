@@ -387,6 +387,16 @@ fn system_prompt(durable: &Durable, index: usize) -> String {
         .clone()
 }
 
+/// Resource-generation comparisons ignore the sparse permission reminder
+/// (Issue #544 §10): it is injected only on first/change/compaction request
+/// starts and is not part of the frozen resource generation under test.
+fn system_prompt_without_permission_reminder(prompt: &str) -> &str {
+    match prompt.find("\n\nExecution permission mode:") {
+        Some(index) => &prompt[..index],
+        None => prompt,
+    }
+}
+
 /// The model-facing tool names of one persisted request.
 fn tool_names(durable: &Durable, index: usize) -> Vec<String> {
     durable
@@ -1835,10 +1845,11 @@ fn live_external_edits_never_expose_a_new_generation() {
     let first = system_prompt(&durable, 0);
     assert!(first.contains("R1 project instructions."));
     assert!(first.contains("R1 alpha summary"));
+    let first_generation = system_prompt_without_permission_reminder(&first);
     for index in 1..snapshots.len() {
         assert_eq!(
-            system_prompt(&durable, index),
-            first,
+            system_prompt_without_permission_reminder(&system_prompt(&durable, index)),
+            first_generation,
             "request {index} still sends the R1 generation"
         );
         assert_eq!(
