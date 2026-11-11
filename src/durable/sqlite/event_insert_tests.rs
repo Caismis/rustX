@@ -84,10 +84,11 @@ fn prepared_readonly_domains_avoid_savepoints_and_preserve_isolated_read_failure
         isolated.lock().unwrap().execute_batch("CREATE TEMP TRIGGER native_first_read_failure AFTER INSERT ON events BEGIN SELECT NEW.sequence; END").unwrap();
         take_optional_layout_work();
         let attempt = response_start(&prepared, "readonly-prepare");
-        // Readiness, execution, source and Trace still own actual write domains.
-        // Aggregates and pending Turn are pure reads; the former six wrappers
-        // become four, each executing one SAVEPOINT and one RELEASE on success.
-        assert_eq!(take_optional_layout_work(), 4);
+        // Execution, source and Trace still own actual write domains. Aggregates
+        // and pending Turn are pure reads, and readiness is one statement that
+        // SQLite already rolls back; the former six wrappers become three, each
+        // executing one SAVEPOINT and one RELEASE on success.
+        assert_eq!(take_optional_layout_work(), 3);
         response_start(&isolated, "readonly-prepare");
         assert_eq!(event_rows(&prepared), event_rows(&isolated));
         assert_eq!(prepared.read_events(None, 8).unwrap().events.len(), 1);
@@ -130,14 +131,14 @@ fn prepared_readonly_domains_avoid_savepoints_and_preserve_isolated_read_failure
                 transaction.commit().unwrap();
                 take_optional_layout_work()
             };
-            // Eight actual write domains remain; aggregate, Ledger lookup and
-            // pending Turn no longer add the former three empty savepoints.
-            assert_eq!(append(&prepared), 8);
+            // Seven actual write domains remain; aggregate, Ledger lookup and
+            // pending Turn add no empty savepoint and readiness needs none.
+            assert_eq!(append(&prepared), 7);
             append(&isolated);
             assert_eq!(event_rows(&prepared), event_rows(&isolated));
             take_optional_layout_work();
             response_complete(&prepared, &attempt);
-            assert_eq!(take_optional_layout_work(), 4);
+            assert_eq!(take_optional_layout_work(), 3);
             response_complete(&isolated, &attempt);
             assert_eq!(event_rows(&prepared), event_rows(&isolated));
         }

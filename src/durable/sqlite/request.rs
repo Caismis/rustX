@@ -495,18 +495,17 @@ pub(super) fn index_request_read_layouts(
     event: &RuntimeEventEnvelope,
     request_trace_prepared: bool,
 ) -> Result<(), ConversationStoreError> {
-    let _ = optional_display_layout(transaction, || {
-        if let Some(retry) = retry_message_id {
+    if let Some(retry) = retry_message_id {
+        let _ = optional_display_layout(transaction, || {
             content::index_utf8_field(
                 transaction,
                 "response_identity",
                 &format!("request-start:{}", event.sequence),
                 1,
                 retry.as_str(),
-            )?;
-        }
-        Ok(())
-    })?;
+            )
+        })?;
+    }
     if !request_trace_prepared {
         let _ = optional_display_layout(transaction, || {
             observation_trace::request_core(transaction, event, snapshot)
