@@ -199,8 +199,12 @@ impl PartialEq for RuntimeEventEnvelope {
 /// even when the envelope also carries the enclosing attempt or turn. Unknown
 /// payload fields are rejected so stale or contradictory encodings cannot
 /// silently deserialize.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, strum::AsRefStr,
+)]
+#[cfg_attr(test, derive(strum::VariantNames))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[strum(serialize_all = "snake_case")]
 pub enum RuntimeEvent {
     /// Observational Goal facts; never replayed as Goal state.
     Goal { fact: crate::goal::GoalFact },

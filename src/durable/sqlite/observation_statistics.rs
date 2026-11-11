@@ -334,9 +334,7 @@ pub(super) fn is_trace_anchor(event: &RuntimeEvent) -> bool {
     {
         return false;
     }
-    super::observation_event::native_kind(event)
-        .ok()
-        .and_then(|kind| crate::durable::trace::TraceFactKind::parse(&kind))
+    crate::durable::trace::TraceFactKind::parse(super::observation_event::native_kind(event))
         .is_some_and(crate::durable::trace::TraceFactKind::is_anchor)
 }
 pub(super) struct Prepared {
