@@ -105,6 +105,10 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
     }
 
     let args: Vec<&str> = tokens.collect();
+    classify_allowlisted_executable(executable, args.as_slice())
+}
+
+fn classify_allowlisted_executable(executable: &str, args: &[&str]) -> BashReadonlyClass {
     match executable {
         "ls" | "pwd" | "echo" | "printf" | "true" | "false" | "test" | "[" | "cat" | "head"
         | "tail" | "wc" | "stat" | "file" | "which" | "type" | "basename" | "dirname"
@@ -120,10 +124,7 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
             }
         }
         "date" => {
-            // Conservative: only bare `date` is proven display-only. GNU glued
-            // `-s…`, quoted `-s`, BSD positional set-time, and display flags
-            // that take operands need full argv analysis before they can be
-            // trusted as read-only.
+            // Conservative: only bare `date` is proven display-only.
             if args.is_empty() {
                 BashReadonlyClass::Readonly
             } else {
@@ -133,8 +134,7 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
             }
         }
         "env" => {
-            // Bare `env` prints the environment. Any wrapper (`env rm`,
-            // `env FOO=1 cmd`) needs full argv walking before it can be proven.
+            // Bare `env` prints the environment; wrappers need argv walking.
             if args.is_empty() {
                 BashReadonlyClass::Readonly
             } else {
@@ -164,7 +164,7 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
                 BashReadonlyClass::Readonly
             }
         }
-        "git" => classify_git(args.as_slice()),
+        "git" => classify_git(args),
         _ => BashReadonlyClass::Unproven {
             reason: format!(
                 "executable `{executable}` is not on the conservative read-only allowlist"
