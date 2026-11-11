@@ -1145,9 +1145,10 @@ The attempt always carries one required policy. A runtime-created attempt is
 bound to its one concrete, conversation-owned `InteractionCoordinator`; that
 native owner is not a replaceable production rendezvous strategy. Standalone
 inert execution has no interaction provider and fails `Ask` closed. The
-runtime-created policy is derived from the admitted effective `ApprovalMode`:
-`Policy` consults the resolved Tool's `ToolApprovalPolicy`, while `FullAccess`
-maps effective approval to `Never` only. The policy sees only the
+runtime-created policy is derived from the admitted effective `ApprovalMode`
+(`plan` / `automatic` / `full_access`; see `docs/permission-modes.md`). The
+built-in matrix plus resource overrides decide Allow / Elevate / Review; there
+is no per-tool `ToolApprovalPolicy`. The policy sees only the
 conversation/attempt/turn, call and resolved tool identities, safe name,
 origin, mode, and validated business arguments. It cannot resolve registry
 facts, mutate canonical state, dispatch a tool, receive cancellation

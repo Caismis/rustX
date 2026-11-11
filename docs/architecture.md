@@ -1026,12 +1026,11 @@ crate-private `QuestionnaireRequester` containing the attempt identity, the
 owner-observing `ExecutionCancellation` capability, and that coordinator. A standalone
 inert execution has no interaction provider and therefore fails an `Ask`
 closed. The configured
-`ToolApprovalPolicy` is resolved only after exact registry preflight. The
-runtime-wide `ApprovalMode` then computes effective approval: `Policy` keeps
-the Tool's `Never`/`Always` value, while `FullAccess` maps eligible calls to
-`Never` without changing any Tool definition. This issue does not add a
-permission language, risk-classification engine, allowlist, routing layer, or
-form framework.
+Execution permission uses the Issue #544 closed modes (`plan` / `automatic` /
+`full_access`) after exact registry preflight. `ConfiguredApprovalPolicy`
+applies the built-in matrix, resource three-mode overrides, elevation, and
+Automatic Auxiliary review — see `docs/permission-modes.md`. There is no
+per-tool `ToolApprovalPolicy`, custom permission language, or routing layer.
 `PreToolPolicy` runs only after registry identity resolution, reserved metadata
 stripping, tool-owned semantic normalization, and business-argument
 validation, and after the Assistant `ToolCall` is canonical. For `ask_user`,
@@ -2607,13 +2606,12 @@ The three policy axes are independent:
   `ModelSelectable`) decides ownership and settlement: foreground work is
   attempt-owned and physically cancellable, background work is
   conversation-owned and detached after accepted dispatch.
-- [`ToolConcurrencyPolicy`] (`Sequential` / `Parallel`) decides scheduling
-  within one tool-call batch: a `Sequential` invocation is an exclusive
-  barrier, adjacent `Parallel` invocations run as one group.
-- [`ToolApprovalPolicy`] (`Never` / `Always`) decides whether an eligible
-  invocation publishes a native Approval before the executor starts. The
-  runtime `ApprovalMode` is a separate control-plane override: `Policy`
-  consults this axis and `FullAccess` makes effective approval `Never` only.
+- Tool-level Sequential/Parallel authoring is removed (Issue #544). Independent
+  authorized calls may start concurrently; ToolResults still commit in original
+  call order. Domain owners (Todo, Goal, …) retain their own barriers.
+- [`ApprovalMode`] (`plan` / `automatic` / `full_access`) is the closed
+  execution-permission control plane. Per-tool Never/Always approval axes are
+  gone; see `docs/permission-modes.md`.
 
 The canonical input schema is tool-owned and never mutated. For
 `ModelSelectable` tools the model-facing compiler decorates a clone with the

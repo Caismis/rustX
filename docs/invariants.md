@@ -1204,11 +1204,12 @@ The ownership contract is:
   replace that owner with an arbitrary rendezvous. No public
   generic interaction trait is exposed. A standalone inert
   execution has no interaction provider and fails `Ask` closed. The
-  runtime-created policy is derived from the effective `ApprovalMode`:
-  `Policy` consults the resolved Tool's `Never`/`Always`
-  `ToolApprovalPolicy`, while `FullAccess` makes effective approval `Never`
-  only. There are no optional approval hooks, policy chains, priorities,
-  wrappers, or callbacks hidden in `ToolExecutor`.
+  runtime-created policy is derived from the effective `ApprovalMode`
+  (`plan` / `automatic` / `full_access`). The built-in matrix, resource
+  overrides, elevation, and Automatic review decide admission — see
+  `docs/permission-modes.md`. There are no per-tool Never/Always axes,
+  optional approval hooks, policy chains, priorities, wrappers, or callbacks
+  hidden in `ToolExecutor`.
 - `PreToolPolicy` runs only after `ToolRegistry::preflight` has resolved the
   tool identity, invocation metadata, execution mode, and validated business
   arguments, and after the Assistant `ToolCall` has committed canonically.

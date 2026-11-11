@@ -244,24 +244,15 @@ it('keeps automatically composed Agent controls out of settings', async () => {
   expect(screen.queryByRole('note', { name: 'Agent controls' })).toBeNull();
 });
 
-it('writes Native and MCP invocation policies independently, and an empty policy only when explicitly authored', async () => {
+it('does not expose obsolete native or MCP execution-policy authoring', async () => {
   const context = workspaceSource();
-  const { writes: write } = await renderEditor(<>{toolsPage(context, {}, 'workspace', 'p1')}<AvailabilityDetail source={context} scope="workspace" revision="p1" family="mcp" name="search"/></>, { source: context, context });
-  // Per-Tool invocation policy is progressively disclosed rather than given a
-  // page of its own.
-  fireEvent.click(screen.getByRole('button', { name: 'Advanced Tool policies' }));
-  const form = within(screen.getByRole('form', { name: 'bash policy' }));
-  await chooseOption('execution', 'Model selectable', form);
-  fireEvent.click(form.getByRole('button', { name: 'Save bash policy' }));
-  await waitFor(() => expect(write.mock.calls[0]).toEqual([{ kind: 'config', mutation: { unit: 'native_policy', id: 'bash', authored: { execution: 'model_selectable' } } }, 'p1']));
-  const mcp = within(screen.getByRole('form', { name: 'MCP policy search' }));
-  // This Workspace authors no `search` policy; opening its editor authors none
-  // either, so there is nothing to save until the user says so.
-  expect((mcp.getByRole('button', { name: 'Save MCP policy search' }) as HTMLButtonElement).disabled).toBe(true);
-  fireEvent.click(mcp.getByRole('button', { name: 'Override MCP policy search' }));
-  fireEvent.click(mcp.getByRole('button', { name: 'Save MCP policy search' }));
-  // An explicitly authored empty policy object stays `{}` and is never null.
-  await waitFor(() => expect(write.mock.calls[1][0]).toEqual({ kind: 'config', mutation: { unit: 'mcp_policy', id: 'search', authored: {} } }));
+  await renderEditor(<>{toolsPage(context, {}, 'workspace', 'p1')}<AvailabilityDetail source={context} scope="workspace" revision="p1" family="mcp" name="search"/></>, { source: context, context });
+  // Issue #544: tool-level execution/concurrency authoring is gone; only Bash
+  // keeps model-selectable execution_mode on the call itself.
+  expect(screen.queryByRole('button', { name: 'Advanced Tool policies' })).toBeNull();
+  expect(screen.queryByRole('form', { name: 'bash policy' })).toBeNull();
+  expect(screen.queryByRole('form', { name: 'MCP policy search' })).toBeNull();
+  expect(screen.getByRole('form', { name: 'Tools: search' })).toBeTruthy();
 });
 
 it('round-trips an independent Agent profile with guidance and model', async () => {

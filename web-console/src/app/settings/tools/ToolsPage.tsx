@@ -2,23 +2,22 @@ import { SettingsNotice } from '../SettingsFeedback';
 import { useTranslation } from '../../../locale/react';
 import { useState } from 'react';
 import type {
-  ExecutionPermissionMode as ApprovalMode, NativePolicyOverrideDocument, NativeTool,
+  ExecutionPermissionMode as ApprovalMode,
   RuntimeLayer, SourceScope, SourceSettings, SourceToolSelection,
 } from '../../../../../protocol/app-server/v78';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitForm } from '../forms/bridge';
-import { CheckboxList, Selection, TextField, nativeTools, policyTools } from '../forms/controls';
-import { Advanced, Choice } from '../primitives/aria';
+import { CheckboxList, Selection, TextField, nativeTools } from '../forms/controls';
+import { Choice } from '../primitives/aria';
 import { reachableIdentities, sourceView } from '../projection';
-import {PolicyFields} from '../forms/PolicyFields';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 
 /** The Tools & Permissions product page.
  *
  * It answers exactly one user question — *what may the root Agent use, and
- * under what policy?* Approval behavior, built-in Tool availability, access to
- * Managed Python sources and native Tool policies remain here. MCP, Skills
- * and named Agents own their availability controls in their resource modules.
+ * under what permission mode?* Mode selection and built-in Tool availability
+ * remain here. MCP three-mode resource overrides live on the MCP definition;
+ * Skills and named Agents own their availability controls in their modules.
  *
  * Every control keeps its exact native identity and its exact native
  * vocabulary. `all`, an explicit list of identities, an explicit empty list and
@@ -64,13 +63,6 @@ export function ToolsPage({ source, document, scope, revision }: {
       <Button disabled={!source_} onClick={() => { setAdded(current => [...current, `python:${source_}`]); setSource(''); }}>{tx('settings:tools-page.add-source-selection')}</Button>
     </div>
 
-    <Advanced title={tx('settings:tools-page.advanced-tool-policies')}>
-      {policyTools.map(name => <UnitForm<NativePolicyOverrideDocument> key={name} title={tx('settings:tools-page.value-policy', { p0: name })}
-        authored={document.native_tools?.[name as NativeTool] ?? undefined} blank={{}} revision={revision}
-        mutation={authored => ({ kind: 'config', mutation: { unit: 'native_policy', id: name as NativeTool, authored } })}>
-        {(value, change) => <PolicyFields value={value} change={change} />}
-      </UnitForm>)}
-    </Advanced>
     <SettingsNotice text={sourceView(source, scope) === undefined ? tx('settings:tools-page.this-scope-has-no-source-view') : undefined}/>
   </section>;
 }
