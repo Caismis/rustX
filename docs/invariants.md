@@ -1172,10 +1172,11 @@ Loop replacement.
 ```text
 ToolRegistry::preflight
   -> canonical Assistant ToolCall
-  -> effective ToolApprovalPolicy / ApprovalMode
+  -> ExecutionPermissionMode via PreToolPolicy (Issue #544)
        Allow -> existing start frontier
        Deny  -> one ToolExecutionStatus::Denied result slot
-       Ask   -> InteractionCoordinator -> typed Runtime Client response
+       Elevate/Ask -> InteractionCoordinator -> typed Runtime Client response
+       Automatic Review -> Auxiliary (fail closed)
   -> exact original PreparedInvocation, or no executor
 ```
 
@@ -1591,8 +1592,9 @@ projection.
 
 ### Questionnaire and `ask_user`
 
-`ask_user` is one ordinary foreground, sequential, approval-never Tool. Its
-model-facing input is a single closed root object with required `questions`:
+`ask_user` is one ordinary foreground-only Tool (Issue #544 matrix: Allow in
+every mode). Its answer is not a Tool Approval token. Its model-facing input
+is a single closed root object with required `questions`:
 1–4 questions; each has required `question` (1–4096 Unicode scalar values),
 `header` (1–16), 2–4 options, and optional `multi_select` (default false).
 Each option has a non-empty `label` (at most 60 scalar values) and
@@ -3211,7 +3213,7 @@ the launch-boundary policy inheritance.
   transcripts.
 - **Native authorities remain native.** WorkflowRuntime composes the named
   SubagentRuntime, frozen model/capability/Skill resources, retry/timeout,
-  ApprovalMode, ToolApprovalPolicy, InteractionCoordinator,
+  ExecutionPermissionMode / ApprovalMode, InteractionCoordinator,
   process containment, the frozen Session workspace binding, and physical
   settlement. It creates no child scheduler, permission system, TUI path,
   Tool Plane dispatch path, or second Agent Loop.
@@ -3419,10 +3421,12 @@ A package rewrite is observed only at the next quiescent re-discovery.
   servers are entries of the same sorted server map); active
   registries are never mutated in place. Global model-facing name collisions
   reject the whole candidate.
-- `ToolOrigin` identifies provenance only. Execution ownership and batch
-  scheduling remain `ToolExecutionPolicy` and `ToolConcurrencyPolicy`, and
-  all origins use the canonical Agent Loop, progress, cancellation, and
-  background paths.
+- `ToolOrigin` identifies provenance only. Execution ownership remains
+  `ToolExecutionPolicy` (foreground/background). Tool-level Sequential/Parallel
+  authoring is removed (Issue #544): independent authorized calls may start
+  concurrently; ToolResults commit in original call order; domain owners keep
+  their own barriers. All origins use the canonical Agent Loop, progress,
+  cancellation, and background paths.
 - **MCP Resources have a negotiated zero-or-three Tool contract.** Only a ready
   source with negotiated Resources support and the profile's `All` selection
   enters that profile's resource authority. `Exact` selection, configured or
@@ -3922,10 +3926,12 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 
 ## Tool plane (M5)
 
-- Foreground/background execution policy and sequential/parallel scheduling
-  are two independent axes: ownership/settlement is decided by
-  `ToolExecutionPolicy`, concurrency within a batch by
-  `ToolConcurrencyPolicy`. The two are never combined into one axis.
+- Foreground/background ownership/settlement is decided by
+  `ToolExecutionPolicy`. Tool-level Sequential/Parallel authoring is removed
+  (Issue #544): independent authorized calls may start concurrently; ToolResults
+  still commit atomically in original call order. Domain owners (Todo, Goal, …)
+  retain their own synchronization. Ownership and permission are never combined
+  into one axis.
 - The canonical tool input schema is tool-owned and never mutated. The
   model-facing execution-ownership selector `execution_mode` exists only in
   the compiled model-facing schema of a `ModelSelectable` tool, is required
@@ -3972,14 +3978,14 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   and name disagree is a contract violation, never an id-first fallback.
 - The native executor implementation and its execution-ownership policy are
   independent: each ordinary native tool (Read/Write/Edit/Glob/Grep/Bash)
-  independently selects its execution and concurrency policy through the
-  concrete bounded `NativeToolPolicies` configuration and may use any legal
-  execution policy (`ForegroundOnly`, `BackgroundOnly`, `ModelSelectable`);
-  defaults are intentional per-tool values in the
-  [native policy table](runtime-resources.md#exact-tool-authority-and-native-defaults). The
-  Job and Agent controls are fixed foreground/sequential Tools. Native image
-  reading is fixed foreground/parallel/approval-never; all three are outside
-  the configurable policy set.
+  independently selects ownership through the concrete bounded
+  `NativeToolPolicies` configuration and may use any legal execution policy
+  (`ForegroundOnly`, `BackgroundOnly`, `ModelSelectable`); defaults are
+  intentional per-tool values in the
+  [native policy table](runtime-resources.md#exact-tool-authority-and-native-defaults).
+  Job/Agent controls and native image reading are fixed foreground-only and
+  outside the configurable ownership set. Permission is the Issue #544 mode
+  matrix, not a per-tool never/always axis.
 - Invocation order is frozen: resolve tool, extract/resolve invocation
   metadata, strip metadata, apply tool-owned business-argument normalization,
   validate the normalized arguments against the canonical schema, dispatch

@@ -1,7 +1,7 @@
 # Permission modes — P01–P22 evidence map (Issue #544)
 
 Living map of acceptance proofs against tip tests. Gaps are explicit; do not
-treat an empty cell as covered. Tip under verification: `b012890f5` (#550 /
+treat an empty cell as covered. Tip under verification: `64365b495` (#550 /
 #546).
 
 | ID | Requirement (short) | Evidence today | Gap |

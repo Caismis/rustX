@@ -64,10 +64,10 @@ pub const NAME: &str = "todo";
 /// The tool-owned registration of the native `todo` tool.
 ///
 /// The list is conversation state rather than a filesystem or process
-/// effect, so the tool keeps the fixed foreground-only, sequential,
-/// approval-never policy of the runtime intrinsics: two concurrent
-/// mutations of one list would make the published snapshots race, and there
-/// is nothing here for a human to approve.
+/// effect, so the tool keeps fixed foreground-only ownership and an exclusive
+/// batch barrier (Issue #544): two concurrent mutations of one list would
+/// make the published snapshots race. Permission allows Todo mutations in
+/// every mode.
 #[must_use]
 pub(super) fn registration() -> NativeToolRegistration {
     NativeToolRegistration::new(definition(), std::sync::Arc::new(TodoExecutor))

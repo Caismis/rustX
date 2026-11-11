@@ -981,14 +981,13 @@ conversation-owned rendezvous, not a second execution engine:
 ```text
 ToolRegistry preflight
   -> canonical Assistant ToolCall commit
-  -> effective ToolApprovalPolicy / ApprovalMode
-       Never ------------------------------┐
-       Always -> AttemptLifecycle::pre_tool│
+  -> ExecutionPermissionMode via PreToolPolicy (Issue #544)
        Allow ------------------------------┐
        Deny -> one typed denied result      │
-       Ask -> InteractionCoordinator       │
+       Elevate/Ask -> InteractionCoordinator│
                    -> Runtime Client       │
                    <- typed response       │
+       Automatic Review -> Auxiliary       │
        -> existing cancellation/start frontier
        -> exact original PreparedInvocation, or one result slot
 ```
@@ -1042,9 +1041,10 @@ cannot rediscover model-argument validity. The policy cannot resolve a tool,
 dispatch it, or alter the prepared invocation.
 
 Questionnaire is a separate bounded interaction kind, not an approval
-variant. The native `ask_user` Tool uses the ordinary Tool Plane path and
-fixed foreground/sequential/approval-never policy. One invocation is one
-coordinator interaction, even when it contains several related questions:
+variant. The native `ask_user` Tool uses the ordinary Tool Plane path with
+fixed foreground-only ownership; permission follows the Issue #544 matrix
+(Allow in every mode). One invocation is one coordinator interaction, even
+when it contains several related questions:
 
 ```text
 Assistant ToolCall(ask_user)
@@ -2837,10 +2837,10 @@ the result in `RuntimeClientSnapshot.todos`, so a reference client
 reconstructs the list from the runtime's own projection plus the
 committed results it observes live — never by scanning the bounded
 transcript page it happens to hold, and without any client-side task
-state. The tool is fixed foreground-only, sequential,
-approval-never: one list cannot be mutated by a detached execution, two
-concurrent mutations would publish racing snapshots, and there is nothing
-in a task list for a human to approve. A subagent child composes its own list
+state. The tool is fixed foreground-only and stays an exclusive batch barrier
+(Issue #544): one list cannot be mutated by a detached execution, and two
+concurrent mutations would publish racing snapshots. Permission allows Todo
+mutations in every mode. A subagent child composes its own list
 over its own conversation and its own Ledger, when its frozen extension set
 includes Todo — so parent/child and child/child isolation is structural rather
 than a check, and a child that composes no Todo extension has neither a list
@@ -6214,9 +6214,9 @@ pre-crash nonterminal run is not silently rerun, because Agent and Tool work
 may be non-idempotent.
 
 Workflow child composition uses the existing capability projection,
-`ApprovalMode`, `ToolApprovalPolicy`, and `InteractionCoordinator`. FullAccess
-can affect approval only for already-authorized capabilities; it cannot widen
-the selected profile. `ask_user` remains an ordinary admitted capability and
+`ExecutionPermissionMode` / `ApprovalMode`, and `InteractionCoordinator`.
+Full Access can affect permission only for already-authorized capabilities; it
+cannot widen the selected profile. `ask_user` remains an ordinary admitted capability and
 WorkflowRuntime never manufactures it or calls the TUI. Workflow Agents run in
 the invoking Session's workspace binding; a Workflow owns no workspace resource.
 The native `WorkflowFileDocument` composes `WorkflowDefinition` with bounded

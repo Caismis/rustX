@@ -2,16 +2,18 @@
 //! normal [`ToolDefinition`] + [`ToolExecutor`] registrations.
 //!
 //! Read, Write, Edit, Glob, Grep, and Bash are all ordinary registrations;
-//! their executor implementations and their execution-ownership and approval
-//! policies are independent, so each tool is configured with its own
+//! their executor implementations and foreground/background ownership are
+//! independent. Each ordinary tool is configured with its own
 //! [`ToolInvocationPolicy`] (`ForegroundOnly`, `BackgroundOnly`, or
-//! `ModelSelectable` execution, `Sequential`/`Parallel` concurrency, and
-//! `Never`/`Always` approval through the concrete bounded
-//! [`NativeToolPolicies`] configuration. The only intentionally fixed
-//! policies belong to Job/Agent controls (foreground-only,
-//! sequential, approval-never), and `ask_user` is likewise fixed to
-//! foreground-only, sequential, approval-never because it is the native
-//! Questionnaire capability itself.
+//! `ModelSelectable`) through the concrete bounded [`NativeToolPolicies`]
+//! table. Permission (whether an eligible invocation may start) is decided by
+//! Issue #544's closed modes and resource overrides, not by a per-tool
+//! never/always authoring axis. Tool-level Sequential/Parallel authoring is
+//! removed; independent authorized calls may start concurrently.
+//!
+//! The only intentionally fixed ownership policies belong to Job/Agent
+//! controls (foreground-only) and `ask_user` (foreground-only, because it is
+//! the native Questionnaire capability itself).
 //!
 //! # `todo` is not here
 //!
@@ -22,10 +24,8 @@
 //! must explicitly enable it. Root and named Plugins default off. The Tool's
 //! implementation lives here, while composition belongs to the Plugin owner.
 //!
-//! Read/Glob/Grep default to foreground, parallel, approval-never.
-//! Write/Edit default to foreground, sequential, approval-always.
-//! Bash defaults to model-selectable, sequential, approval-always.
-//! Missing override axes retain each Tool's product default.
+//! Read/Write/Edit/Glob/Grep default to foreground-only ownership.
+//! Bash defaults to model-selectable foreground|background via `execution_mode`.
 //!
 //! # Module ownership
 //!
@@ -271,12 +271,12 @@ pub struct NativeToolResources {
 /// configurable native tools. `ask_user`, domain controls, and `todo` own
 /// fixed policies and are not configurable through this table.
 ///
-/// Execution policy belongs to the registered tool definition, not to the
+/// Execution ownership belongs to the registered tool definition, not to the
 /// native tool plane as a whole: each ordinary native tool independently
-/// selects its execution and concurrency policy. This deliberately models
-/// only the six known M5 tools — no generic policy maps, plugin
-/// configuration frameworks, strategy traits, factories, or global
-/// configuration registries.
+/// selects its foreground/background policy. Permission is owned by the
+/// Issue #544 mode matrix. This deliberately models only the six known M5
+/// tools — no generic policy maps, plugin configuration frameworks, strategy
+/// traits, factories, or global configuration registries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeToolPolicies {
     /// The policy of the native Read tool.
@@ -330,8 +330,8 @@ impl NativeToolPolicies {
 /// `policies.edit`, `glob` from `policies.glob`, `grep` from
 /// `policies.grep`, and `bash` from `policies.bash`. Job/Agent controls
 /// are intentionally outside this configurable set and stay fixed to
-/// foreground-only sequential execution, which the registry
-/// enforces regardless of the configured policies.
+/// foreground-only ownership, which the registry enforces regardless of the
+/// configured policies.
 ///
 /// # Errors
 ///
@@ -542,12 +542,11 @@ pub(crate) fn subagent_child_definition(
 /// `frozen` is the sequence of exact [`ToolDefinition`]s the invoking
 /// generation admitted and the parent resolution froze. Each one is
 /// registered **verbatim**: its identity, description, input schema, replay
-/// policy, origin, and all three invocation-policy axes are the ones the
-/// parent authorized, never a locally rebuilt default. A generation that
-/// admits `grep` as model-selectable, parallel, and approval-required must
-/// give the child that `grep` — quietly substituting a foreground-only,
-/// sequential, approval-never `grep` would hand the child different
-/// semantics under the same name.
+/// policy, origin, and execution-ownership axis are the ones the parent
+/// authorized, never a locally rebuilt default. A generation that admits
+/// `grep` as model-selectable must give the child that `grep` — quietly
+/// substituting a foreground-only `grep` would hand the child different
+/// ownership semantics under the same name.
 ///
 /// Materialization is therefore checked, not assumed: the child plane
 /// reconstructs the native implementation for the frozen name under the

@@ -2224,7 +2224,8 @@ Existing pinned source adaptations reused/extended:
 - `ui-permission-presets/.../PermissionSelect.tsx` and
   `ui-primitives/src/RiskConfirmation.tsx`: visual controls only. The upstream
   read-only/workspace-write presets and automatic permission controller are
-  excluded; rustX exposes only policy/full_access and reuses its source actor.
+  excluded; rustX exposes Issue #544 modes (`plan` / `automatic` / `full_access`)
+  and reuses its source actor.
 - `ui-chat/.../ReasoningRow.tsx` and the existing Markdown stack: compact
   Markdown typography, one parser/security/streaming implementation.
 - `ui-tool/.../components/ToolRow.tsx`: native-ID dispatch into the body primitives

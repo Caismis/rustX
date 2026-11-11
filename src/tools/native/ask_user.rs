@@ -1,8 +1,10 @@
 //! The native `ask_user` tool.
 //!
-//! `ask_user` is an ordinary foreground, sequential, approval-never Tool. One
-//! invocation contains one bounded questionnaire and publishes exactly one
-//! interaction through the runtime-owned `InteractionCoordinator`.
+//! `ask_user` is an ordinary foreground-only Tool. Permission follows the
+//! Issue #544 matrix (Allow in every mode). One invocation contains one
+//! bounded questionnaire and publishes exactly one interaction through the
+//! runtime-owned `InteractionCoordinator`. Its answer is not a Tool Approval
+//! token.
 
 use std::fmt::Write as _;
 
