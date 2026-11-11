@@ -63,8 +63,7 @@ fn load_reusing(
         value.native_nodes += 1;
         work.set(value);
     });
-    let actual = manifest::node(connection, &native)?;
-    let bytes:Option<Vec<u8>>=connection.prepare_cached("SELECT CASE WHEN typeof(source_metadata)='blob' AND length(source_metadata)<=65536 AND source_native_digest=?2 AND source_hash=?3 THEN source_metadata END FROM native_input_nodes WHERE id=?1").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.query_row(params![native.id,native.digest.as_slice(),expected.as_slice()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let (actual, bytes) = manifest::node_with_source(connection, &native, &expected)?;
     let bytes = bytes.ok_or_else(|| storage("captured Source augmentation unavailable"))?;
     #[cfg(test)]
     super::record_metadata(bytes.len());
