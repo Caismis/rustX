@@ -157,8 +157,10 @@ def web_upload_conformance() -> Scenario:
             Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
                         body_contains=("Use my uploaded files", "<user_uploaded_files>", "acceptance.txt")),
                  Stream(ToolCall(f"upload-{phase.lower()}", "bash", json.dumps({
-                     "command": command, "execution_mode": "foreground",
-                 })), Finish("tool_calls"))),
+                     "command": command,
+                     "execution_mode": "foreground",
+                     "elevation_reason": "integration fixture escalates unproven upload bash under Plan mode",
+                 }, separators=(",", ":"))), Finish("tool_calls"))),
             Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
                         body_contains=("UPLOAD_NATIVE_SENTINEL", ".agents/uploads/")),
                  Stream(Text(f"{phase} upload read through native Tool."), Finish())),
@@ -378,8 +380,16 @@ print(json.dumps({'deliveries':[{'path':'a/report.md'}]}))
     def tool(call: str, name: str, arguments: dict[str, object]) -> Stream:
         return Stream(ToolCall(call, name, json.dumps(arguments, ensure_ascii=False)), Finish('tool_calls'))
     return Scenario('web_file_delivery',
-        Step(expected, tool('delivery-write', 'write', {'path': '报告 file.md', 'content': markdown})),
-        Step(expected, tool('delivery-bash', 'bash', {'command': "python3 - <<'PY'\n" + script + 'PY\n', 'execution_mode': 'foreground'})),
+        Step(expected, tool('delivery-write', 'write', {
+            'path': '报告 file.md',
+            'content': markdown,
+            'elevation_reason': 'integration fixture escalates write under Plan mode',
+        })),
+        Step(expected, tool('delivery-bash', 'bash', {
+            'command': "python3 - <<'PY'\n" + script + 'PY\n',
+            'execution_mode': 'foreground',
+            'elevation_reason': 'integration fixture escalates mutating bash under Plan mode',
+        })),
         Step(expected, Stream(Text('I created report.md and 报告 file.md.'), Gate('delivery-before-declaration'),
                               ToolCall('delivery-malformed', 'present', json.dumps({'files': [{'path': '../escape'}]})), Finish('tool_calls'))),
         Step(expected, tool('delivery-present', 'present', {'files': files + [{'path': './报告 file.md', 'description': 'Duplicate discarded'}]})),
