@@ -1124,6 +1124,13 @@ impl SqliteConversationStore {
                 format!("open {}: {error}", path.display()),
             )
         })?;
+        // A rejected WAL database must not be checkpointed when this handle closes.
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                true,
+            )
+            .map_err(|error| storage(format!("protect rejected SQLite: {error}")))?;
         // Refuse obsolete development state before changing journal settings.
         reject_legacy_schema(&connection)?;
         if has_table(&connection, "rustx_store")? {
@@ -1131,6 +1138,12 @@ impl SqliteConversationStore {
             validate_existing_schema(&connection)?;
             validate_existing_identity(&connection, &conversation_id)?;
         }
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                false,
+            )
+            .map_err(|error| storage(format!("restore SQLite checkpoint on close: {error}")))?;
         configure_connection(&mut connection, false)?;
         Self::from_connection(conversation_id, connection)
     }
@@ -1238,6 +1251,12 @@ impl SqliteConversationStore {
                 format!("open existing {}: {error}", path.display()),
             )
         })?;
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                true,
+            )
+            .map_err(|error| storage(format!("protect rejected SQLite: {error}")))?;
         if let Some(scope) = scope {
             scope.install(&connection)?;
         }
@@ -1259,6 +1278,12 @@ impl SqliteConversationStore {
         register_integrity_function(&connection)?;
         validate_existing_schema(&connection)?;
         validate_existing_identity(&connection, &conversation_id)?;
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                false,
+            )
+            .map_err(|error| storage(format!("restore SQLite checkpoint on close: {error}")))?;
         connection
             .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
             .map_err(|error| {

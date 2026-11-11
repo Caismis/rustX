@@ -16,7 +16,7 @@ use crate::runtime::identity::{AttemptId, ConversationId, MessageId};
 
 mod attempt_facts;
 
-pub(super) const CUT_SQL: &str = "SELECT next_event_sequence,next_transcript_position,reading_mutation_revision,COALESCE((SELECT MAX(position) FROM message_ledger),0),COALESCE(surface_revision,0),retained_transcript_count,next_inbound_sequence,pending_observation_count FROM rustx_store WHERE id=1";
+pub(super) const CUT_SQL: &str = "SELECT next_event_sequence,next_transcript_position,reading_mutation_revision,COALESCE((SELECT MAX(position) FROM message_ledger),0),CASE WHEN (surface_revision IS NULL)!=(surface_compaction_generation IS NULL) THEN NULL ELSE COALESCE(surface_revision,0) END,retained_transcript_count,next_inbound_sequence,pending_observation_count FROM rustx_store WHERE id=1";
 
 pub(super) fn cut(
     connection: &Connection,

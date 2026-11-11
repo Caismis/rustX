@@ -1382,11 +1382,13 @@ pub(super) fn surface_boundaries(
     let limit = limit(requested)?;
     let actual: u64 = connection
         .query_row(
-            "SELECT COALESCE((SELECT surface_revision FROM rustx_store WHERE id=1),0)",
+            "SELECT CASE WHEN (surface_revision IS NULL)!=(surface_compaction_generation IS NULL) THEN NULL ELSE COALESCE(surface_revision,0) END FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
+        .unwrap_or(0);
     if through.get() > actual {
         return Err(ConversationStoreError::InvalidReference(
             "Surface boundary revision is newer than native head".into(),

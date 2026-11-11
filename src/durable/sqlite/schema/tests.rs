@@ -490,6 +490,73 @@ fn incompatible_page_geometry_is_rejected_without_modifying_the_file() {
 }
 
 #[test]
+fn rejected_wal_database_does_not_checkpoint_on_close() {
+    use rusqlite::config::DbConfig;
+    for old_version in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rejected.sqlite");
+        let wal = directory.path().join("rejected.sqlite-wal");
+        let id = ConversationId::generate();
+        drop(SqliteConversationStore::open(id.clone(), &path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        if !old_version {
+            connection.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA page_size=2048; VACUUM; PRAGMA journal_mode=WAL;").unwrap();
+        }
+        connection
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+            .unwrap();
+        connection
+            .set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
+            .unwrap();
+        let update = if old_version {
+            "UPDATE rustx_store SET schema_version=109 WHERE id=1"
+        } else {
+            "UPDATE rustx_store SET reading_mutation_revision=reading_mutation_revision+1 WHERE id=1"
+        };
+        connection.execute(update, []).unwrap();
+        drop(connection);
+        let main_before = std::fs::read(&path).unwrap();
+        let wal_before = std::fs::read(&wal).unwrap();
+        for open in [
+            SqliteConversationStore::open,
+            SqliteConversationStore::open_existing,
+            SqliteConversationStore::open_for_archive,
+        ] {
+            let result = open(id.clone(), &path);
+            if old_version {
+                assert!(matches!(
+                    result,
+                    Err(ConversationStoreError::SchemaVersionMismatch { stored: 109, .. })
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ConversationStoreError::IncompatibleSchema(_))
+                ));
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), main_before);
+            assert_eq!(std::fs::read(&wal).unwrap(), wal_before);
+        }
+    }
+}
+
+#[test]
+fn accepted_writer_still_checkpoints_on_close() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("accepted.sqlite");
+    let wal = directory.path().join("accepted.sqlite-wal");
+    let id = ConversationId::generate();
+    let store = SqliteConversationStore::open(id, &path).unwrap();
+    store.conn.lock().unwrap().execute_batch("PRAGMA wal_checkpoint(TRUNCATE); UPDATE rustx_store SET reading_mutation_revision=reading_mutation_revision+1 WHERE id=1").unwrap();
+    assert!(std::fs::metadata(&wal).unwrap().len() > 0);
+    drop(store);
+    assert!(
+        !wal.exists(),
+        "last accepted writer should checkpoint on close"
+    );
+}
+
+#[test]
 #[allow(unsafe_code)]
 fn physical_pages_preserve_blob_limits_and_overflow_payloads() {
     let directory = tempfile::tempdir().unwrap();
@@ -878,11 +945,21 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
         ));
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
-    let files = std::fs::read_dir(directory.path())
+    // Refusal disables SQLite's close checkpoint, so SQLite can retain empty
+    // WAL/SHM sidecars even though the main file is unchanged.
+    let mut files = std::fs::read_dir(directory.path())
         .unwrap()
-        .map(|entry| entry.unwrap().file_name())
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(files, [std::ffi::OsString::from("workflow-wait.sqlite")]);
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "workflow-wait.sqlite",
+            "workflow-wait.sqlite-shm",
+            "workflow-wait.sqlite-wal"
+        ]
+    );
 }
 
 #[test]
@@ -953,11 +1030,21 @@ fn workflow_node_io_and_indexes_require_current_schema_without_rewrite() {
         ));
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
-    let files = std::fs::read_dir(directory.path())
+    // Refusal disables SQLite's close checkpoint, so SQLite can retain empty
+    // WAL/SHM sidecars even though the main file is unchanged.
+    let mut files = std::fs::read_dir(directory.path())
         .unwrap()
-        .map(|entry| entry.unwrap().file_name())
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(files, [std::ffi::OsString::from("workflow-node-io.sqlite")]);
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "workflow-node-io.sqlite",
+            "workflow-node-io.sqlite-shm",
+            "workflow-node-io.sqlite-wal"
+        ]
+    );
 }
 
 /// Pre-integration stores can hold retired workspace facts or lack the
@@ -1021,7 +1108,16 @@ fn pre_integration_stores_are_refused_and_left_untouched() {
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect::<Vec<_>>();
         sidecars.sort();
-        assert_eq!(sidecars, ["pre-integration.sqlite"]);
+        // SQLite may keep the empty sidecars created while inspecting the
+        // refused file; it must not checkpoint and rewrite the main file.
+        assert_eq!(
+            sidecars,
+            [
+                "pre-integration.sqlite",
+                "pre-integration.sqlite-shm",
+                "pre-integration.sqlite-wal"
+            ]
+        );
     }
 }
 

@@ -49,9 +49,12 @@ SQLite owns WAL/SHM files, reader snapshots and checkpoint state. No application
 code deletes a live sidecar or treats the main database alone as a live snapshot.
 The writer uses 512-byte pages and a 7,825-frame automatic checkpoint window
 (about 4 MiB including WAL frame headers); no checkpoint is forced on each
-semantic write. The page cache is sized at approximately 2,000 KiB. This allows
-more repeated page updates to be combined before writing the main database.
-Last connection close may checkpoint and remove sidecars.
+semantic write. The suggested page-cache size is approximately 2,000 KiB, not
+a hard memory limit. The checkpoint window allows more repeated page updates to
+be combined before writing the main database.
+Last connection close may checkpoint and remove sidecars. A rejected store is
+not checkpointed on close, so inspection may leave SQLite-created WAL/SHM
+sidecars even when they contain no committed frames.
 A read-only connection that outlives the writer can leave WAL files after all
 handles close; SQLite recovers them on reopen and a later writable close can
 complete checkpoint/cleanup. This is not authority to unlink those files. The
