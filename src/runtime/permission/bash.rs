@@ -91,6 +91,13 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
             reason: "quoted or escaped shell syntax requires full argv analysis".to_owned(),
         };
     }
+    if command.contains('*') || command.contains('?') {
+        // Glob expansion rewrites argv before the executable runs, so a
+        // source-level token check cannot prove the post-expansion argv.
+        return BashReadonlyClass::Unproven {
+            reason: "shell glob patterns require full argv analysis".to_owned(),
+        };
+    }
 
     let mut tokens = command.split_whitespace();
     let Some(executable) = tokens.next() else {
@@ -109,6 +116,9 @@ fn classify_conservative(command: &str) -> BashReadonlyClass {
 }
 
 fn classify_allowlisted_executable(executable: &str, args: &[&str]) -> BashReadonlyClass {
+    // Keep this surface tiny until brush-parser AST argv analysis lands.
+    // Tools with rich option grammars (`git`, `find`, `fd`, `jq`, `yq`, `rg`)
+    // stay unproven: whitespace tokenization cannot safely prove argv.
     match executable {
         "ls" | "pwd" | "echo" | "printf" | "true" | "false" | "test" | "[" | "cat" | "head"
         | "tail" | "wc" | "stat" | "file" | "which" | "type" | "basename" | "dirname"
@@ -135,177 +145,12 @@ fn classify_allowlisted_executable(executable: &str, args: &[&str]) -> BashReado
                 }
             }
         }
-        "find" => {
-            if args.iter().copied().any(is_find_write_option) {
-                BashReadonlyClass::Unproven {
-                    reason: "find write/action options are not read-only".to_owned(),
-                }
-            } else {
-                BashReadonlyClass::Readonly
-            }
-        }
-        // `fd`, `yq`, `jq`, and `rg` stay off the proven-readonly path:
-        // in-place / exec / --pre forms need full argv analysis first.
-        "git" => classify_git(args),
         _ => BashReadonlyClass::Unproven {
             reason: format!(
                 "executable `{executable}` is not on the conservative read-only allowlist"
             ),
         },
     }
-}
-
-fn is_find_write_option(token: &str) -> bool {
-    matches!(
-        token,
-        "-delete"
-            | "-exec"
-            | "-execdir"
-            | "-ok"
-            | "-okdir"
-            | "-fprint"
-            | "-fprint0"
-            | "-fls"
-            | "-fprintf"
-    ) || token.starts_with("-exec")
-}
-
-fn classify_git(args: &[&str]) -> BashReadonlyClass {
-    let mut index = 0usize;
-    while index < args.len() {
-        let arg = args[index];
-        if arg == "-C" {
-            index += 2;
-            continue;
-        }
-        // Reject spaced `-c`, glued `-ckey=value`, and bang-alias config that
-        // can rewrite a later allowlisted subcommand into shell execution.
-        if arg.starts_with("-c") || arg.starts_with("--exec-path") || arg == "--paginate" {
-            return BashReadonlyClass::Unproven {
-                reason:
-                    "git global options that can change execution context are not proven read-only"
-                        .to_owned(),
-            };
-        }
-        if arg.starts_with('-') {
-            index += 1;
-            continue;
-        }
-        let rest = &args[index + 1..];
-        return match arg {
-            // Diff-family commands can invoke config-driven external helpers
-            // (diff.external, textconv, filters) even without --ext-diff /
-            // --textconv on argv, so they stay unproven for now.
-            "log" | "show" | "diff" | "blame" => BashReadonlyClass::Unproven {
-                reason: format!(
-                    "git {arg} may invoke config-driven external helpers and is not proven read-only"
-                ),
-            },
-            "status" | "ls-files" | "ls-tree" | "rev-parse" | "describe" | "shortlog"
-            | "version" | "help" => {
-                if git_writes_output(rest) || git_invokes_external(rest) {
-                    BashReadonlyClass::Unproven {
-                        reason: format!(
-                            "git {arg} forms that write output or invoke external helpers are not proven read-only"
-                        ),
-                    }
-                } else {
-                    BashReadonlyClass::Readonly
-                }
-            }
-            "config" => {
-                if rest
-                    .iter()
-                    .any(|a| matches!(*a, "--list" | "-l" | "--get" | "--get-all" | "--get-regexp"))
-                {
-                    BashReadonlyClass::Readonly
-                } else {
-                    BashReadonlyClass::Unproven {
-                        reason: "git config without an explicit read form is not proven read-only"
-                            .to_owned(),
-                    }
-                }
-            }
-            "branch" | "tag" | "remote" => {
-                if git_ref_query_only(arg, rest) {
-                    BashReadonlyClass::Readonly
-                } else {
-                    BashReadonlyClass::Unproven {
-                        reason: format!(
-                            "git {arg} forms that may create or mutate refs are not proven read-only"
-                        ),
-                    }
-                }
-            }
-            _ => BashReadonlyClass::Unproven {
-                reason: format!("git subcommand `{arg}` is not proven read-only"),
-            },
-        };
-    }
-    BashReadonlyClass::Unproven {
-        reason: "git command missing a subcommand is not proven read-only".to_owned(),
-    }
-}
-
-fn git_writes_output(rest: &[&str]) -> bool {
-    rest.iter()
-        .any(|arg| *arg == "--output" || arg.starts_with("--output="))
-}
-
-fn git_invokes_external(rest: &[&str]) -> bool {
-    rest.iter().any(|arg| {
-        *arg == "--ext-diff"
-            || *arg == "--textconv"
-            || arg.starts_with("--ext-diff=")
-            || arg.starts_with("--textconv=")
-    })
-}
-
-/// True only for listing/query forms with no positional ref name that could
-/// create a branch, tag, or remote.
-fn git_ref_query_only(subcommand: &str, rest: &[&str]) -> bool {
-    if rest.iter().any(|a| {
-        matches!(
-            *a,
-            "-d" | "-D"
-                | "--delete"
-                | "add"
-                | "rename"
-                | "set-url"
-                | "-m"
-                | "--move"
-                | "-c"
-                | "--copy"
-                | "--edit-description"
-                | "-f"
-                | "--force"
-                | "-u"
-                | "--set-upstream-to"
-                | "--unset-upstream"
-                | "-i"
-                | "--stdin"
-        ) || a.starts_with("--set-upstream-to=")
-    }) {
-        return false;
-    }
-    // Any positional operand can name a new ref (`git branch foo`,
-    // `git tag v1`). After `--`, even dash-prefixed tokens are operands
-    // (`git branch -- -foo`), so they are never treated as flags.
-    let _ = subcommand;
-    let mut end_of_options = false;
-    for arg in rest {
-        if end_of_options {
-            return false;
-        }
-        if *arg == "--" {
-            end_of_options = true;
-            continue;
-        }
-        if !arg.starts_with('-') {
-            return false;
-        }
-    }
-    true
 }
 
 #[cfg(test)]
@@ -317,12 +162,10 @@ mod tests {
         for command in [
             "ls -la",
             "pwd",
-            "git status",
             "cat README.md",
-            "git branch",
-            "git branch -a",
             "env",
             "date",
+            "grep pattern",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
@@ -340,48 +183,27 @@ mod tests {
             "echo hi > file",
             "ls | rm",
             "curl http://x",
+            "git status",
+            "git status -v",
             "git commit -am x",
             "env rm -rf /",
-            "git branch feature",
-            "git tag v1.0.0",
-            "git branch -- -foo",
-            "git tag -- -v1",
-            "yq -i .x=1 file.yaml",
-            "yq -iy .x=1 file.yaml",
+            "find .",
+            "find . -delete",
+            "find . -fprin? result.txt",
             "yq .x file.yaml",
-            "jq -i . file.json",
-            "jq --in-place . file.json",
             "jq . file.json",
-            "rg --pre touch pattern",
             "rg .",
+            "rg --pre=sh needle",
             "fd .",
-            "fd -ex rm",
-            "fd -eXrm",
-            "git diff --ext-diff HEAD",
-            "git show --textconv HEAD",
-            "git diff HEAD",
-            "git log --oneline",
-            "git show HEAD",
-            "git blame README.md",
+            "fd . -X touch",
             "date -s 12:00:00",
-            "date -s12:00:00",
-            "date \"-s\" 12:00:00",
-            "date 1234567890",
             "date -u",
             "pwd\nrm -rf /",
-            "pwd\r\nrm -rf /",
             "pwd & rm -rf /",
             "true && rm -rf /",
-            "git diff --no-index --output=/tmp/written.patch a b",
-            "git diff --output /tmp/written.patch",
-            "git show --output=patch HEAD",
-            "git diff --no-index '--output' /tmp/result.patch /tmp/input-a /tmp/input-b",
-            "git diff \"--output=/tmp/written.patch\" a b",
-            "git diff --output\\=/tmp/written.patch",
-            "git -calias.status=!touch /tmp/pwned status",
-            "find . '-delete'",
-            "yq '-i' .x=1 file.yaml",
-            "yq '.x' file.yaml",
+            "date \"-u\"",
+            "ls file?",
+            "cat *.txt",
         ] {
             let analysis = analyze_bash_readonly(command);
             assert!(
@@ -389,11 +211,5 @@ mod tests {
                 "{command} should be unproven"
             );
         }
-    }
-
-    #[test]
-    fn find_delete_is_unproven() {
-        let analysis = analyze_bash_readonly("find . -delete");
-        assert!(matches!(analysis.class, BashReadonlyClass::Unproven { .. }));
     }
 }
