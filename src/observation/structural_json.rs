@@ -10,7 +10,7 @@ use serde_json::Value;
 pub(crate) mod plan;
 #[cfg(test)]
 mod plan_tests;
-use plan::{Unsigned, View};
+use plan::{Unsigned, View, WireNumber};
 
 #[cfg(test)]
 thread_local! {
@@ -181,6 +181,27 @@ pub(crate) fn serialize_wire<T: Serialize + ?Sized, S: serde::Serializer>(
         wire: true,
     })
 }
+
+// serde_json formats an integer into its stack buffer; the longest u64 has
+// twenty digits. Keep serialize_str so every serializer sees the same value.
+fn serialize_decimal<S: serde::Serializer>(value: u64, serializer: S) -> Result<S::Ok, S::Error> {
+    let mut bytes = [0; 20];
+    let mut remaining = &mut bytes[..];
+    serde_json::to_writer(&mut remaining, &value).expect("u64 fits in twenty JSON bytes");
+    let written = 20 - remaining.len();
+    let text = std::str::from_utf8(&bytes[..written]).expect("JSON integer is ASCII");
+    serializer.serialize_str(text)
+}
+
+fn serialize_wire_number<S: serde::Serializer>(
+    value: WireNumber,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        WireNumber::Native(value) => value.serialize(serializer),
+        WireNumber::Decimal(value) => serialize_decimal(value, serializer),
+    }
+}
 macro_rules! scalar {
     ($($method:ident($ty:ty)),*) => {$ (fn $method(self, value: $ty) -> Result<Self::Ok, Self::Error> { self.serializer.$method(value) })*};
 }
@@ -252,11 +273,11 @@ impl<'a, S: serde::Serializer> serde::Serializer for Encoder<'a, S> {
     }
     fn serialize_i64(self, value: i64) -> Result<S::Ok, S::Error> {
         if self.wire {
-            return self
+            let value = self
                 .schema
-                .wire_number(Value::from(value))
-                .map_err(serde::ser::Error::custom)?
-                .serialize(self.serializer);
+                .wire_number(WireNumber::Native(Value::from(value)))
+                .map_err(serde::ser::Error::custom)?;
+            return serialize_wire_number(value, self.serializer);
         }
         if self.schema.signed_safe() && value.unsigned_abs() > 9_007_199_254_740_991 {
             return Err(serde::ser::Error::custom(
@@ -267,14 +288,14 @@ impl<'a, S: serde::Serializer> serde::Serializer for Encoder<'a, S> {
     }
     fn serialize_u64(self, value: u64) -> Result<S::Ok, S::Error> {
         if self.wire {
-            return self
+            let value = self
                 .schema
-                .wire_number(Value::from(value))
-                .map_err(serde::ser::Error::custom)?
-                .serialize(self.serializer);
+                .wire_number(WireNumber::Native(Value::from(value)))
+                .map_err(serde::ser::Error::custom)?;
+            return serialize_wire_number(value, self.serializer);
         }
         match self.schema.unsigned() {
-            Unsigned::Decimal => self.serializer.serialize_str(&value.to_string()),
+            Unsigned::Decimal => serialize_decimal(value, self.serializer),
             Unsigned::Safe if value > 9_007_199_254_740_991 => Err(serde::ser::Error::custom(
                 "native quantity exceeds safe JSON integer range",
             )),
@@ -917,6 +938,16 @@ pub(crate) fn decode<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decimal_integers_use_string_callbacks_at_u64_boundaries() {
+        for value in [0, 9, 10, 9_007_199_254_740_993, u64::MAX] {
+            assert_eq!(
+                serialize_decimal(value, StringSerializer(StringKey)).unwrap(),
+                Some(value.to_string())
+            );
+        }
+    }
 
     type PropertyEncoding = (
         Result<Vec<u8>, String>,

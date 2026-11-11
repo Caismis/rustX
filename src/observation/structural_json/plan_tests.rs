@@ -2,6 +2,26 @@ use super::tests::property_encoding;
 use super::*;
 
 #[test]
+fn decimal_wire_unions_keep_validation_order_after_conversion() {
+    let schema = serde_json::json!({"allOf": [
+        {"format": "uint64"}, {"format": "uint64"}
+    ]});
+    let plan = plan::Plan::new(&schema, &schema);
+    assert!(matches!(
+        plan.root()
+            .wire_number(plan::WireNumber::Native(serde_json::json!(42))),
+        Err("exact domain requires native u64")
+    ));
+    let schema = serde_json::json!({"format": "uint64"});
+    let plan = plan::Plan::new(&schema, &schema);
+    assert!(matches!(
+        plan.root()
+            .wire_number(plan::WireNumber::Native(serde_json::json!(u64::MAX))),
+        Ok(plan::WireNumber::Decimal(u64::MAX))
+    ));
+}
+
+#[test]
 fn compiled_wire_tag_names_cover_nested_branches_without_direct_properties() {
     let schema = serde_json::json!({
         "properties": {"root_only": {"const": "root"}},

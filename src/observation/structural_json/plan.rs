@@ -26,6 +26,11 @@ pub(crate) enum Unsigned {
     Safe,
 }
 
+pub(crate) enum WireNumber {
+    Native(Value),
+    Decimal(u64),
+}
+
 /// The numeric domain is derived once from the Rust-owned schema, including
 /// the explicit bound that distinguishes exact identities from safe quantities.
 pub(crate) fn unsigned(schema: &Value) -> Unsigned {
@@ -594,7 +599,7 @@ impl<'a> View<'a> {
     // App Server's Value codec visits untagged numeric alternatives even when
     // the union itself has no format (notably RequestId). Scalars are tiny;
     // preserving that order needs no intermediate record/object tree.
-    pub(crate) fn wire_number(self, mut value: Value) -> Result<Value, &'static str> {
+    pub(crate) fn wire_number(self, mut value: WireNumber) -> Result<WireNumber, &'static str> {
         let (plan, index) = match self {
             Self::Compiled(plan, index) => (plan, index),
             #[cfg(test)]
@@ -610,12 +615,18 @@ impl<'a> View<'a> {
             return Ok(value);
         }
         if node.unsigned == Unsigned::Decimal {
-            return value
-                .as_u64()
-                .map(|number| Value::from(number.to_string()))
-                .ok_or("exact domain requires native u64");
+            return match value {
+                WireNumber::Native(value) => value
+                    .as_u64()
+                    .map(WireNumber::Decimal)
+                    .ok_or("exact domain requires native u64"),
+                WireNumber::Decimal(_) => Err("exact domain requires native u64"),
+            };
         }
-        if value.is_number() && (node.unsigned == Unsigned::Safe || node.signed_safe) {
+        if let WireNumber::Native(ref value) = value
+            && value.is_number()
+            && (node.unsigned == Unsigned::Safe || node.signed_safe)
+        {
             let number = value
                 .as_i64()
                 .ok_or("quantity must be a safe JSON integer")?;
