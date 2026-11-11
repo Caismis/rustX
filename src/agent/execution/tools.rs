@@ -115,14 +115,17 @@ fn group_at(slots: &[CallSlot], index: usize) -> Group {
     }
 }
 
-/// End of the concurrent group beginning at `index`: every adjacent prepared
-/// invocation forms one group.
+/// End of the concurrent group beginning at `index`.
+///
+/// Issue #544 removes tool-level Sequential/Parallel authoring: every remaining
+/// prepared slot shares one authorize-and-start frontier. Already-settled
+/// preflight rejections may sit between prepared siblings; they are skipped
+/// during authorize/start and must not split the concurrent group, or later
+/// Allows would wait for earlier executors to drain.
 fn concurrent_group_end(slots: &[CallSlot], index: usize) -> usize {
-    let mut end = index + 1;
-    while end < slots.len() && slots[end].prepared.is_some() {
-        end += 1;
-    }
-    end
+    debug_assert!(index < slots.len());
+    debug_assert!(slots[index].prepared.is_some());
+    slots.len()
 }
 
 /// A failed tool result.
