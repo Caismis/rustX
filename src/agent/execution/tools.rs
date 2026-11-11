@@ -100,32 +100,46 @@ pub(super) struct SettledCall {
 enum Group {
     /// The slot is already settled (validation rejection); no barrier.
     Trivial,
+    /// Exclusive barrier for domain-owned tools that share provisional state.
+    Sequential,
     /// Adjacent prepared invocations authorize and may execute concurrently.
     Concurrent,
 }
 
-/// Issue #544: tool-level Sequential/Parallel authoring is removed. Every
-/// prepared slot joins one concurrent authorize-and-start group; rejected
-/// slots remain trivial fill.
+fn is_todo_slot(slot: &CallSlot) -> bool {
+    slot.tool_id.as_str() == crate::tools::todo::TODO_TOOL_ID
+}
+
+/// Issue #544: tool-level Sequential/Parallel authoring is removed. Prepared
+/// slots authorize concurrently, except `todo` which stays an exclusive
+/// barrier so one batch's shared provisional list cannot race.
 fn group_at(slots: &[CallSlot], index: usize) -> Group {
-    if slots[index].prepared.is_some() {
-        Group::Concurrent
-    } else {
+    if slots[index].prepared.is_none() {
         Group::Trivial
+    } else if is_todo_slot(&slots[index]) {
+        Group::Sequential
+    } else {
+        Group::Concurrent
     }
 }
 
 /// End of the concurrent group beginning at `index`.
 ///
-/// Issue #544 removes tool-level Sequential/Parallel authoring: every remaining
-/// prepared slot shares one authorize-and-start frontier. Already-settled
-/// preflight rejections may sit between prepared siblings; they are skipped
-/// during authorize/start and must not split the concurrent group, or later
-/// Allows would wait for earlier executors to drain.
+/// Already-settled preflight rejections may sit between prepared siblings and
+/// must not split the group. A `todo` slot is an exclusive barrier and ends
+/// the concurrent run before it.
 fn concurrent_group_end(slots: &[CallSlot], index: usize) -> usize {
     debug_assert!(index < slots.len());
     debug_assert!(slots[index].prepared.is_some());
-    slots.len()
+    debug_assert!(!is_todo_slot(&slots[index]));
+    let mut end = index + 1;
+    while end < slots.len() {
+        if slots[end].prepared.is_some() && is_todo_slot(&slots[end]) {
+            break;
+        }
+        end += 1;
+    }
+    end
 }
 
 /// A failed tool result.
@@ -449,6 +463,64 @@ impl AgentExecution<'_> {
             }
             match group_at(&slots, index) {
                 Group::Trivial => {
+                    index += 1;
+                }
+                Group::Sequential => {
+                    // Todo shares one provisional list per batch. Run each call
+                    // alone so later siblings observe earlier mutations.
+                    if slots[index].result.is_none() {
+                        let facts = ParallelAuthFacts::from_execution(index, self, &slots[index]);
+                        let outcome = authorize_owned(
+                            &self.lifecycle,
+                            &self.cancellation.execution_cancellation(),
+                            &facts,
+                        )
+                        .await
+                        .map_err(CanonicalCommitError::Interaction)?;
+                        if let Some(result) = outcome {
+                            slots[index].result = Some(result);
+                        }
+                    }
+                    if slots[index].result.is_none() {
+                        let tool_call_id = slots[index].call.id.clone();
+                        let tool_id = slots[index].tool_id.clone();
+                        if let Err(message) =
+                            self.emit_shared(RuntimeEvent::ToolExecutionStarted {
+                                tool_call_id,
+                                tool_id,
+                            })
+                        {
+                            return Err(CanonicalCommitError::Durable(
+                                crate::durable::ConversationStoreError::Storage(message),
+                            ));
+                        }
+                        slots[index].executor_started = true;
+                        #[cfg(test)]
+                        self.park_after_tool_start();
+                        if let Some(error) = self.durable_failure_commit_error() {
+                            return Err(error);
+                        }
+                        let prepared = slots[index]
+                            .prepared
+                            .as_ref()
+                            .expect("unsettled slots are preflighted");
+                        let (_, result, facts) = self
+                            .run_single_call(
+                                index,
+                                prepared.invocation.clone(),
+                                prepared.progress_capability,
+                                todo_writer.clone(),
+                                occurrences[index].clone(),
+                            )
+                            .await;
+                        slots[index].result = Some(result);
+                        slots[index].execution_facts = facts;
+                        if self.cancellation.interaction_failed() {
+                            return Err(CanonicalCommitError::Interaction(
+                                InteractionFailure::ControlLost,
+                            ));
+                        }
+                    }
                     index += 1;
                 }
                 Group::Concurrent => {
