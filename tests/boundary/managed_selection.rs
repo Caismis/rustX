@@ -301,11 +301,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
             },
             coordinator.acquire_attempt_lease(),
             &cancellation,
-            {
-                let mut policy = support::default_execution_policy();
-                policy.approval_mode = rustx::runtime::ApprovalMode::FullAccess;
-                policy
-            },
+            support::default_execution_policy(),
             context,
             &fixture.runtime,
             rustx::agent::AttemptLifecycle::inert(),

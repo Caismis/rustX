@@ -52,7 +52,10 @@ pub(crate) fn default_execution_policy() -> crate::agent::execution::AgentExecut
         // generation, so it hands out no subagent resolution authority.
         subagent_context: None,
         workflow_output: None,
-        approval_mode: rustx::runtime::ApprovalMode::default(),
+        // Non-interactive fixtures are not permission-mode tests: Full Access
+        // lets ExternalOrDelegated / BashOther / Write proceed without an
+        // unanswered Elevate Ask (Issue #544).
+        approval_mode: rustx::runtime::ApprovalMode::FullAccess,
     }
 }
 

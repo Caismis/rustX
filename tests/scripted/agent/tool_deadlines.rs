@@ -123,7 +123,7 @@ fn execution_policy(
         monotonic_clock: clock as Arc<dyn MonotonicClock>,
         subagent_context: None,
         workflow_output: None,
-        approval_mode: rustx::runtime::ApprovalMode::default(),
+        approval_mode: rustx::runtime::ApprovalMode::FullAccess,
     }
 }
 
