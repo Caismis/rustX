@@ -4,6 +4,8 @@ use self::reference::validate_event_reference_with_requests;
 use super::{append_facts, attempt_start, event_insert, native_request};
 use crate::durable::sqlite::statements::FixedStatements;
 #[cfg(test)]
+mod identity_review_tests;
+#[cfg(test)]
 mod identity_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod identity_write_tests;
