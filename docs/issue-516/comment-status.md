@@ -1,12 +1,12 @@
 # PR 517 comment implementation status
 
 Checked on 2026-11-11, Asia/Shanghai, including formal
-[review 5854777822](https://github.com/Caismis/rustX/pull/517#pullrequestreview-5854777822)
-of `16871aec4dfdd10bea531bc245581537c0ce26f0`. Its four findings are implemented
+[review 5855950554](https://github.com/Caismis/rustX/pull/517#pullrequestreview-5855950554)
+of `de5f165950c662a488a7bda12f0a7788144666ab`. The four correctness findings are implemented
 with deterministic regressions: GLB admission accounts for complete cached view
 allocations and independently checks receiver backing buffers; the first task
 model selection starts from the displayed effective configuration; STL solid
-names cannot contribute structural tokens; and perspective motion LOD uses a
+names are isolated from both admission and the actual loader's grammar; and perspective motion LOD uses a
 conservative camera-space projection bound. Implementation, validation and limits
 are in [the requested-changes report](requested-changes-20261111.md).
 
@@ -30,6 +30,14 @@ Earlier repair evidence remains in [the hover-copy report](hover-copy-ci-repair-
 | Request | Current state | Source |
 | --- | --- | --- |
 | Approximately 200 MB geometry: first usable picture within 200 ms, every interaction below 50 ms, complete geometry when settled | The historical 235559e78 STEP runs used a sampled coordinate envelope. The current first-image policy excludes sampled points and sparse triangles; those historical times cannot certify the first admitted complete mesh. General model-class acceptance and the historical large-STL gap remain open. Loading text, P95 or smaller workloads cannot replace the gate. | [Historical STEP evidence](step-200mb-validation.md), [historical surface evidence](surface-preview-optimization.md) |
+
+The [current-code performance follow-up](https://github.com/Caismis/rustX/pull/517#issuecomment-6790753825)
+separates serialized read overhead, native CAD import/tier costs and receiver
+stream scanning. Its synthetic latency and Node/native CPU diagnostics do not
+certify browser presentation or the user's workload. Read-transport, optional-tier
+and cancellable-receiver optimizations remain proposals requiring representative
+traces, unchanged authority/version/settlement contracts and bounded fair
+admission; this correctness repair does not implement those policy changes.
 
 ## Roadmap and evidence follow-ups
 
@@ -55,7 +63,7 @@ These follow-ups are not represented as disabled placeholder controls.
 | --- | --- |
 | [4534738776](https://github.com/Caismis/rustX/pull/517#discussion_r4534738776) | Complete loaded GLB views are charged once per loader cache identity, including overlapping distinct views and embedded images used by textures. The receiver independently charges full distinct attribute/interleaved/index ArrayBuffers. Existing logical expansion limits remain. Regressions include actual padded imports, shared ownership and rejection before a 528-MiB allocation plan. |
 | [4534738783](https://github.com/Caismis/rustX/pull/517#discussion_r4534738783) | The first model/profile gesture uses the effective displayed selection. Real-dialog request regressions preserve same-model request/output settings and four auxiliary policies, retain the helper's primary-model reset semantics, and verify untouched model omission. |
-| [4534738798](https://github.com/Caismis/rustX/pull/517#discussion_r4534738798) | Admission consumes complete solid/endsolid name records before counting facet/vertex tokens. Actual-loader regressions preserve keyword-containing names and identical cube geometry, mixed-case/whitespace normalization, multiple solids and the unchanged part limit. |
+| [4534738798](https://github.com/Caismis/rustX/pull/517#discussion_r4534738798), [4535662647](https://github.com/Caismis/rustX/pull/517#discussion_r4535662647) | Admission consumes complete solid/endsolid name records before counting facet/vertex tokens. The loader receives safe opaque boundary names; bounded original opening names are restored only after decoded vertex/group correspondence checks. Actual-loader regressions cover embedded endsolid and numeric facet/vertex text, identical cube geometry, multiple normalized solids, the unchanged part limit, and actual decoding at a test-local exact vertex budget. |
 | [4534738802](https://github.com/Caismis/rustX/pull/517#discussion_r4534738802) | Motion selection bounds depth and off-axis displacement over the complete camera-space box, using both CSS viewport dimensions and affine amplification including shear. Unknown projections or unsafe depth retain originals. The real simplifier regression reproduces the visible greater-than-one-pixel witness and keeps original geometry; a centered safe view still admits the LOD. |
 | [6761761816](https://github.com/Caismis/rustX/pull/517#issuecomment-6761761816) | Restored the localized, keyboard-accessible Copy action to the file-change hover preview, copying exact admitted diff text through existing serialization and feedback. Preview limits, truncation, Floating UI placement and full-review Copy remain. The reviewed `16871aec` FULL CI passed browser and macOS lanes. See the [repair report](hover-copy-ci-repair-20261110.md) for implementation evidence. |
 | [6758147163](https://github.com/Caismis/rustX/pull/517#issuecomment-6758147163) | Explicit Shell/Scheduler readiness/model assertions and 17 reviewed pinned PNG references repair the screenshot baseline. All 73 original Shell/Scheduler cases passed locally; the reviewed `16871aec` FULL CI subsequently passed all browser lanes. See the screenshot report for environment and image evidence. |

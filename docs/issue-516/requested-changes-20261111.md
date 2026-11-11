@@ -49,14 +49,22 @@ the shared helper are unchanged.
 ## ASCII STL structural records
 
 Admission consumes the complete `solid` and `endsolid` name records before
-counting vertex/facet tokens. Free-form names therefore cannot introduce false
-structural counts. Case and leading-whitespace normalization still preserve
-names and feed the representation actually checked to the pinned STLLoader.
+counting vertex/facet tokens. Normalization extracts bounded opening names as
+metadata and replaces both opening and closing names with safe opaque tokens in
+the loader input. This prevents the pinned loader's unanchored grammar from
+interpreting excluded metadata as structural syntax. After verifying the decoded
+vertex count and one-to-one group/name correspondence, the adapter restores the
+original opening names. Case and leading-whitespace normalization, binary
+classification, numeric limits and final model validation remain in force.
 
-Actual-loader cube comparisons cover `Cube`, `solid plate`, `Vertex Block` and
-`facet normal housing`, retaining names and identical position/normal arrays.
-Multiple mixed-case/indented solids and the unchanged 256-part boundary have
-regressions. Binary classification and geometry budgets remain unchanged.
+Actual-loader cube comparisons cover `Cube`, `solid plate`, `Vertex Block`,
+`facet normal housing`, `front endsolid plate`, and names containing `facet`
+followed by one or three numeric `vertex` records. Every renamed cube retains the
+same 36-vertex position/normal arrays and its original display name. Mixed-case,
+indented multiple solids and the unchanged 256-part boundary have regressions.
+A test-local 36-vertex/12-triangle limit and a spy calling the original parser
+verify that actual decoding produces exactly the admitted 36 vertices, before
+post-parse validation; metadata cannot first allocate 39 vertices and then fail.
 
 ## Perspective motion LOD
 
@@ -89,13 +97,23 @@ depth, unknown projection skew and geometry-reference restoration are checked.
 
 ## Validation and acceptance
 
-The new counterexamples reproduced the old defects before implementation.
-Focused geometry, task creation, model-selection and scheduler coverage passes;
-the real simplifier/perspective regression also passes under the normal Linux
-Vite configuration. Full local Web/Host, type, production and audit results are
-recorded with this delivery. FULL CI must verify the pushed HEAD independently;
-the reviewed revision's [successful run](https://github.com/Caismis/rustX/actions/runs/42958477060)
-is baseline evidence only.
+The counterexamples reproduced the old defects before implementation. The ten
+STL name/count regressions pass under the normal Linux Vite configuration,
+including five assertions that failed before grammar isolation. The broader
+40-file geometry/task/model/scheduler run reports 463 passed and two cold-module
+import timeouts out of 465 cases on local WSL/Node 24.21.0; the original five-second
+limits remain unchanged. Those two unchanged demand/Refresh tests require
+current-head CI verification. TypeScript, production build, 349 source records,
+356 production notices, 357 bundled icons, localization and the 2-GiB WASM
+asset/source audit pass.
+
+The preceding `de5f1659` [Web/Host CI job](https://github.com/Caismis/rustX/actions/runs/42987044054/job/130413148213)
+passed 4,801 tests with four platform skips, including the unchanged workflow
+Schema test that failed in the local sparse/shared-dependency environment. That
+result validates its named revision, not this subsequent STL correction. FULL CI
+must verify every pushed HEAD independently; the original reviewed revision's
+[successful run](https://github.com/Caismis/rustX/actions/runs/42958477060) is also
+baseline evidence only.
 
 The approximately-200-MiB STEP first usable model picture within 200 ms and every
 observed interaction below 50 ms remain an unresolved acceptance gate. The two

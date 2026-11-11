@@ -16,6 +16,12 @@ physical file-read settlement and original Download remain owned by the existing
 | IGES, IGS | occt-import-js ReadIgesFile | Explicit millimeter output |
 | Open CASCADE BREP | occt-import-js ReadBrepFile | Native coordinates, unknown units; linearUnit does not affect BREP |
 
+ASCII STL names are metadata outside the loader's grammar. Admission consumes
+complete solid-name records; loading uses safe opaque boundary names, then
+restores the bounded original opening names to the corresponding decoded groups
+after vertex/group-count checks. Keywords or numeric vertex text in names cannot
+change the geometry or consume unadmitted loader allocations.
+
 CAD triangulation uses `bounding_box_ratio`, linear deflection `0.001`, angular
 deflection `0.5`, and `linearUnit: millimeter`. Available names, mesh colors,
 face-color ranges and hierarchy survive import. Unnamed parts receive localized
