@@ -72,7 +72,7 @@ fn checkpoint_tool_proof_observes_exact_arguments_without_response_cache_invalid
     // JSON meaning but changing map order. The response owner does not depend
     // on this payload; the Tool proof must independently see its current bytes.
     assert_eq!(store.lock().unwrap().execute(
-        "UPDATE content_frontiers SET bytes=?1 WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='j' AND revision=1",
+        "UPDATE content_frontiers SET bytes=?1 WHERE source_kind='canonical' AND source_id=5 AND block_index=0 AND representation='j' AND revision=1",
         [br#"{"b":2,"a":1}"#.as_slice()],
     ).unwrap(), 1);
     super::super::observation_response::cache_work();
@@ -87,13 +87,13 @@ fn checkpoint_tool_proof_observes_exact_arguments_without_response_cache_invalid
     {
         let connection = store.lock().unwrap();
         connection.execute_batch("SAVEPOINT tool_payload_rollback").unwrap();
-        assert_eq!(connection.execute("UPDATE content_frontiers SET bytes=x'ff' WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='j'", []).unwrap(), 1);
+        assert_eq!(connection.execute("UPDATE content_frontiers SET bytes=x'ff' WHERE source_kind='canonical' AND source_id=5 AND block_index=0 AND representation='j'", []).unwrap(), 1);
         connection.execute_batch("ROLLBACK TO tool_payload_rollback; RELEASE tool_payload_rollback").unwrap();
     }
     let restored = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap();
     assert_eq!(restored, changed);
     assert!(restored.transcript_rows[0].same_owner(&changed.transcript_rows[0]));
-    assert_eq!(store.lock().unwrap().execute("UPDATE content_frontiers SET bytes=x'ff' WHERE source_kind='canonical' AND source_id='ledger:1' AND block_index=0 AND representation='j'", []).unwrap(), 1);
+    assert_eq!(store.lock().unwrap().execute("UPDATE content_frontiers SET bytes=x'ff' WHERE source_kind='canonical' AND source_id=5 AND block_index=0 AND representation='j'", []).unwrap(), 1);
     let expected = checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap_err();
     let actual = store.observation_checkpoint_head(&cut, cut.read.journal, 32).unwrap_err();
     assert_eq!(actual.to_string(), expected.to_string());
@@ -102,7 +102,7 @@ fn checkpoint_tool_proof_observes_exact_arguments_without_response_cache_invalid
 #[test]
 fn checkpoint_tool_proof_rechecks_external_witness_and_result_corruption() {
     for damage in [
-        "UPDATE observation_headers SET tool_result_json=x'7b' WHERE ledger_position=2",
+        "UPDATE transcript_entries SET tool_result_json=x'7b' WHERE ledger_position=2",
         "UPDATE events SET observation_witness=x'7b' WHERE observation_kind='tool_execution_completed'",
         "UPDATE canonical_tool_calls SET observation_name='changed exact native name' WHERE observation_ledger=1",
     ] {
@@ -149,7 +149,7 @@ fn checkpoint_tool_proof_retention_obeys_one_page_byte_budget_and_row_limit() {
     // Both cells remain within their original native 16 KiB limits. Padding
     // exercises retained source bytes without enlarging the rendered Tool body.
     let padding = "p".repeat(13_000);
-    assert_eq!(store.lock().unwrap().execute("UPDATE observation_headers SET header_json=CAST(json_set(header_json,'$.source_padding',?1) AS BLOB) WHERE ledger_position IS NOT NULL", [&padding]).unwrap(), 32);
+    assert_eq!(store.lock().unwrap().execute("UPDATE transcript_entries SET header_json=CAST(json_set(header_json,'$.source_padding',?1) AS BLOB) WHERE ledger_position IS NOT NULL", [&padding]).unwrap(), 32);
     assert_eq!(store.lock().unwrap().execute("UPDATE observation_block_headers SET header_json=CAST(json_set(header_json,'$.value.source_padding',?1) AS BLOB)", [&padding]).unwrap(), 32);
     let cut = store.observation_read_cut().unwrap();
     let expected = checkpoint_head_oracle(&store, &cut, cut.read.journal, 32).unwrap();
@@ -201,7 +201,7 @@ fn checkpoint_body_proof_rechecks_transactional_source_and_rollback() {
     {
         let mut connection = store.lock().unwrap();
         let transaction = connection.transaction().unwrap();
-        assert_eq!(transaction.execute("UPDATE observation_headers SET header_json=CAST(json_set(header_json,'$.display.content[0].text','provisional different body') AS BLOB) WHERE ledger_position=1", []).unwrap(), 1);
+        assert_eq!(transaction.execute("UPDATE transcript_entries SET header_json=CAST(json_set(header_json,'$.display.content[0].text','provisional different body') AS BLOB) WHERE ledger_position=1", []).unwrap(), 1);
         let provisional = super::super::observation_checkpoint::read(&transaction, &store.conn.response, store.conversation_id(), &cut, cut.read.journal, 32).unwrap();
         assert_ne!(provisional.transcript.entries, original.transcript.entries);
         assert!(!provisional.transcript_rows[0].same_body(&original.transcript_rows[0]));
@@ -223,7 +223,7 @@ fn checkpoint_tool_body_proof_preserves_native_admission_boundary_and_current_me
     }
     let cut = store.observation_read_cut().unwrap();
     assert_eq!(cut.read.journal, 9);
-    let bytes: Vec<u8> = store.lock().unwrap().query_row("SELECT header_json FROM observation_headers WHERE ledger_position=1", [], |row| row.get(0)).unwrap();
+    let bytes: Vec<u8> = store.lock().unwrap().query_row("SELECT header_json FROM transcript_entries WHERE ledger_position=1", [], |row| row.get(0)).unwrap();
     let mut header: crate::durable::observation::MessageHeader = serde_json::from_slice(&bytes).unwrap();
     let Some(MessageBlock::Assistant(assistant)) = &mut header.display else { unreachable!() };
     let AssistantContentBlock::ToolCall(call) = &mut assistant.content[0] else { unreachable!() };
@@ -234,7 +234,7 @@ fn checkpoint_tool_body_proof_preserves_native_admission_boundary_and_current_me
         let Some(MessageBlock::Assistant(assistant)) = &mut header.display else { unreachable!() };
         let AssistantContentBlock::ToolCall(call) = &mut assistant.content[0] else { unreachable!() };
         call.arguments["padding"] = serde_json::Value::String("p".repeat(length));
-        store.lock().unwrap().execute("UPDATE observation_headers SET header_json=?1 WHERE ledger_position=1", [serde_json::to_vec(&header).unwrap()]).unwrap();
+        store.lock().unwrap().execute("UPDATE transcript_entries SET header_json=?1 WHERE ledger_position=1", [serde_json::to_vec(&header).unwrap()]).unwrap();
     };
     // Locate the actual legacy admission boundary, not an assumed byte charge.
     let (mut low, mut high) = (0, maximum + 1);

@@ -428,11 +428,11 @@ fn primary_and_unique_keys_replace_duplicate_btrees_for_bounded_seeks() {
     for retired in [
         "pending_inbound_sequence_idx",
         "message_ledger_id_idx",
-        "transcript_order_reference_idx",
+        "transcript_entries_reference_idx",
         "surface_ops_revision_idx",
         "contribution_emission_heads_lookup_idx",
         "publication_frames_stream_idx",
-        "observation_headers_transcript_idx",
+        "transcript_entries_transcript_idx",
         "events_trace_holes_idx",
         "events_observation_trace_holes_idx",
         "events_observation_statistics_holes_idx",
@@ -461,8 +461,8 @@ fn primary_and_unique_keys_replace_duplicate_btrees_for_bounded_seeks() {
             "message_id=?",
         ),
         (
-            "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id='message'",
-            "reference_kind=? AND reference_id=?",
+            "SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id='message'",
+            "native_reference_kind=? AND native_reference_id=?",
         ),
         (
             "SELECT revision FROM surface_ops WHERE revision>7 ORDER BY revision LIMIT 32",
@@ -477,8 +477,8 @@ fn primary_and_unique_keys_replace_duplicate_btrees_for_bounded_seeks() {
             "producer=? AND semantic_key=?",
         ),
         (
-            "SELECT header_json FROM observation_headers WHERE transcript_position=7",
-            "transcript_position=?",
+            "SELECT header_json FROM transcript_entries WHERE position=7",
+            "INTEGER PRIMARY KEY",
         ),
     ] {
         let plan = connection

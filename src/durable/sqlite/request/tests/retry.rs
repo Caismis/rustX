@@ -352,7 +352,7 @@ fn retry_capture_ignores_optional_display_holes_and_other_attempt_steering() {
     assert_eq!(
         connection
             .execute(
-                "DELETE FROM observation_headers WHERE reference_id=?1",
+                "UPDATE transcript_entries SET header_json=NULL,reference_kind=NULL,reference_id=NULL,ledger_position=NULL WHERE reference_id=?1",
                 [original.id().as_str()],
             )
             .unwrap(),
@@ -397,7 +397,7 @@ fn retry_capture_ignores_optional_display_holes_and_other_attempt_steering() {
             .lock()
             .unwrap()
             .query_row(
-                "SELECT COUNT(*) FROM observation_headers WHERE reference_id=?1",
+                "SELECT COUNT(*) FROM transcript_entries WHERE reference_id=?1",
                 [original.id().as_str()],
                 |row| row.get::<_, u64>(0),
             )

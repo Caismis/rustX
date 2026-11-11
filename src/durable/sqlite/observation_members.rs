@@ -246,7 +246,7 @@ pub(super) fn prepare_event(
         .tool_call_count
         .checked_add(header.tool_call_count)
         .ok_or_else(|| storage("native process Tool count exhausted"))?;
-    let cursor:Option<u64>=connection.query_row_cached("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let cursor:Option<u64>=connection.query_row_cached("SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1",[message_id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if let Some(cursor) = cursor {
         counts.first_cursor = Some(
             counts
@@ -302,7 +302,7 @@ pub(super) fn seed_members(
                 .tool_call_count
                 .checked_add(header.tool_call_count)
                 .ok_or_else(|| storage("native member Tool count exhausted"))?;
-            let cursor:Option<u64>=connection.query_row_cached("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+            let cursor:Option<u64>=connection.query_row_cached("SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1",[id.as_str()],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             if let Some(cursor) = cursor {
                 counts.first_cursor =
                     Some(counts.first_cursor.map_or(
@@ -387,7 +387,7 @@ fn inherited_terminal_at(
     transcript: u64,
 ) -> Result<Option<crate::observation::turn::TurnProcessView>, ConversationStoreError> {
     let reference: Option<Option<String>> = connection.query_row(
-        "SELECT CASE WHEN typeof(reference_id)='text' AND length(CAST(reference_id AS BLOB))<=16 THEN reference_id END FROM transcript_order WHERE position=?1 AND position<=?2 AND reference_kind='inherited_turn'",
+        "SELECT CASE WHEN typeof(native_reference_id)='text' AND length(CAST(native_reference_id AS BLOB))<=16 THEN native_reference_id END FROM transcript_entries WHERE position=?1 AND position<=?2 AND native_reference_kind='inherited_turn'",
         params![transcript, cut.inherited_through.get()], |row| row.get(0),
     ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let Some(reference) = reference else {
@@ -444,7 +444,7 @@ pub(super) fn transcript_process(
             .map(Option::flatten);
     };
     let role: Option<String> = connection.query_row(
-        "SELECT json_extract(header_json,'$.role') FROM observation_headers INDEXED BY observation_headers_ledger_idx WHERE ledger_position=?1 AND ledger_position IS NOT NULL AND transcript_position=?2 AND journal_position<=?3",
+        "SELECT json_extract(header_json,'$.role') FROM transcript_entries INDEXED BY transcript_entries_ledger_idx WHERE ledger_position=?1 AND ledger_position IS NOT NULL AND position=?2 AND journal_position<=?3",
         params![position, transcript, cut.read.journal], |row|row.get(0),
     ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let role = role.ok_or_else(|| storage("native member message header unavailable"))?;

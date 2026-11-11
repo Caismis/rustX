@@ -189,7 +189,7 @@ fn native_readiness_reopen_uses_committed_baseline_without_history_rows_or_write
     {
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
         reopened.lock().unwrap().authorizer(Some(|context: AuthContext<'_>| {
-            if matches!(context.action, AuthAction::Read { table_name: "events" | "transcript_order", .. }) {
+            if matches!(context.action, AuthAction::Read { table_name: "events" | "transcript_entries", .. }) {
                 Authorization::Deny
             } else {
                 Authorization::Allow
@@ -223,7 +223,7 @@ fn native_readiness_source_deletion_and_rollback_share_the_connection_transactio
     let mut connection = store.lock().unwrap();
     {
         let transaction = connection.transaction().unwrap();
-        transaction.execute("DELETE FROM transcript_order WHERE position=1", []).unwrap();
+        transaction.execute("DELETE FROM transcript_entries WHERE position=1", []).unwrap();
         let count: u64 = transaction.query_row("SELECT COUNT(*) FROM transcript_observation_readiness", [], |row| row.get(0)).unwrap();
         assert_eq!(count, 0, "TEMP cleanup follows the native T owner deletion");
         transaction.rollback().unwrap();

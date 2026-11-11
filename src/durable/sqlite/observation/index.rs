@@ -14,7 +14,7 @@ use crate::durable::observation::{
 };
 use crate::durable::sqlite::statements::FixedStatements;
 use crate::durable::sqlite::{
-    Connection, ConversationStoreError, OptionalExtension, Transaction, params, seq_to_i64, storage,
+    Connection, ConversationStoreError, Transaction, params, seq_to_i64, storage,
 };
 use crate::message::types::{InboundKind, MessageBlock};
 use crate::observation::bounded::bounded_bytes;
@@ -166,20 +166,13 @@ pub(in crate::durable::sqlite) struct PublicationHeader {
     pub(in crate::durable::sqlite) captured_bindings: usize,
 }
 
-pub(in crate::durable::sqlite) fn index_publication_message(
-    connection: &Connection,
-    message: &MessageBlock,
-    position: u64,
-) -> Result<Option<PublicationHeader>, ConversationStoreError> {
-    index_message_capture(connection, message, Some(position), true)
-}
-
 #[allow(clippy::too_many_lines)] // One native descriptor with its original bounded admission.
-fn index_message_capture(
+pub(in crate::durable::sqlite) fn index_message_capture(
     connection: &Connection,
     message: &MessageBlock,
     position: Option<u64>,
     retain_publication: bool,
+    transcript_cursor: Option<crate::durable::TranscriptCursor>,
 ) -> Result<Option<PublicationHeader>, ConversationStoreError> {
     #[cfg(test)]
     PUBLICATION_CAPTURE_WORK.with(|work| {
@@ -235,11 +228,17 @@ fn index_message_capture(
         || metadata_deferred
         || message.id().as_str().len() > 256;
     let mut header = MessageHeader {
-        deliveries: if let (Some(position),MessageBlock::Tool(tool))=(position,message) {
-            (tool.result.status==crate::tools::types::ToolExecutionStatus::Success).then(||crate::durable::sqlite::observation_delivery::head(connection,position,0,8)).transpose()?
-        }else{None},
+        deliveries: if let (Some(position), MessageBlock::Tool(tool)) = (position, message) {
+            (tool.result.status == crate::tools::types::ToolExecutionStatus::Success)
+                .then(|| {
+                    crate::durable::sqlite::observation_delivery::head(connection, position, 0, 8)
+                })
+                .transpose()?
+        } else {
+            None
+        },
         tool_calls: Vec::new(),
-        transcript_cursor: connection.query_row_cached("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",[message.id().as_str()],|row|row.get::<_,u64>(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.map(crate::durable::TranscriptCursor::new),
+        transcript_cursor,
         identity: (message.id().as_str().len() <= 256).then(|| message.id().clone()),
         locator: position.map(|position| {
             crate::observation::content::CanonicalContentLocator::ByLedgerPosition { position }
@@ -270,7 +269,11 @@ fn index_message_capture(
         display: (message.id().as_str().len() <= 256)
             .then_some(display)
             .flatten(),
-        content: capture.content.into_iter().map(crate::observation::metadata::MetadataFragment::into_owned).collect(),
+        content: capture
+            .content
+            .into_iter()
+            .map(crate::observation::metadata::MetadataFragment::into_owned)
+            .collect(),
         collections: capture.collections,
         deferred,
     };
@@ -303,7 +306,9 @@ fn index_message_capture(
     } else {
         (message_header_bytes(&mut header)?, None)
     };
-    connection.execute_cached("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,header_json,transcript_position) VALUES('message',?1,?2,?3,(SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),position.map(seq_to_i64).transpose()?,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    // Hidden carriers use their own negative rowids, independent of the full
+    // width Ledger/Inbound coordinates. MIN is a primary-key endpoint seek.
+    connection.execute_cached("INSERT INTO transcript_entries(position,reference_kind,reference_id,ledger_position,header_json) VALUES(COALESCE((SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1),(SELECT position FROM transcript_entries WHERE reference_kind='message' AND reference_id=?1),(SELECT CASE WHEN MIN(position)<0 THEN MIN(position)-1 ELSE -1 END FROM transcript_entries)),'message',?1,?2,?3) ON CONFLICT(position) DO UPDATE SET reference_kind=excluded.reference_kind,reference_id=excluded.reference_id,ledger_position=excluded.ledger_position,header_json=excluded.header_json",params![message.id().as_str(),position.map(seq_to_i64).transpose()?,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     index_tool_result(connection, message, position)?;
     Ok(prepared)
 }
@@ -313,7 +318,12 @@ pub(in crate::durable::sqlite) fn index_message(
     message: &MessageBlock,
     position: Option<u64>,
 ) -> Result<(), ConversationStoreError> {
-    index_message_capture(connection, message, position, false).map(|_| ())
+    let cursor = crate::durable::sqlite::canonical::ledger::load_transcript_reference(
+        connection,
+        "message",
+        message.id().as_str(),
+    )?;
+    index_message_capture(connection, message, position, false, cursor).map(|_| ())
 }
 
 pub(in crate::durable::sqlite) fn index_tool_result(
@@ -327,7 +337,7 @@ pub(in crate::durable::sqlite) fn index_tool_result(
             .ok_or_else(|| storage("native Tool result summary exceeds header budget"))?;
         connection
             .execute(
-                "UPDATE observation_headers SET tool_result_json=?2 WHERE ledger_position=?1",
+                "UPDATE transcript_entries SET tool_result_json=?2 WHERE ledger_position=?1",
                 params![position, bytes],
             )
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
@@ -553,7 +563,7 @@ fn store_transcript_bytes(
     journal: u64,
     bytes: &[u8],
 ) -> Result<(), ConversationStoreError> {
-    connection.execute("INSERT INTO observation_headers(reference_kind,reference_id,ledger_position,journal_position,header_json,transcript_position) VALUES(?1,?2,NULL,?3,?4,(SELECT position FROM transcript_order WHERE reference_kind=?1 AND reference_id=?2)) ON CONFLICT(reference_kind,reference_id) DO UPDATE SET journal_position=excluded.journal_position,header_json=excluded.header_json",params![kind,id,journal,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    connection.execute("UPDATE transcript_entries SET reference_kind=?1,reference_id=?2,journal_position=?3,header_json=?4 WHERE native_reference_kind=?1 AND native_reference_id=?2",params![kind,id,journal,bytes]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(())
 }
 
@@ -812,7 +822,7 @@ pub(in crate::durable::sqlite) fn index_pending_header(
     id: &crate::runtime::identity::MessageId,
     transcript: Option<u64>,
 ) -> Result<(), ConversationStoreError> {
-    let bytes:Vec<u8>=connection.query_row_cached("SELECT header_json FROM observation_headers WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let bytes:Vec<u8>=connection.query_row_cached("SELECT header_json FROM transcript_entries WHERE reference_kind='message' AND reference_id=?1",[id.as_str()],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if bytes.len() > HEADER_ENCODED_MAX {
         return Err(storage("pending source header exceeds bound"));
     }

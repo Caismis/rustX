@@ -351,7 +351,8 @@ fn count_conversation_store_open() {
 /// Version 107 stores timestamp prefix maxima and pins bounded ledger/owner seeks.
 /// It also shares immutable Trace catalog versions with witnessed request bindings.
 /// Version 108 combines these with shared Tool association facts and immutable request payloads.
-/// Version 109 uses sparse event aliases, numeric lifecycle terminals and lossless owner keys.
+/// Version 109 unifies sparse event identities, integer request ownership, selected-input
+/// and Source trees, co-located transcript headers, numeric Content coordinates, and Surface identity.
 pub const SQLITE_SCHEMA_VERSION: i64 = 109;
 
 /// One operation in a deterministic admission fault script.

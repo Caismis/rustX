@@ -719,7 +719,7 @@ impl ObservationStore for SqliteConversationStore {
         let Some(position) = position else {
             return Ok(None);
         };
-        let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM observation_headers INDEXED BY observation_headers_ledger_idx WHERE ledger_position=?1 AND reference_kind='message'",[position],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"native retry message header unavailable"))?;
+        let bytes:Vec<u8>=connection.query_row("SELECT header_json FROM transcript_entries INDEXED BY transcript_entries_ledger_idx WHERE ledger_position=?1 AND reference_kind='message'",[position],|row|row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,"native retry message header unavailable"))?;
         let header: crate::durable::observation::MessageHeader = serde_json::from_slice(&bytes)
             .map_err(|_| storage("native retry message header corrupt"))?;
         Ok(header.identity)

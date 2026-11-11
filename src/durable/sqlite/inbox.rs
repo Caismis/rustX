@@ -9,6 +9,7 @@ mod tests;
 use super::AdmissionFaultOperation;
 use super::canonical::ledger::{
     append_transcript_reference, load_message_tx, load_transcript_reference, message_exists,
+    patch_message_transcript,
 };
 use super::journal::reference::validate_subagent_terminal_publication;
 use super::journal::{find_event_by_id, persist_event_tx};
@@ -753,15 +754,16 @@ pub(super) fn accept_scheduled_inbound_tx(
                 crate::durable::sqlite::sqlite_error(&error, format!("insert correlation: {error}"))
             })?;
     }
-    let _ = optional_display_layout(transaction, || {
-        content::index_pending(transaction, &message, sequence, 0)?;
-        observation::index::index_message(transaction, &MessageBlock::User(message.clone()), None)
-    })?;
     // Acceptance is the durable-before-display frontier for an ordinary
     // inbound user message. Context facts are durable model input but are not
     // ordinary transcript content, so they never receive an ordering row.
     // Adoption later reuses this same reference when a visible body moves
     // into the Message Ledger.
+    let prior_cursor = match load_transcript_reference(transaction, "message", message_id.as_str())
+    {
+        Err(error @ ConversationStoreError::OperationCancelled) => return Err(error),
+        result => result,
+    };
     let transcript_cursor = if matches!(message.kind, InboundKind::Context(_)) {
         None
     } else {
@@ -771,6 +773,20 @@ pub(super) fn accept_scheduled_inbound_tx(
             message_id.as_str(),
         )?)
     };
+    let _ = optional_display_layout(transaction, || {
+        content::index_pending(transaction, &message, sequence, 0)?;
+        observation::index::index_message_capture(
+            transaction,
+            &MessageBlock::User(message.clone()),
+            None,
+            false,
+            prior_cursor?,
+        )
+        .map(|_| ())
+    })?;
+    if let Some(cursor) = transcript_cursor {
+        patch_message_transcript(transaction, &message_id, cursor)?;
+    }
     let _ = observation::index::index_pending_header(
         transaction,
         sequence,
@@ -860,8 +876,8 @@ pub(super) fn load_pending_rows(
         .prepare_cached(
             "SELECT p.sequence,p.message_id,p.message_json,p.correlation,t.position,p.revision
              FROM pending_inbound p
-             LEFT JOIN transcript_order t
-               ON t.reference_kind='message' AND t.reference_id=p.message_id
+             LEFT JOIN transcript_entries t
+               ON t.native_reference_kind='message' AND t.native_reference_id=p.message_id
              ORDER BY p.sequence",
         )
         .map_err(|error| {
@@ -930,7 +946,7 @@ pub(super) fn load_pending_exact(
     sequence: InboundSequence,
 ) -> Result<Option<PendingInboundItem>, ConversationStoreError> {
     type PendingIdentityRow = (String, String, Option<String>, Option<u64>, u64);
-    let row:Option<PendingIdentityRow>=connection.query_row("SELECT p.message_id,p.message_json,p.correlation,t.position,p.revision FROM pending_inbound p LEFT JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=p.message_id WHERE p.sequence=?1",[sequence.get()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let row:Option<PendingIdentityRow>=connection.query_row("SELECT p.message_id,p.message_json,p.correlation,t.position,p.revision FROM pending_inbound p LEFT JOIN transcript_entries t ON t.native_reference_kind='message' AND t.native_reference_id=p.message_id WHERE p.sequence=?1",[sequence.get()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     row.map(|(id, json, correlation, cursor, revision)| {
         let message: UserMessageBlock =
             serde_json::from_str(&json).map_err(|error| storage(error.to_string()))?;
@@ -1034,11 +1050,7 @@ impl SqliteConversationStore {
                 .map_err(|error| {
                     crate::durable::sqlite::sqlite_error(&error, format!("pending remove: {error}"))
                 })?;
-            let _ = optional_display_layout(&transaction, || {
-                transaction.execute("DELETE FROM observation_headers WHERE reference_kind='message' AND reference_id=?1",[item.message_id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
-                Ok(())
-            })?;
-            transaction.execute("DELETE FROM transcript_order WHERE reference_kind='message' AND reference_id=?1", [item.message_id.as_str()])
+            transaction.execute("DELETE FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1", [item.message_id.as_str()])
                 .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("pending transcript remove: {error}")))?;
             transaction.execute("UPDATE rustx_store SET retained_transcript_count=retained_transcript_count-1,pending_observation_count=pending_observation_count-1 WHERE id=1", []).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         }

@@ -83,6 +83,7 @@ enum Domain {
     Journal,
     Ledger,
     Transcript,
+    TranscriptEntry,
 }
 
 impl Owner {
@@ -109,10 +110,10 @@ impl Owner {
                 ],
             ),
             (
-                "observation_headers",
+                "transcript_entries",
                 vec![
                     ("ledger_position", Domain::Ledger),
-                    ("transcript_position", Domain::Transcript),
+                    ("position", Domain::TranscriptEntry),
                 ],
             ),
             (
@@ -126,7 +127,6 @@ impl Owner {
                 "request_snapshots",
                 vec![("started_sequence", Domain::Journal)],
             ),
-            ("transcript_order", vec![("position", Domain::Transcript)]),
         ] {
             // xinfo preserves SQLite's logical column ordinals across virtual columns.
             let mut statement = connection
@@ -187,11 +187,18 @@ impl Owner {
         let frontier = match domain {
             Domain::Journal => &self.journal,
             Domain::Ledger => &self.ledger,
-            Domain::Transcript => &self.transcript,
+            Domain::Transcript | Domain::TranscriptEntry => &self.transcript,
         }
         .load(Ordering::Relaxed);
         match value {
             Ok(ValueRef::Null) => false,
+            // Negative carrier rowids are not T cursors. Ledger dependencies
+            // still invalidate changes to already observed hidden messages.
+            Ok(ValueRef::Integer(value))
+                if matches!(domain, Domain::TranscriptEntry) && *value < 0 =>
+            {
+                false
+            }
             Ok(ValueRef::Integer(value)) => {
                 u64::try_from(*value).map_or(true, |value| value <= frontier)
             }
@@ -222,7 +229,8 @@ impl Owner {
             // descriptor across any content-frontier rewrite. Ordinary reads
             // do not consult them, so this broad rule only applies when needed.
             table.starts_with("inherited_")
-                || (table == "content_frontiers" && self.identity_fields.load(Ordering::Relaxed))
+                || (matches!(table, "content_frontiers" | "content_source_ids")
+                    && self.identity_fields.load(Ordering::Relaxed))
         };
         if invalidates {
             self.invalidate();

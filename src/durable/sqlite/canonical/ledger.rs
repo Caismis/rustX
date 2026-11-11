@@ -381,15 +381,27 @@ fn append_message_ledger_with_capture(
             params![position, id.as_str(), encode(message, "canonical message")?,ordinary_user,human_activity_at.map(|time|time.to_rfc3339()),activity_max.map(|value|value.0),activity_max.map(|value|value.1),opening_preview,observation_state::todo_value(message).is_some(),ordinary_human,title_source_text],
         )
         .map_err(|error| map_insert_error(&error, &id))?;
+    // The physical carrier is allocated first, but descriptor admission must
+    // still see the cursor that existed before this append, as it did before
+    // co-location. Admitting the new cursor early can discard an inline body.
+    let prior_cursor = match load_transcript_reference(transaction, "message", id.as_str()) {
+        Err(error @ ConversationStoreError::OperationCancelled) => return Err(error),
+        result => result,
+    };
+    let transcript_cursor = transcript_visible_message(message)
+        .then(|| append_transcript_reference(transaction, "message", id.as_str()))
+        .transpose()?;
     let retain_publication = publication_header.is_some();
     let captured = optional_display_layout(transaction, || {
         content::index_message(transaction, message)?;
         let position = nonnegative(position, "header ledger position")?;
-        if retain_publication {
-            observation::index_publication_message(transaction, message, position)
-        } else {
-            observation::index_message(transaction, message, Some(position)).map(|()| None)
-        }
+        observation::index::index_message_capture(
+            transaction,
+            message,
+            Some(position),
+            retain_publication,
+            prior_cursor?,
+        )
     })?;
     if let Some(publication_header) = publication_header {
         // A proof escapes only after the whole original optional domain commits.
@@ -428,15 +440,10 @@ fn append_message_ledger_with_capture(
         observation_trace::index_proposals(transaction, &conversation, position, message)?;
         observation_trace::index_canonical(transaction, &conversation, position, message)
     })?;
-    if transcript_visible_message(message) {
-        Ok(Some(append_transcript_reference(
-            transaction,
-            "message",
-            id.as_str(),
-        )?))
-    } else {
-        Ok(None)
+    if let Some(cursor) = transcript_cursor {
+        patch_message_transcript(transaction, &id, cursor)?;
     }
+    Ok(transcript_cursor)
 }
 
 pub(in crate::durable::sqlite) fn append_message_ledger(
@@ -470,8 +477,8 @@ pub(in crate::durable::sqlite) fn append_transcript_reference(
 ) -> Result<TranscriptCursor, ConversationStoreError> {
     let existing: Option<i64> = transaction
         .query_row_cached(
-            "SELECT position FROM transcript_order
-             WHERE reference_kind=?1 AND reference_id=?2",
+            "SELECT position FROM transcript_entries
+             WHERE native_reference_kind=?1 AND native_reference_id=?2",
             params![reference_kind, reference_id],
             |row| row.get(0),
         )
@@ -491,10 +498,6 @@ pub(in crate::durable::sqlite) fn append_transcript_reference(
                 )
                 .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         }
-        let _ = optional_display_layout(transaction, || {
-            transaction . execute_cached ( "UPDATE observation_headers SET transcript_position=?1,header_json=CASE WHEN reference_kind='message' THEN CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) ELSE header_json END WHERE reference_kind=?2 AND reference_id=?3" , params ! [ position , reference_kind , reference_id ] ) . map_err ( | error | super :: super :: sqlite_error ( & error , error . to_string ( ) ) ) ? ;
-            Ok(())
-        })?;
         return Ok(TranscriptCursor::new(
             u64::try_from(position).map_err(|_| storage("negative transcript position"))?,
         ));
@@ -516,7 +519,7 @@ pub(in crate::durable::sqlite) fn append_transcript_reference(
         .ok_or_else(|| storage("transcript position exhausted"))?;
     transaction
         .execute_cached(
-            "INSERT INTO transcript_order(position,reference_kind,reference_id) VALUES(?1,?2,?3)",
+            "INSERT INTO transcript_entries(position,native_reference_kind,native_reference_id) VALUES(?1,?2,?3)",
             params![position, reference_kind, reference_id],
         )
         .map_err(|error| {
@@ -534,7 +537,7 @@ pub(in crate::durable::sqlite) fn append_transcript_reference(
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         transaction
             .execute_cached(
-                "UPDATE transcript_order SET observation_readiness_missing=0 WHERE position=?1",
+                "UPDATE transcript_entries SET observation_readiness_missing=0 WHERE position=?1",
                 [position],
             )
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
@@ -549,24 +552,20 @@ pub(in crate::durable::sqlite) fn append_transcript_reference(
             )
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     }
-    let _ = optional_display_layout(transaction, || {
-        transaction . execute_cached ( "UPDATE observation_headers SET transcript_position=?1,header_json=CASE WHEN reference_kind='message' THEN CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) ELSE header_json END WHERE reference_kind=?2 AND reference_id=?3" , params ! [ position , reference_kind , reference_id ] ) . map_err ( | error | super :: super :: sqlite_error ( & error , error . to_string ( ) ) ) ? ;
-        Ok(())
-    })?;
     Ok(TranscriptCursor::new(
         u64::try_from(position).map_err(|_| storage("negative transcript position"))?,
     ))
 }
 
 pub(in crate::durable::sqlite) fn load_transcript_reference(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     reference_kind: &str,
     reference_id: &str,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
     transaction
         .query_row_cached(
-            "SELECT position FROM transcript_order
-             WHERE reference_kind=?1 AND reference_id=?2",
+            "SELECT position FROM transcript_entries
+             WHERE native_reference_kind=?1 AND native_reference_id=?2",
             params![reference_kind, reference_id],
             |row| row.get::<_, i64>(0),
         )
@@ -585,19 +584,37 @@ pub(in crate::durable::sqlite) fn load_transcript_reference(
         .transpose()
 }
 
+pub(in crate::durable::sqlite) fn patch_message_transcript(
+    connection: &Connection,
+    id: &MessageId,
+    cursor: TranscriptCursor,
+) -> Result<(), ConversationStoreError> {
+    // Preserve the separate, optional post-admission JSON patch and its failure
+    // boundary. It must not rerun typed admission or roll back native authority.
+    let _ = optional_display_layout(connection, || {
+        connection.execute_cached(
+            "UPDATE transcript_entries SET header_json=CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) WHERE reference_kind='message' AND reference_id=?2",
+            params![cursor.get(), id.as_str()],
+        ).map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
 pub(in crate::durable::sqlite) fn append_surface_op(
     transaction: &Transaction<'_>,
     revision: SurfaceRevision,
     generation: u64,
     operation: &SurfaceOp,
 ) -> Result<(), ConversationStoreError> {
-    transaction
+    let SurfaceOp::Append { message_id } = operation;
+    let inserted=transaction
         .execute_cached(
-            "INSERT INTO surface_ops(revision,compaction_generation,op_json) VALUES(?1,?2,?3)",
+            "INSERT INTO surface_ops(revision,compaction_generation,ledger_position,message_id) SELECT ?1,?2,position,?3 FROM message_ledger WHERE message_id=?3",
             params![
                 seq_to_i64(revision.get())?,
                 seq_to_i64(generation)?,
-                encode(operation, "Surface operation")?
+                message_id.as_str()
             ],
         )
         .map_err(|error| {
@@ -606,7 +623,11 @@ pub(in crate::durable::sqlite) fn append_surface_op(
                 format!("append Surface operation: {error}"),
             )
         })?;
-    let SurfaceOp::Append { message_id } = operation;
+    if inserted != 1 {
+        return Err(ConversationStoreError::InvalidReference(
+            "Surface append requires a canonical Ledger position".into(),
+        ));
+    }
     {
         transaction.execute_cached("UPDATE message_ledger SET first_append_revision=COALESCE(first_append_revision,?1) WHERE message_id=?2",params![revision.get(),message_id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         // Existing native Surface commit owns first appearance. This index
@@ -730,6 +751,20 @@ pub(in crate::durable::sqlite) fn load_surface_history(
     Ok(replay_surface_history(connection, through)?.1)
 }
 
+pub(in crate::durable::sqlite) fn surface_append_operation(
+    message_id: String,
+    ledger_message_id: Option<&str>,
+) -> Result<SurfaceOp, ConversationStoreError> {
+    if ledger_message_id != Some(message_id.as_str()) {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Surface operation references missing or mismatched Ledger message {message_id}"
+        )));
+    }
+    Ok(SurfaceOp::Append {
+        message_id: MessageId::new(message_id),
+    })
+}
+
 pub(in crate::durable::sqlite) fn replay_surface_history(
     connection: &Connection,
     revision: SurfaceRevision,
@@ -752,8 +787,8 @@ pub(in crate::durable::sqlite) fn replay_surface_history(
     let mut history = Vec::new();
     let mut statement = connection
         .prepare(
-            "SELECT revision,compaction_generation,op_json
-             FROM surface_ops WHERE revision <= ?1 ORDER BY revision",
+            "SELECT s.revision,s.compaction_generation,s.message_id,m.message_id
+             FROM surface_ops s LEFT JOIN message_ledger m ON m.position=s.ledger_position WHERE s.revision <= ?1 ORDER BY s.revision",
         )
         .map_err(|error| {
             crate::durable::sqlite::sqlite_error(&error, format!("read Surface history: {error}"))
@@ -764,6 +799,7 @@ pub(in crate::durable::sqlite) fn replay_surface_history(
                 row.get::<_, i64>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         })
         .map_err(|error| {
@@ -774,7 +810,7 @@ pub(in crate::durable::sqlite) fn replay_surface_history(
         })?;
     let mut expected_revision = 1_u64;
     for row in rows {
-        let (stored_revision, stored_generation, json) =
+        let (stored_revision, stored_generation, message_id, ledger_message_id) =
             row.map_err(|error| storage(format!("Surface history row: {error}")))?;
         if u64::try_from(stored_revision).ok() != Some(expected_revision) {
             return Err(ConversationStoreError::InvalidReference(
@@ -782,8 +818,7 @@ pub(in crate::durable::sqlite) fn replay_surface_history(
             ));
         }
         let _ = nonnegative(stored_generation, "canonical append metadata")?;
-        let operation: SurfaceOp = decode(&json, "Surface operation")?;
-        validate_surface_operation_references(connection, &operation)?;
+        let operation = surface_append_operation(message_id, ledger_message_id.as_deref())?;
         apply_surface_op(&mut active, &operation)?;
         history.push(operation);
         expected_revision = expected_revision

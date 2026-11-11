@@ -594,33 +594,40 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 FOREIGN KEY(ledger_position,message_id) REFERENCES message_ledger(position,message_id)
             );
             CREATE TABLE IF NOT EXISTS audit_observation_blocks (
-                transcript_position INTEGER NOT NULL REFERENCES transcript_order(position) ON DELETE CASCADE,
+                transcript_position INTEGER NOT NULL REFERENCES transcript_entries(position) ON DELETE CASCADE,
                 ordinal INTEGER NOT NULL CHECK(ordinal>=0),header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
                 PRIMARY KEY(transcript_position,ordinal)
             ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS observation_headers (
-                header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
+            CREATE TABLE IF NOT EXISTS transcript_entries (
+                header_json BLOB CHECK(header_json IS NULL OR length(header_json)<=16384),
                 tool_result_json BLOB CHECK(tool_result_json IS NULL OR length(tool_result_json)<=16384),
-                transcript_position INTEGER UNIQUE,ledger_position INTEGER,
+                position INTEGER PRIMARY KEY,ledger_position INTEGER,
                 journal_position INTEGER NOT NULL DEFAULT 0 CHECK(journal_position>=0),
-                reference_kind TEXT NOT NULL, reference_id TEXT NOT NULL,
-                PRIMARY KEY(reference_kind,reference_id)
+                reference_kind TEXT, reference_id TEXT,
+                native_reference_kind TEXT, native_reference_id TEXT,
+                observation_readiness_missing INTEGER NOT NULL DEFAULT 1 CHECK(observation_readiness_missing IN (0,1)),
+                UNIQUE(reference_kind,reference_id),
+                UNIQUE(native_reference_kind,native_reference_id)
             );
-            CREATE UNIQUE INDEX IF NOT EXISTS observation_headers_ledger_idx ON observation_headers(ledger_position) WHERE ledger_position IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS transcript_entries_ledger_idx ON transcript_entries(ledger_position) WHERE ledger_position IS NOT NULL;
             CREATE TABLE IF NOT EXISTS surface_observation_boundaries (
                 ordinal INTEGER PRIMARY KEY,ledger_position INTEGER NOT NULL UNIQUE,surface_revision INTEGER NOT NULL UNIQUE
             );
+            CREATE TABLE IF NOT EXISTS content_source_ids (
+                id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(id>0),
+                alias TEXT NOT NULL UNIQUE
+            );
             CREATE TABLE IF NOT EXISTS content_segments (
-                source_kind TEXT NOT NULL, source_id TEXT NOT NULL, block_index INTEGER NOT NULL,
+                source_kind TEXT NOT NULL, source_id INTEGER NOT NULL CHECK(typeof(source_id)='integer' AND source_id>-9223372036854775808), block_index INTEGER NOT NULL,
                 representation TEXT NOT NULL, segment INTEGER NOT NULL, bytes BLOB NOT NULL CHECK(length(bytes)<=65536),
                 PRIMARY KEY(source_kind,source_id,block_index,representation,segment)
             ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS content_frontiers (
-                source_kind TEXT NOT NULL, source_id TEXT NOT NULL, block_index INTEGER NOT NULL,
+                source_kind TEXT NOT NULL, source_id INTEGER NOT NULL CHECK(typeof(source_id)='integer' AND source_id>-9223372036854775808), block_index INTEGER NOT NULL,
                 representation TEXT NOT NULL, revision INTEGER NOT NULL, readable_end INTEGER NOT NULL,
                 bytes BLOB CHECK(bytes IS NULL OR length(bytes)<=65536),
                 PRIMARY KEY(source_kind,source_id,block_index,representation,revision)
-            ) WITHOUT ROWID;
+            );
             CREATE TABLE IF NOT EXISTS publication_metadata_segments (
                 stream_id TEXT NOT NULL,block_index INTEGER NOT NULL,revision INTEGER NOT NULL,
                 segment INTEGER NOT NULL,bytes BLOB NOT NULL CHECK(length(bytes)<=65536),
@@ -712,14 +719,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
             CREATE INDEX IF NOT EXISTS canonical_tool_calls_scope_idx ON canonical_tool_calls(attempt_id,call_id,commit_sequence,assistant_message_id,block_index);
             CREATE INDEX IF NOT EXISTS canonical_tool_calls_pending
                 ON canonical_tool_calls(assistant_message_id,block_index) WHERE result_message_id IS NULL;
-            CREATE TABLE IF NOT EXISTS transcript_order (
-                position INTEGER PRIMARY KEY,
-                reference_kind TEXT NOT NULL,
-                reference_id TEXT NOT NULL,
-                observation_readiness_missing INTEGER NOT NULL DEFAULT 1 CHECK(observation_readiness_missing IN (0,1)),
-                UNIQUE(reference_kind,reference_id)
-            );
-            CREATE INDEX IF NOT EXISTS transcript_observation_readiness_missing_idx ON transcript_order(position) WHERE observation_readiness_missing=1;
+            CREATE INDEX IF NOT EXISTS transcript_observation_readiness_missing_idx ON transcript_entries(position) WHERE observation_readiness_missing=1 AND position>0;
             CREATE TABLE IF NOT EXISTS bootstrap_identity (
                 occupancy_observation BLOB CHECK(occupancy_observation IS NULL OR length(occupancy_observation)<=16384),
                 id INTEGER PRIMARY KEY CHECK(id=1),
@@ -771,7 +771,9 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
             CREATE TABLE IF NOT EXISTS surface_ops (
                 revision INTEGER PRIMARY KEY,
                 compaction_generation INTEGER NOT NULL,
-                op_json TEXT NOT NULL
+                ledger_position INTEGER NOT NULL,
+                message_id TEXT NOT NULL,
+                FOREIGN KEY(ledger_position,message_id) REFERENCES message_ledger(position,message_id)
             );
             CREATE TABLE IF NOT EXISTS surface_head (
                 id INTEGER PRIMARY KEY CHECK(id=1),
@@ -953,7 +955,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
             CREATE INDEX IF NOT EXISTS events_observation_readiness_missing_idx ON events(sequence) WHERE observation_readiness_missing=1;
             CREATE INDEX IF NOT EXISTS events_observation_assistant_ledger_idx ON events(observation_assistant_ledger) WHERE observation_assistant_ledger IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_aggregate_heads_idx ON events(observation_aggregate_heads) WHERE observation_aggregate_heads>0;
-            CREATE INDEX IF NOT EXISTS transcript_order_audit_position_idx ON transcript_order(position) WHERE reference_kind='publication_audit';
+            CREATE INDEX IF NOT EXISTS transcript_entries_audit_position_idx ON transcript_entries(position) WHERE native_reference_kind='publication_audit';
             CREATE INDEX IF NOT EXISTS events_observation_tool_lifecycle_idx ON events(observation_tool_ledger,observation_tool_block,observation_tool_phase) WHERE observation_tool_phase IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_key,json_extract(event_json,'$.event.type')) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_attempt_heads_idx ON events(attempt_key,observation_attempt_heads) WHERE observation_attempt_heads>0;

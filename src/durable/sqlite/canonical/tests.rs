@@ -1,7 +1,6 @@
 //! Canonical ledger, surface, and transcript regressions of the SQLite store.
 
 use crate::conversation::ConversationState;
-use crate::conversation::SurfaceOp;
 use crate::durable::sqlite::canonical::transcript::*;
 use crate::durable::sqlite::test_support::*;
 use crate::durable::sqlite::*;
@@ -19,6 +18,8 @@ use std::sync::Arc;
 
 mod append_head;
 mod initialization_state;
+mod layout;
+mod surface_identity;
 
 #[test]
 fn snapshot_transcript_excludes_later_tool_results() {
@@ -488,26 +489,14 @@ fn pending_message_identity_cannot_be_reused_by_a_canonical_append() {
 fn corrupt_surface_operation_reference_fails_closed() {
     let store = store();
     store.initialize(&[user_message("a", "A")]).unwrap();
-    let missing = MessageId::new("missing");
-    let operation = serde_json::to_string(&SurfaceOp::Append {
-        message_id: missing.clone(),
-    })
-    .unwrap();
     let connection = store.conn.lock().unwrap();
-    connection
-        .execute(
-            "INSERT INTO surface_ops(revision,compaction_generation,op_json) VALUES(2,0,?1)",
-            [operation],
-        )
-        .unwrap();
-    connection
-        .execute("UPDATE surface_head SET revision=2 WHERE id=1", [])
-        .unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=OFF; UPDATE surface_ops SET ledger_position=999 WHERE revision=1; PRAGMA foreign_keys=ON").unwrap();
     drop(connection);
+    assert_eq!(store.load_head().unwrap().revision, SurfaceRevision::new(1));
     assert!(matches!(
-        store.load_head(),
+        store.reconstruct_surface(SurfaceRevision::new(1)),
         Err(ConversationStoreError::InvalidReference(detail))
-            if detail.contains("canonical frontier metadata")
+            if detail.contains("Surface operation references")
     ));
 }
 
@@ -576,7 +565,7 @@ fn t14_canonical_after_boundary_uses_original_ledger_and_selected_revision() {
     {
         let connection = store.lock().unwrap();
         connection
-            .execute_batch("DELETE FROM observation_headers")
+            .execute_batch("DELETE FROM transcript_entries")
             .unwrap();
         connection
             .execute(
