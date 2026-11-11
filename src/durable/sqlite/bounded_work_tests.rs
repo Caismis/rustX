@@ -1055,6 +1055,8 @@ pub(crate) fn append_completed_turns(
         turn: &str,
         tools: bool,
     ) -> RequestSnapshot {
+        let phase = super::query_work::phase;
+        phase("read:request");
         let mut snapshot = progress_request_snapshot(
             attempt.as_str(),
             turn,
@@ -1085,9 +1087,11 @@ pub(crate) fn append_completed_turns(
         snapshot
             .freeze_selected_input(store.conversation_id(), &request, &history.input_manifest)
             .unwrap();
+        phase("commit_model_turn_start");
         store
             .commit_model_turn_start(&[], &snapshot, Utc::now())
             .unwrap();
+        phase("event:model_request_completed");
         let mut event = envelope(
             store.conversation_id(),
             "",
@@ -1111,9 +1115,13 @@ pub(crate) fn append_completed_turns(
         snapshot
     }
 
+    let phase = super::query_work::phase;
     for ordinal in first..first + turns {
+        phase("accept_inbound");
         let accepted = store.accept_inbound(draft("turn growth")).unwrap();
+        phase("adopt_pending_batch");
         store.adopt_pending_batch(accepted.sequence, None).unwrap();
+        phase("event:attempt_started");
         let attempt = response_start(store, &format!("frontier-{ordinal}"));
         let first_request = model_step(store, &attempt, "1", tool);
         let final_request = if tool {
@@ -1123,6 +1131,7 @@ pub(crate) fn append_completed_turns(
                 name: "read".into(),
                 arguments: serde_json::json!({"path":"fixture.txt"}),
             };
+            phase("canonical:tool_call");
             let proposal = MessageBlock::Assistant(AssistantMessageBlock {
                 id: first_request.provisional_message_id.clone(),
                 content: vec![AssistantContentBlock::ToolCall(call.clone())],
@@ -1140,6 +1149,7 @@ pub(crate) fn append_completed_turns(
                     ),
                 )
                 .unwrap();
+            phase("event:tool_started");
             store
                 .append_event(envelope(
                     store.conversation_id(),
@@ -1162,6 +1172,7 @@ pub(crate) fn append_completed_turns(
                 workflow: None,
                 managed_output: None,
             };
+            phase("event:tool_completed");
             store
                 .append_event(envelope(
                     store.conversation_id(),
@@ -1174,6 +1185,7 @@ pub(crate) fn append_completed_turns(
                     },
                 ))
                 .unwrap();
+            phase("canonical:tool_result");
             let message = MessageBlock::Tool(ToolMessageBlock {
                 id: MessageId::new(format!("result-{ordinal}")),
                 occurrence: crate::message::types::ToolCallOccurrenceRef::new(
@@ -1202,12 +1214,15 @@ pub(crate) fn append_completed_turns(
         } else {
             first_request
         };
+        phase("canonical:assistant");
         response_message(
             store,
             &attempt,
             final_request.provisional_message_id.as_str(),
         );
+        phase("event:attempt_completed");
         response_complete(store, &attempt);
+        phase("");
     }
 }
 
