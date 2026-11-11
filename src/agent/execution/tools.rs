@@ -161,12 +161,21 @@ fn failed_result(error: &str) -> ToolExecutionResult {
 
 /// A cancelled tool result carrying the attempt cancellation reason.
 fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
+    cancelled_result_with_phase(reason, ToolCancellationPhase::BeforeStart)
+}
+
+/// A cancelled result for a call that already crossed the executor-start frontier.
+fn cancelled_after_start(reason: CancellationReason) -> ToolExecutionResult {
+    cancelled_result_with_phase(reason, ToolCancellationPhase::DuringExecution)
+}
+
+fn cancelled_result_with_phase(
+    reason: CancellationReason,
+    phase: ToolCancellationPhase,
+) -> ToolExecutionResult {
     ToolExecutionResult {
         deliveries: Vec::new(),
-        status: ToolExecutionStatus::Cancelled {
-            reason,
-            phase: ToolCancellationPhase::BeforeStart,
-        },
+        status: ToolExecutionStatus::Cancelled { reason, phase },
         content: Vec::new(),
         duration_ms: 0,
         exit_code: None,
@@ -724,7 +733,7 @@ impl AgentExecution<'_> {
                         // empty.
                         let batch_started = slots.iter().any(|slot| slot.executor_started);
                         if batch_started {
-                            deferred_group_error = Some(error);
+                            deferred_group_error.get_or_insert(error);
                         } else {
                             return Err(error);
                         }
@@ -732,7 +741,9 @@ impl AgentExecution<'_> {
                     if self.cancellation.interaction_failed() {
                         let batch_started = slots.iter().any(|slot| slot.executor_started);
                         if batch_started {
-                            deferred_group_error = Some(CanonicalCommitError::Interaction(
+                            // Keep the first deferred error (e.g. Durable). A later
+                            // ControlLost must not rewrite attempt-terminal cause.
+                            deferred_group_error.get_or_insert(CanonicalCommitError::Interaction(
                                 InteractionFailure::ControlLost,
                             ));
                         } else {
@@ -770,13 +781,18 @@ impl AgentExecution<'_> {
                 ));
             }
         }
-        // Cancellation fill: every not-yet-started foreground call receives
-        // a cancelled result slot, so the committed batch covers every
-        // logical call exactly once.
+        // Cancellation fill: every unset foreground call receives a cancelled
+        // result slot, so the committed batch covers every logical call exactly
+        // once. Started slots must never receive BeforeStart.
         if self.cancellation.is_cancelled() {
+            let reason = self.cancellation.reason();
             for slot in &mut slots {
                 if slot.result.is_none() {
-                    slot.result = Some(cancelled_result(self.cancellation.reason()));
+                    slot.result = Some(if slot.executor_started {
+                        cancelled_after_start(reason)
+                    } else {
+                        cancelled_result(reason)
+                    });
                 }
             }
         }
