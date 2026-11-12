@@ -363,10 +363,14 @@ fn incremental_event(
                 checkpoint,
             } if base.checkpoint.is_some() => RuntimeClientEvent::CheckpointPatched {
                 transition: transition.clone(),
-                checkpoint: Box::new(CheckpointDelta::between(
-                    base.checkpoint.as_ref().unwrap(),
-                    checkpoint,
-                )),
+                checkpoint: Box::new({
+                    let mut prior = base.checkpoint.as_ref().unwrap().as_ref().clone();
+                    prior.transcript = base.transcript.as_ref().unwrap().as_ref().clone();
+                    prior
+                        .message_descriptors
+                        .clone_from(base.descriptors.as_ref().unwrap().as_ref());
+                    CheckpointDelta::between(&prior, checkpoint)
+                }),
             },
             event => event.clone(),
         })

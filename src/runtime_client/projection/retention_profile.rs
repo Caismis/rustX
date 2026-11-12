@@ -304,6 +304,15 @@ impl Census {
             }
             RuntimeClientEvent::ProjectionDelta { events, metadata } => {
                 self.vector("nested_event_vectors", events);
+                if let Some(complete) = &metadata.native_transition
+                    && self.owner(
+                        "bootstrap_transition_owners",
+                        Arc::as_ptr(complete) as usize,
+                        size_of_val(complete.as_ref()),
+                    )
+                {
+                    self.event(complete);
+                }
                 if let Some(cut) = &metadata.native_cut {
                     self.cut(cut);
                 }

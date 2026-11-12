@@ -1,6 +1,6 @@
 /** Pure Runtime Client read-model fold. Routing/cursor continuity belongs to
  * the attachment owner. No I/O, providers, React, or execution authority. */
-import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution, ContentRef, ContentBinding, CanonicalContentLocator, RuntimeClientCheckpoint, ProjectionMetadata, RuntimeClientCursor, SnapshotDelta, TranscriptDelta } from './v79.ts';
+import type { RuntimeClientSnapshot as Snapshot, RuntimeClientEvent as Event, InFlightBlock, ForegroundToolExecution, ContentRef, ContentBinding, CanonicalContentLocator, RuntimeClientCheckpoint, ProjectionMetadata, RuntimeClientCursor, SnapshotDelta, TranscriptDelta, BindingDelta, FrontierDelta, ToolDelta, DescriptorDelta, EntryDelta, RefDelta, ReadEvidenceDelta, ObservationCutDelta } from './v79.ts';
 import { canonicalLocatorKey, contentSourceKey, sameContentRef } from './content-identity.ts';
 
 const cuts = new WeakMap<Snapshot, ProjectionMetadata>();
@@ -95,18 +95,83 @@ const samePath = (left: string[] | null | undefined, right: string[] | null | un
 const sameBinding = (left: ContentBinding, right: ContentBinding) =>
   sameContentRef(left.content_ref,right.content_ref) && left.deferred===right.deferred
   && samePath(left.path,right.path) && samePath(left.source_path,right.source_path);
-/** Resolve indices strictly against the immutable pre-transition checkpoint. */
-export function applyListDelta<T>(base: readonly T[], delta: {slots: number[]; values: T[]}, limit = 786_432): T[] {
-  if (delta.slots.length > limit || delta.slots.length > base.length + delta.values.length) throw new Error('Native list delta exceeds its display bound.');
+/** Resolve indices against immutable publication literals. A high-bit slot
+ * selects a typed edit of a base row rather than a newly supplied literal. */
+type ItemCodec = (base: unknown, edit: unknown) => unknown;
+type ListEdit<T> = {slots: number[]; values: T[]; patches?: {base: number; delta: unknown}[]};
+export function applyListDelta<T>(base: readonly T[], delta: ListEdit<T>, limit = 786_432, codec?: ItemCodec): T[] {
+  const patches = delta.patches ?? [];
+  if (delta.slots.length > limit || delta.slots.length > base.length + delta.values.length + patches.length) {
+    throw new Error('Native list delta exceeds its display bound.');
+  }
   return delta.slots.map(index => {
-    if (!Number.isSafeInteger(index) || index < 0 || index >= base.length + delta.values.length) throw new Error('Invalid native list delta slot.');
+    if (!Number.isSafeInteger(index) || index < 0 || index > 0xffff_ffff) throw new Error('Invalid native list delta slot.');
+    if (index >= 0x8000_0000) {
+      const patch = patches[index - 0x8000_0000];
+      if (!patch || !codec || !Number.isSafeInteger(patch.base) || patch.base < 0 || patch.base >= base.length) {
+        throw new Error('Invalid native item delta base.');
+      }
+      return codec(base[patch.base], patch.delta) as T;
+    }
+    if (index >= base.length + delta.values.length) throw new Error('Invalid native list delta slot.');
     return index < base.length ? base[index]! : delta.values[index - base.length]!;
   });
 }
+type FieldCodec = 'scalar' | {object: ItemCodec} | ItemCodec;
+function applyObjectDelta(base: unknown, edit: unknown, codecs: Record<string, FieldCodec>, omitted: readonly string[] = []): unknown {
+  const next = {...base as Record<string, unknown>};
+  for (const [key, change] of Object.entries(edit as Record<string, unknown>)) {
+    if (!Object.hasOwn(codecs, key)) throw new Error('Unknown native item edit.');
+    if (change == null) continue;
+    const codec = codecs[key];
+    if (codec === 'scalar') {
+      const value = (change as {value: unknown}).value;
+      if (value == null && omitted.includes(key)) delete next[key];
+      else next[key] = value;
+    } else if (typeof codec === 'object') {
+      next[key] = codec.object(next[key], change);
+    } else {
+      next[key] = applyListDelta((next[key] ?? []) as unknown[], change as ListEdit<unknown>, key === 'tool_calls' ? 32 : 786_432, codec);
+    }
+  }
+  return next;
+}
+const refFields = {content_revision: 'scalar', readable_end: 'scalar'} satisfies Record<keyof RefDelta, FieldCodec>;
+const applyRef: ItemCodec = (base, edit) => applyObjectDelta(base, edit, refFields);
+const bindingFields = {path: 'scalar', deferred: 'scalar', content_ref: {object: applyRef}} satisfies Record<keyof BindingDelta, FieldCodec>;
+const applyBinding: ItemCodec = (base, edit) => applyObjectDelta(base, edit, bindingFields);
+const frontierFields = {revision: 'scalar', total: 'scalar', loaded: 'scalar', next_offset: 'scalar'} satisfies Record<keyof FrontierDelta, FieldCodec>;
+const applyFrontier: ItemCodec = (base, edit) => applyObjectDelta(base, edit, frontierFields);
+const toolFields = {
+  occurrence: 'scalar', message_id: 'scalar', block_index: 'scalar', call_id: 'scalar', metadata_ref: 'scalar',
+  assembly_complete: 'scalar', result_source: 'scalar', result_metadata_ref: 'scalar', committed_result: 'scalar',
+  committed_result_deferred: 'scalar', tool_id: 'scalar', name: 'scalar', state: 'scalar',
+} satisfies Record<keyof ToolDelta, FieldCodec>;
+const applyTool: ItemCodec = (base, edit) => applyObjectDelta(base, edit, toolFields, ['result_source', 'result_metadata_ref', 'committed_result']);
+const descriptorFields = {
+  deliveries: 'scalar', identity: 'scalar', locator: 'scalar', role: 'scalar', kind: 'scalar', block_count: 'scalar',
+  tool_call_count: 'scalar', turn_process: 'scalar', completed_response: 'scalar', tool_calls: applyTool, content: applyBinding, collections: applyFrontier,
+} satisfies Record<keyof DescriptorDelta, FieldCodec>;
+const applyDescriptor: ItemCodec = (base, edit) => applyObjectDelta(base, edit, descriptorFields);
+const entryFields = {
+  turn_process: 'scalar', response_pending: 'scalar', completed_response: 'scalar', cursor: 'scalar', item: 'scalar', tool_calls: applyTool,
+} satisfies Record<keyof EntryDelta, FieldCodec>;
+const applyEntry: ItemCodec = (base, edit) => applyObjectDelta(base, edit, entryFields, ['turn_process', 'completed_response']);
+
+const readEvidenceFields = {
+  journal: 'scalar', transcript: 'scalar', mutation_revision: 'scalar', ledger_through: 'scalar',
+  surface_revision: 'scalar', transcript_total: 'scalar', pending_through: 'scalar', pending_total: 'scalar',
+} satisfies Record<keyof ReadEvidenceDelta, FieldCodec>;
+const applyReadEvidence: ItemCodec = (base, edit) => applyObjectDelta(base, edit, readEvidenceFields);
+const observationCutFields = {
+  read: {object: applyReadEvidence}, ledger_through: 'scalar', transcript_total: 'scalar', surface_revision: 'scalar', inherited_through: 'scalar',
+} satisfies Record<keyof ObservationCutDelta, FieldCodec>;
+const applyObservationCut: ItemCodec = (base, edit) => applyObjectDelta(base, edit, observationCutFields);
+
 function applyTranscriptDelta(prior: Snapshot['transcript'], edit: TranscriptDelta): Snapshot['transcript'] {
-  const transcript = {...edit.page, entries: applyListDelta(prior.entries ?? [], edit.entries, 32)};
-  const content = applyListDelta(prior.content ?? [], edit.content);
-  const collections = applyListDelta(prior.collections ?? [], edit.collections);
+  const transcript = {...edit.page, entries: applyListDelta(prior.entries ?? [], edit.entries, 32, applyEntry)};
+  const content = applyListDelta(prior.content ?? [], edit.content,786_432,applyBinding);
+  const collections = applyListDelta(prior.collections ?? [], edit.collections,786_432,applyFrontier);
   const deferred = applyListDelta(prior.deferred_entries ?? [], edit.deferred_entries, 32);
   if (content.length) transcript.content = content; else delete transcript.content;
   if (collections.length) transcript.collections = collections; else delete transcript.collections;
@@ -133,7 +198,7 @@ function applySnapshotDelta(base: Snapshot, edit: SnapshotDelta): Snapshot {
       else fields[key]=value;
     } else if(kind==='list') {
       const prior=(base as unknown as Record<string,unknown>)[key] as unknown[]|undefined;
-      fields[key]=applyListDelta(prior??[],change as {slots:number[];values:unknown[]},key==='trace_updates'?512:['messages','message_descriptors'].includes(key)?8:32);
+      fields[key]=applyListDelta(prior??[],change as ListEdit<unknown>,key==='trace_updates'?512:['messages','message_descriptors'].includes(key)?8:32,key==='message_descriptors'?applyDescriptor:undefined);
     } else next.transcript=applyTranscriptDelta(base.transcript,change as TranscriptDelta);
   }
   return next;
@@ -149,6 +214,10 @@ function applyReadCutDelta(base: ProjectionMetadata['read_cut'], edit: Extract<E
   const next = {...base, revision: edit.revision};
   if (edit.through != null) next.through = edit.through;
   if (edit.source_cut != null) next.source_cut = edit.source_cut.value;
+  if (edit.source_cut_patch != null) {
+    if (edit.source_cut != null || base.source_cut == null) throw new Error('Invalid native source cut delta base.');
+    next.source_cut = applyObservationCut(base.source_cut, edit.source_cut_patch) as NonNullable<typeof base.source_cut>;
+  }
   if (edit.live_publication != null) next.live_publication = edit.live_publication.value;
   if (edit.canonical_foreground != null) next.canonical_foreground = edit.canonical_foreground.value;
   if (edit.domain_revisions != null) next.domain_revisions = applyMapDelta(base.domain_revisions, edit.domain_revisions);
@@ -164,15 +233,15 @@ export function expandRuntimeEvent(state: Snapshot, event: Event): Event {
     || BigInt(event.metadata.read_cut.revision) !== BigInt(event.metadata.base_cursor) + 1n) throw new Error('Native projection delta base mismatch.');
   const metadata: ProjectionMetadata = {
     read_cut: applyReadCutDelta(base.read_cut, event.metadata.read_cut),
-    content: applyListDelta(base.content, event.metadata.content),
-    collections: applyListDelta(base.collections, event.metadata.collections),
+    content: event.metadata.content == null ? base.content : applyListDelta(base.content, event.metadata.content,786_432,applyBinding),
+    collections: event.metadata.collections == null ? base.collections : applyListDelta(base.collections, event.metadata.collections,786_432,applyFrontier),
   };
   const literal = literals.get(state);
   if (!literal) throw new Error('Missing native publication literal base.');
   const events = event.events.map((fact): Event => {
     if (fact.type === 'read_domains_patched') return {...fact,type:'read_domains_updated',transcript:applyTranscriptDelta(literal.transcript,fact.transcript)};
-    if (fact.type === 'checkpoint_patched') return {...fact,type:'checkpoint_advanced',checkpoint:{...fact.checkpoint,snapshot:applySnapshotDelta(literal.checkpoint,fact.checkpoint.snapshot)}};
-    if (fact.type === 'message_descriptor_patched') return {...fact, type: 'message_descriptor_committed', head: applyListDelta([...literal.descriptors, fact.descriptor], fact.head, 8)};
+    if (fact.type === 'checkpoint_patched') return {...fact,type:'checkpoint_advanced',checkpoint:{...fact.checkpoint,snapshot:applySnapshotDelta({...literal.checkpoint, transcript:literal.transcript, message_descriptors:literal.descriptors},fact.checkpoint.snapshot)}};
+    if (fact.type === 'message_descriptor_patched') return {...fact, type: 'message_descriptor_committed', head: applyListDelta([...literal.descriptors, fact.descriptor], fact.head, 8,applyDescriptor)};
     if (fact.type === 'projection_delta' || fact.type === 'projection_transition') throw new Error('Nested native projection delta.');
     return fact;
   });

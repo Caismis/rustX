@@ -51,7 +51,7 @@ export function deltaEvent(base: RuntimeClientCheckpoint, event: RuntimeClientEv
         deferred_entries: listDelta(literal.transcript.deferred_entries ?? [], deferred_entries),
       }};
     }
-    if(fact.type==='checkpoint_advanced') return {...fact,type:'checkpoint_patched',checkpoint:{...fact.checkpoint,snapshot:snapshotDelta(literal.checkpoint,fact.checkpoint.snapshot)}};
+    if(fact.type==='checkpoint_advanced') return {...fact,type:'checkpoint_patched',checkpoint:{...fact.checkpoint,snapshot:snapshotDelta({...literal.checkpoint,transcript:literal.transcript,message_descriptors:literal.descriptors},fact.checkpoint.snapshot)}};
     if (fact.type === 'message_descriptor_committed') return {...fact, type: 'message_descriptor_patched', head: listDelta([...literal.descriptors, fact.descriptor], fact.head)};
     return fact;
   });
