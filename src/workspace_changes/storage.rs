@@ -1,5 +1,5 @@
 //! One exact, owner-marked namespace shared by recorders using a temporary root.
-//! Each Attempt owns only its child directory, including Git's stdin files.
+//! Each Attempt owns its private object store and first-mutation file captures.
 use std::{
     fs,
     io::{self, Read, Write},
@@ -19,15 +19,19 @@ pub(super) struct SnapshotDirectory {
 }
 
 impl SnapshotDirectory {
+    pub fn namespace(temporary_root: &Path) -> io::Result<PathBuf> {
+        Ok(temporary_root.canonicalize()?.join(format!(
+            "rustx-workspace-changes-{}",
+            nix::unistd::geteuid()
+        )))
+    }
+
     pub fn create(temporary_root: &Path) -> io::Result<Self> {
         let _initialization = INITIALIZATION
             .lock()
             .map_err(|_| io::Error::other("snapshot storage initialization failed"))?;
         // Resolve aliases before comparing against Git's physical worktree path.
-        let root = temporary_root.canonicalize()?.join(format!(
-            "rustx-workspace-changes-{}",
-            nix::unistd::geteuid()
-        ));
+        let root = Self::namespace(temporary_root)?;
         let created = match fs::DirBuilder::new().mode(0o700).create(&root) {
             Ok(()) => true,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => false,
