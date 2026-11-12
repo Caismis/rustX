@@ -955,6 +955,16 @@ fn append_durable_history(
 /// never fail a correct run.
 const STREAM_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_mins(2);
 
+fn complete_transition(event: &RuntimeClientEvent) -> &RuntimeClientEvent {
+    match event {
+        RuntimeClientEvent::ProjectionDelta { metadata, .. } => metadata
+            .native_transition
+            .as_deref()
+            .expect("frozen native replay carrier"),
+        event => event,
+    }
+}
+
 /// Receives events until the predicate matches.
 async fn receive_until(
     subscription: &EventSubscription,
@@ -967,17 +977,23 @@ async fn receive_until(
             let EventDelivery::Event(event) = delivery else {
                 panic!("subscription must stay open and contiguous, got {delivery:?}");
             };
-            let RuntimeClientEvent::ProjectionTransition { metadata, .. } = event.event.as_ref()
-            else {
-                panic!("one complete native transition");
+            let revision = match event.event.as_ref() {
+                RuntimeClientEvent::ProjectionTransition { metadata, .. } => {
+                    metadata.read_cut.revision
+                }
+                RuntimeClientEvent::ProjectionDelta { metadata, .. } => metadata.read_cut.revision,
+                _ => panic!("one complete native transition"),
             };
-            assert_eq!(metadata.read_cut.revision, event.cursor.get());
-            let matched = event.event.facts().iter().any(|fact| {
-                predicate(&RuntimeClientProtocolEvent {
-                    cursor: event.cursor,
-                    event: Arc::new(fact.clone()),
-                })
-            });
+            assert_eq!(revision, event.cursor.get());
+            let matched = complete_transition(&event.event)
+                .facts()
+                .iter()
+                .any(|fact| {
+                    predicate(&RuntimeClientProtocolEvent {
+                        cursor: event.cursor,
+                        event: Arc::new(fact.clone()),
+                    })
+                });
             seen.push(event);
             if matched {
                 return seen;
@@ -997,12 +1013,12 @@ async fn receive_until_metadata(
             let EventDelivery::Event(event) = subscription.next().await else {
                 panic!("native subscription must remain contiguous");
             };
-            let RuntimeClientEvent::ProjectionTransition { metadata, .. } = event.event.as_ref() else {
+            let RuntimeClientEvent::ProjectionTransition { metadata, .. } = complete_transition(&event.event) else {
                 panic!("one complete native transition");
             };
             assert_eq!(metadata.read_cut.revision, event.cursor.get());
-            if predicate(metadata) { return event; }
-            if let Some(outcome) = event.event.facts().iter().find_map(|fact| match fact {
+            if predicate(metadata) { return RuntimeClientProtocolEvent {cursor:event.cursor,event:Arc::new(complete_transition(&event.event).clone())}; }
+            if let Some(outcome) = complete_transition(&event.event).facts().iter().find_map(|fact| match fact {
                 RuntimeClientEvent::AttemptSettled { outcome, .. } => Some(outcome),
                 _ => None,
             }) {
@@ -1962,7 +1978,9 @@ async fn t06_t14_many_live_blocks_keep_every_descriptor_after_inline_budget_exha
         })
     })
     .await;
-    let RuntimeClientEvent::ProjectionTransition { metadata, .. } = update.event.as_ref() else {
+    let RuntimeClientEvent::ProjectionTransition { metadata, .. } =
+        complete_transition(&update.event)
+    else {
         unreachable!()
     };
     let event_ref = &metadata
@@ -2342,7 +2360,7 @@ async fn await_profile_settlement(subscription: &EventSubscription) {
     assert_eq!(
         events
             .iter()
-            .flat_map(|event| event.event.facts())
+            .flat_map(|event| complete_transition(&event.event).facts())
             .filter(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
             .count(),
         1
@@ -2583,8 +2601,9 @@ async fn incremental_projection_independent_snapshot_capture() {
     // committed and published. The tiny stream must not depend on beating
     // the production coalescer deadline; preserve the original live/expiry
     // assertions and the exact response bytes consumed by the client oracle.
-    let mut events = receive_until(&subscription, |event| {
-        event.event.facts().iter().any(|fact| {
+    let mut events =
+        receive_until(&subscription, |event| {
+            complete_transition(&event.event).facts().iter().any(|fact| {
             matches!(
                 fact,
                 RuntimeClientEvent::BlockContentAdvanced { content_ref, .. }
@@ -2594,8 +2613,8 @@ async fn incremental_projection_independent_snapshot_capture() {
                     )
             )
         })
-    })
-    .await;
+        })
+        .await;
     continue_stream.send_replace(true);
     events.extend(
         receive_until(&subscription, |event| {
@@ -2611,10 +2630,13 @@ async fn incremental_projection_independent_snapshot_capture() {
     // independently owned presentation read. Capture the equivalence cut
     // only after the terminal response's decorated domain was published.
     let terminal_read = |event: &RuntimeClientProtocolEvent| {
-        event.event.facts().iter().any(|fact| {
-            matches!(fact, RuntimeClientEvent::ReadDomainsUpdated { transcript, .. }
+        complete_transition(&event.event)
+            .facts()
+            .iter()
+            .any(|fact| {
+                matches!(fact, RuntimeClientEvent::ReadDomainsUpdated { transcript, .. }
                 if transcript.entries.iter().any(|entry| entry.completed_response.is_some()))
-        })
+            })
     };
     if !events.iter().any(terminal_read) {
         events.extend(receive_until(&subscription, terminal_read).await);
@@ -2633,11 +2655,10 @@ async fn incremental_projection_independent_snapshot_capture() {
         assert_eq!(event.cursor.get(), cursor);
     }
     assert_eq!(cursor, n.get());
-    let (expired_cursor, expired_reference) =
-        events
-            .iter()
-            .find_map(|event| {
-                event.event.facts().iter().find_map(|fact| match fact {
+    let (expired_cursor, expired_reference) = events
+        .iter()
+        .find_map(|event| {
+            complete_transition(&event.event).facts().iter().find_map(|fact| match fact {
                 RuntimeClientEvent::BlockContentAdvanced { content_ref, .. }
                     if content_ref.readable_end > 0
                         && matches!(
@@ -2646,8 +2667,8 @@ async fn incremental_projection_independent_snapshot_capture() {
                         ) => Some((event.cursor, content_ref.clone())),
                 _ => None,
             })
-            })
-            .expect("actual released nonempty LiveRef in the original native stream");
+        })
+        .expect("actual released nonempty LiveRef in the original native stream");
     // Canonical acceptance has expired this untouched original Live source.
     // Neither Replay retention nor a later read can redirect it to C/Audit.
     assert!(matches!(
@@ -3068,7 +3089,7 @@ async fn submit_while_busy_queues_for_the_next_drain() {
     // Wait until the first request is in flight (the adapter has been
     // asked) so the second submit provably arrives while busy.
     receive_until(&subscription, |event| {
-        event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::BlockContentAdvanced { kind, .. } if kind == "text"))
+        complete_transition(&event.event).facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::BlockContentAdvanced { kind, .. } if kind == "text"))
     })
     .await;
     assert_eq!(adapter.requests().len(), 1);
@@ -3225,7 +3246,7 @@ async fn cancel_current_attempt_acceptance_is_not_settlement() {
     let settled: Vec<_> = events
         .iter()
         .filter(|event| {
-            event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled {
+            complete_transition(&event.event).facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled {
                     outcome: crate::runtime_client::event::RuntimeClientOutcome::Cancelled { .. },
                     ..
                 }))
@@ -3318,7 +3339,7 @@ async fn detach_is_not_cancellation() {
         .subscribe_events(cursor)
         .expect("resume from the retained cursor");
     receive_until(&subscription, |event| {
-        event.event.facts().iter().any(|fact| {
+        complete_transition(&event.event).facts().iter().any(|fact| {
             matches!(
                 fact,
                 RuntimeClientEvent::AttemptSettled {
@@ -3987,10 +4008,13 @@ async fn canonical_history_has_one_owner_at_a_time() {
     // stream) and is now parked inside tool execution, so the attempt
     // provably has not settled.
     receive_until(&subscription, |event| {
-        event.event.facts().iter().any(|fact| {
-            matches!(fact, RuntimeClientEvent::MessageCommitted { message, .. }
+        complete_transition(&event.event)
+            .facts()
+            .iter()
+            .any(|fact| {
+                matches!(fact, RuntimeClientEvent::MessageCommitted { message, .. }
                 if matches!(message, MessageBlock::Assistant(_)))
-        })
+            })
     })
     .await;
     await_background_started(&mut tool_started, "the parking tool started").await;
@@ -4040,7 +4064,7 @@ async fn canonical_history_has_one_owner_at_a_time() {
     .await;
     let committed_during_attempt: Vec<&MessageBlock> = settlement
         .iter()
-        .flat_map(|event| event.event.facts())
+        .flat_map(|event| complete_transition(&event.event).facts())
         .filter_map(|fact| match fact {
             RuntimeClientEvent::MessageCommitted { message, .. } => Some(message),
             _ => None,
@@ -4903,10 +4927,13 @@ async fn background_durable_commit_cannot_publish_a_half_semantic_snapshot() {
     };
     await_background_started(&mut started, "published background").await;
     receive_until(&subscription, |event| {
-        event.event.facts().iter().any(|fact| {
-            matches!(fact, RuntimeClientEvent::JobUpdated { job, .. }
+        complete_transition(&event.event)
+            .facts()
+            .iter()
+            .any(|fact| {
+                matches!(fact, RuntimeClientEvent::JobUpdated { job, .. }
                     if job.job_id == execution_id)
-        })
+            })
     })
     .await;
     fixture.host.projection_settled().await;
@@ -5319,7 +5346,7 @@ async fn snapshot_candidate_survives_moving_head_and_replays_exact_suffix() {
         };
         assert_eq!(event.cursor.get(), cursor.get() + u64::from(turn));
         assert!(
-            event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::AttemptTurnUpdated { turn: actual, .. } if *actual == turn))
+            complete_transition(&event.event).facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::AttemptTurnUpdated { turn: actual, .. } if *actual == turn))
         );
     }
     assert_eq!(
@@ -5589,7 +5616,7 @@ async fn captured_snapshot_excludes_later_durable_messages_and_replay_converges(
         };
         assert_eq!(event.cursor.get(), through.get() + 1);
         through = event.cursor;
-        for fact in event.event.facts() {
+        for fact in complete_transition(&event.event).facts() {
             fold_captured_snapshot_fact(&mut replayed, fact);
         }
     }
@@ -6485,7 +6512,7 @@ async fn job_list_preserves_domain_bound_order_and_omission_metadata() {
             .take(MAX_JOB_LIST_LIMIT)
             .collect::<Vec<_>>()
     );
-    receive_until(&subscription, |event| event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::JobUpdated { job, .. } if Some(&job.job_id) == ids.last() && job.state == crate::tools::background::BackgroundLifecycle::Succeeded))).await;
+    receive_until(&subscription, |event| complete_transition(&event.event).facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::JobUpdated { job, .. } if Some(&job.job_id) == ids.last() && job.state == crate::tools::background::BackgroundLifecycle::Succeeded))).await;
     let RuntimeClientResult::DomainPage { page } = attachment.job_list().unwrap() else {
         panic!("bounded jobs page");
     };
@@ -6631,7 +6658,7 @@ async fn agent_status_projection_shares_one_composition() {
     .await;
     let facts: Vec<_> = events
         .iter()
-        .flat_map(|event| event.event.facts())
+        .flat_map(|event| complete_transition(&event.event).facts())
         .collect();
     let status_index = facts
         .iter()
@@ -7923,7 +7950,7 @@ async fn attachments_remain_dynamic_after_activation() {
     // Wait for a real in-flight streaming fact through the client
     // projection, then detach mid-attempt.
     receive_until(&subscription, |event| {
-        event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::BlockContentAdvanced { kind, .. } if kind == "text"))
+        complete_transition(&event.event).facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::BlockContentAdvanced { kind, .. } if kind == "text"))
     })
     .await;
     first.detach();

@@ -1,7 +1,7 @@
 import { SettingsNotice } from '../SettingsFeedback';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted resource controls; see PROVENANCE.md. */
 import {useTranslation} from '../../../locale/react';
-import type {SourceScope,SourceSettings} from '../../../../../protocol/app-server/v78';
+import type {SourceScope,SourceSettings} from '../../../../../protocol/app-server/v79';
 import {Button} from '../../../presentation/primitives/Button';
 import {AvailabilityDetail} from '../../resources/shared/AvailabilityDetail';
 import type {PageFocus} from '../machines/navigation';

@@ -113,6 +113,10 @@ fn assert_event_cut(event: &rustx::runtime_client::RuntimeClientProtocolEvent) {
         rustx::runtime_client::RuntimeClientEvent::ProjectionTransition { metadata, .. } => {
             assert_eq!(metadata.read_cut.revision, event.cursor.get());
         }
+        rustx::runtime_client::RuntimeClientEvent::ProjectionDelta { metadata, .. } => {
+            assert_eq!(metadata.read_cut.revision, event.cursor.get());
+            assert_eq!(metadata.base_cursor.get() + 1, event.cursor.get());
+        }
         rustx::runtime_client::RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
             assert_eq!(checkpoint.cursor, event.cursor);
             assert_eq!(checkpoint.read_cut.revision, event.cursor.get());

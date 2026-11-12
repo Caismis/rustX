@@ -631,6 +631,29 @@ envelope!(crate::app_server::protocol::ServerRequest, server_request);
 // ordinary protocol, without adding its operation to the public Method space.
 envelope!(crate::app_server::product_host::FileRead, file_read);
 
+pub(crate) fn numeric_codec_assets() -> Vec<(&'static str, Vec<u8>)> {
+    fn bytes<T: schemars::JsonSchema>() -> Vec<u8> {
+        let schema = serde_json::to_value(schemars::schema_for!(T)).unwrap();
+        crate::observation::structural_json::plan::Plan::new(&schema, &schema).to_bytes()
+    }
+    vec![
+        ("request", bytes::<crate::app_server::protocol::Request>()),
+        ("response", bytes::<crate::app_server::protocol::Response>()),
+        (
+            "notification",
+            bytes::<crate::app_server::protocol::Notification>(),
+        ),
+        (
+            "server_request",
+            bytes::<crate::app_server::protocol::ServerRequest>(),
+        ),
+        (
+            "file_read",
+            bytes::<crate::app_server::product_host::FileRead>(),
+        ),
+    ]
+}
+
 /// The complete public JSON Schema, with the same numeric rules as the codec.
 pub(super) fn protocol_schema() -> Value {
     // DomainPage.value carries bounded display DTOs without an unbounded RPC
@@ -813,7 +836,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v78.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v79.ts"),
         )
         .unwrap();
         for domain in [

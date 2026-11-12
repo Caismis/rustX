@@ -124,7 +124,8 @@ async fn assert_compacted_replay(
         };
         assert_eq!(record.cursor.get(), cursor.get() + 1);
         cursor = record.cursor;
-        let RuntimeClientEvent::ProjectionTransition { metadata, .. } = record.event.as_ref()
+        let RuntimeClientEvent::ProjectionTransition { metadata, .. } =
+            complete_transition(&record.event)
         else {
             panic!("one complete publication record");
         };

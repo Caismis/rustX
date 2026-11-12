@@ -4,7 +4,7 @@ import { useState } from 'react';
 import type {
   ApprovalMode, NativePolicyOverrideDocument, NativeTool,
   RuntimeLayer, SourceScope, SourceSettings, SourceToolSelection,
-} from '../../../../../protocol/app-server/v78';
+} from '../../../../../protocol/app-server/v79';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitForm } from '../forms/bridge';
 import { CheckboxList, Selection, TextField, nativeTools, policyTools } from '../forms/controls';

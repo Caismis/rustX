@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import type { NamedAgentProfileDocument, SourceScope, SourceSettings, SourceToolSelection, WorkflowToolChoice, WorkflowToolSource } from '../../../../../protocol/app-server/v78';
+import type { NamedAgentProfileDocument, SourceScope, SourceSettings, SourceToolSelection, WorkflowToolChoice, WorkflowToolSource } from '../../../../../protocol/app-server/v79';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Switch } from '../../../presentation/primitives/Switch';

@@ -14,6 +14,10 @@ const ARC_HEADER: usize = 2 * size_of::<usize>();
 fn event_variant(event: &RuntimeClientEvent) -> &'static str {
     match event {
         RuntimeClientEvent::ProjectionTransition { .. } => "variant_ProjectionTransition",
+        RuntimeClientEvent::ProjectionDelta { .. } => "variant_ProjectionDelta",
+        RuntimeClientEvent::CheckpointPatched { .. } => "variant_CheckpointPatched",
+        RuntimeClientEvent::ReadDomainsPatched { .. } => "variant_ReadDomainsPatched",
+        RuntimeClientEvent::MessageDescriptorPatched { .. } => "variant_MessageDescriptorPatched",
         RuntimeClientEvent::CheckpointAdvanced { .. } => "variant_CheckpointAdvanced",
         RuntimeClientEvent::BlockContentAdvanced { .. } => "variant_BlockContentAdvanced",
         RuntimeClientEvent::ReadDomainsUpdated { .. } => "variant_ReadDomainsUpdated",
@@ -284,6 +288,7 @@ impl Census {
         }
         self.domain("individual_status_values", value);
     }
+    #[allow(clippy::too_many_lines)] // Closed event ownership census.
     fn event(&mut self, event: &RuntimeClientEvent) {
         self.count("event_values", 1);
         self.count(event_variant(event), 1);
@@ -293,6 +298,17 @@ impl Census {
                 self.cut(&metadata.read_cut);
                 self.content(&metadata.content);
                 self.collections(&metadata.collections);
+                for event in events {
+                    self.event(event);
+                }
+            }
+            RuntimeClientEvent::ProjectionDelta { events, metadata } => {
+                self.vector("nested_event_vectors", events);
+                if let Some(cut) = &metadata.native_cut {
+                    self.cut(cut);
+                }
+                self.domain("delta_content", &metadata.content);
+                self.domain("delta_collections", &metadata.collections);
                 for event in events {
                     self.event(event);
                 }

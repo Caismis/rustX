@@ -5279,6 +5279,32 @@ export type RuntimeClientEvent =
       type: 'projection_transition';
     }
   | {
+      events: RuntimeClientEvent[];
+      metadata: MetadataDelta;
+      type: 'projection_delta';
+    }
+  | {
+      projection_head?: RuntimeClientProjectionHeadView | null;
+      transcript: TranscriptDelta;
+      trace?: TracePage | null;
+      occupancy?: RuntimeClientContextOccupancy | null;
+      todos?: TodoSnapshot | null;
+      type: 'read_domains_patched';
+    }
+  | {
+      attempt_id?: AttemptId | null;
+      descriptor: RuntimeClientMessageDescriptor;
+      head: ListDelta5;
+      transcript_cursor?: RuntimeClientTranscriptCursor | null;
+      evicted_message_id?: MessageId | null;
+      type: 'message_descriptor_patched';
+    }
+  | {
+      transition: string;
+      checkpoint: CheckpointDelta;
+      type: 'checkpoint_patched';
+    }
+  | {
       transition: string;
       checkpoint: RuntimeClientCheckpoint;
       type: 'checkpoint_advanced';
@@ -5672,7 +5698,7 @@ export type RuntimeClientEvent =
       type: 'configuration_applied';
     }
   | {
-      context: RuntimeClientContextView1;
+      context: RuntimeClientContextView2;
       /**
        * The owning attempt for automatic compaction; absent for manual
        * idle maintenance.
@@ -5681,7 +5707,7 @@ export type RuntimeClientEvent =
       type: 'context_compaction_started';
     }
   | {
-      context: RuntimeClientContextView2;
+      context: RuntimeClientContextView3;
       /**
        * The owning attempt for automatic compaction; absent for manual
        * idle maintenance.
@@ -5699,7 +5725,7 @@ export type RuntimeClientEvent =
        * idle maintenance.
        */
       attempt_id?: AttemptId | null;
-      context: RuntimeClientContextView3;
+      context: RuntimeClientContextView4;
       type: 'context_compacted';
     }
   | {
@@ -5999,7 +6025,7 @@ export type RuntimeClientEvent =
       type: 'agent_updated';
     }
   | {
-      capabilities: CapabilityView1;
+      capabilities: CapabilityView2;
       type: 'capability_updated';
     }
   | {
@@ -6007,8 +6033,8 @@ export type RuntimeClientEvent =
       model?: SessionModelView | null;
       model_status: RuntimeClientModelStatus;
       approval_mode: ApprovalMode;
-      capabilities: CapabilityView2;
-      resources: RuntimeClientResourcesView1;
+      capabilities: CapabilityView3;
+      resources: RuntimeClientResourcesView2;
       type: 'resource_generation_updated';
     }
   | {
@@ -6573,7 +6599,7 @@ export type Notification1 =
     }
   | {
       method: 'fs/changed';
-      params: Changed;
+      params: Changed21;
     }
   | {
       method: 'thread/status/changed';
@@ -16198,6 +16224,32 @@ export interface RuntimeClientProtocolEvent {
         type: 'projection_transition';
       }
     | {
+        events: RuntimeClientEvent[];
+        metadata: MetadataDelta;
+        type: 'projection_delta';
+      }
+    | {
+        projection_head?: RuntimeClientProjectionHeadView | null;
+        transcript: TranscriptDelta;
+        trace?: TracePage | null;
+        occupancy?: RuntimeClientContextOccupancy | null;
+        todos?: TodoSnapshot | null;
+        type: 'read_domains_patched';
+      }
+    | {
+        attempt_id?: AttemptId | null;
+        descriptor: RuntimeClientMessageDescriptor;
+        head: ListDelta5;
+        transcript_cursor?: RuntimeClientTranscriptCursor | null;
+        evicted_message_id?: MessageId | null;
+        type: 'message_descriptor_patched';
+      }
+    | {
+        transition: string;
+        checkpoint: CheckpointDelta;
+        type: 'checkpoint_patched';
+      }
+    | {
         transition: string;
         checkpoint: RuntimeClientCheckpoint;
         type: 'checkpoint_advanced';
@@ -16591,7 +16643,7 @@ export interface RuntimeClientProtocolEvent {
         type: 'configuration_applied';
       }
     | {
-        context: RuntimeClientContextView1;
+        context: RuntimeClientContextView2;
         /**
          * The owning attempt for automatic compaction; absent for manual
          * idle maintenance.
@@ -16600,7 +16652,7 @@ export interface RuntimeClientProtocolEvent {
         type: 'context_compaction_started';
       }
     | {
-        context: RuntimeClientContextView2;
+        context: RuntimeClientContextView3;
         /**
          * The owning attempt for automatic compaction; absent for manual
          * idle maintenance.
@@ -16618,7 +16670,7 @@ export interface RuntimeClientProtocolEvent {
          * idle maintenance.
          */
         attempt_id?: AttemptId | null;
-        context: RuntimeClientContextView3;
+        context: RuntimeClientContextView4;
         type: 'context_compacted';
       }
     | {
@@ -16918,7 +16970,7 @@ export interface RuntimeClientProtocolEvent {
         type: 'agent_updated';
       }
     | {
-        capabilities: CapabilityView1;
+        capabilities: CapabilityView2;
         type: 'capability_updated';
       }
     | {
@@ -16926,8 +16978,8 @@ export interface RuntimeClientProtocolEvent {
         model?: SessionModelView | null;
         model_status: RuntimeClientModelStatus;
         approval_mode: ApprovalMode;
-        capabilities: CapabilityView2;
-        resources: RuntimeClientResourcesView1;
+        capabilities: CapabilityView3;
+        resources: RuntimeClientResourcesView2;
         type: 'resource_generation_updated';
       }
     | {
@@ -16955,12 +17007,530 @@ export interface RuntimeClientProtocolEvent {
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "MetadataDelta".
+ */
+export interface MetadataDelta {
+  base_cursor: RuntimeClientCursor;
+  read_cut: ReadCutDelta;
+  content: ListDelta;
+  collections: ListDelta2;
+}
+/**
+ * Scope remains explicit on each record. Every other unchanged cut component
+ * is inherited only from the cursor-checked baseline in that same scope.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ReadCutDelta".
+ */
+export interface ReadCutDelta {
+  conversation_id: ConversationId;
+  activation_id?: SubagentId | null;
+  revision: string;
+  through?: string | null;
+  source_cut?: Changed | null;
+  live_publication?: Changed2 | null;
+  canonical_foreground?: Changed3 | null;
+  domain_revisions?: MapDelta | null;
+  collection_cuts?: MapDelta2 | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed".
+ */
+export interface Changed {
+  value?: ObservationReadCut | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed2".
+ */
+export interface Changed2 {
+  value?: LivePublicationReadCut | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed3".
+ */
+export interface Changed3 {
+  value?: CanonicalForegroundReadCut | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "MapDelta".
+ */
+export interface MapDelta {
+  removed: string[];
+  values: {
+    [k: string]: string;
+  };
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "MapDelta2".
+ */
+export interface MapDelta2 {
+  removed: string[];
+  values: {
+    [k: string]: ObservationCollectionCut;
+  };
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta".
+ */
+export interface ListDelta {
+  slots: number[];
+  values: ContentBinding[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta2".
+ */
+export interface ListDelta2 {
+  slots: number[];
+  values: CollectionFrontier[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TranscriptDelta".
+ */
+export interface TranscriptDelta {
+  page: RuntimeClientTranscriptPage2;
+  content: ListDelta;
+  collections: ListDelta2;
+  deferred_entries: ListDelta3;
+  entries: ListDelta4;
+}
+/**
+ * One bounded newest-or-older page of derived transcript history.
+ */
+export interface RuntimeClientTranscriptPage2 {
+  /**
+   * The exact native source cut from which bodies and evidence were read.
+   */
+  source_cut?: ObservationReadCut | null;
+  /**
+   * Deferred bytes remain explicitly recoverable on older historical pages.
+   */
+  content?: ContentBinding[];
+  collections?: CollectionFrontier[];
+  /**
+   * Native items whose structural display requires bounded further reading.
+   */
+  deferred_entries?: CheckpointPageItem[];
+  /**
+   * Last native transcript position inherited by this lineage; zero for an empty prefix.
+   */
+  inherited_through?: RuntimeClientTranscriptCursor | null;
+  /**
+   * Native whole-conversation totals, independent of this page.
+   */
+  statistics?: ConversationStatistics | null;
+  /**
+   * Items in chronological order within this page.
+   */
+  entries?: RuntimeClientTranscriptEntry[];
+  /**
+   * The exclusive cursor for the next older page.
+   */
+  next_cursor?: RuntimeClientTranscriptCursor | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta3".
+ */
+export interface ListDelta3 {
+  slots: number[];
+  values: CheckpointPageItem[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta4".
+ */
+export interface ListDelta4 {
+  slots: number[];
+  values: RuntimeClientTranscriptEntry[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta5".
+ */
+export interface ListDelta5 {
+  slots: number[];
+  values: RuntimeClientMessageDescriptor[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CheckpointDelta".
+ */
+export interface CheckpointDelta {
+  snapshot: SnapshotDelta;
+  cursor: RuntimeClientCursor;
+  read_cut: CheckpointReadCut;
+  content: ContentBinding[];
+  collections: CollectionFrontier[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SnapshotDelta".
+ */
+export interface SnapshotDelta {
+  settings_evidence?: Changed4 | null;
+  effective_plugins?: Changed5 | null;
+  workflows?: Changed6 | null;
+  conversation_id?: Changed7 | null;
+  shutting_down?: Changed8 | null;
+  effective_approval_mode?: Changed9 | null;
+  durability_failure?: Changed10 | null;
+  trace?: Changed11 | null;
+  attempt?: Changed12 | null;
+  inbound?: Changed13 | null;
+  context?: Changed14 | null;
+  capabilities?: Changed15 | null;
+  resources?: Changed16 | null;
+  model?: Changed17 | null;
+  model_status?: Changed18 | null;
+  todos?: Changed19 | null;
+  goal?: Changed20 | null;
+  messages?: ListDelta6 | null;
+  message_descriptors?: ListDelta5 | null;
+  publication_settlements?: ListDelta7 | null;
+  trace_updates?: ListDelta8 | null;
+  pending_interactions?: ListDelta9 | null;
+  jobs?: ListDelta10 | null;
+  agents?: ListDelta11 | null;
+  statuses?: ListDelta12 | null;
+  transcript?: TranscriptDelta | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed4".
+ */
+export interface Changed4 {
+  value: SettingsEvidence;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed5".
+ */
+export interface Changed5 {
+  value?: EffectivePlugins | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed6".
+ */
+export interface Changed6 {
+  value: WorkflowSnapshot1;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowSnapshot".
  */
 export interface WorkflowSnapshot1 {
   revision: string;
   runs: WorkflowRunView[];
   omitted_runs: number;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed7".
+ */
+export interface Changed7 {
+  value: ConversationId;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed8".
+ */
+export interface Changed8 {
+  value: boolean;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed9".
+ */
+export interface Changed9 {
+  value: ApprovalMode;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed10".
+ */
+export interface Changed10 {
+  value?: RuntimeDurabilityFailure | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed11".
+ */
+export interface Changed11 {
+  value: TracePage;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed12".
+ */
+export interface Changed12 {
+  value?: RuntimeClientAttempt | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed13".
+ */
+export interface Changed13 {
+  value: InboundDiagnostics1;
+}
+/**
+ * The inbound mailbox diagnostics of the Runtime Client projection.
+ *
+ * A read-only view of authoritative mailbox state: it validates the
+ * Issue #22 ordering contract and supports reconnect, and it can never
+ * drain or mutate the mailbox.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "InboundDiagnostics".
+ */
+export interface InboundDiagnostics1 {
+  /**
+   * The currently pending inbound items in runtime-assigned inbound
+   * sequence order.
+   */
+  pending?: InboundItemView[];
+  /**
+   * The latest observed finite drain boundary, when any drain occurred.
+   */
+  last_drain?: InboundDrainView | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed14".
+ */
+export interface Changed14 {
+  value: RuntimeClientContextView1;
+}
+/**
+ * The context diagnostics carried by the Runtime Client snapshot.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "RuntimeClientContextView".
+ */
+export interface RuntimeClientContextView1 {
+  /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
+  /**
+   * Latest manual operation admitted in this runtime incarnation. Never inferred
+   * from a newer canonical checkpoint. Absence is insufficient evidence.
+   */
+  manual_compaction?: RuntimeClientManualCompaction | null;
+  /**
+   * Latest pre-commit diagnostic; cleared when the next compaction starts.
+   */
+  compaction_error?: string | null;
+  /**
+   * Latest native measured request or committed compacted-context estimate.
+   */
+  occupancy?: RuntimeClientContextOccupancy | null;
+  /**
+   * Whether the runtime currently owns a context-compaction operation.
+   * This is live operation state, not inferred from token usage.
+   */
+  compaction_in_progress: boolean;
+  /**
+   * Runtime Client projection statistic: the number of committed
+   * compaction completions folded into this read model. The compaction
+   * generation remains the conversation-owned identity.
+   */
+  compaction_count: number;
+  /**
+   * The latest committed compaction metadata, when compaction occurred.
+   */
+  latest_compaction?: RuntimeClientCompactionView | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed15".
+ */
+export interface Changed15 {
+  value: CapabilityView1;
+}
+/**
+ * The deterministic capability projection.
+ *
+ * Projected from the active [`CapabilitySnapshot`]
+ * ([`crate::capabilities::CapabilitySnapshot`]) plus the
+ * coordinator-owned availability state (Issue #81): the revision, the
+ * active Tool catalog, the complete available Tool catalog, the deterministic
+ * model-visible Skill catalog, and the typed per-source availability. No
+ * executors, environment paths, package-manager state, or private dependency
+ * internals appear.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CapabilityView".
+ */
+export interface CapabilityView1 {
+  /**
+   * Configured Tool intent before effective model gating.
+   */
+  configured_tools: RuntimeClientTool[];
+  /**
+   * The active monotonic capability revision.
+   */
+  revision: string;
+  /**
+   * The deterministic active Tool catalog in registry order. Model
+   * requests and execution use exactly this set.
+   */
+  tools?: RuntimeClientTool[];
+  /**
+   * The complete available Tool catalog, including inactive Tools. The
+   * active set above is an explicit subset; availability never implies
+   * model activation.
+   */
+  available_tools?: RuntimeClientTool[];
+  /**
+   * The deterministic model-visible Skill catalog ordered by Skill name.
+   * Skills hidden by `disable-model-invocation` remain runtime-owned but
+   * are omitted here. Every entry includes the canonical absolute host
+   * path of its `SKILL.md`.
+   */
+  skills?: RuntimeClientSkill[];
+  /**
+   * The typed availability of every evaluated optional capability
+   * source, in deterministic source-identity order (Issue #81).
+   */
+  sources?: CapabilitySourceView[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed16".
+ */
+export interface Changed16 {
+  value: RuntimeClientResourcesView1;
+}
+/**
+ * The client-visible projection of one immutable runtime resource
+ * generation.
+ *
+ * It carries identity and provenance, never content: a client that wants
+ * the text of a project context file reads the file, exactly as it would
+ * read a `SKILL.md`. Publishing the bytes here would create a second copy
+ * of request input inside a conversation projection.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "RuntimeClientResourcesView".
+ */
+export interface RuntimeClientResourcesView1 {
+  /**
+   * Facts copied from the same immutable generation as this revision.
+   * Deferred inspection facts are loaded through finite native field pages.
+   */
+  inspection?: CapabilityInspection | null;
+  /**
+   * Identifies one immutable process-local runtime resource generation.
+   *
+   * This is deliberately separate from `ContextGeneration` (one context
+   * assembly provenance set) and `CapabilityRevision` (one executable
+   * capability set). A resource-only change may advance this revision while
+   * retaining an identical capability revision.
+   */
+  revision?: string;
+  /**
+   * The runtime-loaded project instruction files, root-most to
+   * workspace, in the exact order the runtime concatenated them.
+   */
+  context_files?: RuntimeClientContextFile[];
+  /**
+   * Whether an immutable agent profile/persona is frozen into this
+   * generation. The persona text itself is runtime-owned request input.
+   */
+  agent_profile?: boolean;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed17".
+ */
+export interface Changed17 {
+  value?: SessionModelView | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed18".
+ */
+export interface Changed18 {
+  value?: RuntimeClientModelStatus | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed19".
+ */
+export interface Changed19 {
+  value?: TodoSnapshot | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed20".
+ */
+export interface Changed20 {
+  value?: RuntimeClientGoalView | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta6".
+ */
+export interface ListDelta6 {
+  slots: number[];
+  values: MessageBlock[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta7".
+ */
+export interface ListDelta7 {
+  slots: number[];
+  values: RuntimeClientPublicationSettlementRecord[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta8".
+ */
+export interface ListDelta8 {
+  slots: number[];
+  values: TraceLifecycle[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta9".
+ */
+export interface ListDelta9 {
+  slots: number[];
+  values: RuntimeClientInteractionHeader[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta10".
+ */
+export interface ListDelta10 {
+  slots: number[];
+  values: RuntimeClientJob[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta11".
+ */
+export interface ListDelta11 {
+  slots: number[];
+  values: RuntimeClientAgent[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta12".
+ */
+export interface ListDelta12 {
+  slots: number[];
+  values: AgentStatusView[];
 }
 /**
  * Normalized token accounting for one generation.
@@ -17302,44 +17872,7 @@ export interface ContentRef2 {
   readable_end: number;
 }
 /**
- * Authoritative context state at this lifecycle boundary.
- */
-export interface RuntimeClientContextView1 {
-  /**
-   * Independent current historical projection, including inherited activations.
-   */
-  projection_head?: RuntimeClientProjectionHeadView | null;
-  /**
-   * Latest manual operation admitted in this runtime incarnation. Never inferred
-   * from a newer canonical checkpoint. Absence is insufficient evidence.
-   */
-  manual_compaction?: RuntimeClientManualCompaction | null;
-  /**
-   * Latest pre-commit diagnostic; cleared when the next compaction starts.
-   */
-  compaction_error?: string | null;
-  /**
-   * Latest native measured request or committed compacted-context estimate.
-   */
-  occupancy?: RuntimeClientContextOccupancy | null;
-  /**
-   * Whether the runtime currently owns a context-compaction operation.
-   * This is live operation state, not inferred from token usage.
-   */
-  compaction_in_progress: boolean;
-  /**
-   * Runtime Client projection statistic: the number of committed
-   * compaction completions folded into this read model. The compaction
-   * generation remains the conversation-owned identity.
-   */
-  compaction_count: number;
-  /**
-   * The latest committed compaction metadata, when compaction occurred.
-   */
-  latest_compaction?: RuntimeClientCompactionView | null;
-}
-/**
- * Authoritative context state at this lifecycle boundary.
+ * The context diagnostics carried by the Runtime Client snapshot.
  */
 export interface RuntimeClientContextView2 {
   /**
@@ -17376,9 +17909,46 @@ export interface RuntimeClientContextView2 {
   latest_compaction?: RuntimeClientCompactionView | null;
 }
 /**
- * The context diagnostics after this committed compaction.
+ * The context diagnostics carried by the Runtime Client snapshot.
  */
 export interface RuntimeClientContextView3 {
+  /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
+  /**
+   * Latest manual operation admitted in this runtime incarnation. Never inferred
+   * from a newer canonical checkpoint. Absence is insufficient evidence.
+   */
+  manual_compaction?: RuntimeClientManualCompaction | null;
+  /**
+   * Latest pre-commit diagnostic; cleared when the next compaction starts.
+   */
+  compaction_error?: string | null;
+  /**
+   * Latest native measured request or committed compacted-context estimate.
+   */
+  occupancy?: RuntimeClientContextOccupancy | null;
+  /**
+   * Whether the runtime currently owns a context-compaction operation.
+   * This is live operation state, not inferred from token usage.
+   */
+  compaction_in_progress: boolean;
+  /**
+   * Runtime Client projection statistic: the number of committed
+   * compaction completions folded into this read model. The compaction
+   * generation remains the conversation-owned identity.
+   */
+  compaction_count: number;
+  /**
+   * The latest committed compaction metadata, when compaction occurred.
+   */
+  latest_compaction?: RuntimeClientCompactionView | null;
+}
+/**
+ * The context diagnostics carried by the Runtime Client snapshot.
+ */
+export interface RuntimeClientContextView4 {
   /**
    * Independent current historical projection, including inherited activations.
    */
@@ -17983,44 +18553,15 @@ export interface RuntimeClientAgent1 {
   workspace: string;
 }
 /**
- * The deterministic active capability projection.
- */
-export interface CapabilityView1 {
-  /**
-   * Configured Tool intent before effective model gating.
-   */
-  configured_tools: RuntimeClientTool[];
-  /**
-   * The active monotonic capability revision.
-   */
-  revision: string;
-  /**
-   * The deterministic active Tool catalog in registry order. Model
-   * requests and execution use exactly this set.
-   */
-  tools?: RuntimeClientTool[];
-  /**
-   * The complete available Tool catalog, including inactive Tools. The
-   * active set above is an explicit subset; availability never implies
-   * model activation.
-   */
-  available_tools?: RuntimeClientTool[];
-  /**
-   * The deterministic model-visible Skill catalog ordered by Skill name.
-   * Skills hidden by `disable-model-invocation` remain runtime-owned but
-   * are omitted here. Every entry includes the canonical absolute host
-   * path of its `SKILL.md`.
-   */
-  skills?: RuntimeClientSkill[];
-  /**
-   * The typed availability of every evaluated optional capability
-   * source, in deterministic source-identity order (Issue #81).
-   */
-  sources?: CapabilitySourceView[];
-}
-/**
- * The active capability projection this generation was composed
- * against.
+ * The deterministic capability projection.
+ *
+ * Projected from the active [`CapabilitySnapshot`]
+ * ([`crate::capabilities::CapabilitySnapshot`]) plus the
+ * coordinator-owned availability state (Issue #81): the revision, the
+ * active Tool catalog, the complete available Tool catalog, the deterministic
+ * model-visible Skill catalog, and the typed per-source availability. No
+ * executors, environment paths, package-manager state, or private dependency
+ * internals appear.
  */
 export interface CapabilityView2 {
   /**
@@ -18056,9 +18597,59 @@ export interface CapabilityView2 {
   sources?: CapabilitySourceView[];
 }
 /**
- * The active runtime resource projection after the commit.
+ * The deterministic capability projection.
+ *
+ * Projected from the active [`CapabilitySnapshot`]
+ * ([`crate::capabilities::CapabilitySnapshot`]) plus the
+ * coordinator-owned availability state (Issue #81): the revision, the
+ * active Tool catalog, the complete available Tool catalog, the deterministic
+ * model-visible Skill catalog, and the typed per-source availability. No
+ * executors, environment paths, package-manager state, or private dependency
+ * internals appear.
  */
-export interface RuntimeClientResourcesView1 {
+export interface CapabilityView3 {
+  /**
+   * Configured Tool intent before effective model gating.
+   */
+  configured_tools: RuntimeClientTool[];
+  /**
+   * The active monotonic capability revision.
+   */
+  revision: string;
+  /**
+   * The deterministic active Tool catalog in registry order. Model
+   * requests and execution use exactly this set.
+   */
+  tools?: RuntimeClientTool[];
+  /**
+   * The complete available Tool catalog, including inactive Tools. The
+   * active set above is an explicit subset; availability never implies
+   * model activation.
+   */
+  available_tools?: RuntimeClientTool[];
+  /**
+   * The deterministic model-visible Skill catalog ordered by Skill name.
+   * Skills hidden by `disable-model-invocation` remain runtime-owned but
+   * are omitted here. Every entry includes the canonical absolute host
+   * path of its `SKILL.md`.
+   */
+  skills?: RuntimeClientSkill[];
+  /**
+   * The typed availability of every evaluated optional capability
+   * source, in deterministic source-identity order (Issue #81).
+   */
+  sources?: CapabilitySourceView[];
+}
+/**
+ * The client-visible projection of one immutable runtime resource
+ * generation.
+ *
+ * It carries identity and provenance, never content: a client that wants
+ * the text of a project context file reads the file, exactly as it would
+ * read a `SKILL.md`. Publishing the bytes here would create a second copy
+ * of request input inside a conversation projection.
+ */
+export interface RuntimeClientResourcesView2 {
   /**
    * Facts copied from the same immutable generation as this revision.
    * Deferred inspection facts are loaded through finite native field pages.
@@ -19647,9 +20238,9 @@ export interface OutputDelta {
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "Changed".
+ * via the `definition` "Changed21".
  */
-export interface Changed {
+export interface Changed21 {
   watchId: string;
   changedPaths: string[];
   resyncRequired: boolean;
@@ -20827,27 +21418,6 @@ export interface ModelCapabilities6 {
   jsonSchemaOutput?: boolean;
 }
 /**
- * The inbound mailbox diagnostics of the Runtime Client projection.
- *
- * A read-only view of authoritative mailbox state: it validates the
- * Issue #22 ordering contract and supports reconnect, and it can never
- * drain or mutate the mailbox.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "InboundDiagnostics".
- */
-export interface InboundDiagnostics1 {
-  /**
-   * The currently pending inbound items in runtime-assigned inbound
-   * sequence order.
-   */
-  pending?: InboundItemView[];
-  /**
-   * The latest observed finite drain boundary, when any drain occurred.
-   */
-  last_drain?: InboundDrainView | null;
-}
-/**
  * The latest live-activity projection of one subagent child.
  *
  * Owned and advanced by the child; the parent registry stores the newest
@@ -20954,131 +21524,6 @@ export interface SubagentActivityCounters1 {
    * Tool executions finished (completed plus failed).
    */
   tool_executions: number;
-}
-/**
- * The context diagnostics carried by the Runtime Client snapshot.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "RuntimeClientContextView".
- */
-export interface RuntimeClientContextView4 {
-  /**
-   * Independent current historical projection, including inherited activations.
-   */
-  projection_head?: RuntimeClientProjectionHeadView | null;
-  /**
-   * Latest manual operation admitted in this runtime incarnation. Never inferred
-   * from a newer canonical checkpoint. Absence is insufficient evidence.
-   */
-  manual_compaction?: RuntimeClientManualCompaction | null;
-  /**
-   * Latest pre-commit diagnostic; cleared when the next compaction starts.
-   */
-  compaction_error?: string | null;
-  /**
-   * Latest native measured request or committed compacted-context estimate.
-   */
-  occupancy?: RuntimeClientContextOccupancy | null;
-  /**
-   * Whether the runtime currently owns a context-compaction operation.
-   * This is live operation state, not inferred from token usage.
-   */
-  compaction_in_progress: boolean;
-  /**
-   * Runtime Client projection statistic: the number of committed
-   * compaction completions folded into this read model. The compaction
-   * generation remains the conversation-owned identity.
-   */
-  compaction_count: number;
-  /**
-   * The latest committed compaction metadata, when compaction occurred.
-   */
-  latest_compaction?: RuntimeClientCompactionView | null;
-}
-/**
- * The deterministic capability projection.
- *
- * Projected from the active [`CapabilitySnapshot`]
- * ([`crate::capabilities::CapabilitySnapshot`]) plus the
- * coordinator-owned availability state (Issue #81): the revision, the
- * active Tool catalog, the complete available Tool catalog, the deterministic
- * model-visible Skill catalog, and the typed per-source availability. No
- * executors, environment paths, package-manager state, or private dependency
- * internals appear.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "CapabilityView".
- */
-export interface CapabilityView3 {
-  /**
-   * Configured Tool intent before effective model gating.
-   */
-  configured_tools: RuntimeClientTool[];
-  /**
-   * The active monotonic capability revision.
-   */
-  revision: string;
-  /**
-   * The deterministic active Tool catalog in registry order. Model
-   * requests and execution use exactly this set.
-   */
-  tools?: RuntimeClientTool[];
-  /**
-   * The complete available Tool catalog, including inactive Tools. The
-   * active set above is an explicit subset; availability never implies
-   * model activation.
-   */
-  available_tools?: RuntimeClientTool[];
-  /**
-   * The deterministic model-visible Skill catalog ordered by Skill name.
-   * Skills hidden by `disable-model-invocation` remain runtime-owned but
-   * are omitted here. Every entry includes the canonical absolute host
-   * path of its `SKILL.md`.
-   */
-  skills?: RuntimeClientSkill[];
-  /**
-   * The typed availability of every evaluated optional capability
-   * source, in deterministic source-identity order (Issue #81).
-   */
-  sources?: CapabilitySourceView[];
-}
-/**
- * The client-visible projection of one immutable runtime resource
- * generation.
- *
- * It carries identity and provenance, never content: a client that wants
- * the text of a project context file reads the file, exactly as it would
- * read a `SKILL.md`. Publishing the bytes here would create a second copy
- * of request input inside a conversation projection.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "RuntimeClientResourcesView".
- */
-export interface RuntimeClientResourcesView2 {
-  /**
-   * Facts copied from the same immutable generation as this revision.
-   * Deferred inspection facts are loaded through finite native field pages.
-   */
-  inspection?: CapabilityInspection | null;
-  /**
-   * Identifies one immutable process-local runtime resource generation.
-   *
-   * This is deliberately separate from `ContextGeneration` (one context
-   * assembly provenance set) and `CapabilityRevision` (one executable
-   * capability set). A resource-only change may advance this revision while
-   * retaining an identical capability revision.
-   */
-  revision?: string;
-  /**
-   * The runtime-loaded project instruction files, root-most to
-   * workspace, in the exact order the runtime concatenated them.
-   */
-  context_files?: RuntimeClientContextFile[];
-  /**
-   * Whether an immutable agent profile/persona is frozen into this
-   * generation. The persona text itself is runtime-owned request input.
-   */
-  agent_profile?: boolean;
 }
 /**
  * One live-published requested interaction audit projection.

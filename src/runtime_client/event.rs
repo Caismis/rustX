@@ -64,6 +64,33 @@ pub enum RuntimeClientEvent {
         events: Vec<RuntimeClientEvent>,
         metadata: super::checkpoint::ProjectionMetadata,
     },
+    /// Cursor-relative atomic transition. All edits address the state before
+    /// any fact in this transition is folded.
+    ProjectionDelta {
+        events: Vec<RuntimeClientEvent>,
+        metadata: Box<super::delta::MetadataDelta>,
+    },
+    /// A read-domain page with unchanged rows and evidence retained by index.
+    ReadDomainsPatched {
+        projection_head: Option<crate::observation::head::RuntimeClientProjectionHeadView>,
+        transcript: Box<super::delta::TranscriptDelta>,
+        trace: Option<Box<crate::observation::trace::TracePage>>,
+        occupancy: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
+        todos: Option<crate::tools::todo::TodoSnapshot>,
+    },
+    MessageDescriptorPatched {
+        attempt_id: Option<AttemptId>,
+        descriptor: std::sync::Arc<crate::observation::transcript::RuntimeClientMessageDescriptor>,
+        head: super::delta::ListDelta<
+            std::sync::Arc<crate::observation::transcript::RuntimeClientMessageDescriptor>,
+        >,
+        transcript_cursor: Option<RuntimeClientTranscriptCursor>,
+        evicted_message_id: Option<MessageId>,
+    },
+    CheckpointPatched {
+        transition: String,
+        checkpoint: Box<super::delta::CheckpointDelta>,
+    },
     /// An already folded transition whose growing fields are represented by
     /// a complete finite cut before publication, never rewritten by transport.
     CheckpointAdvanced {
@@ -641,7 +668,9 @@ impl RuntimeClientEvent {
     #[must_use]
     pub fn facts(&self) -> &[Self] {
         match self {
-            Self::ProjectionTransition { events, .. } => events,
+            Self::ProjectionTransition { events, .. } | Self::ProjectionDelta { events, .. } => {
+                events
+            }
             event => std::slice::from_ref(event),
         }
     }

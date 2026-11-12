@@ -3,7 +3,7 @@ import { afterEach, expect, it } from 'vitest';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';
 import { chooseOption, openResourceModule, settingsReady, SettingsSurface } from './settings-harness';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
-import type { MethodResult } from '../../protocol/app-server/v78';
+import type { MethodResult } from '../../protocol/app-server/v79';
 
 afterEach(cleanup);
 const writes = (subject: ReturnType<typeof cfg3Client>) => subject.request.mock.calls.flatMap(([op]) => op.method === 'configuration/sourceWrite' ? [op.params] : []);

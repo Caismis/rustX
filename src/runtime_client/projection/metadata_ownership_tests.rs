@@ -90,6 +90,7 @@ fn baseline_encode(
 
 fn copy_draft(draft: &PublicationDraft) -> PublicationDraft {
     PublicationDraft {
+        previous: None,
         encoding_profile: None,
         seed: draft.seed.clone(),
         events: draft.events.clone(),
@@ -101,6 +102,7 @@ fn copy_draft(draft: &PublicationDraft) -> PublicationDraft {
 fn empty_draft() -> PublicationDraft {
     let (projection, _store) = initialized_source_projection();
     PublicationDraft {
+        previous: None,
         encoding_profile: None,
         seed: (*projection.checkpoint_seed()).clone(),
         events: vec![RuntimeClientEvent::TraceChanged],
@@ -159,6 +161,7 @@ fn traced_draft() -> PublicationDraft {
         assert!(projection.install_read_domains(&fence, Ok(read), true));
     });
     let mut draft = PublicationDraft {
+        previous: None,
         encoding_profile: None,
         seed: (*projection.checkpoint_seed()).clone(),
         events: Vec::new(),
@@ -1039,4 +1042,68 @@ fn subscriber_delivery_and_eviction_preserve_held_metadata_owners() {
     assert_eq!(released.strong_count(), 0);
     drop(draft);
     assert_eq!(payload(), 0, "the independent raw evidence cache has also been released");
+}
+
+#[test]
+fn cursor_relative_publication_round_trips_without_reencoding_unchanged_lists() {
+    let mut draft = empty_draft();
+    let base = draft.seed.checkpoint_candidate().unwrap();
+    let descriptor = Arc::new(
+        serde_json::from_value::<crate::observation::transcript::RuntimeClientMessageDescriptor>(
+            serde_json::json!({
+                "locator": {"type":"by_ledger_position", "position":0},
+                "role":"assistant", "kind":"message", "block_count":0,
+                "tool_call_count":0, "tool_calls":[], "content":[], "collections":[]
+            }),
+        )
+        .unwrap(),
+    );
+    draft.events = vec![
+        RuntimeClientEvent::ReadDomainsUpdated {
+            projection_head: base.snapshot.context.projection_head.clone(),
+            transcript: Box::new(base.snapshot.transcript.clone()),
+            trace: None,
+            occupancy: None,
+            todos: None,
+        },
+        RuntimeClientEvent::MessageDescriptorCommitted {
+            attempt_id: None,
+            descriptor: descriptor.clone(),
+            head: [descriptor].into_iter().collect(),
+            transcript_cursor: None,
+            evicted_message_id: None,
+        },
+    ];
+    let complete = baseline_encode(copy_draft(&draft), &mut BaselinePath::default()).unwrap();
+    let mut previous = draft.seed.clone();
+    previous.display = Some(Arc::new(super::super::publication::PublicationBasis {
+        cursor:base.cursor,metadata:ProjectionMetadata {read_cut:base.read_cut.clone(),content:base.content.clone(),collections:base.collections.clone()},
+        transcript:Some(Arc::new(base.snapshot.transcript.clone())),descriptors:Some(Arc::new(base.snapshot.message_descriptors.clone())),checkpoint:Some(Arc::new(base.snapshot.clone())),weight:4096,weights:[4096;3],
+    }));
+    draft.previous = Some(Arc::new(previous));
+    let incremental = draft.encode().unwrap();
+    assert_eq!(
+        crate::runtime_client::delta::expand_event(&base, &incremental.event),
+        Some(complete.event)
+    );
+    assert!(incremental.bytes < complete.bytes);
+    let RuntimeClientEvent::ProjectionDelta { events, metadata } = &incremental.event else {
+        panic!("expected typed delta")
+    };
+    assert!(metadata.content.values.is_empty());
+    assert!(metadata.collections.values.is_empty());
+    let RuntimeClientEvent::ReadDomainsPatched { transcript, .. } = &events[0] else {
+        panic!("expected page edit")
+    };
+    assert!(transcript.entries.values.is_empty());
+    let RuntimeClientEvent::MessageDescriptorPatched { head, .. } = &events[1] else {
+        panic!("expected head edit")
+    };
+    assert!(
+        head.values.is_empty(),
+        "new descriptor is supplied exactly once"
+    );
+    let mut wrong = base;
+    wrong.cursor = RuntimeClientCursor::new(wrong.cursor.get() + 1);
+    assert!(crate::runtime_client::delta::expand_event(&wrong, &incremental.event).is_none());
 }

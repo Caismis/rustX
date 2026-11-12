@@ -18,8 +18,7 @@ pub(crate) fn take_property_work() -> (usize, usize) {
     PROPERTY_WORK.with(|count| count.replace((0, 0)))
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, serde::Deserialize)]
-#[cfg_attr(test, derive(serde::Serialize))]
+#[derive(Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub(crate) enum Unsigned {
     Plain,
     Decimal,
@@ -47,8 +46,7 @@ pub(crate) fn unsigned(schema: &Value) -> Unsigned {
     }
 }
 
-#[derive(Clone, Copy, Default, serde::Deserialize)]
-#[cfg_attr(test, derive(serde::Serialize))]
+#[derive(Clone, Copy, Default, serde::Deserialize, serde::Serialize)]
 struct Span {
     start: u32,
     end: u32,
@@ -68,16 +66,14 @@ impl Span {
     }
 }
 
-#[derive(serde::Deserialize)]
-#[cfg_attr(test, derive(serde::Serialize))]
+#[derive(serde::Deserialize, serde::Serialize)]
 struct Property {
     name: Span,
     node: u32,
     // The original tag selector inspects the property's own const, not a ref.
     constant: Option<Box<Value>>,
 }
-#[derive(serde::Deserialize)]
-#[cfg_attr(test, derive(serde::Serialize))]
+#[derive(serde::Deserialize, serde::Serialize)]
 struct Node {
     unsigned: Unsigned,
     signed_safe: bool,
@@ -171,8 +167,7 @@ impl Node {
     }
 }
 
-#[derive(serde::Deserialize)]
-#[cfg_attr(test, derive(serde::Serialize))]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub(crate) struct Plan {
     nodes: Box<[Node]>,
     properties: Box<[Property]>,
@@ -194,7 +189,6 @@ impl Plan {
     pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
         rmp_serde::from_slice(bytes).expect("generated numeric codec descriptor")
     }
-    #[cfg(test)]
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         rmp_serde::to_vec(self).expect("numeric codec descriptor")
     }
