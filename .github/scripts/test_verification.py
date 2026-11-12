@@ -332,6 +332,29 @@ class Gate(unittest.TestCase):
         self.assertEqual(v.gate(planned, passing(planned), "abc", "abc", stale),
                          ["the tested merge commit m joins ['base', 'older'], not base base and head abc"])
 
+    def test_a_github_stacked_merge_commit_is_accepted_when_base_ancestors_first_parent(self):
+        planned = v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))
+        stacked = {"merge": "m", "parents": ["stack-merge", "abc"], "base": "base"}
+        # Intermediate stack merge that still carries the PR base.
+        self.assertEqual(
+            v.gate(planned, passing(planned), "abc", "abc", stacked,
+                   is_ancestor=lambda anc, desc: (anc, desc) == ("base", "stack-merge")),
+            [],
+        )
+        # Wrong first-parent lineage must still fail.
+        self.assertEqual(
+            v.gate(planned, passing(planned), "abc", "abc", stacked,
+                   is_ancestor=lambda anc, desc: False),
+            ["the tested merge commit m joins ['stack-merge', 'abc'], not base base and head abc"],
+        )
+        # Second parent must remain the PR head.
+        wrong_head = {"merge": "m", "parents": ["stack-merge", "other"], "base": "base"}
+        self.assertEqual(
+            v.gate(planned, passing(planned), "abc", "abc", wrong_head,
+                   is_ancestor=lambda anc, desc: True),
+            ["the tested merge commit m joins ['stack-merge', 'other'], not base base and head abc"],
+        )
+
     def test_a_superseded_fast_run_is_not_current_verification(self):
         planned = v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))
         self.assertIn("superseded", v.gate(planned, passing(planned), "old", "new")[0])

@@ -1195,11 +1195,13 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      # Depth 2 keeps the tested merge commit's parents, which the gate
-      # matches against the event's base and head.
+      # Full history so the gate can accept GitHub stacked-PR merge commits:
+      # second parent is still head, and the PR base is an ancestor of the
+      # first parent (an intermediate stack merge) rather than the parent
+      # itself. Ordinary PRs still match parents `[base, head]` exactly.
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Every selected job succeeded, at the right profile, for the current head
         env:
           GITHUB_TOKEN: ${{ github.token }}

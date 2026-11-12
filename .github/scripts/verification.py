@@ -226,7 +226,30 @@ def plan(event_name, labels, changes):
             "steps": selected_steps(profile, paths_of(changes)), "browser": browser_selection(profile, changes)}
 
 
-def gate(planned, results, tested_head, current_head, tested=None):
+def is_git_ancestor(ancestor, descendant):
+    """True when `ancestor` is reachable from `descendant` in this checkout."""
+    return subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        check=False,
+        capture_output=True,
+    ).returncode == 0
+
+
+def tested_merge_matches(tested, tested_head, is_ancestor=is_git_ancestor):
+    """True when the Actions merge commit verifies this PR's base and head.
+
+    Ordinary PRs have parents `[base, head]`. GitHub stacked PRs nest: the
+    merge commit's second parent is still head, and the first parent is an
+    intermediate stack merge that has the PR base as an ancestor.
+    """
+    parents = tested["parents"]
+    base = tested["base"]
+    if parents == [base, tested_head]:
+        return True
+    return len(parents) == 2 and parents[1] == tested_head and is_ancestor(base, parents[0])
+
+
+def gate(planned, results, tested_head, current_head, tested=None, is_ancestor=is_git_ancestor):
     """Merge verdict: the reasons this run cannot verify its head (empty = pass).
 
     `results` maps a job id to its GitHub result (success, failure,
@@ -234,7 +257,9 @@ def gate(planned, results, tested_head, current_head, tested=None):
     event named and `current_head` the pull request's head now (both None
     outside pull requests). `tested` describes the synthetic merge commit a
     pull request run checked out: {"merge", "parents", "base"}; its parents
-    must be exactly the event's base and head.
+    must join the event's base and head (directly, or via a GitHub stack
+    merge that keeps head as the second parent and base as an ancestor of
+    the first).
     """
     errors = [f"{job}: required by every run but {results.get(job) or 'missing'}"
               for job in ALWAYS if results.get(job) != "success"]
@@ -249,7 +274,7 @@ def gate(planned, results, tested_head, current_head, tested=None):
             "high-risk change verified only by FAST; FULL is required on the exact head "
             f"before merge (add the `{PROMOTION_LABEL}` label): " + "; ".join(planned["reasons"][:5])
         )
-    if tested is not None and tested["parents"] != [tested["base"], tested_head]:
+    if tested is not None and not tested_merge_matches(tested, tested_head, is_ancestor=is_ancestor):
         errors.append(f"the tested merge commit {tested['merge']} joins {tested['parents']}, "
                       f"not base {tested['base']} and head {tested_head}")
     if tested_head != current_head:
