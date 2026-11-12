@@ -19,7 +19,7 @@ import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog, 
 import { configurationSystem } from '../src/app/settings/machines/system';
 import { Server, endpoint, snapshot, boundedSettings } from './fixture';
 import { cfg3Source } from './cfg3-data';
-import type { SourceSettings } from '../../protocol/app-server/v77';
+import type { SourceSettings } from '../../protocol/app-server/v78';
 import { workspaceSettingsTarget } from '../src/app/settings/projection';
 let server: Server;
 beforeEach(() => {

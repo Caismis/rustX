@@ -265,20 +265,28 @@ impl ToolEnvironment {
 }
 
 /// Overrides that keep Git's process boundary aligned with argv-only readonly
-/// classification. Empty values clear local config; authorized overlay entries
-/// that already set these keys win and are left untouched.
+/// classification.
+///
+/// Empty `GIT_EXTERNAL_DIFF` / empty orderFile paths are not "unset": Git treats
+/// them as a command or path and breaks ordinary `git diff`. Prefer
+/// `diff.external=true` (no-op) and `diff.orderFile=/dev/null`, and force
+/// `core.fsmonitor=false` so repo-local helpers cannot fire under argv-readonly
+/// classification. Authorized overlay entries that already set these keys win.
 fn apply_git_readonly_execution_guards(entries: &mut Vec<(String, String)>) {
     const GUARDS: &[(&str, &str)] = &[
-        ("GIT_CONFIG_COUNT", "4"),
+        ("GIT_CONFIG_COUNT", "6"),
         ("GIT_CONFIG_KEY_0", "diff.external"),
-        ("GIT_CONFIG_VALUE_0", ""),
+        ("GIT_CONFIG_VALUE_0", "true"),
         ("GIT_CONFIG_KEY_1", "diff.orderFile"),
-        ("GIT_CONFIG_VALUE_1", ""),
+        ("GIT_CONFIG_VALUE_1", "/dev/null"),
         ("GIT_CONFIG_KEY_2", "core.editor"),
         ("GIT_CONFIG_VALUE_2", "true"),
         ("GIT_CONFIG_KEY_3", "core.pager"),
         ("GIT_CONFIG_VALUE_3", "cat"),
-        ("GIT_EXTERNAL_DIFF", ""),
+        ("GIT_CONFIG_KEY_4", "core.fsmonitor"),
+        ("GIT_CONFIG_VALUE_4", "false"),
+        ("GIT_CONFIG_KEY_5", "core.useBuiltinFSMonitor"),
+        ("GIT_CONFIG_VALUE_5", "false"),
         ("GIT_PAGER", "cat"),
         ("GIT_EDITOR", "true"),
     ];
@@ -304,16 +312,19 @@ mod tests {
                 ("HOME".to_owned(), "/ws".to_owned()),
                 ("LANG".to_owned(), String::from("C.UTF-8")),
                 ("LC_ALL".to_owned(), String::from("C.UTF-8")),
-                ("GIT_CONFIG_COUNT".to_owned(), "4".to_owned()),
+                ("GIT_CONFIG_COUNT".to_owned(), "6".to_owned()),
                 ("GIT_CONFIG_KEY_0".to_owned(), "diff.external".to_owned()),
-                ("GIT_CONFIG_VALUE_0".to_owned(), String::new()),
+                ("GIT_CONFIG_VALUE_0".to_owned(), "true".to_owned()),
                 ("GIT_CONFIG_KEY_1".to_owned(), "diff.orderFile".to_owned()),
-                ("GIT_CONFIG_VALUE_1".to_owned(), String::new()),
+                ("GIT_CONFIG_VALUE_1".to_owned(), "/dev/null".to_owned()),
                 ("GIT_CONFIG_KEY_2".to_owned(), "core.editor".to_owned()),
                 ("GIT_CONFIG_VALUE_2".to_owned(), "true".to_owned()),
                 ("GIT_CONFIG_KEY_3".to_owned(), "core.pager".to_owned()),
                 ("GIT_CONFIG_VALUE_3".to_owned(), "cat".to_owned()),
-                ("GIT_EXTERNAL_DIFF".to_owned(), String::new()),
+                ("GIT_CONFIG_KEY_4".to_owned(), "core.fsmonitor".to_owned()),
+                ("GIT_CONFIG_VALUE_4".to_owned(), "false".to_owned()),
+                ("GIT_CONFIG_KEY_5".to_owned(), "core.useBuiltinFSMonitor".to_owned()),
+                ("GIT_CONFIG_VALUE_5".to_owned(), "false".to_owned()),
                 ("GIT_PAGER".to_owned(), "cat".to_owned()),
                 ("GIT_EDITOR".to_owned(), "true".to_owned()),
             ]
@@ -399,16 +410,19 @@ mod tests {
                 ("VIRTUAL_ENV".to_owned(), "/env/python/abc".to_owned()),
                 ("NODE_PATH".to_owned(), "/env/node/def/node_modules".to_owned()),
                 ("MY_VAR".to_owned(), "1".to_owned()),
-                ("GIT_CONFIG_COUNT".to_owned(), "4".to_owned()),
+                ("GIT_CONFIG_COUNT".to_owned(), "6".to_owned()),
                 ("GIT_CONFIG_KEY_0".to_owned(), "diff.external".to_owned()),
-                ("GIT_CONFIG_VALUE_0".to_owned(), String::new()),
+                ("GIT_CONFIG_VALUE_0".to_owned(), "true".to_owned()),
                 ("GIT_CONFIG_KEY_1".to_owned(), "diff.orderFile".to_owned()),
-                ("GIT_CONFIG_VALUE_1".to_owned(), String::new()),
+                ("GIT_CONFIG_VALUE_1".to_owned(), "/dev/null".to_owned()),
                 ("GIT_CONFIG_KEY_2".to_owned(), "core.editor".to_owned()),
                 ("GIT_CONFIG_VALUE_2".to_owned(), "true".to_owned()),
                 ("GIT_CONFIG_KEY_3".to_owned(), "core.pager".to_owned()),
                 ("GIT_CONFIG_VALUE_3".to_owned(), "cat".to_owned()),
-                ("GIT_EXTERNAL_DIFF".to_owned(), String::new()),
+                ("GIT_CONFIG_KEY_4".to_owned(), "core.fsmonitor".to_owned()),
+                ("GIT_CONFIG_VALUE_4".to_owned(), "false".to_owned()),
+                ("GIT_CONFIG_KEY_5".to_owned(), "core.useBuiltinFSMonitor".to_owned()),
+                ("GIT_CONFIG_VALUE_5".to_owned(), "false".to_owned()),
                 ("GIT_PAGER".to_owned(), "cat".to_owned()),
                 ("GIT_EDITOR".to_owned(), "true".to_owned()),
             ]
@@ -421,16 +435,19 @@ mod tests {
                 ("LANG".to_owned(), "C.UTF-8".to_owned()),
                 ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
                 ("MY_VAR".to_owned(), "1".to_owned()),
-                ("GIT_CONFIG_COUNT".to_owned(), "4".to_owned()),
+                ("GIT_CONFIG_COUNT".to_owned(), "6".to_owned()),
                 ("GIT_CONFIG_KEY_0".to_owned(), "diff.external".to_owned()),
-                ("GIT_CONFIG_VALUE_0".to_owned(), String::new()),
+                ("GIT_CONFIG_VALUE_0".to_owned(), "true".to_owned()),
                 ("GIT_CONFIG_KEY_1".to_owned(), "diff.orderFile".to_owned()),
-                ("GIT_CONFIG_VALUE_1".to_owned(), String::new()),
+                ("GIT_CONFIG_VALUE_1".to_owned(), "/dev/null".to_owned()),
                 ("GIT_CONFIG_KEY_2".to_owned(), "core.editor".to_owned()),
                 ("GIT_CONFIG_VALUE_2".to_owned(), "true".to_owned()),
                 ("GIT_CONFIG_KEY_3".to_owned(), "core.pager".to_owned()),
                 ("GIT_CONFIG_VALUE_3".to_owned(), "cat".to_owned()),
-                ("GIT_EXTERNAL_DIFF".to_owned(), String::new()),
+                ("GIT_CONFIG_KEY_4".to_owned(), "core.fsmonitor".to_owned()),
+                ("GIT_CONFIG_VALUE_4".to_owned(), "false".to_owned()),
+                ("GIT_CONFIG_KEY_5".to_owned(), "core.useBuiltinFSMonitor".to_owned()),
+                ("GIT_CONFIG_VALUE_5".to_owned(), "false".to_owned()),
                 ("GIT_PAGER".to_owned(), "cat".to_owned()),
                 ("GIT_EDITOR".to_owned(), "true".to_owned()),
             ],
@@ -453,6 +470,82 @@ mod tests {
         assert_eq!(
             first.child_environment(std::path::Path::new("/ws")),
             second.child_environment(std::path::Path::new("/ws"))
+        );
+    }
+
+    /// Ordinary `git status`/`git diff` succeed under the readonly guards, and
+    /// a repo-local fsmonitor hook is not executed.
+    #[test]
+    fn git_readonly_guards_keep_ordinary_diff_and_suppress_fsmonitor() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let repo = root.path().join("repo");
+        std::fs::create_dir_all(&repo).expect("repo");
+        let marker = root.path().join("fsmonitor-fired");
+        let hook = root.path().join("fsmonitor.sh");
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\necho fired > '{}'\nexit 0\n",
+                marker.display()
+            ),
+        )
+        .expect("hook");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&hook).expect("meta").permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&hook, perms).expect("chmod");
+        }
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env_clear()
+                .envs(
+                    ToolEnvironment::new()
+                        .child_environment(&repo)
+                        .into_iter()
+                        .chain([(
+                            "GIT_CONFIG_GLOBAL".to_owned(),
+                            "/dev/null".to_owned(),
+                        )])
+                        .chain([("GIT_CONFIG_NOSYSTEM".to_owned(), "1".to_owned())]),
+                )
+                .output()
+                .unwrap_or_else(|error| panic!("git {args:?}: {error}"))
+        };
+        assert!(
+            run(&["init", "-q"]).status.success(),
+            "git init must succeed under child_environment"
+        );
+        // Force a local fsmonitor that would fire without the readonly guards.
+        assert!(
+            run(&[
+                "config",
+                "core.fsmonitor",
+                &hook.display().to_string(),
+            ])
+            .status
+            .success()
+        );
+        std::fs::write(repo.join("file.txt"), "hello\n").expect("file");
+        assert!(run(&["add", "file.txt"]).status.success());
+        let status = run(&["status", "--porcelain"]);
+        assert!(
+            status.status.success(),
+            "git status failed: {}",
+            String::from_utf8_lossy(&status.stderr)
+        );
+        let diff = run(&["diff", "--cached"]);
+        assert!(
+            diff.status.success(),
+            "git diff failed: {}",
+            String::from_utf8_lossy(&diff.stderr)
+        );
+        assert!(
+            !marker.exists(),
+            "repo-local fsmonitor must not fire under readonly guards"
         );
     }
 }
