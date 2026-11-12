@@ -728,6 +728,7 @@ async fn agent_tool_branch_return_uses_committed_typed_binding() {
                 schema: schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
             },
             routes: Vec::new(),
+            permissions: None,
             on_error: WorkflowValueErrorStrategy::default(),
         },
     );
@@ -921,8 +922,8 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
     );
     let definition = WorkflowDefinition {
         description: "unadmitted".into(),
-
         timeout_ms: 100,
+        permissions: None,
         block: WorkflowBlock {
             input: json!({"type":"object"}),
             nodes: {

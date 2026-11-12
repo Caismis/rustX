@@ -204,6 +204,7 @@ chat_reasoning_replay = "omit"
             tools: Vec::new(),
             skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
             inherit_project_instructions: false,
+            permissions: None,
             extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
             workflows: BTreeSet::new(),
         },

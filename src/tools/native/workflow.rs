@@ -50,14 +50,18 @@ fn registration(
     runtime: &WorkflowRuntime,
     program: &Arc<WorkflowProgram>,
 ) -> NativeToolRegistration {
-    NativeToolRegistration::new(
+    let mut registration = NativeToolRegistration::new(
         definition(program),
         Arc::new(WorkflowToolExecutor {
             runtime: runtime.clone(),
             program: program.clone(),
         }),
     )
-    .with_foreground_policy(foreground_policy(program))
+    .with_foreground_policy(foreground_policy(program));
+    if let Some(set) = program.permissions() {
+        registration = registration.with_resource_permissions(set);
+    }
+    registration
 }
 
 fn foreground_policy(program: &WorkflowProgram) -> crate::tools::deadline::ForegroundPolicy {

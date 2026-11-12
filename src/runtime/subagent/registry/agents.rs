@@ -593,15 +593,8 @@ impl SubagentRegistry {
         approval_mode: crate::runtime::types::ApprovalMode,
         cancellation: CancellationSignal,
     ) -> Result<AgentMessageAccepted, AgentControlError> {
-        self.send_message_with_attachments(
-            id,
-            message,
-            &[],
-            origin,
-            approval_mode,
-            cancellation,
-        )
-        .await
+        self.send_message_with_attachments(id, message, &[], origin, approval_mode, cancellation)
+            .await
     }
     /// Refuse a known unresolved owner before acquiring any new mutation authority.
     /// This is a read of the same native predicate rechecked by control arbitration.

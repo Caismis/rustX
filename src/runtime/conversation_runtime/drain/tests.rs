@@ -2904,7 +2904,7 @@ async fn shutdown_waits_for_reserved_resume_physical_and_durable_rollback() {
                     "reserved input",
                     AgentActivationOrigin::ClientControl,
                     crate::runtime::types::ApprovalMode::FullAccess,
-                CancellationSignal::new(),
+                    CancellationSignal::new(),
                 )
                 .await
         }
@@ -2994,7 +2994,7 @@ async fn shutdown_waits_for_reserved_resume_physical_and_durable_rollback() {
         "after reopen",
         AgentActivationOrigin::ClientControl,
         crate::runtime::types::ApprovalMode::FullAccess,
-    CancellationSignal::new(),
+        CancellationSignal::new(),
     );
     let (accepted, ()) = tokio::join!(send, async {
         assert!(matches!(

@@ -199,6 +199,7 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
             subagent_context: None,
             workflow_output: None,
             approval_mode: rustx::runtime::ApprovalMode::FullAccess,
+            last_permission_reminder_mode: None,
         },
         context_runtime,
         &fixture.runtime,

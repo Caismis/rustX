@@ -352,3 +352,64 @@ fn routes_reject_root_finite_business_values_without_weakening_the_contract() {
         assert!(error.to_string().contains("root const or enum"));
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn agent_admit_denies_when_entry_permission_denies_current_mode() {
+    use crate::runtime::permission::{ResourcePermissionSet, ResourcePermissionValue};
+    let plane = workflow_test_plane(1);
+    let mut child = stage_workflow_child(&plane);
+    let runtime = workflow_runtime(&plane);
+    let context = workflow_test_context(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    let mut agent_node = node(&json!({}));
+    agent_node["permissions"] = json!({
+        "plan": "deny",
+        "automatic": "default",
+        "full_access": "allow"
+    });
+    let mut definition = agent(agent_node, &[("done", None, "triage.text")]);
+    definition
+        .block
+        .edges
+        .retain(|edge| edge.from != "workflow_start");
+    definition
+        .block
+        .edges
+        .insert(0, edge("workflow_start", "triage"));
+    let program = Arc::new(compile_test(definition).unwrap());
+    let WorkflowNodeProgram::Agent(compiled) = &program.block.nodes["triage"] else {
+        panic!("expected agent node");
+    };
+    assert_eq!(
+        compiled.resource_permissions,
+        Some(ResourcePermissionSet {
+            plan: ResourcePermissionValue::Deny,
+            automatic: ResourcePermissionValue::Default,
+            full_access: ResourcePermissionValue::Allow,
+        })
+    );
+    let task = tokio::spawn(async move {
+        runtime
+            .run_test_foreground(
+                program,
+                ToolCallId::new("agent-deny"),
+                context,
+                json!({"task":"Ship it?"}),
+                cancellation,
+            )
+            .await
+    });
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::select! {
+            result = task => result.expect("workflow task"),
+            _ = child.expect_delegate() => panic!("child must not be admitted when entry is denied"),
+        }
+    })
+    .await
+    .expect("workflow should settle without admitting a child");
+    assert!(
+        outcome.is_err(),
+        "denied agent entry must not complete successfully"
+    );
+}

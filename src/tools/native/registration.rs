@@ -28,6 +28,7 @@
 //!
 //! [`register_native_tools`]: super::register_native_tools
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use schemars::generate::{SchemaGenerator, SchemaSettings};
@@ -62,6 +63,11 @@ pub(crate) struct NativeToolRegistration {
     /// Tool-owned normalization applied after runtime metadata is stripped
     /// and before the canonical schema is validated.
     pub(crate) normalizer: BusinessArgumentNormalizer,
+    /// Exact-or-source resource permission object frozen with the registration.
+    pub(crate) resource_permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+    /// Per-target permission objects for invocations that select a named target.
+    pub(crate) resource_permission_targets:
+        BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
 }
 
 impl NativeToolRegistration {
@@ -77,7 +83,31 @@ impl NativeToolRegistration {
             executor,
             foreground: Self::ordinary_foreground(),
             normalizer: identity_arguments,
+            resource_permissions: None,
+            resource_permission_targets: BTreeMap::new(),
         }
+    }
+
+    /// Attaches the winning authored resource permission object.
+    #[must_use]
+    pub(super) fn with_resource_permissions(
+        mut self,
+        permissions: crate::runtime::permission::ResourcePermissionSet,
+    ) -> Self {
+        self.resource_permissions = Some(permissions);
+        self.resource_permission_targets.clear();
+        self
+    }
+
+    /// Attaches per-target permission objects for named-target invocations.
+    #[must_use]
+    pub(super) fn with_resource_permission_targets(
+        mut self,
+        targets: BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
+    ) -> Self {
+        self.resource_permissions = None;
+        self.resource_permission_targets = targets;
+        self
     }
 
     pub(super) fn with_foreground_policy(
@@ -92,6 +122,27 @@ impl NativeToolRegistration {
     pub(super) fn with_normalizer(mut self, normalizer: BusinessArgumentNormalizer) -> Self {
         self.normalizer = normalizer;
         self
+    }
+
+    /// Converts into the registry registration while preserving frozen
+    /// permission metadata.
+    pub(crate) fn into_tool_registration(self) -> crate::tools::executor::ToolRegistration {
+        let Self {
+            definition,
+            executor,
+            normalizer,
+            foreground,
+            resource_permissions,
+            resource_permission_targets,
+        } = self;
+        crate::tools::executor::ToolRegistration::from_parts(
+            definition,
+            executor,
+            normalizer,
+            foreground,
+            resource_permissions,
+            resource_permission_targets,
+        )
     }
 }
 

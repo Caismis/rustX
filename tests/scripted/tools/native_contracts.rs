@@ -536,6 +536,7 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
             tools: vec![],
             skills: rustx::runtime::agent_profile::AgentSkillSelection::default(),
             inherit_project_instructions: false,
+            permissions: None,
             extensions: rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
             workflows: std::collections::BTreeSet::default(),
         },

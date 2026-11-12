@@ -1071,6 +1071,8 @@ pub struct PreparedPythonPackage {
     pub fingerprint: String,
     /// The state directory (`packages/<fingerprint>/`).
     pub state_dir: PathBuf,
+    /// Optional MCP permission object propagated into the synthesized binding.
+    pub permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
 }
 
 impl PreparedPythonPackage {
@@ -1116,7 +1118,7 @@ impl PreparedPythonPackage {
                 environment,
             },
             policy: ToolInvocationPolicy::default(),
-            permissions: None,
+            permissions: self.permissions,
             tool_permissions: std::collections::BTreeMap::new(),
         }
     }
@@ -1261,6 +1263,7 @@ fn read_prepared_state(
     Ok(Some(PreparedPythonPackage {
         fingerprint: fingerprint.to_owned(),
         state_dir: state_dir.to_path_buf(),
+        permissions: None,
     }))
 }
 
@@ -1427,7 +1430,11 @@ async fn materialize_package(
                 .ok_or_else(|| PythonToolError::Storage("Python staging did not materialize".into()))?;
             crate::package_io::check_cancelled(&cancellation).map_err(io_error)?;
             match std::fs::rename(&staging, &destination) {
-                Ok(()) => Ok(PreparedPythonPackage { fingerprint: fingerprint.clone(), state_dir: destination.clone() }),
+                Ok(()) => Ok(PreparedPythonPackage {
+                    fingerprint: fingerprint.clone(),
+                    state_dir: destination.clone(),
+                    permissions: None,
+                }),
                 Err(_) if destination.exists() => read_prepared_state(&destination, &package, &fingerprint, &python_identity, &uv_identity, &cancellation)?
                     .ok_or_else(|| PythonToolError::Storage("concurrent Python publication disappeared".into())),
                 Err(error) => Err(io_error(error)),
@@ -2202,6 +2209,7 @@ mod tests {
         let prepared = PreparedPythonPackage {
             fingerprint: "sha256:abc".to_owned(),
             state_dir: PathBuf::from("/state/sha256:abc"),
+            permissions: None,
         };
         let binding = prepared.server_binding();
         let McpTransportConfig::Stdio {
@@ -2602,6 +2610,7 @@ mod tests {
         let prepared = PreparedPythonPackage {
             fingerprint: "build".into(),
             state_dir: PathBuf::from("prepared"),
+            permissions: None,
         };
         owner.finish(Ok(prepared.clone()));
         assert!(first_wake.0.load(std::sync::atomic::Ordering::SeqCst));

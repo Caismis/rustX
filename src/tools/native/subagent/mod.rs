@@ -53,9 +53,12 @@ pub(super) fn registration(
     subagents: SubagentRegistry,
     catalog: &AgentCatalog,
 ) -> NativeToolRegistration {
-    NativeToolRegistration::new(
-        definition(catalog),
-        std::sync::Arc::new(SubagentExecutor { subagents }),
+    super::freeze_named_agent_permissions(
+        NativeToolRegistration::new(
+            definition(catalog),
+            std::sync::Arc::new(SubagentExecutor { subagents }),
+        ),
+        catalog,
     )
 }
 
@@ -294,6 +297,7 @@ mod tests {
                     tools: Vec::new(),
                     skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                     inherit_project_instructions: true,
+                    permissions: None,
                     extensions: crate::extensions::NativeAgentExtensionsDocument::default()
                         .resolve(),
                     workflows: std::collections::BTreeSet::default(),
@@ -311,6 +315,7 @@ mod tests {
                     tools: Vec::new(),
                     skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                     inherit_project_instructions: true,
+                    permissions: None,
                     extensions: crate::extensions::NativeAgentExtensionsDocument::default()
                         .resolve(),
                     workflows: std::collections::BTreeSet::default(),
@@ -602,6 +607,7 @@ chat_reasoning_replay = "omit"
                 inherit_project_instructions: false,
                 extensions: crate::extensions::NativeAgentExtensions::none(),
                 workflows: std::collections::BTreeSet::default(),
+                permissions: None,
             },
             workspace_root.join("reviewer.md"),
         )

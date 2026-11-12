@@ -767,7 +767,8 @@ async fn thread_identity_tools_names_archive_and_unarchive_remain_native_metadat
         let first = AppServerConnection::new(f.host.clone());
         let second = AppServerConnection::new(f.host.clone());
         initialize(&first).await; initialize(&second).await;
-        let tools = vec![crate::tools::host::HostToolDefinition {namespace:Some("business".into()),name:"lookup".into(),description:"Look up an application record".into(),input_schema:serde_json::json!({"type":"object","properties":{},"additionalProperties":false})}];
+        let tools = vec![crate::tools::host::HostToolDefinition {namespace:Some("business".into()),name:"lookup".into(),description:"Look up an application record".into(),permissions: None,
+            input_schema:serde_json::json!({"type":"object","properties":{},"additionalProperties":false})}];
         let MethodResult::SessionTransition {thread,session,..} = call(&first,100,Method::SessionCreate {dynamic_tools:tools.clone(),submission:None,settings:crate::local_runtime::session::SessionPersistentState {cwd:f.workspaces[0].clone(),model:None}}).await else {panic!("Thread creation")};
         assert_eq!(thread.id,session.active_conversation_id); assert_eq!(thread.node_id,session.active_node); assert_eq!(thread.dynamic_tools,tools);
         let MethodResult::Attached {target:a,..}=call(&first,101,Method::SessionAttach {thread_id:thread.id.clone()}).await else {panic!("resume")};

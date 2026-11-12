@@ -795,6 +795,10 @@ struct CoordinatorState {
     mcp_settlement_failure: Option<String>,
     /// The effective mode frozen for the currently admitted attempt boundary.
     effective_approval_mode: ApprovalMode,
+    /// Mode last successfully injected as a permission reminder on this
+    /// conversation. Cleared only when the next admission must re-emit
+    /// (mode change, first admission, or post-compaction).
+    last_permission_reminder_mode: Option<ApprovalMode>,
     /// The latest requested runtime control mode.
     /// Monotonic control-plane revision; idempotent requests do not advance it.
     /// The one canonical conversation state, owned by the coordinator

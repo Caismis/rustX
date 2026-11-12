@@ -43,12 +43,16 @@ pub struct PermissionReminderState {
 }
 
 impl PermissionReminderState {
-    /// First request of a new admitted execution needs a reminder.
+    /// Reminder eligibility for one admitted execution.
+    ///
+    /// `last_emitted` is the mode last successfully injected on this
+    /// conversation. When it already matches `mode`, consecutive ordinary
+    /// user turns stay quiet until compaction or an effective mode change.
     #[must_use]
-    pub const fn for_admission(mode: ApprovalMode) -> Self {
+    pub fn for_admission(mode: ApprovalMode, last_emitted: Option<ApprovalMode>) -> Self {
         Self {
             mode,
-            pending: true,
+            pending: last_emitted != Some(mode),
         }
     }
 
@@ -67,6 +71,12 @@ impl PermissionReminderState {
     pub fn consume_after_start_commit(&mut self) {
         self.pending = false;
     }
+
+    /// Mode that was successfully injected at least once during this attempt.
+    #[must_use]
+    pub const fn emitted_mode(&self) -> Option<ApprovalMode> {
+        if self.pending { None } else { Some(self.mode) }
+    }
 }
 
 #[cfg(test)]
@@ -75,11 +85,24 @@ mod tests {
 
     #[test]
     fn admission_is_pending_until_consumed() {
-        let mut state = PermissionReminderState::for_admission(ApprovalMode::Plan);
+        let mut state = PermissionReminderState::for_admission(ApprovalMode::Plan, None);
         assert!(state.pending_text().unwrap().contains("plan"));
         state.consume_after_start_commit();
         assert!(state.pending_text().is_none());
+        assert_eq!(state.emitted_mode(), Some(ApprovalMode::Plan));
         state.mark_after_compaction();
         assert!(state.pending_text().unwrap().contains("plan"));
+    }
+
+    #[test]
+    fn matching_prior_emit_suppresses_new_admission() {
+        let state =
+            PermissionReminderState::for_admission(ApprovalMode::Plan, Some(ApprovalMode::Plan));
+        assert!(state.pending_text().is_none());
+        let changed = PermissionReminderState::for_admission(
+            ApprovalMode::Automatic,
+            Some(ApprovalMode::Plan),
+        );
+        assert!(changed.pending_text().unwrap().contains("automatic"));
     }
 }

@@ -258,6 +258,10 @@ pub enum SchemaError {
     InvalidExecutionMode(String),
     /// The `elevation_reason` value is not a string, null, or within bounds.
     InvalidElevationReason(String),
+    /// The canonical schema already claims the reserved `elevation_reason` name.
+    ElevationReasonCollision(ExecutionModeClaim),
+    /// The canonical schema cannot carry optional top-level elevation metadata.
+    UndecorableElevationRoot(String),
     /// The business arguments violate the canonical schema.
     InvalidArguments(Vec<String>),
 }
@@ -356,6 +360,19 @@ impl core::fmt::Display for SchemaError {
                 f,
                 "the {ELEVATION_REASON_FIELD:?} field must be a string of at most 512 characters \
                  or null, got {detail}"
+            ),
+            Self::ElevationReasonCollision(claim) => write!(
+                f,
+                "the canonical tool schema claims the top-level {ELEVATION_REASON_FIELD:?} name in \
+                 root {}, which rustX reserves for permission-elevation metadata; rename the \
+                 business field so model-facing decoration and pre-dispatch stripping stay \
+                 equivalent",
+                claim.location()
+            ),
+            Self::UndecorableElevationRoot(detail) => write!(
+                f,
+                "the canonical tool schema cannot carry optional top-level \
+                 {ELEVATION_REASON_FIELD:?} metadata: {detail}"
             ),
             Self::InvalidArguments(errors) => write!(
                 f,
@@ -525,20 +542,11 @@ pub fn compile_model_definition(
     definition: &ToolDefinition,
 ) -> Result<ModelToolDefinition, SchemaError> {
     validate_execution_metadata_contract(definition.execution_policy, &definition.input_schema)?;
-    let mut input_schema = definition.input_schema.clone();
+    let mut input_schema = compile_elevation_metadata(&definition.input_schema)?;
     let mut description = definition.description.clone();
     if definition.execution_policy == ToolExecutionPolicy::ModelSelectable {
         decorate_execution_mode(&mut input_schema);
         description = with_execution_mode_reminder(&description);
-    }
-    // Flat elevation_reason decoration is sound for the same decoratable
-    // object roots ModelSelectable already requires. Non-decoratable roots
-    // keep their canonical schema until the wrapping compiler lands; models
-    // can still omit the field.
-    if is_flat_decoratable_object_root(&input_schema)
-        && !root_claims_property(&input_schema, ELEVATION_REASON_FIELD)
-    {
-        decorate_elevation_reason(&mut input_schema);
     }
     Ok(ModelToolDefinition {
         id: definition.id.clone(),
@@ -546,16 +554,6 @@ pub fn compile_model_definition(
         description,
         input_schema,
     })
-}
-
-fn is_flat_decoratable_object_root(schema: &serde_json::Value) -> bool {
-    let Some(root) = schema.as_object() else {
-        return false;
-    };
-    root.get("type").and_then(serde_json::Value::as_str) == Some("object")
-        && root
-            .keys()
-            .all(|keyword| is_decoratable_root_keyword(keyword))
 }
 
 fn root_claims_property(schema: &serde_json::Value, name: &str) -> bool {
@@ -566,22 +564,166 @@ fn root_claims_property(schema: &serde_json::Value, name: &str) -> bool {
         .is_some_and(|properties| properties.contains_key(name))
 }
 
-fn decorate_elevation_reason(schema: &mut serde_json::Value) {
-    let object = schema
+fn root_requires_property(schema: &serde_json::Value, name: &str) -> bool {
+    schema
+        .as_object()
+        .and_then(|root| root.get("required"))
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|required| required.iter().any(|entry| entry.as_str() == Some(name)))
+}
+
+fn elevation_property_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": ["string", "null"],
+        "description": ELEVATION_REASON_DESCRIPTION,
+    })
+}
+
+/// Compiles model-facing elevation metadata without mutating the business
+/// schema identity that nested `$ref: "#"` would re-enter.
+///
+/// The undecorated canonical schema is preserved under
+/// `$defs/rustx_business`. Root `#` references in the model-facing clone are
+/// rewritten to that definition before `elevation_reason` is injected, so a
+/// legal model call still strips to arguments that validate against the
+/// original business schema.
+fn compile_elevation_metadata(
+    canonical: &serde_json::Value,
+) -> Result<serde_json::Value, SchemaError> {
+    let declares = root_claims_property(canonical, ELEVATION_REASON_FIELD);
+    let requires = root_requires_property(canonical, ELEVATION_REASON_FIELD);
+    match (declares, requires) {
+        (true, true) => {
+            return Err(SchemaError::ElevationReasonCollision(
+                ExecutionModeClaim::PropertyAndRequired,
+            ));
+        }
+        (true, false) => {
+            return Err(SchemaError::ElevationReasonCollision(
+                ExecutionModeClaim::Property,
+            ));
+        }
+        (false, true) => {
+            return Err(SchemaError::ElevationReasonCollision(
+                ExecutionModeClaim::Required,
+            ));
+        }
+        (false, false) => {}
+    }
+
+    let mut business = canonical.clone();
+    rewrite_root_refs(&mut business);
+
+    let mut compiled = canonical.clone();
+    rewrite_root_refs(&mut compiled);
+    inject_elevation_into_schema_root(&mut compiled)?;
+
+    let root = compiled.as_object_mut().ok_or_else(|| {
+        SchemaError::UndecorableElevationRoot("canonical schema root must be a JSON object".into())
+    })?;
+    let defs = root
+        .entry("$defs")
+        .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
-        .expect("decoratable schemas are root object schemas");
+        .ok_or_else(|| SchemaError::UndecorableElevationRoot("$defs must be an object".into()))?;
+    if defs.contains_key("rustx_business") {
+        return Err(SchemaError::UndecorableElevationRoot(
+            "canonical schema already defines $defs.rustx_business".into(),
+        ));
+    }
+    defs.insert("rustx_business".into(), business);
+    Ok(compiled)
+}
+
+fn rewrite_root_refs(schema: &mut serde_json::Value) {
+    match schema {
+        serde_json::Value::Object(map) => {
+            for key in ["$ref", "$recursiveRef"] {
+                if map.get(key).and_then(serde_json::Value::as_str) == Some("#") {
+                    map.insert(
+                        key.to_owned(),
+                        serde_json::Value::String("#/$defs/rustx_business".into()),
+                    );
+                }
+            }
+            for (key, value) in map.iter_mut() {
+                if key != "$ref" && key != "$recursiveRef" {
+                    rewrite_root_refs(value);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                rewrite_root_refs(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn inject_elevation_into_schema_root(schema: &mut serde_json::Value) -> Result<(), SchemaError> {
+    {
+        let Some(root) = schema.as_object_mut() else {
+            return Err(SchemaError::UndecorableElevationRoot(
+                "canonical schema root must be a JSON object".into(),
+            ));
+        };
+        if root.contains_key("const") || root.contains_key("enum") {
+            return Err(SchemaError::UndecorableElevationRoot(
+                "root const/enum cannot admit optional elevation_reason".into(),
+            ));
+        }
+        // Composition branches that describe the same root instance each need
+        // the optional field so a closed branch remains satisfiable.
+        for keyword in ["allOf", "anyOf", "oneOf"] {
+            if let Some(serde_json::Value::Array(branches)) = root.get_mut(keyword) {
+                for branch in branches.iter_mut() {
+                    inject_elevation_into_object_schema(branch)?;
+                }
+            }
+        }
+    }
+    inject_elevation_into_object_schema(schema)
+}
+
+fn inject_elevation_into_object_schema(schema: &mut serde_json::Value) -> Result<(), SchemaError> {
+    let Some(object) = schema.as_object_mut() else {
+        return Ok(());
+    };
+    // A bare root `$ref` still needs a sibling properties map so the model can
+    // lawfully supply optional elevation_reason beside the reffed business body.
+    let is_objectish = object.get("type").and_then(serde_json::Value::as_str) == Some("object")
+        || object.contains_key("properties")
+        || object.contains_key("additionalProperties")
+        || object.contains_key("maxProperties")
+        || object.contains_key("$ref")
+        || object.contains_key("$recursiveRef");
+    if !is_objectish {
+        return Ok(());
+    }
+    if let Some(serde_json::Value::Number(max)) = object.get("maxProperties") {
+        let Some(value) = max.as_u64() else {
+            return Err(SchemaError::UndecorableElevationRoot(
+                "root maxProperties must be a non-negative integer".into(),
+            ));
+        };
+        object.insert(
+            "maxProperties".into(),
+            serde_json::Value::Number((value + 1).into()),
+        );
+    }
     object
         .entry("properties")
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
-        .expect("properties is an object")
+        .ok_or_else(|| {
+            SchemaError::UndecorableElevationRoot("properties must be an object".into())
+        })?
         .insert(
             ELEVATION_REASON_FIELD.to_owned(),
-            serde_json::json!({
-                "type": ["string", "null"],
-                "description": ELEVATION_REASON_DESCRIPTION,
-            }),
+            elevation_property_schema(),
         );
+    Ok(())
 }
 
 /// Appends the runtime-owned `execution_mode` reminder to a compiled
@@ -1006,8 +1148,7 @@ mod tests {
             original.clone(),
         ))
         .expect("compile");
-        let mut expected = original.clone();
-        super::decorate_elevation_reason(&mut expected);
+        let expected = super::compile_elevation_metadata(&original).expect("elevation wrap");
         assert_eq!(
             compiled.input_schema, expected,
             "the foreground schema gains elevation_reason only"
@@ -1101,15 +1242,10 @@ mod tests {
                 validate_execution_metadata_contract(policy, schema).expect("fixed policy");
                 let compiled = compile_model_definition(&definition(policy, schema.clone()))
                     .expect("fixed policy compiles");
-                let mut expected = schema.clone();
-                if super::is_flat_decoratable_object_root(&expected)
-                    && !super::root_claims_property(&expected, super::ELEVATION_REASON_FIELD)
-                {
-                    super::decorate_elevation_reason(&mut expected);
-                }
+                let expected = super::compile_elevation_metadata(schema).expect("elevation wrap");
                 assert_eq!(
                     &compiled.input_schema, &expected,
-                    "fixed policy keeps business fields and adds elevation_reason when decoratable"
+                    "fixed policy compiles through the elevation metadata wrap"
                 );
             }
         }
@@ -1269,14 +1405,30 @@ mod tests {
                 ToolExecutionPolicy::ForegroundOnly,
                 ToolExecutionPolicy::BackgroundOnly,
             ] {
-                let compiled = compile_model_definition(&definition(policy, schema.clone()))
-                    .unwrap_or_else(|error| {
-                        panic!("root {keyword:?} stays legal under {policy:?}: {error}")
-                    });
-                assert_eq!(
-                    &compiled.input_schema, schema,
-                    "root {keyword:?} is compiled verbatim under {policy:?}"
-                );
+                match super::compile_elevation_metadata(schema) {
+                    Ok(expected) => {
+                        let compiled =
+                            compile_model_definition(&definition(policy, schema.clone()))
+                                .unwrap_or_else(|error| {
+                                    panic!(
+                                        "root {keyword:?} must compile under {policy:?}: {error}"
+                                    )
+                                });
+                        assert_eq!(
+                            &compiled.input_schema, &expected,
+                            "root {keyword:?} gains elevation wrap under {policy:?}"
+                        );
+                    }
+                    Err(error) => {
+                        let compiled =
+                            compile_model_definition(&definition(policy, schema.clone()));
+                        assert_eq!(
+                            compiled.unwrap_err(),
+                            error,
+                            "root {keyword:?} refuses unsound elevation under {policy:?}"
+                        );
+                    }
+                }
             }
         }
     }
@@ -1445,15 +1597,17 @@ mod tests {
                     .unwrap_or_else(|error| {
                         panic!("references stay legal under {policy:?}: {error}")
                     });
-                let mut expected = (*schema).clone();
-                if super::is_flat_decoratable_object_root(&expected)
-                    && !super::root_claims_property(&expected, super::ELEVATION_REASON_FIELD)
-                {
-                    super::decorate_elevation_reason(&mut expected);
-                }
+                let expected = super::compile_elevation_metadata(schema)
+                    .unwrap_or_else(|error| panic!("elevation wrap under {policy:?}: {error}"));
                 assert_eq!(
                     &compiled.input_schema, &expected,
-                    "a referencing schema keeps its refs and gains elevation_reason when decoratable under {policy:?}"
+                    "referencing schemas rewrite root refs and gain elevation_reason under {policy:?}"
+                );
+                assert_eq!(
+                    compiled.input_schema["$defs"]["rustx_business"]["properties"]
+                        .get(super::ELEVATION_REASON_FIELD),
+                    None,
+                    "undecorated business $defs must not carry elevation_reason"
                 );
             }
         }

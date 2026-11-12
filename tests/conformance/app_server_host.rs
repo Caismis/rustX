@@ -26,6 +26,7 @@ fn definition(namespace: &str) -> HostToolDefinition {
         namespace: Some(namespace.into()),
         name: "lookup".into(),
         description: "Look up one application record".into(),
+        permissions: None,
         input_schema: serde_json::json!({"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false}),
     }
 }

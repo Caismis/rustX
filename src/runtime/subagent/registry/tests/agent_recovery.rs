@@ -113,7 +113,6 @@ async fn recovered_physical_receipt_requires_owner_release_and_durable_proof() {
                 &admitted.child_agent_id,
                 "cannot overlap",
                 AgentActivationOrigin::ClientControl,
-
                 crate::runtime::types::ApprovalMode::FullAccess,
                 CancellationSignal::new()
             )
@@ -207,7 +206,7 @@ async fn agent411_recovery_never_reopens_unproven_physical_containment() {
                 "must not restart",
                 crate::runtime::subagent::AgentActivationOrigin::ClientControl,
                 crate::runtime::types::ApprovalMode::FullAccess,
-            CancellationSignal::new(),
+                CancellationSignal::new(),
             )
             .await;
         let error = refused.unwrap_err();
@@ -246,7 +245,7 @@ async fn agent411_unreconciled_orphan_cannot_recover_resume_authority() {
             "must not overlap",
             crate::runtime::subagent::AgentActivationOrigin::ClientControl,
             crate::runtime::types::ApprovalMode::FullAccess,
-        CancellationSignal::new(),
+            CancellationSignal::new(),
         )
         .await;
     let error = refused.unwrap_err();
@@ -310,7 +309,7 @@ async fn agent411_crash_reconciliation_cannot_invent_physical_resume_proof() {
                 "no replacement process",
                 crate::runtime::subagent::AgentActivationOrigin::ClientControl,
                 crate::runtime::types::ApprovalMode::FullAccess,
-            CancellationSignal::new(),
+                CancellationSignal::new(),
             )
             .await
             .unwrap_err();
@@ -704,7 +703,6 @@ async fn persistent_child_result_belongs_to_concluding_terminal_attempt() {
                 &first.child_agent_id,
                 "later task",
                 AgentActivationOrigin::ClientControl,
-
                 crate::runtime::types::ApprovalMode::FullAccess,
                 CancellationSignal::new()
             ),
@@ -955,7 +953,7 @@ async fn pre_reserved_wait_settles_independently_of_another_agents_recovery() {
         "cancel before Reserved",
         AgentActivationOrigin::ClientControl,
         crate::runtime::types::ApprovalMode::FullAccess,
-    CancellationSignal::new(),
+        CancellationSignal::new(),
     ));
     assert!(futures_util::poll!(&mut send).is_pending());
     gate.wait_until_entered();

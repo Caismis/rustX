@@ -424,6 +424,7 @@ mod tests {
                     inherit_project_instructions: false,
                     extensions: crate::extensions::NativeAgentExtensions::none(),
                     workflows: std::collections::BTreeSet::default(),
+                    permissions: None,
                 },
                 PathBuf::from("instructions.md"),
             )

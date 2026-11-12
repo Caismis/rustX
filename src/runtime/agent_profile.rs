@@ -80,6 +80,8 @@ pub struct AgentProfile {
     pub extensions: NativeAgentExtensions,
     pub workflows: BTreeSet<WorkflowId>,
     pub inherit_project_instructions: bool,
+    /// Source-default three-mode permission object for Agent control tools.
+    pub permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AgentScope {

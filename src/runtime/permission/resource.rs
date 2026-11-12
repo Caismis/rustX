@@ -135,6 +135,13 @@ pub fn effective_invocation_resource_permission(
             .unwrap_or_default()
             .for_mode(mode);
     }
+    if let Some(agent) = arguments.get("agent").and_then(serde_json::Value::as_str) {
+        return targets
+            .get(agent)
+            .copied()
+            .unwrap_or_default()
+            .for_mode(mode);
+    }
     targets
         .values()
         .map(|set| set.for_mode(mode))

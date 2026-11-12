@@ -113,6 +113,7 @@ impl SettledExecution<'_> {
             conversation: self.execution.conversation,
             durable_failure: self.execution.durable_failure,
             durable_failure_kind: self.execution.durable_failure_kind,
+            permission_reminder_emitted: self.execution.permission_reminder.emitted_mode(),
         }
     }
 }

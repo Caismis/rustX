@@ -135,7 +135,7 @@ async fn a_workflow_child_cannot_be_resumed_through_agent_controls() {
                 "continue as an ordinary Agent",
                 AgentActivationOrigin::ClientControl,
                 crate::runtime::types::ApprovalMode::FullAccess,
-            CancellationSignal::new(),
+                CancellationSignal::new(),
             )
             .await
             .is_err(),
@@ -245,7 +245,7 @@ async fn assert_resume_workspace_preflight(
             &attachments,
             AgentActivationOrigin::ClientControl,
             crate::runtime::types::ApprovalMode::FullAccess,
-        CancellationSignal::new(),
+            CancellationSignal::new(),
         )
         .await
         .unwrap_err();
@@ -281,7 +281,6 @@ async fn assert_resume_workspace_preflight(
             "restored resume",
             &attachments,
             AgentActivationOrigin::ClientControl,
-
             crate::runtime::types::ApprovalMode::FullAccess,
             CancellationSignal::new()
         ),
@@ -338,7 +337,7 @@ async fn resume_workspace_preflight_arbitrates_competitors_and_preallocation_int
         "cancelled winner",
         AgentActivationOrigin::ClientControl,
         crate::runtime::types::ApprovalMode::FullAccess,
-    CancellationSignal::new(),
+        CancellationSignal::new(),
     ));
     assert!(futures_util::poll!(&mut sending).is_pending());
     gate.wait_until_entered();
@@ -358,7 +357,6 @@ async fn resume_workspace_preflight_arbitrates_competitors_and_preallocation_int
                 &first.child_agent_id,
                 "competitor",
                 AgentActivationOrigin::ClientControl,
-
                 crate::runtime::types::ApprovalMode::FullAccess,
                 CancellationSignal::new()
             )
@@ -386,7 +384,6 @@ async fn resume_workspace_preflight_arbitrates_competitors_and_preallocation_int
             &first.child_agent_id,
             "next winner",
             AgentActivationOrigin::ClientControl,
-
             crate::runtime::types::ApprovalMode::FullAccess,
             CancellationSignal::new()
         ),
@@ -439,7 +436,7 @@ async fn resume_workspace_preflight_does_not_replace_execution_time_validation()
         "workspace disappears after preflight",
         AgentActivationOrigin::ClientControl,
         crate::runtime::types::ApprovalMode::FullAccess,
-    CancellationSignal::new(),
+        CancellationSignal::new(),
     ));
     assert!(futures_util::poll!(&mut sending).is_pending());
     gate.wait_until_entered();

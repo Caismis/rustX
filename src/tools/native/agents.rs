@@ -54,11 +54,22 @@ pub(super) fn definitions() -> Vec<ToolDefinition> {
     }).collect()
 }
 
-pub(super) fn registrations(registry: &SubagentRegistry) -> Vec<NativeToolRegistration> {
+pub(super) fn registrations(
+    registry: &SubagentRegistry,
+    catalog: &crate::runtime::subagent::AgentCatalog,
+) -> Vec<NativeToolRegistration> {
     definitions()
         .into_iter()
         .map(|definition| {
-            NativeToolRegistration::new(definition, Arc::new(AgentExecutor(registry.clone())))
+            let freeze_permissions = definition.name == NAMES[1]
+                || definition.name == crate::tools::native::subagent::SUBAGENT_TOOL_NAME;
+            let registration =
+                NativeToolRegistration::new(definition, Arc::new(AgentExecutor(registry.clone())));
+            if freeze_permissions {
+                super::freeze_named_agent_permissions(registration, catalog)
+            } else {
+                registration
+            }
         })
         .collect()
 }

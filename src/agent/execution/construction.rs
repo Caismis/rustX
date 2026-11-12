@@ -258,6 +258,7 @@ impl<'a> AgentExecution<'a> {
             terminal_emitted: false,
             permission_reminder: crate::runtime::permission::PermissionReminderState::for_admission(
                 runtime_policy.approval_mode,
+                runtime_policy.last_permission_reminder_mode,
             ),
         })
     }

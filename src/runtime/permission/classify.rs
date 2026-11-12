@@ -81,9 +81,10 @@ pub fn is_workspace_plan_file(
     let (Some(root), Some(target)) = (workspace_root, mutation_target) else {
         return false;
     };
-    let Ok(canonical_root) = root.canonicalize().or_else(|_| {
-        crate::tools::native::support::resolve_effective_path(root).map_err(|_| ())
-    }) else {
+    let Ok(canonical_root) = root
+        .canonicalize()
+        .or_else(|_| crate::tools::native::support::resolve_effective_path(root).map_err(|_| ()))
+    else {
         return false;
     };
     let expected = canonical_root.join("PLAN.md");

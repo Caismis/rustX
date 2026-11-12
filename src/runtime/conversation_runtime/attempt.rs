@@ -153,6 +153,11 @@ impl RuntimeInner {
                 }),
             workflow_output: self.workflow_output.clone(),
             approval_mode,
+            last_permission_reminder_mode: self
+                .state
+                .lock()
+                .expect("coordinator lock")
+                .last_permission_reminder_mode,
         };
         let workspace_changes = execution_policy.workspace_changes.clone();
         let auxiliary_invocation = model.summary_invocation().clone();
@@ -295,6 +300,9 @@ impl RuntimeInner {
                 fanout.child_settled();
             }
             state.conversation = Some(result.conversation);
+            if let Some(mode) = result.permission_reminder_emitted {
+                state.last_permission_reminder_mode = Some(mode);
+            }
             if let Some(diagnostic) = durable_failure {
                 let operation = match result.durable_failure_kind {
                     Some(crate::agent::DurableFailureKind::Compaction) => {

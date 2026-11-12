@@ -1810,6 +1810,7 @@ mod tests {
                 tools,
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 inherit_project_instructions: true,
+                permissions: None,
                 extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
                     crate::context::AgentStatusConfig::default(),
                 )
@@ -2197,6 +2198,7 @@ mod tests {
                 tools,
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 inherit_project_instructions: true,
+                permissions: None,
                 extensions,
                 workflows: std::collections::BTreeSet::default(),
             },
@@ -2268,6 +2270,7 @@ mod tests {
                     tools: Vec::new(),
                     skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                     inherit_project_instructions: true,
+                    permissions: None,
                     extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
                         crate::context::AgentStatusConfig::default(),
                     )
@@ -2287,6 +2290,7 @@ mod tests {
                     tools: Vec::new(),
                     skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                     inherit_project_instructions: true,
+                    permissions: None,
                     extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
                         crate::context::AgentStatusConfig::default(),
                     )
@@ -2389,7 +2393,7 @@ mod tests {
             // an override would have replaced away.
             "An entirely different routing description.".to_owned(), instructions: "instructions".to_owned(), model: None, execution_deadline: None, tools: vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
-            }], skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(vec!["some-skill".to_owned()]), inherit_project_instructions: true, extensions: crate::extensions::NativeAgentExtensions::with_agent_status(crate::context::AgentStatusConfig::default()).and_todo(), workflows: std::collections::BTreeSet::default() }, std::path::PathBuf::from("/w/reviewer.md"))
+            }], skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(vec!["some-skill".to_owned()]), inherit_project_instructions: true, extensions: crate::extensions::NativeAgentExtensions::with_agent_status(crate::context::AgentStatusConfig::default()).and_todo(), workflows: std::collections::BTreeSet::default(), permissions: None }, std::path::PathBuf::from("/w/reviewer.md"))
         .expect("definition");
 
         let mut relabelled = spec.clone();

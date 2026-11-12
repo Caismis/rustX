@@ -952,6 +952,7 @@ impl ConversationRuntime {
                 resources: config.resources,
                 mcp_settlement_failure: None,
                 effective_approval_mode: config.approval_mode,
+                last_permission_reminder_mode: None,
                 conversation: Some(conversation),
                 current_attempt: None,
                 scheduled: None,

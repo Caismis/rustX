@@ -157,6 +157,9 @@ macro_rules! agent_profile_document {
             #[serde(default)]
             #[serde(rename = "plugins")]
             pub extensions: NativeAgentExtensionsDocument,
+            /// Source-default three-mode permission object (Issue #544).
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            pub permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
         }
 
         impl $name {
@@ -180,6 +183,7 @@ macro_rules! agent_profile_document {
                     extensions: self.extensions.resolve(),
                     workflows: self.workflows.iter().cloned().collect(),
                     inherit_project_instructions: self.agents_md.inherit,
+                    permissions: self.permissions,
                 })
             }
 

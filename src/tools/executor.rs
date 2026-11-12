@@ -804,6 +804,27 @@ impl std::fmt::Debug for ToolRegistration {
 }
 
 impl ToolRegistration {
+    pub(crate) fn from_parts(
+        definition: ToolDefinition,
+        executor: Arc<dyn ToolExecutor>,
+        normalizer: BusinessArgumentNormalizer,
+        foreground: crate::tools::deadline::ForegroundPolicy,
+        resource_permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+        resource_permission_targets: BTreeMap<
+            String,
+            crate::runtime::permission::ResourcePermissionSet,
+        >,
+    ) -> Self {
+        Self {
+            foreground,
+            definition,
+            executor,
+            normalizer,
+            resource_permissions,
+            resource_permission_targets,
+        }
+    }
+
     pub(crate) fn foreground(&self) -> crate::tools::deadline::ForegroundPolicy {
         self.foreground
     }
@@ -829,6 +850,7 @@ impl ToolRegistration {
         self.resource_permission_targets = targets;
         self
     }
+
     /// Prepares a fixed foreground invocation against an exact frozen
     /// definition. Runtime metadata is never accepted as business input.
     pub(crate) fn prepare_fixed(
@@ -901,6 +923,29 @@ pub(crate) fn validate_model_facing_name(name: &str) -> Result<(), ToolRegistryE
 }
 
 impl ToolRegistry {
+    /// Registers one validated registration while preserving frozen resource
+    /// permission metadata.
+    pub(crate) fn register_registration(
+        &mut self,
+        registration: ToolRegistration,
+    ) -> Result<(), ToolRegistryError> {
+        let resource_permissions = registration.resource_permissions;
+        let resource_permission_targets = registration.resource_permission_targets;
+        self.register_with_execution_metadata(
+            registration.definition,
+            registration.executor,
+            registration.normalizer,
+            registration.foreground,
+        )?;
+        let last = self
+            .entries
+            .last_mut()
+            .expect("register always pushes one entry");
+        last.resource_permissions = resource_permissions;
+        last.resource_permission_targets = resource_permission_targets;
+        Ok(())
+    }
+
     /// Creates an empty registry.
     #[must_use]
     pub fn new() -> Self {
@@ -1093,20 +1138,7 @@ impl ToolRegistry {
     ) -> Result<Self, ToolRegistryError> {
         let mut registry = Self::new();
         for registration in registrations {
-            let permissions = registration.resource_permissions;
-            let targets = registration.resource_permission_targets;
-            registry.register_with_execution_metadata(
-                registration.definition,
-                registration.executor,
-                registration.normalizer,
-                registration.foreground,
-            )?;
-            let last = registry
-                .entries
-                .last_mut()
-                .expect("register always pushes one entry");
-            last.resource_permissions = permissions;
-            last.resource_permission_targets = targets;
+            registry.register_registration(registration)?;
         }
         Ok(registry)
     }

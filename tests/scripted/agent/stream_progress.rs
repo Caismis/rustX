@@ -189,6 +189,7 @@ async fn make_execution(setup: ExecutionSetup<'_>) -> AgentExecution<'_> {
             model_timeout_policy: policy,
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
+            last_permission_reminder_mode: None,
             approval_mode: rustx::runtime::ApprovalMode::FullAccess,
         },
         context_runtime(),

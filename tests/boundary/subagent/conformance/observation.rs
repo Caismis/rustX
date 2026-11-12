@@ -534,7 +534,7 @@ async fn assert_reactivation(
             "second activation",
             crate::runtime::subagent::AgentActivationOrigin::ClientControl,
             rustx::runtime::types::ApprovalMode::FullAccess,
-        CancellationSignal::new(),
+            CancellationSignal::new(),
         )
         .await
         .unwrap();

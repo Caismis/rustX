@@ -853,6 +853,7 @@ fn parallel_model_program() -> WorkflowProgram {
     compile_test(WorkflowDefinition {
         description: "Concurrent Model calls".into(),
         timeout_ms: 600_000,
+        permissions: None,
         block: WorkflowBlock {
             input: schema(json!({"task":{"type":"string"}}), &["task"]),
             nodes,

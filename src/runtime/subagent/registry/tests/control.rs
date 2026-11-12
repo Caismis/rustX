@@ -31,7 +31,7 @@ async fn the_registry_authority_refuses_to_steer_a_workflow_owned_child() {
             "the workflow owns this instruction",
             crate::runtime::subagent::AgentActivationOrigin::ClientControl,
             crate::runtime::types::ApprovalMode::FullAccess,
-        CancellationSignal::new(),
+            CancellationSignal::new(),
         )
         .await
         .expect_err("a Workflow-owned AgentRun is never steerable");
@@ -104,14 +104,14 @@ async fn concurrent_active_messages_follow_owner_admission_sequence() {
         "one",
         crate::runtime::subagent::AgentActivationOrigin::ClientControl,
         crate::runtime::types::ApprovalMode::FullAccess,
-    CancellationSignal::new(),
+        CancellationSignal::new(),
     ));
     let mut second = Box::pin(plane.registry.send_message(
         &accepted.child_agent_id,
         "two",
         crate::runtime::subagent::AgentActivationOrigin::ClientControl,
         crate::runtime::types::ApprovalMode::FullAccess,
-    CancellationSignal::new(),
+        CancellationSignal::new(),
     ));
     assert!(futures_util::poll!(&mut first).is_pending());
     assert!(futures_util::poll!(&mut second).is_pending());
@@ -237,7 +237,7 @@ async fn a_dropped_steer_future_removes_its_ticket_without_synthesizing_cancella
         "steer one",
         crate::runtime::subagent::AgentActivationOrigin::ClientControl,
         crate::runtime::types::ApprovalMode::FullAccess,
-    CancellationSignal::new(),
+        CancellationSignal::new(),
     ));
     let () = std::future::poll_fn(|cx| {
         assert!(
@@ -288,7 +288,7 @@ async fn a_dropped_steer_future_removes_its_ticket_without_synthesizing_cancella
                     "steer after the abandonment",
                     crate::runtime::subagent::AgentActivationOrigin::ClientControl,
                     crate::runtime::types::ApprovalMode::FullAccess,
-                CancellationSignal::new(),
+                    CancellationSignal::new(),
                 )
                 .await
         }
@@ -349,7 +349,7 @@ async fn terminal_settlement_clears_outstanding_steer_reservations() {
         "never answered",
         crate::runtime::subagent::AgentActivationOrigin::ClientControl,
         crate::runtime::types::ApprovalMode::FullAccess,
-    CancellationSignal::new(),
+        CancellationSignal::new(),
     ));
     let () = std::future::poll_fn(|cx| {
         assert!(steer.as_mut().poll(cx).is_pending());
@@ -457,7 +457,7 @@ async fn natural_terminal_after_child_acceptance_does_not_erase_the_acknowledgem
                     "accepted before the natural terminal",
                     crate::runtime::subagent::AgentActivationOrigin::ClientControl,
                     crate::runtime::types::ApprovalMode::FullAccess,
-                CancellationSignal::new(),
+                    CancellationSignal::new(),
                 )
                 .await
         }

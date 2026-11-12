@@ -133,6 +133,28 @@ pub(crate) fn is_domain_control(name: &str) -> bool {
 ///
 /// Child runtimes never reach this function: their plane is
 /// [`register_subagent_child_tools`], which has no Agent controls at all.
+pub(super) fn freeze_named_agent_permissions(
+    mut registration: NativeToolRegistration,
+    catalog: &crate::runtime::subagent::AgentCatalog,
+) -> NativeToolRegistration {
+    let mut targets = std::collections::BTreeMap::new();
+    for definition in catalog.definitions() {
+        if let Some(set) = definition.profile().permissions {
+            targets.insert(definition.name().to_string(), set);
+        }
+    }
+    if targets.is_empty() {
+        return registration;
+    }
+    if targets.len() == 1 {
+        registration = registration
+            .with_resource_permissions(targets.into_values().next().expect("exactly one target"));
+    } else {
+        registration = registration.with_resource_permission_targets(targets);
+    }
+    registration
+}
+
 fn agent_control_registrations(
     subagents: Option<&crate::runtime::subagent::SubagentRegistry>,
     catalog: &crate::runtime::subagent::AgentCatalog,
@@ -145,7 +167,7 @@ fn agent_control_registrations(
             "the Root admits named Agents, but the subagent registry is unavailable".into(),
         )
     })?;
-    let mut registrations = agents::registrations(subagents);
+    let mut registrations = agents::registrations(subagents, catalog);
     registrations.push(subagent::registration(subagents.clone(), catalog));
     Ok(registrations)
 }
@@ -347,13 +369,7 @@ pub fn register_native_tools(
     // tool-owned registration, and this list is the only place that knows
     // which native capabilities exist.
     for registration in native_tool_registrations(resources, policies)? {
-        let NativeToolRegistration {
-            definition,
-            executor,
-            normalizer,
-            foreground,
-        } = registration;
-        registry.register_with_execution_metadata(definition, executor, normalizer, foreground)?;
+        registry.register_registration(registration.into_tool_registration())?;
     }
     Ok(())
 }
@@ -388,13 +404,7 @@ fn register_workflow_registrations(
     registrations: Vec<NativeToolRegistration>,
 ) -> Result<(), ToolRegistryError> {
     for registration in registrations {
-        let NativeToolRegistration {
-            definition,
-            executor,
-            normalizer,
-            foreground,
-        } = registration;
-        registry.register_with_execution_metadata(definition, executor, normalizer, foreground)?;
+        registry.register_registration(registration.into_tool_registration())?;
     }
     Ok(())
 }
@@ -495,6 +505,7 @@ pub(crate) fn todo_tool_registration() -> crate::tools::executor::ToolRegistrati
         // what `ToolRegistration::plain` composes. Asserting it here keeps a
         // later policy change from silently crossing this seam.
         foreground: crate::tools::deadline::ForegroundPolicy::Leaf,
+        ..
     } = todo::registration()
     else {
         unreachable!("the todo Tool registration is a foreground leaf")

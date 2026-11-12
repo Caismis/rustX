@@ -35,7 +35,7 @@ async fn reject_without_effects(plane: &TestPlane, agent: &AgentId) {
         &[],
         AgentActivationOrigin::ClientControl,
         crate::runtime::types::ApprovalMode::FullAccess,
-    CancellationSignal::new(),
+        CancellationSignal::new(),
     ));
     assert!(matches!(
         futures_util::poll!(&mut rejected),
@@ -66,7 +66,7 @@ async fn active_guidance_preserves_text_budget_and_accepts_many_files() {
         &files,
         AgentActivationOrigin::ClientControl,
         crate::runtime::types::ApprovalMode::FullAccess,
-    CancellationSignal::new(),
+        CancellationSignal::new(),
     ));
     assert!(futures_util::poll!(&mut send).is_pending());
     let ParentFrame::Guidance(guidance) = child.read_frame().await else {
@@ -127,7 +127,7 @@ async fn inactive_activation_preserves_text_budget_and_accepts_many_files() {
         &files,
         AgentActivationOrigin::ClientControl,
         crate::runtime::types::ApprovalMode::FullAccess,
-    CancellationSignal::new(),
+        CancellationSignal::new(),
     ));
     assert!(futures_util::poll!(&mut send).is_pending());
     let delegate = resumed.accept_delegate().await;

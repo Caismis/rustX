@@ -272,6 +272,8 @@ pub struct AgentExecutionResult {
     pub durable_failure: Option<String>,
     /// The typed durable stage associated with [`Self::durable_failure`].
     pub durable_failure_kind: Option<DurableFailureKind>,
+    /// Permission mode successfully injected during this attempt, when any.
+    pub permission_reminder_emitted: Option<crate::runtime::types::ApprovalMode>,
 }
 
 impl AgentExecutionResult {
@@ -330,6 +332,8 @@ pub(crate) struct AgentExecutionRuntimePolicy {
     pub(crate) workflow_output: Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>>,
     /// Frozen execution-permission mode for sparse reminders (Issue #544).
     pub(crate) approval_mode: crate::runtime::types::ApprovalMode,
+    /// Mode last successfully injected on this conversation, when known.
+    pub(crate) last_permission_reminder_mode: Option<crate::runtime::types::ApprovalMode>,
 }
 
 /// One agent attempt execution.

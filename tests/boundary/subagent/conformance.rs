@@ -6286,7 +6286,7 @@ async fn a_steer_is_consumed_by_the_same_child_conversation_and_agent_loop() {
             "Focus on cancellation ownership and ignore TUI code.",
             crate::runtime::subagent::AgentActivationOrigin::ClientControl,
             rustx::runtime::types::ApprovalMode::FullAccess,
-        CancellationSignal::new(),
+            CancellationSignal::new(),
         )
         .await
         .expect("the running child durably accepts the guidance");
@@ -6400,7 +6400,7 @@ async fn accepted_steers_are_observed_in_their_durable_acceptance_order() {
                 message,
                 crate::runtime::subagent::AgentActivationOrigin::ClientControl,
                 rustx::runtime::types::ApprovalMode::FullAccess,
-            CancellationSignal::new(),
+                CancellationSignal::new(),
             )
             .await
             .unwrap_or_else(|error| panic!("{message} is accepted: {error}"));

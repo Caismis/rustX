@@ -55,6 +55,7 @@ pub(crate) fn default_execution_policy() -> crate::agent::execution::AgentExecut
         // Reminder/projection mode only. Tool authorization reads the
         // attempt lifecycle (`inert` / [`full_access_lifecycle`] are Full
         // Access; Plan fixtures must opt in).
+        last_permission_reminder_mode: None,
         approval_mode: rustx::runtime::ApprovalMode::FullAccess,
     }
 }

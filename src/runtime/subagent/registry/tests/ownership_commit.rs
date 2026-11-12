@@ -815,7 +815,7 @@ async fn reserved_commit_does_not_lock_registry_and_interrupt_captures_exact_res
                 "next",
                 AgentActivationOrigin::ClientControl,
                 crate::runtime::types::ApprovalMode::FullAccess,
-            CancellationSignal::new(),
+                CancellationSignal::new(),
             )
             .await
     });

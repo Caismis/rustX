@@ -554,8 +554,9 @@ mod tests {
     fn oversized_review_arguments_fail_closed_without_calling_allow() {
         let oversized = "x".repeat(REVIEW_ARGUMENTS_BUDGET + 1);
         let arguments = serde_json::json!({ "command": oversized });
-        let conversation_id =
-            crate::runtime::identity::ConversationId::new("conv_6ae353db-f482-746d-8f8d-b42ad2fef7a7");
+        let conversation_id = crate::runtime::identity::ConversationId::new(
+            "conv_6ae353db-f482-746d-8f8d-b42ad2fef7a7",
+        );
         let attempt_id = crate::runtime::identity::AttemptId::new("attempt_review_budget");
         let invocation_id = crate::tools::types::ToolInvocationId::Agent {
             call_id: crate::runtime::identity::ToolCallId::new("call_review_budget"),
