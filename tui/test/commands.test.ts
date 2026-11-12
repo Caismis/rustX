@@ -18,7 +18,7 @@ import { describe, it } from "node:test";
 
 import { SlashCommandAutocompleteProvider, commandPrefix } from "../src/commands/autocomplete.ts";
 import { CommandDispatcher } from "../src/commands/dispatcher.ts";
-import { renderTools } from "../src/commands/presentation.ts";
+import { renderModel, renderTools } from "../src/commands/presentation.ts";
 import { COMMANDS, parseCommandLine } from "../src/commands/registry.ts";
 import { emptyPresentationState } from "../src/presentation/projection.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
@@ -1041,6 +1041,151 @@ describe("CommandDispatcher", () => {
           result.text,
           "usage: /model profile set <id> | /model profile clear",
         );
+    }
+    assert.equal(h.transport.log.requests.length, before);
+  });
+
+  it("renders configured and effective auxiliary model facts in /model show", () => {
+    const effective = sessionModel("alpha/model-a", { profile: "low" });
+    effective.configured.auxiliary = {
+      mode: "explicit",
+      model: "alpha/summary",
+      profile: { mode: "explicit", id: "compact" },
+    };
+    effective.auxiliary = {
+      mode: "explicit",
+      effective: { ...effective.effective!, model: "alpha/summary", profile: "compact" },
+    };
+    const rendered = renderModel(emptyPresentationState(effective));
+    assert.match(rendered, /configured auxiliary model: `alpha\/summary`/);
+    assert.match(rendered, /configured auxiliary profile strategy: compact/);
+    assert.match(rendered, /effective auxiliary model: `alpha\/summary`/);
+    assert.match(rendered, /effective auxiliary profile: compact/);
+  });
+
+  it("auxiliary follow resets session mode and lowest profile through model_set", async () => {
+    const h = await harness();
+    const command = h.dispatcher.submit("/model auxiliary follow");
+    const read = await nextRequest(h, "session/model");
+    const current = sessionModel("alpha/model-a");
+    current.configured.auxiliary = {
+      mode: "explicit",
+      model: "alpha/summary",
+      profile: { mode: "explicit", id: "compact" },
+    };
+    h.transport.respond(read.id, domainReceipt("model", [current]));
+    const set = await nextRequest(h, "session/setModel");
+    assert.deepEqual(paramsOf(set, "session/setModel").config.auxiliary, {
+      mode: "session",
+      profile: { mode: "lowest" },
+    });
+    h.transport.respond(set.id, { type: "model_set", settings_revision: "1" });
+    const confirmed = await nextRequest(h, "session/model");
+    h.transport.respond(
+      confirmed.id,
+      domainReceipt("model", [
+        {
+          ...current,
+          configured: {
+            ...current.configured,
+            auxiliary: { mode: "session", profile: { mode: "lowest" } },
+          },
+        },
+      ]),
+    );
+    const outcome = await command;
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
+      assert.match(outcome.text, /follows session primary model/);
+      assert.match(outcome.text, /profile strategy lowest/);
+    }
+  });
+
+  it("auxiliary set carries profile and overrides onto an explicit catalog model", async () => {
+    const h = await harness();
+    const command = h.dispatcher.submit("/model auxiliary set alpha/summary");
+    const catalog = await nextRequest(h, "session/models");
+    h.transport.respond(
+      catalog.id,
+      domainReceipt("model_catalog.models", [
+        catalogModel("alpha/model-a"),
+        catalogModel("alpha/summary"),
+      ]),
+    );
+    const read = await nextRequest(h, "session/model");
+    const current = sessionModel("alpha/model-a");
+    current.configured.auxiliary = {
+      mode: "session",
+      profile: { mode: "lowest" },
+      request_params: { summary_tag: "keep" },
+      max_output_tokens: 256,
+    };
+    h.transport.respond(read.id, domainReceipt("model", [current]));
+    const set = await nextRequest(h, "session/setModel");
+    assert.deepEqual(paramsOf(set, "session/setModel").config.auxiliary, {
+      mode: "explicit",
+      model: "alpha/summary",
+      profile: { mode: "lowest" },
+      request_params: { summary_tag: "keep" },
+      max_output_tokens: 256,
+    });
+    assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, true);
+    h.transport.respond(set.id, { type: "model_set", settings_revision: "1" });
+    const confirmed = await nextRequest(h, "session/model");
+    h.transport.respond(
+      confirmed.id,
+      domainReceipt("model", [
+        {
+          ...current,
+          configured: {
+            ...current.configured,
+            auxiliary: {
+              mode: "explicit",
+              model: "alpha/summary",
+              profile: { mode: "lowest" },
+              request_params: { summary_tag: "keep" },
+              max_output_tokens: 256,
+            },
+          },
+        },
+      ]),
+    );
+    const outcome = await command;
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") assert.match(outcome.text, /alpha\/summary/);
+  });
+
+  for (const [command, expectedProfile] of [
+    ["/model auxiliary profile lowest", { mode: "lowest" }],
+    ["/model auxiliary profile model_default", { mode: "model_default" }],
+    ["/model auxiliary profile clear", { mode: "model_default" }],
+    ["/model auxiliary profile set compact", { mode: "explicit", id: "compact" }],
+  ] as const) {
+    it(`auxiliary profile grammar commits ${expectedProfile.mode} through model_set`, async () => {
+      const h = await harness();
+      const changing = h.dispatcher.submit(command);
+      const read = await nextRequest(h, "session/model");
+      const current = sessionModel("alpha/model-a");
+      current.configured.auxiliary = { mode: "explicit", model: "alpha/summary" };
+      h.transport.respond(read.id, domainReceipt("model", [current]));
+      const set = await nextRequest(h, "session/setModel");
+      assert.deepEqual(paramsOf(set, "session/setModel").config.auxiliary, {
+        mode: "explicit",
+        model: "alpha/summary",
+        profile: expectedProfile,
+      });
+      h.transport.respond(set.id, domainReceipt("model", [{ ...current, configured: { ...current.configured, auxiliary: { mode: "explicit", model: "alpha/summary", profile: expectedProfile } } }]));
+      assert.equal((await changing).kind, "transient");
+    });
+  }
+
+  it("rejects obsolete auxiliary syntax without a native operation", async () => {
+    const h = await harness();
+    const before = h.transport.log.requests.length;
+    for (const text of ["/model auxiliary", "/model auxiliary set", "/model auxiliary profile", "/model auxiliary profile set"]) {
+      const result = await h.dispatcher.submit(text);
+      assert.equal(result.kind, "transient");
+      if (result.kind === "transient") assert.match(result.text, /usage: \/model auxiliary/);
     }
     assert.equal(h.transport.log.requests.length, before);
   });

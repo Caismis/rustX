@@ -31,14 +31,17 @@ import { renderRepairInspection, type SourceRepairObservation } from "../present
 
 import type { AppServerHost } from "../app-server/host.ts";
 import type { AppServerSession } from "../app-server/session.ts";
-import { capabilitySummary, describeProfile, sessionLabel, skills } from "../presentation/selectors.ts";
+import { capabilitySummary, describeConfiguredAuxiliaryModel, describeConfiguredAuxiliaryProfile, describeProfile, sessionLabel, skills } from "../presentation/selectors.ts";
 import { isTodoComposed, selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import { renderTodoInspection, deferredTodoRecords } from "../ui/components/todos.ts";
 import { parseCommandLine } from "./registry.ts";
 import { expandPreference, failure, focusTransition, inspect, reasoningPreference, transient, usage, type CommandOutcome } from "./outcome.ts";
 import { goalSummary, renderDebug, renderHelp, renderModel, renderSettings, renderSkills, renderStatus, renderTools, type DebugDiagnostics } from "./presentation.ts";
-import type { CatalogModelView, SessionSettings, SessionUserMessageBoundaryObservation } from "../protocol/app-server.ts";
+import type { CatalogModelView, SessionModelConfig, SessionSettings, SessionUserMessageBoundaryObservation } from "../protocol/app-server.ts";
+
+const AUXILIARY_USAGE =
+  "usage: /model auxiliary clear | follow | set <provider/model> | profile lowest | profile model_default | profile set <id> | profile clear";
 
 export interface DispatcherContext {
   /** The connection and its durable Session catalog. */
@@ -741,6 +744,90 @@ export class CommandDispatcher {
       else if (profile !== undefined) configured.profile = profile;
       const updated = await session.modelSet(configured, true);
       return transient("info", withModelOutcomeNotice(session, `Session model profile -> ${updated.configured.profile ?? "model default"}; future independent attempts. Running attempts stay frozen.`));
+    }
+    if (/^auxiliary(?:\s|$)/.test(argument)) {
+      const parts = argument.split(/\s+/);
+      const verb = parts[1];
+      if (verb === "clear" || verb === "follow") {
+        if (parts.length !== 2) return transient("error", AUXILIARY_USAGE);
+        const current = await session.modelGet();
+        const configured: SessionModelConfig = {
+          ...current.configured,
+          auxiliary: { mode: "session", profile: { mode: "lowest" } },
+        };
+        const updated = await session.modelSet(configured, true);
+        return transient(
+          "info",
+          withModelOutcomeNotice(
+            session,
+            `Session auxiliary model -> ${describeConfiguredAuxiliaryModel(updated.configured.auxiliary)}; profile strategy ${describeConfiguredAuxiliaryProfile(updated.configured.auxiliary)}; future independent attempts. Running attempts stay frozen.`,
+          ),
+        );
+      }
+      if (verb === "set") {
+        if (parts.length !== 3) return transient("error", AUXILIARY_USAGE);
+        const modelId = parts[2]!;
+        const catalog = await session.modelCatalog();
+        const models = catalog.models ?? [];
+        if (!models.some((model) => model.model === modelId)) {
+          const known = models.map((model) => model.model).join(", ");
+          return transient(
+            "error",
+            `${modelId} is not in the runtime's catalog. Selectable: ${known || "none"}`,
+          );
+        }
+        const current = await session.modelGet();
+        const prev = current.configured.auxiliary;
+        const configured: SessionModelConfig = {
+          ...current.configured,
+          auxiliary: {
+            mode: "explicit",
+            model: modelId,
+            ...(prev?.profile ? { profile: prev.profile } : {}),
+            ...(prev?.request_params ? { request_params: prev.request_params } : {}),
+            ...(prev?.max_output_tokens != null ? { max_output_tokens: prev.max_output_tokens } : {}),
+          },
+        };
+        const updated = await session.modelSet(configured, true);
+        return transient(
+          "info",
+          withModelOutcomeNotice(
+            session,
+            `Session auxiliary model -> ${describeConfiguredAuxiliaryModel(updated.configured.auxiliary)}; profile strategy ${describeConfiguredAuxiliaryProfile(updated.configured.auxiliary)}; overrides preserved; future independent attempts. Running attempts stay frozen.`,
+          ),
+        );
+      }
+      if (verb === "profile") {
+        const strategy = parts[2];
+        const explicitId = parts.length === 4 && strategy === "set" ? parts[3] : undefined;
+        const lowest = strategy === "lowest" && parts.length === 3;
+        const modelDefault =
+          (strategy === "model_default" || strategy === "clear") && parts.length === 3;
+        if (!lowest && !modelDefault && explicitId === undefined) {
+          return transient("error", AUXILIARY_USAGE);
+        }
+        const profile = lowest
+          ? ({ mode: "lowest" } as const)
+          : explicitId !== undefined
+            ? ({ mode: "explicit", id: explicitId } as const)
+            : ({ mode: "model_default" } as const);
+        const current = await session.modelGet();
+        const base =
+          current.configured.auxiliary ?? ({ mode: "session", profile: { mode: "lowest" } } as const);
+        const configured: SessionModelConfig = {
+          ...current.configured,
+          auxiliary: { ...base, profile },
+        };
+        const updated = await session.modelSet(configured, true);
+        return transient(
+          "info",
+          withModelOutcomeNotice(
+            session,
+            `Session auxiliary profile strategy -> ${describeConfiguredAuxiliaryProfile(updated.configured.auxiliary)}; future independent attempts. Running attempts stay frozen.`,
+          ),
+        );
+      }
+      return transient("error", AUXILIARY_USAGE);
     }
     if (argument === "show") {
       return inspect("Model", withModelOutcomeNotice(session, renderModel(state)));

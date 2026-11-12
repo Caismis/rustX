@@ -1,4 +1,4 @@
-import { activeBackground, capabilitySummary, describeConfiguredProfile, describeProfile, inactiveToolsByOrigin, latestAgentStatus, originLabel, outcomeLabel, skills, toolsByOrigin, unavailableInputModalities } from "../presentation/selectors.ts";
+import { activeBackground, capabilitySummary, describeConfiguredAuxiliaryModel, describeConfiguredAuxiliaryProfile, describeConfiguredProfile, describeProfile, inactiveToolsByOrigin, latestAgentStatus, originLabel, outcomeLabel, skills, toolsByOrigin, unavailableInputModalities } from "../presentation/selectors.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import { renderAgentStatusDetail } from "../ui/components/agent-status.ts";
 import { COMMANDS } from "./registry.ts";
@@ -139,14 +139,18 @@ export function renderModel(state: PresentationState): string {
     }
   }
 
-  const auxiliary = session.configured.auxiliary;
+  const auxiliaryConfigured = session.configured.auxiliary;
   lines.push(
-    `- auxiliary model: ${
-      auxiliary == null || auxiliary.mode === "session"
-        ? "follows the Session primary model with an independent profile strategy"
-        : `\`${auxiliary.model}\``
-    }`,
+    `- configured auxiliary model: ${describeConfiguredAuxiliaryModel(auxiliaryConfigured)}`,
+    `- configured auxiliary profile strategy: ${describeConfiguredAuxiliaryProfile(auxiliaryConfigured)}`,
   );
+  const auxiliaryEffective = session.auxiliary;
+  if (auxiliaryEffective != null) {
+    lines.push(
+      `- effective auxiliary model: \`${auxiliaryEffective.effective.model}\` via ${auxiliaryEffective.effective.protocol}`,
+      `- effective auxiliary profile: ${describeProfile(auxiliaryEffective.effective)}`,
+    );
+  }
 
   const attempt = state.attempt;
   if (attempt !== undefined) {

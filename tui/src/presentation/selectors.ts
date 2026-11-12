@@ -350,6 +350,30 @@ export function describeConfiguredProfile(
     : `${configured.profile}`;
 }
 
+/** How the session configured auxiliary model selection (session follow vs explicit). */
+export function describeConfiguredAuxiliaryModel(
+  auxiliary: SessionModelConfig["auxiliary"],
+): string {
+  if (auxiliary == null || auxiliary.mode === "session") {
+    return "follows session primary model";
+  }
+  return `\`${auxiliary.model}\``;
+}
+
+/** Auxiliary profile strategy the session asked for, independent of the primary profile. */
+export function describeConfiguredAuxiliaryProfile(
+  auxiliary: SessionModelConfig["auxiliary"],
+): string {
+  const profile = auxiliary?.profile;
+  if (profile == null || profile.mode === "lowest") {
+    return "lowest";
+  }
+  if (profile.mode === "model_default") {
+    return "model default";
+  }
+  return profile.id;
+}
+
 /**
  * Modalities the catalog claims but the runtime cannot deliver today.
  *
