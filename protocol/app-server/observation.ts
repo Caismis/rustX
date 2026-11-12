@@ -1,4 +1,4 @@
-import type { AttachmentTarget, CheckpointReadCut, RuntimeClientCheckpoint, RuntimeClientEvent } from './v78.ts';
+import type { AttachmentTarget, CheckpointReadCut, RuntimeClientCheckpoint, RuntimeClientEvent } from './v79.ts';
 
 /** Validate the returned native Root cut before installing any client state. */
 export function validateRootCheckpoint(target: AttachmentTarget, checkpoint: RuntimeClientCheckpoint, applied?: string): void {
@@ -12,6 +12,8 @@ export function validateRootEvent(target: AttachmentTarget, event: RuntimeClient
   if (event.type === 'checkpoint_advanced') {
     validateRootCheckpoint(target, event.checkpoint);
     if (event.checkpoint.cursor !== cursor) throw new Error('Root checkpoint event cursor mismatch.');
+  } else if (event.type === 'projection_delta') {
+    throw new Error('Projection delta requires its checked baseline before validation.');
   } else if (event.type === 'projection_transition') {
     validateObservationCut(event.metadata.read_cut, target.conversation_id, null, cursor);
     for (const fact of event.events) validateRootEvent(target, fact, cursor);

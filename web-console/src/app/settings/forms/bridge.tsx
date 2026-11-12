@@ -2,7 +2,7 @@ import { useTranslation } from '../../../locale/react';
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useForm, type ReactFormExtendedApi } from '@tanstack/react-form';
 import { useSelector } from '@xstate/react';
-import type { SourceMutation } from '../../../../../protocol/app-server/v78';
+import type { SourceMutation } from '../../../../../protocol/app-server/v79';
 import { Button } from '../../../presentation/primitives/Button';
 import { SettingsNotice } from '../SettingsFeedback';
 import { SourceContext } from '../source-context';

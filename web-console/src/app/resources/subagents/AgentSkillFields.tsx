@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import type { SourceScope, SourceSettings, SourceToolSelection } from '../../../../../protocol/app-server/v78';
+import type { SourceScope, SourceSettings, SourceToolSelection } from '../../../../../protocol/app-server/v79';
 import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
 import { Switch } from '../../../presentation/primitives/Switch';

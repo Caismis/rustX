@@ -2,8 +2,8 @@ import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity.t
 import { messageDescriptors } from './message-descriptors.ts';
 import { contentRefKey } from '../../../protocol/app-server/content-identity.ts';
 import { displayInteraction } from './interaction-display.ts';
-import type { ContentBinding } from '../../../protocol/app-server/v78.ts';
-import { foldRuntimeEvent, checkpointSnapshot, contentBindings, observationCheckpoint, refineToolSlots, statusIdentity, transitionFacts } from '../../../protocol/app-server/projection.ts';
+import type { ContentBinding } from '../../../protocol/app-server/v79.ts';
+import { expandRuntimeEvent, foldRuntimeEvent, checkpointSnapshot, contentBindings, observationCheckpoint, refineToolSlots, statusIdentity, transitionFacts } from '../../../protocol/app-server/projection.ts';
 /**
  * The presentation reducer.
  *
@@ -177,10 +177,12 @@ export function deferredContent(state: PresentationState) {
  * value (for a diff, a test assertion, or an undo of a render).
  */
 export function reduce(state: PresentationState, protocolEvent: ProjectedEvent): PresentationState {
-  const { cursor, event } = protocolEvent;
+  const { cursor } = protocolEvent;
+  let { event } = protocolEvent;
   if (event.type === 'checkpoint_advanced') return replaceFromSnapshot(checkpointSnapshot(event.checkpoint), cursor);
   const native = nativeSnapshots.get(state);
   if (!native) throw new Error('No authoritative checkpoint for Runtime Client observation.');
+  event = expandRuntimeEvent(native, event);
   const projected = foldRuntimeEvent(native, event);
   const adaptation: Adaptation = { projected, displayedInbound: new Map((native.inbound.pending ?? []).map(item => [item.message.id, item.sequence])) };
   let view: TranscriptView = transcriptView(state);
@@ -239,6 +241,10 @@ interface Adaptation {
 function adaptTranscript(view: TranscriptView, event: RuntimeClientEvent, adaptation: Adaptation): TranscriptView {
   const { projected, displayedInbound } = adaptation;
   switch (event.type) {
+    case 'projection_delta':
+    case 'read_domains_patched':
+    case 'message_descriptor_patched':
+    case 'checkpoint_patched': throw new Error('Unexpanded native projection delta.');
     case 'checkpoint_advanced':
       displayedInbound.clear();
       for (const item of event.checkpoint.snapshot.inbound.pending ?? []) displayedInbound.set(item.message.id, item.sequence);
@@ -543,8 +549,8 @@ function mergeNativeTranscript(state: TranscriptView, fresh: TranscriptView): Tr
   };
 }
 
-function boundedDeferred(rows: import('../../../protocol/app-server/v78.ts').CheckpointPageItem[]) {
- const unique=new Map(rows.map(row=>[row.offset,row])),kept:import('../../../protocol/app-server/v78.ts').CheckpointPageItem[]=[];let bytes=0;
+function boundedDeferred(rows: import('../../../protocol/app-server/v79.ts').CheckpointPageItem[]) {
+ const unique=new Map(rows.map(row=>[row.offset,row])),kept:import('../../../protocol/app-server/v79.ts').CheckpointPageItem[]=[];let bytes=0;
  for(const row of [...unique.values()].reverse()){const size=new TextEncoder().encode(JSON.stringify(row)).length;if(kept.length===512||bytes+size>4*1024*1024)break;bytes+=size;kept.push(row);}
  return kept.reverse();
 }

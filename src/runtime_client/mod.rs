@@ -103,6 +103,7 @@ mod agent_trace;
 pub mod attachment;
 pub(crate) mod auxiliary;
 pub mod checkpoint;
+pub mod delta;
 pub(crate) mod domain;
 pub mod endpoint;
 pub mod event;

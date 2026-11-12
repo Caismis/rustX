@@ -11,6 +11,12 @@ use super::protocol::{
     ServerCapabilities, Success,
 };
 
+/// Rust-derived numeric descriptors emitted with the public schema artifacts.
+#[must_use]
+pub fn numeric_codec_assets() -> Vec<(&'static str, Vec<u8>)> {
+    super::wire::numeric_codec_assets()
+}
+
 #[must_use]
 #[allow(clippy::too_many_lines)] // Typed fixture constructors, not protocol logic.
 /// Construct canonical wire fixtures without environment-dependent values.
@@ -1775,9 +1781,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v78.schema.json", "v78.ts"]);
+        assert_eq!(generations, ["v79.schema.json", "v79.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v78.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v79.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

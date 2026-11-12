@@ -1,6 +1,7 @@
+import {deltaEvent} from '../../protocol/app-server/test-support/projection-delta';
 import { expect, it } from 'vitest';
-import { checkpointSnapshot, transitionFacts, foldRuntimeEvent as fold } from '../../protocol/app-server/projection';
-import type { RuntimeClientEvent as Event, RuntimeClientCheckpoint } from '../../protocol/app-server/v78';
+import { checkpointSnapshot, observationCheckpoint, transitionFacts, foldRuntimeEvent as fold } from '../../protocol/app-server/projection';
+import type { RuntimeClientEvent as Event, RuntimeClientCheckpoint } from '../../protocol/app-server/v79';
 import capture from './fixtures/incremental-native.json';
 import { checkpoint, interaction, snapshot } from './fixture';
 
@@ -78,7 +79,15 @@ it('every Session event variant has an explicit transition or documented domain 
   apply({type:'message_descriptor_committed',descriptor,head:[descriptor]});expect(state.message_descriptors).toEqual([descriptor]);
   apply({type:'collection_changed',domain:'agents',cut:{generation:'1',total:0}});
   apply({ type: 'runtime_shutdown' }); expect(state.shutting_down).toBe(true);
+  apply({type:'checkpoint_advanced',transition:'literal-base',checkpoint:checkpoint(state,'0')});
+  const base = observationCheckpoint(state, '0')!;
+  apply(deltaEvent(base, {type:'projection_transition', metadata:{read_cut:{...base.read_cut,revision:'1'},content:base.content,collections:base.collections},events:[
+    {type:'read_domains_updated',transcript:state.transcript,projection_head:state.context?.projection_head,occupancy:state.context?.occupancy,todos:state.todos},
+    {type:'message_descriptor_committed',descriptor,head:state.message_descriptors},
+    {type:'checkpoint_advanced',transition:'literal-edit',checkpoint:{...base,cursor:'1',read_cut:{...base.read_cut,revision:'1'}}},
+  ]}));
   const vocabulary: Record<Event['type'], true> = {
+    checkpoint_patched:true,projection_delta:true,read_domains_patched:true,message_descriptor_patched:true,
     pending_head_changed:true,tool_occurrence_rebound:true,tool_result_committed:true,message_descriptor_committed:true,collection_changed:true,projection_transition:true,checkpoint_advanced:true,block_content_advanced:true,
     read_domains_updated: true, trace_changed: true, goal_changed: true, workflows_updated: true,
     attempt_started: true, attempt_settled: true, attempt_turn_updated: true, attempt_usage_updated: true,

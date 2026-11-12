@@ -1,6 +1,6 @@
-import type { AgentObservation, AgentObservationCursor, RuntimeClientCheckpoint, RuntimeClientSnapshot, RuntimeClientEvent, CheckpointReadCut } from './v78.ts';
+import type { AgentObservation, AgentObservationCursor, RuntimeClientCheckpoint, RuntimeClientSnapshot, RuntimeClientEvent, CheckpointReadCut } from './v79.ts';
 import { validateObservationCut } from './observation.ts';
-import { checkpointSnapshot, foldRuntimeEvent, contentBindings, observationCheckpoint } from './projection.ts';
+import { checkpointSnapshot, expandRuntimeEvent, foldRuntimeEvent, contentBindings, observationCheckpoint } from './projection.ts';
 
 export class ChildObservation {
   phase: 'checkpointLoading' | 'liveFollowing' | 'durableOnly' | 'resyncRequired' | 'unavailable' = 'checkpointLoading';
@@ -27,7 +27,7 @@ export class ChildObservation {
       }
       if (event.type !== 'projection_transition') return false;
       validateObservationCut(event.metadata.read_cut, this.conversationId, this.activationId, cursor);
-      return event.events.every(fact => fact.type !== 'projection_transition' && fact.type !== 'checkpoint_advanced' || this.eventIdentity(fact, cursor));
+      return event.events.every(fact => fact.type !== 'projection_transition' && fact.type !== 'projection_delta' && fact.type !== 'checkpoint_advanced' || this.eventIdentity(fact, cursor));
     } catch { return false; }
   }
   apply(observation: AgentObservation) {
@@ -36,9 +36,12 @@ export class ChildObservation {
       if (observation.events.length > 32) throw new Error('Child event batch exceeds its bound.');
       for (const record of observation.events) {
         if (BigInt(record.cursor) !== BigInt(this.cursor.cursor) + 1n) { this.phase = 'resyncRequired'; throw new Error('Child observation gap.'); }
-        if (!this.eventIdentity(record.event, record.cursor)) { this.phase = 'resyncRequired'; throw new Error('Child event cut evidence mismatch.'); }
         let snapshot: RuntimeClientSnapshot;
-        try { snapshot = foldRuntimeEvent(this.snapshot, record.event); }
+        try {
+          const event = expandRuntimeEvent(this.snapshot, record.event);
+          if (!this.eventIdentity(event, record.cursor)) throw new Error('Child event cut evidence mismatch.');
+          snapshot = foldRuntimeEvent(this.snapshot, event);
+        }
         catch (error) { this.phase = 'resyncRequired'; throw error; }
         if (snapshot.conversation_id !== this.conversationId) { this.phase = 'resyncRequired'; throw new Error('Child event conversation mismatch.'); }
         this.snapshot = snapshot;
