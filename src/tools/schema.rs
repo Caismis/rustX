@@ -992,9 +992,11 @@ mod tests {
             original.clone(),
         ))
         .expect("compile");
+        let mut expected = original.clone();
+        super::decorate_elevation_reason(&mut expected);
         assert_eq!(
-            compiled.input_schema, original,
-            "the foreground schema is compiled verbatim"
+            compiled.input_schema, expected,
+            "the foreground schema gains elevation_reason only"
         );
         assert_eq!(
             selectable.input_schema, original,
@@ -1084,8 +1086,17 @@ mod tests {
             for schema in &schemas {
                 validate_execution_metadata_contract(policy, schema).expect("fixed policy");
                 let compiled = compile_model_definition(&definition(policy, schema.clone()))
-                    .expect("fixed policy compiles verbatim");
-                assert_eq!(&compiled.input_schema, schema);
+                    .expect("fixed policy compiles");
+                let mut expected = schema.clone();
+                if super::is_flat_decoratable_object_root(&expected)
+                    && !super::root_claims_property(&expected, super::ELEVATION_REASON_FIELD)
+                {
+                    super::decorate_elevation_reason(&mut expected);
+                }
+                assert_eq!(
+                    &compiled.input_schema, &expected,
+                    "fixed policy keeps business fields and adds elevation_reason when decoratable"
+                );
             }
         }
     }
@@ -1420,9 +1431,15 @@ mod tests {
                     .unwrap_or_else(|error| {
                         panic!("references stay legal under {policy:?}: {error}")
                     });
+                let mut expected = (*schema).clone();
+                if super::is_flat_decoratable_object_root(&expected)
+                    && !super::root_claims_property(&expected, super::ELEVATION_REASON_FIELD)
+                {
+                    super::decorate_elevation_reason(&mut expected);
+                }
                 assert_eq!(
-                    &compiled.input_schema, schema,
-                    "a referencing schema is compiled verbatim under {policy:?}"
+                    &compiled.input_schema, &expected,
+                    "a referencing schema keeps its refs and gains elevation_reason when decoratable under {policy:?}"
                 );
             }
         }

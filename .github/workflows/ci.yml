@@ -279,11 +279,11 @@ jobs:
     if: fromJSON(needs.plan.outputs.run)['rust-contracts']
     runs-on: ubuntu-26.04
     # Preparation and the two native builds consumed about 11 minutes in
-    # run 38883956631. Tip 85eed5f80 (run 43092819736) still cancelled this
-    # lane at the 60m ceiling while an obsolete approvals-before-start
-    # contract was hanging; keep headroom after that rewrite for FULL
-    # permission-mode + Bash AST compile/test variance.
-    timeout-minutes: 90
+    # run 38883956631. Tip 5bde09b44 still cancelled this lane at the 90m
+    # ceiling while obsolete Plan-default headless fixtures and sequential
+    # barriers were still hanging; keep headroom for FULL permission-mode +
+    # Bash AST compile/test variance after those rewrites.
+    timeout-minutes: 120
 
     env:
       VERIFICATION_PROFILE: full
@@ -356,10 +356,9 @@ jobs:
     if: fromJSON(needs.plan.outputs.run)['rust-boundaries']
     runs-on: ubuntu-26.04
     # Cold libclang setup and both native builds exhausted 25 minutes in
-    # runs 39798438811 and 39811600857. Tip 85eed5f80 cancelled this lane at
-    # the prior 60m ceiling while Plan-mode Ask fixtures were still settling.
-    # Keep the same ceiling as rust-contracts so both Linux FULL lanes finish.
-    timeout-minutes: 90
+    # runs 39798438811 and 39811600857. Keep the same ceiling as
+    # rust-contracts so both Linux FULL lanes finish.
+    timeout-minutes: 120
 
     env:
       VERIFICATION_PROFILE: full

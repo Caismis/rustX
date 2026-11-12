@@ -2073,11 +2073,24 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
             let mut tools = ToolRegistry::new();
             probe.register(&mut tools);
             let arguments = match name {
-                "write" => serde_json::json!({"path":"test.txt","content":"new"}),
-                "edit" => {
-                    serde_json::json!({"path":"test.txt","edits":[{"oldText":"old","newText":"new"}]})
-                }
-                "bash" => serde_json::json!({"command":"true","execution_mode":"foreground"}),
+                // Plan elevates non-fast-path defaults only with a nonblank
+                // elevation_reason; otherwise the call is Denied and never Asks.
+                "write" => serde_json::json!({
+                    "path":"test.txt",
+                    "content":"new",
+                    "elevation_reason":"lifecycle approval fixture"
+                }),
+                "edit" => serde_json::json!({
+                    "path":"test.txt",
+                    "edits":[{"oldText":"old","newText":"new"}],
+                    "elevation_reason":"lifecycle approval fixture"
+                }),
+                // `true` is proven read-only; use an unproven redirect so Plan Asks.
+                "bash" => serde_json::json!({
+                    "command":"printf x >/tmp/rustx-lifecycle-ask",
+                    "execution_mode":"foreground",
+                    "elevation_reason":"lifecycle approval fixture"
+                }),
                 _ => unreachable!(),
             };
             let call = ScriptedCall {
@@ -2124,9 +2137,10 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                 let observed = facts.lock().unwrap()[0].clone();
                 assert_eq!(observed.tool_id, definition.id);
                 assert_eq!(observed.mode, ToolInvocationMode::Foreground);
-                // Bash's execution metadata was stripped at frozen preflight.
+                // Runtime metadata was stripped at frozen preflight.
                 let mut business = arguments.clone();
                 business.as_object_mut().unwrap().remove("execution_mode");
+                business.as_object_mut().unwrap().remove("elevation_reason");
                 assert_eq!(observed.arguments, business);
                 if decision == "cancel" {
                     cancellation.cancel();

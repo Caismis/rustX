@@ -276,6 +276,12 @@ impl Fixture {
             .insert("local/b".into(), alternate);
         catalog["agent"].as_table_mut().unwrap().insert("tools".into(),
             toml::Value::try_from(serde_json::json!({"builtin":["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_status"]})).unwrap());
+        // Headless App Server fixtures mutate via fake Builtin tools without a
+        // browser Ask; Full Access keeps Plan elevation from denying the turn.
+        catalog.as_table_mut().unwrap().insert(
+            "approval_mode".into(),
+            toml::Value::String("full_access".into()),
+        );
         documents[0] = toml::to_string(&catalog).unwrap().into_bytes();
         crate::local_runtime::initialization::initialize(&host, &documents);
         phases.enter("launch analysis");

@@ -546,7 +546,7 @@ async fn host_fixture_before_activation(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter.clone()),
-        approval_mode: crate::runtime::ApprovalMode::Plan,
+        approval_mode: crate::runtime::ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -643,7 +643,7 @@ async fn host_fixture_with_runtime_probe(
             explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter.clone()),
-            approval_mode: crate::runtime::ApprovalMode::Plan,
+            approval_mode: crate::runtime::ApprovalMode::FullAccess,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
@@ -6916,7 +6916,7 @@ async fn host_fixture_probe_with_native_tools(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: crate::scripted_suites::support::model::scripted_session_model(adapter.clone()),
-        approval_mode: crate::runtime::ApprovalMode::Plan,
+        approval_mode: crate::runtime::ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -7014,7 +7014,7 @@ async fn host_fixture_probe_with_runtime_gate(
             explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: crate::scripted_suites::support::model::scripted_session_model(adapter.clone()),
-            approval_mode: crate::runtime::ApprovalMode::Plan,
+            approval_mode: crate::runtime::ApprovalMode::FullAccess,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
@@ -7134,7 +7134,7 @@ async fn runtime_only_fixture(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter.clone()),
-        approval_mode: crate::runtime::ApprovalMode::Plan,
+        approval_mode: crate::runtime::ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -7550,7 +7550,7 @@ fn claim_config(fixture: &OwnershipFixture) -> RuntimeConversationConfig {
         explicit_model: true,
         agent_id: AgentId::new("agent-claim"),
         model: scripted_session_model(fixture.adapter.clone()),
-        approval_mode: crate::runtime::ApprovalMode::Plan,
+        approval_mode: crate::runtime::ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {

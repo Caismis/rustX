@@ -386,7 +386,10 @@ pub(super) async fn headless_runtime_with_options(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter),
-        approval_mode: ApprovalMode::Plan,
+        // Headless fixtures that are not permission tests use Full Access so
+        // fake Builtin tools are not Plan-elevated into Denied (Issue #544).
+        // Plan/Automatic fixtures must set the mode explicitly.
+        approval_mode: ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -495,7 +498,7 @@ pub(super) async fn headless_runtime_over_store_with_policy(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter),
-        approval_mode: ApprovalMode::Plan,
+        approval_mode: ApprovalMode::FullAccess,
         model_timeout_policy,
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -603,7 +606,7 @@ pub(super) async fn headless_runtime_over_store_with_subagents(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter),
-        approval_mode: ApprovalMode::Plan,
+        approval_mode: ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -718,7 +721,7 @@ pub(super) async fn subagent_runtime_config_with_registry(
         explicit_model: true,
         agent_id: runtime_agent.clone(),
         model: scripted_session_model(adapter),
-        approval_mode: ApprovalMode::Plan,
+        approval_mode: ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -1668,7 +1671,7 @@ pub(super) async fn runtime_with_model_probe_at(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter),
-        approval_mode: ApprovalMode::Plan,
+        approval_mode: ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {

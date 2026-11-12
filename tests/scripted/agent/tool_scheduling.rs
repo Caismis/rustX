@@ -1,13 +1,11 @@
 //! M5 deterministic Agent Loop scheduling tests.
 //!
 //! These tests prove the deterministic scheduling phases of one committed
-//! tool-call batch: parallel reversed physical completion with canonical
-//! result order, the exclusive sequential barrier, parallel-group plus
-//! sequential-barrier composition, mixed foreground/background groups that
-//! never wait for detached settlement, and the structural cancellation
-//! settlement of a batch. All synchronization is explicit (watches,
-//! notifies, and controller tasks); no wall-clock sleep proves any
-//! concurrency invariant.
+//! tool-call batch: concurrent independent starts with canonical result
+//! order, mixed foreground/background groups that never wait for detached
+//! settlement, and the structural cancellation settlement of a batch. All
+//! synchronization is explicit (watches, notifies, and controller tasks);
+//! no wall-clock sleep proves any concurrency invariant.
 
 #![allow(clippy::similar_names)] // scripted fixture names are intentionally similar
 
@@ -277,10 +275,10 @@ async fn parallel_reversed_completion_keeps_canonical_order() {
     ));
 }
 
-/// The exclusive sequential barrier: a later sequential call cannot start
-/// before the earlier call's attempt-facing result exists.
+/// Issue #544: independent authorized calls may start concurrently. A parked
+/// sibling does not block another Allow tool from crossing the start frontier.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sequential_barrier_blocks_later_calls() {
+async fn independent_authorized_calls_may_start_concurrently() {
     let call_a = scripted("call-a", "tool-alpha", "alpha", serde_json::json!({}));
     let call_b = scripted("call-b", "tool-beta", "beta", serde_json::json!({}));
     let model = fake_model(tool_turn_then_stop(&[&call_a, &call_b]));
@@ -288,7 +286,7 @@ async fn sequential_barrier_blocks_later_calls() {
         common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
-    let tool_b = FakeTool::new(
+    let (tool_b, release_b) = FakeTool::parking(
         common::tool_policies("beta", "tool-beta", ToolExecutionPolicy::ForegroundOnly),
         success_result("b"),
     );
@@ -299,8 +297,6 @@ async fn sequential_barrier_blocks_later_calls() {
     tool_b.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
 
-    // Native storage/capability setup and initial conversation durability are
-    // preparation; the unchanged scheduling guard starts with execution.
     let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let store = tool_runtime.durable_store();
     let (lease, _capability) = common::capability_lease(tools, &tool_runtime)
@@ -311,13 +307,9 @@ async fn sequential_barrier_blocks_later_calls() {
 
     let controller = tokio::spawn(async move {
         await_started(&mut started_a, "A started").await;
-        // A is still parked: B must not have started.
-        assert!(
-            !*started_b.borrow(),
-            "B cannot start while the sequential barrier A is pending"
-        );
+        await_started(&mut started_b, "B started while A is still parked").await;
         release_a.send_replace(true);
-        await_started(&mut started_b, "B started after A's result existed").await;
+        release_b.send_replace(true);
     });
     let _controller_guard = SequentialControllerGuard {
         release: release_on_unwind,
@@ -337,10 +329,10 @@ async fn sequential_barrier_blocks_later_calls() {
     );
 }
 
-/// Parallel group plus sequential barrier: P1/P2 may overlap and the
-/// sequential call starts only after both attempt-facing results exist.
+/// Issue #544: a third independent Allow call may start while earlier
+/// siblings are still parked — there is no tool-level sequential barrier.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn parallel_group_then_sequential_barrier() {
+async fn three_independent_calls_may_overlap_without_a_tool_barrier() {
     let call_p1 = scripted("call-p1", "tool-p1", "p1", serde_json::json!({}));
     let call_p2 = scripted("call-p2", "tool-p2", "p2", serde_json::json!({}));
     let call_s = scripted("call-s", "tool-s", "s", serde_json::json!({}));
@@ -353,15 +345,13 @@ async fn parallel_group_then_sequential_barrier() {
         common::tool_policies("p2", "tool-p2", ToolExecutionPolicy::ForegroundOnly),
         success_result("p2"),
     );
-    let tool_s = FakeTool::new(
+    let (tool_s, release_s) = FakeTool::parking(
         common::tool_policies("s", "tool-s", ToolExecutionPolicy::ForegroundOnly),
         success_result("s"),
     );
     let mut started_p1 = tool_p1.started();
     let mut started_p2 = tool_p2.started();
     let mut started_s = tool_s.started();
-    let mut completed_p1 = tool_p1.completed();
-    let mut completed_p2 = tool_p2.completed();
     let mut tools = ToolRegistry::new();
     tool_p1.register(&mut tools);
     tool_p2.register(&mut tools);
@@ -371,25 +361,10 @@ async fn parallel_group_then_sequential_barrier() {
     let controller = tokio::spawn(async move {
         await_started(&mut started_p1, "P1 started").await;
         await_started(&mut started_p2, "P2 started").await;
-        assert!(
-            !*started_s.borrow(),
-            "the sequential call cannot start before its barrier"
-        );
+        await_started(&mut started_s, "S started while P1/P2 are still parked").await;
         release_p1.send_replace(true);
         release_p2.send_replace(true);
-        completed_p1
-            .wait_for(|order| order.iter().any(|name| name == "p1"))
-            .await
-            .expect("P1 completed");
-        completed_p2
-            .wait_for(|order| order.iter().any(|name| name == "p2"))
-            .await
-            .expect("P2 completed");
-        await_started(
-            &mut started_s,
-            "S started only after both attempt-facing results",
-        )
-        .await;
+        release_s.send_replace(true);
     });
     let (result, _capability) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
@@ -501,11 +476,11 @@ async fn mixed_foreground_background_group_does_not_wait_for_detached_terminal()
     assert_eq!(tool_message_ids, vec!["call-a", "call-b", "call-c"]);
 }
 
-/// Cancellation during a mixed batch: in-flight foreground work receives
-/// the physical cancellation signal and settles as cancelled, the committed
-/// background dispatch stays conversation-owned, the complete batch commits
-/// in call order, no next model request starts, and exactly one
-/// `AttemptCancelled` terminal event ends the trace.
+/// Cancellation during a mixed concurrent batch: in-flight foreground work
+/// receives the physical cancellation signal and settles as cancelled, the
+/// committed background dispatch stays conversation-owned, the complete
+/// batch commits in call order, no next model request starts, and exactly
+/// one `AttemptCancelled` terminal event ends the trace.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
 async fn cancellation_during_mixed_batch_settles_structurally() {
@@ -534,10 +509,9 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
         FakeStep::Emit(tool_call_events(3, &call_d)[2].clone()),
         FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
     ]]);
-    // alpha: parallel foreground, parking; beta: parallel background,
-    // parking (committed and conversation-owned); gamma: parallel
-    // foreground, parking; delta: sequential foreground after the parallel
-    // group — it must never start.
+    // alpha/gamma/delta: concurrent foreground, parking; beta: concurrent
+    // background, parking (committed and conversation-owned). Cancellation
+    // wins while A/C/D are in flight; D is no longer a sequential follower.
     let (tool_a, release_a) = FakeTool::parking(
         common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
@@ -550,13 +524,13 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
         common::tool_policies("gamma", "tool-gamma", ToolExecutionPolicy::ForegroundOnly),
         success_result("c"),
     );
-    let tool_d = FakeTool::new(
+    let (tool_d, release_d) = FakeTool::parking(
         common::tool_policies("delta", "tool-delta", ToolExecutionPolicy::ForegroundOnly),
         success_result("d"),
     );
     let mut started_a = tool_a.started();
     let mut started_c = tool_c.started();
-    let started_d = tool_d.started();
+    let mut started_d = tool_d.started();
     let mut started_b = tool_b.started();
     let mut completed_b = tool_b.completed();
     let mut tools = ToolRegistry::new();
@@ -567,10 +541,11 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let controller_cancellation = cancellation.clone();
     let controller = tokio::spawn(async move {
-        // The parallel group started: A and C are parked, B's detached
+        // The concurrent batch started: A/C/D are parked, B's detached
         // runner started after its dispatch commit.
         await_started(&mut started_a, "A started").await;
         await_started(&mut started_c, "C started").await;
+        await_started(&mut started_d, "D started").await;
         await_started(&mut started_b, "detached B started").await;
         // Attempt cancellation wins while the foreground work is in flight.
         controller_cancellation.cancel();
@@ -587,6 +562,7 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
         );
         let _ = release_a;
         let _ = release_c;
+        let _ = release_d;
     });
     let (result, _capability) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
@@ -596,10 +572,6 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
     .expect("run terminates");
     controller.await.expect("controller task");
 
-    assert!(
-        !*started_d.borrow(),
-        "the sequential call after the cancelling group never starts"
-    );
     let messages = tool_messages(&result);
     assert_eq!(
         messages
@@ -641,7 +613,7 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
         messages[3].result.status,
         ToolExecutionStatus::Cancelled {
             reason: CancellationReason::UserRequested,
-            phase: rustx::tools::types::ToolCancellationPhase::BeforeStart,
+            phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
         }
     ));
     assert_eq!(

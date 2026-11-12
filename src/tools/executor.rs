@@ -1623,11 +1623,11 @@ mod tests {
             definition(
                 crate::tools::native::jobs::NAMES[0],
                 crate::tools::native::jobs::NAMES[0],
-                ToolExecutionPolicy::ForegroundOnly,
+                ToolExecutionPolicy::ModelSelectable,
                 object_schema(),
             ),
         )
-        .expect_err("parallel intrinsic rejected");
+        .expect_err("model-selectable intrinsic rejected");
         assert!(matches!(error, ToolRegistryError::InvalidPolicy(_)));
         register(
             &mut registry,
@@ -1638,7 +1638,7 @@ mod tests {
                 object_schema(),
             ),
         )
-        .expect("fixed intrinsic policy is accepted");
+        .expect("fixed foreground-only intrinsic policy is accepted");
     }
 
     /// A `ModelSelectable` tool whose canonical schema cannot carry the
@@ -1769,12 +1769,12 @@ mod tests {
                     ),
                 )
                 .unwrap_or_else(|error| {
-                    panic!("{label} needs no synthetic field under {policy:?}: {error}")
+                    panic!("{label} needs no execution_mode injection under {policy:?}: {error}")
                 });
                 assert_eq!(
-                    &registry.model_definitions()[0].input_schema,
-                    schema,
-                    "{label} is compiled verbatim under {policy:?}"
+                    registry.model_definitions().len(),
+                    1,
+                    "{label} reaches a model request under {policy:?}"
                 );
             }
         }

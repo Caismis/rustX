@@ -104,7 +104,7 @@ async fn construction_rejects_a_non_pristine_registry_with_committed_children() 
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Plan,
+                            approval_mode: crate::runtime::ApprovalMode::FullAccess,
                         },
                         admission: crate::runtime::subagent::ActivationAdmission {
                             attachments: Vec::new(),
@@ -235,7 +235,7 @@ async fn a_standalone_subagent_commit_winning_the_transfer_race_rejects_construc
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("explore"),
-                        approval_mode: crate::runtime::ApprovalMode::Plan,
+                        approval_mode: crate::runtime::ApprovalMode::FullAccess,
                     },
                     admission: crate::runtime::subagent::ActivationAdmission {
                         attachments: Vec::new(),
@@ -382,7 +382,7 @@ async fn a_runtime_claim_winning_first_refuses_the_later_standalone_commit() {
                     title: "Explore task".into(),
                     execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: test_resolved_subagent("explore"),
-                    approval_mode: crate::runtime::ApprovalMode::Plan,
+                    approval_mode: crate::runtime::ApprovalMode::FullAccess,
                 },
                 admission: crate::runtime::subagent::ActivationAdmission {
                     attachments: Vec::new(),
@@ -1038,7 +1038,7 @@ fn construction_validates_ownership() {
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
-        approval_mode: ApprovalMode::Plan,
+        approval_mode: ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -1122,7 +1122,7 @@ fn construction_outside_execution_runtime_fails_typed() {
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
-        approval_mode: ApprovalMode::Plan,
+        approval_mode: ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -1175,7 +1175,7 @@ async fn invalid_model_timeout_policy_fails_before_runtime_ownership_transfer() 
                 explicit_model: true,
                 agent_id: AgentId::new("agent-timeout-construction"),
                 model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
-                approval_mode: ApprovalMode::Plan,
+                approval_mode: ApprovalMode::FullAccess,
                 model_timeout_policy,
                 tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
                 ),
@@ -1292,7 +1292,7 @@ async fn invalid_tool_deadline_policy_fails_before_runtime_ownership_transfer() 
                 explicit_model: true,
                 agent_id: AgentId::new("agent-tool-deadline-construction"),
                 model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
-                approval_mode: ApprovalMode::Plan,
+                approval_mode: ApprovalMode::FullAccess,
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 tool_deadline_policy,
                 context: ConversationContextConfig {
@@ -2258,7 +2258,7 @@ async fn finish_finite_workflow_child(
             title: "Explore task".into(),
             execution_policy: InheritedExecutionPolicy::default(),
             resolved: test_resolved_subagent("reviewer"),
-            approval_mode: ApprovalMode::Plan,
+            approval_mode: ApprovalMode::FullAccess,
         },
         admission: ActivationAdmission {
             attachments: Vec::new(),

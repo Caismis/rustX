@@ -43,7 +43,7 @@ async fn child_transcript_invalid_limits_precede_unavailable_history_access() {
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Plan,
+                            approval_mode: crate::runtime::ApprovalMode::FullAccess,
                         },
                         admission: crate::runtime::subagent::ActivationAdmission {
                             attachments: Vec::new(),
