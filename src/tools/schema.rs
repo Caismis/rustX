@@ -92,11 +92,18 @@ pub const EXECUTION_MODE_VALUES: [&str; 2] = ["foreground", "background"];
 /// forwarded to executors.
 pub const ELEVATION_REASON_FIELD: &str = "elevation_reason";
 
+/// Maximum UTF-8 byte length of a nonblank [`ELEVATION_REASON_FIELD`] value.
+pub const ELEVATION_REASON_MAX_UTF8_BYTES: usize = 512;
+
+/// `$defs` name holding the undecorated canonical business schema while the
+/// model-facing copy admits optional [`ELEVATION_REASON_FIELD`].
+const RUSTX_BUSINESS_DEF: &str = "rustx_business";
+
 /// Model-facing description of [`ELEVATION_REASON_FIELD`].
 pub const ELEVATION_REASON_DESCRIPTION: &str = "Optional reason requesting human escalation for \
      this exact tool call under Plan or Automatic permission modes. Omit or leave null when no \
-     escalation is requested. This is a reason only — never approval evidence — and it never \
-     reaches the tool's business executor.";
+     escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never \
+     approval evidence — and it never reaches the tool's business executor.";
 
 /// The model-facing description of the injected [`EXECUTION_MODE_FIELD`]
 /// property. It states the semantic decision instead of listing the enum,
@@ -112,7 +119,8 @@ pub const EXECUTION_MODE_DESCRIPTION: &str = "Required execution ownership for t
 /// The runtime-owned reminder appended to the compiled model-facing
 /// description of a `ModelSelectable` tool. It belongs to model-definition
 /// compilation, not to any individual tool.
-pub const EXECUTION_MODE_DESCRIPTION_REMINDER: &str = "Execution ownership: every call to this tool must include the top-level \"execution_mode\" \
+pub const EXECUTION_MODE_DESCRIPTION_REMINDER: &str =
+    "Execution ownership: every call to this tool must include the top-level \"execution_mode\" \
      field, set to \"foreground\" when the agent needs this call's terminal result before it can \
      continue, or \"background\" when the work should keep running independently while the agent \
      proceeds.";
@@ -358,8 +366,8 @@ impl core::fmt::Display for SchemaError {
             ),
             Self::InvalidElevationReason(detail) => write!(
                 f,
-                "the {ELEVATION_REASON_FIELD:?} field must be a string of at most 512 characters \
-                 or null, got {detail}"
+                "the {ELEVATION_REASON_FIELD:?} field must be a string of at most \
+                 {ELEVATION_REASON_MAX_UTF8_BYTES} UTF-8 bytes or null, got {detail}"
             ),
             Self::ElevationReasonCollision(claim) => write!(
                 f,
@@ -575,48 +583,46 @@ fn root_requires_property(schema: &serde_json::Value, name: &str) -> bool {
 fn elevation_property_schema() -> serde_json::Value {
     serde_json::json!({
         "type": ["string", "null"],
+        "maxLength": ELEVATION_REASON_MAX_UTF8_BYTES,
         "description": ELEVATION_REASON_DESCRIPTION,
     })
+}
+
+fn elevation_collision_claim(schema: &serde_json::Value) -> Option<ExecutionModeClaim> {
+    let declares = root_claims_property(schema, ELEVATION_REASON_FIELD);
+    let requires = root_requires_property(schema, ELEVATION_REASON_FIELD);
+    match (declares, requires) {
+        (true, true) => Some(ExecutionModeClaim::PropertyAndRequired),
+        (true, false) => Some(ExecutionModeClaim::Property),
+        (false, true) => Some(ExecutionModeClaim::Required),
+        (false, false) => None,
+    }
 }
 
 /// Compiles model-facing elevation metadata without mutating the business
 /// schema identity that nested `$ref: "#"` would re-enter.
 ///
 /// The undecorated canonical schema is preserved under
-/// `$defs/rustx_business`. Root `#` references in the model-facing clone are
-/// rewritten to that definition before `elevation_reason` is injected, so a
-/// legal model call still strips to arguments that validate against the
-/// original business schema.
+/// `$defs/rustx_business`. Model-facing compilation then admits optional
+/// [`ELEVATION_REASON_FIELD`] on every schema object that constrains the root
+/// instance — including nested composition branches and inlined local `$ref`
+/// targets — so a legal metadata call validates against the model schema if
+/// and only if stripping metadata leaves arguments that satisfy the original
+/// business schema.
 fn compile_elevation_metadata(
     canonical: &serde_json::Value,
 ) -> Result<serde_json::Value, SchemaError> {
-    let declares = root_claims_property(canonical, ELEVATION_REASON_FIELD);
-    let requires = root_requires_property(canonical, ELEVATION_REASON_FIELD);
-    match (declares, requires) {
-        (true, true) => {
-            return Err(SchemaError::ElevationReasonCollision(
-                ExecutionModeClaim::PropertyAndRequired,
-            ));
-        }
-        (true, false) => {
-            return Err(SchemaError::ElevationReasonCollision(
-                ExecutionModeClaim::Property,
-            ));
-        }
-        (false, true) => {
-            return Err(SchemaError::ElevationReasonCollision(
-                ExecutionModeClaim::Required,
-            ));
-        }
-        (false, false) => {}
-    }
+    reject_elevation_collision_on_root_instance(canonical, canonical, &mut Vec::new())?;
 
     let mut business = canonical.clone();
-    rewrite_root_refs(&mut business);
+    rewrite_pound_refs_in_subschemas(&mut business);
 
     let mut compiled = canonical.clone();
-    rewrite_root_refs(&mut compiled);
-    inject_elevation_into_schema_root(&mut compiled)?;
+    // Inline local root `$ref`s and inject elevation before rewriting nested
+    // `#` pointers, so closed ref targets receive the optional field instead
+    // of relying on ignored/ineffective `$ref` siblings.
+    inject_elevation_for_root_instance(&mut compiled, canonical, &mut Vec::new())?;
+    rewrite_pound_refs_in_subschemas(&mut compiled);
 
     let root = compiled.as_object_mut().ok_or_else(|| {
         SchemaError::UndecorableElevationRoot("canonical schema root must be a JSON object".into())
@@ -626,92 +632,251 @@ fn compile_elevation_metadata(
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
         .ok_or_else(|| SchemaError::UndecorableElevationRoot("$defs must be an object".into()))?;
-    if defs.contains_key("rustx_business") {
+    if defs.contains_key(RUSTX_BUSINESS_DEF) {
         return Err(SchemaError::UndecorableElevationRoot(
             "canonical schema already defines $defs.rustx_business".into(),
         ));
     }
-    defs.insert("rustx_business".into(), business);
+    defs.insert(RUSTX_BUSINESS_DEF.to_owned(), business);
     Ok(compiled)
 }
 
-fn rewrite_root_refs(schema: &mut serde_json::Value) {
-    match schema {
-        serde_json::Value::Object(map) => {
-            for key in ["$ref", "$recursiveRef"] {
-                if map.get(key).and_then(serde_json::Value::as_str) == Some("#") {
-                    map.insert(
-                        key.to_owned(),
-                        serde_json::Value::String("#/$defs/rustx_business".into()),
-                    );
-                }
-            }
-            for (key, value) in map.iter_mut() {
-                if key != "$ref" && key != "$recursiveRef" {
-                    rewrite_root_refs(value);
+/// Rejects every root-applicable claim on the reserved elevation field,
+/// including composition branches and local `$ref` targets that describe the
+/// same instance as the document root.
+fn reject_elevation_collision_on_root_instance(
+    node: &serde_json::Value,
+    document: &serde_json::Value,
+    stack: &mut Vec<String>,
+) -> Result<(), SchemaError> {
+    if let Some(claim) = elevation_collision_claim(node) {
+        return Err(SchemaError::ElevationReasonCollision(claim));
+    }
+    let Some(object) = node.as_object() else {
+        return Ok(());
+    };
+    if object.contains_key("const") || object.contains_key("enum") {
+        return Err(SchemaError::UndecorableElevationRoot(
+            "root const/enum cannot admit optional elevation_reason".into(),
+        ));
+    }
+    for key in ["$ref", "$recursiveRef"] {
+        if let Some(reference) = object.get(key).and_then(serde_json::Value::as_str) {
+            if let Some(target) = resolve_local_schema_ref(document, reference) {
+                if !stack.contains(&reference.to_owned()) {
+                    stack.push(reference.to_owned());
+                    reject_elevation_collision_on_root_instance(target, document, stack)?;
+                    stack.pop();
                 }
             }
         }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                rewrite_root_refs(item);
+    }
+    for keyword in ["allOf", "anyOf", "oneOf"] {
+        if let Some(branches) = object.get(keyword).and_then(serde_json::Value::as_array) {
+            for branch in branches {
+                reject_elevation_collision_on_root_instance(branch, document, stack)?;
             }
         }
-        _ => {}
+    }
+    Ok(())
+}
+
+/// Rewrites `$ref`/`$recursiveRef` values of `"#"` to the undecorated business
+/// definition, walking only real subschema positions so nested `const` /
+/// `enum` / annotation data that happens to contain `{"$ref":"#"}` is left
+/// alone.
+fn rewrite_pound_refs_in_subschemas(schema: &mut serde_json::Value) {
+    let Some(node) = schema.as_object_mut() else {
+        return;
+    };
+    for key in ["$ref", "$recursiveRef"] {
+        if node.get(key).and_then(serde_json::Value::as_str) == Some("#") {
+            node.insert(
+                key.to_owned(),
+                serde_json::Value::String(format!("#/$defs/{RUSTX_BUSINESS_DEF}")),
+            );
+        }
+    }
+    let keys: Vec<String> = node.keys().cloned().collect();
+    for keyword in keys {
+        let Some(value) = node.get_mut(&keyword) else {
+            continue;
+        };
+        if SUBSCHEMA_KEYWORDS.contains(&keyword.as_str()) {
+            rewrite_pound_refs_in_subschemas(value);
+        } else if SUBSCHEMA_LIST_KEYWORDS.contains(&keyword.as_str()) {
+            if let serde_json::Value::Array(items) = value {
+                for item in items {
+                    rewrite_pound_refs_in_subschemas(item);
+                }
+            }
+        } else if SCHEMA_MAP_KEYWORDS.contains(&keyword.as_str()) {
+            if let serde_json::Value::Object(members) = value {
+                for subschema in members.values_mut() {
+                    rewrite_pound_refs_in_subschemas(subschema);
+                }
+            }
+        } else if keyword == "items" {
+            if let serde_json::Value::Array(items) = value {
+                for item in items {
+                    rewrite_pound_refs_in_subschemas(item);
+                }
+            } else {
+                rewrite_pound_refs_in_subschemas(value);
+            }
+        } else if keyword == "dependencies" {
+            if let serde_json::Value::Object(members) = value {
+                for subschema in members.values_mut() {
+                    if subschema.is_object() {
+                        rewrite_pound_refs_in_subschemas(subschema);
+                    }
+                }
+            }
+        }
     }
 }
 
-fn inject_elevation_into_schema_root(schema: &mut serde_json::Value) -> Result<(), SchemaError> {
+fn resolve_local_schema_ref<'a>(
+    document: &'a serde_json::Value,
+    reference: &str,
+) -> Option<&'a serde_json::Value> {
+    if reference == "#" {
+        return Some(document);
+    }
+    let path = reference.strip_prefix("#/")?;
+    let mut current = document;
+    for raw in path.split('/') {
+        let token = raw.replace("~1", "/").replace("~0", "~");
+        current = current.as_object()?.get(&token)?;
+    }
+    Some(current)
+}
+
+/// Injects optional elevation metadata into every schema object that
+/// constrains the root instance.
+fn inject_elevation_for_root_instance(
+    node: &mut serde_json::Value,
+    document: &serde_json::Value,
+    stack: &mut Vec<String>,
+) -> Result<(), SchemaError> {
+    // Inline local `$ref`/`$recursiveRef` targets that describe this same
+    // root instance. Sibling keywords next to `$ref` cannot open a closed
+    // target (`additionalProperties: false`), so the target must receive the
+    // optional field itself — and only for this root application, via inline.
+    inline_local_root_ref(node, document, stack)?;
+
     {
-        let Some(root) = schema.as_object_mut() else {
-            return Err(SchemaError::UndecorableElevationRoot(
-                "canonical schema root must be a JSON object".into(),
-            ));
+        let Some(object) = node.as_object_mut() else {
+            return Ok(());
         };
-        if root.contains_key("const") || root.contains_key("enum") {
+        if object.contains_key("const") || object.contains_key("enum") {
             return Err(SchemaError::UndecorableElevationRoot(
                 "root const/enum cannot admit optional elevation_reason".into(),
             ));
         }
-        // Composition branches that describe the same root instance each need
-        // the optional field so a closed branch remains satisfiable.
         for keyword in ["allOf", "anyOf", "oneOf"] {
-            if let Some(serde_json::Value::Array(branches)) = root.get_mut(keyword) {
-                for branch in branches.iter_mut() {
-                    inject_elevation_into_object_schema(branch)?;
-                }
+            // Take branches out so we can recurse without overlapping borrows.
+            let Some(serde_json::Value::Array(mut branches)) = object.remove(keyword) else {
+                continue;
+            };
+            for branch in &mut branches {
+                inject_elevation_for_root_instance(branch, document, stack)?;
             }
+            object.insert(keyword.to_owned(), serde_json::Value::Array(branches));
         }
     }
-    inject_elevation_into_object_schema(schema)
+    inject_elevation_into_object_schema(node)
+}
+
+fn inline_local_root_ref(
+    node: &mut serde_json::Value,
+    document: &serde_json::Value,
+    stack: &mut Vec<String>,
+) -> Result<(), SchemaError> {
+    let Some(object) = node.as_object_mut() else {
+        return Ok(());
+    };
+    let reference = ["$ref", "$recursiveRef"].iter().find_map(|key| {
+        object
+            .get(*key)
+            .and_then(serde_json::Value::as_str)
+            .map(|value| ((*key).to_owned(), value.to_owned()))
+    });
+    let Some((keyword, reference)) = reference else {
+        return Ok(());
+    };
+    // Document-root `#` stays a reference: nested rewriting points it at the
+    // undecorated business def. Inlining `#` would re-merge the same `$ref`
+    // and never open a closed target.
+    if reference == "#" {
+        return Ok(());
+    }
+    let Some(target) = resolve_local_schema_ref(document, &reference) else {
+        return Ok(());
+    };
+    if stack.contains(&reference) {
+        return Ok(());
+    }
+    let target = target.clone();
+    object.remove(&keyword);
+    if let serde_json::Value::Object(target_object) = target {
+        for (key, value) in target_object {
+            object.entry(key).or_insert(value);
+        }
+    } else {
+        // Boolean / non-object targets have nothing to merge; keep siblings.
+    }
+    stack.push(reference);
+    // Continue inlining if the merged target itself was a ref wrapper.
+    let result = inline_local_root_ref(node, document, stack);
+    stack.pop();
+    result
 }
 
 fn inject_elevation_into_object_schema(schema: &mut serde_json::Value) -> Result<(), SchemaError> {
+    if let Some(claim) = elevation_collision_claim(schema) {
+        return Err(SchemaError::ElevationReasonCollision(claim));
+    }
+    let property_names_ok = match schema
+        .as_object()
+        .and_then(|object| object.get("propertyNames"))
+    {
+        None => true,
+        Some(property_names) => {
+            // Unknown whether the name schema is usable until we try.
+            Validator::new(property_names)
+                .map(|validator| {
+                    validator.is_valid(&serde_json::Value::String(
+                        ELEVATION_REASON_FIELD.to_owned(),
+                    ))
+                })
+                .unwrap_or(false)
+        }
+    };
+    if !property_names_ok {
+        return Err(SchemaError::UndecorableElevationRoot(
+            "root propertyNames rejects the reserved elevation_reason field".into(),
+        ));
+    }
     let Some(object) = schema.as_object_mut() else {
         return Ok(());
     };
-    // A bare root `$ref` still needs a sibling properties map so the model can
-    // lawfully supply optional elevation_reason beside the reffed business body.
     let is_objectish = object.get("type").and_then(serde_json::Value::as_str) == Some("object")
         || object.contains_key("properties")
         || object.contains_key("additionalProperties")
+        || object.contains_key("minProperties")
         || object.contains_key("maxProperties")
         || object.contains_key("$ref")
         || object.contains_key("$recursiveRef");
     if !is_objectish {
         return Ok(());
     }
-    if let Some(serde_json::Value::Number(max)) = object.get("maxProperties") {
-        let Some(value) = max.as_u64() else {
-            return Err(SchemaError::UndecorableElevationRoot(
-                "root maxProperties must be a non-negative integer".into(),
-            ));
-        };
-        object.insert(
-            "maxProperties".into(),
-            serde_json::Value::Number((value + 1).into()),
-        );
-    }
+
+    // Cardinality must treat elevation as optional metadata: bump the bound
+    // only when the field is present. Unconditional ±1 accepts illegal
+    // business shapes or rejects empty-after-strip calls.
+    adjust_property_cardinality_for_optional_elevation(object)?;
+
     object
         .entry("properties")
         .or_insert_with(|| serde_json::json!({}))
@@ -723,6 +888,87 @@ fn inject_elevation_into_object_schema(schema: &mut serde_json::Value) -> Result
             ELEVATION_REASON_FIELD.to_owned(),
             elevation_property_schema(),
         );
+    Ok(())
+}
+
+fn adjust_property_cardinality_for_optional_elevation(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<(), SchemaError> {
+    let max = match object.get("maxProperties") {
+        Some(serde_json::Value::Number(number)) => {
+            let Some(value) = number.as_u64() else {
+                return Err(SchemaError::UndecorableElevationRoot(
+                    "root maxProperties must be a non-negative integer".into(),
+                ));
+            };
+            Some(value)
+        }
+        Some(_) => {
+            return Err(SchemaError::UndecorableElevationRoot(
+                "root maxProperties must be a non-negative integer".into(),
+            ));
+        }
+        None => None,
+    };
+    let min = match object.get("minProperties") {
+        Some(serde_json::Value::Number(number)) => {
+            let Some(value) = number.as_u64() else {
+                return Err(SchemaError::UndecorableElevationRoot(
+                    "root minProperties must be a non-negative integer".into(),
+                ));
+            };
+            Some(value)
+        }
+        Some(_) => {
+            return Err(SchemaError::UndecorableElevationRoot(
+                "root minProperties must be a non-negative integer".into(),
+            ));
+        }
+        None => None,
+    };
+    if max.is_none() && min.is_none() {
+        return Ok(());
+    }
+    object.remove("maxProperties");
+    object.remove("minProperties");
+
+    // If the schema already uses if/then/else for business reasons, refuse
+    // rather than silently overwrite those applicators.
+    if object.contains_key("if") || object.contains_key("then") || object.contains_key("else") {
+        return Err(SchemaError::UndecorableElevationRoot(
+            "root if/then/else combined with minProperties/maxProperties cannot admit optional elevation_reason"
+                .into(),
+        ));
+    }
+
+    let mut then_schema = serde_json::Map::new();
+    let mut else_schema = serde_json::Map::new();
+    if let Some(value) = max {
+        then_schema.insert(
+            "maxProperties".into(),
+            serde_json::Value::Number((value + 1).into()),
+        );
+        else_schema.insert(
+            "maxProperties".into(),
+            serde_json::Value::Number(value.into()),
+        );
+    }
+    if let Some(value) = min {
+        then_schema.insert(
+            "minProperties".into(),
+            serde_json::Value::Number((value + 1).into()),
+        );
+        else_schema.insert(
+            "minProperties".into(),
+            serde_json::Value::Number(value.into()),
+        );
+    }
+    object.insert(
+        "if".into(),
+        serde_json::json!({ "required": [ELEVATION_REASON_FIELD] }),
+    );
+    object.insert("then".into(), serde_json::Value::Object(then_schema));
+    object.insert("else".into(), serde_json::Value::Object(else_schema));
     Ok(())
 }
 
@@ -959,9 +1205,9 @@ pub fn resolve_invocation_metadata(
             let trimmed = text.trim();
             if trimmed.is_empty() {
                 None
-            } else if trimmed.len() > 512 {
+            } else if trimmed.len() > ELEVATION_REASON_MAX_UTF8_BYTES {
                 return Err(SchemaError::InvalidElevationReason(format!(
-                    "length {}",
+                    "UTF-8 byte length {}",
                     trimmed.len()
                 )));
             } else {
@@ -1025,9 +1271,9 @@ pub fn validate_business_arguments(
 #[cfg(test)]
 mod tests {
     use super::{
-        EXECUTION_MODE_DESCRIPTION_REMINDER, EXECUTION_MODE_FIELD, compile_model_definition,
-        resolve_invocation_metadata, validate_business_arguments, validate_canonical_schema,
-        validate_execution_metadata_contract,
+        compile_model_definition, resolve_invocation_metadata, validate_business_arguments,
+        validate_canonical_schema, validate_execution_metadata_contract, ELEVATION_REASON_FIELD,
+        ELEVATION_REASON_MAX_UTF8_BYTES, EXECUTION_MODE_DESCRIPTION_REMINDER, EXECUTION_MODE_FIELD,
     };
     use crate::runtime::identity::ToolId;
     use crate::tools::types::{
@@ -1044,6 +1290,72 @@ mod tests {
             execution_policy: policy,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
+        }
+    }
+
+    /// Whether `elevation_reason` is absent, null, or a string within the
+    /// UTF-8 byte bound. Overlong / wrong-typed metadata is not a legal call.
+    fn elevation_metadata_is_legal(arguments: &serde_json::Value) -> bool {
+        match arguments.get(ELEVATION_REASON_FIELD) {
+            None | Some(serde_json::Value::Null) => true,
+            Some(serde_json::Value::String(text)) => {
+                let trimmed = text.trim();
+                trimmed.is_empty() || trimmed.len() <= ELEVATION_REASON_MAX_UTF8_BYTES
+            }
+            Some(_) => false,
+        }
+    }
+
+    /// Model-schema acceptance for a legal elevation metadata call, including
+    /// the UTF-8 byte bound JSON Schema `maxLength` only approximates.
+    fn model_accepts_legal_elevation_call(
+        model_schema: &serde_json::Value,
+        arguments: &serde_json::Value,
+    ) -> bool {
+        if !elevation_metadata_is_legal(arguments) {
+            return false;
+        }
+        let Ok(validator) = jsonschema::Validator::new(model_schema) else {
+            return false;
+        };
+        validator.is_valid(arguments)
+    }
+
+    fn strip_elevation(arguments: &serde_json::Value) -> serde_json::Value {
+        let mut stripped = arguments.clone();
+        if let Some(object) = stripped.as_object_mut() {
+            object.remove(ELEVATION_REASON_FIELD);
+        }
+        stripped
+    }
+
+    /// Projection contract: for every legal metadata call, the model schema
+    /// accepts it iff the stripped business args satisfy the canonical schema.
+    fn assert_elevation_projection_equivalence(
+        canonical: &serde_json::Value,
+        model_schema: &serde_json::Value,
+        candidates: &[serde_json::Value],
+    ) {
+        // Some fixtures (dangling `$dynamicRef`) are not standalone validating
+        // documents; registration would refuse them. Skip the oracle there.
+        let Ok(business_validator) = jsonschema::Validator::new(canonical) else {
+            return;
+        };
+        let Ok(model_validator) = jsonschema::Validator::new(model_schema) else {
+            panic!("compiled model schema must be a valid JSON Schema: {model_schema}");
+        };
+        for arguments in candidates {
+            if !elevation_metadata_is_legal(arguments) {
+                continue;
+            }
+            let stripped = strip_elevation(arguments);
+            let business_ok = business_validator.is_valid(&stripped);
+            let model_ok =
+                model_validator.is_valid(arguments) && elevation_metadata_is_legal(arguments);
+            assert_eq!(
+                model_ok, business_ok,
+                "elevation projection broken for {arguments}: model={model_ok} business={business_ok} under canonical {canonical} / model {model_schema}"
+            );
         }
     }
 
@@ -1084,12 +1396,10 @@ mod tests {
             description.contains("terminal result"),
             "the description explains the semantic decision: {description}"
         );
-        assert!(
-            schema["required"]
-                .as_array()
-                .expect("required")
-                .contains(&json!(EXECUTION_MODE_FIELD))
-        );
+        assert!(schema["required"]
+            .as_array()
+            .expect("required")
+            .contains(&json!(EXECUTION_MODE_FIELD)));
     }
 
     #[test]
@@ -1148,10 +1458,28 @@ mod tests {
             original.clone(),
         ))
         .expect("compile");
-        let expected = super::compile_elevation_metadata(&original).expect("elevation wrap");
-        assert_eq!(
-            compiled.input_schema, expected,
-            "the foreground schema gains elevation_reason only"
+        assert!(
+            compiled.input_schema["properties"]
+                .get(ELEVATION_REASON_FIELD)
+                .is_some(),
+            "the foreground schema gains elevation_reason"
+        );
+        assert!(
+            compiled.input_schema["properties"]
+                .get(EXECUTION_MODE_FIELD)
+                .is_none(),
+            "fixed policy does not gain execution_mode"
+        );
+        assert_elevation_projection_equivalence(
+            &original,
+            &compiled.input_schema,
+            &[
+                json!({"path": "a.txt"}),
+                json!({"path": "a.txt", "elevation_reason": "need write"}),
+                json!({"elevation_reason": "need write"}),
+                json!({}),
+                json!({"path": 1}),
+            ],
         );
         assert_eq!(
             selectable.input_schema, original,
@@ -1242,10 +1570,23 @@ mod tests {
                 validate_execution_metadata_contract(policy, schema).expect("fixed policy");
                 let compiled = compile_model_definition(&definition(policy, schema.clone()))
                     .expect("fixed policy compiles");
-                let expected = super::compile_elevation_metadata(schema).expect("elevation wrap");
-                assert_eq!(
-                    &compiled.input_schema, &expected,
-                    "fixed policy compiles through the elevation metadata wrap"
+                assert!(
+                    compiled.input_schema["properties"]
+                        .get(ELEVATION_REASON_FIELD)
+                        .is_some(),
+                    "fixed policy still gains elevation_reason under {policy:?}"
+                );
+                assert_elevation_projection_equivalence(
+                    schema,
+                    &compiled.input_schema,
+                    &[
+                        json!({"execution_mode": "whatever"}),
+                        json!({"execution_mode": "whatever", "elevation_reason": "ask"}),
+                        json!({"command": "ls", "execution_mode": "x"}),
+                        json!({"command": "ls", "execution_mode": "x", "elevation_reason": "ask"}),
+                        json!({"elevation_reason": "ask"}),
+                        json!({}),
+                    ],
                 );
             }
         }
@@ -1405,27 +1746,33 @@ mod tests {
                 ToolExecutionPolicy::ForegroundOnly,
                 ToolExecutionPolicy::BackgroundOnly,
             ] {
-                match super::compile_elevation_metadata(schema) {
-                    Ok(expected) => {
-                        let compiled =
-                            compile_model_definition(&definition(policy, schema.clone()))
-                                .unwrap_or_else(|error| {
-                                    panic!(
-                                        "root {keyword:?} must compile under {policy:?}: {error}"
-                                    )
-                                });
-                        assert_eq!(
-                            &compiled.input_schema, &expected,
-                            "root {keyword:?} gains elevation wrap under {policy:?}"
+                match compile_model_definition(&definition(policy, schema.clone())) {
+                    Ok(compiled) => {
+                        // Sound wraps preserve projection; unsound roots must
+                        // refuse compilation instead of emitting a schema that
+                        // accepts calls whose stripped args fail the canonical
+                        // business schema (const/enum).
+                        assert_elevation_projection_equivalence(
+                            schema,
+                            &compiled.input_schema,
+                            &[
+                                json!({"command": "ls"}),
+                                json!({"command": "ls", "elevation_reason": "ask"}),
+                                json!({"elevation_reason": "ask"}),
+                                json!({}),
+                                json!({"command": "ls", "extra": 1}),
+                                json!({"command": "ls", "extra": 1, "elevation_reason": "ask"}),
+                            ],
                         );
                     }
                     Err(error) => {
-                        let compiled =
-                            compile_model_definition(&definition(policy, schema.clone()));
-                        assert_eq!(
-                            compiled.unwrap_err(),
-                            error,
-                            "root {keyword:?} refuses unsound elevation under {policy:?}"
+                        assert!(
+                            matches!(
+                                error,
+                                super::SchemaError::UndecorableElevationRoot(_)
+                                    | super::SchemaError::ElevationReasonCollision(_)
+                            ),
+                            "root {keyword:?} refuses unsound elevation under {policy:?}: {error}"
                         );
                     }
                 }
@@ -1597,17 +1944,27 @@ mod tests {
                     .unwrap_or_else(|error| {
                         panic!("references stay legal under {policy:?}: {error}")
                     });
-                let expected = super::compile_elevation_metadata(schema)
-                    .unwrap_or_else(|error| panic!("elevation wrap under {policy:?}: {error}"));
-                assert_eq!(
-                    &compiled.input_schema, &expected,
-                    "referencing schemas rewrite root refs and gain elevation_reason under {policy:?}"
-                );
                 assert_eq!(
                     compiled.input_schema["$defs"]["rustx_business"]["properties"]
-                        .get(super::ELEVATION_REASON_FIELD),
+                        .get(ELEVATION_REASON_FIELD),
                     None,
                     "undecorated business $defs must not carry elevation_reason"
+                );
+                assert_elevation_projection_equivalence(
+                    schema,
+                    &compiled.input_schema,
+                    &[
+                        json!({}),
+                        json!({"elevation_reason": "ask"}),
+                        json!({"command": "ls"}),
+                        json!({"command": "ls", "elevation_reason": "ask"}),
+                        json!({"command": "ls", "child": {}}),
+                        json!({"command": "ls", "child": {}, "elevation_reason": "ask"}),
+                        json!({"items": ["x"]}),
+                        json!({"items": ["x"], "elevation_reason": "ask"}),
+                        json!({"child": {}}),
+                        json!({"child": {}, "elevation_reason": "ask"}),
+                    ],
                 );
             }
         }
@@ -1974,11 +2331,9 @@ mod tests {
             invalid,
             super::SchemaError::InvalidExecutionMode("\"sideways\"".to_owned())
         );
-        assert!(
-            invalid
-                .to_string()
-                .contains("\"execution_mode\": \"background\"")
-        );
+        assert!(invalid
+            .to_string()
+            .contains("\"execution_mode\": \"background\""));
 
         assert!(matches!(
             resolve_invocation_metadata(
@@ -2028,12 +2383,10 @@ mod tests {
             json!({"type": "object"}),
         ))
         .expect("compile");
-        assert!(
-            !compiled
-                .input_schema
-                .to_string()
-                .contains("__rustx_execution")
-        );
+        assert!(!compiled
+            .input_schema
+            .to_string()
+            .contains("__rustx_execution"));
         assert!(!compiled.description.contains("__rustx_execution"));
     }
 
@@ -2085,5 +2438,235 @@ mod tests {
         assert!(validate_business_arguments(&schema, &json!({"path": "a"})).is_ok());
         let error = validate_business_arguments(&schema, &json!({"path": 1})).expect_err("fail");
         assert!(matches!(error, super::SchemaError::InvalidArguments(_)));
+    }
+
+    #[test]
+    fn elevation_max_properties_does_not_accept_two_business_props() {
+        let canonical = json!({
+            "type": "object",
+            "properties": {
+                "a": {"type": "string"},
+                "b": {"type": "string"},
+            },
+            "maxProperties": 1,
+        });
+        let compiled = compile_model_definition(&definition(
+            ToolExecutionPolicy::ForegroundOnly,
+            canonical.clone(),
+        ))
+        .expect("compile");
+        assert_elevation_projection_equivalence(
+            &canonical,
+            &compiled.input_schema,
+            &[
+                json!({"a": "1"}),
+                json!({"a": "1", "b": "2"}),
+                json!({"a": "1", "elevation_reason": "ask"}),
+                json!({"a": "1", "b": "2", "elevation_reason": "ask"}),
+                json!({"elevation_reason": "ask"}),
+                json!({}),
+            ],
+        );
+    }
+
+    #[test]
+    fn elevation_min_properties_rejects_metadata_only_when_business_empty_is_invalid() {
+        let canonical = json!({
+            "type": "object",
+            "properties": {"a": {"type": "string"}},
+            "minProperties": 1,
+        });
+        let compiled = compile_model_definition(&definition(
+            ToolExecutionPolicy::ForegroundOnly,
+            canonical.clone(),
+        ))
+        .expect("compile");
+        assert!(
+            !model_accepts_legal_elevation_call(
+                &compiled.input_schema,
+                &json!({"elevation_reason": "ask"})
+            ),
+            "metadata alone must not satisfy business minProperties"
+        );
+        assert_elevation_projection_equivalence(
+            &canonical,
+            &compiled.input_schema,
+            &[
+                json!({}),
+                json!({"a": "1"}),
+                json!({"elevation_reason": "ask"}),
+                json!({"a": "1", "elevation_reason": "ask"}),
+            ],
+        );
+    }
+
+    #[test]
+    fn elevation_root_ref_to_closed_object_accepts_metadata() {
+        let canonical = json!({
+            "$ref": "#/$defs/body",
+            "$defs": {
+                "body": {
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
+                    "additionalProperties": false,
+                }
+            }
+        });
+        let compiled = compile_model_definition(&definition(
+            ToolExecutionPolicy::ForegroundOnly,
+            canonical.clone(),
+        ))
+        .expect("compile");
+        assert!(
+            model_accepts_legal_elevation_call(
+                &compiled.input_schema,
+                &json!({"command": "ls", "elevation_reason": "ask"})
+            ),
+            "closed $ref target must admit optional elevation_reason: {}",
+            compiled.input_schema
+        );
+        assert_elevation_projection_equivalence(
+            &canonical,
+            &compiled.input_schema,
+            &[
+                json!({"command": "ls"}),
+                json!({"command": "ls", "elevation_reason": "ask"}),
+                json!({"command": "ls", "extra": 1}),
+                json!({"elevation_reason": "ask"}),
+                json!({}),
+            ],
+        );
+    }
+
+    #[test]
+    fn elevation_multi_layer_composition_closed_objects_all_admit_metadata() {
+        let canonical = json!({
+            "allOf": [
+                {
+                    "allOf": [
+                        {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"],
+                            "additionalProperties": false,
+                        }
+                    ]
+                }
+            ]
+        });
+        let compiled = compile_model_definition(&definition(
+            ToolExecutionPolicy::ForegroundOnly,
+            canonical.clone(),
+        ))
+        .expect("compile");
+        assert!(
+            model_accepts_legal_elevation_call(
+                &compiled.input_schema,
+                &json!({"command": "ls", "elevation_reason": "ask"})
+            ),
+            "nested composition layers must all admit elevation: {}",
+            compiled.input_schema
+        );
+        assert_elevation_projection_equivalence(
+            &canonical,
+            &compiled.input_schema,
+            &[
+                json!({"command": "ls"}),
+                json!({"command": "ls", "elevation_reason": "ask"}),
+                json!({"command": "ls", "extra": 1}),
+                json!({"elevation_reason": "ask"}),
+            ],
+        );
+    }
+
+    #[test]
+    fn elevation_collision_in_composition_branch_is_refused() {
+        let canonical = json!({
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "allOf": [{
+                "type": "object",
+                "properties": {
+                    "elevation_reason": {"type": "number"},
+                },
+            }],
+        });
+        let error =
+            compile_model_definition(&definition(ToolExecutionPolicy::ForegroundOnly, canonical))
+                .expect_err("business elevation_reason in a root composition branch collides");
+        assert!(matches!(
+            error,
+            super::SchemaError::ElevationReasonCollision(_)
+        ));
+    }
+
+    #[test]
+    fn elevation_rewrite_skips_nested_const_ref_data() {
+        let canonical = json!({
+            "type": "object",
+            "properties": {
+                "mode": {"const": {"$ref": "#"}},
+            },
+            "required": ["mode"],
+            "additionalProperties": false,
+        });
+        let compiled = compile_model_definition(&definition(
+            ToolExecutionPolicy::ForegroundOnly,
+            canonical.clone(),
+        ))
+        .expect("compile");
+        assert_eq!(
+            compiled.input_schema["properties"]["mode"]["const"],
+            json!({"$ref": "#"}),
+            "const payload must not be rewritten as a schema $ref"
+        );
+        assert_elevation_projection_equivalence(
+            &canonical,
+            &compiled.input_schema,
+            &[
+                json!({"mode": {"$ref": "#"}}),
+                json!({"mode": {"$ref": "#"}, "elevation_reason": "ask"}),
+                json!({"mode": {"$ref": "#/$defs/rustx_business"}}),
+                json!({"elevation_reason": "ask"}),
+            ],
+        );
+    }
+
+    #[test]
+    fn elevation_reason_enforces_utf8_byte_limit() {
+        let canonical = json!({"type": "object", "properties": {"path": {"type": "string"}}});
+        let compiled =
+            compile_model_definition(&definition(ToolExecutionPolicy::ForegroundOnly, canonical))
+                .expect("compile");
+        let field = &compiled.input_schema["properties"][ELEVATION_REASON_FIELD];
+        assert_eq!(
+            field["maxLength"],
+            json!(ELEVATION_REASON_MAX_UTF8_BYTES),
+            "model schema must advertise the length bound"
+        );
+
+        // 171 CJK codepoints × 3 bytes = 513 UTF-8 bytes.
+        let overlong = "字".repeat(171);
+        assert_eq!(overlong.len(), ELEVATION_REASON_MAX_UTF8_BYTES + 1);
+        assert!(
+            !elevation_metadata_is_legal(&json!({"elevation_reason": overlong.clone()})),
+            "513 UTF-8 bytes is not legal elevation metadata"
+        );
+        let error = resolve_invocation_metadata(
+            ToolExecutionPolicy::ForegroundOnly,
+            &json!({"path": "a", "elevation_reason": overlong}),
+        )
+        .expect_err("runtime rejects overlong elevation_reason");
+        assert!(matches!(
+            error,
+            super::SchemaError::InvalidElevationReason(_)
+        ));
+        let message = error.to_string();
+        assert!(
+            message.contains("UTF-8 bytes"),
+            "diagnostic must say bytes, not characters: {message}"
+        );
+        assert!(!message.contains("characters"));
     }
 }
