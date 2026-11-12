@@ -304,7 +304,7 @@ impl RuntimeInner {
             .subagents
             .clone()
             .ok_or("native Workflow registry unavailable")?;
-        let (claim, _resources_lease) = {
+        let (claim, _resources_lease, auxiliary_invocation) = {
             let mut state = self.lock_state();
             if !self.lifecycle.is_running() || cancellation.signal.is_cancelled() {
                 return Ok(());
@@ -326,6 +326,15 @@ impl RuntimeInner {
                     .map_err(|e| e.to_string())?;
                 return Ok(());
             }
+            // Freeze the permission-reviewer invocation in the same critical
+            // section as Claim so a concurrent model-selection commit cannot
+            // swap M1→M2 between durable Claim and reviewer construction.
+            let auxiliary_invocation = state
+                .model
+                .snapshot()
+                .map_err(|error| error.to_string())?
+                .summary_invocation()
+                .clone();
             let lease = self
                 .capability
                 .acquire_attempt_lease_for(resources.capability().clone());
@@ -342,7 +351,7 @@ impl RuntimeInner {
                 .map_err(|e| format!("scheduled Claim lifecycle: {e:?}"))?
                 .map_err(|e| e.to_string())?;
             let Some(claim) = claim else { return Ok(()) };
-            (claim, lease)
+            (claim, lease, auxiliary_invocation)
         };
         let policy = claim
             .start
@@ -365,13 +374,6 @@ impl RuntimeInner {
             .execution_context(self.capability.clone(), id.clone())
             .with_workflow_models(self.auxiliary.clone())
             .with_workflow_deadline(self.monotonic_clock.clone(), deadline, trigger.clone());
-        let auxiliary_invocation = self
-            .lock_state()
-            .model
-            .snapshot()
-            .map_err(|error| error.to_string())?
-            .summary_invocation()
-            .clone();
         let reviewer = Arc::new(
             crate::runtime::permission::review::AuxiliaryPermissionReviewer::new(
                 self.auxiliary.clone(),

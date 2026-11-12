@@ -256,6 +256,8 @@ pub enum SchemaError {
     MissingExecutionMode,
     /// The `execution_mode` value is not `foreground` or `background`.
     InvalidExecutionMode(String),
+    /// The `elevation_reason` value is not a string, null, or within bounds.
+    InvalidElevationReason(String),
     /// The business arguments violate the canonical schema.
     InvalidArguments(Vec<String>),
 }
@@ -349,6 +351,11 @@ impl core::fmt::Display for SchemaError {
                 } else {
                     format!("{location:?}")
                 }
+            ),
+            Self::InvalidElevationReason(detail) => write!(
+                f,
+                "the {ELEVATION_REASON_FIELD:?} field must be a string of at most 512 characters \
+                 or null, got {detail}"
             ),
             Self::InvalidArguments(errors) => write!(
                 f,
@@ -801,21 +808,28 @@ pub fn resolve_invocation_metadata(
             (mode, stripped)
         }
     };
-    let elevation_reason = stripped
+    let elevation_reason = match stripped
         .as_object_mut()
         .and_then(|object| object.remove(ELEVATION_REASON_FIELD))
-        .and_then(|value| match value {
-            serde_json::Value::Null => None,
-            serde_json::Value::String(text) => {
-                let trimmed = text.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    Some(trimmed.to_owned())
-                }
+    {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(text)) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else if trimmed.len() > 512 {
+                return Err(SchemaError::InvalidElevationReason(format!(
+                    "length {}",
+                    trimmed.len()
+                )));
+            } else {
+                Some(trimmed.to_owned())
             }
-            other => Some(other.to_string()),
-        });
+        }
+        Some(other) => {
+            return Err(SchemaError::InvalidElevationReason(other.to_string()));
+        }
+    };
     Ok((mode, elevation_reason, stripped))
 }
 

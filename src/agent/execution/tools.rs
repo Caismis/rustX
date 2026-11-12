@@ -100,24 +100,18 @@ pub(super) struct SettledCall {
 enum Group {
     /// The slot is already settled (validation rejection); no barrier.
     Trivial,
-    /// Exclusive barrier for domain-owned tools that share provisional state.
-    Sequential,
     /// Adjacent prepared invocations authorize and may execute concurrently.
+    /// Todo participates here; the Todo owner serializes provisional list work.
     Concurrent,
 }
 
-fn is_todo_slot(slot: &CallSlot) -> bool {
-    slot.tool_id.as_str() == crate::tools::todo::TODO_TOOL_ID
-}
-
 /// Issue #544: tool-level Sequential/Parallel authoring is removed. Prepared
-/// slots authorize concurrently, except `todo` which stays an exclusive
-/// barrier so one batch's shared provisional list cannot race.
+/// slots authorize and may start concurrently. Todo list mutations stay ordered
+/// by the Todo owner/batch writer; they must not split the whole tool batch
+/// into global serial stages that block unrelated Read/MCP work.
 fn group_at(slots: &[CallSlot], index: usize) -> Group {
     if slots[index].prepared.is_none() {
         Group::Trivial
-    } else if is_todo_slot(&slots[index]) {
-        Group::Sequential
     } else {
         Group::Concurrent
     }
@@ -126,17 +120,15 @@ fn group_at(slots: &[CallSlot], index: usize) -> Group {
 /// End of the concurrent group beginning at `index`.
 ///
 /// Already-settled preflight rejections may sit between prepared siblings and
-/// must not split the group. A `todo` slot is an exclusive barrier and ends
-/// the concurrent run before it.
+/// must not split the group. Todo slots participate in the same concurrent
+/// group; their owner serializes provisional list mutations.
 fn concurrent_group_end(slots: &[CallSlot], index: usize) -> usize {
     debug_assert!(index < slots.len());
     debug_assert!(slots[index].prepared.is_some());
-    debug_assert!(!is_todo_slot(&slots[index]));
     let mut end = index + 1;
     while end < slots.len() {
-        if slots[end].prepared.is_some() && is_todo_slot(&slots[end]) {
-            break;
-        }
+        // Extend through prepared siblings (including todo) and settled
+        // preflight rejections alike.
         end += 1;
     }
     end
@@ -473,85 +465,6 @@ impl AgentExecution<'_> {
             match group_at(&slots, index) {
                 Group::Trivial => {
                     index += 1;
-                }
-                Group::Sequential => {
-                    // Todo shares one provisional list per batch. Run each call
-                    // alone so later siblings observe earlier mutations. Errors
-                    // still defer through batch-wide started tracking so an
-                    // earlier Concurrent Allow cannot outlive missing tool-result
-                    // messages.
-                    let mut group_error: Option<CanonicalCommitError> = None;
-                    if slots[index].result.is_none() && !self.cancellation.is_cancelled() {
-                        let facts = ParallelAuthFacts::from_execution(index, self, &slots[index]);
-                        match authorize_owned(
-                            &self.lifecycle,
-                            &self.cancellation.execution_cancellation(),
-                            &facts,
-                        )
-                        .await
-                        {
-                            Ok(Some(result)) => slots[index].result = Some(result),
-                            Ok(None) => {}
-                            Err(error) => {
-                                group_error = Some(CanonicalCommitError::Interaction(error));
-                            }
-                        }
-                    }
-                    if group_error.is_none()
-                        && slots[index].result.is_none()
-                        && !self.cancellation.is_cancelled()
-                    {
-                        let tool_call_id = slots[index].call.id.clone();
-                        let tool_id = slots[index].tool_id.clone();
-                        if let Err(message) = self.emit_shared(RuntimeEvent::ToolExecutionStarted {
-                            tool_call_id,
-                            tool_id,
-                        }) {
-                            group_error = Some(CanonicalCommitError::Durable(
-                                crate::durable::ConversationStoreError::Storage(message),
-                            ));
-                        } else {
-                            slots[index].executor_started = true;
-                            #[cfg(test)]
-                            self.park_after_tool_start();
-                            if let Some(error) = self.durable_failure_commit_error() {
-                                group_error = Some(error);
-                            } else {
-                                let prepared = slots[index]
-                                    .prepared
-                                    .as_ref()
-                                    .expect("unsettled slots are preflighted");
-                                let (_, result, facts) = self
-                                    .run_single_call(
-                                        index,
-                                        prepared.invocation.clone(),
-                                        prepared.progress_capability,
-                                        todo_writer.clone(),
-                                        occurrences[index].clone(),
-                                    )
-                                    .await;
-                                slots[index].result = Some(result);
-                                slots[index].execution_facts = facts;
-                            }
-                        }
-                    }
-                    if group_error.is_none() && self.cancellation.interaction_failed() {
-                        group_error = Some(CanonicalCommitError::Interaction(
-                            InteractionFailure::ControlLost,
-                        ));
-                    }
-                    if let Some(error) = group_error {
-                        let batch_started = slots.iter().any(|slot| slot.executor_started);
-                        if batch_started {
-                            deferred_group_error = Some(error);
-                            break;
-                        }
-                        return Err(error);
-                    }
-                    index += 1;
-                    if deferred_group_error.is_some() {
-                        break;
-                    }
                 }
                 Group::Concurrent => {
                     // Authorize siblings independently and start each allowed
