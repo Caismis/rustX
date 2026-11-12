@@ -118,4 +118,36 @@ mod tests {
         assert!(state.pending_text().unwrap().contains("plan"));
         assert_eq!(state.emitted_mode(), None);
     }
+
+    /// Mirrors attempt settlement: compaction arms pending, then cancel before
+    /// ModelRequestStarted must clear `last_permission_reminder_mode` so the
+    /// next attempt does not suppress the reminder.
+    #[test]
+    fn settlement_after_compaction_cancel_before_request_start_rearms_next_attempt() {
+        let mut last_permission_reminder_mode = Some(ApprovalMode::Plan);
+        let mut state = PermissionReminderState::for_admission(
+            ApprovalMode::Plan,
+            last_permission_reminder_mode,
+        );
+        assert!(!state.pending);
+        state.mark_after_compaction();
+        // Cancel before request-start commit: pending stays true, never consumed.
+        assert!(state.pending);
+        assert_eq!(state.emitted_mode(), None);
+        match (state.emitted_mode(), state.pending) {
+            (Some(mode), _) => last_permission_reminder_mode = Some(mode),
+            (None, true) => last_permission_reminder_mode = None,
+            (None, false) => {}
+        }
+        assert_eq!(last_permission_reminder_mode, None);
+        let next = PermissionReminderState::for_admission(
+            ApprovalMode::Plan,
+            last_permission_reminder_mode,
+        );
+        assert!(
+            next.pending,
+            "next attempt must re-emit after compaction→pending→cancel before start"
+        );
+        assert!(next.pending_text().unwrap().contains("plan"));
+    }
 }

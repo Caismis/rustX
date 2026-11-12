@@ -216,6 +216,23 @@ id_type! {
     AgentId
 }
 
+impl AgentId {
+    /// Fallible construction for untrusted caller strings (tool arguments).
+    ///
+    /// Rejects empty identities so authorize binding can skip closed without
+    /// panicking on malformed `send_message` input.
+    ///
+    /// # Errors
+    /// Returns a validation message when the value is empty.
+    pub fn parse(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into();
+        if value.is_empty() {
+            return Err("agent id must not be empty".into());
+        }
+        Ok(Self::new(value))
+    }
+}
+
 id_type! {
     /// Identifies an immutable agent version.
     AgentVersionId
@@ -846,6 +863,11 @@ mod tests {
         ));
         let _ = round_trip(&MessageId::new("msg-1"));
         let _ = round_trip(&AgentId::new("agent-a"));
+        assert_eq!(
+            AgentId::parse("agent-a").expect("parse").as_str(),
+            "agent-a"
+        );
+        assert!(AgentId::parse("").is_err());
         let _ = round_trip(&AgentVersionId::new("agent-v1"));
         let _ = round_trip(&SubagentId::new("conv-1-subagent-1"));
         let _ = round_trip(&AttemptId::new("attempt-1"));

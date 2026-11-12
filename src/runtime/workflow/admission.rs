@@ -18,6 +18,41 @@ pub(super) fn effective_agent_entry_resource_permissions(
     node.or(profile)
 }
 
+/// Authorize/review facts for one Workflow Agent entry: profile plus the
+/// already-rendered task. Distinct tasks must produce distinct review inputs;
+/// oversized payloads fail closed through `complete_review_arguments`.
+#[must_use]
+pub(super) fn agent_entry_authorize_arguments(
+    profile: &crate::runtime::subagent::SubagentName,
+    task: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "agent": profile.to_string(),
+        "task": task,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::subagent::SubagentName;
+
+    #[test]
+    fn agent_entry_authorize_arguments_differ_by_rendered_task() {
+        let profile = SubagentName::parse("reviewer").expect("profile");
+        let first = agent_entry_authorize_arguments(&profile, "Review change A.");
+        let second = agent_entry_authorize_arguments(&profile, "Review change B.");
+        assert_ne!(
+            first, second,
+            "two different rendered tasks must yield different authorize payloads"
+        );
+        assert_eq!(first["agent"], "reviewer");
+        assert_eq!(first["task"], "Review change A.");
+        assert_eq!(second["agent"], "reviewer");
+        assert_eq!(second["task"], "Review change B.");
+    }
+}
+
 impl WorkflowCatalog {
     /// Resolve every required static dependency before publication. A failed node
     /// leaves only diagnostics, never an executable subset of the source.

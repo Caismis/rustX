@@ -1360,12 +1360,11 @@ impl ParallelAuthFacts {
             && let Some(agent_id) = permission_arguments
                 .get("agent_id")
                 .and_then(serde_json::Value::as_str)
+            && let Ok(parsed) = crate::runtime::identity::AgentId::parse(agent_id)
             && let Some(name) = execution
                 .subagent_context
                 .as_ref()
-                .and_then(|context| {
-                    context.named_agent_for_id(&crate::runtime::identity::AgentId::new(agent_id))
-                })
+                .and_then(|context| context.named_agent_for_id(&parsed))
             && let Some(object) = permission_arguments.as_object_mut()
         {
             object.insert("agent".into(), serde_json::Value::String(name));
