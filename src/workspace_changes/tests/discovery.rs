@@ -1,4 +1,4 @@
-//! Fresh discovery, membership and configuration at every endpoint/attempt.
+//! Discovery and index seeding across repositories and fresh runtimes.
 use super::*;
 
 async fn edit(root: &Path, name: &str, expected_before: &str) {
@@ -6,7 +6,7 @@ async fn edit(root: &Path, name: &str, expected_before: &str) {
     let record = start(root, &store, "fresh");
     record.before_tools().await;
     assert!(record.baseline.lock().unwrap().is_some());
-    assert!(record.directory.get().is_none());
+    assert!(record.directory.get().is_some());
     let after = if expected_before == "changed\n" {
         "different\n"
     } else {
@@ -26,7 +26,7 @@ async fn edit(root: &Path, name: &str, expected_before: &str) {
 }
 
 #[tokio::test]
-async fn fresh_attempts_observe_checkout_commit_stash_and_index_replacement() {
+async fn fresh_runtimes_observe_checkout_commit_stash_and_index_replacement() {
     let dir = repository();
     let root = dir.path();
     let first = git(root, &["rev-parse", "HEAD"]);
@@ -92,7 +92,7 @@ async fn linked_worktree_and_retargeted_gitfile_use_the_current_index() {
 }
 
 #[tokio::test]
-async fn local_and_included_config_change_ignore_membership_without_processes() {
+async fn local_and_included_config_seed_snapshot_ignore_membership() {
     let dir = repository();
     let root = dir.path();
     let excludes = root.join(".git/extra-excludes");
@@ -114,7 +114,7 @@ async fn local_and_included_config_change_ignore_membership_without_processes() 
     fs::write(root.join("generated.log"), "ignored change\n").unwrap();
     record.finish().await;
     assert!(store.summary(&AttemptId::new("ignored")).is_none());
-    assert!(record.directory.get().is_none());
+    assert!(record.directory.get().is_some());
     fs::write(&excludes, "").unwrap();
     edit(root, "generated.log", "ignored change\n").await;
 }
@@ -144,7 +144,7 @@ async fn bare_configuration_does_not_allocate_snapshot_storage() {
 }
 
 #[tokio::test]
-async fn sha256_and_split_indices_keep_raw_endpoints_without_writing_the_index() {
+async fn sha256_and_split_indices_seed_snapshots_without_writing_the_user_index() {
     for sha256 in [false, true] {
         let dir = tempdir();
         let root = dir.path();
@@ -170,7 +170,7 @@ async fn sha256_and_split_indices_keep_raw_endpoints_without_writing_the_index()
 }
 
 #[tokio::test]
-async fn replacing_repository_format_during_an_attempt_preserves_the_original_raw_baseline() {
+async fn replacing_the_repository_object_store_abandons_the_attempt_record() {
     let dir = repository();
     let root = dir.path();
     let store = Arc::default();
@@ -181,19 +181,14 @@ async fn replacing_repository_format_during_an_attempt_preserves_the_original_ra
     git(root, &["add", "tracked.txt"]);
     fs::write(root.join("tracked.txt"), "after replacement\n").unwrap();
     record.finish().await;
-    raw::text_change(
-        &store,
-        "replacement",
-        "tracked.txt",
-        "one\ntwo\n",
-        "after replacement\n",
-        (1, 2),
-    )
-    .await;
+    assert!(
+        store.summary(&AttemptId::new("replacement")).is_none(),
+        "removed alternate objects make the original snapshot unavailable"
+    );
 }
 
 #[tokio::test]
-async fn removing_an_inner_repository_keeps_the_attempt_root_with_enclosing_git_membership() {
+async fn removing_the_original_repository_does_not_rediscover_its_parent() {
     let parent = repository();
     let root = parent.path().join("inner");
     fs::create_dir(&root).unwrap();

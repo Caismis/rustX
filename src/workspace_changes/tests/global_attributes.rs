@@ -122,7 +122,7 @@ async fn assert_raw_endpoints() {
         }
 
         let recorded = store
-            .0
+            .records
             .lock()
             .unwrap()
             .get(attempt.as_str())

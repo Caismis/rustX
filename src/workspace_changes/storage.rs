@@ -1,5 +1,5 @@
 //! One exact, owner-marked namespace shared by recorders using a temporary root.
-//! Each Attempt owns its private object store and first-mutation file captures.
+//! Each runtime owns its private object store and first-mutation file captures.
 use std::{
     fs,
     io::{self, Read, Write},
@@ -78,7 +78,7 @@ impl SnapshotDirectory {
             }
         }
         let directory = tempfile::Builder::new()
-            .prefix("attempt-")
+            .prefix("session-")
             .tempdir_in(&root)?;
         Ok(Self { root, directory })
     }
