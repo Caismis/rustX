@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
@@ -14,7 +14,9 @@ import type { WorkflowDocument } from '../../src/app/workflows/document/model';
 const inspector = (page: Page) => page.getByRole('complementary', { name: 'Inspector' });
 const canvas = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
 async function activate(page: Page) {
-  const node = canvas(page).getByLabel('Branch node choose', { exact: true }); await node.focus(); await node.press('Enter');
+  const node = canvas(page).getByLabel('Branch node choose', { exact: true });
+  await expect(node).toBeVisible();
+  await node.focus(); await node.press('Enter');
 }
 
 test('six concurrent reference conditions retain numeric operators during edits in both scopes', async ({ page }) => {
@@ -52,7 +54,7 @@ test('six concurrent reference conditions retain numeric operators during edits 
     }
     expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 for (const width of [1440, 390]) test(`single integer token retains string template semantics after save at ${width}px`, async ({ page }, info) => {
@@ -108,7 +110,7 @@ for (const width of [1440, 390]) test(`single integer token retains string templ
     expect((await fixture.control('requests')).requests).toHaveLength(0);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 for (const width of [1440, 390]) test(`object-array membership retains its full operand through editing and save at ${width}px`, async ({ page }, info) => {
@@ -158,7 +160,7 @@ for (const width of [1440, 390]) test(`object-array membership retains its full 
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-style card and panel', async ({ page }, info) => {
@@ -257,7 +259,7 @@ test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-sty
     await expect(inspector(page)).toHaveCSS('position', 'absolute'); await captureEvidence(page, 'branch-mobile', info);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('branch variable picker shows upstream outputs and excludes parallel siblings and later nodes', async ({ page }, info) => {
@@ -295,5 +297,5 @@ test('branch variable picker shows upstream outputs and excludes parallel siblin
     await picker.getByRole('button', { name: /^before \/ text ·/ }).click();
     await expect(picker).toHaveCount(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });

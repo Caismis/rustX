@@ -17,6 +17,7 @@ async function observeLatency(page: Page) {
     const evidence: SessionLatency = { marks: [], rpc: [], http: [] };
     window.__sessionLatency = evidence;
     const NativeSocket = window.WebSocket;
+    const lineage = new Map<string, { sessionId: string; nodeId: string }>();
     let connectionSequence = 0;
     // thread/resume only names a Conversation on the wire. Map each known
     // Conversation back to its Session/Node so cold-preview recovery can prove
@@ -51,6 +52,13 @@ async function observeLatency(page: Page) {
             };
           };
           const row = this.calls.get(reply.id);
+          if (reply.result?.type === 'session' || reply.result?.type === 'session_transition') {
+            const session = reply.result.session;
+            if (session?.id && session.active_node && session.active_conversation_id) lineage.set(session.active_conversation_id, { sessionId: session.id, nodeId: session.active_node });
+          }
+          if (row?.method === 'session/node' && row.sessionId && reply.result?.type === 'node' && reply.result.node) {
+            lineage.set(reply.result.node.conversation_id, { sessionId: row.sessionId, nodeId: reply.result.node.id });
+          }
           if (row) {
             row.end = performance.now(); row.bytes = event.data.length;
             row.error = reply.error ? reply.error.data?.kind || 'untyped_rpc_error' : undefined;
@@ -74,8 +82,10 @@ async function observeLatency(page: Page) {
                   ? reply.result.target.conversation_id
                   : row.threadId;
                 const owner = conversationId ? conversationOwner.get(conversationId) : undefined;
+                const observed = conversationId ? lineage.get(conversationId) : undefined;
                 row.sessionId = sessionId ?? owner?.sessionId;
                 row.nodeId = owner?.nodeId;
+                if (!row.nodeId && observed && observed.sessionId === row.sessionId) row.nodeId = observed.nodeId;
               }
               if (row.method === 'thread/read') row.resultThreadId = reply.result.thread?.id;
             }
@@ -117,6 +127,9 @@ async function report(page: Page, info: TestInfo) {
   const evidence = await page.evaluate(() => window.__sessionLatency);
   await info.attach('session-latency.json', { body: JSON.stringify(evidence, null, 2), contentType: 'application/json' });
   console.log('SESSION_LATENCY', JSON.stringify(evidence));
+  for (const attach of evidence.rpc.filter(row => row.method === 'thread/resume' && row.error === undefined && row.resultType === 'attached')) {
+    expect(attach).toMatchObject({ sessionId: expect.any(String), nodeId: expect.any(String), target: expect.any(String) });
+  }
   // Preserve every rejection. A cold preview needs its exact live handoff;
   // unavailable status capture needs a new strong read proving recovery.
   // Unrelated reads and every required operation must still succeed.

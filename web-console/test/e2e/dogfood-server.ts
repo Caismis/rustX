@@ -1,5 +1,6 @@
+import type { Page } from '@playwright/test';
 import { appServerEndpoint } from '../../../dev/src/app-server-readiness.ts';
-import { startWorkspaceHost } from './workspace-host.ts';
+import { drainWorkspaceHostRoutes, startWorkspaceHost } from './workspace-host.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, opendirSync } from 'node:fs';
@@ -223,17 +224,32 @@ timezone = "UTC"
       async stop(check = true) {
         try {
           const report = await control('shutdown', 'POST');
+          // Product Host observers and terminals settle through the live native
+          // connection; retire that ownership before terminating its server.
+          await workspaceHost.stop();
           app!.kill('SIGTERM'); provider.stdin.end();
           const [providerCode] = await Promise.all([exited(provider), exited(app!)]);
           await measurement?.afterExit?.();
           if (check && (!report.ok || providerCode !== 0)) throw new Error(`Provider scenario not satisfied (exit ${providerCode}): ${JSON.stringify(report)}`);
           return report;
         } finally {
-          await workspaceHost.stop();
-          app?.kill('SIGTERM'); provider.kill('SIGTERM');
-          rmSync(directory, { recursive: true, force: true });
+          try { await workspaceHost.stop(); }
+          finally {
+            app?.kill('SIGTERM'); provider.kill('SIGTERM');
+            rmSync(directory, { recursive: true, force: true });
+          }
         }
       },
     };
   } catch (error) { app?.kill(); provider.kill(); rmSync(directory, { recursive: true, force: true }); throw new Error(`${String(error)}\n${providerErrors}`); }
+}
+
+/** Retire the browser proxy before the Host it forwards to. Already running
+ * Node route callbacks must finish while their Host and native owner are live. */
+export async function stopDogfoodPage(page: Page, fixture: Pick<Awaited<ReturnType<typeof startDogfood>>, 'stop'>, check = true) {
+  try { await drainWorkspaceHostRoutes(page); await page.unrouteAll({ behavior: 'wait' }); }
+  finally {
+    try { await page.close(); }
+    finally { await fixture.stop(check); }
+  }
 }

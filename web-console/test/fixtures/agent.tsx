@@ -144,7 +144,7 @@ if (mode === 'question-history') questionHistoryFixture(server, s);
 if (mode === 'composer' && new URLSearchParams(location.search).has('workflow-runs')) workflowRunsFixture(server, s);
 server.snapshots.set('A', s);
 await server.attached('A');
-localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
 createRoot(document.getElementById('root')!).render(mode === 'restored' ? <RestoredComposerFixture /> : <App client={server.client} workspaceHost={server.workspaceHost}/>);
 
 // Browser-only controls for deterministic composer projection/transport tests.

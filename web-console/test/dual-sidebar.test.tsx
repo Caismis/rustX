@@ -280,7 +280,7 @@ it('refresh hints restore the last Home Session while a different primary page i
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
   await act(async () => fireEvent.click(primary('Settings')));
-  expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!).openViews).toEqual(['B', 'A']);
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v3')!)).toEqual({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'B' } });
   const at = server.requests.length;
   first.unmount();
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });

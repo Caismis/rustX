@@ -12,7 +12,7 @@ type NativeReadResult<M extends NativeRead> = Extract<MethodResult, { type: M ex
  * No snapshots, notifications, or semantic results are manufactured here. */
 export async function wireProbe(page: Page) {
   const requests: { id: string | number; method: string; params: any }[] = [];
-  const responses: { method: string; result: any }[] = [];
+  const responses: { id: string | number; method: string; result: any }[] = [];
   const requestTimes = new Map<string | number, number>();
   const notifications: { method: string; params: any }[] = [];
   // Immutable lineage metadata from real native reads, never a guessed ID or
@@ -163,7 +163,7 @@ export async function wireProbe(page: Page) {
       };
       if (method) {
         methods.delete(response.id);
-        responses.push({ method, result: response.result });
+        responses.push({ id: response.id, method, result: response.result });
         if (hold.delete(method)) {
           held.push({ method, send: deliver });
           pump();

@@ -69,7 +69,7 @@ server.workspaceHost.classifyLocations = async cwds => { await associationGate; 
 const settingsTargets: string[] = [];
 server.workspaceHost.configureWorkspace = async (id, _endpoint, operation) => {
   settingsTargets.push(id);
-  const projection = { ...cfg3Source(), target: { kind: 'workspace' as const, directory: '/workspace' } };
+  const projection = { ...cfg3Source(), prospective_approval_mode: 'plan' as const, target: { kind: 'workspace' as const, directory: '/workspace' } };
   if (operation.kind === 'write') return { kind: 'write', commit: { acknowledgement: sourceReceipt(projection), reread: { status: 'observed', projection } } };
   if (operation.kind === 'model_probe') return { kind: 'model_probe', outcome: 'connected' };
   if (operation.kind === 'mcp_probe') return {kind:'mcp_probe',result:{id:operation.id,revision:operation.expected_revision,outcome:'reachable'}};
@@ -84,7 +84,7 @@ if (cold) {
   server.held.add('thread/resume'); server.held.add('inbound/queue');
   await server.connect();
 } else await server.attached('A', 'B');
-localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
+localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
 
 // Isolated fixture controls, never reachable from the production application.
 let replacedAttach: { socket: typeof server.socket; response: import('../../../protocol/app-server/v78').Response } | undefined;

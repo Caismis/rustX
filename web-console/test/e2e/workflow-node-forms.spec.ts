@@ -1,7 +1,7 @@
 import { test, expect, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
@@ -143,5 +143,5 @@ test('shows each native node in the Dify-style card and grouped settings panel',
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });

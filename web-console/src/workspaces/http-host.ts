@@ -91,7 +91,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     if (signal?.aborted) cancel();
     try {
       let result: { ok: boolean; value?: T } & HostFailure;
-      try { result = await fileResponse(response, kind === 'file' ? FILE_PREVIEW_LIMITS.fileBytes : FILE_PREVIEW_LIMITS.convertedPdfBytes) as typeof result; }
+      try { result = await fileResponse(response, kind === 'file' ? FILE_PREVIEW_LIMITS.fileBytes : FILE_PREVIEW_LIMITS.convertedPdfBytes, signal) as typeof result; }
       catch { throw new WorkspaceHostError('File operation settlement unavailable', unknown); }
       if (!result || typeof result.ok !== 'boolean' || (result.ok && result.value === undefined)) {
         throw new WorkspaceHostError('File operation settlement unavailable', unknown);

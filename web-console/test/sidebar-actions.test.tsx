@@ -9,7 +9,7 @@ let server: Server | undefined;
 afterEach(() => { cleanup(); server?.client.disconnect(); vi.unstubAllGlobals(); localStorage.clear(); });
 async function mount() {
   localStorage.clear(); server = new Server(); await server.attached('A', 'B');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
   const ui = render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
   await act(async () => {}); return ui;
 }

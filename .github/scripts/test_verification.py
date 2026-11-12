@@ -270,9 +270,9 @@ class AffectedSteps(unittest.TestCase):
 
 
 class BrowserSelection(unittest.TestCase):
-    def test_full_runs_the_complete_inventory_in_two_shards(self):
+    def test_full_runs_the_complete_inventory_in_three_shards(self):
         self.assertEqual(v.plan("push", [], [])["browser"],
-                         {"selection": "full", "shards": [1, 2], "specs": [], "presentation": False})
+                         {"selection": "full", "shards": [1, 2, 3], "specs": [], "presentation": False})
 
     def test_fast_is_one_shard_of_smoke_and_changed_specs(self):
         browser = v.plan("pull_request", [], modified("web-console/test/e2e/chat.spec.ts", "README.md"))["browser"]

@@ -56,7 +56,7 @@ afterEach(() => { cleanup(); server.client.disconnect(); });
 async function mount(initial: RuntimeClientSnapshot, ...others: string[]) {
   server.snapshots.set('A', initial);
   await server.attached('A', ...others);
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', ...others] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', ...others], route: { kind: 'session', sessionId: 'A' } }));
   return render(<App client={server.client} workspaceHost={server.workspaceHost} />);
 }
 const region = (name: 'To-dos' | 'Goal' | 'Queue') => screen.queryByRole('region', { name });

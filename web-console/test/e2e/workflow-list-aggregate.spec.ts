@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 import { dataNodesDocument } from '../workflow-data-document';
 import { viewId } from '../../src/app/workflows/ui/editor/selection';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession, choose } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import type { WorkflowCheckReport } from '../../../protocol/app-server/v78';
@@ -199,7 +199,7 @@ for (const width of [1440, 390])
         await expect(page.locator('vite-error-overlay')).toHaveCount(0);
         expect(errors).toEqual([]);
       } finally {
-        await fixture.stop(false);
+        await stopDogfoodPage(page, fixture, false);
       }
     });
   });
@@ -276,5 +276,5 @@ for (const width of [1440, 390]) test(`Boolean List references remain dynamic un
     expect(await page.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });

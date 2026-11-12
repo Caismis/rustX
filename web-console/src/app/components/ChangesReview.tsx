@@ -2,11 +2,19 @@ import { useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } f
 import type { FileComparison } from '../../../../protocol/app-server/v78';
 import type { ChangesReviewRequest } from '../changes-review';
 import { useTranslation } from '../../locale/react';
-import { DiffBlock, localDiffHunks } from '../../presentation/primitives/DiffBlock';
+import { DiffBlock, diffCopyText, localDiffHunks } from '../../presentation/primitives/DiffBlock';
 import { languageForPath } from '../../presentation/primitives/file-language';
 import { grammarLoadCount, highlightLines, subscribeGrammarLoaded } from '../../presentation/markdown/highlight';
+import { useCopyFeedback } from '../../presentation/primitives/use-copy-feedback';
 import { Button } from '../../presentation/primitives/Button';
 import css from './ChangesReview.module.css';
+
+function PreviewCopy({text}: {text: string}) {
+  const tx = useTranslation(), {copied, onCopy} = useCopyFeedback(text);
+  return <Button size="sm" className={css.copy} disabled={!text} onClick={onCopy}>
+    {copied ? tx('artifacts:changes.copied') : tx('artifacts:changes.copy')}
+  </Button>;
+}
 
 function PreviewDiff({hunks, path}: {hunks: FileComparison['hunks']; path: string}) {
   const language = languageForPath(path);
@@ -54,16 +62,19 @@ export function ChangeComparison({request,index,visible=true,preview=false}: {re
     return()=>{live=false;};
   },[request.client,request.owned,identity,current,visible,retry]);
   const comparison=state.comparison, file=request.summary.files[index];
+  const diffs = useMemo(() => comparison && !comparison.binary && !comparison.oversized
+    ? comparison.hunks.map(hunk => ({path: `${file.display}:${hunk.new_start}`, oldText: hunk.old_text, newText: hunk.new_text})) : [], [comparison, file.display]);
+  const copyText = useMemo(() => preview ? diffCopyText(diffs) : '', [preview, diffs]);
   if(!current)return <p>{tx('artifacts:changes.missing')}</p>;
   return <div className={preview ? css.preview : css.comparison} data-change-comparison data-changes-hover-preview={preview || undefined}>
-    {preview && <div className={css.previewHeader}><span className={css.path} data-changes-preview-path>{file.path}</span></div>}
+    {preview && <div className={css.previewHeader}><span className={css.path} data-changes-preview-path>{file.path}</span><PreviewCopy key={JSON.stringify([identity,copyText])} text={copyText}/></div>}
     {state.error ? <p role="alert">{tx('artifacts:changes.error')} <Button size="sm" onClick={()=>setRetry(value=>value+1)}>{tx('artifacts:changes.retry')}</Button></p>
       : comparison===undefined ? <p role="status">{tx('artifacts:changes.loading')}</p>
       : comparison===null ? <p>{tx('artifacts:changes.missing')}</p>
       : comparison.binary ? <p>{tx('artifacts:changes.binary-diff')}</p>
       : comparison.oversized ? <p>{tx('artifacts:changes.oversized-diff')}</p>
       : preview ? comparison.hunks.length > 0 && <PreviewDiff hunks={comparison.hunks} path={file.path}/>
-      : <DiffBlock diffs={comparison.hunks.map(hunk=>({path:`${file.display}:${hunk.new_start}`,oldText:hunk.old_text,newText:hunk.new_text}))} maxLines={500} labels={{
+      : <DiffBlock diffs={diffs} maxLines={500} labels={{
         copy:tx('artifacts:changes.copy'),copied:tx('artifacts:changes.copied'),collapseAria:tx('artifacts:changes.collapse'),collapse:tx('artifacts:changes.collapse'),
         expandAria:n=>tx('artifacts:changes.more-lines',{count:n}),expand:n=>tx('artifacts:changes.more-lines',{count:n}),files:()=>tx('artifacts:changes.title',{count:1}),
       }}/>}

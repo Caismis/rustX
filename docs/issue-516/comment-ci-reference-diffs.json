@@ -1,0 +1,215 @@
+{
+  "baseline_commit": "f03f842f5be626d1394afd1a9ab0bfc19ab37b4a",
+  "browser_image": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
+  "playwright": "1.63.0",
+  "chromium": "153.0.8010.12",
+  "helvetica_font": "Liberation Sans",
+  "comparison_policy": "Existing exact comparison and rasterizer-noise policy unchanged.",
+  "reason": "Healthy Workspace source fixtures publish Policy and the captured native model rather than unavailable placeholders.",
+  "references": [
+    {
+      "path": "web-console/test/e2e/scheduler.spec.ts-snapshots/scheduler-en-header-picker-linux.png",
+      "count": 1057,
+      "bounds": [
+        500,
+        966,
+        1239,
+        979
+      ],
+      "before_sha256": "3d943faadd8e9eab6a356c18529e22176053925fe9fcdfc4c68fd8b3531426c8",
+      "after_sha256": "d8257b3608ea3fff802ef1038b317f2e65cd011bddf28c16efbc40ed99d775f5"
+    },
+    {
+      "path": "web-console/test/e2e/scheduler.spec.ts-snapshots/scheduler-en-workbench-linux.png",
+      "count": 648,
+      "bounds": [
+        404,
+        966,
+        686,
+        979
+      ],
+      "before_sha256": "2a3291211aadc9c4276b0e9c091eb1fad773ebdbb5fd12063884a3e19f40e10d",
+      "after_sha256": "a163d8bf3f6d4515ac3315d75c4326f6d6f73d9813dac7ac99ee871d8eb50bf4"
+    },
+    {
+      "path": "web-console/test/e2e/scheduler.spec.ts-snapshots/scheduler-zh-header-picker-linux.png",
+      "count": 1037,
+      "bounds": [
+        500,
+        966,
+        1239,
+        979
+      ],
+      "before_sha256": "e113b6a5a241c06801ea1cfeee4cb69b928305ecbe6fa493c61ba2a3e38a5e3c",
+      "after_sha256": "42d16b9064409b717e00ac5306aadc4e8284a4e1649be97ae4355edf604c6cf9"
+    },
+    {
+      "path": "web-console/test/e2e/scheduler.spec.ts-snapshots/scheduler-zh-workbench-linux.png",
+      "count": 766,
+      "bounds": [
+        404,
+        966,
+        686,
+        979
+      ],
+      "before_sha256": "4033d1fde0de1f57d3e884b40674cf0393f0f006f738197cccf9751bfec3aad7",
+      "after_sha256": "b51f68b04264626f81bf64fe62cb1b3510be94f7e0da0887f8ffddb9f4bb6bde"
+    },
+    {
+      "path": "web-console/test/e2e/shell.spec.ts-snapshots/desktop-collapsed-rail-linux.png",
+      "count": 533,
+      "bounds": [
+        365,
+        966,
+        469,
+        979
+      ],
+      "before_sha256": "affa281794a2a00bf7ef84b6700b490b309285765a6b5966a82b34b60bed31ed",
+      "after_sha256": "579641b72fbb8e1d7c7dd6253078bea5abd78667100cec59a4ff1d91ddeda61e"
+    },
+    {
+      "path": "web-console/test/e2e/shell.spec.ts-snapshots/desktop-expanded-dark-linux.png",
+      "count": 523,
+      "bounds": [
+        505,
+        966,
+        609,
+        979
+      ],
+      "before_sha256": "c1bc5854ad4eff644ec25e0c895d8640dedc69076531a6022a3c9977cc8bdd24",
+      "after_sha256": "e4e4fd893796b27f9b8305f30e4f89add9ef581ad87332bb0f1768025310594f"
+    },
+    {
+      "path": "web-console/test/e2e/shell.spec.ts-snapshots/desktop-expanded-light-linux.png",
+      "count": 533,
+      "bounds": [
+        505,
+        966,
+        609,
+        979
+      ],
+      "before_sha256": "5ce53ce2cffd28bc71510eab85e09ccf11c6539e5203629b804ee0331502b20b",
+      "after_sha256": "d0cfa13a02bd4b9857104238084ee17e3d070ce7572cf9a97cd83e616e4b6802"
+    },
+    {
+      "path": "web-console/test/e2e/shell.spec.ts-snapshots/mobile-rail-dark-linux.png",
+      "count": 124,
+      "bounds": [
+        124,
+        810,
+        153,
+        823
+      ],
+      "before_sha256": "a2e9fc4c474131799dfb6290d77c9697973a0082862dde1c0b4b2c0ad52278a8",
+      "after_sha256": "f52f2a2f22df4be18e9ff12bc84102ed1de8f05a750454b2239ef6ea53c22ccd"
+    },
+    {
+      "path": "web-console/test/e2e/shell.spec.ts-snapshots/session-idle-light-linux.png",
+      "count": 533,
+      "bounds": [
+        505,
+        966,
+        609,
+        979
+      ],
+      "before_sha256": "574f28581a513c164d7d9df0edb03dc7a8ed88bb732b6ed28bc65d82f3531f6d",
+      "after_sha256": "acdd554f0f47891b278d27c2389298e4d18485c76575d4785938fbc7ff349fb6"
+    },
+    {
+      "path": "web-console/test/e2e/shell.spec.ts-snapshots/session-queued-light-linux.png",
+      "count": 533,
+      "bounds": [
+        505,
+        966,
+        609,
+        979
+      ],
+      "before_sha256": "9b4b563728d0e9ae384385d03df1db2a7c5a6f7253f9d3f4f1dd561efdcaea68",
+      "after_sha256": "e2f93766626b8f5cfda17d5d1bf4cd2ec2993bf90a4267995d2b9f0edc058b9d"
+    },
+    {
+      "path": "web-console/test/e2e/shell.spec.ts-snapshots/session-stopping-light-linux.png",
+      "count": 533,
+      "bounds": [
+        505,
+        966,
+        609,
+        979
+      ],
+      "before_sha256": "72e46959ff97e593fcd1a9ca80cf0a9257bb1efec6c2754b45cac3e105f7824a",
+      "after_sha256": "078f4af167fdb04cbfa4350750d87edd6eda5f5022fc74cfb22da41948038600"
+    },
+    {
+      "path": "web-console/test/e2e/shell.spec.ts-snapshots/sidebar-delete-light-linux.png",
+      "count": 1789,
+      "bounds": [
+        501,
+        961,
+        612,
+        984
+      ],
+      "before_sha256": "d30ca51f8da23d3b20be8ae9b9789777c97a2401e9f1f11fb755e3efb6518f21",
+      "after_sha256": "06bfc4d3676fc34830eff1d12f8e74bcb79bf53a6068e5e3b815db40c65e2f93"
+    },
+    {
+      "path": "web-console/test/e2e/shell.spec.ts-snapshots/sidebar-empty-light-linux.png",
+      "count": 533,
+      "bounds": [
+        505,
+        966,
+        609,
+        979
+      ],
+      "before_sha256": "f88b9060adc4f5e929f96b4e87af2a7b9fb3ba8e18a4e2109757d632c490a61b",
+      "after_sha256": "12833096bebdaf82e0845f518b841acc4cff895d9f2edf358b480fd12310c44c"
+    },
+    {
+      "path": "web-console/test/e2e/shell.spec.ts-snapshots/sidebar-named-light-linux.png",
+      "count": 533,
+      "bounds": [
+        505,
+        966,
+        609,
+        979
+      ],
+      "before_sha256": "3de3869f63c2bb135d17329795002b704fe5738f1a5aeba3b80d7aa1f2e18153",
+      "after_sha256": "055b42703dfdd974899c6c4be9987791ff3b102882c783d078564733edcec214"
+    },
+    {
+      "path": "web-console/test/e2e/shell.spec.ts-snapshots/sidebar-other-uncertain-light-linux.png",
+      "count": 533,
+      "bounds": [
+        505,
+        966,
+        609,
+        979
+      ],
+      "before_sha256": "050d6a7bf796d5007d490f5061e7c943e5aae08c630f3b25ed36171e77392f9b",
+      "after_sha256": "df96d2b306fb0e674e0076346b326a521c7f326d012800f3f844fdc5639fa10f"
+    },
+    {
+      "path": "web-console/test/e2e/shell.spec.ts-snapshots/sidebar-preview-light-linux.png",
+      "count": 533,
+      "bounds": [
+        505,
+        966,
+        609,
+        979
+      ],
+      "before_sha256": "89bcba36a2fb10b0dce4a4e6480626afe957f839c18a9e3c43e769a6f3922959",
+      "after_sha256": "d4f2c4eb3f99f2a3fb4afcc73979504df68e3149353cd276dbca2153446004b1"
+    },
+    {
+      "path": "web-console/test/e2e/shell.spec.ts-snapshots/workspace-session-browser-linux.png",
+      "count": 533,
+      "bounds": [
+        505,
+        966,
+        609,
+        979
+      ],
+      "before_sha256": "8a85f62024e82a175315be779117210678749c07fb40447daf6b3042582a6915",
+      "after_sha256": "23f978c0bec97c244de3b896df69ccd8d3a6804704530d935b6e5180950a5002"
+    }
+  ]
+}

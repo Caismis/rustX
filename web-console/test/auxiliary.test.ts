@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { capabilities, Server } from './fixture';
+import { capabilities, Server, snapshot } from './fixture';
 import type { AuxiliaryResult, AuxiliarySegment } from '../../protocol/app-server/v78';
 const servers: Server[] = [];
 afterEach(() => { for (const server of servers.splice(0)) server.client.disconnect(); vi.useRealTimers(); });
@@ -21,6 +21,30 @@ it('one explicit question survives panel close without another submission or can
   expect(server.requests.filter(row => row.request.method === 'auxiliary/btw')).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'auxiliary/cancel')).toHaveLength(0);
   expect(questions.snapshot('A')?.correlation).toBeTruthy();
+});
+it('keeps draft bytes across transport loss, clears on exact release and retires old authority drafts', async () => {
+  const server = await connected(), questions = server.client.auxiliary;
+  questions.setDraft('A', 'Keep exact bytes  ');
+  await server.client.disconnect(); expect(questions.draft('A')).toBe('Keep exact bytes  ');
+  await server.connect(); await server.client.attach('A'); expect(questions.draft('A')).toBe('Keep exact bytes  ');
+  await server.client.release('A'); expect(questions.draft('A')).toBe('');
+  await server.client.attach('A'); questions.setDraft('A', 'Old authority');
+  await server.client.disconnect(); server.authorityId = 'replacement-authority'; await server.connect();
+  expect(questions.draft('A')).toBe('');
+  await server.client.disconnect(); server.authorityId = 'fixture-app-server-authority'; await server.connect(); await server.client.attach('A');
+  expect(questions.draft('A')).toBe('');
+  expect(server.requests.some(row => row.request.method === 'auxiliary/btw' || row.request.method === 'auxiliary/cancel')).toBe(false);
+});
+it('bounds drafts by UTF-8 bytes and shares sixteen slots with submitted questions', async () => {
+  const server = await connected(), questions = server.client.auxiliary;
+  questions.setDraft('A', 'é'.repeat(8192));
+  expect(() => questions.setDraft('A', 'é'.repeat(8193))).toThrow('16384 UTF-8 bytes');
+  expect(questions.draft('A')).toHaveLength(8192);
+  for (let index = 0; index < 16; index++) { const id = `draft-${index}`; server.snapshots.set(id, snapshot(id)); await server.client.attach(id); if (index < 15) questions.setDraft(id, 'Draft'); }
+  expect(() => questions.setDraft('draft-15', 'Too many')).toThrow('capacity is full');
+  await expect(questions.submit('draft-15', 'Too many')).rejects.toThrow('capacity is full');
+  questions.setDraft('draft-0', ''); questions.setDraft('draft-15', 'Now fits');
+  expect(questions.draft('draft-15')).toBe('Now fits');
 });
 it('attempt reset invalidates provisional output and a complete retained result repairs gaps', async () => {
   const server = await connected(), questions = server.client.auxiliary;
@@ -266,4 +290,46 @@ it.each(['pending', 'unresolved', 'confirmed_not_admitted'] as const)('late %s l
   expect(questions.snapshot('A')?.settled).not.toBe(true);
   await questions.submit('A', 'Do not duplicate');
   expect(server.requests.filter(row => row.request.method === 'auxiliary/btw')).toHaveLength(1);
+});
+
+it('consumes only the acknowledged exact draft while closed and keeps intentional repeated text afterward', async () => {
+  const server = await connected(), questions = server.client.auxiliary;
+  questions.setDraft('A', 'Original question'); await questions.submit('A', 'Original question');
+  expect(questions.draft('A')).toBe(''); expect(questions.snapshot('A')?.question).toBe('Original question');
+  questions.setDraft('A', 'Original question'); await questions.reconcile('A');
+  expect(questions.draft('A')).toBe('Original question');
+});
+it('preserves a newer draft when the original submission receipt arrives', async () => {
+  const server = await connected(), questions = server.client.auxiliary;
+  questions.setDraft('A', 'Original question'); server.held.add('auxiliary/btw');
+  const submission = questions.submit('A', 'Original question'), request = await server.waitFor('auxiliary/btw', 1);
+  questions.setDraft('A', 'Newer unsent question'); server.reply(request); await submission;
+  expect(questions.draft('A')).toBe('Newer unsent question');
+});
+it('preserves an unacknowledged draft after definite submission failure', async () => {
+  const server = await connected(), questions = server.client.auxiliary;
+  questions.setDraft('A', 'Original question'); server.held.add('auxiliary/btw');
+  const submission = questions.submit('A', 'Original question'), request = await server.waitFor('auxiliary/btw', 1);
+  server.socket.deliver({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'Preparation failed', data: { kind: 'auxiliary', reason: 'unavailable' } } });
+  await submission; expect(questions.snapshot('A')?.phase).toBe('failed'); expect(questions.draft('A')).toBe('Original question');
+});
+it('consumes an uncertain draft only when reconnect lookup confirms its receipt', async () => {
+  const server = await connected(), questions = server.client.auxiliary;
+  questions.setDraft('A', 'Original question'); server.held.add('auxiliary/btw');
+  const submission = questions.submit('A', 'Original question'); await server.waitFor('auxiliary/btw', 1);
+  server.client.disconnect(); await submission; expect(questions.draft('A')).toBe('Original question');
+  await server.connect(); await server.client.waitForAttachment('A', () => true);
+  const receipt = { call_id: 'call-A', correlation: questions.snapshot('A')!.correlation, scope: 'scope-A' };
+  server.handlers.set('auxiliary/submissionLookup', () => ({ type: 'auxiliary_submission_lookup', lookup: { state: 'known', receipt } }));
+  await questions.reconcile('A'); expect(questions.draft('A')).toBe('');
+});
+it('a delayed original receipt does not consume a draft written after lookup already confirmed admission', async () => {
+  const server = await connected(), questions = server.client.auxiliary;
+  questions.setDraft('A', 'Original question'); server.held.add('auxiliary/btw');
+  const submission = questions.submit('A', 'Original question'), request = await server.waitFor('auxiliary/btw', 1);
+  const receipt = { call_id: 'call-A', correlation: questions.snapshot('A')!.correlation, scope: 'scope-A' };
+  server.handlers.set('auxiliary/submissionLookup', () => ({ type: 'auxiliary_submission_lookup', lookup: { state: 'known', receipt } }));
+  await questions.reconcile('A'); expect(questions.draft('A')).toBe('');
+  questions.setDraft('A', 'Original question'); server.reply(request); await submission;
+  expect(questions.draft('A')).toBe('Original question');
 });
