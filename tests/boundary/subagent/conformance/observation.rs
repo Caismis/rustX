@@ -1432,6 +1432,7 @@ async fn assert_child_source_failure_and_repair(
     assert!(events[0].event.facts().iter().any(|fact| matches!(
         fact,
         crate::runtime_client::event::RuntimeClientEvent::ReadDomainsUpdated { .. }
+            | crate::runtime_client::event::RuntimeClientEvent::ReadDomainsPatched { .. }
     )));
     assert_eq!(child.store.observation_read_cut().unwrap(), native);
     assert_eq!(child.model.requests().len(), 1);

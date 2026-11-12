@@ -329,7 +329,7 @@ mod scale {
         let issued = cached.read_cut.as_ref().unwrap().clone();
         assert_eq!(issued, initial.read_cut);
         assert!(projection.replay.back().unwrap().1.facts().iter().any(|event| {
-            matches!(event, RuntimeClientEvent::ReadDomainsUpdated {trace: Some(trace),..} if trace.as_ref() == &cached)
+            matches!(event, RuntimeClientEvent::ReadDomainsUpdated {trace: Some(trace),..} | RuntimeClientEvent::ReadDomainsPatched {trace: Some(trace),..} if trace.as_ref() == &cached)
         }));
         let held_fence = projection.read_domain_fence();
         let held_read = held_fence.read(&store).unwrap();
@@ -425,6 +425,6 @@ fn t08_t14_cached_trace_cut_is_not_retagged_by_todo_or_unchanged_installation() 
         cached
     );
     assert!(projection.replay.back().unwrap().1.facts().iter().any(|event| {
-        matches!(event, RuntimeClientEvent::ReadDomainsUpdated {trace: Some(trace),..} if trace.as_ref() == &cached)
+        matches!(event, RuntimeClientEvent::ReadDomainsUpdated {trace: Some(trace),..} | RuntimeClientEvent::ReadDomainsPatched {trace: Some(trace),..} if trace.as_ref() == &cached)
     }));
 }

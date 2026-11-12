@@ -287,7 +287,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// 82 added optional, Model-owned reasoning Profile order to full catalog
 /// metadata; selection ordinals and frozen invocation snapshots are unchanged.
 /// Version 85 combines shared-control errors and bounded Trace refresh progress.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 85;
+/// Version 86 carries cursor-relative typed projection list edits.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 86;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1378,7 +1379,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 85);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 86);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

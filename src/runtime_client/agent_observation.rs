@@ -246,9 +246,14 @@ impl Peer {
         &self,
         cut: &crate::observation::cut::CheckpointReadCut,
     ) -> Result<(), RuntimeClientError> {
-        if cut.conversation_id != self.conversation_id
-            || cut.activation_id.as_ref() != Some(&self.activation_id)
-        {
+        self.validate_scope(&cut.conversation_id, cut.activation_id.as_ref())
+    }
+    fn validate_scope(
+        &self,
+        conversation_id: &ConversationId,
+        activation_id: Option<&SubagentId>,
+    ) -> Result<(), RuntimeClientError> {
+        if *conversation_id != self.conversation_id || activation_id != Some(&self.activation_id) {
             return Err(failed(
                 "native observation read cut changed conversation or activation",
             ));
@@ -427,6 +432,19 @@ impl Peer {
                         super::event::RuntimeClientEvent::CheckpointAdvanced {
                             checkpoint, ..
                         } => self.validate_cut(&checkpoint.read_cut)?,
+                        super::event::RuntimeClientEvent::ProjectionDelta { metadata, .. } => {
+                            self.validate_scope(
+                                &metadata.read_cut.conversation_id,
+                                metadata.read_cut.activation_id.as_ref(),
+                            )?;
+                            if metadata.base_cursor != consumed
+                                || metadata.read_cut.revision != event.cursor.get()
+                            {
+                                return Err(failed(
+                                    "native delta does not name its exact preceding cursor",
+                                ));
+                            }
+                        }
                         _ => return Err(failed("native event lacks complete read-cut evidence")),
                     }
                     consumed = event.cursor;

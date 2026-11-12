@@ -373,6 +373,7 @@ impl FitBudget {
         budget.finish()
     }
 
+    #[cfg(test)]
     pub(super) fn replacement(checkpoint: Option<usize>, metadata: Option<usize>) -> Option<usize> {
         let mut event = Self::new();
         event.value("type", &"checkpoint_advanced");

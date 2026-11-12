@@ -4977,14 +4977,22 @@ async fn await_child_publication_fact<T>(
             else {
                 panic!("{description}: Child publication stopped or requires repair");
             };
-            let rustx::runtime_client::RuntimeClientEvent::ProjectionTransition {
-                metadata, ..
-            } = record.event.as_ref()
-            else {
-                panic!("complete native Child transition");
+            let (actual_conversation, actual_activation) = match record.event.as_ref() {
+                rustx::runtime_client::RuntimeClientEvent::ProjectionTransition {
+                    metadata,
+                    ..
+                } => (
+                    &metadata.read_cut.conversation_id,
+                    metadata.read_cut.activation_id.as_ref(),
+                ),
+                rustx::runtime_client::RuntimeClientEvent::ProjectionDelta { metadata, .. } => (
+                    &metadata.read_cut.conversation_id,
+                    metadata.read_cut.activation_id.as_ref(),
+                ),
+                _ => panic!("complete native Child transition"),
             };
-            assert_eq!(&metadata.read_cut.conversation_id, conversation);
-            assert_eq!(metadata.read_cut.activation_id.as_ref(), Some(activation));
+            assert_eq!(actual_conversation, conversation);
+            assert_eq!(actual_activation, Some(activation));
             if let Some(value) = record.event.facts().iter().find_map(&predicate) {
                 return value;
             }

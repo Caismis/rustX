@@ -732,6 +732,10 @@ pub async fn receive_until(
                 RuntimeClientEvent::ProjectionTransition { metadata, .. } => {
                     assert_eq!(metadata.read_cut.revision, event.cursor.get());
                 }
+                RuntimeClientEvent::ProjectionDelta { metadata, .. } => {
+                    assert_eq!(metadata.read_cut.revision, event.cursor.get());
+                    assert_eq!(metadata.base_cursor.get() + 1, event.cursor.get());
+                }
                 RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
                     assert_eq!(checkpoint.cursor, event.cursor);
                     assert_eq!(checkpoint.read_cut.revision, event.cursor.get());
@@ -772,7 +776,9 @@ async fn receive_read_domain_suffix(
             .iter()
             .all(|event| event.event.facts().iter().any(|fact| matches!(
                 fact,
-                RuntimeClientEvent::TraceChanged | RuntimeClientEvent::ReadDomainsUpdated { .. }
+                RuntimeClientEvent::TraceChanged
+                    | RuntimeClientEvent::ReadDomainsUpdated { .. }
+                    | RuntimeClientEvent::ReadDomainsPatched { .. }
             )))
     );
 }
