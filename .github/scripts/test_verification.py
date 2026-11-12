@@ -1,5 +1,8 @@
+import os
 import pathlib
 import re
+import subprocess
+import tempfile
 import unittest
 
 import verification as v
@@ -332,26 +335,26 @@ class Gate(unittest.TestCase):
         self.assertEqual(v.gate(planned, passing(planned), "abc", "abc", stale),
                          ["the tested merge commit m joins ['base', 'older'], not base base and head abc"])
 
-    def test_a_github_stacked_merge_commit_is_accepted_when_base_ancestors_first_parent(self):
+    def test_a_github_stacked_merge_commit_requires_base_tree_not_mere_ancestry(self):
         planned = v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))
         stacked = {"merge": "m", "parents": ["stack-merge", "abc"], "base": "base"}
-        # Intermediate stack merge that still carries the PR base.
+        # Intermediate stack merge with the same tree as the declared base.
         self.assertEqual(
             v.gate(planned, passing(planned), "abc", "abc", stacked,
-                   is_ancestor=lambda anc, desc: (anc, desc) == ("base", "stack-merge")),
+                   same_tree=lambda left, right: (left, right) == ("base", "stack-merge")),
             [],
         )
-        # Wrong first-parent lineage must still fail.
+        # An ancestor-related first parent with foreign content must fail.
         self.assertEqual(
             v.gate(planned, passing(planned), "abc", "abc", stacked,
-                   is_ancestor=lambda anc, desc: False),
+                   same_tree=lambda left, right: False),
             ["the tested merge commit m joins ['stack-merge', 'abc'], not base base and head abc"],
         )
         # Second parent must remain the PR head.
         wrong_head = {"merge": "m", "parents": ["stack-merge", "other"], "base": "base"}
         self.assertEqual(
             v.gate(planned, passing(planned), "abc", "abc", wrong_head,
-                   is_ancestor=lambda anc, desc: True),
+                   same_tree=lambda left, right: True),
             ["the tested merge commit m joins ['stack-merge', 'other'], not base base and head abc"],
         )
 
@@ -423,6 +426,60 @@ class Workflow(unittest.TestCase):
         self.assertIn("VERIFICATION_PROFILE: fast\n", jobs["rust-platform-core"])
         for job in ("rust-contracts", "rust-boundaries", "rust-platform-boundaries"):
             self.assertIn("VERIFICATION_PROFILE: full", jobs[job])
+
+
+class StackedMergeGit(unittest.TestCase):
+    """Real-git regressions for stacked Merge verification parents."""
+
+    def git(self, repo, *args):
+        return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+
+    def commit_tree(self, repo, message):
+        self.git(repo, "add", "-A")
+        self.git(repo, "-c", "user.name=test", "-c", "user.email=test@example.com",
+                 "commit", "--allow-empty", "-m", message)
+        return self.git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    def test_tree_equivalent_stack_merge_is_accepted_and_foreign_content_is_rejected(self):
+        planned = v.plan("pull_request", [], modified("README.md"))
+        with tempfile.TemporaryDirectory() as repo:
+            self.git(repo, "init")
+            (pathlib.Path(repo) / "README.md").write_text("base\n", encoding="utf-8")
+            base = self.commit_tree(repo, "base")
+
+            self.git(repo, "checkout", "-b", "head")
+            (pathlib.Path(repo) / "README.md").write_text("head\n", encoding="utf-8")
+            head = self.commit_tree(repo, "head")
+
+            # Tree-equivalent intermediate: empty commit on base (same tree).
+            self.git(repo, "checkout", "-b", "stack-equiv", base)
+            equiv = self.commit_tree(repo, "stack-equiv-empty")
+            # Merge head into the equivalent intermediate (GitHub stack shape).
+            self.git(repo, "merge", "--no-ff", "-m", "tested", head)
+            merge = self.git(repo, "rev-parse", "HEAD").stdout.strip()
+            parents = self.git(repo, "rev-list", "--parents", "-n", "1", merge).stdout.split()
+            tested = {"merge": parents[0], "parents": parents[1:], "base": base}
+
+            # Foreign-content intermediate: ancestor-related but different tree.
+            self.git(repo, "checkout", "-b", "stack-foreign", base)
+            (pathlib.Path(repo) / "impl.txt").write_text("extra\n", encoding="utf-8")
+            foreign = self.commit_tree(repo, "foreign")
+            self.git(repo, "merge", "--no-ff", "-m", "tested-foreign", head)
+            merge_f = self.git(repo, "rev-parse", "HEAD").stdout.strip()
+            parents_f = self.git(repo, "rev-list", "--parents", "-n", "1", merge_f).stdout.split()
+            tested_f = {"merge": parents_f[0], "parents": parents_f[1:], "base": base}
+
+            previous = os.getcwd()
+            try:
+                os.chdir(repo)
+                self.assertEqual(v.git_tree(equiv), v.git_tree(base))
+                self.assertNotEqual(v.git_tree(foreign), v.git_tree(base))
+                self.assertEqual(v.gate(planned, passing(planned), head, head, tested), [])
+                errors = v.gate(planned, passing(planned), head, head, tested_f)
+                self.assertEqual(len(errors), 1)
+                self.assertIn("tested merge commit", errors[0])
+            finally:
+                os.chdir(previous)
 
 
 if __name__ == "__main__":
