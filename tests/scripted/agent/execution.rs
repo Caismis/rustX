@@ -2446,7 +2446,9 @@ fn agent_sources_spell_no_provider_protocol() {
         for token in forbidden {
             // Whole-token match only: "ToolMessages" must not trip the Anthropic
             // Messages API vocabulary check.
-            let present = source.split(|ch: char| !ch.is_ascii_alphanumeric()).any(|part| part == token);
+            let present = source
+                .split(|ch: char| !ch.is_ascii_alphanumeric())
+                .any(|part| part == token);
             assert!(
                 !present,
                 "{token} must not appear in the agent kernel: {}",

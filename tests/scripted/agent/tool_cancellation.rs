@@ -919,8 +919,7 @@ async fn issue136_mixed_batch_preserves_order_and_phases() {
             messages[1].result.status,
             ToolExecutionStatus::Cancelled {
                 reason: CancellationReason::UserRequested,
-                phase: ToolCancellationPhase::DuringExecution
-                    | ToolCancellationPhase::BeforeStart,
+                phase: ToolCancellationPhase::DuringExecution | ToolCancellationPhase::BeforeStart,
             }
         ),
         "B status under concurrent cancel: {:?}",
