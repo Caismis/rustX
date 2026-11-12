@@ -204,7 +204,8 @@ impl Display {
                         }
                     }
                 }
-                RuntimeClientEvent::MessageDescriptorCommitted { descriptor, .. } => {
+                RuntimeClientEvent::MessageDescriptorCommitted { descriptor, .. }
+                | RuntimeClientEvent::MessageDescriptorPatched { descriptor, .. } => {
                     self.descriptor(descriptor, attachment);
                 }
                 RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
