@@ -70,7 +70,9 @@ failures are retained. Exact evidence-head FULL/Merge status is recorded in
 an earlier production or documentation head.
 
 [Plain pairs](evidence/pair-inputs), [lifecycle/footprint details](evidence/final-lifecycle-details.json),
-[separate profiles](final-structural-profiles.md), and the [verified compact archive](evidence/final-structural.tar.xz)
+[separate profiles](final-structural-profiles.md), and the [verified compact archive](https://drive.google.com/file/d/1MwzfQqRWY1d3m69vaDg65BBHHcFXDlQ5/view?usp=drivesdk "Original file: docs/issue-481/evidence/final-structural.tar.xz")
 with its [manifest](evidence/final-structural.tar.manifest.json) preserve all inputs,
 commands, build identities, logs, process outcomes and complete oracles. Original
 files and immutable executables remain in the cloud workspace.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

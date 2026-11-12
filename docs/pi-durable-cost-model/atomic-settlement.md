@@ -70,7 +70,7 @@ Unit filters were `durable::sqlite::final_settlement_tests`, `agent::execution::
 `boundary_suites::durable::process_death::conformance::` on the all-features library
 test executable. These overlapping suites are not additive coverage counts.
 
-[Checks archive](evidence/atomic-settlement/checks.tar.xz) and
+[Checks archive](https://drive.google.com/file/d/1h7XPTYks7HMenaDgDRizkVxotm4f3oWF/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/atomic-settlement/checks.tar.xz") and
 [SHA-256 manifest](evidence/atomic-settlement/checks-manifest.json) preserve all
 initial failures and final successful logs, including the invalid transient-ref
 failure, incorrectly turn-scoped Attempt terminal fixture, and generation-stripping
@@ -105,7 +105,7 @@ and exact publication test both passed. The new ordering fixture's initial UUIDv
 was corrected to the required UUIDv7; its failure is retained. Two test futures
 were boxed after the larger recording helper crossed the lint threshold.
 
-[Checks](evidence/atomic-client-validation/checks.tar.xz) and
+[Checks](https://drive.google.com/file/d/1MksXuXdUVdzcQZzq5aDG_sAOinvgsxI6/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/atomic-client-validation/checks.tar.xz") and
 [manifest](evidence/atomic-client-validation/checks.tar.manifest.json) retain the
 initial failures and successful follow-up. This is not a final FULL result or an
 atomic speedup claim. The separate cadence stage supplies canonical tool proposal
@@ -167,10 +167,12 @@ python3 /workspace/issue-481-evidence/pi-atomic-profile/run.py
 python3 /workspace/issue-481-evidence/pi-atomic-profile/analyze.py
 ```
 
-[Raw archive](evidence/atomic-measurements/measurements.tar.xz),
+[Raw archive](https://drive.google.com/file/d/1Y5WUZ9UhSMOUsNok3kIQ2XwIGGWLCfMP/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/atomic-measurements/measurements.tar.xz"),
 [manifest](evidence/atomic-measurements/measurements.tar.manifest.json),
 [formal summary](evidence/atomic-measurements/formal-summary.json), and
 [WAL summary](evidence/atomic-measurements/wal-summary.json) preserve source/build
 identity, every sample, profile scripts and results. Original artifacts remain
 in the cloud workspace. Final combined/leave-out results and exact-head FULL
 validation are still required.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

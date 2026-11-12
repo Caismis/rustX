@@ -84,7 +84,7 @@ compression competed. Lightweight summary extraction occurred between stages.
 
 ## Reproducible evidence
 
-[SQL removal archive](evidence/sql-removal-candidate.tar.xz) has 1,288 verified
+[SQL removal archive](https://drive.google.com/file/d/1MwzfQqRWY1d3m69vaDg65BBHHcFXDlQ5/view?usp=drivesdk "Original file: docs/issue-481/evidence/sql-removal-candidate.tar.xz") has 1,288 verified
 files (3,810,860 compressed bytes), with a SHA-256 manifest. It contains all 204
 candidate and 36 confirmation samples, runner, plan, criteria hash, executable
 identity, build/test logs, summaries and decision script. Extract alongside the
@@ -100,3 +100,5 @@ tests, 366 durable tests excluding four expensive scale cases, and all-target,
 all-feature Clippy with warnings denied passed. The preceding SQL stage also
 passed all 370 durable cases. Final exact-head FULL and Merge verification are
 required separately; earlier green runs do not cover this final evidence head.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

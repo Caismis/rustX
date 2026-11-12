@@ -153,7 +153,7 @@ have stronger evidence of scale and must be investigated within their contracts.
 
 ## Reproduction and limits
 
-The [3.63 MB archive](evidence/remaining-pi-gap.tar.xz), verified against its
+The [3.63 MB archive](https://drive.google.com/file/d/1MwzfQqRWY1d3m69vaDg65BBHHcFXDlQ5/view?usp=drivesdk "Original file: docs/issue-481/evidence/remaining-pi-gap.tar.xz"), verified against its
 [109-file manifest](evidence/remaining-pi-gap.tar.manifest.json), contains the
 controller, diagnostic Pi wrapper/driver, all raw traces,
 phase snapshots, SQL counters, CPU profiles, oracle results, analyzer and binary
@@ -165,3 +165,5 @@ This is one final matched diagnostic pair, not a new three-pair performance clai
 We can identify commit/write amplification and specific repeated work; we cannot
 assign every millisecond of the remaining gap to an exclusive owner. No production
 architecture, publication cadence, persistence queue or guarantee was changed.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

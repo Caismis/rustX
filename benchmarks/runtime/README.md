@@ -82,7 +82,11 @@ Summaries also expose sampled anonymous PSS, with unavailable counters as null.
 `pack-evidence.py --root /absolute/evidence --output evidence.tar.xz 'run/*'`
 copies selected raw files, records lengths/SHA-256 in `MANIFEST.json`, and
 verifies every archive member. It does not delete original evidence. Perform
-compression after formal samples finish. `profile-footprints.py` separately samples product-owned Source temporary-file
+compression after formal samples finish. Store detailed archives outside Git; the
+[external evidence guide](../../docs/performance-evidence/README.md) and its
+manifest retain Drive locations, original paths and byte-level checksums for the
+historical captures. Keep reports and reviewable summaries in Git.
+`profile-footprints.py` separately samples product-owned Source temporary-file
 logical/allocated bytes from the external controller; it is never a formal timing
 run and does not claim a true peak. The reports under `docs/issue-481`
 separate baseline, Source-only, canonical incremental and combined comparisons.

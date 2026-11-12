@@ -124,8 +124,10 @@ python3 /workspace/issue-481-evidence/pi-partial-large-profile-corrected/run.py
 python3 /workspace/issue-481-evidence/pi-partial-large-profile-corrected/analyze.py
 ```
 
-[Raw archive](evidence/partial-measurements/measurements.tar.xz),
+[Raw archive](https://drive.google.com/file/d/1MwzfQqRWY1d3m69vaDg65BBHHcFXDlQ5/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/partial-measurements/measurements.tar.xz"),
 [manifest](evidence/partial-measurements/measurements.tar.manifest.json), and
 [formal summary](evidence/partial-measurements/formal-summary.json) preserve the
 complete data, identities, corrected/withdrawn profiles and reproducible scripts.
 Final combined/leave-out evidence and FULL verification remain separate gates.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

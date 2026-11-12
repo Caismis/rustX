@@ -19,7 +19,7 @@ Ratios are after/before, within pair. Intervals use the predeclared paired log-t
 
 All five metric families, including complete process writes and sampled anonymous PSS, are retained in the [readable paired values](evidence/cancellation-v3/paired-costs.csv) and [full uncertainty](evidence/cancellation-v3/paired-uncertainty.json). No adverse pair is dropped and no historical/new samples are pooled. Phase records distinguish initialization, cancellation, late snapshot/verification, shutdown, checkpoint/close, reopen and cleanup. Product CPU is self user+system in 10 ms ticks, including driver/verification; small one-turn CPU differences are coarse. Evidence-file output follows cleanup and is excluded from product counters. Provider start/control/teardown is explicit in process records. Memory is maximum sampled RSS/PSS, not peak. Allocations are unavailable. Process-attributed writes are not physical-device writes. No unrelated medians are subtracted.
 
-The [147-file archive](evidence/observer-demand-cancellation-v3.tar.xz) and [manifest](evidence/observer-demand-cancellation-v3.tar.manifest.json) preserve control preparation, fresh optimized build identity/logs, all control smokes, all cancellation inputs/results/counters, commands and comparisons. Original cloud files/executables remain available. This standalone reader checks every archive hash and recomputes all 30 paired metric rows and ten intervals directly from the raw counters:
+The [147-file archive](https://drive.google.com/file/d/1Y5WUZ9UhSMOUsNok3kIQ2XwIGGWLCfMP/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/observer-demand-cancellation-v3.tar.xz") and [manifest](evidence/observer-demand-cancellation-v3.tar.manifest.json) preserve control preparation, fresh optimized build identity/logs, all control smokes, all cancellation inputs/results/counters, commands and comparisons. Original cloud files/executables remain available. This standalone reader checks every archive hash and recomputes all 30 paired metric rows and ten intervals directly from the raw counters:
 
 ```sh
 python3 docs/pi-durable-cost-model/evidence/cancellation-v3/recompute.py \
@@ -28,3 +28,5 @@ python3 docs/pi-durable-cost-model/evidence/cancellation-v3/recompute.py \
 ```
 
 Further diagnosis remains open; these data do not establish Pi parity or justify removing the checkpoint-cut correctness repair.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

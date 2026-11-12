@@ -116,7 +116,7 @@ The cloud host has a four-CPU quota, five affinity CPUs and a 16 GiB cgroup limi
 Source files live on `/tmp` tmpfs; runtime stores live on `/workspace` overlay.
 OS caches were not dropped. [Build/environment identities](evidence/final-build-identities.json),
 [plain pair inputs](evidence/pair-inputs), [profiles](final-structural-profiles.md),
-and the [archive](evidence/final-structural.tar.xz) / [manifest](evidence/final-structural.tar.manifest.json)
+and the [archive](https://drive.google.com/file/d/1MwzfQqRWY1d3m69vaDg65BBHHcFXDlQ5/view?usp=drivesdk "Original file: docs/issue-481/evidence/final-structural.tar.xz") / [manifest](evidence/final-structural.tar.manifest.json)
 retain commands, toolchain, fixtures, successes/failures and all slow samples.
 The invalid same-binary cold comparison remains separately marked and preserved
 in the earlier identity-repair evidence; it is not included here.
@@ -128,3 +128,5 @@ requires FULL for this high-risk change. See [PR #484](https://github.com/Caismi
 for exact evidence-complete head, latest integrated main, final FULL/Merge link and
 independent review status. No timeout, interleaving gate, assertion, recovery,
 audit or publication contract was weakened.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

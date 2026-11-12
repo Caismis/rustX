@@ -69,8 +69,10 @@ filter omitted `tests::`; that invocation is retained and not counted as a pass.
 
 [Readable results and logs](evidence/ci-terminal-fixtures/validation-after.json),
 [before-fix reproduction](evidence/ci-terminal-fixtures/reproduce-before.json),
-and [complete preserved evidence archive](evidence/ci-terminal-fixtures/evidence.tar.xz)
+and [complete preserved evidence archive](https://drive.google.com/file/d/1MgL5rbo0YZDxnaVXtPcCkVgTP46V5CRb/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/ci-terminal-fixtures/evidence.tar.xz")
 include commands, original failures, exact patch, compiler build records and the
 fresh capture. Readable log copies omit trailing blank lines; the archive retains
 the original files. This report is prepared locally before pushing the fix, as
 requested by the parent. No merge or benchmark rerun was performed.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

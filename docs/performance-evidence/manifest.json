@@ -1,0 +1,1731 @@
+{
+  "schema": 1,
+  "relocated_on": "2026-11-12",
+  "source_commit": "c5617cd939bfaee2bdb777fd32c7ab7456df5908",
+  "folder": {
+    "id": "1LbNtoe5Kj_fBW7fU2gEg4wYMhC3AtT8A",
+    "url": "https://drive.google.com/drive/folders/1LbNtoe5Kj_fBW7fU2gEg4wYMhC3AtT8A"
+  },
+  "scope": "Byte-preserving storage relocation; no performance rerun or new performance claim.",
+  "verification": "Every source member hashed before packing; every uploaded bundle downloaded again and verified by complete SHA-256 and byte count.",
+  "git_history": "Forward deletion only. Existing historical objects remain reachable; no history rewrite or force-push.",
+  "removed_from_current_tree": {
+    "files": 121,
+    "bytes": 1447265892
+  },
+  "retained_structured_backups": 52,
+  "bundles": [
+    {
+      "kind": "standalone",
+      "name": "main-integration-20261110--main-integration.tar.xz",
+      "file_id": "1nUN2v98E3hXDhNlCBmEug41JKAMBbkgj",
+      "url": "https://drive.google.com/file/d/1nUN2v98E3hXDhNlCBmEug41JKAMBbkgj/view?usp=drivesdk",
+      "bytes": 284008,
+      "sha256": "ca4816c407d9afd2cb1a3fb07ec3904dbd70aa2bdfef231df236a3e2b6ecacbd",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-01.tar",
+      "file_id": "1Pm-q9oRDza2AWTzQ6wQNJ4dTx7y_ka1l",
+      "url": "https://drive.google.com/file/d/1Pm-q9oRDza2AWTzQ6wQNJ4dTx7y_ka1l/view?usp=drivesdk",
+      "bytes": 94371840,
+      "sha256": "c14289eb0a3bd06159b4554864b246d53593d031014d953d761fc7f2571fcdd4",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-02.tar",
+      "file_id": "1W-VnbFTp9ZCKsldSXD3zR2TCALXk9S6A",
+      "url": "https://drive.google.com/file/d/1W-VnbFTp9ZCKsldSXD3zR2TCALXk9S6A/view?usp=drivesdk",
+      "bytes": 94382080,
+      "sha256": "94ddc73361052399330b86e8ee9a92f52726c09f124da7407a48086fbea2efe9",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-03.tar",
+      "file_id": "1MgL5rbo0YZDxnaVXtPcCkVgTP46V5CRb",
+      "url": "https://drive.google.com/file/d/1MgL5rbo0YZDxnaVXtPcCkVgTP46V5CRb/view?usp=drivesdk",
+      "bytes": 94371840,
+      "sha256": "cabb87eabc145fdea10448fa13a358edca6b6f45d21c7d297e9f32f6a5e74c2b",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-04.tar",
+      "file_id": "1NMntyYzFAsy6I2UFmlH5rTeBdxLn_yuj",
+      "url": "https://drive.google.com/file/d/1NMntyYzFAsy6I2UFmlH5rTeBdxLn_yuj/view?usp=drivesdk",
+      "bytes": 94382080,
+      "sha256": "e182723564b45c4c7909013b9eaf6c94e3dbbe8558fdd8131bfedcd5fe0ec195",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-05.tar",
+      "file_id": "1F7S7MAYf6IHnQYa7UfxalXWth3Ii_mLi",
+      "url": "https://drive.google.com/file/d/1F7S7MAYf6IHnQYa7UfxalXWth3Ii_mLi/view?usp=drivesdk",
+      "bytes": 94382080,
+      "sha256": "edf9b61c3c53bbe5e038898a1ecb76e547e365dc1db59ecce6190fd7545f6977",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-06.tar",
+      "file_id": "1IEpgLHyfDRDPqG9TA4-34NtBoquvv0tH",
+      "url": "https://drive.google.com/file/d/1IEpgLHyfDRDPqG9TA4-34NtBoquvv0tH/view?usp=drivesdk",
+      "bytes": 94371840,
+      "sha256": "e882b62b93bfb6edf3c26d0db6d74eb9a817257d01697df0613a7a7c8caa50a7",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-07.tar",
+      "file_id": "1RGMPOuaQesn4xDdNvkfIHw0IQkj3X8_o",
+      "url": "https://drive.google.com/file/d/1RGMPOuaQesn4xDdNvkfIHw0IQkj3X8_o/view?usp=drivesdk",
+      "bytes": 94382080,
+      "sha256": "332aae858a738a00ee2a9eb8034ae6cbb9a1cfe8c63325d00fd7a8a6c0986832",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-08.tar",
+      "file_id": "1XONxkwvsyZDUbRL19ptTo8ZW3g8gnqTj",
+      "url": "https://drive.google.com/file/d/1XONxkwvsyZDUbRL19ptTo8ZW3g8gnqTj/view?usp=drivesdk",
+      "bytes": 94382080,
+      "sha256": "390530a75b34ffa2cb4377e9419d614c0a3435541c6218f0f02947df059d89ba",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-09.tar",
+      "file_id": "1h7XPTYks7HMenaDgDRizkVxotm4f3oWF",
+      "url": "https://drive.google.com/file/d/1h7XPTYks7HMenaDgDRizkVxotm4f3oWF/view?usp=drivesdk",
+      "bytes": 94382080,
+      "sha256": "720824b0d2c7efb750ecf90d7ea3fc84c1fe740efbd4098fff5aa67a6bee2254",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-10.tar",
+      "file_id": "1xjM3VPI3_prsM9sB0-Floz5U2OsmfQHS",
+      "url": "https://drive.google.com/file/d/1xjM3VPI3_prsM9sB0-Floz5U2OsmfQHS/view?usp=drivesdk",
+      "bytes": 94371840,
+      "sha256": "daf984f52bd16519e610e5fe033632e2141afcf50d116d7294a2ec7b5531699e",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-11.tar",
+      "file_id": "1MksXuXdUVdzcQZzq5aDG_sAOinvgsxI6",
+      "url": "https://drive.google.com/file/d/1MksXuXdUVdzcQZzq5aDG_sAOinvgsxI6/view?usp=drivesdk",
+      "bytes": 94382080,
+      "sha256": "dbb814f1decefa6adb71f1d67496f2ee03df23ddbf3cac706651b22574c4c468",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-12.tar",
+      "file_id": "1JWzgG7udLGWiwos8NniYJ45-8KVTWZZt",
+      "url": "https://drive.google.com/file/d/1JWzgG7udLGWiwos8NniYJ45-8KVTWZZt/view?usp=drivesdk",
+      "bytes": 94351360,
+      "sha256": "9c049fb92b3868cd8a46f3096d97c9ec07591fb3e8dac035db68e825e3f9bcac",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-13.tar",
+      "file_id": "14We0ONQjs5J2et8KbZII5OwZLuJVlpdb",
+      "url": "https://drive.google.com/file/d/14We0ONQjs5J2et8KbZII5OwZLuJVlpdb/view?usp=drivesdk",
+      "bytes": 94382080,
+      "sha256": "e0d8435c41aafacbcdb80e9234ef315923ee4f3132b435ddf2c94cef9b1bcc75",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-14.tar",
+      "file_id": "1UzbGjMyitkCnpcy6gv0cDqgjoMbTpd_z",
+      "url": "https://drive.google.com/file/d/1UzbGjMyitkCnpcy6gv0cDqgjoMbTpd_z/view?usp=drivesdk",
+      "bytes": 94382080,
+      "sha256": "8181b429dfa6e1173e8878333983d22a369a2d1f8af80a066749c4743538b838",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-15.tar",
+      "file_id": "1MwzfQqRWY1d3m69vaDg65BBHHcFXDlQ5",
+      "url": "https://drive.google.com/file/d/1MwzfQqRWY1d3m69vaDg65BBHHcFXDlQ5/view?usp=drivesdk",
+      "bytes": 94382080,
+      "sha256": "e45e7bd2591cd5a1b99edc989464cdb4a9f3f73079dd365a7716577b2ccd0c99",
+      "download_verified": true
+    },
+    {
+      "kind": "tar",
+      "name": "rustx-pr485-performance-16.tar",
+      "file_id": "1Y5WUZ9UhSMOUsNok3kIQ2XwIGGWLCfMP",
+      "url": "https://drive.google.com/file/d/1Y5WUZ9UhSMOUsNok3kIQ2XwIGGWLCfMP/view?usp=drivesdk",
+      "bytes": 68976640,
+      "sha256": "9a3ecacd4cda88eb188f9a8628d7ce007215060b504bb5db3ea979ccdc9ab65f",
+      "download_verified": true
+    }
+  ],
+  "files": [
+    {
+      "path": "docs/issue-480/evidence/after/paired/0-short-large-after.json",
+      "bytes": 314685,
+      "git_blob": "b6440afb2ed674f054962d40e8f95cd4fba60c33",
+      "sha256": "7f38b1a430cf71523b173bf7386d6f6469853d2542a981aa1ce9f2e986eed6f6",
+      "bundle": "rustx-pr485-performance-01.tar",
+      "archive_member": "docs/issue-480/evidence/after/paired/0-short-large-after.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/after/paired/0-short-large-before.json",
+      "bytes": 267330,
+      "git_blob": "83be4b97201d84797f72dd6f183cd7f3a36c86b1",
+      "sha256": "87bc5990378d746a6de7ccec2d099a843301f2c01a6b34cf54e5f5a346641a90",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/after/paired/0-short-large-before.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/after/paired/1-short-large-after.json",
+      "bytes": 314126,
+      "git_blob": "5a0523e4678a180492def7f18d2f8fe1f7e9ee72",
+      "sha256": "1947b16116ea51772a014d58816cf3b3a7707fe25f8b483276a2d57f82317786",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/after/paired/1-short-large-after.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/after/paired/1-short-large-before.json",
+      "bytes": 265660,
+      "git_blob": "d06193a28c07c8a06600dcf71750a234ab228fc3",
+      "sha256": "035ae25a129877b6f522654321220924a63f2e48cd4d3d5b8444d19e20972330",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/after/paired/1-short-large-before.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/after/paired/2-short-large-after.json",
+      "bytes": 314019,
+      "git_blob": "ece386e27bada095d741077243fc9b85af73a927",
+      "sha256": "24eac67cc32e7991f3dade051ad1cfb9a43085a7c5a750cd3fe7808934496d75",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/after/paired/2-short-large-after.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/after/paired/2-short-large-before.json",
+      "bytes": 268547,
+      "git_blob": "09db7260399260bd711076125a99631174e443be",
+      "sha256": "a15333016ab2e351eff98d41978b25c3fe82f736d42d5ef59e92c639b3fdf1e0",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/after/paired/2-short-large-before.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/after/trace-paired/0-short-small-after.strace.gz",
+      "bytes": 2312548,
+      "git_blob": "0cc6633122e6a882207956914d07ae95ce0844ef",
+      "sha256": "184fb3e0ac653f2201f79ed02d1ca51c43a712743b0b09bf608b97848bdeaaa6",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/after/trace-paired/0-short-small-after.strace.gz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-480/evidence/after/trace-paired/0-short-small-before.strace.gz",
+      "bytes": 2755048,
+      "git_blob": "14afa3ac47acaaa7b43a566624a0011a2f704128",
+      "sha256": "8cffb10692ef0a7c7ec2f2dfc0f447af057fead7dfa9f2b57ec1e8c89a883576",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/issue-480/evidence/after/trace-paired/0-short-small-before.strace.gz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-480/evidence/after/validation/rustx-480-unit-eight.log",
+      "bytes": 452380,
+      "git_blob": "ff3f0897f69d3fcf398982e8602cda6b1b3ffe05",
+      "sha256": "5955de4359ee6d7ee5bb67dbfbe7860e44671a0aa5b5664012bc18a509c7331c",
+      "bundle": "rustx-pr485-performance-14.tar",
+      "archive_member": "docs/issue-480/evidence/after/validation/rustx-480-unit-eight.log",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/after/validation/rustx-480-unit-final.log",
+      "bytes": 450675,
+      "git_blob": "cfbb6303b0b003078ea24ae98794728796a15520",
+      "sha256": "fee425e5535033214286c3aa41dcd1eb6cfdd1b530d5efe80128d30b3d364613",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/after/validation/rustx-480-unit-final.log",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/after/validation/rustx-480-unit.log",
+      "bytes": 453349,
+      "git_blob": "05879a5e2a2d3f96e0faf449b9c41902de13491a",
+      "sha256": "a2d50d4b9069515fec4490b2828d6165956c79bd63c96cd6733521a36ac1c760",
+      "bundle": "rustx-pr485-performance-10.tar",
+      "archive_member": "docs/issue-480/evidence/after/validation/rustx-480-unit.log",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/before/before-final/0-short-large-before.json",
+      "bytes": 271872,
+      "git_blob": "ed97934f4ce6b91f7bf95202ef9678ffe313022c",
+      "sha256": "6cabfdbc4b8849e2152ad0251ba7c5e4f9937d8e21701fbd3f18c87655240514",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/before/before-final/0-short-large-before.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/before/before-trace-final/0-short-small-before.strace.gz",
+      "bytes": 2749150,
+      "git_blob": "beef74fa6960f7d23e7f74f0ab17f442abd88c1b",
+      "sha256": "cb5d0bc05ff96c0276087c145e7c2aa90588276e581247d0cd1f73a20fbd5fa2",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/issue-480/evidence/before/before-trace-final/0-short-small-before.strace.gz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-480/evidence/before/before-trace/0-short-small-before.strace.gz",
+      "bytes": 2231778,
+      "git_blob": "82dbd2f83754fd4516b3c1024a6c3363bdb06b28",
+      "sha256": "7c0839125debea6f45e5b3bbcc531db86768d12526f7caa2a2196c3c11ecacd7",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/before/before-trace/0-short-small-before.strace.gz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-480/evidence/before/before/0-short-large-before.json",
+      "bytes": 263968,
+      "git_blob": "749cd39db1f094fbb390dea9bc33f8607ed56d23",
+      "sha256": "de0a4e365a0377773902c1c179eb979f50d891e3f0e9cc2f517a1f7ce94dda52",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/before/before/0-short-large-before.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/ci-budget/cargo-timing-20261017T205645387Z-ba5fb6adc5bb5f2d.html.gz",
+      "bytes": 59350,
+      "git_blob": "f3890913bd5eab8fde40b3ff675bd2c3994bfe3a",
+      "sha256": "4cca0628cfebfb17057d7b673f20385e8a5166e5c138c9581dd2c111d3a967bf",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/ci-budget/cargo-timing-20261017T205645387Z-ba5fb6adc5bb5f2d.html.gz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-480/evidence/ci-budget/cargo-timing-20261017T211606790Z-ba5fb6adc5bb5f2d.html.gz",
+      "bytes": 82757,
+      "git_blob": "30026585e344f6851b3e9715a06dea6ed7659207",
+      "sha256": "408ea660d287f294efcdc1eff9630c62635aa7f67dd7077abbd714433e83b156",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/ci-budget/cargo-timing-20261017T211606790Z-ba5fb6adc5bb5f2d.html.gz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-480/evidence/ci-budget/rustx-480-ci-timeout-macos.log.gz",
+      "bytes": 40391,
+      "git_blob": "c174b98f72edf4b13bf9c7ab48797a14eab02bf0",
+      "sha256": "cfe44cc4888b3beceed2fb39a9d074f069a4e6dc3bdbde467969b80da6ea1935",
+      "bundle": "rustx-pr485-performance-03.tar",
+      "archive_member": "docs/issue-480/evidence/ci-budget/rustx-480-ci-timeout-macos.log.gz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-480/evidence/review-repair/paired/0-short-large-after.json",
+      "bytes": 332469,
+      "git_blob": "1726a59a7d983d122564edf3c072e5e136f9799c",
+      "sha256": "8d9406e6252829e80d5964b8e6d1fadb80fc5c96a437f59893d9330ea81bdaac",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/review-repair/paired/0-short-large-after.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/review-repair/paired/0-short-large-before.json",
+      "bytes": 283163,
+      "git_blob": "3487144dfce08418f47853ec0600bc1c5c8b0b51",
+      "sha256": "4d26322f024e4577ddca9a489384bd7bcaeaf5fe9316ecca007e675bd0d6be2a",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/review-repair/paired/0-short-large-before.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/review-repair/paired/1-short-large-after.json",
+      "bytes": 333098,
+      "git_blob": "34173803890d40529d44e50cc7d9488b323b38c1",
+      "sha256": "4330194ede14d5433577df896cbd8e82c28580bac91c5a7a0f99306559ebd20e",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/review-repair/paired/1-short-large-after.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/review-repair/paired/1-short-large-before.json",
+      "bytes": 283706,
+      "git_blob": "5db86c214159b28325f2a82b33e63b7a01d15555",
+      "sha256": "3407d46a5d1dcf260e188735a642017de7121871044cfcb9ef00c5c0b8948b8c",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/review-repair/paired/1-short-large-before.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/review-repair/paired/2-short-large-after.json",
+      "bytes": 332629,
+      "git_blob": "e510740adcc0cea5e256b2522856a8d29c592fc0",
+      "sha256": "b5ff0e309813b2682f8eee784e3d38e920ac2a23c885e76224a62ab006221825",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/review-repair/paired/2-short-large-after.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/review-repair/paired/2-short-large-before.json",
+      "bytes": 284849,
+      "git_blob": "9a000d0a752095f92714a64b72a149153a35b5bd",
+      "sha256": "647c043abacc70bc9c11273267d7c14e9d1a8f2ce0d94bdd0de318eed82d3ddc",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-480/evidence/review-repair/paired/2-short-large-before.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-480/evidence/review-repair/pre-review-ci-failure.log",
+      "bytes": 822976,
+      "git_blob": "2b165474ca9e57ca56b1fd04c606c9e12595230f",
+      "sha256": "ee53ad93f95c4860499de57c70445f02031f8105bf37d4cfc2c9c624d1732497",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/issue-480/evidence/review-repair/pre-review-ci-failure.log",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-481/evidence/attribution.tar.xz",
+      "bytes": 15146748,
+      "git_blob": "2c9e044b3e135afa32ebe7e96a1d3a41ccaeafd7",
+      "sha256": "8d6fe1542bc82a1705e8753246f76a0fc21431b0d051d9960e4cb24760ce35d0",
+      "bundle": "rustx-pr485-performance-10.tar",
+      "archive_member": "docs/issue-481/evidence/attribution.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-481/evidence/baseline.tar.xz",
+      "bytes": 2134212,
+      "git_blob": "f1842df4b90be2ede35c2c080d7bac66dbe8b8f6",
+      "sha256": "e4f4212ff7a6954a0f912101561574dd821ecf29ff2b8f896453ac37ed3a5d5c",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-481/evidence/baseline.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-481/evidence/certificate-stage.tar.xz",
+      "bytes": 1216408,
+      "git_blob": "5c543c0f56ffd4a8bb163f3909272a8c7dd8d366",
+      "sha256": "f3361668ac3788b6e46b0aa6548e899a6233ced5c8a6ecf6d6c03bc0efa9f20e",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-481/evidence/certificate-stage.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-481/evidence/combined.tar.xz",
+      "bytes": 3318552,
+      "git_blob": "5bc2a2e6e7728f1e890aff364f4c591d8185f001",
+      "sha256": "2ec202ff28c2e2a653ba02f8ff1e956da8ab3b813b6e4519ca09f030062481f5",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/issue-481/evidence/combined.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-481/evidence/continued-profiles.tar.xz",
+      "bytes": 32512736,
+      "git_blob": "7d5ccf88ef5bcc6e4a297b2df39442effb6912b6",
+      "sha256": "95a9c53a72ff357a635f0a16e539390190ab8748ed058be8ec8a702818a34cc1",
+      "bundle": "rustx-pr485-performance-12.tar",
+      "archive_member": "docs/issue-481/evidence/continued-profiles.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-481/evidence/continued-runtime.tar.xz",
+      "bytes": 2595016,
+      "git_blob": "9737549460df6d6b387b3e99a4a554bd4e3bde8f",
+      "sha256": "d10e9a9d30080e8ea098256bfad923890beccd6027edeab65ce0876e5decca7d",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-481/evidence/continued-runtime.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-481/evidence/final-lifecycle-details.json",
+      "bytes": 653521,
+      "git_blob": "e98988b52c140368372a1a7ce286b2e7355a4ecb",
+      "sha256": "e28ec5b650c864c9b36abb77ea22c9dc640f31f25b482b41ecd986175f5deac1",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-481/evidence/final-lifecycle-details.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/issue-481/evidence/final-structural.tar.xz",
+      "bytes": 7501824,
+      "git_blob": "a5dd81fce42b939484488d72347777f2c5f2e268",
+      "sha256": "2ffcd6a140d925b45de64ce4b30cc0bad32b179fc89a40e0ac72e760a184815d",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/issue-481/evidence/final-structural.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-481/evidence/identity-repair.tar.xz",
+      "bytes": 91272,
+      "git_blob": "9d881edd788fb1d9c5d5b50b4cb53e5ccaf14adf",
+      "sha256": "03da0bd464739838d4081c846d8d2edd8ee06bceb27ae14eae47ae10a17425a4",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-481/evidence/identity-repair.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-481/evidence/metadata-stage.tar.xz",
+      "bytes": 4899380,
+      "git_blob": "d764df14ba897645b2233dc00f99982591c0ce1b",
+      "sha256": "3dc865eeba98a6bf5038a1dff995b5d30aba5e90a6a70c2f55d901d1098c84e4",
+      "bundle": "rustx-pr485-performance-01.tar",
+      "archive_member": "docs/issue-481/evidence/metadata-stage.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-481/evidence/remaining-pi-gap.tar.xz",
+      "bytes": 3631940,
+      "git_blob": "10409fb5a12ee5e7f6dac6900f8b53cb3bc8b098",
+      "sha256": "3ca8f8b9782621831efe9328ab47628928b0ea8d5eba29f9b39107263104a9fd",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/issue-481/evidence/remaining-pi-gap.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-481/evidence/reservations.tar.xz",
+      "bytes": 642768,
+      "git_blob": "afa0177686691670265b67c7a21c4725443cee79",
+      "sha256": "5d92af9d930b643234bf604437b027f7e2cd7e9868b372359a6ce8c0369d1e96",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-481/evidence/reservations.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-481/evidence/review.tar.xz",
+      "bytes": 1122956,
+      "git_blob": "ffa75cc65adea7e150c398a1589a9cd139bef859",
+      "sha256": "e83e593c70c302e7bb8002e47e4a3b24be615f7cb4306317499cd49ec4273077",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-481/evidence/review.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-481/evidence/source.tar.xz",
+      "bytes": 2086216,
+      "git_blob": "a2dbfff7ad84c1512ade686116c3c7b52b150dbf",
+      "sha256": "b04fd862641dff29f0387923310b7d209473ff0e74f061d296ce48bb17a36f36",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-481/evidence/source.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-481/evidence/sql-removal-candidate.tar.xz",
+      "bytes": 3810860,
+      "git_blob": "e32ef4ae8f3d14988b9da9852655846184ebdab6",
+      "sha256": "7aac7c50bd3065fc3a6aadca18d8cacb2e3210647a95ffa97f3ba80b780ed844",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/issue-481/evidence/sql-removal-candidate.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/issue-481/evidence/statement-reuse.tar.xz",
+      "bytes": 650732,
+      "git_blob": "18355ef66b640bc56ee1c8ff03c5a52a69a0cbe2",
+      "sha256": "217c17253111605ad772af2751a76f973df0c6a67d65a11ae4b23726eabf11f7",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/issue-481/evidence/statement-reuse.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/aligned-observers-validation.tar.xz",
+      "bytes": 1232584,
+      "git_blob": "e4dcc4ca32514c89292daec754c074ffc1e1c41d",
+      "sha256": "ae4bc238006147d8e35bf72ec6cda36ce41c98f9080024967a7b73d1bba21168",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/aligned-observers-validation.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/aligned-pi-gap-v3.tar.xz",
+      "bytes": 1373788,
+      "git_blob": "7c50e30b8daf2e73326f9120fbe54f392125ba64",
+      "sha256": "e022ae473515f1c32e6ad545a80dc8b739ce28a86f4d386a246ad7ea91e73aa2",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/aligned-pi-gap-v3.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/atomic-client-validation/checks.tar.xz",
+      "bytes": 15216,
+      "git_blob": "49a844a9b6100cc6514a2db5b081bf72800b2e17",
+      "sha256": "97ff6ffcb24da9ceacdf44d384f404024b10fbcde22458be5d537be993e4b534",
+      "bundle": "rustx-pr485-performance-11.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/atomic-client-validation/checks.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/atomic-leaveout/measurements.tar.xz",
+      "bytes": 2701280,
+      "git_blob": "6188610c42f302aed53b554034e7139c64d6fed2",
+      "sha256": "7bfb83d58bc573debb5d55e015d7a4b41f1801029bc7b7351268fe6b105fc8b4",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/atomic-leaveout/measurements.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/atomic-measurements/measurements.tar.xz",
+      "bytes": 2664680,
+      "git_blob": "e7b2a375d1c90bcbec289412c77bb37c6174de36",
+      "sha256": "f49277261bc92bf7439ec6bd42172640d61293dbf1175bfc1de3bb873dbf560b",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/atomic-measurements/measurements.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/atomic-settlement/checks.tar.xz",
+      "bytes": 15700,
+      "git_blob": "039835dbf5c36c33f5e3a2b54222756f0bc22406",
+      "sha256": "75699a83aa2e45eebe5c3c4e9237b443b410dbc8cc810de7e76ce12e8292ffec",
+      "bundle": "rustx-pr485-performance-09.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/atomic-settlement/checks.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/auth-leaveout/measurements.tar.xz",
+      "bytes": 2571832,
+      "git_blob": "a402cf1969218830c20208c4f4c7ae5a3f345220",
+      "sha256": "c819a791b60eabb48c7b591b212f73158ce4fb702924ca4cd3b431a6575bb9b1",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/auth-leaveout/measurements.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/block-coordinates-20261110/block-coordinates-portable.tar.xz",
+      "bytes": 37061296,
+      "git_blob": "063efe90d7a4e688b94d48ffcfc4880358c97acc",
+      "sha256": "d9905c2ffc99228cbe2f2cd2c1a2552d10c26811e0e7614411dafc0cb7eb8390",
+      "bundle": "rustx-pr485-performance-10.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/block-coordinates-20261110/block-coordinates-portable.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/canonical-coordinates-20261109/evidence.tar.xz",
+      "bytes": 1736472,
+      "git_blob": "a1ae91cafd187b4fd17665161fe35484501f2769",
+      "sha256": "69960df5454bc74bffe558b1c0fa0d82fea49cca5082bf65a85e98c1b606ddd9",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/canonical-coordinates-20261109/evidence.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/checkpoint-admission-diagnostics.tar.xz",
+      "bytes": 557984,
+      "git_blob": "b6036b3bd3b4ec0d0f061d4295eeedf097417f69",
+      "sha256": "83b5457701639ed17b1bcdd3dc7354d3c0788ca0097efed874d58876bd9fd3fa",
+      "bundle": "rustx-pr485-performance-06.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/checkpoint-admission-diagnostics.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/checkpoint-admission-results.tar.xz",
+      "bytes": 1727468,
+      "git_blob": "57a5ebaad0f829f0e3c1a179c9c2a2b11392dc8d",
+      "sha256": "a0465e5e46ad69ae4b7a4ba4058a43adec8cfdb58da2bd616da27157005acb9d",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/checkpoint-admission-results.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/checkpoint-admission-validation.tar.xz",
+      "bytes": 153636,
+      "git_blob": "994cf976b5a53ca89c64f30cef7d0277412fff66",
+      "sha256": "2373d9d2bab69db5d0a489c7a662e94d2f0e67d709dbe75af93f18ed07bdf591",
+      "bundle": "rustx-pr485-performance-08.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/checkpoint-admission-validation.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/checkpoint-retained-cut-validation.tar.xz",
+      "bytes": 334232,
+      "git_blob": "1efef00bcca38080a90d36f20edd1793990983da",
+      "sha256": "5c0f68eb76eca74ae064d2756e324a1996dd41c2825743555d86d73b40765f00",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/checkpoint-retained-cut-validation.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/checkpoint-window-20261110/evidence.tar.xz",
+      "bytes": 43124968,
+      "git_blob": "dde967471d9d2b6c6c411ffbf93336004dd048c0",
+      "sha256": "8836aa39a14609ad41407af3736331d4bb6d86594f3fa51367671ee5cc507667",
+      "bundle": "rustx-pr485-performance-09.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/checkpoint-window-20261110/evidence.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/checkpoint-window-20261110/manifest.json",
+      "bytes": 396354,
+      "git_blob": "88f6ce76613a3fc093ce6fd52a48dce248ac770b",
+      "sha256": "1896a50df07d2da160cca4c096613b690c5be48166a4c8924bd74429781f3dcb",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/checkpoint-window-20261110/manifest.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/ci-terminal-fixtures/evidence.tar.xz",
+      "bytes": 184976,
+      "git_blob": "24aac26c289363c76a9ae86dd865d73ee4f70003",
+      "sha256": "a34d9f11b66fcc4b1a5a6a0956a5ad0953825772820ffbfbf7eab68ce44ffd48",
+      "bundle": "rustx-pr485-performance-03.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/ci-terminal-fixtures/evidence.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/combined-measurements/measurements.tar.xz",
+      "bytes": 4160712,
+      "git_blob": "691368e4d7d186b6ef78ebf13dab436d25cffbbd",
+      "sha256": "b0ec99d98d36acb09206fa0b0099d876046043aecb267a5aadcdd30bc4923e49",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/combined-measurements/measurements.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/compact-navigation-results.tar.xz",
+      "bytes": 673064,
+      "git_blob": "311d326381a57166c77d1f6613a0b4b05ad34723",
+      "sha256": "d415a2a352e05a822447706dda3d5c620921a6d90cdc8c821226c770bd758063",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/compact-navigation-results.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/compact-navigation-validation.tar.xz",
+      "bytes": 70168,
+      "git_blob": "f4fa1aecea552f6b63970f4033bb5c66b72779ac",
+      "sha256": "4c3922effb098efad33854a48a9e56ba91ba01dcb767dab019bfd8d54b21a1d4",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/compact-navigation-validation.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/compact-write-layout-final-runtime-20261029/raw.tar.xz",
+      "bytes": 11126836,
+      "git_blob": "28120912d2523ccba41b98b5b3d784b76543eb54",
+      "sha256": "1f5071d8d3b67f276b5cc5f4706bdfa5b0e801ea4e8c8b572cd11a7b167c5d1d",
+      "bundle": "rustx-pr485-performance-14.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/compact-write-layout-final-runtime-20261029/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/compact-write-layout-runtime-20261029/raw.tar.xz",
+      "bytes": 11255152,
+      "git_blob": "7da3ff30c8447dad77e3bf1bef636411aafaa01f",
+      "sha256": "e5e40ae3dfd3cee378d6961ef3fc9f10ba5aab300df8cb7fc76353d895c9cd61",
+      "bundle": "rustx-pr485-performance-03.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/compact-write-layout-runtime-20261029/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/complete-costs-runtime-20261027/raw.tar.xz",
+      "bytes": 39816596,
+      "git_blob": "d522e10e87909989bd276bb95fe51f224b81d9e7",
+      "sha256": "c3fa3cbdfbdd7055b97627fe51acdb03a0e3692b0fd2270a687d771d9dc811e1",
+      "bundle": "rustx-pr485-performance-09.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/complete-costs-runtime-20261027/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/content-reference-owners-20261110/owners-portable.tar.xz",
+      "bytes": 13859948,
+      "git_blob": "c8bda3d7731dfb60e5a6b7f28fca14820df70dbd",
+      "sha256": "dfc78ea804134eee70ef5cb72e9f0347680d8b5d0e8339577231061c8cbdaea3",
+      "bundle": "rustx-pr485-performance-13.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/content-reference-owners-20261110/owners-portable.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/content-runtime-20261102/raw.tar.xz",
+      "bytes": 11264364,
+      "git_blob": "03502ea3a185a76a9c2c1a3a1dbcd84e1a8f3c74",
+      "sha256": "0d5aa082ee331274948a0946cb31188e593e9b0d5a08850151861d036914f741",
+      "bundle": "rustx-pr485-performance-02.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/content-runtime-20261102/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/continuation-20261027/append-audit.json",
+      "bytes": 2680180,
+      "git_blob": "0588fe9ed153f6c776f7c3bc8549386fa32ecfd3",
+      "sha256": "ad5aa917c777c6fe080cea22c515e34d3b259f7d612ce85ffee817e7d66e5366",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/continuation-20261027/append-audit.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/continuation-20261027/candidate-e-reader.json",
+      "bytes": 979798,
+      "git_blob": "d14ec0df1a3af9f2a0fce0803010a3783b0747e9",
+      "sha256": "a6e05c21aced6c4e62f0353b2a61da9f423899fd9c30d6953b84f18e317aa9b9",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/continuation-20261027/candidate-e-reader.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/continuation-20261027/direct-d-recomputed.json",
+      "bytes": 271175,
+      "git_blob": "480ead2cc15ffe0f31468dbb780abc3b10874d35",
+      "sha256": "532390424bf9a7cbf844597be58b8b3b29e148bfd328cae65b94bef7b4e55cc4",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/continuation-20261027/direct-d-recomputed.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/continuation-20261027/e-direct-recomputed.json",
+      "bytes": 272742,
+      "git_blob": "5d291007cda56cc9f8c510b1564ef9baefff85b9",
+      "sha256": "710daf82527dc4b3bf5be31956330a57d2c36f69fef901956a590fd47308dca7",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/continuation-20261027/e-direct-recomputed.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/continuation-20261027/e-retention-audit.json",
+      "bytes": 287720,
+      "git_blob": "269dbea28b320ddb08f3ff6b0576ba368136f605",
+      "sha256": "a710d054a939c9d11181fa91274c736e9ce3258c15f3e4aa01fe66baae7208c5",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/continuation-20261027/e-retention-audit.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/continuation-20261027/pi-recomputed.json",
+      "bytes": 281569,
+      "git_blob": "0181b1dd83ea7e5caeb36a383bc01cc57b78fc4e",
+      "sha256": "7a44dd50ba93d8aa271703bd8c8692d03626f87c3048dfacfcd03d7597cb634a",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/continuation-20261027/pi-recomputed.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/continuation-20261027/raw.tar.manifest.json",
+      "bytes": 351202,
+      "git_blob": "123e27855b088f86ddaa6d736554da34d017391e",
+      "sha256": "9994487cc4f1399859bccb4803f0e83239850858b422c5b027f4f562b25fbd17",
+      "bundle": "rustx-pr485-performance-07.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/continuation-20261027/raw.tar.manifest.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/continuation-20261027/raw.tar.xz",
+      "bytes": 7233600,
+      "git_blob": "d269cc0dcf5f2c211ef0db01b1a55c317b190e40",
+      "sha256": "808dc22f1d1230379e74332856ab35fcc5c82db58284da9584d84dffe73a6998",
+      "bundle": "rustx-pr485-performance-04.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/continuation-20261027/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/derived-summaries.tar.xz",
+      "bytes": 72508,
+      "git_blob": "a79c4e3bd5d6206598499737ccdcf5a4ee88164e",
+      "sha256": "9cf03ffc47ec00a70c0b7e988fc25e62f1bb04cf0614586b291cc9cc1b140fa8",
+      "bundle": "rustx-pr485-performance-08.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/derived-summaries.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/event-index-measurements/measurements.tar.xz",
+      "bytes": 2599992,
+      "git_blob": "6a4c113791b661aaa47bcd790df24e1e8f09e5c5",
+      "sha256": "cca8b24dbb344736802d55e11873b66e2fd438c9edf830fe8c3346dbe8200dba",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/event-index-measurements/measurements.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/event-indexes/checks.tar.xz",
+      "bytes": 15244,
+      "git_blob": "8a63888c51f4c7e5c3f7cfd2d5d5834660ab899f",
+      "sha256": "cdd13f3469a211a4f718c1b869f78f36d299c9eb73f012154e675d5141856aef",
+      "bundle": "rustx-pr485-performance-11.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/event-indexes/checks.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/final-cost-closure-candidate-runtime-20261028/raw.tar.xz",
+      "bytes": 12180536,
+      "git_blob": "48f50701f3e87cbd166983acf7b23c6494e4d5f2",
+      "sha256": "b08a058432d34d29c64c7d820a2a4f1cd994a96278ee47fc5b9b5dcf2e891864",
+      "bundle": "rustx-pr485-performance-13.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/final-cost-closure-candidate-runtime-20261028/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/final-cost-closure-runtime-20261028/raw.tar.xz",
+      "bytes": 11534480,
+      "git_blob": "cda66af69fc4ae52c2a828752e92c454ff726b96",
+      "sha256": "2b6fd27c79168b52844fdc24420380b63c7d09fdad3e25f6c1fa8d91f400f9fd",
+      "bundle": "rustx-pr485-performance-14.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/final-cost-closure-runtime-20261028/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/final-production-profile.tar.xz",
+      "bytes": 2753632,
+      "git_blob": "0a14efffca9714547e23e34ea81ecd88925cf126",
+      "sha256": "ee9efa9c09b322915bdc3eb2e5e5552a08e104d501fbcd3a5d142940d1ec0615",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/final-production-profile.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/final-simplification-20261104/fixed.tar.xz",
+      "bytes": 57928988,
+      "git_blob": "020114bcda1c9ca43096abe3d2d93bb68758e526",
+      "sha256": "9c8a4b7eeb12ffa6bfd3866b386766dc20ee1b2e2e94c7e7b0a9f016b38a8889",
+      "bundle": "rustx-pr485-performance-07.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/final-simplification-20261104/fixed.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/final-simplification-20261104/manifest.json",
+      "bytes": 2625362,
+      "git_blob": "05e9fc80cd3822e06d78f18ae9c4b1fe92deed23",
+      "sha256": "68312f6843a8605578ae60ec5930779ec5b601180d7224ec5f8ac90f0ea20d2c",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/final-simplification-20261104/manifest.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/final-simplification-20261104/rotating.tar.xz",
+      "bytes": 35309780,
+      "git_blob": "fb39fbad97641ccedbe399ba799ded4aa6cc7c04",
+      "sha256": "12dc95cb855bc5711fd8ad6791daaf27c9d014ae0f146b883cd0d2f30b79a6ee",
+      "bundle": "rustx-pr485-performance-10.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/final-simplification-20261104/rotating.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/final-simplification-20261104/validation.tar.xz",
+      "bytes": 29139440,
+      "git_blob": "e27cbd758c8035eb1cfd32173339d60c4a6a70ba",
+      "sha256": "210e4d96b73a9d7ef6a4d016a204d8a16a00b7a1ffe7107d7b14303c37ac9ff3",
+      "bundle": "rustx-pr485-performance-12.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/final-simplification-20261104/validation.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/final-validation/initial-checks.tar.xz",
+      "bytes": 20532,
+      "git_blob": "3f19a6702c090a83995a60858e38e7a0ac1d8baf",
+      "sha256": "31f8d0f3da8db124d1eafb03ad146477ac0e1d2534db853d865a310fe030735c",
+      "bundle": "rustx-pr485-performance-09.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/final-validation/initial-checks.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/final-validation/protocol-followup.tar.xz",
+      "bytes": 22176,
+      "git_blob": "f7625e48123a5630cbf23707306bb5f4ef51da5b",
+      "sha256": "2d71ecb243c8b5a0ac4f79909474feafb518aedb3ba9c0bc50e02e7f403ce0e2",
+      "bundle": "rustx-pr485-performance-02.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/final-validation/protocol-followup.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/idle-retention-20261103/final.tar.xz",
+      "bytes": 45544328,
+      "git_blob": "1a53ed0ab0634160228fcde23f8501ac171cedae",
+      "sha256": "655d58667bf05661d6f7e7104118f679aa3032f47ef4404d0be863fe08af5316",
+      "bundle": "rustx-pr485-performance-08.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/idle-retention-20261103/final.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/idle-retention-20261103/manifest.json",
+      "bytes": 2631934,
+      "git_blob": "7502d23e174e5f7693a4b2e992d6b9bb0da7bb5b",
+      "sha256": "d4895b3ecef61552334f55efbde631ad5d075f53f6f2bac9f97c84d95d87a218",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/idle-retention-20261103/manifest.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/idle-retention-20261103/trial.tar.xz",
+      "bytes": 65899704,
+      "git_blob": "9c12e272c894ead1d30b73c3fb0b56e47483222a",
+      "sha256": "a7d3ddb1f8af1824613d5a8825a8e1139727f43d7e9462dd4b8a9e3a9cabcb1f",
+      "bundle": "rustx-pr485-performance-05.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/idle-retention-20261103/trial.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/incremental-attempt-investigation-20261102/raw.tar.xz",
+      "bytes": 6103404,
+      "git_blob": "88690b434567e2223db0dbe968ea398d2871b6e5",
+      "sha256": "7a037b5936beacdb88803cca061e9e2d4174476974fd65b6f2f302617d3010a2",
+      "bundle": "rustx-pr485-performance-13.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/incremental-attempt-investigation-20261102/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/incremental-attempt-investigation-initial-20261102/raw.tar.xz",
+      "bytes": 6102132,
+      "git_blob": "c0547a986714236700990c046f09c7b0c8d34654",
+      "sha256": "969bff06f064e07dcabfee96d96b336bfe7a86f40a9fe87af71b285ff1395874",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/incremental-attempt-investigation-initial-20261102/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/incremental-attempt-runtime-20261102/raw.tar.xz",
+      "bytes": 10750292,
+      "git_blob": "2f3da477a05b61c52552c27e90747755243f4034",
+      "sha256": "06d963327a1ef17af141c3fdbb5e1e4923d7936c8cbd323440fe578751f1bb91",
+      "bundle": "rustx-pr485-performance-14.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/incremental-attempt-runtime-20261102/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/inline-content-runtime-20261030/raw.tar.xz",
+      "bytes": 13013056,
+      "git_blob": "6681288b200c45f33922c2b77073739004c2117b",
+      "sha256": "1bb966160f182424b59cfbd36c7f73540afe3d13653650e4166d0f8c8c723b9f",
+      "bundle": "rustx-pr485-performance-13.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/inline-content-runtime-20261030/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/inspection-integrity/checks.tar.xz",
+      "bytes": 12048,
+      "git_blob": "c7a63e15ed7c2cd8b25ade434b97e601176f72af",
+      "sha256": "b6704d2c710e4b13c4760d9501cf5dabb0591fcfc346cdc0dd544eb8c0d8d8ee",
+      "bundle": "rustx-pr485-performance-07.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/inspection-integrity/checks.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/integrity-measurements/measurements.tar.xz",
+      "bytes": 2788976,
+      "git_blob": "199aadbf350f71ebbf0a5c0132dec10fc86765e5",
+      "sha256": "da68de2115b9ec6af208df2632c38c1fb1ad8ff2d529c89554a93e10b00f3d02",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/integrity-measurements/measurements.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/joint-major-runtime-20261027/raw.tar.xz",
+      "bytes": 9300904,
+      "git_blob": "85beb75d511afd7adcbe657ab5e720d504ad090b",
+      "sha256": "6569c3c9afade988d29b076ee7779224fa47472cfd920d482cb83990fd73b6ac",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/joint-major-runtime-20261027/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/kind-keys-20261110/evidence.tar.xz",
+      "bytes": 65840436,
+      "git_blob": "cc4847cc3402f9e0d8feeb47c10a965555e54600",
+      "sha256": "f186bc810c6ad6e1617fdb4b2bbc563c921f74e92fdd417a691abffb3a9d5cf3",
+      "bundle": "rustx-pr485-performance-06.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/kind-keys-20261110/evidence.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/kind-keys-20261110/heap-audit.json",
+      "bytes": 268048,
+      "git_blob": "fabfb854cc58340d08fd54c31e896e1e508be4c0",
+      "sha256": "c31641d71b7492d2505bad913988edab980ea2ab9f1c2b4e1a43ae8a4c048ec0",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/kind-keys-20261110/heap-audit.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/kind-keys-20261110/manifest.json",
+      "bytes": 366789,
+      "git_blob": "b2b31ce2d722a22e59d61ce0576fc93fb8dd13c7",
+      "sha256": "93105d2749b5b3d378fcd284c2ad4cc284c6fc25e1755bbbe53b50d6c8e122f3",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/kind-keys-20261110/manifest.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/lazy-preview-measurements/measurements.tar.xz",
+      "bytes": 2438920,
+      "git_blob": "10789c0f92e092a87ec4fc84326f5ea66ae52717",
+      "sha256": "d24d442838250a0a2f0aeed93d74e611e899cab64f4183b13d73c4db7797be21",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/lazy-preview-measurements/measurements.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/lazy-state-previews/checks.tar.xz",
+      "bytes": 12236,
+      "git_blob": "5a99afb79cac9e120c7a0ccaf60b707e7fc9ba05",
+      "sha256": "220fb3b0896bb0470684f01e0d2a5383a8e0da1d0140a74c84f71eea1d621630",
+      "bundle": "rustx-pr485-performance-12.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/lazy-state-previews/checks.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/lifecycle-details.tar.xz",
+      "bytes": 92884,
+      "git_blob": "ef178d74285e436b57905b4908568e22098c25f3",
+      "sha256": "17238e7f6d18bb41de84137ede846d1d35b13102a6be98bf03e8e45a99b6348d",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/lifecycle-details.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/live-trace-demand-validation.tar.xz",
+      "bytes": 93380,
+      "git_blob": "c3b73b1718d9092e569713ceeead030a367c3745",
+      "sha256": "679cfed7c625b00008a24b4a544f3cd7c19a08621c106551e54fc8320141cfdc",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/live-trace-demand-validation.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/local-performance-20261027/cpu-counts.json",
+      "bytes": 1083491,
+      "git_blob": "4b06a2fcef5f895dd9c9e8b4b82dead223be5744",
+      "sha256": "158755d7167832a05191781eb08c2bcaa96ad2396e16970848e768a04fe3b37b",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/local-performance-20261027/cpu-counts.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/local-performance-20261027/profile-attribution.tar.xz",
+      "bytes": 110696,
+      "git_blob": "f6f2fd06b7bc6f9df62bd7626bf11f2e0bb1a285",
+      "sha256": "5af1de06c6c73a0d66308df6c899c859d3e8651f324d4197a3110e5d9db3e2a3",
+      "bundle": "rustx-pr485-performance-04.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/local-performance-20261027/profile-attribution.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/local-performance-20261027/raw.tar.xz",
+      "bytes": 6391804,
+      "git_blob": "ed9427dde1c7b084ed3bf59e48fb0ddd46e87fd7",
+      "sha256": "4f406110811a7d82a440f4187cc18a9fab42575a6e70cb16bdc932b4104bffa1",
+      "bundle": "rustx-pr485-performance-10.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/local-performance-20261027/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/local-performance-20261027/recomputed.json",
+      "bytes": 538473,
+      "git_blob": "16787ac81872b15db8d0f58f1d53ff63f49c9c1b",
+      "sha256": "a72dd01b0b989d12878cbef82ffd20d2d1bb1326de995bdb4d28d54e68f917bf",
+      "bundle": "rustx-pr485-performance-13.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/local-performance-20261027/recomputed.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/main-integration-20261106/checks.tar.gz",
+      "bytes": 463458,
+      "git_blob": "8bcb3b6b1a6ea13e8a993d93ebcf0375e9e55486",
+      "sha256": "84eb5ee43752bb3be4368a976f8417fbfbb9dc95246cdfa16f9e07e4a0d96abc",
+      "bundle": "rustx-pr485-performance-12.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/main-integration-20261106/checks.tar.gz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/main-integration-20261106/inputs.json",
+      "bytes": 329190,
+      "git_blob": "b3e8e2276a2ba1270087afd4d3d11191b30ca42e",
+      "sha256": "2d8b8f890f7743b0b3738df61c56b360279897287996c90ebe3b64fe519d7a65",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/main-integration-20261106/inputs.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/main-integration-20261110/main-integration.tar.xz",
+      "bytes": 284008,
+      "git_blob": "b8c72e41fcd265a28dd7d2fb81bc84b1f7c84f23",
+      "sha256": "ca4816c407d9afd2cb1a3fb07ec3904dbd70aa2bdfef231df236a3e2b6ecacbd",
+      "bundle": "main-integration-20261110--main-integration.tar.xz",
+      "archive_member": null,
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/memory-writes-20261103/manifest.json",
+      "bytes": 1350363,
+      "git_blob": "68a238a4f196bd40f2c27c2006ea1a1f4e301e8f",
+      "sha256": "df69760c6798b136807837daacefa131b89be6cd945daa83cd49b28d550fa67b",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/memory-writes-20261103/manifest.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/memory-writes-20261103/raw.tar.xz",
+      "bytes": 83082524,
+      "git_blob": "7b3df31ab50925307ec23ae8ea183b990f6c4eb3",
+      "sha256": "5d1af2e7d55d04f3d7a153717bf28b061189008d55273d15842546d4ccdd681e",
+      "bundle": "rustx-pr485-performance-02.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/memory-writes-20261103/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/merged-operations-final-runtime-20261028/raw.tar.xz",
+      "bytes": 11181372,
+      "git_blob": "7138097f1d447d5d7edd9da08605269c105640d9",
+      "sha256": "e0fa21c9c5115c19a2010ebe15a820e08ac5fe914ce28a32a5e77e16778da0b2",
+      "bundle": "rustx-pr485-performance-14.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/merged-operations-final-runtime-20261028/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/merged-operations-runtime-20261027/raw.tar.xz",
+      "bytes": 11085192,
+      "git_blob": "88598b90cb49fd9e0a8e59283bc6178a4a6bd6ba",
+      "sha256": "8514c67739b1236e37a4229cc7308cac2d331a4833143681b28329be1c4f87da",
+      "bundle": "rustx-pr485-performance-14.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/merged-operations-runtime-20261027/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/metadata-runtime-20261102/raw.tar.xz",
+      "bytes": 24107580,
+      "git_blob": "d551c3558cc124f3efb1cbe3329bdaaa2bab3dd0",
+      "sha256": "dadcf09cd1e4bb8c9588fc6441741482e7ec0399cf41372f385be95b8883c08c",
+      "bundle": "rustx-pr485-performance-11.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/metadata-runtime-20261102/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/native-regression-20261103/manifest.json",
+      "bytes": 1630997,
+      "git_blob": "5fed7a20b8504c6723fdfcb5e0b459359fec68da",
+      "sha256": "7bfc9d516100da37ec4b3de5606d234d25c6ac3a90af2ad0c6c562294c606096",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/native-regression-20261103/manifest.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/native-regression-20261103/raw.tar.xz",
+      "bytes": 71348160,
+      "git_blob": "d921378f99c80e660820fd63ba239bb8c9f40c40",
+      "sha256": "80cbd7f89cf79bd7b3e0726cba03df6c869940cae201fa42402210a9633cd8f0",
+      "bundle": "rustx-pr485-performance-04.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/native-regression-20261103/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/native-statement-reuse-build-validation.tar.xz",
+      "bytes": 302600,
+      "git_blob": "195158a57bd6e16a5ae4903e497e4caf71102f1c",
+      "sha256": "37d2160dc46662a323c2e394a819efcc7eb0f0add78e13aa82564da90ea63355",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/native-statement-reuse-build-validation.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/native-statement-reuse-results.tar.xz",
+      "bytes": 4861032,
+      "git_blob": "a449aae90614f58517f66f7e1744b4b656598ee7",
+      "sha256": "65430c88aef21c2670a6a4b677edce25d59f63082e55f59f19810344c99bc766",
+      "bundle": "rustx-pr485-performance-08.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/native-statement-reuse-results.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/native-statement-reuse-validation.tar.xz",
+      "bytes": 62080,
+      "git_blob": "faff0234f1eb2a47e4dff548ddf113c4acbfc58a",
+      "sha256": "658fac469dcdbecb32fe80cbe84d3b7cdfedffeae0dadc31bc41e235e7f03bdf",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/native-statement-reuse-validation.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/observation-ownership-20261104/diagnostics.tar.xz",
+      "bytes": 36079456,
+      "git_blob": "3647ed3a53172645eb4c53a2c267dc607d55c1d5",
+      "sha256": "194d088801e43f856ec78e0d77e581bd46d3e351953475de35ae7583af7aeeec",
+      "bundle": "rustx-pr485-performance-07.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/observation-ownership-20261104/diagnostics.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/observation-ownership-20261104/manifest.json",
+      "bytes": 2279954,
+      "git_blob": "74ea6dc0b9bb601987f7a9e636c63800fe6a5ac0",
+      "sha256": "8bf17fbb7f3ea9a7f8e2b17d7f380f84f76a4e07a39e07e28724a09af7f144e0",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/observation-ownership-20261104/manifest.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/observation-ownership-20261104/ordinary-fixed.tar.xz",
+      "bytes": 27967976,
+      "git_blob": "6843821a6351feecbf314084a7698a039d4880bb",
+      "sha256": "846ca5c08728bf12da20bac90b60be254512f23a1f5a4668040e108c9d90b387",
+      "bundle": "rustx-pr485-performance-05.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/observation-ownership-20261104/ordinary-fixed.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/observation-ownership-20261104/ordinary-rotating.tar.xz",
+      "bytes": 34063644,
+      "git_blob": "80608dd477b36764d86dd8934e7bc45c11efedc0",
+      "sha256": "e445d05c02790e69c91df5bb1e4d0a3a3bd27630189101bf4b54771bd0455c04",
+      "bundle": "rustx-pr485-performance-11.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/observation-ownership-20261104/ordinary-rotating.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/observation-runtime-20261103/raw.tar.xz",
+      "bytes": 4781748,
+      "git_blob": "f60b60ad07486dca51b242752a12bf3baf302778",
+      "sha256": "cb986c55b76c1f1debeae4ad77a1399ca7603f304d73e319493e7852bc77dd24",
+      "bundle": "rustx-pr485-performance-14.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/observation-runtime-20261103/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/observer-demand-cancellation-v3.tar.xz",
+      "bytes": 364560,
+      "git_blob": "577e87e3430855c2a9ffe828d52b73fa7be9ad6d",
+      "sha256": "b7b040326c709ac1c33bfde2f5bfee1e4ed9973237a35a9fe4da5f438ed70229",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/observer-demand-cancellation-v3.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/observer-demand-results.tar.xz",
+      "bytes": 1550964,
+      "git_blob": "e7468db1a4c3c10bc45ebe6e95aab0fc16c4310e",
+      "sha256": "93831ad1b68aa88ed5006ce9905851263c34d9210c665ee00b6f214bb847b69c",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/observer-demand-results.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/observer-demand-validation.tar.xz",
+      "bytes": 79228,
+      "git_blob": "ea001e4b1d00d1181469393ffa2cb65acc9efb4f",
+      "sha256": "5f07dac751eb69a66b4d35af1a11526cada421c025ecf300ab608b3b126d7dd3",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/observer-demand-validation.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/observer-oracle-repair.tar.xz",
+      "bytes": 687288,
+      "git_blob": "ede33cc7c7f38f06158ee2e7c691477f6ec2cda4",
+      "sha256": "11b29e00bf32248818ca76ed248a2f6891eb881fc47bd47567800e768adcf823",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/observer-oracle-repair.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/owner-reuse-runtime-20261027/raw.tar.xz",
+      "bytes": 12583652,
+      "git_blob": "1b6b8a627680a543d7f6a2347a7300855e1946bf",
+      "sha256": "dcee5a053499af6e65f32c2523272f5bc1ca2f55d0262399cbdde68d4986516c",
+      "bundle": "rustx-pr485-performance-13.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/owner-reuse-runtime-20261027/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/partial-measurements/measurements.tar.xz",
+      "bytes": 4628312,
+      "git_blob": "a33be21bd20c88330b700efe4443dc36c7e17e8e",
+      "sha256": "9bcb89e5e8834a67bb84119293cd49448741886f9979b8d6d4dcbcb038e1f998",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/partial-measurements/measurements.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/partial-validation/checks.tar.xz",
+      "bytes": 27252,
+      "git_blob": "4d9711a6d587089c6bdb3f3efac7c0c174e692b6",
+      "sha256": "62fe816a3ea96dd555a3a8a7e31776e5d087ac02d81023f140ac1a5765ee7e22",
+      "bundle": "rustx-pr485-performance-05.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/partial-validation/checks.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/pi-flow-runtime-20261027/raw.tar.xz",
+      "bytes": 24024636,
+      "git_blob": "27907f344db44aa1bf9ec84d65a2d9d47c902737",
+      "sha256": "eef4c601144965e23fc32b303be67bbccdc7b0197b332d62deba9933840b49ec",
+      "bundle": "rustx-pr485-performance-13.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/pi-flow-runtime-20261027/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/process-cache-20261110/evidence.tar.xz",
+      "bytes": 89148064,
+      "git_blob": "5b6e1b2bfc2d24cf5fc2e6d62204d5952bb7e2c2",
+      "sha256": "f5a4b934d1286b534be35230ef3d69b9de0875e172c0ee283eae949b9a180f4c",
+      "bundle": "rustx-pr485-performance-01.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/process-cache-20261110/evidence.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/process-cache-20261110/manifest.json",
+      "bytes": 924565,
+      "git_blob": "af81c0e6365781532fa0ef057247e9c1841e6610",
+      "sha256": "74ffde9a86e03c19344c964d51b705db2d3bfc1c5b076e0aa9417df5df4dab91",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/process-cache-20261110/manifest.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/query-plan-results.tar.xz",
+      "bytes": 746828,
+      "git_blob": "bb357ee73e665a3271ae3ac9ac17e5d75345368e",
+      "sha256": "67a7c8c1348d49e4ab2411a6a1ba4e7b5f8a1de7f28bc30b968812e310a41452",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/query-plan-results.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/rawvalue-correctness/baseline-validation.tar.xz",
+      "bytes": 10144,
+      "git_blob": "b478503bbcb29adbf3888b9e7aecd34d1402ed62",
+      "sha256": "180512e71fc21011d09abc2b8231be661fc19ae86594d72a140de5c30fd2bffc",
+      "bundle": "rustx-pr485-performance-12.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/rawvalue-correctness/baseline-validation.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/read-cache-trial-20261027/direct-recomputed.json",
+      "bytes": 271167,
+      "git_blob": "9aa7057b8772c62a04f0de4858517a12514d0832",
+      "sha256": "d96972a3cece3d2e409a645068f513cf5c013e8633a3a56e12291c233d17ad40",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/read-cache-trial-20261027/direct-recomputed.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/read-cache-trial-20261027/raw.tar.xz",
+      "bytes": 1672604,
+      "git_blob": "463b8c387360cf3296137f08f7873adf7ccd4174",
+      "sha256": "545152495c76d4175b26739a8309b03902b85e67e99158dc92d837d720b6c434",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/read-cache-trial-20261027/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/read-fusion-20261102/checks.tar.xz",
+      "bytes": 121892,
+      "git_blob": "dc14d7a18fbb015245abb38474d543a6a957a4b8",
+      "sha256": "00077001b78e52e7e817bde8e91431db004a5f502a55f88b9b9dc95ed6377b6c",
+      "bundle": "rustx-pr485-performance-11.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/read-fusion-20261102/checks.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/reference-growth-20261110/summary.json",
+      "bytes": 537064,
+      "git_blob": "ecbc8b89d9978813590b9abf895e4baad419602f",
+      "sha256": "a1f6a82c67f956f2fbe387734006ca2d3a444514bef749f25d80d6410507e8e5",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/reference-growth-20261110/summary.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/remaining-gap-baseline/complete-rust/after_turns-database.json",
+      "bytes": 529053,
+      "git_blob": "45f039d873d807a3dde4391c4cbaa64102427e2d",
+      "sha256": "494966f7a6f0d946b1dc7953bb55c4091eb847a5052682d7f2a1528d421fc538",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/remaining-gap-baseline/complete-rust/after_turns-database.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/repeated-work-final-runtime-20261029/raw.tar.xz",
+      "bytes": 11082104,
+      "git_blob": "dc972b101b59b4c36113c1d7ed17fda244cd4fb2",
+      "sha256": "5fc04cd5de35f704fc3d2c06521b70dbcc37161e8caca1aad5d2710cb8f3f844",
+      "bundle": "rustx-pr485-performance-14.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/repeated-work-final-runtime-20261029/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/repeated-work-runtime-20261029/raw.tar.xz",
+      "bytes": 11245696,
+      "git_blob": "647624985d4b5453bb37135704970750432eebc6",
+      "sha256": "bcaa813429c8dc564e9d032d42c328ecda2a3d8570c563af7d7ac82fd7ade090",
+      "bundle": "rustx-pr485-performance-09.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/repeated-work-runtime-20261029/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/replay-layout-20261110/cpu-profile-symbols.json",
+      "bytes": 306183,
+      "git_blob": "10be76b352ff7525a0beb2fcf9c8ebcd9f9fec56",
+      "sha256": "812fe11144e22512a71b881408564dddce29ad2080c86c0aad9161ad82d5e46c",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/replay-layout-20261110/cpu-profile-symbols.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/replay-layout-20261110/replay-layout-portable.tar.xz",
+      "bytes": 15675792,
+      "git_blob": "637dce33f22007fe4a7263e890b25137fc4857c7",
+      "sha256": "c7045b2eb9e75d8a81fde17cad658bb4f155822f221f77d46713789da368930b",
+      "bundle": "rustx-pr485-performance-04.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/replay-layout-20261110/replay-layout-portable.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/request-hotpath-20261103/manifest.json",
+      "bytes": 347185,
+      "git_blob": "92bae925c4d87214bca8b7a196a0b7e09fc3ece8",
+      "sha256": "f05953cf4b3530ae08efd6898cdbd10c71bb93c102cd08866424b9e1f2006f7a",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/request-hotpath-20261103/manifest.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/request-hotpath-20261103/raw.tar.xz",
+      "bytes": 11524096,
+      "git_blob": "1a30da37723f90725fd7b840de4d46bb86700210",
+      "sha256": "90e8f8f44d2fb3170eee26441b2a582ef7783d24a493d3e7ec19f013b8e4d8fe",
+      "bundle": "rustx-pr485-performance-14.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/request-hotpath-20261103/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/resident-bound.tar.xz",
+      "bytes": 1894212,
+      "git_blob": "42f5012247dfe438959d7ee1800b939215a2741f",
+      "sha256": "84097ab0ef5ae13e89219eaee253c0a1dbb15e543ca52cc4969a8718cc8e2693",
+      "bundle": "rustx-pr485-performance-11.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/resident-bound.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/resident-source.tar.xz",
+      "bytes": 3365736,
+      "git_blob": "0ff7d7b109982e69a5d48f6d088b19e178293d5f",
+      "sha256": "33b7c797df1272a2398490a83e68d8dfa6eab7154e11fe74f26aa1d866a513c7",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/resident-source.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/resources-capacity-20261103/manifest.json",
+      "bytes": 600541,
+      "git_blob": "2c2632bb51fb9e4c2e1a6ca57682e2661014bb72",
+      "sha256": "5c0c9eb8ddbb00558ac5980ee4d6aebfb7663f62133c6256d7220681bbbf6a76",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/resources-capacity-20261103/manifest.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/resources-capacity-20261103/raw.tar.xz",
+      "bytes": 43738656,
+      "git_blob": "87c4a3e521aecd48a05239adcf2be1be49b978ee",
+      "sha256": "ce218fff8c32a9e1227b52b46abfbf86df32c16debe0f516fd4436b101b31f33",
+      "bundle": "rustx-pr485-performance-08.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/resources-capacity-20261103/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/row-owner-20261110/evidence.tar.xz",
+      "bytes": 82882092,
+      "git_blob": "6a32722fd1f5377e43db817b3d029c34438ee4b2",
+      "sha256": "005d411469894a575daece8c408bd0942b2e030f54921f5f01ebb3df1a5cd02c",
+      "bundle": "rustx-pr485-performance-03.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/row-owner-20261110/evidence.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/row-owner-20261110/heap-audit.json",
+      "bytes": 475110,
+      "git_blob": "2483bb865301d545edc176054cc8d7c31a660b48",
+      "sha256": "f12bf9cfb92a147f68b22261903cfc0face87ed0f425a4a6a947b3a2df8a007c",
+      "bundle": "rustx-pr485-performance-05.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/row-owner-20261110/heap-audit.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/row-owner-20261110/manifest.json",
+      "bytes": 1556991,
+      "git_blob": "fe43ebaad10a8026d052fc4ef8d027fc23a189d1",
+      "sha256": "7cf76ae6dca178ce66835c57c286eb4b4eb827b9664f16dae505b31ef0db080e",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/row-owner-20261110/manifest.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/session-foundations-20261104/diagnostics.tar.xz",
+      "bytes": 32205108,
+      "git_blob": "9d18431e760944fb681ddcca009f4e04b2a3e90c",
+      "sha256": "a3b2bfe2178a29403fca5fd17849b5b211d4ed2371be8f3e4681f73ce2068a20",
+      "bundle": "rustx-pr485-performance-12.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/session-foundations-20261104/diagnostics.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/session-foundations-20261104/manifest.json",
+      "bytes": 2199520,
+      "git_blob": "48df1306327b04e01a0c2a67ab3b53b6d2c7951d",
+      "sha256": "b841f38ca647da0a60e532b565d1b1b8d136710151d85bde87b04a3500ba4b75",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/session-foundations-20261104/manifest.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/session-foundations-20261104/ordinary-fixed.tar.xz",
+      "bytes": 27967688,
+      "git_blob": "0b5909458bcbc1e04c6ea4136be12908d17340b5",
+      "sha256": "9bd32b1274ad66ce91a4c1eee2b495470918e3ce3e1433239143f56da5e095f7",
+      "bundle": "rustx-pr485-performance-06.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/session-foundations-20261104/ordinary-fixed.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/session-foundations-20261104/ordinary-rotating.tar.xz",
+      "bytes": 34152500,
+      "git_blob": "10992a738a615453127818a2b0f5c00a82bcc64e",
+      "sha256": "7624b6754e343fdac88ebc91a5d98dcee0d3eb9581b180d578c4d0977d9a5e22",
+      "bundle": "rustx-pr485-performance-11.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/session-foundations-20261104/ordinary-rotating.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/shared-domains-final-runtime-20261030/raw.tar.xz",
+      "bytes": 10846804,
+      "git_blob": "802d3f41da9418b070f39b2764dd60e8a360c9a0",
+      "sha256": "258c04aa14169a6b23cb46685fad9b65bd896601c94a5333ca6429df971f1c96",
+      "bundle": "rustx-pr485-performance-14.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/shared-domains-final-runtime-20261030/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/shared-domains-runtime-20261030/raw.tar.xz",
+      "bytes": 10602364,
+      "git_blob": "a6b815ac265ee712110bb29455a93a84d45b933a",
+      "sha256": "0d10c07fdcc7666950097d4806590fef9c869822a6181570cf464d5ffe3f7e71",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/shared-domains-runtime-20261030/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/shared-request-response-20261027/raw.tar.xz",
+      "bytes": 8726964,
+      "git_blob": "749a7b2cdd00c2e0535e051b4c79a40db825a3f3",
+      "sha256": "8f434d594bd269949cb13a819fad2419c5d0f717c6e35dc2e2a3432a7607c4c9",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/shared-request-response-20261027/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/shutdown-observation-validation.tar.xz",
+      "bytes": 143168,
+      "git_blob": "39bfc5a53136ba6154a149724a8cbe07d30c743f",
+      "sha256": "2575cad559b436327c3cccc115f458106b55e1b301ceb408899ba09795b12ae7",
+      "bundle": "rustx-pr485-performance-09.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/shutdown-observation-validation.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/statistics-runtime-20261103/raw.tar.xz",
+      "bytes": 9210420,
+      "git_blob": "491c5d3f4c4c3beea304442b089c35caa9c50ede",
+      "sha256": "e7385339cc7d9c465a073705b5c2d346fb39f243ae63bb137f62920367b150c3",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/statistics-runtime-20261103/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/template-extra-cases.tar.xz",
+      "bytes": 62932,
+      "git_blob": "213f7efc12b009cbd92cc867df456390f68fca76",
+      "sha256": "89b8a7da7ed0e2cf42b9d4955fc84add8c89e9a5344c3a869ae0f94a5e029a88",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/template-extra-cases.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/template-metrics.tar.xz",
+      "bytes": 615208,
+      "git_blob": "436eaf11bf35b7c949331eb1f891d24455ead89d",
+      "sha256": "e10277f8e1783e1d3fd80c288ccd41edbc9eac0ba4ead88950b77e4618413041",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/template-metrics.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/turn-growth-20261110/cpu-low128-text.folded.gz",
+      "bytes": 293032,
+      "git_blob": "5a436a8b9b6ec2d023932b89db2453d6c8b6f62e",
+      "sha256": "5b312137ac8be484e165bd6c4d06accbc584aedce014c8d7a22c48466bffd65d",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/turn-growth-20261110/cpu-low128-text.folded.gz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/write-compute-20261027/append-audit.json",
+      "bytes": 2682773,
+      "git_blob": "e03ed68b47971cf5a8efe997d4da7d8a9c132351",
+      "sha256": "4bf26e9e2b4f70c1d5f7e82f3df552f56e50d1f199736c510194627ee8e970de",
+      "bundle": "rustx-pr485-performance-15.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/write-compute-20261027/append-audit.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/write-compute-20261027/cpu-counts.json",
+      "bytes": 392296,
+      "git_blob": "a4d05bfe5ae6334220d761b4c83807f7ee5cc022",
+      "sha256": "cd9ca51b8f3ca31ea30a2a2c80b04b93439f33049a10a08f1055e66e70fe9f48",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/write-compute-20261027/cpu-counts.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/write-compute-20261027/paired-cohorts-audit.json",
+      "bytes": 387246,
+      "git_blob": "f71c0aeb885369ce899563a6d5e7d636e698f825",
+      "sha256": "52e17a7c6f54fcbabd15700f0376775ebeb7c4e66ea165368728f7b1b3a42640",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/write-compute-20261027/paired-cohorts-audit.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/write-compute-20261027/pi-recomputed.json",
+      "bytes": 282059,
+      "git_blob": "db5e49dbcdbee8268fc83db7fa13cf1834dfa250",
+      "sha256": "5a7eebd66237dbd39008ad9e5a450ea58f8b663206d7f7fc363853b1244852aa",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/write-compute-20261027/pi-recomputed.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/write-compute-20261027/raw.tar.manifest.json",
+      "bytes": 330956,
+      "git_blob": "7fc73777127cceb5b9933f74a3d9676c29ffa4b7",
+      "sha256": "c065d8398ba2bceda17639ffe0a004b30f90318ca243612b58a2d7175113771e",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/write-compute-20261027/raw.tar.manifest.json",
+      "retained_in_git": true
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/write-compute-20261027/raw.tar.xz",
+      "bytes": 12065896,
+      "git_blob": "383553d97d2da9a59ebc45ac99949d047b566482",
+      "sha256": "e0e3804b42b55f497efedccd2c9f7620c68d3b0b18da9d612b28568b29ea81f4",
+      "bundle": "rustx-pr485-performance-13.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/write-compute-20261027/raw.tar.xz",
+      "retained_in_git": false
+    },
+    {
+      "path": "docs/pi-durable-cost-model/evidence/write-ledger-20261109/evidence.tar.xz",
+      "bytes": 1067468,
+      "git_blob": "ad2bff30de5552a3ae236c8774aa4dd4cb6bd372",
+      "sha256": "de538edb157431bd41a4323af2175d8d90e7155586a654de4df8d5964827f552",
+      "bundle": "rustx-pr485-performance-16.tar",
+      "archive_member": "docs/pi-durable-cost-model/evidence/write-ledger-20261109/evidence.tar.xz",
+      "retained_in_git": false
+    }
+  ]
+}

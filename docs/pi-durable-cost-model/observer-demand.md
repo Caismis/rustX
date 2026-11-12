@@ -8,8 +8,10 @@ Deterministic tests gate physical read entry/release and worker turns. They prov
 
 Validation uses a real library test executable with root opt-level 0 for local correctness only; formal measurements require the unchanged normal optimized release settings. Projection: 84 passed. Host: 98 passed, including five source-recovery tests; recovery was also run separately. App Server: 296 passed across manager, configuration, protocol and real transports. These suites total **478 distinct passes**. Matching real child executable prerequisites were corrected after initial failed diagnostics; all original logs are retained. Formatting and whitespace checks pass. Matched measurements and exact-head FULL/Merge remain pending. No performance or Pi-parity claim is made for this unmeasured change.
 
-[Verified validation archive](evidence/observer-demand-validation.tar.xz) and [manifest](evidence/observer-demand-validation.tar.manifest.json) include source diff, build/test logs, initial failures and exact test names. Original evidence remains preserved.
+[Verified validation archive](https://drive.google.com/file/d/1Y5WUZ9UhSMOUsNok3kIQ2XwIGGWLCfMP/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/observer-demand-validation.tar.xz") and [manifest](evidence/observer-demand-validation.tar.manifest.json) include source diff, build/test logs, initial failures and exact test names. Original evidence remains preserved.
 
 Independent review found a dirty-head shutdown regression in this initial stage. The [shutdown inspection repair](shutdown-observation.md) records the reproduction, frozen-cut fix and additional validation; the original validation archive remains unchanged.
 
 The subsequent [retained-cut checkpoint repair](checkpoint-retained-cut.md) supersedes the worker-dependent checkpoint behavior described above. Ordinary inspection now hydrates its captured seed independently; live subscriber reads and known Source-failure repairs retain the worker owner. The original stage evidence is unchanged.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

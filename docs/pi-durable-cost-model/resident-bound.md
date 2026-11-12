@@ -76,7 +76,9 @@ python3 benchmarks/runtime/profile-source.py /workspace/issue-481-evidence/pi-re
 
 [Phase/pair summary](evidence/resident-bound-summary.json),
 [Source profile counters](evidence/resident-bound-source.json),
-[verified raw archive](evidence/resident-bound.tar.xz) and
+[verified raw archive](https://drive.google.com/file/d/1MksXuXdUVdzcQZzq5aDG_sAOinvgsxI6/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/resident-bound.tar.xz") and
 [manifest](evidence/resident-bound.tar.manifest.json) preserve the evidence.
 Originals remain in `/workspace/issue-481-evidence`; the archived build identity
 and commands reproduce the preserved executable without committing binaries.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

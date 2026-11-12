@@ -83,10 +83,12 @@ cargo test --locked --all-features \
   --test subagent --test tools --examples -- --test-threads=8
 ```
 
-Protocol regeneration and Rust documentation-test results are recorded in the [validation summary](evidence/main-integration-20261110/validation.json). The [evidence archive](evidence/main-integration-20261110/main-integration.tar.xz) retains merge decisions, failed and successful check logs, source/build identity and test counts. Its [index](evidence/main-integration-20261110/archive-index.json) lists members and hashes. Executables, dependency trees and live runtime roots are excluded.
+Protocol regeneration and Rust documentation-test results are recorded in the [validation summary](evidence/main-integration-20261110/validation.json). The [evidence archive](https://drive.google.com/file/d/1nUN2v98E3hXDhNlCBmEug41JKAMBbkgj/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/main-integration-20261110/main-integration.tar.xz") retains merge decisions, failed and successful check logs, source/build identity and test counts. Its [index](evidence/main-integration-20261110/archive-index.json) lists members and hashes. Executables, dependency trees and live runtime roots are excluded.
 
 ## Limits and handoff
 
 No new performance, capacity, WAL or reference-product comparison is inferred from these correctness runs. Existing pre-integration performance data retain their exact original identities. No browser screenshot/E2E, macOS or completed remote-CI result is claimed. Required remote checks must be assessed on the actual pushed merge HEAD before a later merge decision.
 
 The requested main integration is complete once the merge is committed and pushed. PR #485 stays Draft and is not merged. Subsequent CPU/write work, if requested, should use a separately controlled measurement; it is outside this closeout.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

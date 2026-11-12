@@ -51,7 +51,7 @@ checkpoint, close/reopen and cleanup; evidence output follows counter capture.
 Provider start/control and complete controller wall remain explicit. This is a
 diagnostic performance variant, not a complete variant FULL or merge claim.
 
-[Archive](evidence/atomic-leaveout/measurements.tar.xz),
+[Archive](https://drive.google.com/file/d/1MwzfQqRWY1d3m69vaDg65BBHHcFXDlQ5/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/atomic-leaveout/measurements.tar.xz"),
 [manifest](evidence/atomic-leaveout/measurements.tar.manifest.json), and
 [formal summary](evidence/atomic-leaveout/formal-summary.json) retain all samples,
 profile data, exact identities and the reproducible diagnostic patch. The
@@ -63,3 +63,5 @@ formal builds. Original artifacts remain in the cloud workspace.
 diffs, build identity and existing test proof](evidence/atomic-leaveout/readable/README.md)
 allow review without unpacking the archive or resolving local diagnostic commits.
 No new measurements or production changes accompany this evidence view.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

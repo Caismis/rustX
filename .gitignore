@@ -24,3 +24,21 @@ __pycache__/
 
 # Development launcher
 /dev/node_modules
+
+# Detailed performance captures live in Drive; see docs/performance-evidence/README.md.
+# Local restores must not reintroduce raw archives into Git.
+/docs/pi-durable-cost-model/evidence/**/*.xz
+/docs/pi-durable-cost-model/evidence/**/*.gz
+/docs/pi-durable-cost-model/evidence/**/*.zip
+/docs/pi-durable-cost-model/evidence/**/*.zst
+/docs/pi-durable-cost-model/evidence/**/*.tar
+/docs/issue-481/evidence/**/*.xz
+/docs/issue-481/evidence/**/*.gz
+/docs/issue-481/evidence/**/*.zip
+/docs/issue-481/evidence/**/*.zst
+/docs/issue-481/evidence/**/*.tar
+/docs/issue-480/evidence/**/*.xz
+/docs/issue-480/evidence/**/*.gz
+/docs/issue-480/evidence/**/*.zip
+/docs/issue-480/evidence/**/*.zst
+/docs/issue-480/evidence/**/*.tar

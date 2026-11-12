@@ -102,7 +102,7 @@ device writes. No unrelated medians are subtracted. DB/WAL logical and allocated
 footprints and phase counters remain in each complete sample. Cold physical-read
 bounds retain their tests; this comparison is not a first-read latency benchmark.
 
-[Complete evidence archive](evidence/integrity-measurements/measurements.tar.xz),
+[Complete evidence archive](https://drive.google.com/file/d/1MwzfQqRWY1d3m69vaDg65BBHHcFXDlQ5/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/integrity-measurements/measurements.tar.xz"),
 [manifest](evidence/integrity-measurements/measurements.tar.manifest.json),
 [formal summary](evidence/integrity-measurements/formal-summary.json), and
 [WAL diagnostic](evidence/integrity-measurements/wal-summary.json) preserve all
@@ -134,3 +134,5 @@ to `b5840bd9`, and was compiled/tested on the actual resulting baseline tree
 tests pass**, with schema gate 73 unchanged. Full compiler/command identity and
 readable logs are in the linked manifest. The original incomplete artifact is
 preserved in history and the validation archive; this does not alter production.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.
