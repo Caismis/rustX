@@ -8,13 +8,20 @@
 //! ├── server.py                            the `FastMCP` server (entrypoint
 //! │                                        is fixed: server.py:mcp)
 //! ├── requirements.txt                     REQUIRED, even when empty
+//! ├── permissions.toml                     OPTIONAL resource permissions
+//! │                                        (`permissions` + `tools` map;
+//! │                                        same shape as MCP server docs)
 //! └── *.py                                 supporting modules
 //! ```
 //!
-//! rustX discovers each package, freezes its bytes into a fingerprint,
-//! prepares an isolated uv environment in the runtime-private store, and
-//! synthesizes one [`McpServerBinding`] per package. From there everything
-//! — connect, `tools/list`, `tools/call`, epochs, availability, commit,
+//! rustX discovers each package, freezes its code/dependency bytes into a
+//! fingerprint, prepares an isolated uv environment in the runtime-private
+//! store, and synthesizes one [`McpServerBinding`] per package. Authored
+//! resource permissions are captured with the winning package and frozen
+//! onto the prepared handle at prepare time; they are never part of the
+//! fingerprint-keyed env cache, so distinct permission objects cannot be
+//! shared through a code-only prepared state. From there everything —
+//! connect, `tools/list`, `tools/call`, epochs, availability, commit,
 //! leases, subagent crossing — is the generic MCP machinery of
 //! [`crate::tools::mcp`]; this module ends at the launch specification.
 //!
@@ -117,6 +124,12 @@ pub const TOOLS_ROOT: &str = "tools";
 pub const SERVER_FILE: &str = "server.py";
 /// The fixed dependency manifest of a package (required, even when empty).
 pub const REQUIREMENTS_FILE: &str = "requirements.txt";
+/// Optional package-local resource permission document.
+///
+/// Same authoring shape as an MCP server permissions document: a source-default
+/// [`ResourcePermissionSet`] under `permissions`, plus exact-tool exceptions
+/// under `tools.<name>.permissions`. Absent means product/matrix defaults.
+pub const PERMISSIONS_FILE: &str = "permissions.toml";
 
 /// The fixed entrypoint every managed server is launched with.
 const ENTRYPOINT: &str = "server.py:mcp";
@@ -147,6 +160,22 @@ pub enum PythonToolError {
     Environment(String),
 }
 
+/// Package-local permission authoring document (`permissions.toml`).
+///
+/// Mirrors the MCP server permissions document surface: source-default
+/// `permissions` plus exact-tool exceptions under `tools`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
+pub struct ManagedPythonPermissionsDocument {
+    /// Source-default three-mode permission object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+    /// Exact-tool permission exceptions keyed by remote tool name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tools: BTreeMap<String, crate::local_runtime::config::McpToolPermissionDocument>,
+}
+
 /// One validated package with an owned, file-backed source snapshot.
 #[derive(Debug, Clone)]
 pub struct PythonToolPackage {
@@ -156,12 +185,19 @@ pub struct PythonToolPackage {
     /// the server never runs from this live root).
     root: PathBuf,
     /// Every package file, sorted by package-relative path.
+    ///
+    /// Excludes [`PERMISSIONS_FILE`]: that document is resource metadata
+    /// captured onto this package, not frozen server source.
     files: Vec<PathBuf>,
     source: Arc<PythonSource>,
     source_digest: String,
     /// The normalized dependency lines of `requirements.txt` (comments and
     /// blank lines removed), in file order.
     requirements: Vec<String>,
+    /// Source-default three-mode permission object from [`PERMISSIONS_FILE`].
+    permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+    /// Exact-tool permission exceptions from [`PERMISSIONS_FILE`].
+    tool_permissions: BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
 }
 
 /// One anonymous backing file, with bounded in-memory file coordinates. Its last
@@ -237,6 +273,19 @@ impl PythonToolPackage {
     pub fn source_digest(&self) -> &str {
         &self.source_digest
     }
+    /// Source-default three-mode permission object authored in
+    /// [`PERMISSIONS_FILE`], when present.
+    #[must_use]
+    pub const fn permissions(&self) -> Option<crate::runtime::permission::ResourcePermissionSet> {
+        self.permissions
+    }
+    /// Exact-tool permission exceptions authored in [`PERMISSIONS_FILE`].
+    #[must_use]
+    pub fn tool_permissions(
+        &self,
+    ) -> &BTreeMap<String, crate::runtime::permission::ResourcePermissionSet> {
+        &self.tool_permissions
+    }
 }
 
 /// The discovery outcome of one folder below `.agents/tools/`: either the
@@ -294,7 +343,7 @@ pub(crate) fn discover_package(
         PythonToolError::InvalidPackage(message) => invalid(message),
         other => other,
     })?;
-    let files = collect_files(root, cancellation)?;
+    let mut files = collect_files(root, cancellation)?;
     // Membership is already complete. Reject malformed winning candidates
     // before creating capture storage or reading any supporting asset bytes.
     if !files.iter().any(|path| path == Path::new(SERVER_FILE)) {
@@ -310,6 +359,51 @@ pub(crate) fn discover_package(
             "the package has no {REQUIREMENTS_FILE} (required, even when empty)"
         )));
     }
+    // Resource permissions are package metadata, not frozen server source:
+    // parse them off the winning folder, then exclude the document from the
+    // code/dependency fingerprint and prepared env cache.
+    let (permissions, tool_permissions) = take_permissions_document(&mut files, root, &invalid)?;
+    let (source, source_digest, requirements) =
+        capture_package_source(root, &files, cancellation, requirements_error)?;
+    Ok(PythonToolPackage {
+        name: name.to_owned(),
+        root: root.to_path_buf(),
+        files,
+        source: Arc::new(source),
+        source_digest,
+        requirements,
+        permissions,
+        tool_permissions,
+    })
+}
+
+/// Parses optional [`PERMISSIONS_FILE`] and removes it from the frozen source set.
+fn take_permissions_document(
+    files: &mut Vec<PathBuf>,
+    root: &Path,
+    invalid: &impl Fn(String) -> PythonToolError,
+) -> Result<
+    (
+        Option<crate::runtime::permission::ResourcePermissionSet>,
+        BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
+    ),
+    PythonToolError,
+> {
+    if !files.iter().any(|path| path == Path::new(PERMISSIONS_FILE)) {
+        return Ok((None, BTreeMap::new()));
+    }
+    files.retain(|path| path != Path::new(PERMISSIONS_FILE));
+    parse_permissions_document(root, invalid)
+}
+
+/// Captures package source bytes into an anonymous backing file and parses
+/// `requirements.txt` declarations from the same stream.
+fn capture_package_source(
+    root: &Path,
+    files: &[PathBuf],
+    cancellation: &crate::runtime::CancellationSignal,
+    requirements_error: impl Fn(PythonToolError) -> PythonToolError,
+) -> Result<(PythonSource, String, Vec<String>), PythonToolError> {
     let mut source_file = tempfile::tempfile().map_err(io_error)?;
     let directory = crate::package_io::PackageDirectory::open(root).map_err(io_error)?;
     let mut hash = sha2::Sha256::new();
@@ -317,7 +411,7 @@ pub(crate) fn discover_package(
     let mut entries = BTreeMap::new();
     let mut offset = 0_u64;
     let mut requirements = requirements::Parser::default();
-    for path in &files {
+    for path in files {
         if path == Path::new(REQUIREMENTS_FILE) {
             requirements = requirements::Parser::new(offset);
         }
@@ -360,14 +454,7 @@ pub(crate) fn discover_package(
     let requirements = requirements
         .finish(&source.file)
         .map_err(requirements_error)?;
-    Ok(PythonToolPackage {
-        name: name.to_owned(),
-        root: root.to_path_buf(),
-        files,
-        source: Arc::new(source),
-        source_digest,
-        requirements,
-    })
+    Ok((source, source_digest, requirements))
 }
 
 impl PartialEq for PythonToolPackage {
@@ -377,9 +464,38 @@ impl PartialEq for PythonToolPackage {
             && self.files == other.files
             && self.source_digest == other.source_digest
             && self.requirements == other.requirements
+            && self.permissions == other.permissions
+            && self.tool_permissions == other.tool_permissions
     }
 }
 impl Eq for PythonToolPackage {}
+
+/// Reads and validates optional [`PERMISSIONS_FILE`] from the package root.
+fn parse_permissions_document(
+    root: &Path,
+    invalid: &impl Fn(String) -> PythonToolError,
+) -> Result<
+    (
+        Option<crate::runtime::permission::ResourcePermissionSet>,
+        BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
+    ),
+    PythonToolError,
+> {
+    let path = root.join(PERMISSIONS_FILE);
+    let bytes = crate::bounded_file::read_bounded(&path).map_err(|error| {
+        invalid(format!(
+            "{PERMISSIONS_FILE}: cannot read resource permissions: {error}"
+        ))
+    })?;
+    let document: ManagedPythonPermissionsDocument = crate::toml_authoring::parse(&bytes)
+        .map_err(|error| invalid(format!("{PERMISSIONS_FILE}: {error}")))?;
+    let tool_permissions = document
+        .tools
+        .into_iter()
+        .filter_map(|(name, tool)| tool.permissions.map(|permissions| (name, permissions)))
+        .collect();
+    Ok((document.permissions, tool_permissions))
+}
 
 /// Enumerate metadata through anchored directory handles, without opening links.
 fn collect_files(
@@ -998,7 +1114,10 @@ impl PythonToolStore {
         .await
         .map_err(io_error)??
         {
-            return Ok(prepared);
+            // Env cache is code/dependency only; permissions come from the
+            // current winning resource package, never from the fingerprint
+            // directory itself.
+            return Ok(with_package_permissions(prepared, package));
         }
         let key = fingerprint.clone();
         let (state, owner) = {
@@ -1059,20 +1178,35 @@ impl PythonToolStore {
         }
         let result = state.wait().await;
         crate::package_io::check_cancelled(cancellation).map_err(io_error)?;
-        result
+        Ok(with_package_permissions(result?, package))
     }
 }
 
-/// One prepared managed package: the fingerprint-keyed immutable state the
-/// synthesized MCP binding launches.
+/// Attaches the winning package's authored permissions onto a prepared env
+/// handle. The fingerprint-keyed store never owns these objects.
+fn with_package_permissions(
+    mut prepared: PreparedPythonPackage,
+    package: &PythonToolPackage,
+) -> PreparedPythonPackage {
+    prepared.permissions = package.permissions;
+    prepared.tool_permissions = package.tool_permissions.clone();
+    prepared
+}
+
+/// One prepared managed package: the fingerprint-keyed immutable env state
+/// plus resource permissions frozen from the winning package at prepare time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedPythonPackage {
     /// The preparation fingerprint of this state.
     pub fingerprint: String,
     /// The state directory (`packages/<fingerprint>/`).
     pub state_dir: PathBuf,
-    /// Optional MCP permission object propagated into the synthesized binding.
+    /// Source-default MCP permission object propagated into the synthesized
+    /// binding. Captured from the package resource, not from the env cache.
     pub permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+    /// Exact-tool permission exceptions propagated into the synthesized
+    /// binding. Captured from the package resource, not from the env cache.
+    pub tool_permissions: BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
 }
 
 impl PreparedPythonPackage {
@@ -1119,7 +1253,7 @@ impl PreparedPythonPackage {
             },
             policy: ToolInvocationPolicy::default(),
             permissions: self.permissions,
-            tool_permissions: std::collections::BTreeMap::new(),
+            tool_permissions: self.tool_permissions.clone(),
         }
     }
 }
@@ -1260,10 +1394,13 @@ fn read_prepared_state(
             state_dir.display()
         )));
     }
+    // Permissions stay unset here: the fingerprint directory is env-only.
+    // `ensure_prepared` freezes them from the current package afterward.
     Ok(Some(PreparedPythonPackage {
         fingerprint: fingerprint.to_owned(),
         state_dir: state_dir.to_path_buf(),
         permissions: None,
+        tool_permissions: BTreeMap::new(),
     }))
 }
 
@@ -1430,10 +1567,13 @@ async fn materialize_package(
                 .ok_or_else(|| PythonToolError::Storage("Python staging did not materialize".into()))?;
             crate::package_io::check_cancelled(&cancellation).map_err(io_error)?;
             match std::fs::rename(&staging, &destination) {
+                // Env publication is code/dependency only; permissions are
+                // attached by `ensure_prepared` from the winning package.
                 Ok(()) => Ok(PreparedPythonPackage {
                     fingerprint: fingerprint.clone(),
                     state_dir: destination.clone(),
                     permissions: None,
+                    tool_permissions: BTreeMap::new(),
                 }),
                 Err(_) if destination.exists() => read_prepared_state(&destination, &package, &fingerprint, &python_identity, &uv_identity, &cancellation)?
                     .ok_or_else(|| PythonToolError::Storage("concurrent Python publication disappeared".into())),
@@ -2210,6 +2350,7 @@ mod tests {
             fingerprint: "sha256:abc".to_owned(),
             state_dir: PathBuf::from("/state/sha256:abc"),
             permissions: None,
+            tool_permissions: BTreeMap::new(),
         };
         let binding = prepared.server_binding();
         let McpTransportConfig::Stdio {
@@ -2257,6 +2398,206 @@ mod tests {
             Some("1")
         );
         assert_eq!(binding.policy, ToolInvocationPolicy::default());
+        assert_eq!(binding.permissions, None);
+        assert!(binding.tool_permissions.is_empty());
+    }
+
+    fn deny_ask_permissions() -> crate::runtime::permission::ResourcePermissionSet {
+        use crate::runtime::permission::{ResourcePermissionSet, ResourcePermissionValue};
+        ResourcePermissionSet {
+            plan: ResourcePermissionValue::Deny,
+            automatic: ResourcePermissionValue::Ask,
+            full_access: ResourcePermissionValue::Ask,
+        }
+    }
+
+    fn deny_all_permissions() -> crate::runtime::permission::ResourcePermissionSet {
+        use crate::runtime::permission::{ResourcePermissionSet, ResourcePermissionValue};
+        ResourcePermissionSet {
+            plan: ResourcePermissionValue::Deny,
+            automatic: ResourcePermissionValue::Deny,
+            full_access: ResourcePermissionValue::Deny,
+        }
+    }
+
+    #[test]
+    fn discovery_captures_permissions_toml_as_package_metadata() {
+        let directory = tempfile::tempdir().expect("workspace");
+        let root = directory.path().join(".agents/tools/demo");
+        std::fs::create_dir_all(&root).unwrap();
+        for (relative, bytes) in &valid_package_files() {
+            std::fs::write(root.join(relative), bytes).unwrap();
+        }
+        std::fs::write(
+            root.join(PERMISSIONS_FILE),
+            r#"
+[permissions]
+plan = "deny"
+automatic = "ask"
+full_access = "ask"
+
+[tools.risky]
+permissions = { plan = "deny", automatic = "deny", full_access = "deny" }
+"#,
+        )
+        .unwrap();
+        let package = discover_package(
+            &root.canonicalize().unwrap(),
+            "demo",
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .expect("valid package with permissions");
+        assert_eq!(package.permissions(), Some(deny_ask_permissions()));
+        assert_eq!(
+            package.tool_permissions().get("risky"),
+            Some(&deny_all_permissions())
+        );
+        assert!(
+            !package
+                .files()
+                .iter()
+                .any(|path| path == Path::new(PERMISSIONS_FILE)),
+            "permissions.toml is resource metadata, not frozen source"
+        );
+    }
+
+    #[test]
+    fn authored_deny_ask_permissions_reach_the_synthesized_mcp_binding() {
+        let directory = tempfile::tempdir().expect("workspace");
+        let root = directory.path().join(".agents/tools/demo");
+        std::fs::create_dir_all(&root).unwrap();
+        for (relative, bytes) in &valid_package_files() {
+            std::fs::write(root.join(relative), bytes).unwrap();
+        }
+        std::fs::write(
+            root.join(PERMISSIONS_FILE),
+            r#"
+[permissions]
+plan = "deny"
+automatic = "ask"
+full_access = "ask"
+
+[tools.risky]
+permissions = { plan = "deny", automatic = "deny", full_access = "deny" }
+"#,
+        )
+        .unwrap();
+        let package = discover_package(
+            &root.canonicalize().unwrap(),
+            "demo",
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .unwrap();
+        let prepared = with_package_permissions(
+            PreparedPythonPackage {
+                fingerprint: "sha256:abc".to_owned(),
+                state_dir: PathBuf::from("/state/sha256:abc"),
+                permissions: None,
+                tool_permissions: BTreeMap::new(),
+            },
+            &package,
+        );
+        let binding = prepared.server_binding();
+        assert_eq!(binding.permissions, Some(deny_ask_permissions()));
+        assert_eq!(
+            binding.tool_permissions.get("risky"),
+            Some(&deny_all_permissions())
+        );
+    }
+
+    #[test]
+    fn permissions_toml_does_not_enter_the_env_fingerprint() {
+        let directory = tempfile::tempdir().expect("workspace");
+        let root = directory.path().join(".agents/tools/demo");
+        std::fs::create_dir_all(&root).unwrap();
+        for (relative, bytes) in &valid_package_files() {
+            std::fs::write(root.join(relative), bytes).unwrap();
+        }
+        let without = discover_package(
+            &root.canonicalize().unwrap(),
+            "demo",
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(PERMISSIONS_FILE),
+            r#"
+[permissions]
+plan = "deny"
+automatic = "ask"
+full_access = "ask"
+"#,
+        )
+        .unwrap();
+        let with = discover_package(
+            &root.canonicalize().unwrap(),
+            "demo",
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .unwrap();
+        assert_ne!(without.permissions(), with.permissions());
+        let python_identity = "/usr/bin/python3 (Python 3.12.13)";
+        let uv_identity = "/usr/bin/uv (uv 0.11.12)";
+        assert_eq!(
+            package_fingerprint(&without, python_identity, uv_identity),
+            package_fingerprint(&with, python_identity, uv_identity),
+            "permissions must not address the shared env cache"
+        );
+        assert_eq!(without.source_digest(), with.source_digest());
+    }
+
+    #[test]
+    fn cached_env_reuse_still_freezes_current_package_permissions() {
+        let directory = tempfile::tempdir().expect("store");
+        let mut package = package("demo");
+        package.permissions = Some(deny_ask_permissions());
+        package
+            .tool_permissions
+            .insert("risky".into(), deny_all_permissions());
+        let (_fingerprint, state_dir) = seed_prepared_state(directory.path(), &package, "py", "uv");
+        let reopened = read_prepared_state(
+            &state_dir,
+            &package,
+            &package_fingerprint(&package, "py", "uv"),
+            "py",
+            "uv",
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .unwrap()
+        .expect("cached env");
+        assert_eq!(reopened.permissions, None);
+        assert!(reopened.tool_permissions.is_empty());
+        let frozen = with_package_permissions(reopened, &package);
+        let binding = frozen.server_binding();
+        assert_eq!(binding.permissions, Some(deny_ask_permissions()));
+        assert_eq!(
+            binding.tool_permissions.get("risky"),
+            Some(&deny_all_permissions())
+        );
+    }
+
+    #[test]
+    fn malformed_permissions_toml_rejects_the_package() {
+        let directory = tempfile::tempdir().expect("workspace");
+        let root = directory.path().join(".agents/tools/demo");
+        std::fs::create_dir_all(&root).unwrap();
+        for (relative, bytes) in &valid_package_files() {
+            std::fs::write(root.join(relative), bytes).unwrap();
+        }
+        std::fs::write(root.join(PERMISSIONS_FILE), "permissions = true\n").unwrap();
+        let error = discover_package(
+            &root.canonicalize().unwrap(),
+            "demo",
+            &crate::runtime::CancellationSignal::new(),
+        )
+        .expect_err("malformed permissions reject the package");
+        let PythonToolError::InvalidPackage(message) = error else {
+            panic!("expected InvalidPackage, got {error:?}");
+        };
+        assert!(
+            message.contains(PERMISSIONS_FILE),
+            "diagnostic names the permissions document: {message}"
+        );
     }
 
     /// One fully valid on-disk prepared state of `package` under
@@ -2611,6 +2952,7 @@ mod tests {
             fingerprint: "build".into(),
             state_dir: PathBuf::from("prepared"),
             permissions: None,
+            tool_permissions: BTreeMap::new(),
         };
         owner.finish(Ok(prepared.clone()));
         assert!(first_wake.0.load(std::sync::atomic::Ordering::SeqCst));
