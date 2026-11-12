@@ -97,7 +97,7 @@ const OWNERS: &str = concat!(
     SELECT 1,sequence
     FROM events INDEXED BY events_kind_idx
     WHERE sequence<=?1 AND ",
-    crate::durable::sqlite::event_kind_key::sql!("json_extract(event_json,'$.event.type')"),
+    crate::durable::sqlite::event_kind_key::sql!("event_kind"),
     "=x'0002'",
     "
 ) "
@@ -127,7 +127,7 @@ fn location(
             "attempt_timed_out",
             "attempt_limit_exceeded",
         ] {
-            let fact:Option<(String,Option<String>)>=connection.query_row(concat!("SELECT event_id,json_extract(event_json,'$.event.message_id') FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND json_extract(event_json,'$.event.type')=?2 AND sequence<=?3 ORDER BY sequence LIMIT 1"),params![id.attempt_id.as_str(),kind,cut.journal],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+            let fact:Option<(String,Option<String>)>=connection.query_row(concat!("SELECT event_id,event_message_id FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND event_kind=?2 AND sequence<=?3 ORDER BY sequence LIMIT 1"),params![id.attempt_id.as_str(),kind,cut.journal],|row|Ok((row.get(0)?,row.get(1)?))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             if let Some((event_id, message_id)) = fact {
                 let (reference_kind, reference_id) = message_id
                     .as_deref()
@@ -178,15 +178,19 @@ pub(super) fn local_prompt_sql() -> String {
 fn adoption_prompt_sql(eligible: &str) -> String {
     format!(
         concat!(
-            concat!("WITH adoptions AS (
+            concat!(
+                "WITH adoptions AS (
          SELECT sequence,event_json FROM events INDEXED BY events_attempt_kind_idx
-         WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND json_extract(event_json,'$.event.type')='inbound_turn_adopted' AND sequence<=?3
+         WHERE attempt_key = ",
+                crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"),
+                " AND event_kind='inbound_turn_adopted' AND sequence<=?3
          UNION ALL
          SELECT sequence,event_json FROM events INDEXED BY events_attempt_kind_idx
-         WHERE attempt_key IS NULL AND json_extract(event_json,'$.event.type')='inbound_turn_adopted' AND sequence<?2
+         WHERE attempt_key IS NULL AND event_kind='inbound_turn_adopted' AND sequence<?2
            AND sequence>(SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx
-             WHERE sequence<?2 AND "),
-            crate::durable::sqlite::event_kind_key::sql!("json_extract(event_json,'$.event.type')"),
+             WHERE sequence<?2 AND "
+            ),
+            crate::durable::sqlite::event_kind_key::sql!("event_kind"),
             "=x'0002'",
             ")
         )
@@ -204,7 +208,7 @@ pub(super) fn attempt_prompt(
     attempt: &AttemptId,
     through: u64,
 ) -> Result<Option<MessageId>, ConversationStoreError> {
-    let started:Option<i64>=connection.query_row_cached(concat!("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND sequence<=?2 AND json_extract(event_json,'$.event.type')='attempt_started' ORDER BY sequence LIMIT 1"),params![attempt.as_str(),seq_to_i64(through)?],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
+    let started:Option<i64>=connection.query_row_cached(concat!("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND sequence<=?2 AND event_kind='attempt_started' ORDER BY sequence LIMIT 1"),params![attempt.as_str(),seq_to_i64(through)?],|row|row.get(0)).optional().map_err(|e|storage(e.to_string()))?;
     let Some(sequence) = started else {
         return Ok(None);
     };
@@ -279,7 +283,7 @@ fn local_previews(
     let settled: bool = connection
         .query_row(
             concat!("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND sequence<=?2
-             AND json_extract(event_json,'$.event.type') IN ('attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded'))"),
+             AND event_kind IN ('attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded'))"),
             params![attempt.as_str(), seq_to_i64(cut.journal)?],
             |row| row.get(0),
         )
@@ -289,9 +293,9 @@ fn local_previews(
     }
     let mut statement = connection
         .prepare_cached(
-            concat!("SELECT json_extract(event_json,'$.event.message_id') FROM events INDEXED BY events_attempt_kind_idx
-             WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND sequence<=?2 AND json_extract(event_json,'$.event.type')='assistant_message_committed'
-             AND EXISTS(SELECT 1 FROM transcript_entries h WHERE h.reference_kind='message' AND h.reference_id=json_extract(event_json,'$.event.message_id') AND json_extract(h.header_json,'$.has_text_preview')=1)
+            concat!("SELECT event_message_id FROM events INDEXED BY events_attempt_kind_idx
+             WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND sequence<=?2 AND event_kind='assistant_message_committed'
+             AND EXISTS(SELECT 1 FROM transcript_entries h WHERE h.reference_kind='message' AND h.reference_id=event_message_id AND json_extract(h.header_json,'$.has_text_preview')=1)
              ORDER BY sequence DESC LIMIT 1"),
         )
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("turn response: {error}")))?;
@@ -842,7 +846,7 @@ pub(super) fn lineage_turns(
 ) -> Result<Vec<crate::durable::reading::TurnReadingProvenance>, ConversationStoreError> {
     use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
     let mut turns = inherited_turns(connection)?;
-    let mut statement = connection.prepare("SELECT event_json,sequence FROM events WHERE sequence<=?1 AND json_extract(event_json,'$.event.type')='attempt_started' ORDER BY sequence").map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let mut statement = connection.prepare("SELECT event_json,sequence FROM events WHERE sequence<=?1 AND event_kind='attempt_started' ORDER BY sequence").map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let starts = statement
         .query_map([seq_to_i64(through)?], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))

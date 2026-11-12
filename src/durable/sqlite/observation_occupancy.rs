@@ -204,10 +204,10 @@ pub(super) fn read(
                 .query_row_cached(
                     "SELECT sequence,observation_occupancy
                      FROM events INDEXED BY events_context_reading_idx
-                     WHERE json_extract(event_json,'$.event.type')=?1
-                       AND (json_extract(event_json,'$.event.type')='compaction_completed'
+                     WHERE event_kind=?1
+                       AND (event_kind='compaction_completed'
                             OR (COALESCE(json_type(event_json,'$.event.usage.input_tokens'),'null')!='null'
-                                AND json_extract(event_json,'$.event.owner.type')='agent'))=1
+                                AND event_owner_kind='agent'))=1
                        AND sequence<=?2
                      ORDER BY sequence DESC LIMIT 1",
                     params![kind, through],
@@ -229,10 +229,10 @@ pub(super) fn read(
                           AND o.terminal_kind=?3 AND o.attempt_id=e.attempt_id AND o.turn_id=e.turn_id
                           AND o.request_id='request:' || octet_length(o.attempt_id) || ':' || o.attempt_id || ':' || octet_length(o.turn_id) || ':' || o.turn_id || ':' || o.retry_number)
                  FROM events e INDEXED BY events_context_reading_idx
-                 WHERE json_extract(e.event_json,'$.event.type')=?1
-                   AND (json_extract(e.event_json,'$.event.type')='compaction_completed'
+                 WHERE e.event_kind=?1
+                   AND (e.event_kind='compaction_completed'
                         OR (COALESCE(json_type(e.event_json,'$.event.usage.input_tokens'),'null')!='null'
-                            AND json_extract(e.event_json,'$.event.owner.type')='agent'))=1
+                            AND e.event_owner_kind='agent'))=1
                    AND e.sequence<=?2 ORDER BY e.sequence DESC LIMIT 1",
                 params![kind, through, terminal_kind],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),

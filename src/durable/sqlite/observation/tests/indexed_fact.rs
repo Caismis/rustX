@@ -260,16 +260,12 @@ mod scale {
         assert_eq!(execution_cost(&connection, &message(cut)).0, 1);
         for predicate in [
             concat!(
-                crate::durable::sqlite::event_kind_key::sql!(
-                    "json_extract(event_json, '$.event.type')"
-                ),
+                crate::durable::sqlite::event_kind_key::sql!("event_kind"),
                 " = x'0005' AND json_type(event_json, '$.event.usage') = 'object'"
             ),
             concat!(
-                crate::durable::sqlite::event_kind_key::sql!(
-                    "json_extract(event_json, '$.event.type')"
-                ),
-                " = x'0006' AND json_extract(event_json, '$.event.message_id') = 'target'"
+                crate::durable::sqlite::event_kind_key::sql!("event_kind"),
+                " = x'0006' AND event_message_id = 'target'"
             ),
         ] {
             let mut statement = connection.prepare(&format!("SELECT event_json FROM events INDEXED BY events_kind_idx WHERE {predicate} ORDER BY sequence DESC LIMIT 1")).unwrap();
@@ -329,7 +325,7 @@ pub(super) fn attempt_lookup_cost(connection: &Connection, id: &str, through: u6
             |row| row.get(3),
         )
         .unwrap();
-    assert!(plan.contains("SEARCH events USING INDEX events_message_id_kind_idx (<expr>=? AND <expr>=? AND rowid<?)"), "{plan}");
+    assert!(plan.contains("SEARCH events USING INDEX events_message_id_kind_idx (event_message_id=? AND event_kind=? AND rowid<?)"), "{plan}");
     println!("{plan}");
     let mut statement = connection.prepare(TRANSCRIPT_ATTEMPTS_SQL).unwrap();
     let results = statement

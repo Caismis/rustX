@@ -1993,7 +1993,7 @@ fn n1_header_work_is_bounded_by_the_historical_page_not_future_timeline() {
         "one page has only constant frontier/header work"
     );
     let plan:String = store.lock().unwrap().query_row(
-        concat!("EXPLAIN QUERY PLAN SELECT event_json FROM events INDEXED BY events_kind_idx WHERE ",crate::durable::sqlite::event_kind_key::sql!("json_extract(event_json,'$.event.type')"),"='compaction_completed'"," AND sequence<=2 ORDER BY sequence DESC LIMIT 1"),[],|r|r.get(3),
+        concat!("EXPLAIN QUERY PLAN SELECT event_json FROM events INDEXED BY events_kind_idx WHERE ",crate::durable::sqlite::event_kind_key::sql!("event_kind"),"='compaction_completed'"," AND sequence<=2 ORDER BY sequence DESC LIMIT 1"),[],|r|r.get(3),
     ).unwrap();
     assert!(plan.contains("SEARCH") && plan.contains("events_kind_idx"));
 }

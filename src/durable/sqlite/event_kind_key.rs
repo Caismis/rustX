@@ -28,7 +28,7 @@ macro_rules! sql {
 }
 pub(super) use sql;
 
-pub(super) const NATIVE: &str = sql!("json_extract(event_json, '$.event.type')");
+pub(super) const NATIVE: &str = sql!("event_kind");
 pub(super) const OBSERVATION: &str = sql!("observation_kind");
 
 pub(super) fn parameter(kind: &str) -> Value {

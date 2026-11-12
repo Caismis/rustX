@@ -540,8 +540,8 @@ fn append_message_ledger_with_capture(
                     u32::try_from(index).map_err(|_| storage("Tool block index overflow"))?;
                 transaction
                     .execute_cached(
-                        "INSERT INTO canonical_tool_calls(assistant_message_id,block_index,call_id,tool_id,observation_ledger,observation_call_id,observation_tool_id,observation_tool_ordinal,observation_name)
-                         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                        "INSERT INTO canonical_tool_calls(assistant_message_id,block_index,call_id,tool_id,observation_ledger,observation_call_id,observation_tool_id,observation_tool_ordinal,observation_name,assistant_ledger_position)
+                         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?5)",
                         params![assistant.id.as_str(), block_index, call.id.as_str(), call.tool_id.as_str(),position,(call.id.as_str().len()<=256).then_some(call.id.as_str()),(call.tool_id.as_str().len()<=256).then_some(call.tool_id.as_str()),tool_ordinal, observation_tools::name_preview(&call.name)],
                     )
                     .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("canonical Tool occurrence: {error}")))?;

@@ -83,18 +83,18 @@ fn report(tool: bool, phases: &BTreeMap<(&'static str, String), PhaseWork>) {
 fn warmed_turn_write_work_is_fixed() {
     let expected = [
         TurnWork {
-            calls: 634,
+            calls: 621,
             prepares: 18,
-            steps: 21_536,
+            steps: 20_413,
             commits: 7,
             wal_frames: 258,
         },
         TurnWork {
-            calls: 1480,
+            calls: 1392,
             prepares: 38,
-            steps: 48_503,
+            steps: 45_266,
             commits: 13,
-            wal_frames: 552,
+            wal_frames: 553,
         },
     ];
     let actual = [false, true].map(|tool| {

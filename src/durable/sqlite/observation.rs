@@ -902,7 +902,7 @@ fn latest_event(
             concat!(
                 "SELECT sequence,observation_json,observation_witness FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ",
                 crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"),
-                " AND json_extract(event_json,'$.event.type')=?2 AND sequence<=?3 AND sequence<?4 ORDER BY sequence DESC LIMIT 1"
+                " AND event_kind=?2 AND sequence<=?3 AND sequence<?4 ORDER BY sequence DESC LIMIT 1"
             ),
             vec![
                 rusqlite::types::Value::Text(attempt.to_string()),
@@ -915,9 +915,7 @@ fn latest_event(
         (
             concat!(
                 "SELECT sequence,observation_json,observation_witness FROM events INDEXED BY events_kind_idx WHERE ",
-                crate::durable::sqlite::event_kind_key::sql!(
-                    "json_extract(event_json,'$.event.type')"
-                ),
+                crate::durable::sqlite::event_kind_key::sql!("event_kind"),
                 "=?1",
                 " AND sequence<=?2 AND sequence<?3 ORDER BY sequence DESC LIMIT 1"
             ),

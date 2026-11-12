@@ -101,7 +101,7 @@ fn process_event(
         previous
     } else {
         let started: Option<(u64, String)> = connection.query_row_cached(
-            concat!("SELECT sequence,event_timestamp FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1"),
+            concat!("SELECT sequence,event_timestamp FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND event_kind='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1"),
             params![attempt.as_str(), event.sequence], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         crate::durable::observation::MemberProcessHeader {
@@ -352,7 +352,7 @@ pub(super) fn message_members(
         let bytes = bytes.ok_or_else(|| storage("inherited member header unavailable"))?;
         return decode(&bytes).map(Some);
     }
-    let attempt:Option<Option<String>>=connection.query_row("SELECT attempt_id FROM events INDEXED BY events_message_id_kind_idx WHERE json_extract(event_json,'$.event.message_id')=?1 AND json_extract(event_json,'$.event.type')='assistant_message_committed' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![message_id.as_str(),through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let attempt:Option<Option<String>>=connection.query_row("SELECT attempt_id FROM events INDEXED BY events_message_id_kind_idx WHERE event_message_id=?1 AND event_kind='assistant_message_committed' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",params![message_id.as_str(),through],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     attempt
         .flatten()
         .map(|attempt| {

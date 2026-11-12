@@ -38,8 +38,7 @@ pub(super) fn install_cache(connection: &Connection) -> Result<(), ConversationS
     connection.execute_batch("CREATE TEMP TABLE IF NOT EXISTS request_source_page_memo(stamp INTEGER PRIMARY KEY,hash BLOB NOT NULL UNIQUE,page_id INTEGER NOT NULL)")
         .map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))
 }
-/// Marks `reference` most recently used. Replacing an existing hash keeps the
-/// memo size, so only a newly remembered page can exceed the bound.
+/// Refresh the bounded transaction-owned hint, never its immutable page bytes.
 fn remember(
     connection: &Connection,
     reference: BlobRef,
@@ -92,17 +91,23 @@ pub(super) fn store_blob(
         return Err(storage("fragment metadata exceeds bound"));
     }
     let hash: Hash = Sha256::digest(bytes).into();
-    let cached: Option<u64> = connection
+    let cached: Option<(u64, Option<Vec<u8>>)> = connection
         .query_row_cached(
-            "SELECT page_id FROM request_source_page_memo WHERE hash=?1",
+            "SELECT m.page_id,CASE WHEN typeof(p.bytes)='blob' AND length(p.bytes)<=65536 THEN p.bytes END
+             FROM request_source_page_memo m LEFT JOIN request_source_pages p ON p.id=m.page_id AND p.hash=m.hash WHERE m.hash=?1",
             [hash.as_slice()],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?,row.get(1)?)),
         )
         .optional()
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
-    if let Some(id) = cached {
+    if let Some((id, current)) = cached {
         let reference = BlobRef { id, hash };
-        load_blob_reusing(connection, reference, Some(bytes))?;
+        let current = current.ok_or_else(|| storage("original fragment metadata unavailable"))?;
+        #[cfg(test)]
+        super::record_index(current.len());
+        if current != bytes && Hash::from(Sha256::digest(&current)) != hash {
+            return Err(storage("original fragment metadata digest differs"));
+        }
         remember(connection, reference, true)?;
         return Ok(reference);
     }

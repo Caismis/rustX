@@ -26,8 +26,8 @@ pub(super) fn has_call_journal_fact_through_tx(
         .query_row(
             "SELECT EXISTS(
                SELECT 1 FROM events INDEXED BY events_auxiliary_call_id_kind_idx
-               WHERE json_extract(event_json,'$.event.call_id')=?1
-                 AND json_extract(event_json,'$.event.type') IN
+               WHERE event_call_id=?1
+                 AND event_kind IN
                      ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')
                  AND sequence<=?2
              )",
@@ -53,7 +53,7 @@ pub(super) fn has_request_journal_fact_through_tx(
         .query_row(
             "SELECT EXISTS(
                SELECT 1 FROM events INDEXED BY events_request_id_kind_idx
-               WHERE json_extract(event_json,'$.event.request_id')=?1
+               WHERE event_request_id=?1
                  AND sequence<=?2
              )",
             params![request_id.as_str(), seq_to_i64(through)?],
@@ -70,8 +70,8 @@ pub(super) fn has_request_terminal_journal_tx(
         .query_row(
             "SELECT EXISTS(
                SELECT 1 FROM events INDEXED BY events_request_id_kind_idx
-               WHERE json_extract(event_json,'$.event.request_id')=?1
-                 AND json_extract(event_json,'$.event.type') IN
+               WHERE event_request_id=?1
+                 AND event_kind IN
                      ('model_request_completed','model_request_failed')
              )",
             [request_id.as_str()],
@@ -88,8 +88,8 @@ pub(super) fn has_call_settlement_journal_tx(
         .query_row(
             "SELECT EXISTS(
                SELECT 1 FROM events INDEXED BY events_auxiliary_call_id_kind_idx
-               WHERE json_extract(event_json,'$.event.call_id')=?1
-                 AND json_extract(event_json,'$.event.type')='auxiliary_call_settled'
+               WHERE event_call_id=?1
+                 AND event_kind='auxiliary_call_settled'
              )",
             [call_id.as_str()],
             |row| row.get(0),
@@ -178,8 +178,8 @@ pub(super) fn call_audit_at_tx(
     let settlement_facts = connection
         .prepare_cached(
             "SELECT sequence FROM events INDEXED BY events_auxiliary_call_id_kind_idx
-         WHERE json_extract(event_json,'$.event.call_id')=?1
-           AND json_extract(event_json,'$.event.type')='auxiliary_call_settled'
+         WHERE event_call_id=?1
+           AND event_kind='auxiliary_call_settled'
            AND sequence<=?2 ORDER BY sequence LIMIT 2",
         )
         .map_err(|error| sqlite_error(&error, error.to_string()))?
@@ -610,60 +610,60 @@ SELECT max(sequence) FROM (
     SELECT max(sequence) AS sequence
     FROM events INDEXED BY events_auxiliary_fact_type_idx
     WHERE sequence<=?1
-      AND json_extract(event_json,'$.event.type')='auxiliary_call_started'
+      AND event_kind='auxiliary_call_started'
       AND (
-          (json_extract(event_json,'$.event.type') IN
+          (event_kind IN
               ('model_request_started','model_request_completed','model_request_failed')
-           AND json_extract(event_json,'$.event.owner.type')='auxiliary')
-          OR json_extract(event_json,'$.event.type') IN
+           AND event_owner_kind='auxiliary')
+          OR event_kind IN
               ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')
       )
     UNION ALL
     SELECT max(sequence) AS sequence
     FROM events INDEXED BY events_auxiliary_fact_type_idx
     WHERE sequence<=?1
-      AND json_extract(event_json,'$.event.type')='model_request_started'
+      AND event_kind='model_request_started'
       AND (
-          (json_extract(event_json,'$.event.type') IN
+          (event_kind IN
               ('model_request_started','model_request_completed','model_request_failed')
-           AND json_extract(event_json,'$.event.owner.type')='auxiliary')
-          OR json_extract(event_json,'$.event.type') IN
+           AND event_owner_kind='auxiliary')
+          OR event_kind IN
               ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')
       )
     UNION ALL
     SELECT max(sequence) AS sequence
     FROM events INDEXED BY events_auxiliary_fact_type_idx
     WHERE sequence<=?1
-      AND json_extract(event_json,'$.event.type')='model_request_completed'
+      AND event_kind='model_request_completed'
       AND (
-          (json_extract(event_json,'$.event.type') IN
+          (event_kind IN
               ('model_request_started','model_request_completed','model_request_failed')
-           AND json_extract(event_json,'$.event.owner.type')='auxiliary')
-          OR json_extract(event_json,'$.event.type') IN
+           AND event_owner_kind='auxiliary')
+          OR event_kind IN
               ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')
       )
     UNION ALL
     SELECT max(sequence) AS sequence
     FROM events INDEXED BY events_auxiliary_fact_type_idx
     WHERE sequence<=?1
-      AND json_extract(event_json,'$.event.type')='model_request_failed'
+      AND event_kind='model_request_failed'
       AND (
-          (json_extract(event_json,'$.event.type') IN
+          (event_kind IN
               ('model_request_started','model_request_completed','model_request_failed')
-           AND json_extract(event_json,'$.event.owner.type')='auxiliary')
-          OR json_extract(event_json,'$.event.type') IN
+           AND event_owner_kind='auxiliary')
+          OR event_kind IN
               ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')
       )
     UNION ALL
     SELECT max(sequence) AS sequence
     FROM events INDEXED BY events_auxiliary_fact_type_idx
     WHERE sequence<=?1
-      AND json_extract(event_json,'$.event.type') IN ('auxiliary_call_settled','auxiliary_retry_scheduled')
+      AND event_kind IN ('auxiliary_call_settled','auxiliary_retry_scheduled')
       AND (
-          (json_extract(event_json,'$.event.type') IN
+          (event_kind IN
               ('model_request_started','model_request_completed','model_request_failed')
-           AND json_extract(event_json,'$.event.owner.type')='auxiliary')
-          OR json_extract(event_json,'$.event.type') IN
+           AND event_owner_kind='auxiliary')
+          OR event_kind IN
               ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')
       )
 )";

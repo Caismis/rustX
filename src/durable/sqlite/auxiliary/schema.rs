@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS request_owners (
 
 CREATE UNIQUE INDEX IF NOT EXISTS events_auxiliary_submission_idx
     ON events(json_extract(event_json,'$.event.business_source.identity.correlation'))
-    WHERE json_extract(event_json,'$.event.type')='auxiliary_call_started'
+    WHERE event_kind='auxiliary_call_started'
       AND json_extract(event_json,'$.event.business_source.kind')='submission';
 
 CREATE TABLE IF NOT EXISTS auxiliary_calls (
@@ -121,17 +121,17 @@ CREATE INDEX IF NOT EXISTS request_owners_source_idx
     ON request_owners(owner_kind,call_id,auxiliary_ordinal)
     WHERE owner_kind='auxiliary';
 CREATE INDEX IF NOT EXISTS events_auxiliary_call_id_kind_idx
-    ON events(json_extract(event_json,'$.event.call_id'),
-              json_extract(event_json,'$.event.type'))
-    WHERE json_extract(event_json,'$.event.call_id') IS NOT NULL;
+    ON events(event_call_id,
+              event_kind)
+    WHERE event_call_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS events_auxiliary_fact_type_idx
-    ON events(json_extract(event_json,'$.event.type'))
+    ON events(event_kind)
     WHERE (
-        json_extract(event_json,'$.event.type') IN
+        event_kind IN
             ('model_request_started','model_request_completed','model_request_failed')
-        AND json_extract(event_json,'$.event.owner.type')='auxiliary'
+        AND event_owner_kind='auxiliary'
     )
-    OR json_extract(event_json,'$.event.type') IN
+    OR event_kind IN
         ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled');
 "
 );
@@ -178,7 +178,7 @@ pub(super) const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
         unique: true,
         partial: true,
         columns: &[None],
-        definition: "CREATE UNIQUE INDEX events_auxiliary_submission_idx ON events(json_extract(event_json,'$.event.business_source.identity.correlation')) WHERE json_extract(event_json,'$.event.type')='auxiliary_call_started' AND json_extract(event_json,'$.event.business_source.kind')='submission'",
+        definition: "CREATE UNIQUE INDEX events_auxiliary_submission_idx ON events(json_extract(event_json,'$.event.business_source.identity.correlation')) WHERE event_kind='auxiliary_call_started' AND json_extract(event_json,'$.event.business_source.kind')='submission'",
     },
     AuxiliaryIndexShape {
         table: "auxiliary_title_calls",
@@ -257,16 +257,16 @@ pub(super) const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
         name: "events_auxiliary_call_id_kind_idx",
         unique: false,
         partial: true,
-        columns: &[None, None],
-        definition: "CREATE INDEX events_auxiliary_call_id_kind_idx ON events(json_extract(event_json,'$.event.call_id'),json_extract(event_json,'$.event.type')) WHERE json_extract(event_json,'$.event.call_id') IS NOT NULL",
+        columns: &[Some("event_call_id"), Some("event_kind")],
+        definition: "CREATE INDEX events_auxiliary_call_id_kind_idx ON events(event_call_id,event_kind) WHERE event_call_id IS NOT NULL",
     },
     AuxiliaryIndexShape {
         table: "events",
         name: "events_auxiliary_fact_type_idx",
         unique: false,
         partial: true,
-        columns: &[None],
-        definition: "CREATE INDEX events_auxiliary_fact_type_idx ON events(json_extract(event_json,'$.event.type')) WHERE (json_extract(event_json,'$.event.type') IN ('model_request_started','model_request_completed','model_request_failed') AND json_extract(event_json,'$.event.owner.type')='auxiliary') OR json_extract(event_json,'$.event.type') IN ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')",
+        columns: &[Some("event_kind")],
+        definition: "CREATE INDEX events_auxiliary_fact_type_idx ON events(event_kind) WHERE (event_kind IN ('model_request_started','model_request_completed','model_request_failed') AND event_owner_kind='auxiliary') OR event_kind IN ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')",
     },
 ];
 

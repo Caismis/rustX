@@ -484,7 +484,7 @@ fn request_settled(
         state.summary.reports += 1;
         crate::durable::response::add_usage(&mut state.summary.usage, usage);
     }
-    let start:Option<u64>=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_request_id_kind_idx WHERE json_extract(event_json,'$.event.request_id')=?1 AND json_extract(event_json,'$.event.type')='model_request_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![request_id.as_str(),event.sequence],|row|row.get(0))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let start:Option<u64>=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_request_id_kind_idx WHERE event_request_id=?1 AND event_kind='model_request_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1").and_then(|mut statement| statement.query_row(params![request_id.as_str(),event.sequence],|row|row.get(0))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if state.first_request_sequence.is_some() && state.first_request_sequence == start {
         state.first_ttft = generation.and_then(
             crate::model::generation_evidence::GenerationEvidence::time_to_first_output_ms,
