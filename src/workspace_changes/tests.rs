@@ -1,10 +1,12 @@
 use super::*;
 use std::fs;
+mod discovery;
 mod global_attributes;
 #[cfg(unix)]
 mod path_identity;
 mod raw;
 mod sparse;
+mod work;
 
 fn tempdir() -> tempfile::TempDir {
     // File tools pass resolved mutation paths. Keep fixtures in the same path
@@ -29,7 +31,7 @@ fn git(cwd: &Path, args: &[&str]) -> String {
 fn snapshot_paths(root: &Path, scratch: &Path, tree: &str) -> String {
     let output = std::process::Command::new("git")
         .current_dir(root)
-        .env("GIT_OBJECT_DIRECTORY", scratch.join("objects"))
+        .env("GIT_OBJECT_DIRECTORY", scratch.join("git/objects"))
         .env(
             "GIT_ALTERNATE_OBJECT_DIRECTORIES",
             root.join(".git/objects"),
@@ -71,7 +73,6 @@ fn start(cwd: &Path, store: &Arc<ChangesStore>, id: &str) -> Arc<ChangeRecording
         Arc::clone(store),
         CancellationSignal::new(),
     )
-    .unwrap()
 }
 
 #[tokio::test]
@@ -703,11 +704,8 @@ async fn review_supervised_git_treats_quoted_newline_paths_as_data() {
 }
 
 #[cfg(target_os = "linux")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn review_cancelling_a_snapshot_reaps_its_blocked_git_reader() {
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::time::Duration;
-
+#[tokio::test]
+async fn non_regular_config_includes_do_not_block_in_process_observation() {
     let dir = repository();
     let root = dir.path();
     let fifo = root.join(".git/held-config");
@@ -717,66 +715,15 @@ async fn review_cancelling_a_snapshot_reaps_its_blocked_git_reader() {
     )
     .unwrap();
     git(root, &["config", "include.path", fifo.to_str().unwrap()]);
-    let record = start(root, &Arc::default(), "cancel-git-reader");
-    let scratch = record.directory.get().unwrap().path().to_owned();
-    let _writer = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            match fs::OpenOptions::new()
-                .write(true)
-                .custom_flags(libc::O_NONBLOCK)
-                .open(&fifo)
-            {
-                Ok(writer) => break writer,
-                Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {}
-                Err(error) => panic!("open held Git configuration: {error}"),
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("Git must start reading its configuration");
-    // Keep the writer open without data or EOF while identifying the actual
-    // Git child. This blocks data reading, without invoking hooks or filters.
-    let pid = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            for entry in fs::read_dir("/proc").unwrap().flatten() {
-                let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
-                    continue;
-                };
-                if fs::read_link(entry.path().join("exe"))
-                    .ok()
-                    .and_then(|path| path.file_name().map(|name| name == "git"))
-                    != Some(true)
-                {
-                    continue;
-                }
-                if fs::read_dir(entry.path().join("fd")).is_ok_and(|fds| {
-                    fds.flatten()
-                        .any(|fd| fs::read_link(fd.path()).ok().as_ref() == Some(&fifo))
-                }) {
-                    return pid;
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the owned Git reader must hold the configuration FIFO");
-    assert!(
-        scratch.is_dir(),
-        "in-flight snapshot storage must remain owned"
-    );
-    tokio::time::timeout(Duration::from_secs(10), record.finish())
+    let store = Arc::default();
+    let record = start(root, &store, "config-fifo");
+    tokio::time::timeout(std::time::Duration::from_secs(10), record.before_tools())
         .await
-        .expect("an unused recording must not wait for its blocked Git read");
-    drop(record);
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while Path::new(&format!("/proc/{pid}")).exists() || scratch.exists() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("Git must be physically reaped and its snapshot storage reclaimed");
+        .unwrap();
+    assert!(record.baseline.lock().unwrap().is_some());
+    assert!(record.directory.get().is_none());
+    record.finish().await;
+    assert!(record.directory.get().is_none());
 }
 
 async fn ignored_existing_file_entering_git_preserves_before(force_add: bool) {
@@ -1081,13 +1028,18 @@ async fn aliased_temporary_root_inside_repository_never_snapshots_private_storag
     .unwrap();
     let index = fs::read(root.join(".git/index")).unwrap();
     let objects = git(root, &["count-objects", "-v"]);
-    let repo = Repository::locate(root, Arc::clone(&scratch), CancellationSignal::new())
-        .await
-        .unwrap()
-        .unwrap();
+    let repo = Repository::locate(
+        root,
+        Arc::new(OnceLock::from(Arc::clone(&scratch))),
+        CancellationSignal::new(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let before = repo.snapshot().await.unwrap();
     fs::write(root.join("tracked.txt"), "real user change\n").unwrap();
     let after = repo.snapshot().await.unwrap();
+    repo.materialize().await.unwrap();
     for tree in [&before, &after] {
         assert_eq!(
             snapshot_paths(root, scratch.path(), tree),
@@ -1122,11 +1074,16 @@ async fn interleaved_recorders_exclude_peer_storage_and_keep_temporary_parent_us
 
     let scratch_a = Arc::new(create_snapshot_directory(&temporary_root).unwrap());
     fs::write(scratch_a.path().join("private-a"), "private A\n").unwrap();
-    let a = Repository::locate(root, Arc::clone(&scratch_a), CancellationSignal::new())
-        .await
-        .unwrap()
-        .unwrap();
+    let a = Repository::locate(
+        root,
+        Arc::new(OnceLock::from(Arc::clone(&scratch_a))),
+        CancellationSignal::new(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let before = a.snapshot().await.unwrap();
+    a.materialize().await.unwrap();
     assert_eq!(
         snapshot_paths(root, scratch_a.path(), &before),
         expected_paths
@@ -1137,11 +1094,16 @@ async fn interleaved_recorders_exclude_peer_storage_and_keep_temporary_parent_us
     let scratch_b = Arc::new(create_snapshot_directory(&temporary_root).unwrap());
     let private_b = scratch_b.path().join("private-b");
     fs::write(&private_b, "private B\n").unwrap();
-    let b = Repository::locate(root, Arc::clone(&scratch_b), CancellationSignal::new())
-        .await
-        .unwrap()
-        .unwrap();
+    let b = Repository::locate(
+        root,
+        Arc::new(OnceLock::from(Arc::clone(&scratch_b))),
+        CancellationSignal::new(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let b_before = b.snapshot().await.unwrap();
+    b.materialize().await.unwrap();
     assert_eq!(
         snapshot_paths(root, scratch_b.path(), &b_before),
         expected_paths
@@ -1165,11 +1127,16 @@ async fn interleaved_recorders_exclude_peer_storage_and_keep_temporary_parent_us
     let objects = git(root, &["count-objects", "-v"]);
     assert_eq!(a.snapshot().await.unwrap(), before);
     let scratch_c = Arc::new(create_snapshot_directory(&temporary_root).unwrap());
-    let c = Repository::locate(root, Arc::clone(&scratch_c), CancellationSignal::new())
-        .await
-        .unwrap()
-        .unwrap();
+    let c = Repository::locate(
+        root,
+        Arc::new(OnceLock::from(Arc::clone(&scratch_c))),
+        CancellationSignal::new(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let c_before = c.snapshot().await.unwrap();
+    c.materialize().await.unwrap();
     assert_eq!(
         snapshot_paths(root, scratch_c.path(), &c_before),
         expected_paths
@@ -1325,7 +1292,7 @@ async fn repository_discovery_rechecks_markers_between_attempts() {
     first.finish().await;
     git(root, &["init", "-q"]);
     let second = start(root, &store, "initialized");
-    assert!(second.directory.get().is_some());
+    assert!(second.directory.get().is_none());
     second.before_tools().await;
     assert!(second.baseline.lock().unwrap().is_some());
     second.finish().await;
