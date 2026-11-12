@@ -1104,14 +1104,7 @@ describe("CommandDispatcher", () => {
   it("auxiliary set carries profile and overrides onto an explicit catalog model", async () => {
     const h = await harness();
     const command = h.dispatcher.submit("/model auxiliary set alpha/summary");
-    const catalog = await nextRequest(h, "session/models");
-    h.transport.respond(
-      catalog.id,
-      domainReceipt("model_catalog.models", [
-        catalogModel("alpha/model-a"),
-        catalogModel("alpha/summary"),
-      ]),
-    );
+    // Bounded native ID verification only — no first-page catalog membership probe.
     const read = await nextRequest(h, "session/model");
     const current = sessionModel("alpha/model-a");
     current.configured.auxiliary = {
@@ -1153,6 +1146,26 @@ describe("CommandDispatcher", () => {
     const outcome = await command;
     assert.equal(outcome.kind, "transient");
     if (outcome.kind === "transient") assert.match(outcome.text, /alpha\/summary/);
+    assert.equal(h.transport.log.count("session/models"), 0);
+  });
+
+  it("auxiliary set rejects an unbounded or empty native model identity without catalog reads", async () => {
+    const h = await harness();
+    for (const [command, pattern] of [
+      ["/model auxiliary set", /usage: \/model auxiliary/],
+      ["/model auxiliary set leading/", /not a valid native model identity/],
+      ["/model auxiliary set \/trailing", /not a valid native model identity/],
+      [`/model auxiliary set ${"a".repeat(257)}`, /not a valid native model identity/],
+    ] as const) {
+      const outcome = await h.dispatcher.submit(command);
+      assert.equal(outcome.kind, "transient");
+      if (outcome.kind === "transient") {
+        assert.equal(outcome.level, "error");
+        assert.match(outcome.text, pattern);
+      }
+      assert.equal(h.transport.log.count("session/models"), 0);
+      assert.equal(h.transport.log.count("session/setModel"), 0);
+    }
   });
 
   for (const [command, expectedProfile] of [

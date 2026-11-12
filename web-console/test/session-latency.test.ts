@@ -1,5 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { recoveredThreadStatusReads, supersededHistoryReads, type RequestTiming } from './session-latency';
+import { nodeLineageIdentity, recoveredThreadStatusReads, supersededHistoryReads, type RequestTiming } from './session-latency';
+
+describe('node lineage identity narrowing', () => {
+  it('records only complete string identities', () => {
+    expect(nodeLineageIdentity('session-a', { id: 'node-a', conversation_id: 'conversation-a' })).toEqual({
+      conversationId: 'conversation-a',
+      sessionId: 'session-a',
+      nodeId: 'node-a',
+    });
+  });
+
+  it.each([
+    [undefined, { id: 'node-a', conversation_id: 'conversation-a' }],
+    ['', { id: 'node-a', conversation_id: 'conversation-a' }],
+    ['session-a', undefined],
+    ['session-a', {}],
+    ['session-a', { id: 'node-a' }],
+    ['session-a', { conversation_id: 'conversation-a' }],
+    ['session-a', { id: '', conversation_id: 'conversation-a' }],
+    ['session-a', { id: 'node-a', conversation_id: '' }],
+  ] as const)('rejects malformed or missing identity %#', (sessionId, node) => {
+    expect(nodeLineageIdentity(sessionId, node)).toBeUndefined();
+  });
+});
+
 
 const target = JSON.stringify(['session-a', 'conversation-a', 'runtime-1', 'attachment-1']);
 const otherTarget = JSON.stringify(['session-a', 'conversation-a', 'runtime-1', 'attachment-2']);

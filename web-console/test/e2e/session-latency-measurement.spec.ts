@@ -56,8 +56,14 @@ async function observeLatency(page: Page) {
             const session = reply.result.session;
             if (session?.id && session.active_node && session.active_conversation_id) lineage.set(session.active_conversation_id, { sessionId: session.id, nodeId: session.active_node });
           }
-          if (row?.method === 'session/node' && row.sessionId && reply.result?.type === 'node' && reply.result.node) {
-            lineage.set(reply.result.node.conversation_id, { sessionId: row.sessionId, nodeId: reply.result.node.id });
+          if (row?.method === 'session/node' && reply.result?.type === 'node' && reply.result.node) {
+            const node = reply.result.node;
+            // Optional wire fields must be narrowed before a string-keyed map write.
+            if (typeof row.sessionId === 'string' && row.sessionId
+              && typeof node.id === 'string' && node.id
+              && typeof node.conversation_id === 'string' && node.conversation_id) {
+              lineage.set(node.conversation_id, { sessionId: row.sessionId, nodeId: node.id });
+            }
           }
           if (row) {
             row.end = performance.now(); row.bytes = event.data.length;

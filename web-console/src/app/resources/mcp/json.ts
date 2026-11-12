@@ -1,5 +1,19 @@
 import type { McpWrite } from '../../../../../protocol/app-server/v78';
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+const PERMISSION_VALUES = new Set(['default', 'allow', 'ask', 'deny']);
+
+/** Complete three-mode permission object: all modes required, native enum only. */
+function parseResourcePermissions(value: unknown, label: string): void {
+  if (!record(value)) throw new Error(`${label} must be an object`);
+  for (const mode of ['plan', 'automatic', 'full_access'] as const) {
+    if (!Object.hasOwn(value, mode)) throw new Error(`${label} must include plan, automatic, and full_access`);
+    if (!PERMISSION_VALUES.has(value[mode] as string)) {
+      throw new Error('permission values must be default, allow, ask, or deny');
+    }
+  }
+  for (const key of Object.keys(value)) if (!['plan', 'automatic', 'full_access'].includes(key)) throw new Error('Unsupported field');
+}
+
 /** Import only native-supported fields. Never silently drop foreign options. */
 export function parseMcpJson(text: string): Record<string, McpWrite> {
   let parsed: unknown;
@@ -16,26 +30,16 @@ export function parseMcpJson(text: string): Record<string, McpWrite> {
     for (const key of ['env', 'headers']) if (definition[key] != null && (!record(definition[key]) || Object.keys(definition[key]).length)) throw new Error('Literal credentials are not supported; use environment references');
     const keys = ['type','url','command','args','cwd','env','headers','sensitive_env','sensitive_headers','permissions','tools'];
     for (const key of Object.keys(definition)) if (!keys.includes(key)) throw new Error('Unsupported field');
-    if (definition.permissions != null) {
-      if (!record(definition.permissions)) throw new Error('permissions must be an object');
-      for (const mode of ['plan', 'automatic', 'full_access'] as const) {
-        if (!Object.hasOwn(definition.permissions, mode)) throw new Error('permissions must include plan, automatic, and full_access');
-        const value = definition.permissions[mode];
-        if (value !== 'deny' && value !== 'ask' && value !== 'allow') throw new Error('permission values must be deny, ask, or allow');
-      }
-      for (const key of Object.keys(definition.permissions)) if (!['plan','automatic','full_access'].includes(key)) throw new Error('Unsupported field');
-    }
+    // Omitted or null permissions inherit native defaults; an authored object
+    // must supply the complete three-mode ResourcePermissionSet, including default.
+    if (definition.permissions != null) parseResourcePermissions(definition.permissions, 'permissions');
     if (definition.tools != null) {
       if (!record(definition.tools)) throw new Error('tools must be an object');
       for (const tool of Object.values(definition.tools)) {
-        if (!record(tool) || !record(tool.permissions)) throw new Error('each tool permission must include permissions');
-        for (const mode of ['plan', 'automatic', 'full_access'] as const) {
-          if (!Object.hasOwn(tool.permissions, mode)) throw new Error('tool permissions must include plan, automatic, and full_access');
-          const value = tool.permissions[mode];
-          if (value !== 'deny' && value !== 'ask' && value !== 'allow') throw new Error('permission values must be deny, ask, or allow');
-        }
+        if (!record(tool)) throw new Error('each tool must be an object');
         for (const key of Object.keys(tool)) if (key !== 'permissions') throw new Error('Unsupported field');
-        for (const key of Object.keys(tool.permissions)) if (!['plan','automatic','full_access'].includes(key)) throw new Error('Unsupported field');
+        // Exact-tool permissions are optional/nullable; `{}` and `{permissions:null}` are legal.
+        if (tool.permissions != null) parseResourcePermissions(tool.permissions, 'tool permissions');
       }
     }
     if (definition.type != null && definition.type !== 'http' && definition.type !== 'stdio') throw new Error('Unsupported transport');

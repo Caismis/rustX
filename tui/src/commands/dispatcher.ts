@@ -43,6 +43,12 @@ import type { CatalogModelView, SessionModelConfig, SessionSettings, SessionUser
 const AUXILIARY_USAGE =
   "usage: /model auxiliary clear | follow | set <provider/model> | profile lowest | profile model_default | profile set <id> | profile clear";
 
+/** Bounded native model identity (ModelId): nonempty segments, no whitespace, ≤256 UTF-8 bytes. */
+function isBoundedNativeModelId(value: string): boolean {
+  if (!value || value.split("/").some((segment) => segment.length === 0) || /\s/.test(value)) return false;
+  return new TextEncoder().encode(value).length <= 256;
+}
+
 export interface DispatcherContext {
   /** The connection and its durable Session catalog. */
   host: AppServerHost;
@@ -767,14 +773,11 @@ export class CommandDispatcher {
       if (verb === "set") {
         if (parts.length !== 3) return transient("error", AUXILIARY_USAGE);
         const modelId = parts[2]!;
-        const catalog = await session.modelCatalog();
-        const models = catalog.models ?? [];
-        if (!models.some((model) => model.model === modelId)) {
-          const known = models.map((model) => model.model).join(", ");
-          return transient(
-            "error",
-            `${modelId} is not in the runtime's catalog. Selectable: ${known || "none"}`,
-          );
+        // Never treat the first catalog page as the full catalog. Verify the
+        // bounded native identity here; native model_set remains the authority
+        // for whether that identity is currently selectable.
+        if (!isBoundedNativeModelId(modelId)) {
+          return transient("error", `${modelId} is not a valid native model identity.`);
         }
         const current = await session.modelGet();
         const prev = current.configured.auxiliary;

@@ -114,15 +114,25 @@ export async function mcpStartupGate(workspace: string, signal: AbortSignal, too
   };
 }
 
+/** Model-facing startup_echo schema after elevation metadata wrap (`$defs.rustx_business`). */
 export const startupToolSchema = {
   type: 'object',
   properties: {
+    message: { type: 'string' },
     elevation_reason: {
+      type: ['string', 'null'],
       description:
         'Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. This is a reason only — never approval evidence — and it never reaches the tool\'s business executor.',
-      type: ['string', 'null'],
     },
-    message: { type: 'string' },
   },
   required: ['message'],
+  $defs: {
+    rustx_business: {
+      type: 'object',
+      properties: {
+        message: { type: 'string' },
+      },
+      required: ['message'],
+    },
+  },
 };

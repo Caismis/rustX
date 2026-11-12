@@ -16,6 +16,17 @@ export interface RequestTiming {
   target?: string;
 }
 
+/** Narrow optional node identities before writing a string-keyed lineage map. */
+export function nodeLineageIdentity(
+  sessionId: string | undefined,
+  node: { id?: string; conversation_id?: string } | undefined,
+): { conversationId: string; sessionId: string; nodeId: string } | undefined {
+  if (typeof sessionId !== 'string' || !sessionId || !node) return undefined;
+  if (typeof node.id !== 'string' || !node.id) return undefined;
+  if (typeof node.conversation_id !== 'string' || !node.conversation_id) return undefined;
+  return { conversationId: node.conversation_id, sessionId, nodeId: node.id };
+}
+
 type CompletedTiming = RequestTiming & { end: number };
 
 function completed(row: RequestTiming): row is CompletedTiming {
