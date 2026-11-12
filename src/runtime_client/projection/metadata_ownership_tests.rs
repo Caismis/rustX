@@ -1127,3 +1127,34 @@ fn cursor_relative_publication_round_trips_without_reencoding_unchanged_lists() 
     wrong.cursor = RuntimeClientCursor::new(wrong.cursor.get() + 1);
     assert!(crate::runtime_client::delta::expand_event(&wrong, &incremental.event).is_none());
 }
+
+#[test]
+fn editing_overhead_cannot_reject_an_admitted_complete_carrier() {
+    use super::super::publication::{PublicationBasis, incremental_event, meter_candidate};
+    let checkpoint = empty_draft().seed.checkpoint_candidate().unwrap();
+    let frontiers = (0..6000)
+        .map(|index| crate::observation::metadata::MetadataFragment::from(
+            crate::observation::cut::CollectionFrontier {
+                domain: format!("d{index}"), revision: 0, total: 0, loaded: 0, next_offset: None,
+            },
+        ))
+        .collect::<Vec<_>>();
+    let base = PublicationBasis {
+        cursor: checkpoint.cursor,
+        metadata: ProjectionMetadata {
+            read_cut: checkpoint.read_cut, content: Arc::default(), collections: Arc::new(frontiers),
+        },
+        transcript: None, descriptors: None, checkpoint: None, weight: 0, weights: [0; 3],
+    };
+    let mut next = base.metadata.clone();
+    next.read_cut.revision += 1;
+    for frontier in Arc::make_mut(&mut next.collections) {
+        frontier.revision = 1; frontier.total = 1; frontier.loaded = 1; frontier.next_offset = Some(1);
+    }
+    let complete = RuntimeClientEvent::ProjectionTransition {events: vec![], metadata: next};
+    let mut edited = incremental_event(complete.clone(), &base, 0);
+    assert!(crate::observation::bounded::bounded_structural_len(&edited, CHECKPOINT_TARGET_BYTES).is_none());
+    let expected = encoded_event_bytes(&complete, CHECKPOINT_TARGET_BYTES).unwrap();
+    assert_eq!(meter_candidate(&mut edited, &complete, None, None), Some(expected.len()));
+    assert_eq!(edited, complete);
+}

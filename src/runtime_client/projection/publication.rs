@@ -219,7 +219,8 @@ impl PublicationDraft {
                 || complete.clone(),
                 |base| incremental_event(complete.clone(), base, weight),
             );
-            let mut encoded = meter_with_metadata(&event, metadata_budget, arrays.as_ref());
+            let mut encoded =
+                meter_candidate(&mut event, &complete, metadata_budget, arrays.as_ref());
             // The first delivery of any domain uses the exact original carrier.
             // Large uncertain admissions retain the original bounded fallback.
             if !replace
@@ -244,7 +245,7 @@ impl PublicationDraft {
                     || complete.clone(),
                     |base| incremental_event(complete.clone(), base, weight),
                 );
-                encoded = meter_with_metadata(&event, metadata_budget, arrays.as_ref());
+                encoded = meter_candidate(&mut event, &complete, metadata_budget, arrays.as_ref());
             }
             let encoded = encoded.ok_or_else(|| RuntimeClientError::ObservationUnavailable {
                 message: "finite display transition exceeds its encoded budget".into(),
@@ -271,6 +272,24 @@ impl PublicationDraft {
             sources: self.sources,
         })
     }
+}
+
+/// Editing overhead can exceed a complete carrier. Preserve the original
+/// bounded admission rather than rejecting a state that still fits in full.
+pub(super) fn meter_candidate(
+    event: &mut RuntimeClientEvent,
+    complete: &RuntimeClientEvent,
+    metadata_budget: Option<usize>,
+    arrays: Option<&crate::runtime_client::checkpoint::metadata_fragment::PreparedMetadata>,
+) -> Option<usize> {
+    if let Some(bytes) = meter_with_metadata(event, metadata_budget, arrays) {
+        return Some(bytes);
+    }
+    if matches!(event, RuntimeClientEvent::ProjectionDelta { .. }) {
+        *event = complete.clone();
+        return meter_with_metadata(event, metadata_budget, arrays);
+    }
+    None
 }
 
 fn meter_with_metadata(
@@ -311,7 +330,7 @@ fn replacement(
     }
 }
 
-fn incremental_event(
+pub(super) fn incremental_event(
     complete: RuntimeClientEvent,
     base: &PublicationBasis,
     weight: usize,
