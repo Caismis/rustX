@@ -146,6 +146,7 @@ fn assert_read_suffix(
             event.event.facts().iter().all(|fact| matches!(
                 fact,
                 rustx::runtime_client::RuntimeClientEvent::ReadDomainsUpdated { .. }
+                    | rustx::runtime_client::RuntimeClientEvent::ReadDomainsPatched { .. }
                     | rustx::runtime_client::RuntimeClientEvent::TraceChanged
             )),
             "only a read-domain suffix follows the native terminal"
