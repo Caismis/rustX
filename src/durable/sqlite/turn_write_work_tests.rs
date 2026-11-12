@@ -12,6 +12,7 @@ struct TurnWork {
     steps: i64,
     commits: usize,
     wal_frames: u64,
+    event_index_entries: u64,
 }
 
 const WAL_HEADER: u64 = 32;
@@ -36,6 +37,7 @@ fn measure(tool: bool) -> (TurnWork, BTreeMap<(&'static str, String), PhaseWork>
     store.initialize(&[]).unwrap();
     super::append_completed_turns(&store, 0, 8, tool);
     truncate_wal(&store);
+    let index_before = event_index_cells(&store);
     store.begin_query_work();
     super::append_completed_turns(&store, 8, 1, tool);
     let _ = store.finish_query_work();
@@ -43,8 +45,22 @@ fn measure(tool: bool) -> (TurnWork, BTreeMap<(&'static str, String), PhaseWork>
         .unwrap()
         .len();
     let phases = query_work::finish_phases();
+    let index_after = event_index_cells(&store);
+    let event_index_entries = index_after
+        .iter()
+        .map(|(name, cells)| cells - index_before.get(name).copied().unwrap_or_default())
+        .sum();
+    if std::env::var_os("RUSTX_TURN_WORK").is_some() {
+        for (name, cells) in &index_after {
+            eprintln!(
+                "INDEX tool={tool} {name} entries={}",
+                cells - index_before.get(name).copied().unwrap_or_default()
+            );
+        }
+    }
     let mut work = TurnWork {
         wal_frames: wal.saturating_sub(WAL_HEADER) / WAL_FRAME,
+        event_index_entries,
         ..TurnWork::default()
     };
     for ((_, sql), entry) in &phases {
@@ -56,6 +72,11 @@ fn measure(tool: bool) -> (TurnWork, BTreeMap<(&'static str, String), PhaseWork>
         }
     }
     (work, phases)
+}
+
+fn event_index_cells(store: &super::SqliteConversationStore) -> BTreeMap<String, u64> {
+    store.lock().unwrap().prepare("SELECT name,sum(ncell) FROM dbstat WHERE name IN(SELECT name FROM sqlite_schema WHERE type='index' AND tbl_name='events') GROUP BY name").unwrap()
+        .query_map([],|row|Ok((row.get(0)?,row.get(1)?))).unwrap().collect::<Result<_,_>>().unwrap()
 }
 
 fn report(tool: bool, phases: &BTreeMap<(&'static str, String), PhaseWork>) {
@@ -88,6 +109,7 @@ fn warmed_turn_write_work_is_fixed() {
             steps: 20_413,
             commits: 7,
             wal_frames: 258,
+            event_index_entries: 58,
         },
         TurnWork {
             calls: 1392,
@@ -95,6 +117,7 @@ fn warmed_turn_write_work_is_fixed() {
             steps: 45_266,
             commits: 13,
             wal_frames: 553,
+            event_index_entries: 112,
         },
     ];
     let actual = [false, true].map(|tool| {
