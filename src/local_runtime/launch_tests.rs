@@ -872,7 +872,7 @@ fn cfg235_oversized_incomplete_projection_preserves_incomplete_diagnostic() {
                 json!({
                     "provider": "host",
                     "id": format!("pad{index}"),
-                    "context_window": 128000,
+                    "context_window": 128_000,
                     "max_output_tokens": 4096,
                     "capabilities": {
                         "input_modalities": ["text"],
