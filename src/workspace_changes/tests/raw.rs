@@ -244,7 +244,7 @@ async fn raw_endpoints_preserve_text_and_binary_for_native_and_shell_equivalent_
 
 #[cfg(unix)]
 #[tokio::test]
-async fn encoding_attributes_and_diff_drivers_cannot_transform_observed_endpoints() {
+async fn built_in_attributes_normalize_snapshots_without_running_diff_drivers() {
     let directory = repository();
     let root = directory.path();
     let external = tempdir();
@@ -303,19 +303,28 @@ async fn encoding_attributes_and_diff_drivers_cannot_transform_observed_endpoint
         store.summary(&AttemptId::new("attributes")).unwrap().total,
         6
     );
-    for name in ["global.txt", "local.txt", "converted.txt"] {
+    for name in ["global.txt", "converted.txt"] {
         text_change(&store, "attributes", name, "before\n", "after\n", (1, 1)).await;
     }
     text_change(
         &store,
         "attributes",
         "crlf.txt",
-        "keep\r\nbefore\r\n",
-        "keep\r\nafter\r\n",
+        "keep\nbefore\n",
+        "keep\nafter\n",
         (1, 1),
     )
     .await;
-    for name in ["encoded.txt", "forced.bin"] {
+    text_change(
+        &store,
+        "attributes",
+        "encoded.txt",
+        "old\n",
+        "new\n",
+        (1, 1),
+    )
+    .await;
+    for name in ["local.txt", "forced.bin"] {
         binary_change(&store, "attributes", name).await;
     }
     assert_eq!(git_files(root), metadata);
@@ -433,7 +442,7 @@ async fn removing_a_nested_repository_and_its_index_entry_records_the_gitlink_de
         let metadata = git_files(root);
         record.finish().await;
         let completed = store
-            .0
+            .records
             .lock()
             .unwrap()
             .get("remove-nested")
@@ -449,14 +458,16 @@ async fn removing_a_nested_repository_and_its_index_entry_records_the_gitlink_de
             (0, 1)
         );
         let (before, after) = completed.trees.as_ref().unwrap();
-        let initial = git(
-            &record.directory.get().unwrap().path().join("git"),
+        let initial = snapshot_git(
+            root,
+            record.directory.get().unwrap().path(),
             &["ls-tree", "-z", before, "--", "nested"],
         );
         assert!(initial.starts_with("160000 commit "));
         assert!(
-            git(
-                &record.directory.get().unwrap().path().join("git"),
+            snapshot_git(
+                root,
+                record.directory.get().unwrap().path(),
                 &["ls-tree", "-z", after, "--", "nested"]
             )
             .is_empty()
@@ -492,8 +503,16 @@ async fn replacing_a_nested_repository_samples_the_actual_file_or_symlink_endpoi
             };
             let metadata = git_files(root);
             record.finish().await;
+            if symbolic {
+                assert!(
+                    store.summary(&AttemptId::new("replace-nested")).is_none(),
+                    "Git check-ignore rejects the captured path beyond the replacement symlink"
+                );
+                assert_eq!(git_files(root), metadata);
+                continue;
+            }
             let completed = store
-                .0
+                .records
                 .lock()
                 .unwrap()
                 .get("replace-nested")
@@ -506,14 +525,16 @@ async fn replacing_a_nested_repository_samples_the_actual_file_or_symlink_endpoi
             assert_eq!(completed.summary.files[0].display, "nested");
             let (before, after) = completed.trees.as_ref().unwrap();
             assert!(
-                git(
-                    &record.directory.get().unwrap().path().join("git"),
+                snapshot_git(
+                    root,
+                    record.directory.get().unwrap().path(),
                     &["ls-tree", "-z", before, "--", "nested"]
                 )
                 .starts_with("160000 commit ")
             );
-            let final_entry = git(
-                &record.directory.get().unwrap().path().join("git"),
+            let final_entry = snapshot_git(
+                root,
+                record.directory.get().unwrap().path(),
                 &["ls-tree", "-z", after, "--", "nested"],
             );
             assert!(

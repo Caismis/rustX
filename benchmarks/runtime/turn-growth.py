@@ -41,6 +41,18 @@ def write(path, value):
     path.write_text(json.dumps(value, indent=2) + '\n')
 
 
+def git_identity(workspace):
+    entries = []
+    for path in sorted((workspace / '.git').rglob('*')):
+        name = str(path.relative_to(workspace))
+        if path.is_dir():
+            entries.append((name, None))
+        else:
+            with path.open('rb') as content:
+                entries.append((name, hashlib.file_digest(content, 'sha256').hexdigest()))
+    return {'entries': len(entries), 'sha256': hashlib.sha256(json.dumps(entries).encode()).hexdigest()}
+
+
 def sample(pid, runtime):
     root = Path('/proc') / str(pid)
     stat = (root / 'stat').read_text().rsplit(')', 1)[1].split()
@@ -54,6 +66,7 @@ def sample(pid, runtime):
             for key, path in [('main', db), ('wal', Path(str(db) + '-wal'))]}})
     return {'pid': pid, 'monotonic_ns': time.monotonic_ns(), 'epoch_ns': time.time_ns(),
             'cpu_ms': (int(stat[11]) + int(stat[12])) * 1000 / os.sysconf('SC_CLK_TCK'),
+            'child_cpu_ms': (int(stat[13]) + int(stat[14])) * 1000 / os.sysconf('SC_CLK_TCK'),
             'rss_bytes': mem['Rss'], 'pss_bytes': mem['Pss'],
             'wchar': io['wchar'], 'write_bytes': io['write_bytes'],
             'database_files': files,
@@ -62,7 +75,7 @@ def sample(pid, runtime):
 
 
 def delta(before, after):
-    return {key: after[key] - before[key] for key in ['cpu_ms', 'wchar', 'write_bytes']}
+    return {key: after[key] - before[key] for key in ['cpu_ms', 'child_cpu_ms', 'wchar', 'write_bytes']}
 
 
 def dbstat(runtime, pages=False):
@@ -108,7 +121,12 @@ async def provider_main(a):
     steps = []
     for i in range(a.turns):
         if a.provider == 'tool':
-            steps.append(Step(expect, Stream(ToolCall(f'read-{i:08}', 'read', '{"path":"fixture.txt"}'), Finish('tool_calls'), Usage(16, 1))))
+            if a.git_workspace_mutations and i == 1:
+                command = "printf 'in-turn\\n' > growth-modified.txt\nprintf 'created\\n' > turn-created.txt\nrm turn-deleted.txt\ncat fixture.txt"
+                call = ToolCall(f'change-{i:08}', 'bash', json.dumps({'execution_mode': 'foreground', 'description': 'Verify workspace changes', 'command': command}))
+            else:
+                call = ToolCall(f'read-{i:08}', 'read', '{"path":"fixture.txt"}')
+            steps.append(Step(expect, Stream(call, Finish('tool_calls'), Usage(16, 1))))
         steps.append(Step(expect, Stream(Text(RESPONSE), Finish(), Usage(16, 1))))
     state = ScenarioRun(Scenario('turn_growth_' + a.provider, *steps))
     server = ProviderServer(state)
@@ -209,19 +227,41 @@ async def scenario(a, kind, out):
     # tool change recording would include growing evidence and repo artifacts.
     workspace_owner = tempfile.TemporaryDirectory(prefix='rustx-turn-growth-workspace-')
     workspace = Path(workspace_owner.name)
+    if a.git_workspace_source:
+        # A real committed source tree, without sharing its index or objects.
+        # Stream the archive to tar instead of retaining repository bytes.
+        with subprocess.Popen(['git', '-C', str(a.git_workspace_source.resolve()),
+                               'archive', 'HEAD'], stdout=subprocess.PIPE) as archive:
+            subprocess.run(['tar', '-xf', '-', '-C', str(workspace)],
+                           stdin=archive.stdout, check=True)
+            archive.stdout.close()
+            assert archive.wait() == 0, 'git archive failed'
     (workspace / 'fixture.txt').write_text('fixed tool result\n')
-    if a.git_workspace:
+    if a.git_workspace_mutations:
+        for name in ['growth-modified.txt', 'between-deleted.txt', 'turn-deleted.txt']:
+            (workspace / name).write_text('initial\n')
+    workspace_files = sum(path.is_file() or path.is_symlink() for path in workspace.rglob('*'))
+    if a.git_workspace or a.git_workspace_source:
         subprocess.run(['git', 'init', '--quiet', '--template=', str(workspace)], check=True)
-        subprocess.run(['git', '-C', str(workspace), 'add', 'fixture.txt'], check=True)
+        subprocess.run(['git', '-C', str(workspace), 'add', '--all'], check=True)
         subprocess.run(['git', '-C', str(workspace), '-c', 'user.name=Benchmark',
                         '-c', 'user.email=benchmark@example.invalid',
                         '-c', 'core.hooksPath=/dev/null', 'commit', '--quiet', '-m', 'Fixture'], check=True)
+        write(out / 'workspace.json', {
+            'source': str(a.git_workspace_source.resolve()) if a.git_workspace_source else None,
+            'source_head': subprocess.check_output(['git', '-C', str(a.git_workspace_source),
+                'rev-parse', 'HEAD'], text=True).strip() if a.git_workspace_source else None,
+            'worktree_files': workspace_files,
+            'files': len(subprocess.check_output(['git', '-C', str(workspace), 'ls-files', '-z']).split(b'\0')) - 1,
+        })
+    git_before = git_identity(workspace) if a.git_workspace_mutations else None
     token = out / 'token'
     token.write_text(CAPACITY.TOKEN)
     token.chmod(0o600)
     provider_log = (out / 'provider.stderr').open('w')
     provider = await asyncio.create_subprocess_exec(sys.executable, str(Path(__file__).resolve()),
         '--provider', kind, '--turns', str(a.turns), '--provider-output', str(out / 'provider.json'),
+        *(['--git-workspace-mutations'] if a.git_workspace_mutations else []),
         stdout=asyncio.subprocess.PIPE, stderr=provider_log)
     server = Server(a, out)
     rows, windows, reopen = [], [], []
@@ -254,6 +294,10 @@ max_resident_runtimes = 8
 idle_grace_ms = 1000
 shutdown_deadline_ms = 30000
 ''')
+        if a.git_workspace_mutations:
+            # Only this deterministic, local mutation fixture preauthorizes Bash.
+            with (out / 'rustx.toml').open('a') as config:
+                config.write('\n[native_tools.bash]\napproval = "never"\n')
         await server.start()
         result = await server.client.call('thread/start', {'settings': {'cwd': str(workspace)}})
         session, thread = result['session']['id'], result['thread']['id']
@@ -264,7 +308,12 @@ shutdown_deadline_ms = 30000
         before = sample(server.pid, server.runtime)
         write(out / 'session.json', {'session_id': session, 'thread_id': thread, 'initial': before,
                                     'initial_dbstat': dbstat(server.runtime, a.strace)})
+        change_records = []
         for turn in range(1, a.turns + 1):
+            if a.git_workspace_mutations and turn == 2:
+                (workspace / 'growth-modified.txt').write_text('between\n')
+                (workspace / 'between-created.txt').write_text('between new\n')
+                (workspace / 'between-deleted.txt').unlink()
             if a.cpu_profiler and turn == a.profile_from:
                 os.kill(server.pid, signal.SIGUSR2)
             began = time.monotonic_ns()
@@ -281,6 +330,28 @@ shutdown_deadline_ms = 30000
                     break
                 assert time.monotonic_ns() - finished < 30_000_000_000, status
                 await asyncio.sleep(0)
+            if a.git_workspace_mutations:
+                result = await server.client.call('conversation/changes',
+                    {'target': server.target, 'attempt_id': ack['turnId']})
+                summary = result['summary']
+                comparisons = {}
+                if turn == 2:
+                    assert summary is not None, 'the fixture Bash call must produce a workspace change card'
+                    assert [f['display'] for f in summary['files']] == [
+                        'growth-modified.txt', 'turn-created.txt', 'turn-deleted.txt'], summary
+                    assert (summary['total'], summary['added'], summary['deleted']) == (3, 2, 2), summary
+                    for index, file in enumerate(summary['files']):
+                        response = await server.client.call('conversation/changeDiff',
+                            {'target': server.target, 'attempt_id': ack['turnId'], 'index': index})
+                        comparisons[file['display']] = response['comparison']
+                    assert comparisons['growth-modified.txt']['hunks'][0]['old_text'] == 'between\n'
+                    assert comparisons['growth-modified.txt']['hunks'][0]['new_text'] == 'in-turn\n'
+                    assert comparisons['turn-created.txt']['hunks'][0]['new_text'] == 'created\n'
+                    assert comparisons['turn-deleted.txt']['hunks'][0]['old_text'] == 'initial\n'
+                else:
+                    assert summary is None, summary
+                change_records.append({'turn': turn, 'summary': summary, 'comparisons': comparisons})
+                write(out / 'workspace-changes.json', change_records)
             rows.append({'turn': turn, 'settled_ms': (finished - began) / 1e6,
                          'idle_ms': (time.monotonic_ns() - began) / 1e6,
                          'retirement_checks': checks, 'turn_id': ack['turnId']})
@@ -354,6 +425,10 @@ shutdown_deadline_ms = 30000
         if a.cpu_profiler and a.turns >= a.profile_from:
             os.kill(server.pid, signal.SIGUSR2)
         await server.stop()
+        if a.git_workspace_mutations:
+            git_after = git_identity(workspace)
+            assert git_before == git_after, (git_before, git_after)
+            write(out / 'git-unchanged.json', {'before': git_before, 'after': git_after})
         # Avoid serializing the provider's O(N^2) request report through its
         # control endpoint. Shutdown is a signal; its local report is compact.
         def shutdown():
@@ -406,8 +481,10 @@ async def main(a):
         'affinity': sorted(os.sched_getaffinity(0)), 'tokio_workers': 4, 'turns': a.turns, 'window': a.window,
         'settle_seconds': a.settle, 'reopen_at': a.reopen, 'strace': a.strace,
         'strace_counts': a.strace_counts, 'git_workspace': a.git_workspace,
+        'git_workspace_source': str(a.git_workspace_source.resolve()) if a.git_workspace_source else None,
+        'git_workspace_mutations': a.git_workspace_mutations,
         'cpu_profiler': str(a.cpu_profiler) if a.cpu_profiler else None, 'profile_from': a.profile_from,
-        'scope': 'Only server PID utime+stime, /proc/io, RSS/PSS. Fake provider and driver are siblings. '
+        'scope': 'Server PID utime+stime and reaped-child cutime+cstime (reported separately), /proc/io, RSS/PSS. Fake provider and driver are siblings. '
                  'Settled/idle latency excludes between-window settle. CPU/I/O includes settle and retirement reads. '
                  'Reopen uses consistent backup copies in a separate fresh server process; the hot PID stays resident. '
                  'OS file cache remains warm; this is not a dropped-cache storage test. '
@@ -433,6 +510,10 @@ if __name__ == '__main__':
     tracing_options.add_argument('--strace', action='store_true', help='Diagnostic only; traces the server, not provider/driver')
     tracing_options.add_argument('--strace-counts', action='store_true', help='Count server process and scratch directory syscalls with strace -f -c')
     parser.add_argument('--git-workspace', action='store_true', help='Use a real Git workspace with one committed fixture')
+    parser.add_argument('--git-workspace-source', type=Path,
+                        help='Populate the Git workspace from git archive HEAD of this source repository')
+    parser.add_argument('--git-workspace-mutations', action='store_true',
+                        help='Verify between-turn baselines and in-turn modify/create/delete cards through the real RPC')
     parser.add_argument('--cpu-profiler', type=Path, help='Diagnostic only: libprofiler.so, 500 Hz, toggled by SIGUSR2')
     parser.add_argument('--profile-from', type=int, default=1)
     parser.add_argument('--provider', choices=['text', 'tool'], help=argparse.SUPPRESS)
@@ -441,4 +522,7 @@ if __name__ == '__main__':
     assert args.turns > 0 and args.window > 0 and args.settle >= 0
     if args.provider:
         sys.exit(asyncio.run(provider_main(args)))
+    if args.git_workspace_mutations:
+        assert args.turns >= 2 and args.scenarios == ['tool']
+        assert args.git_workspace or args.git_workspace_source
     asyncio.run(main(args))
