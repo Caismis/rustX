@@ -83,6 +83,7 @@ pub enum RuntimeClientEvent {
         descriptor: std::sync::Arc<crate::observation::transcript::RuntimeClientMessageDescriptor>,
         head: super::delta::ListDelta<
             std::sync::Arc<crate::observation::transcript::RuntimeClientMessageDescriptor>,
+            super::delta::DescriptorDelta,
         >,
         transcript_cursor: Option<RuntimeClientTranscriptCursor>,
         evicted_message_id: Option<MessageId>,

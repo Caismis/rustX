@@ -106,12 +106,14 @@ struct TurnWork {
 }
 
 fn captured_wire_value<T: serde::Serialize + schemars::JsonSchema>(value: &T) -> serde_json::Value {
+    struct Wire<'a, T>(&'a T, Arc<crate::observation::structural_json::plan::Plan>);
+    impl<T: serde::Serialize> serde::Serialize for Wire<'_, T> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            crate::observation::structural_json::serialize_wire(self.0, &self.1, serializer)
+        }
+    }
     let schema = crate::observation::structural_json::root::<T>();
-    let encoded = crate::observation::structural_json::Encoded {
-        value,
-        schema: &schema,
-        root: &schema,
-    };
+    let encoded = Wire(value, schema);
     let bytes = crate::observation::bounded::bounded_bytes(
         &encoded,
         crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
@@ -299,6 +301,28 @@ async fn fixed_turn_observation_work() {
     for (kind, tool) in [("text", false), ("tool", true)] {
         let work = measure_turns(tool).await;
         report(kind, &work);
+        assert_eq!(usize::try_from(work.records).unwrap(), work.transitions);
+        let byte_limit = MEASURED_TURNS * if tool { 115_000 } else { 45_000 };
+        assert!(
+            work.transport_bytes <= byte_limit,
+            "{kind}: complete notification byte bound"
+        );
+        assert!(
+            work.encoded_bytes <= byte_limit,
+            "{kind}: publication metering byte bound"
+        );
+        assert!(
+            work.transport_bytes * 5 < work.full_transport_bytes,
+            "{kind}: complete notifications must shrink below one fifth of the identical full trace"
+        );
+        assert!(
+            work.encoded_bytes * 5 < work.full_payload_bytes,
+            "{kind}: publication metering must shrink below one fifth of the identical full trace"
+        );
+        assert!(
+            work.transport_payload_bytes * 5 < work.full_payload_bytes,
+            "{kind}: transport encoding must shrink below one fifth of the identical full trace"
+        );
         let events: usize = work
             .sql
             .values()

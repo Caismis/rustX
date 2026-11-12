@@ -22054,7 +22054,7 @@
               "$ref": "#/$defs/RuntimeClientMessageDescriptor"
             },
             "head": {
-              "$ref": "#/$defs/ListDelta5"
+              "$ref": "#/$defs/ListDelta6"
             },
             "transcript_cursor": {
               "anyOf": [
@@ -23727,18 +23727,30 @@
           "$ref": "#/$defs/ReadCutDelta"
         },
         "content": {
-          "$ref": "#/$defs/ListDelta"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListDelta"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "collections": {
-          "$ref": "#/$defs/ListDelta2"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListDelta2"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
       "required": [
         "base_cursor",
-        "read_cut",
-        "content",
-        "collections"
+        "read_cut"
       ]
     },
     "ReadCutDelta": {
@@ -23779,10 +23791,20 @@
             }
           ]
         },
+        "source_cut_patch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObservationCutDelta"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "live_publication": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed2"
+              "$ref": "#/$defs/Changed5"
             },
             {
               "type": "null"
@@ -23792,7 +23814,7 @@
         "canonical_foreground": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed3"
+              "$ref": "#/$defs/Changed6"
             },
             {
               "type": "null"
@@ -23842,7 +23864,186 @@
       },
       "additionalProperties": false
     },
+    "ObservationCutDelta": {
+      "type": "object",
+      "properties": {
+        "ledger_through": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transcript_total": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "surface_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed3"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inherited_through": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed4"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "read": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReadEvidenceDelta"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "Changed2": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ]
+    },
+    "Changed3": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/SurfaceRevision"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ]
+    },
+    "Changed4": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/TranscriptCursor"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ]
+    },
+    "ReadEvidenceDelta": {
+      "type": "object",
+      "properties": {
+        "journal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transcript": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mutation_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ledger_through": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "surface_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed3"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transcript_total": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pending_through": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pending_total": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed5": {
       "type": "object",
       "properties": {
         "value": {
@@ -23858,7 +24059,7 @@
       },
       "additionalProperties": false
     },
-    "Changed3": {
+    "Changed6": {
       "type": "object",
       "properties": {
         "value": {
@@ -23936,12 +24137,141 @@
           "items": {
             "$ref": "#/$defs/ContentBinding"
           }
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListItemDelta"
+          }
         }
       },
       "additionalProperties": false,
       "required": [
         "slots",
         "values"
+      ]
+    },
+    "ListItemDelta": {
+      "type": "object",
+      "properties": {
+        "base": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "delta": {
+          "$ref": "#/$defs/BindingDelta"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "delta"
+      ]
+    },
+    "BindingDelta": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed7"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deferred": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed8"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "content_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RefDelta"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed7": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ]
+    },
+    "Changed8": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ]
+    },
+    "RefDelta": {
+      "type": "object",
+      "properties": {
+        "content_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SafeQuantity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "readable_end": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SafeQuantity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SafeQuantity": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value"
       ]
     },
     "ListDelta2": {
@@ -23961,6 +24291,12 @@
           "items": {
             "$ref": "#/$defs/CollectionFrontier"
           }
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListItemDelta2"
+          }
         }
       },
       "additionalProperties": false,
@@ -23968,6 +24304,84 @@
         "slots",
         "values"
       ]
+    },
+    "ListItemDelta2": {
+      "type": "object",
+      "properties": {
+        "base": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "delta": {
+          "$ref": "#/$defs/FrontierDelta"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "delta"
+      ]
+    },
+    "FrontierDelta": {
+      "type": "object",
+      "properties": {
+        "revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "loaded": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next_offset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed9"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed9": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false
     },
     "TranscriptDelta": {
       "type": "object",
@@ -24015,12 +24429,37 @@
           "items": {
             "$ref": "#/$defs/CheckpointPageItem"
           }
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListItemDelta3"
+          }
         }
       },
       "additionalProperties": false,
       "required": [
         "slots",
         "values"
+      ]
+    },
+    "ListItemDelta3": {
+      "type": "object",
+      "properties": {
+        "base": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "delta": {
+          "type": "null"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "delta"
       ]
     },
     "ListDelta4": {
@@ -24040,12 +24479,159 @@
           "items": {
             "$ref": "#/$defs/RuntimeClientTranscriptEntry"
           }
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListItemDelta4"
+          }
         }
       },
       "additionalProperties": false,
       "required": [
         "slots",
         "values"
+      ]
+    },
+    "ListItemDelta4": {
+      "type": "object",
+      "properties": {
+        "base": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "delta": {
+          "$ref": "#/$defs/EntryDelta"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "delta"
+      ]
+    },
+    "EntryDelta": {
+      "type": "object",
+      "properties": {
+        "turn_process": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed10"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "response_pending": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed8"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "completed_response": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed11"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed12"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "item": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed13"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_calls": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListDelta5"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed10": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnProcessView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed11": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompletedResponseView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed12": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/RuntimeClientTranscriptCursor"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ]
+    },
+    "Changed13": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/RuntimeClientTranscriptItem"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value"
       ]
     },
     "ListDelta5": {
@@ -24063,7 +24649,13 @@
         "values": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/RuntimeClientMessageDescriptor"
+            "$ref": "#/$defs/ForegroundToolExecution"
+          }
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListItemDelta5"
           }
         }
       },
@@ -24071,6 +24663,509 @@
       "required": [
         "slots",
         "values"
+      ]
+    },
+    "ListItemDelta5": {
+      "type": "object",
+      "properties": {
+        "base": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "delta": {
+          "$ref": "#/$defs/ToolDelta"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "delta"
+      ]
+    },
+    "ToolDelta": {
+      "type": "object",
+      "properties": {
+        "occurrence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed14"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed15"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "block_index": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed16"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "call_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed17"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metadata_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed18"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "assembly_complete": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed8"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed19"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result_metadata_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed18"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "committed_result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed20"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "committed_result_deferred": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed8"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed21"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed22"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed23"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed14": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/RuntimeClientToolOccurrence"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ]
+    },
+    "Changed15": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed16": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/ContentBlockIndex"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ]
+    },
+    "Changed17": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolCallId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed18": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContentRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed19": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JournalFieldRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed20": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolExecutionResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed21": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed22": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ]
+    },
+    "Changed23": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/ForegroundToolState"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value"
+      ]
+    },
+    "ListDelta6": {
+      "type": "object",
+      "properties": {
+        "slots": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "maximum": 4294967295
+          }
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RuntimeClientMessageDescriptor"
+          }
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListItemDelta6"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "slots",
+        "values"
+      ]
+    },
+    "ListItemDelta6": {
+      "type": "object",
+      "properties": {
+        "base": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "delta": {
+          "$ref": "#/$defs/DescriptorDelta"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "delta"
+      ]
+    },
+    "DescriptorDelta": {
+      "type": "object",
+      "properties": {
+        "deliveries": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed24"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "identity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed15"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locator": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed25"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed22"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed22"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "block_count": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_call_count": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "turn_process": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed10"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "completed_response": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Changed11"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tool_calls": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListDelta5"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "content": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListDelta"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collections": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListDelta2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed24": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeClientDeliveryHead"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Changed25": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/CanonicalContentLocator"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value"
       ]
     },
     "CheckpointDelta": {
@@ -24113,7 +25208,7 @@
         "settings_evidence": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed4"
+              "$ref": "#/$defs/Changed26"
             },
             {
               "type": "null"
@@ -24123,7 +25218,7 @@
         "effective_plugins": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed5"
+              "$ref": "#/$defs/Changed27"
             },
             {
               "type": "null"
@@ -24133,7 +25228,7 @@
         "workflows": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed6"
+              "$ref": "#/$defs/Changed28"
             },
             {
               "type": "null"
@@ -24143,7 +25238,7 @@
         "conversation_id": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed7"
+              "$ref": "#/$defs/Changed29"
             },
             {
               "type": "null"
@@ -24163,7 +25258,7 @@
         "effective_approval_mode": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed9"
+              "$ref": "#/$defs/Changed30"
             },
             {
               "type": "null"
@@ -24173,7 +25268,7 @@
         "durability_failure": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed10"
+              "$ref": "#/$defs/Changed31"
             },
             {
               "type": "null"
@@ -24183,7 +25278,7 @@
         "trace": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed11"
+              "$ref": "#/$defs/Changed32"
             },
             {
               "type": "null"
@@ -24193,7 +25288,7 @@
         "attempt": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed12"
+              "$ref": "#/$defs/Changed33"
             },
             {
               "type": "null"
@@ -24203,7 +25298,7 @@
         "inbound": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed13"
+              "$ref": "#/$defs/Changed34"
             },
             {
               "type": "null"
@@ -24213,7 +25308,7 @@
         "context": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed14"
+              "$ref": "#/$defs/Changed35"
             },
             {
               "type": "null"
@@ -24223,7 +25318,7 @@
         "capabilities": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed15"
+              "$ref": "#/$defs/Changed36"
             },
             {
               "type": "null"
@@ -24233,7 +25328,7 @@
         "resources": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed16"
+              "$ref": "#/$defs/Changed37"
             },
             {
               "type": "null"
@@ -24243,7 +25338,7 @@
         "model": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed17"
+              "$ref": "#/$defs/Changed38"
             },
             {
               "type": "null"
@@ -24253,7 +25348,7 @@
         "model_status": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed18"
+              "$ref": "#/$defs/Changed39"
             },
             {
               "type": "null"
@@ -24263,7 +25358,7 @@
         "todos": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed19"
+              "$ref": "#/$defs/Changed40"
             },
             {
               "type": "null"
@@ -24273,7 +25368,7 @@
         "goal": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Changed20"
+              "$ref": "#/$defs/Changed41"
             },
             {
               "type": "null"
@@ -24283,7 +25378,7 @@
         "messages": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ListDelta6"
+              "$ref": "#/$defs/ListDelta7"
             },
             {
               "type": "null"
@@ -24293,7 +25388,7 @@
         "message_descriptors": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ListDelta5"
+              "$ref": "#/$defs/ListDelta6"
             },
             {
               "type": "null"
@@ -24303,7 +25398,7 @@
         "publication_settlements": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ListDelta7"
+              "$ref": "#/$defs/ListDelta8"
             },
             {
               "type": "null"
@@ -24313,7 +25408,7 @@
         "trace_updates": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ListDelta8"
+              "$ref": "#/$defs/ListDelta9"
             },
             {
               "type": "null"
@@ -24323,7 +25418,7 @@
         "pending_interactions": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ListDelta9"
+              "$ref": "#/$defs/ListDelta10"
             },
             {
               "type": "null"
@@ -24333,7 +25428,7 @@
         "jobs": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ListDelta10"
+              "$ref": "#/$defs/ListDelta11"
             },
             {
               "type": "null"
@@ -24343,7 +25438,7 @@
         "agents": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ListDelta11"
+              "$ref": "#/$defs/ListDelta12"
             },
             {
               "type": "null"
@@ -24353,7 +25448,7 @@
         "statuses": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ListDelta12"
+              "$ref": "#/$defs/ListDelta13"
             },
             {
               "type": "null"
@@ -24373,7 +25468,7 @@
       },
       "additionalProperties": false
     },
-    "Changed4": {
+    "Changed26": {
       "type": "object",
       "properties": {
         "value": {
@@ -24385,7 +25480,7 @@
         "value"
       ]
     },
-    "Changed5": {
+    "Changed27": {
       "type": "object",
       "properties": {
         "value": {
@@ -24401,7 +25496,7 @@
       },
       "additionalProperties": false
     },
-    "Changed6": {
+    "Changed28": {
       "type": "object",
       "properties": {
         "value": {
@@ -24413,7 +25508,7 @@
         "value"
       ]
     },
-    "Changed7": {
+    "Changed29": {
       "type": "object",
       "properties": {
         "value": {
@@ -24425,19 +25520,7 @@
         "value"
       ]
     },
-    "Changed8": {
-      "type": "object",
-      "properties": {
-        "value": {
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "value"
-      ]
-    },
-    "Changed9": {
+    "Changed30": {
       "type": "object",
       "properties": {
         "value": {
@@ -24449,7 +25532,7 @@
         "value"
       ]
     },
-    "Changed10": {
+    "Changed31": {
       "type": "object",
       "properties": {
         "value": {
@@ -24465,7 +25548,7 @@
       },
       "additionalProperties": false
     },
-    "Changed11": {
+    "Changed32": {
       "type": "object",
       "properties": {
         "value": {
@@ -24477,7 +25560,7 @@
         "value"
       ]
     },
-    "Changed12": {
+    "Changed33": {
       "type": "object",
       "properties": {
         "value": {
@@ -24493,7 +25576,7 @@
       },
       "additionalProperties": false
     },
-    "Changed13": {
+    "Changed34": {
       "type": "object",
       "properties": {
         "value": {
@@ -24505,7 +25588,7 @@
         "value"
       ]
     },
-    "Changed14": {
+    "Changed35": {
       "type": "object",
       "properties": {
         "value": {
@@ -24517,7 +25600,7 @@
         "value"
       ]
     },
-    "Changed15": {
+    "Changed36": {
       "type": "object",
       "properties": {
         "value": {
@@ -24529,7 +25612,7 @@
         "value"
       ]
     },
-    "Changed16": {
+    "Changed37": {
       "type": "object",
       "properties": {
         "value": {
@@ -24541,7 +25624,7 @@
         "value"
       ]
     },
-    "Changed17": {
+    "Changed38": {
       "type": "object",
       "properties": {
         "value": {
@@ -24557,7 +25640,7 @@
       },
       "additionalProperties": false
     },
-    "Changed18": {
+    "Changed39": {
       "type": "object",
       "properties": {
         "value": {
@@ -24573,7 +25656,7 @@
       },
       "additionalProperties": false
     },
-    "Changed19": {
+    "Changed40": {
       "type": "object",
       "properties": {
         "value": {
@@ -24589,7 +25672,7 @@
       },
       "additionalProperties": false
     },
-    "Changed20": {
+    "Changed41": {
       "type": "object",
       "properties": {
         "value": {
@@ -24604,31 +25687,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "ListDelta6": {
-      "type": "object",
-      "properties": {
-        "slots": {
-          "type": "array",
-          "items": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "maximum": 4294967295
-          }
-        },
-        "values": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/MessageBlock"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "slots",
-        "values"
-      ]
     },
     "ListDelta7": {
       "type": "object",
@@ -24645,7 +25703,13 @@
         "values": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/RuntimeClientPublicationSettlementRecord"
+            "$ref": "#/$defs/MessageBlock"
+          }
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListItemDelta3"
           }
         }
       },
@@ -24670,7 +25734,13 @@
         "values": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/TraceLifecycle"
+            "$ref": "#/$defs/RuntimeClientPublicationSettlementRecord"
+          }
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListItemDelta3"
           }
         }
       },
@@ -24695,7 +25765,13 @@
         "values": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/RuntimeClientInteractionHeader"
+            "$ref": "#/$defs/TraceLifecycle"
+          }
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListItemDelta3"
           }
         }
       },
@@ -24720,7 +25796,13 @@
         "values": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/RuntimeClientJob"
+            "$ref": "#/$defs/RuntimeClientInteractionHeader"
+          }
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListItemDelta3"
           }
         }
       },
@@ -24745,7 +25827,13 @@
         "values": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/RuntimeClientAgent"
+            "$ref": "#/$defs/RuntimeClientJob"
+          }
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListItemDelta3"
           }
         }
       },
@@ -24770,7 +25858,44 @@
         "values": {
           "type": "array",
           "items": {
+            "$ref": "#/$defs/RuntimeClientAgent"
+          }
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListItemDelta3"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "slots",
+        "values"
+      ]
+    },
+    "ListDelta13": {
+      "type": "object",
+      "properties": {
+        "slots": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "maximum": 4294967295
+          }
+        },
+        "values": {
+          "type": "array",
+          "items": {
             "$ref": "#/$defs/AgentStatusView"
+          }
+        },
+        "patches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListItemDelta3"
           }
         }
       },
@@ -32062,7 +33187,7 @@
               "const": "fs/changed"
             },
             "params": {
-              "$ref": "#/$defs/Changed21"
+              "$ref": "#/$defs/Changed42"
             }
           },
           "required": [
@@ -32473,7 +33598,7 @@
         "stderr"
       ]
     },
-    "Changed21": {
+    "Changed42": {
       "type": "object",
       "properties": {
         "watchId": {

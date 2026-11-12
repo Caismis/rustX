@@ -1090,8 +1090,8 @@ fn cursor_relative_publication_round_trips_without_reencoding_unchanged_lists() 
     let RuntimeClientEvent::ProjectionDelta { events, metadata } = &incremental.event else {
         panic!("expected typed delta")
     };
-    assert!(metadata.content.values.is_empty());
-    assert!(metadata.collections.values.is_empty());
+    assert!(metadata.content.is_none());
+    assert!(metadata.collections.is_none());
     let RuntimeClientEvent::ReadDomainsPatched { transcript, .. } = &events[0] else {
         panic!("expected page edit")
     };
@@ -1103,6 +1103,26 @@ fn cursor_relative_publication_round_trips_without_reencoding_unchanged_lists() 
         head.values.is_empty(),
         "new descriptor is supplied exactly once"
     );
+    // A domain first carried in full inside a delta initializes that domain
+    // just as a full outer transition does; the next edit must stay shared.
+    let mut bases = super::super::publication::DeliveryBases::default();
+    let initial = Arc::new(RuntimeClientEvent::ProjectionTransition {
+        events: vec![],
+        metadata: ProjectionMetadata {
+            read_cut: base.read_cut.clone(),
+            content: base.content.clone(),
+            collections: base.collections.clone(),
+        },
+    });
+    assert!(bases.delivery(&initial).is_some());
+    let mut carrier = incremental.event.clone();
+    if let RuntimeClientEvent::ProjectionDelta { events, metadata } = &mut carrier {
+        *events = metadata.native_transition.as_ref().unwrap().facts().to_vec();
+    }
+    let carrier = Arc::new(carrier);
+    assert!(Arc::ptr_eq(&bases.delivery(&carrier).unwrap(), &carrier));
+    let patched = Arc::new(incremental.event.clone());
+    assert!(Arc::ptr_eq(&bases.delivery(&patched).unwrap(), &patched));
     let mut wrong = base;
     wrong.cursor = RuntimeClientCursor::new(wrong.cursor.get() + 1);
     assert!(crate::runtime_client::delta::expand_event(&wrong, &incremental.event).is_none());
