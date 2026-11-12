@@ -35,7 +35,7 @@ async fn deleted_file(store: &ChangesStore, id: &str, before: &str) {
 }
 
 #[tokio::test]
-async fn materialized_skip_worktree_file_deletion_uses_the_sampled_baseline() {
+async fn skip_worktree_file_deletion_remains_hidden_by_git() {
     let dir = repository();
     let root = dir.path();
     let before = "already dirty\nactual worktree contents\n";
@@ -48,14 +48,12 @@ async fn materialized_skip_worktree_file_deletion_uses_the_sampled_baseline() {
     fs::remove_file(root.join("tracked.txt")).unwrap();
     record.finish().await;
 
-    let summary = store.summary(&AttemptId::new("deleted")).unwrap();
-    assert_eq!((summary.total, summary.added, summary.deleted), (1, 0, 2));
-    deleted_file(&store, "deleted", before).await;
+    assert!(store.summary(&AttemptId::new("deleted")).is_none());
     unchanged_skipped_index(root, &index);
 }
 
 #[tokio::test]
-async fn skip_worktree_deletion_is_counted_alongside_other_edits() {
+async fn skip_worktree_deletion_is_hidden_alongside_other_edits() {
     let dir = repository();
     let root = dir.path();
     fs::write(root.join("other.txt"), "keep\nold\n").unwrap();
@@ -70,17 +68,16 @@ async fn skip_worktree_deletion_is_counted_alongside_other_edits() {
     record.finish().await;
 
     let summary = store.summary(&AttemptId::new("mixed")).unwrap();
-    assert_eq!((summary.total, summary.added, summary.deleted), (2, 1, 3));
+    assert_eq!((summary.total, summary.added, summary.deleted), (1, 1, 1));
     assert_eq!(
         summary
             .files
             .iter()
             .map(|file| file.display.as_str())
             .collect::<Vec<_>>(),
-        ["other.txt", "tracked.txt"]
+        ["other.txt"]
     );
     assert_eq!((summary.files[0].added, summary.files[0].deleted), (1, 1));
-    deleted_file(&store, "mixed", "one\ntwo\n").await;
     unchanged_skipped_index(root, &index);
 }
 
@@ -101,7 +98,7 @@ async fn sparse_file_already_absent_at_baseline_creates_no_changes_card() {
 }
 
 #[tokio::test]
-async fn sparse_file_materialized_after_baseline_is_an_addition() {
+async fn skip_worktree_materialization_remains_hidden_by_git() {
     let dir = repository();
     let root = dir.path();
     mark_skipped(root);
@@ -114,14 +111,7 @@ async fn sparse_file_materialized_after_baseline_is_an_addition() {
     fs::write(root.join("tracked.txt"), after).unwrap();
     record.finish().await;
 
-    let attempt = AttemptId::new("materialized");
-    let summary = store.summary(&attempt).unwrap();
-    assert_eq!((summary.total, summary.added, summary.deleted), (1, 2, 0));
-    assert_eq!(summary.files[0].display, "tracked.txt");
-    let comparison = store.comparison(&attempt, 0).await.unwrap().unwrap();
-    assert_eq!(comparison.hunks.len(), 1);
-    assert!(comparison.hunks[0].old_text.is_empty());
-    assert_eq!(comparison.hunks[0].new_text, after);
+    assert!(store.summary(&AttemptId::new("materialized")).is_none());
     unchanged_skipped_index(root, &index);
 }
 
