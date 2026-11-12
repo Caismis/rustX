@@ -327,9 +327,7 @@ fn trace_kind_candidates_remain_independent_of_changed_native_json_kind() {
             .query_row(
                 concat!(
                     "SELECT COUNT(*) FROM events INDEXED BY events_kind_idx WHERE ",
-                    crate::durable::sqlite::event_kind_key::sql!(
-                        "json_extract(event_json,'$.event.type')"
-                    ),
+                    crate::durable::sqlite::event_kind_key::sql!("event_kind"),
                     "=x'0002'",
                     " AND sequence=?1"
                 ),

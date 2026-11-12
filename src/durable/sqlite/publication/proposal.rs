@@ -606,22 +606,79 @@ pub(in crate::durable::sqlite) fn canonical_surface_tool_id(
     transaction: &Transaction<'_>,
     call_id: &ToolCallId,
 ) -> Result<Option<ToolId>, ConversationStoreError> {
-    let head = load_head(transaction)?;
-    for message_id in head.active_message_ids {
-        let message = load_message_tx(transaction, &message_id)?;
-        let MessageBlock::Assistant(assistant) = message else {
-            continue;
-        };
-        if let Some(tool_id) = assistant.content.iter().find_map(|block| match block {
-            AssistantContentBlock::ToolCall(call) if call.id == *call_id => {
-                Some(call.tool_id.clone())
+    let (ledger, checkpoint) =
+        crate::durable::sqlite::canonical::ledger::head_frontier(transaction)?;
+    let base = checkpoint
+        .as_ref()
+        .map_or(0, |checkpoint| checkpoint.candidate.base_frontier.0);
+    // A checkpoint's Original order precedes the appended suffix. Only probe
+    // its explicitly selected identities; never materialize the suffix.
+    let originals = checkpoint
+        .iter()
+        .flat_map(|checkpoint| &checkpoint.candidate.items)
+        .filter_map(|item| {
+            if let crate::context::checkpoint::CheckpointMessage::Original(reference) =
+                &item.message
+            {
+                Some(&reference.message_id)
+            } else {
+                None
             }
-            _ => None,
-        }) {
-            return Ok(Some(tool_id));
+        });
+    let mut selected = None;
+    for message_id in originals {
+        let (exists, owns): (bool, bool) = transaction.query_row_cached(
+            "SELECT EXISTS(SELECT 1 FROM message_ledger WHERE message_id=?1),EXISTS(SELECT 1 FROM canonical_tool_calls WHERE assistant_message_id=?1 AND call_id=?2)",
+            params![message_id.as_str(),call_id.as_str()], |row|Ok((row.get(0)?,row.get(1)?)),
+        ).map_err(|error| sqlite_error(&error,error.to_string()))?;
+        if !exists {
+            return Err(ConversationStoreError::InvalidReference(
+                "missing checkpoint Original dependency".into(),
+            ));
+        }
+        if owns && selected.is_none() {
+            selected = Some(message_id);
         }
     }
-    Ok(None)
+    if let Some(owner) = selected {
+        return canonical_message_tool_id(transaction, owner, call_id);
+    }
+    let owner: Option<String> = transaction
+        .query_row_cached(
+            CANONICAL_SURFACE_TOOL_SQL,
+            params![call_id.as_str(), base, ledger],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| sqlite_error(&error, error.to_string()))?;
+    owner
+        .map(|owner| canonical_message_tool_id(transaction, &MessageId::new(owner), call_id))
+        .transpose()
+        .map(Option::flatten)
+}
+
+pub(in crate::durable::sqlite) const CANONICAL_SURFACE_TOOL_SQL: &str =
+    "SELECT c.assistant_message_id FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_call_ledger_idx
+     JOIN message_ledger m ON m.position=c.assistant_ledger_position AND m.message_id=c.assistant_message_id
+     WHERE c.call_id=?1 AND c.assistant_ledger_position>?2 AND c.assistant_ledger_position<=?3
+     ORDER BY c.assistant_ledger_position,c.block_index LIMIT 1";
+
+fn canonical_message_tool_id(
+    transaction: &Transaction<'_>,
+    message_id: &MessageId,
+    call_id: &ToolCallId,
+) -> Result<Option<ToolId>, ConversationStoreError> {
+    let message = load_message_tx(transaction, message_id)?;
+    let MessageBlock::Assistant(assistant) = message else {
+        return Err(storage("canonical tool owner is not an Assistant"));
+    };
+    if let Some(tool_id) = assistant.content.iter().find_map(|block| match block {
+        AssistantContentBlock::ToolCall(call) if call.id == *call_id => Some(call.tool_id.clone()),
+        _ => None,
+    }) {
+        return Ok(Some(tool_id));
+    }
+    Err(storage("canonical tool index disagrees with its Assistant"))
 }
 
 /// The canonical Assistant message that owns `call_id` inside the exact

@@ -209,7 +209,7 @@ fn responses(
             .map(|response| (response.closing_message_id.clone(), response))
             .collect();
     let mut attempts: BTreeMap<AttemptId, AttemptEvidence> = BTreeMap::new();
-    let mut statement = connection.prepare("SELECT event_json FROM events WHERE sequence<=?1 AND json_extract(event_json,'$.event.type') IN ('attempt_started','assistant_message_committed','model_request_started','model_request_completed','model_request_failed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') AND (json_extract(event_json,'$.event.type') NOT IN ('model_request_started','model_request_completed','model_request_failed') OR json_extract(event_json,'$.event.owner.type')='agent') ORDER BY sequence")
+    let mut statement = connection.prepare("SELECT event_json FROM events WHERE sequence<=?1 AND event_kind IN ('attempt_started','assistant_message_committed','model_request_started','model_request_completed','model_request_failed','attempt_completed','attempt_cancelled','attempt_failed','attempt_timed_out','attempt_limit_exceeded') AND (event_kind NOT IN ('model_request_started','model_request_completed','model_request_failed') OR event_owner_kind='agent') ORDER BY sequence")
         .map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map([seq_to_i64(through)?], |row| row.get::<_, String>(0))

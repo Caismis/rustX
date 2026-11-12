@@ -5,6 +5,7 @@ use super::{
     Sha256, decode, nonnegative, params, seq_to_i64, storage,
 };
 
+pub(super) mod geometry;
 #[cfg(test)]
 mod tests;
 use crate::model::projected::FrozenModelInput;
@@ -43,6 +44,7 @@ pub(super) struct Selection {
     pub root: Option<NodeRef>,
     seats: Vec<(std::sync::Weak<InputNode>, NodeRef)>,
     epoch: u64,
+    pub geometry: geometry::Session,
 }
 
 // Frozen bodies are immutable, so filling optional Source never rewrites them.
@@ -307,6 +309,7 @@ pub(super) fn persist(
         root: None,
         seats: Vec::new(),
         epoch: owner.epoch.load(Ordering::Acquire),
+        geometry: geometry::Session::new(&owner.geometry),
     };
     if let Some(root) = &input.root {
         selected.root = Some(persist_node(connection, root, owner, &mut selected)?);
@@ -423,7 +426,8 @@ static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
 pub(super) struct Owner {
     pub bodies: Arc<crate::conversation::bodies::CanonicalBodies>,
     pub id: u64,
-    pub epoch: AtomicU64,
+    pub epoch: Arc<AtomicU64>,
+    geometry: Arc<geometry::Cache>,
     pub frontier: AtomicU64,
     pub journal_frontier: AtomicU64,
     versions: Mutex<Option<(u64, u64)>>,
@@ -436,12 +440,14 @@ struct MutationColumns {
     journal: Vec<i32>,
     activation: Vec<i32>,
     bootstrap: Vec<i32>,
+    source: Vec<i32>,
 }
 impl MutationColumns {
     fn read(connection: &Connection) -> Self {
         // Preupdate accessors accept logical schema ordinals, including virtual
         // generated columns. table_info omits and renumbers those columns;
         // table_xinfo preserves the ordinals SQLite converts to stored fields.
+        let source = std::cell::RefCell::new(Vec::new());
         let columns = |table: &str| {
             connection
                 .prepare(&format!("PRAGMA table_xinfo({table})"))
@@ -452,6 +458,9 @@ impl MutationColumns {
                 .expect("native dependency columns")
                 .filter_map(|row| {
                     let (index, name) = row.expect("native dependency column");
+                    if table == "native_input_nodes" && name.starts_with("source_") {
+                        source.borrow_mut().push(index);
+                    }
                     let native = match table {
                         "native_input_nodes" => !name.starts_with("source_"),
                         "message_ledger" => {
@@ -473,6 +482,7 @@ impl MutationColumns {
             journal: columns("events"),
             activation: columns("projection_activations"),
             bootstrap: columns("bootstrap_identity"),
+            source: source.into_inner(),
         }
     }
 }
@@ -589,10 +599,12 @@ impl MutationColumns {
 }
 impl Owner {
     fn new() -> Arc<Self> {
+        let epoch = Arc::new(AtomicU64::new(0));
         Arc::new(Self {
             bodies: Arc::default(),
             id: NEXT_OWNER.fetch_add(1, Ordering::Relaxed),
-            epoch: AtomicU64::new(0),
+            geometry: geometry::Cache::new(Arc::clone(&epoch)),
+            epoch,
             frontier: AtomicU64::new(0),
             journal_frontier: AtomicU64::new(0),
             versions: Mutex::new(None),
@@ -627,6 +639,7 @@ impl Owner {
                     append.observe(table, change);
                     response.observe(table, change);
                     statistics.observe(table, change);
+                    watched.geometry.observe(table, change, &columns.source);
                     let invalidates = columns.invalidates(&watched, table, change);
                     if invalidates {
                         watched.invalidate();
@@ -634,6 +647,7 @@ impl Owner {
                 },
             ))
             .map_err(|error| storage(format!("install native input observer: {error}")))?;
+        owner.geometry.enable();
         Ok(owner)
     }
     fn invalidate(&self) {
@@ -669,6 +683,9 @@ impl Owner {
         *versions = Some(actual);
         Ok(self.epoch.load(Ordering::Acquire))
     }
+    pub(super) fn geometry_cache(&self) -> Arc<geometry::Cache> {
+        Arc::clone(&self.geometry)
+    }
 }
 
 impl Selection {
@@ -676,6 +693,7 @@ impl Selection {
         if self.epoch != owner.epoch.load(Ordering::Acquire) {
             return;
         }
+        self.geometry.commit();
         for (weak, node) in self.seats {
             if let Some(input) = weak.upgrade() {
                 *input.stored.lock().expect("committed native input seat") =

@@ -223,7 +223,7 @@ pub(super) fn validate_existing_schema(
 // continues to own the usage payload and the compaction's explicit absence.
 // A primary terminal qualifies only with an actual input measurement, including
 // zero. Output-only Usage must preserve the previous reading before LIMIT.
-pub(super) const CONTEXT_READING_PREDICATE: &str = "json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage.input_tokens'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')";
+pub(super) const CONTEXT_READING_PREDICATE: &str = "event_kind = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage.input_tokens'), 'null') != 'null' AND event_owner_kind = 'agent')";
 
 #[derive(Clone, Copy)]
 pub(super) enum PrimaryRequestFactKind {
@@ -382,16 +382,11 @@ pub(super) fn presentation_statements(
     ];
     let scope = match &query.scope {
         FactScope::All => String::new(),
-        FactScope::AgentRequest => {
-            " AND json_extract(event_json, '$.event.owner.type') = 'agent'".to_owned()
-        }
+        FactScope::AgentRequest => " AND event_owner_kind = 'agent'".to_owned(),
         FactScope::ContextReading => format!(" AND ({CONTEXT_READING_PREDICATE}) = 1"),
         FactScope::Compaction(operation) => {
             values.push(Value::Text(operation.to_string()));
-            format!(
-                " AND json_extract(event_json, '$.event.operation_id') = ?{}",
-                values.len()
-            )
+            format!(" AND event_operation_id = ?{}", values.len())
         }
         FactScope::Step(attempt, turn) => {
             values.push(Value::Text(attempt.to_string()));
@@ -429,7 +424,7 @@ pub(super) fn presentation_statements(
                     .map_or(Value::Null, |id| Value::Text(id.to_string())),
             );
             concat!(
-                " AND json_extract(event_json, '$.event.tool_call_id') = ?3 AND attempt_key IS ",
+                " AND event_tool_call_id = ?3 AND attempt_key IS ",
                 crate::durable::sqlite::event_owner_key::attempt_parameter!("?4"),
                 " AND turn_key IS (",
                 crate::durable::sqlite::event_owner_key::turn!("?5"),
@@ -439,13 +434,13 @@ pub(super) fn presentation_statements(
         }
         other => {
             let (field, value) = match other {
-                FactScope::Request(value) => ("request_id", value),
+                FactScope::Request(value) => ("event_request_id", value),
                 FactScope::Compaction(_) => unreachable!("compaction scope is handled separately"),
-                FactScope::Execution(value) => ("execution_id", value),
-                FactScope::Subagent(value) => ("subagent_id", value),
-                FactScope::Workflow(value) => ("run_id", value),
-                FactScope::Interaction(value) => ("interaction_id", value),
-                FactScope::Message(value) => ("message_id", value),
+                FactScope::Execution(value) => ("event_execution_id", value),
+                FactScope::Subagent(value) => ("event_subagent_id", value),
+                FactScope::Workflow(value) => ("event_run_id", value),
+                FactScope::Interaction(value) => ("event_interaction_id", value),
+                FactScope::Message(value) => ("event_message_id", value),
                 FactScope::All
                 | FactScope::AgentRequest
                 | FactScope::ContextReading
@@ -454,7 +449,7 @@ pub(super) fn presentation_statements(
                 | FactScope::ToolCall { .. } => unreachable!(),
             };
             values.push(Value::Text(value.clone()));
-            format!(" AND json_extract(event_json, '$.event.{field}') = ?3")
+            format!(" AND {field} = ?3")
         }
     };
     let index = match query.scope {
@@ -492,7 +487,7 @@ pub(super) fn presentation_statements(
         let kind_column = if matches!(query.scope, FactScope::All) {
             super::event_kind_key::NATIVE
         } else {
-            "json_extract(event_json, '$.event.type')"
+            "event_kind"
         };
         let columns = if matches!(query.scope, FactScope::All) {
             "sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json"
@@ -511,64 +506,61 @@ pub(super) fn presentation_statements(
 pub(super) const PRESENTATION_INDEXES: &[(&str, &str)] = &[
     (
         "events_primary_request_kind_idx",
-        "(json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.owner.type') = 'agent'",
+        "(event_kind) WHERE event_owner_kind = 'agent'",
     ),
     (
         "events_context_reading_idx",
-        "(json_extract(event_json, '$.event.type')) WHERE (json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage.input_tokens'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')) = 1",
+        "(event_kind) WHERE (event_kind = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage.input_tokens'), 'null') != 'null' AND event_owner_kind = 'agent')) = 1",
     ),
     (
         "events_message_id_kind_idx",
-        "(json_extract(event_json, '$.event.message_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.message_id') IS NOT NULL",
+        "(event_message_id, event_kind) WHERE event_message_id IS NOT NULL",
     ),
     ("events_kind_idx", super::event_kind_key::NATIVE),
-    (
-        "events_attempt_kind_idx",
-        "(attempt_key, json_extract(event_json, '$.event.type'))",
-    ),
+    ("events_attempt_kind_idx", "(attempt_key, event_kind)"),
     (
         "events_step_kind_idx",
-        "(attempt_key, turn_key, json_extract(event_json, '$.event.type')) WHERE attempt_key IS NOT NULL AND turn_key IS NOT NULL",
+        "(attempt_key, turn_key, event_kind) WHERE attempt_key IS NOT NULL AND turn_key IS NOT NULL",
     ),
     (
         "events_compaction_operation_kind_idx",
-        "(json_extract(event_json, '$.event.operation_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.operation_id') IS NOT NULL",
+        "(event_operation_id, event_kind) WHERE event_operation_id IS NOT NULL",
     ),
     (
         "events_request_id_kind_idx",
-        "(json_extract(event_json, '$.event.request_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.request_id') IS NOT NULL",
+        "(event_request_id, event_kind) WHERE event_request_id IS NOT NULL",
     ),
     (
         "events_tool_call_scope_kind_idx",
-        "(json_extract(event_json, '$.event.tool_call_id'), attempt_key, turn_key, json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.tool_call_id') IS NOT NULL",
+        "(event_tool_call_id, attempt_key, turn_key, event_kind) WHERE event_tool_call_id IS NOT NULL",
     ),
     (
         "events_execution_id_kind_idx",
-        "(json_extract(event_json, '$.event.execution_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.execution_id') IS NOT NULL",
+        "(event_execution_id, event_kind) WHERE event_execution_id IS NOT NULL",
     ),
     (
         "events_subagent_id_kind_idx",
-        "(json_extract(event_json, '$.event.subagent_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.subagent_id') IS NOT NULL",
+        "(event_subagent_id, event_kind) WHERE event_subagent_id IS NOT NULL",
     ),
     (
         "events_run_id_kind_idx",
-        "(json_extract(event_json, '$.event.run_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.run_id') IS NOT NULL",
+        "(event_run_id, event_kind) WHERE event_run_id IS NOT NULL",
     ),
     (
         "events_workflow_coordinates_idx",
-        "(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.origin.type'),coalesce(json_extract(event_json,'$.event.run_id.origin.attempt_id'),json_extract(event_json,'$.event.run_id.origin.start_id')),json_extract(event_json,'$.event.run_id.invocation')) WHERE json_extract(event_json,'$.event.type')='workflow_started'",
+        "(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.origin.type'),coalesce(json_extract(event_json,'$.event.run_id.origin.attempt_id'),json_extract(event_json,'$.event.run_id.origin.start_id')),json_extract(event_json,'$.event.run_id.invocation')) WHERE event_kind='workflow_started'",
     ),
     (
         "events_workflow_node_run_kind_idx",
-        "(json_extract(event_json, '$.event.instance.block.run'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.instance.block.run') IS NOT NULL",
+        "(event_instance_run, event_kind) WHERE event_instance_run IS NOT NULL",
     ),
     (
         "events_workflow_node_instance_kind_idx",
-        "(json_extract(event_json, '$.event.instance'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.instance') IS NOT NULL",
+        "(event_instance, event_kind) WHERE event_instance IS NOT NULL",
     ),
     (
         "events_interaction_id_kind_idx",
-        "(json_extract(event_json, '$.event.interaction_id'), json_extract(event_json, '$.event.type')) WHERE json_extract(event_json, '$.event.interaction_id') IS NOT NULL",
+        "(event_interaction_id, event_kind) WHERE event_interaction_id IS NOT NULL",
     ),
 ];
 
@@ -710,17 +702,20 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 observation_ledger INTEGER NOT NULL,observation_tool_ordinal INTEGER NOT NULL,observation_call_id TEXT,observation_tool_id TEXT,observation_name TEXT NOT NULL, result_ledger_position INTEGER,
                 block_index INTEGER NOT NULL CHECK(block_index >= 0),
                 assistant_message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
+                assistant_ledger_position INTEGER NOT NULL REFERENCES message_ledger(position),
                 call_id TEXT NOT NULL,
                 tool_id TEXT NOT NULL,
                 attempt_id TEXT,
                 commit_sequence INTEGER,
                 result_message_id TEXT UNIQUE REFERENCES message_ledger(message_id),
                 PRIMARY KEY(assistant_message_id,block_index),
-                UNIQUE(assistant_message_id,call_id)
+                UNIQUE(assistant_message_id,call_id),
+                FOREIGN KEY(assistant_ledger_position,assistant_message_id) REFERENCES message_ledger(position,message_id)
             );
             CREATE UNIQUE INDEX IF NOT EXISTS canonical_tool_calls_observation_idx ON canonical_tool_calls(observation_ledger,block_index);
             CREATE UNIQUE INDEX IF NOT EXISTS canonical_tool_calls_result_ledger_idx ON canonical_tool_calls(result_ledger_position) WHERE result_ledger_position IS NOT NULL;
             CREATE INDEX IF NOT EXISTS canonical_tool_calls_scope_idx ON canonical_tool_calls(attempt_id,call_id,commit_sequence,assistant_message_id,block_index);
+            CREATE INDEX IF NOT EXISTS canonical_tool_calls_call_ledger_idx ON canonical_tool_calls(call_id,assistant_ledger_position,block_index);
             CREATE INDEX IF NOT EXISTS canonical_tool_calls_pending
                 ON canonical_tool_calls(assistant_message_id,block_index) WHERE result_message_id IS NULL;
             CREATE INDEX IF NOT EXISTS transcript_observation_readiness_missing_idx ON transcript_entries(position) WHERE observation_readiness_missing=1 AND position>0;
@@ -956,7 +951,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
             CREATE INDEX IF NOT EXISTS events_aggregate_heads_idx ON events(observation_aggregate_heads) WHERE observation_aggregate_heads>0;
             CREATE INDEX IF NOT EXISTS transcript_entries_audit_position_idx ON transcript_entries(position) WHERE native_reference_kind='publication_audit';
             CREATE INDEX IF NOT EXISTS events_observation_tool_lifecycle_idx ON events(observation_tool_ledger,observation_tool_block,observation_tool_phase) WHERE observation_tool_phase IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_key,json_extract(event_json,'$.event.type')) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_tool_idx ON events(event_tool_call_id,attempt_key,event_kind) WHERE event_tool_call_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_attempt_heads_idx ON events(attempt_key,observation_attempt_heads) WHERE observation_attempt_heads>0;
             CREATE INDEX IF NOT EXISTS events_observation_member_holes_idx ON events(attempt_key) WHERE observation_members_required=1 AND observation_members IS NULL;
             CREATE INDEX IF NOT EXISTS events_observation_member_anchor_idx ON events(observation_member_anchor) WHERE observation_members IS NOT NULL;
@@ -1376,7 +1371,8 @@ impl SqliteConversationStore {
             Arc::clone(&statistics),
             Arc::clone(&transaction_writes),
         )?;
-        let event_guard = event_insert::Guard::new(&connection, statistics);
+        let event_guard =
+            event_insert::Guard::new(&connection, statistics, Some(manifest.geometry_cache()));
         Ok(Self::from_connection_owner(
             conversation_id,
             Arc::new(ConnectionOwner {

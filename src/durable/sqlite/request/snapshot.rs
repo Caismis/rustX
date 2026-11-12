@@ -276,20 +276,20 @@ pub(in crate::durable::sqlite) fn load_request_snapshot_bounded(
 pub(in crate::durable::sqlite) const REQUEST_START_PROBE_SQL: &str =
     "SELECT sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json
     FROM events INDEXED BY events_request_id_kind_idx
-    WHERE json_extract(event_json,'$.event.request_id')=?1
-      AND json_extract(event_json,'$.event.type')='model_request_started'
+    WHERE event_request_id=?1
+      AND event_kind='model_request_started'
     ORDER BY sequence LIMIT 2";
 
 pub(in crate::durable::sqlite) const REQUEST_OUTCOME_PROBE_SQL: &str =
     "SELECT event_json FROM events WHERE sequence=(SELECT min(sequence) FROM (
     SELECT (SELECT sequence FROM events INDEXED BY events_request_id_kind_idx
-        WHERE json_extract(event_json,'$.event.request_id')=?1
-          AND json_extract(event_json,'$.event.type')='model_request_completed'
+        WHERE event_request_id=?1
+          AND event_kind='model_request_completed'
         ORDER BY sequence LIMIT 1) AS sequence
     UNION ALL
     SELECT (SELECT sequence FROM events INDEXED BY events_request_id_kind_idx
-        WHERE json_extract(event_json,'$.event.request_id')=?1
-          AND json_extract(event_json,'$.event.type')='model_request_failed'
+        WHERE event_request_id=?1
+          AND event_kind='model_request_failed'
         ORDER BY sequence LIMIT 1)))";
 
 #[cfg(test)]
@@ -318,7 +318,7 @@ pub(in crate::durable::sqlite) fn has_request_journal_fact_tx(
     transaction
         .query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_request_id_kind_idx
-             WHERE json_extract(event_json, '$.event.request_id')=?1 LIMIT 1)",
+             WHERE event_request_id=?1 LIMIT 1)",
             [request_id.as_str()],
             |row| row.get(0),
         )

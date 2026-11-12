@@ -839,7 +839,7 @@ fn occupancy_compaction_lookup_work_is_bounded_across_history_growth() {
                     .unwrap()
                     .prepare(
                         "SELECT sequence FROM events INDEXED BY events_context_reading_idx
-                 WHERE json_extract(event_json,'$.event.type')='compaction_completed'
+                 WHERE event_kind='compaction_completed'
                    AND sequence<=?1 ORDER BY sequence DESC LIMIT 1"
                     )
                     .is_err()

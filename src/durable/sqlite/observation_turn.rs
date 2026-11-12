@@ -95,7 +95,7 @@ pub(super) fn prepare(
     let start = if pending.is_some() && matches!(event.event, RuntimeEvent::AttemptStarted { .. }) {
         Some(event.sequence)
     } else {
-        connection.query_row_cached(concat!("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1"),params![attempt.as_str(),event.sequence],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
+        connection.query_row_cached(concat!("SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND event_kind='attempt_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1"),params![attempt.as_str(),event.sequence],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?
     };
     let Some(start) = start else {
         prepared.header = Some(b"null".to_vec());
@@ -283,9 +283,7 @@ fn prompt(
         .query_row_cached(
             concat!(
                 "SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx WHERE ",
-                crate::durable::sqlite::event_kind_key::sql!(
-                    "json_extract(event_json,'$.event.type')"
-                ),
+                crate::durable::sqlite::event_kind_key::sql!("event_kind"),
                 "=x'0002'",
                 " AND sequence<?1"
             ),
@@ -608,7 +606,7 @@ pub(super) fn by_identity(
     cut: &crate::durable::reading::ConversationReadCut,
     id: &crate::durable::reading::ConversationTurnId,
 ) -> Result<ObservedTurn, ConversationStoreError> {
-    let local:Option<u64>=connection.query_row(concat!("SELECT observation_turn_ordinal FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND conversation_id=?2 AND json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=?3 ORDER BY sequence LIMIT 1"),params![id.attempt_id.as_str(),id.conversation_id.as_str(),cut.journal],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
+    let local:Option<u64>=connection.query_row(concat!("SELECT observation_turn_ordinal FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND conversation_id=?2 AND event_kind='attempt_started' AND sequence<=?3 ORDER BY sequence LIMIT 1"),params![id.attempt_id.as_str(),id.conversation_id.as_str(),cut.journal],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
     let ordinal = if let Some(ordinal) = local {
         ordinal
     } else {

@@ -518,4 +518,4 @@ pub(in crate::durable::sqlite) fn load_user_message_boundaries_page(
     load_user_message_boundaries_page_internal(connection, through, Some((offset, limit)))
 }
 
-pub(in crate::durable::sqlite) const TRANSCRIPT_ATTEMPTS_SQL: &str = "SELECT attempt_id FROM events INDEXED BY events_message_id_kind_idx WHERE json_extract(event_json,'$.event.message_id')=?1 AND json_extract(event_json,'$.event.type')='assistant_message_committed' AND sequence<=?2";
+pub(in crate::durable::sqlite) const TRANSCRIPT_ATTEMPTS_SQL: &str = "SELECT attempt_id FROM events INDEXED BY events_message_id_kind_idx WHERE event_message_id=?1 AND event_kind='assistant_message_committed' AND sequence<=?2";

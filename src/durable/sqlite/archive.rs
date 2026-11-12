@@ -161,15 +161,20 @@ impl SqliteConversationStore {
         }
         if matches!(authority, Authority::Journal) {
             // Bounds apply before copying a corrupted auxiliary payload into Rust.
-            return self.lock().map_err(error)?.query_row(
-                "SELECT sequence,CASE WHEN
-                    (json_extract(event_json,'$.event.type') IN ('auxiliary_call_started','auxiliary_call_settled')
-                     OR json_extract(event_json,'$.event.owner.type')='auxiliary')
+            return self
+                .lock()
+                .map_err(error)?
+                .query_row(
+                    "SELECT sequence,CASE WHEN
+                    (event_kind IN ('auxiliary_call_started','auxiliary_call_settled')
+                     OR event_owner_kind='auxiliary')
                     AND octet_length(event_json)>16384 THEN NULL ELSE event_json END
                  FROM events WHERE sequence>?1 AND sequence<=?2 ORDER BY sequence LIMIT 1",
-                params![after, through],
-                |row| Ok((row.get(0)?, row.get::<_, String>(1)?)),
-            ).optional().map_err(error);
+                    params![after, through],
+                    |row| Ok((row.get(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()
+                .map_err(error);
         }
         if matches!(authority, Authority::Requests) {
             let connection = self.lock().map_err(error)?;

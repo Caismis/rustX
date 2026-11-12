@@ -271,7 +271,17 @@ pub(super) fn index_selection(
                 // actual storage now, then share the path/width traversal.
                 // All path errors still precede deferred length errors.
                 let node = captured.into_node(connection, native, trigger_free)?;
-                add(nodes::geometry(connection, &node, 0, sequence)?, 2)?
+                add(
+                    nodes::incremental_geometry(
+                        connection,
+                        &node,
+                        source_hash.ok_or_else(|| storage("selected Source hash unavailable"))?,
+                        0,
+                        sequence,
+                        &selection.geometry,
+                    )?,
+                    2,
+                )?
             }
             (None, None) => 2,
             _ => return Err(storage("composed selected root unavailable")),
