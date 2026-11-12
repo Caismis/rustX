@@ -4324,10 +4324,8 @@ impl WorkflowRuntime {
             node: Box::new(node_id.clone()),
             retry: 0,
         };
-        let arguments = admission::agent_entry_authorize_arguments(
-            &agent.profile,
-            &spec.admission.task,
-        );
+        let arguments =
+            admission::agent_entry_authorize_arguments(&agent.profile, &spec.admission.task);
         let workspace_root = services.runtime.workspace().root();
         let view = crate::agent::PreToolView {
             conversation_id: &run.run_id.conversation_id,

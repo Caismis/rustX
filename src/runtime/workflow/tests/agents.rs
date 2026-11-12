@@ -359,11 +359,7 @@ fn agent_fail_branch_requires_fail_edge_when_node_authors_permissions() {
         "on_error":{"type":"fail_branch"},
         "permissions":{"plan":"default","automatic":"default","full_access":"default"}
     });
-    assert!(compile_test(agent(
-        node(&fail),
-        &[("done", None, "triage.text")],
-    ))
-    .is_err());
+    assert!(compile_test(agent(node(&fail), &[("done", None, "triage.text")],)).is_err());
     compile_test(agent(
         node(&fail),
         &[
@@ -392,11 +388,7 @@ fn agent_entry_resource_permissions_inherit_named_profile_when_node_omits() {
         crate::runtime::types::ApprovalMode::FullAccess,
         Some(profile_permissions),
     );
-    let program = compile_test(agent(
-        node(&json!({})),
-        &[("done", None, "triage.text")],
-    ))
-    .unwrap();
+    let program = compile_test(agent(node(&json!({})), &[("done", None, "triage.text")])).unwrap();
     let WorkflowNodeProgram::Agent(compiled) = &program.block.nodes["triage"] else {
         panic!("expected agent node");
     };
@@ -434,11 +426,8 @@ async fn agent_admit_denies_when_named_profile_entry_permission_denies_without_n
         Some(profile_permissions),
     );
     let (_, cancellation) = workflow_cancellation();
-    let program = Arc::new(compile_test(agent(
-        node(&json!({})),
-        &[("done", None, "triage.text")],
-    ))
-    .unwrap());
+    let program =
+        Arc::new(compile_test(agent(node(&json!({})), &[("done", None, "triage.text")])).unwrap());
     let task = tokio::spawn(async move {
         runtime
             .run_test_foreground(
@@ -488,11 +477,8 @@ async fn agent_admit_blocks_before_prepare_when_named_profile_entry_denies_plan_
         Some(profile_permissions),
     );
     let (_, cancellation) = workflow_cancellation();
-    let program = Arc::new(compile_test(agent(
-        node(&json!({})),
-        &[("done", None, "triage.text")],
-    ))
-    .unwrap());
+    let program =
+        Arc::new(compile_test(agent(node(&json!({})), &[("done", None, "triage.text")])).unwrap());
     let task = tokio::spawn(async move {
         runtime
             .run_test_foreground(

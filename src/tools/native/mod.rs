@@ -660,14 +660,11 @@ mod tests {
             .collect()
     }
 
-    fn named_agent(
-        name: &str,
-        permissions: Option<ResourcePermissionSet>,
-    ) -> NamedAgentDefinition {
+    fn named_agent(name: &str, permissions: Option<ResourcePermissionSet>) -> NamedAgentDefinition {
         NamedAgentDefinition::new(
             SubagentName::parse(name).expect("name"),
             crate::runtime::agent_profile::AgentProfile {
-                description: format!("{name} agent").into(),
+                description: format!("{name} agent"),
                 instructions: "instructions".into(),
                 model: None,
                 execution_deadline: None,
@@ -692,11 +689,9 @@ mod tests {
             automatic: ResourcePermissionValue::Allow,
             full_access: ResourcePermissionValue::Allow,
         };
-        let catalog = AgentCatalog::new([
-            named_agent("alpha", Some(allow)),
-            named_agent("beta", None),
-        ])
-        .expect("catalog");
+        let catalog =
+            AgentCatalog::new([named_agent("alpha", Some(allow)), named_agent("beta", None)])
+                .expect("catalog");
         let frozen = freeze_named_agent_permissions(ask_user::registration(), &catalog);
         assert!(
             frozen.resource_permissions.is_none(),
@@ -719,7 +714,7 @@ mod tests {
         );
     }
 
-    /// After send_message injects the named profile into `agent`, A's Allow
+    /// After `send_message` injects the named profile into `agent`, A's Allow
     /// wins for that call even when sibling B is Deny (aggregate would Deny).
     #[test]
     fn send_message_permission_lookup_uses_named_profile_not_aggregate() {

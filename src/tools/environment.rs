@@ -323,7 +323,10 @@ mod tests {
                 ("GIT_CONFIG_VALUE_3".to_owned(), "cat".to_owned()),
                 ("GIT_CONFIG_KEY_4".to_owned(), "core.fsmonitor".to_owned()),
                 ("GIT_CONFIG_VALUE_4".to_owned(), "false".to_owned()),
-                ("GIT_CONFIG_KEY_5".to_owned(), "core.useBuiltinFSMonitor".to_owned()),
+                (
+                    "GIT_CONFIG_KEY_5".to_owned(),
+                    "core.useBuiltinFSMonitor".to_owned()
+                ),
                 ("GIT_CONFIG_VALUE_5".to_owned(), "false".to_owned()),
                 ("GIT_PAGER".to_owned(), "cat".to_owned()),
                 ("GIT_EDITOR".to_owned(), "true".to_owned()),
@@ -446,7 +449,10 @@ mod tests {
                 ("GIT_CONFIG_VALUE_3".to_owned(), "cat".to_owned()),
                 ("GIT_CONFIG_KEY_4".to_owned(), "core.fsmonitor".to_owned()),
                 ("GIT_CONFIG_VALUE_4".to_owned(), "false".to_owned()),
-                ("GIT_CONFIG_KEY_5".to_owned(), "core.useBuiltinFSMonitor".to_owned()),
+                (
+                    "GIT_CONFIG_KEY_5".to_owned(),
+                    "core.useBuiltinFSMonitor".to_owned()
+                ),
                 ("GIT_CONFIG_VALUE_5".to_owned(), "false".to_owned()),
                 ("GIT_PAGER".to_owned(), "cat".to_owned()),
                 ("GIT_EDITOR".to_owned(), "true".to_owned()),
@@ -484,10 +490,7 @@ mod tests {
         let hook = root.path().join("fsmonitor.sh");
         std::fs::write(
             &hook,
-            format!(
-                "#!/bin/sh\necho fired > '{}'\nexit 0\n",
-                marker.display()
-            ),
+            format!("#!/bin/sh\necho fired > '{}'\nexit 0\n", marker.display()),
         )
         .expect("hook");
         #[cfg(unix)]
@@ -506,10 +509,7 @@ mod tests {
                     ToolEnvironment::new()
                         .child_environment(&repo)
                         .into_iter()
-                        .chain([(
-                            "GIT_CONFIG_GLOBAL".to_owned(),
-                            "/dev/null".to_owned(),
-                        )])
+                        .chain([("GIT_CONFIG_GLOBAL".to_owned(), "/dev/null".to_owned())])
                         .chain([("GIT_CONFIG_NOSYSTEM".to_owned(), "1".to_owned())]),
                 )
                 .output()
@@ -521,13 +521,9 @@ mod tests {
         );
         // Force a local fsmonitor that would fire without the readonly guards.
         assert!(
-            run(&[
-                "config",
-                "core.fsmonitor",
-                &hook.display().to_string(),
-            ])
-            .status
-            .success()
+            run(&["config", "core.fsmonitor", &hook.display().to_string(),])
+                .status
+                .success()
         );
         std::fs::write(repo.join("file.txt"), "hello\n").expect("file");
         assert!(run(&["add", "file.txt"]).status.success());

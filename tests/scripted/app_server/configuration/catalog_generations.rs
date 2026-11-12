@@ -1038,11 +1038,12 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
 
         // Catalog primary choice must not silently recover an unavailable explicit Summary.
         let before = runtime.model_view();
-        let binding = crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
-            &runtime,
-        )
-        .unwrap()
-        .adopted_binding;
+        let binding =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
+            .unwrap()
+            .adopted_binding;
         let catalog = runtime.model_read_source().catalog_source();
         let model_position = (0..catalog.model_count() as u64)
             .find(|position| catalog.model_at(*position).unwrap().model.as_str() == "local/a")

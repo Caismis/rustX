@@ -1062,13 +1062,12 @@ impl AgentExecution<'_> {
         if prepared.mutation_target.is_some() {
             return Ok(());
         }
-        prepared.mutation_target =
-            crate::tools::native::support::bind_invocation_mutation_target(
-                &prepared.invocation.tool_name,
-                &prepared.invocation.arguments,
-                workspace_root,
-                tool_output,
-            )?;
+        prepared.mutation_target = crate::tools::native::support::bind_invocation_mutation_target(
+            &prepared.invocation.tool_name,
+            &prepared.invocation.arguments,
+            workspace_root,
+            tool_output,
+        )?;
         Ok(())
     }
 

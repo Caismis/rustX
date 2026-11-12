@@ -119,8 +119,7 @@ pub const EXECUTION_MODE_DESCRIPTION: &str = "Required execution ownership for t
 /// The runtime-owned reminder appended to the compiled model-facing
 /// description of a `ModelSelectable` tool. It belongs to model-definition
 /// compilation, not to any individual tool.
-pub const EXECUTION_MODE_DESCRIPTION_REMINDER: &str =
-    "Execution ownership: every call to this tool must include the top-level \"execution_mode\" \
+pub const EXECUTION_MODE_DESCRIPTION_REMINDER: &str = "Execution ownership: every call to this tool must include the top-level \"execution_mode\" \
      field, set to \"foreground\" when the agent needs this call's terminal result before it can \
      continue, or \"background\" when the work should keep running independently while the agent \
      proceeds.";
@@ -661,14 +660,13 @@ fn reject_elevation_collision_on_root_instance(
         ));
     }
     for key in ["$ref", "$recursiveRef"] {
-        if let Some(reference) = object.get(key).and_then(serde_json::Value::as_str) {
-            if let Some(target) = resolve_local_schema_ref(document, reference) {
-                if !stack.contains(&reference.to_owned()) {
-                    stack.push(reference.to_owned());
-                    reject_elevation_collision_on_root_instance(target, document, stack)?;
-                    stack.pop();
-                }
-            }
+        if let Some(reference) = object.get(key).and_then(serde_json::Value::as_str)
+            && let Some(target) = resolve_local_schema_ref(document, reference)
+            && !stack.contains(&reference.to_owned())
+        {
+            stack.push(reference.to_owned());
+            reject_elevation_collision_on_root_instance(target, document, stack)?;
+            stack.pop();
         }
     }
     for keyword in ["allOf", "anyOf", "oneOf"] {
@@ -724,12 +722,12 @@ fn rewrite_pound_refs_in_subschemas(schema: &mut serde_json::Value) {
             } else {
                 rewrite_pound_refs_in_subschemas(value);
             }
-        } else if keyword == "dependencies" {
-            if let serde_json::Value::Object(members) = value {
-                for subschema in members.values_mut() {
-                    if subschema.is_object() {
-                        rewrite_pound_refs_in_subschemas(subschema);
-                    }
+        } else if keyword == "dependencies"
+            && let serde_json::Value::Object(members) = value
+        {
+            for subschema in members.values_mut() {
+                if subschema.is_object() {
+                    rewrite_pound_refs_in_subschemas(subschema);
                 }
             }
         }
@@ -844,13 +842,11 @@ fn inject_elevation_into_object_schema(schema: &mut serde_json::Value) -> Result
         None => true,
         Some(property_names) => {
             // Unknown whether the name schema is usable until we try.
-            Validator::new(property_names)
-                .map(|validator| {
-                    validator.is_valid(&serde_json::Value::String(
-                        ELEVATION_REASON_FIELD.to_owned(),
-                    ))
-                })
-                .unwrap_or(false)
+            Validator::new(property_names).is_ok_and(|validator| {
+                validator.is_valid(&serde_json::Value::String(
+                    ELEVATION_REASON_FIELD.to_owned(),
+                ))
+            })
         }
     };
     if !property_names_ok {
@@ -1271,9 +1267,10 @@ pub fn validate_business_arguments(
 #[cfg(test)]
 mod tests {
     use super::{
-        compile_model_definition, resolve_invocation_metadata, validate_business_arguments,
-        validate_canonical_schema, validate_execution_metadata_contract, ELEVATION_REASON_FIELD,
-        ELEVATION_REASON_MAX_UTF8_BYTES, EXECUTION_MODE_DESCRIPTION_REMINDER, EXECUTION_MODE_FIELD,
+        ELEVATION_REASON_FIELD, ELEVATION_REASON_MAX_UTF8_BYTES,
+        EXECUTION_MODE_DESCRIPTION_REMINDER, EXECUTION_MODE_FIELD, compile_model_definition,
+        resolve_invocation_metadata, validate_business_arguments, validate_canonical_schema,
+        validate_execution_metadata_contract,
     };
     use crate::runtime::identity::ToolId;
     use crate::tools::types::{
@@ -1396,10 +1393,12 @@ mod tests {
             description.contains("terminal result"),
             "the description explains the semantic decision: {description}"
         );
-        assert!(schema["required"]
-            .as_array()
-            .expect("required")
-            .contains(&json!(EXECUTION_MODE_FIELD)));
+        assert!(
+            schema["required"]
+                .as_array()
+                .expect("required")
+                .contains(&json!(EXECUTION_MODE_FIELD))
+        );
     }
 
     #[test]
@@ -2331,9 +2330,11 @@ mod tests {
             invalid,
             super::SchemaError::InvalidExecutionMode("\"sideways\"".to_owned())
         );
-        assert!(invalid
-            .to_string()
-            .contains("\"execution_mode\": \"background\""));
+        assert!(
+            invalid
+                .to_string()
+                .contains("\"execution_mode\": \"background\"")
+        );
 
         assert!(matches!(
             resolve_invocation_metadata(
@@ -2383,10 +2384,12 @@ mod tests {
             json!({"type": "object"}),
         ))
         .expect("compile");
-        assert!(!compiled
-            .input_schema
-            .to_string()
-            .contains("__rustx_execution"));
+        assert!(
+            !compiled
+                .input_schema
+                .to_string()
+                .contains("__rustx_execution")
+        );
         assert!(!compiled.description.contains("__rustx_execution"));
     }
 

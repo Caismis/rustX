@@ -364,10 +364,11 @@ async fn live_tool_progress_reaches_the_observer_before_settlement() {
     assert_eq!(messages, vec!["first", "second"]);
 }
 
-/// P1: after Plan authorizes workspace-root PLAN.md, replacing that path with
+/// P1: after Plan authorizes workspace-root `PLAN.md`, replacing that path with
 /// an external symlink before execute must refuse the old authorization. The
-/// park hook sits after ToolExecutionStarted and before the executor runs.
+/// park hook sits after `ToolExecutionStarted` and before the executor runs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one authorize→swap→execute race path
 async fn plan_write_refuses_when_authorized_plan_target_is_replaced_before_execute() {
     use crate::agent::execution::test_sync::ToolStartPause;
     use crate::agent::lifecycle::ConfiguredApprovalPolicy;
@@ -440,9 +441,8 @@ async fn plan_write_refuses_when_authorized_plan_target_is_replaced_before_execu
         crate::scripted_suites::support::default_execution_policy(),
         runtime(&adapter),
         &tool_runtime,
-        crate::agent::AttemptLifecycle::inert().with_pre_tool_policy(Arc::new(
-            ConfiguredApprovalPolicy::new(ApprovalMode::Plan),
-        )),
+        crate::agent::AttemptLifecycle::inert()
+            .with_pre_tool_policy(Arc::new(ConfiguredApprovalPolicy::new(ApprovalMode::Plan))),
     )
     .expect("execution construction");
     execution.install_tool_start_pause(pause);

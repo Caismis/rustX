@@ -100,10 +100,7 @@ impl BoundMutationTarget {
 
     /// Re-resolves the interpreted path and refuses when the effective target
     /// or managed-output ownership no longer matches the bound authorization.
-    pub fn ensure_still_authorized(
-        &self,
-        tool_output: &ManagedToolOutput,
-    ) -> Result<(), String> {
+    pub fn ensure_still_authorized(&self, tool_output: &ManagedToolOutput) -> Result<(), String> {
         let current = resolve_effective_path(&self.interpreted)?;
         if current != self.effective {
             return Err(format!(

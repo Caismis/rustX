@@ -696,6 +696,7 @@ pub enum ToolPreflightError {
 /// never have to compare model-facing tool names to recognize a native
 /// capability.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)] // Ready carries the full prepared invocation; Rejected is rare.
 pub enum PreflightOutcome {
     /// The call is ready to execute: the stripped, validated invocation, its
     /// scheduling policy, and its resolved origin.

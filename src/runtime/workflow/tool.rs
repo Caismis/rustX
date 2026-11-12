@@ -241,7 +241,10 @@ impl WorkflowRuntime {
             audit_arguments: &prepared.invocation.arguments,
             elevation_reason: prepared.elevation_reason.as_deref(),
             workspace_root: Some(workspace_root),
-            mutation_target: prepared.mutation_target.as_ref().map(|target| target.path()),
+            mutation_target: prepared
+                .mutation_target
+                .as_ref()
+                .map(crate::tools::native::support::BoundMutationTarget::path),
             resource_permission,
         };
         self.read_model.node(node, |view| {

@@ -108,10 +108,8 @@ mod tests {
 
     #[test]
     fn unconsumed_pending_after_compaction_must_clear_last_emitted() {
-        let mut state = PermissionReminderState::for_admission(
-            ApprovalMode::Plan,
-            Some(ApprovalMode::Plan),
-        );
+        let mut state =
+            PermissionReminderState::for_admission(ApprovalMode::Plan, Some(ApprovalMode::Plan));
         assert!(state.pending_text().is_none());
         state.mark_after_compaction();
         assert!(state.pending);
@@ -120,7 +118,7 @@ mod tests {
     }
 
     /// Mirrors attempt settlement: compaction arms pending, then cancel before
-    /// ModelRequestStarted must clear `last_permission_reminder_mode` so the
+    /// `ModelRequestStarted` must clear `last_permission_reminder_mode` so the
     /// next attempt does not suppress the reminder.
     #[test]
     fn settlement_after_compaction_cancel_before_request_start_rearms_next_attempt() {
