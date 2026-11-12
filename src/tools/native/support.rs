@@ -77,6 +77,56 @@ impl MutationTarget {
     }
 }
 
+/// The native mutation target prepared once and bound to an authorized
+/// Write/Edit invocation.
+///
+/// Classification, execute, and commit all use this same held target. If the
+/// filesystem facts behind the interpreted path change after binding, the
+/// old authorization cannot continue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundMutationTarget {
+    /// Absolute, lexically normalized request path before symlink following.
+    interpreted: PathBuf,
+    /// Effective host path authorized for mutation.
+    effective: PathBuf,
+}
+
+impl BoundMutationTarget {
+    /// The effective absolute host path authorized for mutation.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.effective
+    }
+
+    /// Re-resolves the interpreted path and refuses when the effective target
+    /// or managed-output ownership no longer matches the bound authorization.
+    pub fn ensure_still_authorized(
+        &self,
+        tool_output: &ManagedToolOutput,
+    ) -> Result<(), String> {
+        let current = resolve_effective_path(&self.interpreted)?;
+        if current != self.effective {
+            return Err(format!(
+                "mutation target changed since authorization (authorized {}, now {})",
+                self.effective.display(),
+                current.display()
+            ));
+        }
+        tool_output
+            .ensure_model_mutation_allowed(&self.effective)
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    /// The commit handle for the still-authorized effective path.
+    #[must_use]
+    pub fn commit_target(&self) -> MutationTarget {
+        MutationTarget {
+            path: self.effective.clone(),
+        }
+    }
+}
+
 /// Resolves and authorizes one native mutation target before side effects.
 ///
 /// This is deliberately not a workspace sandbox. `ManagedToolOutput` owns
@@ -84,15 +134,37 @@ impl MutationTarget {
 /// read-only even though Read/Grep/Glob can inspect it.
 /// `interpreted` is the already absolute, lexically normalized result of
 /// [`interpret_path`].
-pub fn prepare_mutation_target(
+pub fn bind_mutation_target(
     interpreted: &Path,
     tool_output: &ManagedToolOutput,
-) -> Result<MutationTarget, String> {
+) -> Result<BoundMutationTarget, String> {
     let effective = resolve_effective_path(interpreted)?;
     tool_output
         .ensure_model_mutation_allowed(&effective)
         .map_err(|error| error.to_string())?;
-    Ok(MutationTarget { path: effective })
+    Ok(BoundMutationTarget {
+        interpreted: interpreted.to_path_buf(),
+        effective,
+    })
+}
+
+/// Binds the Write/Edit mutation target for one prepared invocation, or
+/// returns `None` for non-mutation tools.
+pub fn bind_invocation_mutation_target(
+    tool_name: &str,
+    arguments: &serde_json::Value,
+    workspace_root: &Path,
+    tool_output: &ManagedToolOutput,
+) -> Result<Option<BoundMutationTarget>, String> {
+    if !matches!(tool_name, "write" | "edit") {
+        return Ok(None);
+    }
+    let requested = arguments
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "write/edit invocation is missing a path".to_owned())?;
+    let interpreted = interpret_path(workspace_root, requested);
+    Ok(Some(bind_mutation_target(&interpreted, tool_output)?))
 }
 
 /// The one file-mutation commit of the native tool plane.
@@ -104,10 +176,10 @@ pub fn prepare_mutation_target(
 /// therefore observes either the previous file or the complete new one, and
 /// a failed commit leaves no temporary file behind.
 ///
-/// `prepare_mutation_target` resolves final and ancestor symlinks before this
-/// function is called. The prepared target is therefore both the path that
-/// passed the managed-output ownership check and the path committed here;
-/// ordinary write-through semantics are retained without replacing a link.
+/// The caller must pass the still-authorized target produced from a
+/// [`BoundMutationTarget`] so the path that passed ownership checks is the
+/// path committed here; ordinary write-through semantics are retained
+/// without replacing a link.
 pub fn atomic_commit(target: &MutationTarget, content: &[u8]) -> Result<(), String> {
     let parent = target
         .path
@@ -288,5 +360,42 @@ pub fn success_text(
         truncation,
         workflow: None,
         managed_output: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::managed_output::ManagedToolOutput;
+
+    #[test]
+    fn bound_target_refuses_when_plan_file_is_replaced_with_external_symlink() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let outside = tempfile::tempdir().expect("outside");
+        let plan = workspace.path().join("PLAN.md");
+        std::fs::write(&plan, "plan").expect("seed plan");
+        let tool_output = ManagedToolOutput::new(
+            crate::runtime::identity::ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ),
+            workspace.path().join("tool-output"),
+        )
+        .expect("managed tool output");
+        let interpreted = interpret_path(workspace.path(), "PLAN.md");
+        let bound = bind_mutation_target(&interpreted, &tool_output).expect("bind");
+        assert_eq!(bound.path(), &plan.canonicalize().expect("canonical plan"));
+
+        std::fs::remove_file(&plan).expect("remove plan");
+        let dangling = outside.path().join("secret.txt");
+        std::os::unix::fs::symlink(&dangling, &plan).expect("replace with symlink");
+
+        let error = bound
+            .ensure_still_authorized(&tool_output)
+            .expect_err("symlink replacement invalidates authorization");
+        assert!(
+            error.contains("mutation target changed since authorization"),
+            "{error}"
+        );
+        assert!(!dangling.exists(), "outside target must stay untouched");
     }
 }

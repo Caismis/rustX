@@ -4675,6 +4675,7 @@ mod mcp_race_tests {
                 questionnaire_requester: None,
                 todos: None,
                 subagent: None,
+                bound_mutation: None,
             },
         )
         .completion

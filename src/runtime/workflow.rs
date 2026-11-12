@@ -4329,6 +4329,7 @@ impl WorkflowRuntime {
             audit_arguments: &arguments,
             elevation_reason: None,
             workspace_root: Some(workspace_root),
+            mutation_target: None,
             resource_permission,
         };
         self.read_model.node(node_id, |view| {

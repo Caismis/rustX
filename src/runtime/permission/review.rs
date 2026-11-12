@@ -578,6 +578,7 @@ mod tests {
             audit_arguments: &arguments,
             elevation_reason: None,
             workspace_root: None,
+            mutation_target: None,
             resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,
         };
         let err = complete_review_arguments(&view).expect_err("budget");

@@ -210,6 +210,18 @@ impl WorkflowRuntime {
             )?;
         }
         let workspace_root = services.runtime.workspace().root();
+        let mut prepared = prepared;
+        match crate::tools::native::support::bind_invocation_mutation_target(
+            &prepared.invocation.tool_name,
+            &prepared.invocation.arguments,
+            workspace_root,
+            services.runtime.tool_output(),
+        ) {
+            Ok(bound) => prepared.mutation_target = bound,
+            Err(error) => {
+                return Ok((terminal(ToolExecutionStatus::Failed { error }), true));
+            }
+        }
         let resource_permission =
             crate::runtime::permission::effective_invocation_resource_permission(
                 prepared.resource_permissions,
@@ -229,6 +241,7 @@ impl WorkflowRuntime {
             audit_arguments: &prepared.invocation.arguments,
             elevation_reason: prepared.elevation_reason.as_deref(),
             workspace_root: Some(workspace_root),
+            mutation_target: prepared.mutation_target.as_ref().map(|target| target.path()),
             resource_permission,
         };
         self.read_model.node(node, |view| {
@@ -287,6 +300,7 @@ impl WorkflowRuntime {
                     context.resources().capability().effective_environment(),
                 );
                 native_context.stdout_capture = stdout;
+                native_context.bound_mutation = prepared.mutation_target.clone();
                 let requester = services
                     .lifecycle
                     .native_interaction_coordinator()

@@ -451,7 +451,9 @@ impl AgentExecution<'_> {
         // Issue #544: authorize each prepared invocation independently.
         // Allowed work may start without waiting for unrelated Ask/Review
         // siblings. Denied/cancelled slots settle their own result only.
-        // The original PreparedInvocation remains unchanged in every slot.
+        // Invocation identity and validated arguments stay frozen; only the
+        // native mutation owner may bind a prepared Write/Edit target onto
+        // the slot before authorization.
         //
         // If a group failure arrives after siblings already started, finish a
         // structurally complete result batch before surfacing the failure so
@@ -482,6 +484,16 @@ impl AgentExecution<'_> {
                         }
                         if self.cancellation.is_cancelled() {
                             slot.result = Some(cancelled_result(self.cancellation.reason()));
+                            continue;
+                        }
+                        if let Some(prepared) = slot.prepared.as_mut()
+                            && let Err(error) = Self::bind_prepared_mutation_target(
+                                prepared,
+                                self.tool_runtime.workspace().root(),
+                                self.tool_runtime.tool_output(),
+                            )
+                        {
+                            slot.result = Some(failed_result(&error));
                             continue;
                         }
                         let facts = ParallelAuthFacts::from_execution(slot_index, self, slot);
@@ -553,6 +565,7 @@ impl AgentExecution<'_> {
                                             slot_index,
                                             prepared.invocation.clone(),
                                             prepared.progress_capability,
+                                            prepared.mutation_target.clone(),
                                             todo_writer.clone(),
                                             occurrences[slot_index].clone(),
                                         )));
@@ -1014,13 +1027,20 @@ impl AgentExecution<'_> {
         call_index: usize,
         invocation: ToolInvocation,
         progress_capability: ToolProgressCapability,
+        bound_mutation: Option<crate::tools::native::support::BoundMutationTarget>,
         todos: Option<crate::tools::todo::TodoWriter>,
         occurrence: crate::message::types::ToolCallOccurrenceRef,
     ) -> (usize, ToolExecutionResult, Vec<RuntimeEvent>) {
         let (result, facts) = match invocation.mode {
             ToolInvocationMode::Foreground => {
-                self.run_foreground(&invocation, progress_capability, todos, &occurrence)
-                    .await
+                self.run_foreground(
+                    &invocation,
+                    progress_capability,
+                    bound_mutation,
+                    todos,
+                    &occurrence,
+                )
+                .await
             }
             // A detached execution outlives this batch, so it is handed no
             // task-list authority: nothing it does can land in the snapshot
@@ -1030,6 +1050,26 @@ impl AgentExecution<'_> {
             }
         };
         (call_index, result, facts)
+    }
+
+    /// Native mutation owner: prepare and hold the Write/Edit target before
+    /// authorization so classify/execute/commit share one bound path.
+    fn bind_prepared_mutation_target(
+        prepared: &mut PreparedInvocation,
+        workspace_root: &std::path::Path,
+        tool_output: &crate::tools::managed_output::ManagedToolOutput,
+    ) -> Result<(), String> {
+        if prepared.mutation_target.is_some() {
+            return Ok(());
+        }
+        prepared.mutation_target =
+            crate::tools::native::support::bind_invocation_mutation_target(
+                &prepared.invocation.tool_name,
+                &prepared.invocation.arguments,
+                workspace_root,
+                tool_output,
+            )?;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -1077,6 +1117,7 @@ impl AgentExecution<'_> {
         &self,
         invocation: &ToolInvocation,
         progress_capability: ToolProgressCapability,
+        bound_mutation: Option<crate::tools::native::support::BoundMutationTarget>,
         todos: Option<crate::tools::todo::TodoWriter>,
         occurrence: &crate::message::types::ToolCallOccurrenceRef,
     ) -> (ToolExecutionResult, Vec<RuntimeEvent>) {
@@ -1093,7 +1134,7 @@ impl AgentExecution<'_> {
             attempt_id: &self.request.attempt_id,
         };
         let execution_cancellation = self.cancellation.execution_cancellation();
-        let context = ToolExecutionContext::new(
+        let mut context = ToolExecutionContext::new(
             &self.request.conversation_id,
             None,
             execution_cancellation.clone(),
@@ -1103,6 +1144,7 @@ impl AgentExecution<'_> {
             self.tool_runtime.tool_output(),
             self.capability.snapshot().effective_environment(),
         );
+        context.bound_mutation = bound_mutation;
         let context = match self.lifecycle.native_questionnaire_requester(
             self.request.attempt_id.clone(),
             execution_cancellation,
@@ -1300,6 +1342,8 @@ struct ParallelAuthFacts {
     audit_arguments: serde_json::Value,
     elevation_reason: Option<String>,
     workspace_root: std::path::PathBuf,
+    /// Bound Write/Edit target held from authorize through execute/commit.
+    mutation_target: Option<std::path::PathBuf>,
     resource_permission: crate::runtime::permission::ResourcePermissionValue,
 }
 
@@ -1330,6 +1374,10 @@ impl ParallelAuthFacts {
             audit_arguments: slot.call.arguments.clone(),
             elevation_reason: prepared.elevation_reason.clone(),
             workspace_root: execution.tool_runtime.workspace().root().to_path_buf(),
+            mutation_target: prepared
+                .mutation_target
+                .as_ref()
+                .map(|target| target.path().to_path_buf()),
             resource_permission,
         }
     }
@@ -1355,6 +1403,7 @@ async fn authorize_owned(
         audit_arguments: &facts.audit_arguments,
         elevation_reason: facts.elevation_reason.as_deref(),
         workspace_root: Some(facts.workspace_root.as_path()),
+        mutation_target: facts.mutation_target.as_deref(),
         resource_permission: facts.resource_permission,
     };
     crate::tools::invocation::authorize(lifecycle, &view, cancellation).await

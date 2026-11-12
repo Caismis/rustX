@@ -320,6 +320,9 @@ pub struct PreToolView<'a> {
     pub elevation_reason: Option<&'a str>,
     /// Workspace root for PLAN.md authorization, when known.
     pub workspace_root: Option<&'a std::path::Path>,
+    /// Bound Write/Edit mutation target prepared by the native mutation owner
+    /// before authorization. Absent for non-mutation tools.
+    pub mutation_target: Option<&'a std::path::Path>,
     /// Effective resource permission for the active mode.
     pub resource_permission: ResourcePermissionValue,
 }
@@ -476,8 +479,6 @@ impl PreToolPolicy for ConfiguredApprovalPolicy {
         cancellation: &'a ExecutionCancellation,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
         Box::pin(async move {
-            let mutation_target =
-                mutation_target_from_arguments(view.tool_name, view.arguments, view.workspace_root);
             let bash_command = view
                 .arguments
                 .get("command")
@@ -485,7 +486,10 @@ impl PreToolPolicy for ConfiguredApprovalPolicy {
                 .filter(|_| view.tool_name == "bash");
             let hints = ClassificationHints {
                 workspace_root: view.workspace_root,
-                mutation_target: mutation_target.as_deref(),
+                // Use the native-owner bound target only. Do not re-resolve
+                // from arguments here: authorize and execute must share one
+                // held mutation target.
+                mutation_target: view.mutation_target,
                 bash_command,
             };
             let (kind, bash) = classify_tool_kind(view.tool_name, view.origin, &hints);
@@ -528,23 +532,6 @@ impl PreToolPolicy for ConfiguredApprovalPolicy {
             })
         })
     }
-}
-
-fn mutation_target_from_arguments(
-    tool_name: &str,
-    arguments: &serde_json::Value,
-    workspace_root: Option<&std::path::Path>,
-) -> Option<std::path::PathBuf> {
-    if !matches!(tool_name, "write" | "edit") {
-        return None;
-    }
-    let requested = arguments.get("path").and_then(|value| value.as_str())?;
-    // Match Write/Edit execution: relative paths resolve against the workspace
-    // root, then follow the same effective-path rules as `prepare_mutation_target`
-    // so Plan-mode PLAN.md classification and the later commit share one target.
-    let cwd = workspace_root.unwrap_or_else(|| std::path::Path::new("."));
-    let interpreted = crate::tools::native::support::interpret_path(cwd, requested);
-    crate::tools::native::support::resolve_effective_path(&interpreted).ok()
 }
 
 /// The immutable invocation facts of one call that reached invocation
@@ -1035,6 +1022,7 @@ mod tests {
             audit_arguments: arguments,
             elevation_reason: None,
             workspace_root: None,
+            mutation_target: None,
             resource_permission: ResourcePermissionValue::Default,
         }
     }

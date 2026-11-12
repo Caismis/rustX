@@ -363,3 +363,147 @@ async fn live_tool_progress_reaches_the_observer_before_settlement() {
         .collect();
     assert_eq!(messages, vec!["first", "second"]);
 }
+
+/// P1: after Plan authorizes workspace-root PLAN.md, replacing that path with
+/// an external symlink before execute must refuse the old authorization. The
+/// park hook sits after ToolExecutionStarted and before the executor runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plan_write_refuses_when_authorized_plan_target_is_replaced_before_execute() {
+    use crate::agent::execution::test_sync::ToolStartPause;
+    use crate::agent::lifecycle::ConfiguredApprovalPolicy;
+    use crate::message::types::MessageBlock;
+    use crate::runtime::ApprovalMode;
+    use crate::tools::types::ToolInvocationPolicy;
+
+    let call = ToolCall {
+        id: ToolCallId::new("call-plan"),
+        tool_id: ToolId::new("tool-write"),
+        name: "write".to_owned(),
+        arguments: serde_json::json!({
+            "path": "PLAN.md",
+            "content": "authorized plan body\n"
+        }),
+    };
+    let adapter = Arc::new(ScriptedAdapter::new(vec![
+        tool_call_script(&call),
+        vec![
+            ModelEvent::Started,
+            ModelEvent::TextDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: "done".to_owned(),
+            },
+            ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            },
+        ],
+    ]));
+    let store = Arc::new(
+        crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ))
+        .expect("in-memory store"),
+    );
+    let tool_runtime = tool_runtime_with_store(
+        "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        Some(store.clone()),
+    );
+    let workspace_root = tool_runtime.workspace().root().to_path_buf();
+    let plan_path = workspace_root.join("PLAN.md");
+    std::fs::write(&plan_path, "seed\n").expect("seed PLAN.md");
+    let outside = tempfile::tempdir().expect("outside");
+    let external_target = outside.path().join("secret.txt");
+
+    let mut tools = ToolRegistry::new();
+    crate::tools::register_native_tools(
+        &mut tools,
+        crate::tools::NativeToolResources {
+            background: tool_runtime.background().clone(),
+            subagents: None,
+            subagent_catalog: crate::runtime::subagent::AgentCatalog::empty(),
+        },
+        crate::tools::NativeToolPolicies {
+            write: ToolInvocationPolicy::new(
+                crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            ),
+            ..crate::tools::NativeToolPolicies::default()
+        },
+    )
+    .expect("register native tools");
+    let lease = capability_lease(tools, &tool_runtime).await.into_lease();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let (pause, mut reached, release) = ToolStartPause::install();
+    let mut execution = AgentExecution::new(
+        request(&adapter),
+        lease,
+        &cancellation,
+        crate::scripted_suites::support::default_execution_policy(),
+        runtime(&adapter),
+        &tool_runtime,
+        crate::agent::AttemptLifecycle::inert().with_pre_tool_policy(Arc::new(
+            ConfiguredApprovalPolicy::new(ApprovalMode::Plan),
+        )),
+    )
+    .expect("execution construction");
+    execution.install_tool_start_pause(pause);
+
+    // ToolStartPause parks with a blocking recv after start. Wait/swap on a
+    // dedicated thread so the parked worker can be released.
+    let swap_plan = plan_path.clone();
+    let swap_external = external_target.clone();
+    let swap = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("swap runtime");
+        runtime.block_on(async {
+            reached
+                .wait_for(|parked| *parked)
+                .await
+                .expect("tool-start park stays open");
+            std::fs::remove_file(&swap_plan).expect("remove authorized PLAN.md");
+            std::os::unix::fs::symlink(&swap_external, &swap_plan)
+                .expect("replace PLAN.md with external symlink");
+            release.send(()).expect("release execute frontier");
+        });
+    });
+    let result = execution.run().await;
+    swap.join().expect("swap thread");
+
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop
+        }
+    ));
+    let messages = result.messages();
+    let status = messages
+        .iter()
+        .find_map(|message| match message {
+            MessageBlock::Tool(tool) if tool.tool_call_id.as_str() == "call-plan" => {
+                Some(&tool.result.status)
+            }
+            _ => None,
+        })
+        .expect("plan write result");
+    match status {
+        ToolExecutionStatus::Failed { error } => {
+            assert!(
+                error.contains("mutation target changed since authorization"),
+                "expected bind-contract failure, got {error}"
+            );
+        }
+        other => panic!("expected Failed status, got {other:?}"),
+    }
+    assert!(
+        !external_target.exists(),
+        "external symlink destination must remain untouched"
+    );
+    assert!(
+        std::fs::symlink_metadata(&plan_path)
+            .expect("plan path metadata")
+            .file_type()
+            .is_symlink(),
+        "PLAN.md remains the swapped symlink rather than being rewritten as the authorized file"
+    );
+}

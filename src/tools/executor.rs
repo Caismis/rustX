@@ -165,6 +165,9 @@ pub struct ToolExecutionContext<'a> {
     ///
     /// [`AgentExecution`]: crate::agent::AgentExecution
     pub(crate) subagent: Option<crate::runtime::subagent::NativeExecutionContext>,
+    /// Bound Write/Edit mutation target authorized for this invocation.
+    /// Absent for non-mutation tools; Write/Edit fail closed when missing.
+    pub(crate) bound_mutation: Option<crate::tools::native::support::BoundMutationTarget>,
 }
 
 impl<'a> ToolExecutionContext<'a> {
@@ -196,6 +199,7 @@ impl<'a> ToolExecutionContext<'a> {
             goal: self.goal.clone(),
             schedule: self.schedule.clone(),
             subagent: self.subagent.clone(),
+            bound_mutation: self.bound_mutation.clone(),
         }
     }
 
@@ -235,6 +239,7 @@ impl<'a> ToolExecutionContext<'a> {
             schedule: None,
             subagent: None,
             workspace_changes: None,
+            bound_mutation: None,
         }
     }
 
@@ -733,6 +738,9 @@ pub struct PreparedInvocation {
     /// Empty unless the registration freezes more than one MCP resource target.
     pub resource_permission_targets:
         BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
+    /// Native Write/Edit mutation target prepared before authorization and
+    /// held through execute/commit. Absent for non-mutation tools.
+    pub mutation_target: Option<crate::tools::native::support::BoundMutationTarget>,
 }
 
 /// The immutable validating tool registry of one attempt's capability set.
@@ -1305,6 +1313,7 @@ impl ToolRegistry {
             progress_capability: entry.executor.progress_capability(),
             resource_permissions: entry.resource_permissions,
             resource_permission_targets: entry.resource_permission_targets.clone(),
+            mutation_target: None,
         })
     }
 
@@ -2180,6 +2189,7 @@ mod tests {
             questionnaire_requester: None,
             todos: None,
             subagent: None,
+            bound_mutation: None,
             workspace_changes: None,
         };
         let executor = registry.executor(&prepared.invocation.tool_id);
