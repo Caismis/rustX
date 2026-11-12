@@ -431,19 +431,24 @@ class Workflow(unittest.TestCase):
 class StackedMergeGit(unittest.TestCase):
     """Real-git regressions for stacked Merge verification parents."""
 
+    GIT_IDENTITY = ("-c", "user.name=test", "-c", "user.email=test@example.com")
+
     def git(self, repo, *args):
         return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
 
+    def git_commit(self, repo, *args):
+        # CI runners often have no user.identity; merges also create commits.
+        return self.git(repo, *self.GIT_IDENTITY, *args)
+
     def commit_tree(self, repo, message):
         self.git(repo, "add", "-A")
-        self.git(repo, "-c", "user.name=test", "-c", "user.email=test@example.com",
-                 "commit", "--allow-empty", "-m", message)
+        self.git_commit(repo, "commit", "--allow-empty", "-m", message)
         return self.git(repo, "rev-parse", "HEAD").stdout.strip()
 
     def test_tree_equivalent_stack_merge_is_accepted_and_foreign_content_is_rejected(self):
         planned = v.plan("pull_request", [], modified("README.md"))
         with tempfile.TemporaryDirectory() as repo:
-            self.git(repo, "init")
+            self.git(repo, "init", "-b", "main")
             (pathlib.Path(repo) / "README.md").write_text("base\n", encoding="utf-8")
             base = self.commit_tree(repo, "base")
 
@@ -455,7 +460,7 @@ class StackedMergeGit(unittest.TestCase):
             self.git(repo, "checkout", "-b", "stack-equiv", base)
             equiv = self.commit_tree(repo, "stack-equiv-empty")
             # Merge head into the equivalent intermediate (GitHub stack shape).
-            self.git(repo, "merge", "--no-ff", "-m", "tested", head)
+            self.git_commit(repo, "merge", "--no-ff", "-m", "tested", head)
             merge = self.git(repo, "rev-parse", "HEAD").stdout.strip()
             parents = self.git(repo, "rev-list", "--parents", "-n", "1", merge).stdout.split()
             tested = {"merge": parents[0], "parents": parents[1:], "base": base}
@@ -464,7 +469,7 @@ class StackedMergeGit(unittest.TestCase):
             self.git(repo, "checkout", "-b", "stack-foreign", base)
             (pathlib.Path(repo) / "impl.txt").write_text("extra\n", encoding="utf-8")
             foreign = self.commit_tree(repo, "foreign")
-            self.git(repo, "merge", "--no-ff", "-m", "tested-foreign", head)
+            self.git_commit(repo, "merge", "--no-ff", "-m", "tested-foreign", head)
             merge_f = self.git(repo, "rev-parse", "HEAD").stdout.strip()
             parents_f = self.git(repo, "rev-list", "--parents", "-n", "1", merge_f).stdout.split()
             tested_f = {"merge": parents_f[0], "parents": parents_f[1:], "base": base}
