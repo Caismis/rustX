@@ -216,17 +216,21 @@ impl SessionModelConfig {
 
     /// Recover an unchanged explicit auxiliary policy when its model is absent
     /// from the catalog. Called only from explicit recovery opt-in paths
-    /// (`recover_unavailable_auxiliary`, configuration capture with
-    /// `allow_unselected`); catalog publication and ordinary selection leave an
-    /// unavailable Explicit choice in place (#543).
+    /// (`recover_unavailable_auxiliary`); catalog publication, ordinary
+    /// selection, and configuration capture leave an unavailable Explicit
+    /// choice in place (#543).
     pub(crate) fn use_available_auxiliary_models(
         &mut self,
         catalog: &crate::model::catalog::ModelCatalog,
         previous: Option<&Self>,
     ) {
-        let carried = previous.map(|config| &config.auxiliary);
-        if carried.is_none_or(|carried| carried == &self.auxiliary)
-            && let AuxiliaryModelPolicy::Explicit { model, .. } = &self.auxiliary
+        let Some(previous) = previous else {
+            return;
+        };
+        if previous.auxiliary != self.auxiliary {
+            return;
+        }
+        if let AuxiliaryModelPolicy::Explicit { model, .. } = &self.auxiliary
             && catalog.model(model).is_err()
         {
             self.auxiliary = AuxiliaryModelPolicy::default();
@@ -1693,6 +1697,32 @@ request_params = '{{"effort":"high"}}'
             serde_json::to_value(source).unwrap(),
             serde_json::to_value(state.view()).unwrap()
         );
+    }
+
+    #[test]
+    fn explicit_auxiliary_recovery_requires_unchanged_carried_policy() {
+        let catalog = example_catalog();
+        let explicit = AuxiliaryModelPolicy::Explicit {
+            model: ModelRef::parse("example/missing").unwrap(),
+            profile: AuxiliaryProfileSelection::ModelDefault,
+            request_params: RequestParams::new(),
+            max_output_tokens: None,
+        };
+        let mut config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
+        config.auxiliary = explicit.clone();
+
+        config.use_available_auxiliary_models(&catalog, None);
+        assert_eq!(config.auxiliary, explicit);
+
+        let unchanged = config.clone();
+        config.use_available_auxiliary_models(&catalog, Some(&unchanged));
+        assert_eq!(config.auxiliary, AuxiliaryModelPolicy::default());
+
+        let mut carried = config.clone();
+        carried.auxiliary = AuxiliaryModelPolicy::default();
+        config.auxiliary = explicit.clone();
+        config.use_available_auxiliary_models(&catalog, Some(&carried));
+        assert_eq!(config.auxiliary, explicit);
     }
 
     #[test]

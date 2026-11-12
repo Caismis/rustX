@@ -300,8 +300,13 @@ impl RuntimeInner {
                 fanout.child_settled();
             }
             state.conversation = Some(result.conversation);
-            if let Some(mode) = result.permission_reminder_emitted {
-                state.last_permission_reminder_mode = Some(mode);
+            match (
+                result.permission_reminder_emitted,
+                result.permission_reminder_unconsumed_pending,
+            ) {
+                (Some(mode), _) => state.last_permission_reminder_mode = Some(mode),
+                (None, true) => state.last_permission_reminder_mode = None,
+                (None, false) => {}
             }
             if let Some(diagnostic) = durable_failure {
                 let operation = match result.durable_failure_kind {

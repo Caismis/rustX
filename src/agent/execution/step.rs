@@ -114,6 +114,7 @@ impl SettledExecution<'_> {
             durable_failure: self.execution.durable_failure,
             durable_failure_kind: self.execution.durable_failure_kind,
             permission_reminder_emitted: self.execution.permission_reminder.emitted_mode(),
+            permission_reminder_unconsumed_pending: self.execution.permission_reminder.pending,
         }
     }
 }

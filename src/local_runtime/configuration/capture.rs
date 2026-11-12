@@ -539,9 +539,6 @@ impl UserConfigManager {
                 })
                 .transpose()?;
         }
-        if allow_unselected && let Some(selection) = &mut config.agent.model {
-            selection.use_available_auxiliary_models(&models, None);
-        }
         let mcp = super::super::mcp_resources::load(
             &self.sources.home_directory.join("rustx/.agents"),
             Some(&locations.workspace),

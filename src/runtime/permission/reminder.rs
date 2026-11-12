@@ -105,4 +105,17 @@ mod tests {
         );
         assert!(changed.pending_text().unwrap().contains("automatic"));
     }
+
+    #[test]
+    fn unconsumed_pending_after_compaction_must_clear_last_emitted() {
+        let mut state = PermissionReminderState::for_admission(
+            ApprovalMode::Plan,
+            Some(ApprovalMode::Plan),
+        );
+        assert!(state.pending_text().is_none());
+        state.mark_after_compaction();
+        assert!(state.pending);
+        assert!(state.pending_text().unwrap().contains("plan"));
+        assert_eq!(state.emitted_mode(), None);
+    }
 }
