@@ -1,306 +1,592 @@
-//! Enumerate with the real index; sample bytes without Git attributes or filters.
-use super::sampling;
-use super::{GitContext, Repository, run};
+//! In-process index enumeration and bounded raw sampling at attempt endpoints.
+use super::{Repository, sampling};
+use crate::{
+    runtime::cancellation::CancellationSignal, workspace_changes::storage::SnapshotDirectory,
+};
+use gix::{
+    bstr::{BStr, ByteSlice},
+    objs::Write as _,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt::Write as _,
-    fs::{self, File},
-    os::unix::ffi::OsStrExt,
-    path::{Path, PathBuf},
-    sync::Arc,
+    fs::File,
+    io::{self, Read},
+    path::Path,
+    sync::{Arc, OnceLock, atomic::AtomicBool},
 };
 
 const PATH_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone)]
-struct Entry {
-    mode: String,
-    object: String,
+pub(super) struct Entry {
+    pub mode: String,
+    object: gix::ObjectId,
     sparse: bool,
+}
+
+pub(super) struct State {
+    repo: gix::Repository,
+    previous: BTreeMap<String, Entry>,
+    snapshots: BTreeMap<String, BTreeMap<String, Entry>>,
+}
+
+/// No Git environment overrides or executable discovery. These operations only
+/// parse configuration, refs, the index and ignore files; never use a filter,
+/// fsmonitor, hook, credential helper, external diff or lazy object fetch.
+pub(super) fn open(cwd: &Path) -> Result<Option<gix::Repository>, String> {
+    let Ok((path, _)) = gix::discover::upwards(cwd) else {
+        return Ok(None);
+    };
+    let mut permissions = gix::open::Permissions::all();
+    permissions.config.git_binary = false;
+    permissions.config.env = false;
+    permissions.env.git_prefix = gix::sec::Permission::Deny;
+    permissions.env.objects = gix::sec::Permission::Deny;
+    permissions.attributes = gix::open::permissions::Attributes::isolated();
+    let options = gix::open::Options::default()
+        .permissions(permissions)
+        .bail_if_untrusted(true)
+        .strict_config(true)
+        .config_overrides([
+            "core.fsmonitor=false",
+            "core.hooksPath=/dev/null",
+            "core.attributesFile=/dev/null",
+            "index.threads=1",
+        ]);
+    let (git_dir, _) = path.into_repository_and_work_tree_directories();
+    if std::fs::metadata(git_dir.join("config")).is_ok_and(|metadata| !metadata.is_file()) {
+        return Err("Git configuration is not a regular file".into());
+    }
+    gix::discover_opts(cwd, gix::discover::upwards::Options::default(), options)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+/// Poll cancellation between bounded compression reads, keeping the memory and
+/// private directory owned until the blocking writer has physically returned.
+struct ObjectInput<'a> {
+    bytes: &'a [u8],
+    cancellation: &'a CancellationSignal,
+}
+impl Read for ObjectInput<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.cancellation.is_cancelled() {
+            // Interrupted is retryable to io::copy; cancellation is permanent.
+            return Err(io::Error::other("Git snapshot was cancelled"));
+        }
+        let limit = buffer.len().min(64 * 1024);
+        self.bytes.read(&mut buffer[..limit])
+    }
+}
+
+impl State {
+    pub fn new(repo: gix::Repository) -> Self {
+        Self {
+            repo: repo.with_object_memory(),
+            previous: BTreeMap::new(),
+            snapshots: BTreeMap::new(),
+        }
+    }
+
+    pub fn entries(&self, tree: &str) -> Result<&BTreeMap<String, Entry>, String> {
+        self.snapshots
+            .get(tree)
+            .ok_or_else(|| "Git snapshot unavailable".into())
+    }
+
+    pub fn bytes(&self, tree: &str, path: &str, limit: usize) -> Result<Option<Vec<u8>>, String> {
+        let id = gix::ObjectId::from_hex(tree.as_bytes())
+            .map_err(|_| "Git file metadata failed".to_owned())?;
+        let tree = self
+            .repo
+            .find_tree(id)
+            .map_err(|_| "Git file metadata failed".to_owned())?;
+        let Some(entry) = tree
+            .lookup_entry(path.split('/').map(str::as_bytes))
+            .map_err(|_| "Git file metadata failed".to_owned())?
+        else {
+            return Ok(Some(Vec::new()));
+        };
+        if entry.mode().is_commit() || entry.mode().is_tree() {
+            return Ok(None);
+        }
+        let id = entry.object_id();
+        // ls-tree -l reports BAD rather than a size for an unavailable blob.
+        // Preserve that unknown endpoint without allocating an oversized body.
+        let Ok(header) = self.repo.find_header(id) else {
+            return Ok(None);
+        };
+        if header.size() > limit as u64 {
+            return Ok(None);
+        }
+        let mut object = self
+            .repo
+            .find_blob(id)
+            .map_err(|_| "Git file comparison unavailable".to_owned())?;
+        Ok(Some(object.take_data()))
+    }
+
+    pub fn finish_sampling(&mut self) {
+        self.previous.clear();
+        self.snapshots.clear();
+        drop(self.repo.set_freelist(None));
+    }
+
+    pub fn materialize(
+        &mut self,
+        scratch: &OnceLock<Arc<SnapshotDirectory>>,
+        cancellation: &CancellationSignal,
+    ) -> Result<Arc<SnapshotDirectory>, String> {
+        if cancellation.is_cancelled() {
+            return Err("Git snapshot was cancelled".into());
+        }
+        let directory = if let Some(directory) = scratch.get() {
+            Arc::clone(directory)
+        } else {
+            let directory = Arc::new(
+                SnapshotDirectory::create(&std::env::temp_dir())
+                    .map_err(|error| error.to_string())?,
+            );
+            let _ = scratch.set(Arc::clone(&directory));
+            directory
+        };
+        let git_dir = directory.path().join("git");
+        if !git_dir.join("objects").exists() {
+            gix::ThreadSafeRepository::init_opts(
+                &git_dir,
+                gix::create::Kind::Bare,
+                gix::create::Options {
+                    object_hash: Some(self.repo.object_hash()),
+                    ..Default::default()
+                },
+                gix::open::Options::isolated(),
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        let objects = gix::odb::loose::Store::at(git_dir.join("objects"), self.repo.object_hash());
+        // reset_object_memory transfers the buffers, avoiding a second workspace
+        // copy. Restore them even if an object write fails, for comparisons.
+        let memory = self
+            .repo
+            .objects
+            .reset_object_memory()
+            .ok_or("Git snapshot memory unavailable")?;
+        let result = memory.iter().try_for_each(|(id, (kind, bytes))| {
+            objects
+                .write_stream_with_known_id(
+                    *kind,
+                    bytes.len() as u64,
+                    &mut ObjectInput {
+                        bytes,
+                        cancellation,
+                    },
+                    *id,
+                )
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        });
+        if let Err(error) = result {
+            self.repo.objects.set_object_memory(memory);
+            return Err(error);
+        }
+        // Completed records retain the private object store, not a workspace-sized
+        // allocation or handles to the user's repository. New samples still write
+        // into memory if this recorder takes another endpoint.
+        self.repo = gix::open_opts(&git_dir, gix::open::Options::isolated().strict_config(true))
+            .map_err(|error| error.to_string())?
+            .with_object_memory();
+        Ok(directory)
+    }
+
+    fn snapshot(
+        &mut self,
+        root: &Path,
+        exclusion: &Path,
+        cancellation: &CancellationSignal,
+    ) -> Result<String, String> {
+        let worktree = open(root)?.ok_or("Git worktree disappeared")?;
+        let index = worktree
+            .index_or_empty()
+            .map_err(|error| error.to_string())?;
+        let worktree_root = worktree
+            .workdir()
+            .ok_or("Git worktree unavailable")?
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let relative = root
+            .strip_prefix(&worktree_root)
+            .map_err(|_| "Snapshot root left the Git worktree")?;
+        let scope = relative.to_str().ok_or("Git worktree path is not UTF-8")?;
+        let scope = if scope.is_empty() {
+            String::new()
+        } else {
+            format!("{scope}/")
+        };
+        let tracked = tracked_entries(&worktree, &index, cancellation, &scope)?;
+        let mut candidates = self.previous.clone();
+        candidates.extend(tracked.clone());
+        for path in untracked(
+            &worktree,
+            &index,
+            &worktree_root,
+            exclusion,
+            cancellation,
+            &scope,
+        )? {
+            candidates.entry(path).or_insert(Entry {
+                mode: "100644".into(),
+                object: gix::ObjectId::null(self.repo.object_hash()),
+                sparse: false,
+            });
+        }
+        candidates.retain(|path, _| !root.join(path).starts_with(exclusion));
+        let endpoints = self.raw_endpoints(root, candidates, &tracked, cancellation)?;
+        if endpoints
+            .values()
+            .any(|entry| entry.mode == "160000" && entry.object.kind() != self.repo.object_hash())
+        {
+            return Err("Nested Git object format does not match the snapshot".into());
+        }
+        let mut tree = gix::objs::tree::Editor::new(
+            gix::objs::Tree::default(),
+            &self.repo.objects,
+            self.repo.object_hash(),
+        );
+        for (path, entry) in &endpoints {
+            validate_path(path, entry)?;
+            let mode = gix::objs::tree::EntryMode::from_bytes(entry.mode.as_bytes())
+                .ok_or("invalid Git snapshot mode")?;
+            tree.upsert(path.split('/').map(BStr::new), mode.kind(), entry.object)
+                .map_err(|error| error.to_string())?;
+        }
+        let id = tree
+            .write(|tree| self.repo.objects.write(tree))
+            .map_err(|error| error.to_string())?
+            .to_string();
+        self.previous.clone_from(&endpoints);
+        self.snapshots.insert(id.clone(), endpoints);
+        Ok(id)
+    }
+
+    fn raw_endpoints(
+        &self,
+        root: &Path,
+        mut candidates: BTreeMap<String, Entry>,
+        tracked: &BTreeMap<String, Entry>,
+        cancellation: &CancellationSignal,
+    ) -> Result<BTreeMap<String, Entry>, String> {
+        let root_file = File::open(root).map_err(|error| error.to_string())?;
+        let links = discover_links(&root_file, &candidates, tracked, cancellation)?;
+        candidates.retain(|path, _| !links.keys().any(|link| Path::new(path).starts_with(link)));
+        let mut endpoints = BTreeMap::new();
+        for (path, retained) in links {
+            let entry = if let Some(entry) = retained {
+                entry
+            } else {
+                let nested = open(&root.join(&path))?.ok_or("Nested Git endpoint unavailable")?;
+                let head = nested
+                    .head()
+                    .map_err(|error| error.to_string())?
+                    .id()
+                    .ok_or("Nested Git HEAD is unborn")?
+                    .detach();
+                Entry {
+                    mode: "160000".into(),
+                    object: head,
+                    sparse: false,
+                }
+            };
+            endpoints.insert(path, entry);
+        }
+        let mut budget = sampling::Budget::new(cancellation);
+        for path in candidates.into_keys() {
+            let mut bytes = Vec::new();
+            match sampling::sample(&root_file, Path::new(&path), &mut bytes, &mut budget)? {
+                sampling::Sample::File(mode) => {
+                    // Bypass Repository::write_blob's disk existence check: every
+                    // sampled byte must remain owned even if the real repo is deleted.
+                    let object = self
+                        .repo
+                        .objects
+                        .write_buf(gix::objs::Kind::Blob, &bytes)
+                        .map_err(|error| error.to_string())?;
+                    endpoints.insert(
+                        path,
+                        Entry {
+                            mode,
+                            object,
+                            sparse: false,
+                        },
+                    );
+                }
+                sampling::Sample::Missing => {}
+                sampling::Sample::Unsupported => {
+                    if let Some(previous) = self.previous.get(&path) {
+                        endpoints.insert(path, previous.clone());
+                    }
+                }
+            }
+        }
+        Ok(endpoints)
+    }
 }
 
 impl Repository {
     pub async fn snapshot(&self) -> Result<String, String> {
-        let previous = self.entries(false).await?;
-        let tracked = self.entries(true).await?;
-        let candidates = self.candidates(&previous, &tracked).await?;
-        let (mut endpoints, candidates) = self.gitlinks(candidates, tracked).await?;
-        let samples = self.samples(candidates, previous).await?;
-        endpoints.extend(samples.retained);
-        endpoints.extend(self.hash_samples(samples.files).await?);
-        let scratch = Arc::clone(&self.scratch);
-        tokio::task::spawn_blocking(move || fs::remove_dir_all(scratch.path().join("raw")))
-            .await
-            .map_err(|error| error.to_string())?
-            .map_err(|error| error.to_string())?;
-        self.write_tree(endpoints).await
-    }
-
-    async fn candidates(
-        &self,
-        previous: &BTreeMap<String, Entry>,
-        tracked: &BTreeMap<String, Entry>,
-    ) -> Result<BTreeMap<String, Entry>, String> {
-        let mut candidates = previous.clone();
-        candidates.extend(tracked.clone());
-        let others = self
-            .worktree_files(&["ls-files", "--others", "--exclude-standard", "-z"])
-            .await?;
-        let others = String::from_utf8(others).map_err(|error| error.to_string())?;
-        for path in others.split_terminator('\0') {
-            candidates
-                .entry(path.trim_end_matches('/').to_owned())
-                .or_insert_with(|| Entry {
-                    mode: "100644".into(),
-                    object: String::new(),
-                    sparse: false,
-                });
-        }
-        candidates.retain(|path, _| !self.scratch.contains(&self.root.join(path)));
-        Ok(candidates)
-    }
-
-    async fn worktree_files(&self, args: &[&str]) -> Result<Vec<u8>, String> {
-        let exclusion = self
-            .scratch
-            .root()
-            .strip_prefix(&self.root)
-            .ok()
-            .map(|path| format!(":(exclude,literal){}", path.to_string_lossy()));
-        let mut args = args.to_vec();
-        if let Some(exclusion) = &exclusion {
-            args.extend(["--", ".", exclusion]);
-        }
-        let (status, output) = run(
-            &self.root,
-            &args,
-            GitContext::Worktree(&self.scratch),
-            PATH_BYTES,
-            None,
-            &self.cancellation,
-        )
-        .await?;
-        if status != 0 {
-            return Err("Git worktree path discovery failed".into());
-        }
-        Ok(output)
-    }
-
-    async fn gitlinks(
-        &self,
-        mut candidates: BTreeMap<String, Entry>,
-        tracked: BTreeMap<String, Entry>,
-    ) -> Result<(BTreeMap<String, Entry>, BTreeMap<String, Entry>), String> {
         let root = self.root.clone();
+        let exclusion = self.exclusion.clone();
         let cancellation = self.cancellation.clone();
-        let (links, candidates) = tokio::task::spawn_blocking(move || {
-            let root = File::open(root).map_err(|error| error.to_string())?;
-            let links = discover_links(&root, &candidates, &tracked, &cancellation)?;
-            candidates
-                .retain(|path, _| !links.keys().any(|link| Path::new(path).starts_with(link)));
-            Ok::<_, String>((links, candidates))
-        })
-        .await
-        .map_err(|error| error.to_string())??;
-        let mut endpoints = BTreeMap::new();
-        for (path, retained) in links {
-            let directory = self.root.join(&path);
-            if let Some(entry) = retained {
-                endpoints.insert(path, entry);
-            } else {
-                let (status, head) = run(
-                    &directory,
-                    &["rev-parse", "--verify", "HEAD"],
-                    GitContext::Worktree(&self.scratch),
-                    1024,
-                    None,
-                    &self.cancellation,
-                )
-                .await?;
-                if status != 0 {
-                    return Err("Nested Git endpoint unavailable".into());
-                }
-                endpoints.insert(
-                    path.clone(),
-                    Entry {
-                        mode: "160000".into(),
-                        object: String::from_utf8(head)
-                            .map_err(|error| error.to_string())?
-                            .trim()
-                            .into(),
-                        sparse: false,
-                    },
-                );
-            }
-        }
-        Ok((endpoints, candidates))
-    }
-
-    async fn samples(
-        &self,
-        candidates: BTreeMap<String, Entry>,
-        previous: BTreeMap<String, Entry>,
-    ) -> Result<Samples, String> {
-        let root = self.root.clone();
-        let scratch = Arc::clone(&self.scratch);
-        let cancellation = self.cancellation.clone();
+        let state = Arc::clone(&self.state);
         tokio::task::spawn_blocking(move || {
-            let directory = scratch.path().join("raw");
-            fs::create_dir(&directory).map_err(|error| error.to_string())?;
-            let root = File::open(root).map_err(|error| error.to_string())?;
-            let mut samples = Samples::default();
-            let mut budget = sampling::Budget::new(&cancellation);
-            for path in candidates.into_keys() {
-                let output = directory.join(samples.files.len().to_string());
-                match sampling::sample(&root, Path::new(&path), &output, &mut budget)? {
-                    sampling::Sample::File(mode) => samples.files.push((path, mode, output)),
-                    // The private baseline contains only physically sampled
-                    // files. Missing at both endpoints is already unchanged;
-                    // a sampled file that disappears is a deletion, regardless
-                    // of skip-worktree flags left in the real index.
-                    sampling::Sample::Missing => {}
-                    sampling::Sample::Unsupported => {
-                        if let Some(before) = previous.get(&path) {
-                            samples.retained.insert(path, before.clone());
-                        }
-                    }
-                }
-            }
-            Ok(samples)
+            state
+                .lock()
+                .expect("workspace Git state")
+                .snapshot(&root, &exclusion, &cancellation)
         })
         .await
         .map_err(|error| error.to_string())?
     }
+}
 
-    async fn hash_samples(
-        &self,
-        samples: Vec<(String, String, PathBuf)>,
-    ) -> Result<BTreeMap<String, Entry>, String> {
-        let mut endpoints = BTreeMap::new();
-        if samples.is_empty() {
-            return Ok(endpoints);
-        }
-        let mut input = Vec::new();
-        for (_, _, path) in &samples {
-            quoted_path(&mut input, path);
-        }
-        let (status, hashes) = run(
-            &self.root,
-            &["hash-object", "-w", "--no-filters", "--stdin-paths"],
-            GitContext::Snapshot(&self.scratch),
-            PATH_BYTES,
-            Some(&input),
-            &self.cancellation,
+/// Match the private Git index's path checks before publishing a raw tree.
+fn validate_path(path: &str, entry: &Entry) -> Result<(), String> {
+    let mut components = path.split('/').peekable();
+    while let Some(component) = components.next() {
+        let mode = (components.peek().is_none() && entry.mode == "120000")
+            .then_some(gix::validate::path::component::Mode::Symlink);
+        gix::validate::path::component(
+            BStr::new(component),
+            mode,
+            gix::validate::path::component::Options {
+                protect_windows: cfg!(windows),
+                protect_hfs: cfg!(target_os = "macos"),
+                protect_ntfs: cfg!(windows),
+            },
         )
-        .await?;
-        if status != 0 {
-            return Err("Raw Git snapshot hashing failed".into());
-        }
-        let hashes = String::from_utf8(hashes).map_err(|error| error.to_string())?;
-        let hashes = hashes.lines().collect::<Vec<_>>();
-        if hashes.len() != samples.len() {
-            return Err("Raw Git snapshot hash count mismatch".into());
-        }
-        for ((path, mode, _), object) in samples.into_iter().zip(hashes) {
-            endpoints.insert(
-                path,
-                Entry {
-                    mode,
-                    object: object.into(),
-                    sparse: false,
-                },
-            );
-        }
-        Ok(endpoints)
+        .map_err(|error| error.to_string())?;
     }
+    Ok(())
+}
 
-    async fn write_tree(&self, endpoints: BTreeMap<String, Entry>) -> Result<String, String> {
-        let (status, _) = run(
-            &self.root,
-            &["read-tree", "--empty"],
-            GitContext::Snapshot(&self.scratch),
-            1024,
-            None,
-            &self.cancellation,
-        )
-        .await?;
-        if status != 0 {
-            return Err("Private Git index reset failed".into());
+fn tracked_entries(
+    repo: &gix::Repository,
+    index: &gix::index::State,
+    cancellation: &CancellationSignal,
+    scope: &str,
+) -> Result<BTreeMap<String, Entry>, String> {
+    let mut tracked = BTreeMap::new();
+    let mut bytes = 0;
+    let budget = sampling::Budget::new(cancellation);
+    for entry in index.entries() {
+        budget.check(0)?;
+        let path = entry
+            .path(index)
+            .to_str()
+            .map_err(|error| error.to_string())?;
+        if entry.mode.is_sparse() {
+            expand_sparse(
+                repo,
+                entry.id,
+                path.trim_end_matches('/'),
+                &mut tracked,
+                &mut bytes,
+                &budget,
+                scope,
+            )?;
+        } else if let Some(path) = path.strip_prefix(scope) {
+            add_tracked(
+                &mut tracked,
+                &mut bytes,
+                path.to_owned(),
+                Entry {
+                    mode: format!("{:o}", entry.mode.bits()),
+                    object: entry.id,
+                    sparse: entry
+                        .flags
+                        .contains(gix::index::entry::Flags::SKIP_WORKTREE),
+                },
+            )?;
         }
-        let mut input = String::new();
-        for (path, entry) in endpoints {
-            write!(input, "{} {}\t{path}\0", entry.mode, entry.object)
+    }
+    Ok(tracked)
+}
+
+fn add_tracked(
+    tracked: &mut BTreeMap<String, Entry>,
+    bytes: &mut usize,
+    path: String,
+    entry: Entry,
+) -> Result<(), String> {
+    // Preserve the former ls-files -v --stage -z output bound, including
+    // the hash width and the flag/mode/stage separators.
+    *bytes += path.len() + entry.object.kind().len_in_hex() + 13;
+    if *bytes > PATH_BYTES {
+        return Err("Git index paths exceeded their limit".into());
+    }
+    tracked.insert(path, entry);
+    Ok(())
+}
+
+/// A sparse index still owns materialized excluded files. Expand its trees in
+/// memory, sampling physical files exactly as with an ordinary skip-worktree index.
+fn expand_sparse(
+    repo: &gix::Repository,
+    id: gix::ObjectId,
+    prefix: &str,
+    tracked: &mut BTreeMap<String, Entry>,
+    bytes: &mut usize,
+    budget: &sampling::Budget<'_>,
+    scope: &str,
+) -> Result<(), String> {
+    let mut pending = vec![(id, prefix.to_owned())];
+    while let Some((id, prefix)) = pending.pop() {
+        budget.check(0)?;
+        if !prefix.starts_with(scope) && !scope.starts_with(&format!("{prefix}/")) {
+            continue;
+        }
+        // Directory names count too, bounding malformed/cyclic trees without
+        // recursive calls or an unbounded queue.
+        *bytes += prefix.len() + 1;
+        if *bytes > PATH_BYTES {
+            return Err("Git sparse paths exceeded their limit".into());
+        }
+        let tree = repo.find_tree(id).map_err(|error| error.to_string())?;
+        for entry in tree.iter() {
+            budget.check(0)?;
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = format!(
+                "{prefix}/{}",
+                entry
+                    .filename()
+                    .to_str()
+                    .map_err(|error| error.to_string())?
+            );
+            if entry.mode().is_tree() {
+                *bytes += path.len() + 1;
+                if *bytes > PATH_BYTES {
+                    return Err("Git sparse paths exceeded their limit".into());
+                }
+                pending.push((entry.object_id(), path));
+            } else if let Some(path) = path.strip_prefix(scope) {
+                add_tracked(
+                    tracked,
+                    bytes,
+                    path.to_owned(),
+                    Entry {
+                        mode: entry.mode().kind().as_octal_str().to_string(),
+                        object: entry.object_id(),
+                        sparse: true,
+                    },
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn untracked(
+    worktree: &gix::Repository,
+    index: &gix::index::State,
+    root: &Path,
+    exclusion: &Path,
+    cancellation: &CancellationSignal,
+    scope: &str,
+) -> Result<BTreeSet<String>, String> {
+    let mut collect = Collect {
+        entries: BTreeSet::new(),
+        budget: sampling::Budget::new(cancellation),
+        failed: None,
+        bytes: 0,
+        root,
+        exclusion,
+        scope,
+    };
+    // An enclosing repository may become visible if .git is removed during
+    // inference. Keep ls-files' original cwd-relative membership and namespace.
+    let patterns: Vec<gix::bstr::BString> = if scope.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!(":(top,literal){}", scope.trim_end_matches('/')).into()]
+    };
+    worktree
+        .dirwalk(
+            index,
+            patterns,
+            &AtomicBool::new(false),
+            worktree
+                .dirwalk_options()
+                .map_err(|error| error.to_string())?,
+            &mut collect,
+        )
+        .map_err(|error| error.to_string())?;
+    if let Some(error) = collect.failed {
+        return Err(error);
+    }
+    Ok(collect.entries)
+}
+
+struct Collect<'a> {
+    entries: BTreeSet<String>,
+    budget: sampling::Budget<'a>,
+    failed: Option<String>,
+    bytes: usize,
+    root: &'a Path,
+    exclusion: &'a Path,
+    scope: &'a str,
+}
+impl gix::dir::walk::Delegate for Collect<'_> {
+    fn emit(
+        &mut self,
+        entry: gix::dir::EntryRef<'_>,
+        _: Option<gix::dir::entry::Status>,
+    ) -> gix::dir::walk::Action {
+        let result = (|| {
+            self.budget.check(0)?;
+            let path = entry
+                .rela_path
+                .to_str()
                 .map_err(|error| error.to_string())?;
-        }
-        if !input.is_empty() {
-            let (status, _) = run(
-                &self.root,
-                &["update-index", "-z", "--index-info"],
-                GitContext::Snapshot(&self.scratch),
-                1024,
-                Some(input.as_bytes()),
-                &self.cancellation,
-            )
-            .await?;
-            if status != 0 {
-                return Err("Raw Git snapshot index failed".into());
+            if entry.status == gix::dir::entry::Status::Untracked
+                && !self.root.join(path).starts_with(self.exclusion)
+            {
+                let Some(path) = path.strip_prefix(self.scope) else {
+                    return Ok(());
+                };
+                self.bytes += path.len() + 1;
+                if self.bytes > PATH_BYTES {
+                    return Err("Git untracked paths exceeded their limit".into());
+                }
+                self.entries.insert(path.to_owned());
             }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            self.failed = Some(error);
+            return std::ops::ControlFlow::Break(());
         }
-        let (status, tree) = run(
-            &self.root,
-            &["write-tree"],
-            GitContext::Snapshot(&self.scratch),
-            1024,
-            None,
-            &self.cancellation,
-        )
-        .await?;
-        if status != 0 {
-            return Err("Raw Git snapshot tree failed".into());
-        }
-        Ok(String::from_utf8(tree)
-            .map_err(|error| error.to_string())?
-            .trim()
-            .into())
+        std::ops::ControlFlow::Continue(())
     }
-
-    async fn entries(&self, worktree: bool) -> Result<BTreeMap<String, Entry>, String> {
-        let args = ["ls-files", "--stage", "-v", "-z"];
-        let output = if worktree {
-            self.worktree_files(&args).await?
-        } else {
-            let (status, output) = run(
-                &self.root,
-                &args,
-                GitContext::Snapshot(&self.scratch),
-                PATH_BYTES,
-                None,
-                &self.cancellation,
-            )
-            .await?;
-            if status != 0 {
-                return Err("Git index membership discovery failed".into());
-            }
-            output
-        };
-        let output = String::from_utf8(output).map_err(|error| error.to_string())?;
-        let mut entries = BTreeMap::new();
-        for entry in output.split_terminator('\0') {
-            let (header, path) = entry.split_once('\t').ok_or("invalid Git index entry")?;
-            let mut fields = header.split_whitespace();
-            let flag = fields.next().ok_or("missing Git index flag")?;
-            let mode = fields.next().ok_or("missing Git index mode")?;
-            let object = fields.next().ok_or("missing Git index object")?;
-            entries.insert(
-                path.into(),
-                Entry {
-                    mode: mode.into(),
-                    object: object.into(),
-                    sparse: flag.eq_ignore_ascii_case("S"),
-                },
-            );
+    fn can_recurse(
+        &mut self,
+        entry: gix::dir::EntryRef<'_>,
+        for_deletion: Option<gix::dir::walk::ForDeletionMode>,
+        root_is_repository: bool,
+    ) -> bool {
+        if let Err(error) = self.budget.check(0) {
+            self.failed = Some(error);
+            return false;
         }
-        Ok(entries)
+        let Ok(path) = entry.rela_path.to_str() else {
+            self.failed = Some("Git path is not UTF-8".into());
+            return false;
+        };
+        !self.root.join(path).starts_with(self.exclusion)
+            && entry.status.can_recurse(
+                entry.disk_kind,
+                entry.pathspec_match,
+                for_deletion,
+                root_is_repository,
+            )
     }
 }
 
@@ -360,26 +646,4 @@ fn discover_links(
         }
     }
     Ok(outermost)
-}
-
-#[derive(Default)]
-struct Samples {
-    files: Vec<(String, String, PathBuf)>,
-    retained: BTreeMap<String, Entry>,
-}
-
-/// Git's --stdin-paths accepts C-quoted byte paths, not JSON unicode escapes.
-fn quoted_path(output: &mut Vec<u8>, path: &Path) {
-    output.push(b'"');
-    for byte in path.as_os_str().as_bytes() {
-        match byte {
-            b'"' | b'\\' => {
-                output.push(b'\\');
-                output.push(*byte);
-            }
-            32..=126 => output.push(*byte),
-            _ => output.extend_from_slice(format!("\\{byte:03o}").as_bytes()),
-        }
-    }
-    output.extend_from_slice(b"\"\n");
 }

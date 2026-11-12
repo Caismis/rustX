@@ -104,12 +104,12 @@ impl RuntimeInner {
                 .is_none()
                 && self.workflow_output.is_none()
             {
-                crate::workspace_changes::ChangeRecording::start(
+                Some(crate::workspace_changes::ChangeRecording::start(
                     attempt_id.clone(),
                     self.tool_runtime.workspace().root().to_owned(),
                     Arc::clone(&self.tool_runtime.workspace_changes),
                     cancellation.signal().child(),
-                )
+                ))
             } else {
                 None
             },

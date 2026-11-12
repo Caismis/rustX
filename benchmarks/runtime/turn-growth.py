@@ -158,6 +158,10 @@ class Server:
         if self.a.strace:
             argv = ['strace', '-f', '-ttt', '-yy', '-xx', '-s', '128', '-e',
                     'trace=write,writev,pwrite64,pwritev,fsync,fdatasync', '-o', str(prefix) + '.strace', *argv]
+        elif self.a.strace_counts:
+            argv = ['strace', '-f', '-c', '-e',
+                    'trace=execve,clone,clone3,wait4,mkdir,mkdirat,unlink,unlinkat',
+                    '-o', str(prefix) + '.strace', *argv]
         self.process = await asyncio.create_subprocess_exec(*argv, cwd=self.out, env=env,
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
         self.log = Path(str(prefix) + '.stderr').open('w')
@@ -171,7 +175,7 @@ class Server:
                 endpoint = line.strip().split()[-1]
                 break
         self.pid = self.process.pid
-        if self.a.strace:
+        if self.a.strace or self.a.strace_counts:
             children = Path(f'/proc/{self.pid}/task/{self.pid}/children').read_text().split()
             assert len(children) == 1, children
             self.pid = int(children[0])
@@ -206,6 +210,12 @@ async def scenario(a, kind, out):
     workspace_owner = tempfile.TemporaryDirectory(prefix='rustx-turn-growth-workspace-')
     workspace = Path(workspace_owner.name)
     (workspace / 'fixture.txt').write_text('fixed tool result\n')
+    if a.git_workspace:
+        subprocess.run(['git', 'init', '--quiet', '--template=', str(workspace)], check=True)
+        subprocess.run(['git', '-C', str(workspace), 'add', 'fixture.txt'], check=True)
+        subprocess.run(['git', '-C', str(workspace), '-c', 'user.name=Benchmark',
+                        '-c', 'user.email=benchmark@example.invalid',
+                        '-c', 'core.hooksPath=/dev/null', 'commit', '--quiet', '-m', 'Fixture'], check=True)
     token = out / 'token'
     token.write_text(CAPACITY.TOKEN)
     token.chmod(0o600)
@@ -395,6 +405,7 @@ async def main(a):
         'protocol_version': VERSION, 'python': sys.version, 'websockets': CAPACITY.websockets.__version__,
         'affinity': sorted(os.sched_getaffinity(0)), 'tokio_workers': 4, 'turns': a.turns, 'window': a.window,
         'settle_seconds': a.settle, 'reopen_at': a.reopen, 'strace': a.strace,
+        'strace_counts': a.strace_counts, 'git_workspace': a.git_workspace,
         'cpu_profiler': str(a.cpu_profiler) if a.cpu_profiler else None, 'profile_from': a.profile_from,
         'scope': 'Only server PID utime+stime, /proc/io, RSS/PSS. Fake provider and driver are siblings. '
                  'Settled/idle latency excludes between-window settle. CPU/I/O includes settle and retirement reads. '
@@ -418,7 +429,10 @@ if __name__ == '__main__':
     parser.add_argument('--reopen', nargs='*', type=int, default=[32, 128, 512])
     parser.add_argument('--settle', type=float, default=.25)
     parser.add_argument('--affinity', nargs='+', type=int, default=[2, 8])
-    parser.add_argument('--strace', action='store_true', help='Diagnostic only; traces the server, not provider/driver')
+    tracing_options = parser.add_mutually_exclusive_group()
+    tracing_options.add_argument('--strace', action='store_true', help='Diagnostic only; traces the server, not provider/driver')
+    tracing_options.add_argument('--strace-counts', action='store_true', help='Count server process and scratch directory syscalls with strace -f -c')
+    parser.add_argument('--git-workspace', action='store_true', help='Use a real Git workspace with one committed fixture')
     parser.add_argument('--cpu-profiler', type=Path, help='Diagnostic only: libprofiler.so, 500 Hz, toggled by SIGUSR2')
     parser.add_argument('--profile-from', type=int, default=1)
     parser.add_argument('--provider', choices=['text', 'tool'], help=argparse.SUPPRESS)

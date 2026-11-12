@@ -1417,12 +1417,12 @@ async fn workspace_changes_follow_native_write_and_edit_without_model_context() 
         let attempt = request.attempt_id.clone();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let mut policy = support::default_execution_policy();
-        policy.workspace_changes = crate::workspace_changes::ChangeRecording::start(
+        policy.workspace_changes = Some(crate::workspace_changes::ChangeRecording::start(
             attempt.clone(),
             fixture.runtime.workspace().root().to_owned(),
             Arc::clone(&fixture.runtime.workspace_changes),
             cancellation.signal().child(),
-        );
+        ));
         let changes = policy.workspace_changes.clone().unwrap();
         let settled = AgentExecution::new(
             request,

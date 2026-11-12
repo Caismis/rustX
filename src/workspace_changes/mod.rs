@@ -112,6 +112,11 @@ struct Baseline {
     repository: Repository,
     tree: String,
 }
+#[cfg(test)]
+type FinalObservationGate = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
 type BaselineTask = tokio_util::task::AbortOnDropHandle<Result<Option<Baseline>, String>>;
 
 /// Attempt-bound file capture authority, shared only with foreground file tools.
@@ -119,13 +124,15 @@ pub(crate) struct ChangeRecording {
     attempt: AttemptId,
     cancellation: CancellationSignal,
     cwd: PathBuf,
-    directory: OnceLock<Arc<SnapshotDirectory>>,
+    directory: Arc<OnceLock<Arc<SnapshotDirectory>>>,
     task: tokio::sync::Mutex<Option<BaselineTask>>,
     baseline: Mutex<Option<Baseline>>,
     captures: Mutex<BTreeMap<PathBuf, Capture>>,
     used: AtomicBool,
     failed: AtomicBool,
     store: Arc<ChangesStore>,
+    #[cfg(test)]
+    final_observation_gate: Mutex<Option<FinalObservationGate>>,
 }
 
 impl ChangeRecording {
@@ -136,17 +143,10 @@ impl ChangeRecording {
         cwd: PathBuf,
         store: Arc<ChangesStore>,
         cancellation: CancellationSignal,
-    ) -> Option<Arc<Self>> {
-        let directory = OnceLock::new();
+    ) -> Arc<Self> {
+        let directory = Arc::new(OnceLock::new());
         let task = if git::may_have_repository(&cwd) {
-            let scratch = match create_snapshot_directory(&std::env::temp_dir()) {
-                Ok(directory) => Arc::new(directory),
-                Err(error) => {
-                    tracing::warn!(%error, "workspace change recording unavailable");
-                    return None;
-                }
-            };
-            let _ = directory.set(Arc::clone(&scratch));
+            let scratch = Arc::clone(&directory);
             let root = cwd.clone();
             let observation_cancellation = cancellation.clone();
             Some(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
@@ -163,7 +163,7 @@ impl ChangeRecording {
         } else {
             None
         };
-        Some(Arc::new(Self {
+        Arc::new(Self {
             attempt,
             cancellation,
             cwd,
@@ -174,7 +174,22 @@ impl ChangeRecording {
             used: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             store,
-        }))
+            #[cfg(test)]
+            final_observation_gate: Mutex::new(None),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_final_observation(
+        &self,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let (release, waiting) = tokio::sync::oneshot::channel();
+        *self.final_observation_gate.lock().unwrap() = Some((entered, waiting));
+        (started, release)
     }
 
     pub(crate) async fn before_tools(&self) {
@@ -269,6 +284,14 @@ impl ChangeRecording {
         if self.failed.load(Ordering::Relaxed) {
             return;
         }
+        #[cfg(test)]
+        {
+            let gate = self.final_observation_gate.lock().unwrap().take();
+            if let Some((entered, waiting)) = gate {
+                let _ = entered.send(());
+                let _ = waiting.await;
+            }
+        }
         if let Err(error) = self.record().await {
             tracing::warn!(%error, "workspace change summary unavailable");
         }
@@ -278,13 +301,13 @@ impl ChangeRecording {
         let baseline = self.baseline.lock().expect("workspace baseline").take();
         let mut files = BTreeMap::<PathBuf, (ChangedFile, FileSource)>::new();
         let mut captures = self.captures.lock().expect("workspace captures").clone();
-        let mut repository = None;
-        let mut trees = None;
+        let (mut repository, mut repository_root, mut trees) = (None, None, None);
         if let Some(Baseline {
             repository: repo,
             tree: before,
         }) = baseline
         {
+            repository_root = Some(repo.root.clone());
             let after = repo.snapshot().await?;
             let changes = resolve_git_changes(&repo, &before, &after, &mut captures).await?;
             for (_, change) in changes {
@@ -318,15 +341,17 @@ impl ChangeRecording {
                     ),
                 );
             }
-            trees = Some((before, after));
-            repository = Some(repo);
+            if !files.is_empty() {
+                repo.finish_sampling();
+                trees = Some((before, after));
+                repository = Some(repo);
+            }
         }
         let Some(directory) = self.directory.get() else {
             return Ok(());
         };
         let cwd = self.cwd.clone();
         let directory = Arc::clone(directory);
-        let repository_root = repository.as_ref().map(|repo| repo.root.clone());
         let files = tokio::task::spawn_blocking(move || {
             capture_endpoints(
                 &mut files,
@@ -397,7 +422,7 @@ async fn resolve_git_changes(
     captures: &mut BTreeMap<PathBuf, Capture>,
 ) -> Result<BTreeMap<String, git::Change>, String> {
     let paths = captures.keys().cloned().collect::<Vec<_>>();
-    let uncovered = repo.uncovered(before, after, &paths).await?;
+    let uncovered = repo.uncovered(before, after, &paths)?;
     captures.retain(|path, _| uncovered.contains(path));
     let mut changes = repo.changes(before, after, true).await?;
     // Rename similarity cannot establish that a destination was absent:

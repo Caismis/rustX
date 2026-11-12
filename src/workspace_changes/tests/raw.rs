@@ -1,6 +1,6 @@
 use super::*;
 
-fn git_files(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+pub(super) fn git_files(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
     fn visit(root: &Path, directory: &Path, files: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
         for entry in fs::read_dir(directory).unwrap() {
             let entry = entry.unwrap();
@@ -53,7 +53,7 @@ async fn change(
     (summary.files[index].clone(), comparison)
 }
 
-async fn text_change(
+pub(super) async fn text_change(
     store: &ChangesStore,
     attempt: &str,
     path: &str,
@@ -95,6 +95,24 @@ async fn baseline_and_final_snapshots_never_execute_hooks_or_required_filters() 
         "hooks/post-index-change",
         &format!("printf ran >> {}", shell_path(&hook_marker)),
     );
+    let monitor = program(
+        root,
+        "fsmonitor",
+        &format!(
+            "printf ran >> {}",
+            shell_path(&root.join(".git/fsmonitor-ran"))
+        ),
+    );
+    git(root, &["config", "core.fsmonitor", &shell_path(&monitor)]);
+    let external = program(
+        root,
+        "external-diff",
+        &format!(
+            "printf ran >> {}",
+            shell_path(&root.join(".git/external-diff-ran"))
+        ),
+    );
+    git(root, &["config", "diff.external", &shell_path(&external)]);
     let clean = program(
         root,
         "clean-filter",
@@ -162,6 +180,8 @@ async fn baseline_and_final_snapshots_never_execute_hooks_or_required_filters() 
     assert!(!hook_marker.exists());
     assert!(!root.join(".git/clean-ran").exists());
     assert!(!root.join(".git/process-ran").exists());
+    assert!(!root.join(".git/fsmonitor-ran").exists());
+    assert!(!root.join(".git/external-diff-ran").exists());
 }
 
 #[cfg(unix)]
@@ -430,13 +450,13 @@ async fn removing_a_nested_repository_and_its_index_entry_records_the_gitlink_de
         );
         let (before, after) = completed.trees.as_ref().unwrap();
         let initial = git(
-            record.directory.get().unwrap().path(),
+            &record.directory.get().unwrap().path().join("git"),
             &["ls-tree", "-z", before, "--", "nested"],
         );
         assert!(initial.starts_with("160000 commit "));
         assert!(
             git(
-                record.directory.get().unwrap().path(),
+                &record.directory.get().unwrap().path().join("git"),
                 &["ls-tree", "-z", after, "--", "nested"]
             )
             .is_empty()
@@ -487,13 +507,13 @@ async fn replacing_a_nested_repository_samples_the_actual_file_or_symlink_endpoi
             let (before, after) = completed.trees.as_ref().unwrap();
             assert!(
                 git(
-                    record.directory.get().unwrap().path(),
+                    &record.directory.get().unwrap().path().join("git"),
                     &["ls-tree", "-z", before, "--", "nested"]
                 )
                 .starts_with("160000 commit ")
             );
             let final_entry = git(
-                record.directory.get().unwrap().path(),
+                &record.directory.get().unwrap().path().join("git"),
                 &["ls-tree", "-z", after, "--", "nested"],
             );
             assert!(

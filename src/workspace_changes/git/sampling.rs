@@ -6,7 +6,7 @@ use nix::{
     sys::stat::{Mode, SFlag, fstatat},
 };
 use std::{
-    fs::{self, File},
+    fs::File,
     io::{Read, Write},
     os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::{Component, Path},
@@ -70,7 +70,7 @@ pub(super) fn directory(root: &File, path: &Path) -> Result<Option<File>, String
 pub(super) fn sample(
     root: &File,
     path: &Path,
-    output: &Path,
+    output: &mut impl Write,
     budget: &mut Budget<'_>,
 ) -> Result<Sample, String> {
     budget.check(0)?;
@@ -88,7 +88,9 @@ pub(super) fn sample(
     if kind == SFlag::S_IFLNK {
         let target = readlinkat(&parent, name).map_err(|error| error.to_string())?;
         budget.check(target.as_bytes().len() as u64)?;
-        fs::write(output, target.as_bytes()).map_err(|error| error.to_string())?;
+        output
+            .write_all(target.as_bytes())
+            .map_err(|error| error.to_string())?;
         budget.remaining -= target.as_bytes().len() as u64;
         return Ok(Sample::File("120000".into()));
     }
@@ -123,9 +125,13 @@ pub(super) fn sample(
     ))
 }
 
-fn copy(mut file: File, output: &Path, size: u64, budget: &mut Budget<'_>) -> Result<(), String> {
+fn copy(
+    mut file: File,
+    output: &mut impl Write,
+    size: u64,
+    budget: &mut Budget<'_>,
+) -> Result<(), String> {
     budget.check(size)?;
-    let mut staged = File::create(output).map_err(|error| error.to_string())?;
     let mut buffer = vec![0; 64 * 1024];
     let mut copied = 0;
     loop {
@@ -144,7 +150,7 @@ fn copy(mut file: File, output: &Path, size: u64, budget: &mut Budget<'_>) -> Re
             return Err("Workspace file grew during snapshot sampling".into());
         }
         budget.check(bytes as u64)?;
-        staged
+        output
             .write_all(&buffer[..bytes])
             .map_err(|error| error.to_string())?;
         budget.remaining -= bytes as u64;
@@ -154,6 +160,7 @@ fn copy(mut file: File, output: &Path, size: u64, budget: &mut Budget<'_>) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn sampling_rejects_growing_and_shrinking_endpoints_instead_of_publishing_a_prefix() {
@@ -162,9 +169,17 @@ mod tests {
         fs::write(&input, b"1234").unwrap();
         let cancellation = CancellationSignal::new();
         for expected in [3, 5] {
-            let output = directory.path().join(format!("output-{expected}"));
+            let mut output = Vec::new();
             let mut budget = Budget::new(&cancellation);
-            assert!(copy(File::open(&input).unwrap(), &output, expected, &mut budget).is_err());
+            assert!(
+                copy(
+                    File::open(&input).unwrap(),
+                    &mut output,
+                    expected,
+                    &mut budget
+                )
+                .is_err()
+            );
         }
     }
 
@@ -173,25 +188,25 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = File::open(directory.path()).unwrap();
         fs::write(directory.path().join("input"), b"1234").unwrap();
-        let output = directory.path().join("output");
+        let mut output = Vec::new();
         let cancellation = CancellationSignal::new();
         let mut budget = Budget::new(&cancellation);
         budget.remaining = 7;
         assert!(matches!(
-            sample(&root, Path::new("input"), &output, &mut budget),
+            sample(&root, Path::new("input"), &mut output, &mut budget),
             Ok(Sample::File(_))
         ));
-        assert_eq!(fs::read(&output).unwrap(), b"1234");
-        fs::remove_file(&output).unwrap();
-        assert!(sample(&root, Path::new("input"), &output, &mut budget).is_err());
-        assert!(!output.exists(), "no truncated file is staged");
+        assert_eq!(output, b"1234");
+        output.clear();
+        assert!(sample(&root, Path::new("input"), &mut output, &mut budget).is_err());
+        assert!(output.is_empty(), "no truncated file is staged");
         budget.remaining = 7;
         budget.deadline = Instant::now();
-        assert!(sample(&root, Path::new("input"), &output, &mut budget).is_err());
+        assert!(sample(&root, Path::new("input"), &mut output, &mut budget).is_err());
         budget.deadline = Instant::now() + Duration::from_secs(30);
         cancellation.cancel();
-        assert!(sample(&root, Path::new("input"), &output, &mut budget).is_err());
-        assert!(!output.exists());
+        assert!(sample(&root, Path::new("input"), &mut output, &mut budget).is_err());
+        assert!(output.is_empty());
     }
 
     #[test]
@@ -206,17 +221,17 @@ mod tests {
             Mode::S_IRUSR | Mode::S_IWUSR,
         )
         .unwrap();
-        let output = directory.path().join("output");
+        let mut output = Vec::new();
         let cancellation = CancellationSignal::new();
         let mut budget = Budget::new(&cancellation);
         assert!(matches!(
-            sample(&root, Path::new("link/secret"), &output, &mut budget),
+            sample(&root, Path::new("link/secret"), &mut output, &mut budget),
             Ok(Sample::Missing)
         ));
         assert!(matches!(
-            sample(&root, Path::new("fifo"), &output, &mut budget),
+            sample(&root, Path::new("fifo"), &mut output, &mut budget),
             Ok(Sample::Unsupported)
         ));
-        assert!(!output.exists());
+        assert!(output.is_empty());
     }
 }
