@@ -104,7 +104,6 @@ async fn construction_rejects_a_non_pristine_registry_with_committed_children() 
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::FullAccess,
                         },
                         admission: crate::runtime::subagent::ActivationAdmission {
                             attachments: Vec::new(),
@@ -114,6 +113,7 @@ async fn construction_rejects_a_non_pristine_registry_with_committed_children() 
                                 tool_call_id: ToolCallId::new("call-pre-constructed"),
                             },
                             terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                         },
                     },
                     &crate::runtime::cancellation::CancellationSignal::new(),
@@ -235,7 +235,6 @@ async fn a_standalone_subagent_commit_winning_the_transfer_race_rejects_construc
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("explore"),
-                        approval_mode: crate::runtime::ApprovalMode::FullAccess,
                     },
                     admission: crate::runtime::subagent::ActivationAdmission {
                         attachments: Vec::new(),
@@ -245,6 +244,7 @@ async fn a_standalone_subagent_commit_winning_the_transfer_race_rejects_construc
                             tool_call_id: ToolCallId::new("call-transfer-race"),
                         },
                         terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                        approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                     },
                 },
                 &crate::runtime::cancellation::CancellationSignal::new(),
@@ -382,7 +382,6 @@ async fn a_runtime_claim_winning_first_refuses_the_later_standalone_commit() {
                     title: "Explore task".into(),
                     execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: test_resolved_subagent("explore"),
-                    approval_mode: crate::runtime::ApprovalMode::FullAccess,
                 },
                 admission: crate::runtime::subagent::ActivationAdmission {
                     attachments: Vec::new(),
@@ -392,6 +391,7 @@ async fn a_runtime_claim_winning_first_refuses_the_later_standalone_commit() {
                         tool_call_id: ToolCallId::new("call-refused"),
                     },
                     terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                    approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                 },
             },
             &crate::runtime::cancellation::CancellationSignal::new(),
@@ -2269,7 +2269,6 @@ async fn finish_finite_workflow_child(
             title: "Explore task".into(),
             execution_policy: InheritedExecutionPolicy::default(),
             resolved: test_resolved_subagent("reviewer"),
-            approval_mode: ApprovalMode::FullAccess,
         },
         admission: ActivationAdmission {
             attachments: Vec::new(),
@@ -2285,6 +2284,7 @@ async fn finish_finite_workflow_child(
                 run_id: node.block.run.clone(),
                 node_id: Box::new(node),
             },
+            approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
         },
     };
     let root = dir.path().join("finite-child");

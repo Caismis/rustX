@@ -107,7 +107,6 @@ async fn subagent_settlement_commits_the_current_staged_configuration() {
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::FullAccess,
                         },
                         admission: crate::runtime::subagent::ActivationAdmission {
                             attachments: Vec::new(),
@@ -117,6 +116,7 @@ async fn subagent_settlement_commits_the_current_staged_configuration() {
                                 tool_call_id: ToolCallId::new("call-busy-subagent"),
                             },
                             terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                         },
                     },
                     &crate::runtime::cancellation::CancellationSignal::new(),

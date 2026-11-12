@@ -73,6 +73,12 @@ impl ToolExecutor for AgentExecutor {
         context: ToolExecutionContext<'a>,
     ) -> ToolExecutionHandle<'a> {
         let cancellation = context.cancellation.clone();
+        // Resume freezes the caller's Attempt mode; delivery to a running
+        // Activation keeps that Activation's snapshot.
+        let approval_mode = context
+            .subagent_context()
+            .map(|subagent| subagent.approval_mode())
+            .unwrap_or(crate::runtime::types::ApprovalMode::Plan);
         ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
                 if invocation.tool_name == NAMES[0] {
@@ -101,7 +107,13 @@ impl ToolExecutor for AgentExecutor {
                     };
                     return tokio::select! {
                         biased;
-                        result = self.0.send_message(&input.agent_id, &input.message, origin, input_cancellation) => match result {
+                        result = self.0.send_message(
+                            &input.agent_id,
+                            &input.message,
+                            origin,
+                            approval_mode,
+                            input_cancellation,
+                        ) => match result {
                             Ok(accepted) => success_json(serde_json::json!(accepted)),
                             Err(error) => message_error(&error),
                         },

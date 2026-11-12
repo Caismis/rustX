@@ -243,23 +243,49 @@ def same_git_tree(left, right):
     return bool(left_tree) and left_tree == right_tree
 
 
-def tested_merge_matches(tested, tested_head, same_tree=same_git_tree):
+def merge_tree(left, right):
+    """Tree OID of `git merge-tree --write-tree left right`, or None on failure.
+
+    Uses the real merge machinery so identical input trees with different
+    histories (for example a commit that reverts to the base tree) cannot
+    fake equivalence with the declared base+head integration.
+    """
+    result = subprocess.run(
+        ["git", "merge-tree", "--write-tree", left, right],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    tree = result.stdout.strip().splitlines()[0].strip() if result.stdout.strip() else ""
+    return tree or None
+
+
+def tested_merge_matches(tested, tested_head, same_tree=same_git_tree, merge_tree_fn=merge_tree,
+                         tree_of=git_tree):
     """True when the Actions merge commit verifies this PR's base and head.
 
     Ordinary PRs have parents `[base, head]`. GitHub stacked PRs nest: the
     merge commit's second parent is still head, and the first parent is an
-    intermediate stack merge. Ancestry alone is not enough — the first
-    parent must have the same tree as the declared base so the tested
-    content is still base+head, not base-plus-foreign stack changes.
+    intermediate stack merge. Matching first-parent trees is not enough —
+    the tested merge tree must equal the independent base+head integration.
     """
     parents = tested["parents"]
     base = tested["base"]
     if parents == [base, tested_head]:
         return True
-    return len(parents) == 2 and parents[1] == tested_head and same_tree(base, parents[0])
+    if len(parents) != 2 or parents[1] != tested_head:
+        return False
+    if not same_tree(base, parents[0]):
+        return False
+    expected = merge_tree_fn(base, tested_head)
+    actual = tree_of(tested["merge"])
+    return bool(expected) and expected == actual
 
 
-def gate(planned, results, tested_head, current_head, tested=None, same_tree=same_git_tree):
+def gate(planned, results, tested_head, current_head, tested=None, same_tree=same_git_tree,
+         merge_tree_fn=merge_tree, tree_of=git_tree):
     """Merge verdict: the reasons this run cannot verify its head (empty = pass).
 
     `results` maps a job id to its GitHub result (success, failure,
@@ -268,8 +294,8 @@ def gate(planned, results, tested_head, current_head, tested=None, same_tree=sam
     outside pull requests). `tested` describes the synthetic merge commit a
     pull request run checked out: {"merge", "parents", "base"}; its parents
     must join the event's base and head (directly, or via a GitHub stack
-    merge that keeps head as the second parent and the first parent's tree
-    identical to the declared base).
+    merge that keeps head as the second parent and whose merge tree equals
+    the independent base+head integration).
     """
     errors = [f"{job}: required by every run but {results.get(job) or 'missing'}"
               for job in ALWAYS if results.get(job) != "success"]
@@ -284,7 +310,8 @@ def gate(planned, results, tested_head, current_head, tested=None, same_tree=sam
             "high-risk change verified only by FAST; FULL is required on the exact head "
             f"before merge (add the `{PROMOTION_LABEL}` label): " + "; ".join(planned["reasons"][:5])
         )
-    if tested is not None and not tested_merge_matches(tested, tested_head, same_tree=same_tree):
+    if tested is not None and not tested_merge_matches(
+            tested, tested_head, same_tree=same_tree, merge_tree_fn=merge_tree_fn, tree_of=tree_of):
         errors.append(f"the tested merge commit {tested['merge']} joins {tested['parents']}, "
                       f"not base {tested['base']} and head {tested_head}")
     if tested_head != current_head:

@@ -182,11 +182,23 @@ fn review_schema() -> ResponseSchema {
     .expect("static permission review schema")
 }
 
-fn build_prompt(view: &PreToolView<'_>, matrix_reason: &str) -> String {
-    let args = truncate_utf8(
-        &serde_json::to_string(view.arguments).unwrap_or_else(|_| "{}".into()),
-        8_192,
-    );
+/// Maximum serialized business-argument bytes the reviewer may inspect.
+/// Exceeding this budget is a native authorization failure: an Allow must
+/// never be inferred from a truncated prefix of the invocation that will run.
+const REVIEW_ARGUMENTS_BUDGET: usize = 8_192;
+
+fn complete_review_arguments(view: &PreToolView<'_>) -> Result<String, String> {
+    let args = serde_json::to_string(view.arguments).unwrap_or_else(|_| "{}".into());
+    if args.len() > REVIEW_ARGUMENTS_BUDGET {
+        return Err(format!(
+            "permission review arguments are {bytes} bytes and exceed the {REVIEW_ARGUMENTS_BUDGET}-byte inspection budget; incomplete input cannot authorize this invocation",
+            bytes = args.len(),
+        ));
+    }
+    Ok(args)
+}
+
+fn build_prompt(view: &PreToolView<'_>, matrix_reason: &str, args: &str) -> String {
     let elevation = view.elevation_reason.unwrap_or("");
     let workspace = view
         .workspace_root
@@ -263,7 +275,13 @@ async fn review_with_auxiliary(
     // Keep the queue slot until physical Auxiliary settlement finishes so
     // aborted reviews do not release conversation-general capacity early.
     let _review_slot = review_slot;
-    let prompt = build_prompt(view, matrix_reason);
+    let args = match complete_review_arguments(view) {
+        Ok(args) => args,
+        Err(explanation) => {
+            return PermissionReviewVerdict::Failed { explanation };
+        }
+    };
+    let prompt = build_prompt(view, matrix_reason, &args);
     let request = match AuxiliaryOutputFormat::JsonSchema(review_schema()).prepare(ModelRequest {
         response_schema: None,
         response_byte_limit: Some(crate::model::adapter::response_budget::AUXILIARY_RESPONSE_BYTES),
@@ -530,5 +548,38 @@ mod tests {
         assert!(truncated.ends_with('…'));
         assert!(!truncated.contains('界'));
         assert_eq!(truncated.chars().next_back(), Some('…'));
+    }
+
+    #[test]
+    fn oversized_review_arguments_fail_closed_without_calling_allow() {
+        let oversized = "x".repeat(REVIEW_ARGUMENTS_BUDGET + 1);
+        let arguments = serde_json::json!({ "command": oversized });
+        let conversation_id =
+            crate::runtime::identity::ConversationId::new("conv_6ae353db-f482-746d-8f8d-b42ad2fef7a7");
+        let attempt_id = crate::runtime::identity::AttemptId::new("attempt_review_budget");
+        let invocation_id = crate::tools::types::ToolInvocationId::Agent {
+            call_id: crate::runtime::identity::ToolCallId::new("call_review_budget"),
+        };
+        let tool_id = crate::runtime::identity::ToolId::new("tool-bash");
+        let origin = crate::tools::types::ToolOrigin::Builtin;
+        let view = crate::agent::lifecycle::PreToolView {
+            conversation_id: &conversation_id,
+            execution: crate::runtime::interaction::InteractionExecution::Attempt {
+                attempt_id: attempt_id.clone(),
+                turn: 1,
+            },
+            invocation_id: &invocation_id,
+            tool_id: &tool_id,
+            tool_name: "bash",
+            origin: &origin,
+            mode: crate::tools::types::ToolInvocationMode::Foreground,
+            arguments: &arguments,
+            audit_arguments: &arguments,
+            elevation_reason: None,
+            workspace_root: None,
+            resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,
+        };
+        let err = complete_review_arguments(&view).expect_err("budget");
+        assert!(err.contains("incomplete input cannot authorize"));
     }
 }

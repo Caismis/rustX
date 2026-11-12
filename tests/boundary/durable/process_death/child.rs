@@ -2119,7 +2119,8 @@ async fn real_subagent_scenario(root: &Path, scenario: &str) {
                 &agent_id,
                 "follow up after physical settlement",
                 crate::runtime::subagent::AgentActivationOrigin::ClientControl,
-                crate::runtime::CancellationSignal::new(),
+                crate::runtime::types::ApprovalMode::FullAccess,
+                crate::runtime::cancellation::CancellationSignal::new(),
             )
             .await
             .expect("resumed canonical Delegate acceptance");

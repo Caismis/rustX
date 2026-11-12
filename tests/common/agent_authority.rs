@@ -59,7 +59,6 @@ pub(crate) fn admit_agent(
                     summary_output_cap: Some(1024),
                 },
             },
-            approval_mode: rustx::runtime::ApprovalMode::FullAccess,
         };
         return (envelope, authority);
     }

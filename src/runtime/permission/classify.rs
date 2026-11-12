@@ -1,6 +1,6 @@
 //! Classify a prepared tool invocation into a built-in matrix family.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 
 use super::bash::{BashReadonlyClass, analyze_bash_readonly};
 use super::matrix::BuiltinToolKind;
@@ -69,6 +69,10 @@ pub fn classify_tool_kind(
 }
 
 /// True only when the mutation target is exactly `<workspace>/PLAN.md`.
+///
+/// `mutation_target` must already be the Write/Edit effective path (symlink
+/// ancestors and dangling final links resolved). A dangling `PLAN.md` symlink
+/// that resolves outside the workspace therefore never matches.
 #[must_use]
 pub fn is_workspace_plan_file(
     workspace_root: Option<&Path>,
@@ -77,102 +81,59 @@ pub fn is_workspace_plan_file(
     let (Some(root), Some(target)) = (workspace_root, mutation_target) else {
         return false;
     };
-    let expected = root.join("PLAN.md");
-    let Ok(canonical_root) = normalize_existing_or_lexical(root) else {
+    let Ok(canonical_root) = root.canonicalize().or_else(|_| {
+        crate::tools::native::support::resolve_effective_path(root).map_err(|_| ())
+    }) else {
         return false;
     };
-    let Ok(canonical_target) = normalize_existing_or_lexical(target) else {
-        return false;
-    };
-    let Ok(canonical_expected) = normalize_existing_or_lexical(&expected) else {
-        return false;
-    };
-    canonical_target == canonical_expected
-        && canonical_target.starts_with(&canonical_root)
-        && canonical_target
-            .file_name()
-            .is_some_and(|name| name == "PLAN.md")
-}
-
-fn normalize_existing_or_lexical(path: &Path) -> Result<PathBuf, ()> {
-    if let Ok(canonical) = path.canonicalize() {
-        return Ok(canonical);
-    }
-    // When the leaf does not exist yet (Write creates PLAN.md), resolve the
-    // longest existing prefix so symlinked workspace roots still compare equal
-    // to absolute targets spelled through the symlink path.
-    let mut components: Vec<Component<'_>> = path.components().collect();
-    let mut missing: Vec<Component<'_>> = Vec::new();
-    while !components.is_empty() {
-        let candidate: PathBuf = components.iter().collect();
-        if let Ok(canonical) = candidate.canonicalize() {
-            let mut out = canonical;
-            for component in missing.iter().rev() {
-                match component {
-                    Component::Normal(part) => out.push(part),
-                    Component::CurDir => {}
-                    Component::ParentDir => {
-                        if !out.pop() {
-                            return Err(());
-                        }
-                    }
-                    Component::Prefix(_) | Component::RootDir => return Err(()),
-                }
-            }
-            return Ok(out);
-        }
-        if let Some(component) = components.pop() {
-            missing.push(component);
-        }
-    }
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
-            Component::RootDir => out.push(Component::RootDir.as_os_str()),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !out.pop() {
-                    return Err(());
-                }
-            }
-            Component::Normal(part) => out.push(part),
-        }
-    }
-    Ok(out)
+    let expected = canonical_root.join("PLAN.md");
+    // The expected plan path is a real workspace file name, not a symlink we
+    // follow: PLAN.md itself must be the mutation target, never a link hop.
+    target == expected
+        && target.starts_with(&canonical_root)
+        && target.file_name().is_some_and(|name| name == "PLAN.md")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-
     #[test]
     fn only_exact_workspace_plan_file_counts() {
-        let root = PathBuf::from("/workspace");
-        assert!(is_workspace_plan_file(
-            Some(&root),
-            Some(Path::new("/workspace/PLAN.md"))
-        ));
-        assert!(is_workspace_plan_file(
-            Some(&root),
-            Some(&root.join("PLAN.md"))
+        let root = tempfile::tempdir().expect("workspace");
+        let plan = root.path().join("PLAN.md");
+        std::fs::write(&plan, "plan").expect("plan file");
+        assert!(is_workspace_plan_file(Some(root.path()), Some(&plan)));
+        assert!(!is_workspace_plan_file(
+            Some(root.path()),
+            Some(&root.path().join("docs").join("PLAN.md"))
         ));
         assert!(!is_workspace_plan_file(
-            Some(&root),
-            Some(Path::new("/workspace/docs/PLAN.md"))
-        ));
-        assert!(!is_workspace_plan_file(
-            Some(&root),
+            Some(root.path()),
             Some(Path::new("/tmp/PLAN.md"))
         ));
         assert!(!is_workspace_plan_file(
-            Some(&root),
-            Some(Path::new("/workspace/plan.md"))
+            Some(root.path()),
+            Some(&root.path().join("plan.md"))
         ));
         assert!(!is_workspace_plan_file(
-            Some(&root),
+            Some(root.path()),
             Some(Path::new("PLAN.md"))
+        ));
+    }
+
+    #[test]
+    fn dangling_plan_symlink_to_outside_is_not_the_plan_file() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let outside = tempfile::tempdir().expect("outside");
+        let dangling = outside.path().join("new.txt");
+        let plan_link = workspace.path().join("PLAN.md");
+        std::os::unix::fs::symlink(&dangling, &plan_link).expect("symlink");
+        let effective =
+            crate::tools::native::support::resolve_effective_path(&plan_link).expect("resolve");
+        assert_eq!(effective, dangling);
+        assert!(!is_workspace_plan_file(
+            Some(workspace.path()),
+            Some(&effective)
         ));
     }
 

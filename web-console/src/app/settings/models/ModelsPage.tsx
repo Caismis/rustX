@@ -320,13 +320,23 @@ function AuxiliaryModelSelections({ value, change, models, profiles }: ModelSele
       onChange={mode => {
         if (mode === 'lowest') setProfile({ mode: 'lowest' });
         else if (mode === 'model_default') setProfile({ mode: 'model_default' });
-        else setProfile({ mode: 'explicit', id: auxiliary.profile?.mode === 'explicit' ? auxiliary.profile.id : (profiles[modelId ?? '']?.[0] ?? '') });
+        else {
+          const existing = auxiliary.profile?.mode === 'explicit' ? auxiliary.profile.id : undefined;
+          const first = profiles[modelId ?? '']?.[0];
+          const id = existing && existing.length > 0 ? existing : first;
+          // Explicit requires a concrete Profile id; without one, keep model_default.
+          if (id) setProfile({ mode: 'explicit', id });
+          else setProfile({ mode: 'model_default' });
+        }
       }} />
     <p className={css.hint}>{tx('settings:models-page.auxiliary-profile-lowest-help')}</p>
     <fieldset><legend>{tx('settings:models-page.auxiliary-model-settings')}</legend>
       {profileMode === 'explicit' && modelId && <ModelProfileChoice label={tx('settings:models-page.auxiliary-profile')} profile={auxiliary.profile?.mode === 'explicit' ? auxiliary.profile.id : undefined}
         profiles={profiles[modelId] ?? []}
-        onChange={id => setProfile({ mode: 'explicit', id })} />}
+        onChange={id => {
+          if (!id) setProfile({ mode: 'model_default' });
+          else setProfile({ mode: 'explicit', id });
+        }} />}
       <label>{tx('settings:models-page.output-limit-auxiliary')}<input type="number" min="1" value={auxiliary.max_output_tokens?.mode === 'limit' ? auxiliary.max_output_tokens.tokens : ''}
         onChange={event => setAuxiliary({ ...auxiliary, max_output_tokens: event.target.value ? { mode: 'limit', tokens: Number(event.target.value) } : { mode: 'catalog_default' } })} /></label>
       <JsonObjectEditor label={tx('settings:models-page.request-parameter-overrides-auxiliary')} value={auxiliary.request_params ?? undefined}
@@ -359,6 +369,8 @@ export function ModelProfileChoice({ label, profile, profiles, onChange }: {
   const tx = useTranslation();
   const choices = new Set(profiles);
   if (profile) choices.add(profile);
+  // Empty id is not a valid Explicit Profile; the blank option clears back to
+  // the model default through the empty-string sentinel handled by callers.
   return choices.size > 0 ? <Choice label={label} value={profile ?? ''}
     options={[['', tx('settings:copy.model-default-profile')], ...[...choices].map(id => [id, id] as const)]}
     onChange={onChange}/> : null;

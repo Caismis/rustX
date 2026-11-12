@@ -630,12 +630,15 @@ pub static READONLY_COMMAND_POLICIES: LazyLock<HashMap<&'static str, BashReadonl
         map.insert(
             "uniq",
             BashReadonlyCommandPolicy {
+                // `uniq INPUT OUTPUT` writes the second positional; prove
+                // absence of an output operand before allowing the readonly
+                // fast path.
                 allow_any_args: true,
                 command_only: false,
                 allow_compact_numeric_count_flag: false,
                 respects_double_dash: true,
                 safe_flags: None,
-                danger_callback: None,
+                danger_callback: Some(DangerCallbackId::Uniq),
             },
         );
         map.insert(

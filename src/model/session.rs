@@ -214,20 +214,17 @@ impl SessionModelConfig {
         }
     }
 
-    /// An explicit auxiliary model removed from the catalog follows the Session model.
-    /// When a Session is updated, only an unchanged policy can be recovered.
+    /// Keep an explicit auxiliary choice even when the model is absent from the
+    /// catalog. Primary-model recovery must not rewrite it to Follow Session;
+    /// the unavailable Explicit selection stays until the user changes it.
     pub(crate) fn use_available_auxiliary_models(
         &mut self,
         catalog: &crate::model::catalog::ModelCatalog,
         previous: Option<&Self>,
     ) {
-        let carried = previous.map(|config| &config.auxiliary);
-        if carried.is_none_or(|carried| carried == &self.auxiliary)
-            && let AuxiliaryModelPolicy::Explicit { model, .. } = &self.auxiliary
-            && catalog.model(model).is_err()
-        {
-            self.auxiliary = AuxiliaryModelPolicy::default();
-        }
+        let _ = (catalog, previous);
+        // Issue #543: unavailable Explicit auxiliary is a native unavailable
+        // state, not an implicit Follow Session + Lowest authorization.
     }
 }
 

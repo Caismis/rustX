@@ -255,7 +255,37 @@ impl ToolEnvironment {
                 entries.push((key.clone(), value.clone()));
             }
         }
+        // Bash readonly proofs inspect argv only. Force the same execution
+        // contract for Git: repo-local `diff.external` / textconv helpers and
+        // host GIT_* overrides must not escape the proof by launching side
+        // effects under an otherwise-readonly `git diff`/`git show`.
+        apply_git_readonly_execution_guards(&mut entries);
         entries
+    }
+}
+
+/// Overrides that keep Git's process boundary aligned with argv-only readonly
+/// classification. Empty values clear local config; authorized overlay entries
+/// that already set these keys win and are left untouched.
+fn apply_git_readonly_execution_guards(entries: &mut Vec<(String, String)>) {
+    const GUARDS: &[(&str, &str)] = &[
+        ("GIT_CONFIG_COUNT", "4"),
+        ("GIT_CONFIG_KEY_0", "diff.external"),
+        ("GIT_CONFIG_VALUE_0", ""),
+        ("GIT_CONFIG_KEY_1", "diff.orderFile"),
+        ("GIT_CONFIG_VALUE_1", ""),
+        ("GIT_CONFIG_KEY_2", "core.editor"),
+        ("GIT_CONFIG_VALUE_2", "true"),
+        ("GIT_CONFIG_KEY_3", "core.pager"),
+        ("GIT_CONFIG_VALUE_3", "cat"),
+        ("GIT_EXTERNAL_DIFF", ""),
+        ("GIT_PAGER", "cat"),
+        ("GIT_EDITOR", "true"),
+    ];
+    for (key, value) in GUARDS {
+        if !entries.iter().any(|(existing, _)| existing == key) {
+            entries.push(((*key).to_owned(), (*value).to_owned()));
+        }
     }
 }
 

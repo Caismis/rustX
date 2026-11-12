@@ -117,6 +117,7 @@ pub enum DangerCallbackId {
     Ss,
     Test,
     Tput,
+    Uniq,
     Xargs,
     Docker,
     Gh,

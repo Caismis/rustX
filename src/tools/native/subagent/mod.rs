@@ -193,7 +193,6 @@ impl ToolExecutor for SubagentExecutor {
                         title: input.title.trim().into(),
                         execution_policy: subagent_context.execution_policy(),
                         resolved,
-                        approval_mode: subagent_context.approval_mode(),
                     },
                     admission: crate::runtime::subagent::ActivationAdmission {
                         attachments: Vec::new(),
@@ -207,6 +206,7 @@ impl ToolExecutor for SubagentExecutor {
                                 .clone(),
                         },
                         terminal: SubagentTerminalMode::Normal,
+                        approval_mode: subagent_context.approval_mode(),
                     },
                 };
                 // One attempt-derived cancellation authority owns the whole

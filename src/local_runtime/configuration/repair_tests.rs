@@ -246,6 +246,23 @@ fn the_rule_anchors_are_typed_source_schema_fields() {
 }
 
 #[test]
+fn obsolete_auxiliary_model_fields_are_rejected_not_silently_removed() {
+    let text = r#"schema_version = 8
+[agent.model]
+model = "local/a"
+summary_model = "local/b"
+title_model = "local/c"
+"#;
+    let err = plan(text.as_bytes()).expect_err("obsolete fields must not repair");
+    assert_eq!(err, Uneditable::ObsoleteAuxiliaryModelFields);
+    assert!(
+        err.diagnostic().contains("agent.model.auxiliary"),
+        "{}",
+        err.diagnostic()
+    );
+}
+
+#[test]
 fn nested_unknown_fields_and_tables_go_in_one_pass_without_security_exemptions() {
     let text = r#"unknown_root = 1
 [security]

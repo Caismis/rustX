@@ -540,15 +540,11 @@ fn mutation_target_from_arguments(
     }
     let requested = arguments.get("path").and_then(|value| value.as_str())?;
     // Match Write/Edit execution: relative paths resolve against the workspace
-    // root so Plan-mode PLAN.md fast-path classification sees the same target.
-    let path = std::path::PathBuf::from(requested);
-    Some(if path.is_absolute() {
-        path
-    } else if let Some(root) = workspace_root {
-        root.join(path)
-    } else {
-        path
-    })
+    // root, then follow the same effective-path rules as `prepare_mutation_target`
+    // so Plan-mode PLAN.md classification and the later commit share one target.
+    let cwd = workspace_root.unwrap_or_else(|| std::path::Path::new("."));
+    let interpreted = crate::tools::native::support::interpret_path(cwd, requested);
+    crate::tools::native::support::resolve_effective_path(&interpreted).ok()
 }
 
 /// The immutable invocation facts of one call that reached invocation

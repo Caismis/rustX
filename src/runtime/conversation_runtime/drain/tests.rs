@@ -1828,7 +1828,6 @@ async fn runtime_shutdown_waits_for_workflow_child_native_quiescence() {
                     title: "Explore task".into(),
                     execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: test_resolved_subagent("reviewer"),
-                    approval_mode: ApprovalMode::FullAccess,
                 },
                 admission: crate::runtime::subagent::ActivationAdmission {
                     attachments: Vec::new(),
@@ -1848,6 +1847,7 @@ async fn runtime_shutdown_waits_for_workflow_child_native_quiescence() {
                         run_id,
                         node_id: Box::new(node_instance),
                     },
+                    approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                 },
             },
             &CancellationSignal::new(),
@@ -1965,7 +1965,6 @@ async fn abandoned_subagent_publication_cannot_hide_unproven_physical_settlement
                     title: "Explore task".into(),
                     resolved: test_resolved_subagent("reviewer"),
                     execution_policy: InheritedExecutionPolicy::default(),
-                    approval_mode: ApprovalMode::FullAccess,
                 },
                 admission: ActivationAdmission {
                     attachments: Vec::new(),
@@ -1975,6 +1974,7 @@ async fn abandoned_subagent_publication_cannot_hide_unproven_physical_settlement
                         tool_call_id: ToolCallId::new("unproven-abandoned-create"),
                     },
                     terminal: SubagentTerminalMode::Normal,
+                    approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                 },
             },
             &cancellation,
@@ -2070,7 +2070,6 @@ async fn runtime_shutdown_rejects_unproven_child_physical_settlement() {
                     title: "Explore task".into(),
                     resolved: test_resolved_subagent("reviewer"),
                     execution_policy: InheritedExecutionPolicy::default(),
-                    approval_mode: ApprovalMode::FullAccess,
                 },
                 admission: ActivationAdmission {
                     attachments: Vec::new(),
@@ -2080,6 +2079,7 @@ async fn runtime_shutdown_rejects_unproven_child_physical_settlement() {
                         tool_call_id: ToolCallId::new("unproven-create"),
                     },
                     terminal: SubagentTerminalMode::Normal,
+                    approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                 },
             },
             &CancellationSignal::new(),
@@ -2827,7 +2827,6 @@ async fn shutdown_waits_for_reserved_resume_physical_and_durable_rollback() {
             title: "Explore task".into(),
             execution_policy: InheritedExecutionPolicy::default(),
             resolved: test_resolved_subagent("explore"),
-            approval_mode: ApprovalMode::FullAccess,
         },
         admission: ActivationAdmission {
             attachments: Vec::new(),
@@ -2837,6 +2836,7 @@ async fn shutdown_waits_for_reserved_resume_physical_and_durable_rollback() {
                 tool_call_id: ToolCallId::new("initial"),
             },
             terminal: SubagentTerminalMode::Normal,
+            approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
         },
     };
     let (child, mut peer) = stage_runtime_test_child(&dir.path().join("first-child"));
@@ -2903,7 +2903,8 @@ async fn shutdown_waits_for_reserved_resume_physical_and_durable_rollback() {
                     &agent,
                     "reserved input",
                     AgentActivationOrigin::ClientControl,
-                    CancellationSignal::new(),
+                    crate::runtime::types::ApprovalMode::FullAccess,
+                CancellationSignal::new(),
                 )
                 .await
         }
@@ -2992,7 +2993,8 @@ async fn shutdown_waits_for_reserved_resume_physical_and_durable_rollback() {
         &first.child_agent_id,
         "after reopen",
         AgentActivationOrigin::ClientControl,
-        CancellationSignal::new(),
+        crate::runtime::types::ApprovalMode::FullAccess,
+    CancellationSignal::new(),
     );
     let (accepted, ()) = tokio::join!(send, async {
         assert!(matches!(

@@ -28,6 +28,7 @@ pub fn run_danger_callback(id: DangerCallbackId, _command_text: &str, args: &[St
         DangerCallbackId::Ss => ss_dangerous(args),
         DangerCallbackId::Test => test_dangerous(args),
         DangerCallbackId::Tput => tput_dangerous(args),
+        DangerCallbackId::Uniq => uniq_dangerous(args),
         DangerCallbackId::Xargs => xargs_dangerous(args),
         DangerCallbackId::Docker => has_dangerous_docker_option(args),
         DangerCallbackId::Gh => gh_dangerous(args),
@@ -107,6 +108,46 @@ pub fn run_danger_callback(id: DangerCallbackId, _command_text: &str, args: &[St
 #[must_use]
 pub fn is_sed_in_place_option(word: &str) -> bool {
     word.starts_with("-i") || word == "--in-place" || word.starts_with("--in-place=")
+}
+
+/// `uniq` accepts an optional OUTPUT positional that creates or overwrites a
+/// file without redirection. More than one positional is therefore a write.
+#[must_use]
+fn uniq_dangerous(args: &[String]) -> bool {
+    let mut positionals = 0usize;
+    let mut index = 0usize;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--" {
+            positionals += args.len().saturating_sub(index + 1);
+            break;
+        }
+        if arg.starts_with('-') && arg != "-" {
+            // Long options that take a value (`--key=`, `--check-chars N`).
+            if let Some(name) = arg.strip_prefix("--") {
+                let (flag, inline) = name
+                    .split_once('=')
+                    .map_or((name, false), |(flag, _)| (flag, true));
+                if matches!(flag, "check-chars" | "skip-chars" | "skip-fields") && !inline {
+                    index += 1;
+                }
+            } else {
+                // Short options that take a following value: `-f N`, `-s N`, `-w N`.
+                let chars: Vec<char> = arg[1..].chars().collect();
+                if chars.len() == 1 && matches!(chars[0], 'f' | 's' | 'w') {
+                    index += 1;
+                }
+            }
+            index += 1;
+            continue;
+        }
+        positionals += 1;
+        if positionals > 1 {
+            return true;
+        }
+        index += 1;
+    }
+    positionals > 1
 }
 
 #[must_use]

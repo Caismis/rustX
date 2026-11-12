@@ -883,7 +883,6 @@ async fn launch_wired_child_full(
                     title: "Explore task".into(),
                     execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: resolved_child_spec("conformance"),
-                    approval_mode,
                 },
                 admission: crate::runtime::subagent::ActivationAdmission {
                     attachments: Vec::new(),
@@ -893,6 +892,7 @@ async fn launch_wired_child_full(
                         tool_call_id: ToolCallId::new("call-138"),
                     },
                     terminal: rustx::runtime::subagent::SubagentTerminalMode::Normal,
+                    approval_mode,
                 },
             },
             &CancellationSignal::new(),
@@ -6285,7 +6285,8 @@ async fn a_steer_is_consumed_by_the_same_child_conversation_and_agent_loop() {
             &wired.accepted.child_agent_id,
             "Focus on cancellation ownership and ignore TUI code.",
             crate::runtime::subagent::AgentActivationOrigin::ClientControl,
-            crate::runtime::cancellation::CancellationSignal::new(),
+            rustx::runtime::types::ApprovalMode::FullAccess,
+        CancellationSignal::new(),
         )
         .await
         .expect("the running child durably accepts the guidance");
@@ -6398,7 +6399,8 @@ async fn accepted_steers_are_observed_in_their_durable_acceptance_order() {
                 &wired.accepted.child_agent_id,
                 message,
                 crate::runtime::subagent::AgentActivationOrigin::ClientControl,
-                crate::runtime::cancellation::CancellationSignal::new(),
+                rustx::runtime::types::ApprovalMode::FullAccess,
+            CancellationSignal::new(),
             )
             .await
             .unwrap_or_else(|error| panic!("{message} is accepted: {error}"));

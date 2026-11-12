@@ -4258,7 +4258,6 @@ impl WorkflowRuntime {
                 title: node_id.node.clone().into(),
                 execution_policy: context.execution_policy(),
                 resolved,
-                approval_mode: context.approval_mode(),
             },
             admission: crate::runtime::subagent::ActivationAdmission {
                 attachments: Vec::new(),
@@ -4273,6 +4272,7 @@ impl WorkflowRuntime {
                     run_id: run.run_id.clone(),
                     node_id: Box::new(node_id.clone()),
                 },
+                approval_mode: context.approval_mode(),
             },
         };
         let child_cancellation = cancellation.child_signal();

@@ -127,7 +127,11 @@ pub fn atomic_commit(target: &MutationTarget, content: &[u8]) -> Result<(), Stri
 
 /// Resolves all existing symlink components and preserves the effective
 /// destination of a dangling final symlink or a not-yet-created descendant.
-fn resolve_effective_path(target: &Path) -> Result<PathBuf, String> {
+///
+/// Permission classification for Write/Edit must use this same resolver so a
+/// dangling `PLAN.md` symlink cannot authorize a different host target than
+/// the mutation commit will write.
+pub(crate) fn resolve_effective_path(target: &Path) -> Result<PathBuf, String> {
     let mut candidate = lexical_normalize(target);
     for _ in 0..40 {
         match std::fs::symlink_metadata(&candidate) {

@@ -338,24 +338,39 @@ class Gate(unittest.TestCase):
     def test_a_github_stacked_merge_commit_requires_base_tree_not_mere_ancestry(self):
         planned = v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))
         stacked = {"merge": "m", "parents": ["stack-merge", "abc"], "base": "base"}
-        # Intermediate stack merge with the same tree as the declared base.
+        # Intermediate stack merge with the same tree as the declared base, and
+        # a merge tree that matches the independent base+head integration.
         self.assertEqual(
             v.gate(planned, passing(planned), "abc", "abc", stacked,
-                   same_tree=lambda left, right: (left, right) == ("base", "stack-merge")),
+                   same_tree=lambda left, right: (left, right) == ("base", "stack-merge"),
+                   merge_tree_fn=lambda left, right: "merged-tree" if (left, right) == ("base", "abc") else None,
+                   tree_of=lambda commit: "merged-tree" if commit == "m" else None),
             [],
         )
         # An ancestor-related first parent with foreign content must fail.
         self.assertEqual(
             v.gate(planned, passing(planned), "abc", "abc", stacked,
-                   same_tree=lambda left, right: False),
+                   same_tree=lambda left, right: False,
+                   merge_tree_fn=lambda left, right: "merged-tree",
+                   tree_of=lambda commit: "merged-tree"),
             ["the tested merge commit m joins ['stack-merge', 'abc'], not base base and head abc"],
         )
         # Second parent must remain the PR head.
         wrong_head = {"merge": "m", "parents": ["stack-merge", "other"], "base": "base"}
         self.assertEqual(
             v.gate(planned, passing(planned), "abc", "abc", wrong_head,
-                   same_tree=lambda left, right: True),
+                   same_tree=lambda left, right: True,
+                   merge_tree_fn=lambda left, right: "merged-tree",
+                   tree_of=lambda commit: "merged-tree"),
             ["the tested merge commit m joins ['stack-merge', 'other'], not base base and head abc"],
+        )
+        # Same first-parent tree is not enough when the merge result differs.
+        self.assertEqual(
+            v.gate(planned, passing(planned), "abc", "abc", stacked,
+                   same_tree=lambda left, right: True,
+                   merge_tree_fn=lambda left, right: "expected-tree",
+                   tree_of=lambda commit: "actual-tree"),
+            ["the tested merge commit m joins ['stack-merge', 'abc'], not base base and head abc"],
         )
 
     def test_a_superseded_fast_run_is_not_current_verification(self):
@@ -474,6 +489,22 @@ class StackedMergeGit(unittest.TestCase):
             parents_f = self.git(repo, "rev-list", "--parents", "-n", "1", merge_f).stdout.split()
             tested_f = {"merge": parents_f[0], "parents": parents_f[1:], "base": base}
 
+            # Include-then-revert history: tree(F)==tree(base) but merging F with
+            # head does not equal merging the declared base with head.
+            self.git(repo, "checkout", "-b", "h1", base)
+            (pathlib.Path(repo) / "x").write_text("new\n", encoding="utf-8")
+            h1 = self.commit_tree(repo, "h1")
+            self.git(repo, "checkout", "-b", "h2")
+            (pathlib.Path(repo) / "y").write_text("y\n", encoding="utf-8")
+            h2 = self.commit_tree(repo, "h2")
+            self.git(repo, "checkout", "-b", "reverted", h1)
+            self.git_commit(repo, "revert", "--no-edit", h1)
+            reverted = self.git(repo, "rev-parse", "HEAD").stdout.strip()
+            self.git_commit(repo, "merge", "--no-ff", "-m", "tested-reverted", h2)
+            merge_r = self.git(repo, "rev-parse", "HEAD").stdout.strip()
+            parents_r = self.git(repo, "rev-list", "--parents", "-n", "1", merge_r).stdout.split()
+            tested_r = {"merge": parents_r[0], "parents": parents_r[1:], "base": base}
+
             previous = os.getcwd()
             try:
                 os.chdir(repo)
@@ -483,6 +514,11 @@ class StackedMergeGit(unittest.TestCase):
                 errors = v.gate(planned, passing(planned), head, head, tested_f)
                 self.assertEqual(len(errors), 1)
                 self.assertIn("tested merge commit", errors[0])
+                self.assertEqual(v.git_tree(reverted), v.git_tree(base))
+                self.assertNotEqual(v.merge_tree(base, h2), v.git_tree(merge_r))
+                errors_r = v.gate(planned, passing(planned), h2, h2, tested_r)
+                self.assertEqual(len(errors_r), 1)
+                self.assertIn("tested merge commit", errors_r[0])
             finally:
                 os.chdir(previous)
 

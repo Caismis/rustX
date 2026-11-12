@@ -15,6 +15,9 @@ pub const MAX_AGENT_LIST_LIMIT: usize = 64;
 
 /// Immutable Agent-lifetime executable authority. The entire value is captured
 /// in private conversation storage, never serialized into Event Journal facts.
+///
+/// Approval mode is not durable Agent authority: each Activation freezes the
+/// caller's mode at admission time (Issue #544).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DurableAgentAuthority {
@@ -22,7 +25,6 @@ pub struct DurableAgentAuthority {
     pub title: Arc<str>,
     pub resolved: ResolvedSubagentSpec,
     pub execution_policy: super::super::InheritedExecutionPolicy,
-    pub approval_mode: crate::runtime::types::ApprovalMode,
 }
 
 pub(super) struct AgentRecord {
@@ -588,10 +590,18 @@ impl SubagentRegistry {
         id: &AgentId,
         message: &str,
         origin: super::AgentActivationOrigin,
+        approval_mode: crate::runtime::types::ApprovalMode,
         cancellation: CancellationSignal,
     ) -> Result<AgentMessageAccepted, AgentControlError> {
-        self.send_message_with_attachments(id, message, &[], origin, cancellation)
-            .await
+        self.send_message_with_attachments(
+            id,
+            message,
+            &[],
+            origin,
+            approval_mode,
+            cancellation,
+        )
+        .await
     }
     /// Refuse a known unresolved owner before acquiring any new mutation authority.
     /// This is a read of the same native predicate rechecked by control arbitration.
@@ -621,6 +631,9 @@ impl SubagentRegistry {
         message: &str,
         attachments: &[crate::message::content::UploadedFileRef],
         origin: super::AgentActivationOrigin,
+        // Caller's frozen mode for a new Activation; delivery to a running
+        // Activation keeps that Activation's existing mode.
+        approval_mode: crate::runtime::types::ApprovalMode,
         caller_cancellation: CancellationSignal,
     ) -> Result<AgentMessageAccepted, AgentControlError> {
         enum Decision {
@@ -722,6 +735,7 @@ impl SubagentRegistry {
                                     context: None,
                                     origin: origin.clone(),
                                     terminal: SubagentTerminalMode::Normal,
+                                    approval_mode,
                                 },
                             };
                             let (completion, _) =

@@ -247,6 +247,10 @@ mod tests {
             "pwd && whoami",
             "sed -n '1,20p' README.md",
             "sed 's/foo/bar/g'",
+            "uniq",
+            "uniq input.txt",
+            "uniq -c input.txt",
+            "uniq -f 1 -s 2 input.txt",
         ] {
             assert_readonly(command);
         }
@@ -294,6 +298,8 @@ mod tests {
             "xargs rm -rf",
             "sed -i 's/a/b/' file",
             "sed -n -e 'e printf sed-probe' README.md",
+            "uniq input.txt output.txt",
+            "uniq -- input.txt output.txt",
             "cat README.md > out.txt",
             "ls $(touch out.txt)",
             "ls `touch out.txt`",

@@ -73,7 +73,7 @@ pub(crate) use registration::input_schema;
 // because Glob and Grep must observe one filesystem universe.
 mod search;
 pub(crate) mod subagent;
-mod support;
+pub(crate) mod support;
 mod todo;
 mod workflow;
 #[cfg(test)]

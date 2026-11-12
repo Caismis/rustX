@@ -29,6 +29,8 @@ async fn assert_unproven_agent_stops_at_exact_activation(
                 agent_id,
                 "must not resume",
                 AgentActivationOrigin::ClientControl,
+
+                crate::runtime::types::ApprovalMode::FullAccess,
                 CancellationSignal::new()
             )
             .await,

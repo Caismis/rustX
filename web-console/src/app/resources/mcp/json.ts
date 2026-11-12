@@ -14,8 +14,30 @@ export function parseMcpJson(text: string): Record<string, McpWrite> {
     if (record(input.definition)) for (const key of Object.keys(input)) if (!['definition','retained_env','retained_headers'].includes(key)) throw new Error('Unsupported field');
     const definition = record(input.definition) ? input.definition : input;
     for (const key of ['env', 'headers']) if (definition[key] != null && (!record(definition[key]) || Object.keys(definition[key]).length)) throw new Error('Literal credentials are not supported; use environment references');
-    const keys = ['type','url','command','args','cwd','env','headers','sensitive_env','sensitive_headers'];
+    const keys = ['type','url','command','args','cwd','env','headers','sensitive_env','sensitive_headers','permissions','tools'];
     for (const key of Object.keys(definition)) if (!keys.includes(key)) throw new Error('Unsupported field');
+    if (definition.permissions != null) {
+      if (!record(definition.permissions)) throw new Error('permissions must be an object');
+      for (const mode of ['plan', 'automatic', 'full_access'] as const) {
+        if (!Object.hasOwn(definition.permissions, mode)) throw new Error('permissions must include plan, automatic, and full_access');
+        const value = definition.permissions[mode];
+        if (value !== 'deny' && value !== 'ask' && value !== 'allow') throw new Error('permission values must be deny, ask, or allow');
+      }
+      for (const key of Object.keys(definition.permissions)) if (!['plan','automatic','full_access'].includes(key)) throw new Error('Unsupported field');
+    }
+    if (definition.tools != null) {
+      if (!record(definition.tools)) throw new Error('tools must be an object');
+      for (const tool of Object.values(definition.tools)) {
+        if (!record(tool) || !record(tool.permissions)) throw new Error('each tool permission must include permissions');
+        for (const mode of ['plan', 'automatic', 'full_access'] as const) {
+          if (!Object.hasOwn(tool.permissions, mode)) throw new Error('tool permissions must include plan, automatic, and full_access');
+          const value = tool.permissions[mode];
+          if (value !== 'deny' && value !== 'ask' && value !== 'allow') throw new Error('permission values must be deny, ask, or allow');
+        }
+        for (const key of Object.keys(tool)) if (key !== 'permissions') throw new Error('Unsupported field');
+        for (const key of Object.keys(tool.permissions)) if (!['plan','automatic','full_access'].includes(key)) throw new Error('Unsupported field');
+      }
+    }
     if (definition.type != null && definition.type !== 'http' && definition.type !== 'stdio') throw new Error('Unsupported transport');
     const http = definition.type === 'http' || (definition.type == null && definition.url != null);
     if (http) {

@@ -222,7 +222,6 @@ impl Lab {
                     extensions: crate::extensions::NativeAgentExtensionsDocument::default()
                         .resolve(),
                 },
-                approval_mode: crate::runtime::ApprovalMode::Plan,
             },
             admission: crate::runtime::subagent::ActivationAdmission {
                 attachments: Vec::new(),
@@ -232,6 +231,7 @@ impl Lab {
                     tool_call_id: crate::runtime::identity::ToolCallId::new("call-1"),
                 },
                 terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
             },
         }
     }
