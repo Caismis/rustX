@@ -1,11 +1,6 @@
-//! Real Git read-only enumeration proofs for the runtime-owned optional observation.
+//! Cancellation boundaries of the runtime-owned optional workspace observation.
 use crate::runtime::conversation_runtime::test_support::*;
-use std::{
-    fs,
-    os::unix::fs::OpenOptionsExt,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{fs, path::Path, sync::Mutex, time::Duration};
 
 fn git(root: &Path, args: &[&str]) {
     let output = std::process::Command::new("git")
@@ -21,7 +16,7 @@ fn git(root: &Path, args: &[&str]) {
 }
 
 struct WriteTracked {
-    configuration: HeldConfiguration,
+    configuration: HeldObservation,
 }
 impl ToolExecutor for WriteTracked {
     fn start<'a>(
@@ -34,7 +29,7 @@ impl ToolExecutor for WriteTracked {
         crate::tools::executor::ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
                 fs::write(context.workspace.root().join("tracked.txt"), "after\n").unwrap();
-                configuration.arm();
+                configuration.arm(context.workspace_changes.as_ref().unwrap());
                 success_result("changed")
             }),
             cancellation,
@@ -45,76 +40,40 @@ impl ToolExecutor for WriteTracked {
     }
 }
 
-#[derive(Clone)]
-struct HeldConfiguration {
-    root: PathBuf,
-    fifo: PathBuf,
-    original: Vec<u8>,
+#[derive(Clone, Default)]
+struct HeldObservation {
+    gate: Arc<Mutex<Option<ObservationGate>>>,
+    armed: Arc<tokio::sync::Notify>,
 }
 
-impl HeldConfiguration {
-    fn arm(&self) {
-        let mut configuration = self.original.clone();
-        let path = self
-            .fifo
-            .to_string_lossy()
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"");
-        configuration.extend_from_slice(format!("\n[include]\n\tpath = \"{path}\"\n").as_bytes());
-        fs::write(self.root.join(".git/config"), configuration).unwrap();
+type ObservationGate = (
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+);
+
+impl HeldObservation {
+    fn arm(&self, recording: &crate::workspace_changes::ChangeRecording) {
+        *self.gate.lock().unwrap() = Some(recording.hold_final_observation());
+        self.armed.notify_one();
     }
 
-    fn restore(&self) {
-        fs::write(self.root.join(".git/config"), &self.original).unwrap();
+    async fn wait_until_started(&self) -> tokio::sync::oneshot::Sender<()> {
+        bounded(self.armed.notified()).await;
+        let (entered, release) = self.gate.lock().unwrap().take().unwrap();
+        bounded(entered).await.unwrap();
+        release
     }
 
-    async fn reader(&self) -> (fs::File, i32) {
-        // Opening this writer proves that a Git reader has reached the FIFO.
-        // Keeping it open without data prevents EOF and holds that exact read.
-        let writer = bounded(async {
-            loop {
-                match fs::OpenOptions::new()
-                    .write(true)
-                    .custom_flags(libc::O_NONBLOCK)
-                    .open(&self.fifo)
-                {
-                    Ok(writer) => break writer,
-                    Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {}
-                    Err(error) => panic!("open held configuration: {error}"),
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await;
-        let pid = bounded(async {
-            loop {
-                for entry in fs::read_dir("/proc").unwrap().flatten() {
-                    let Ok(pid) = entry.file_name().to_string_lossy().parse::<i32>() else {
-                        continue;
-                    };
-                    if fs::read_link(entry.path().join("exe"))
-                        .ok()
-                        .and_then(|path| path.file_name().map(|name| name == "git"))
-                        != Some(true)
-                    {
-                        continue;
-                    }
-                    if fs::read_dir(entry.path().join("fd")).is_ok_and(|fds| {
-                        fds.flatten()
-                            .any(|fd| fs::read_link(fd.path()).ok().as_ref() == Some(&self.fifo))
-                    }) {
-                        return pid;
-                    }
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await;
-        (writer, pid)
+    fn assert_not_started(&self) {
+        let (mut entered, _release) = self.gate.lock().unwrap().take().unwrap();
+        assert!(
+            entered.try_recv().is_err(),
+            "cancelled attempt must not start its final observation"
+        );
     }
 }
 
-fn configure_repository(dir: &tempfile::TempDir) -> HeldConfiguration {
+fn configure_repository(dir: &tempfile::TempDir) -> HeldObservation {
     let root = dir.path().join("workspace");
     fs::create_dir(&root).unwrap();
     git(&root, &["init", "-q"]);
@@ -132,30 +91,19 @@ fn configure_repository(dir: &tempfile::TempDir) -> HeldConfiguration {
             "initial",
         ],
     );
-    let fifo = dir.path().join("held-config");
-    nix::unistd::mkfifo(
-        &fifo,
-        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
-    )
-    .unwrap();
-    let original = fs::read(root.join(".git/config")).unwrap();
-    HeldConfiguration {
-        root,
-        fifo,
-        original,
-    }
+    HeldObservation::default()
 }
 
 async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
-    // A guard below the independent Git timeout, not a performance assertion:
-    // the held read has no data or EOF and cannot complete by itself.
+    // A deadlock guard, not a performance assertion. The observation gate
+    // cannot complete until explicitly released by the test.
     tokio::time::timeout(Duration::from_secs(10), future)
         .await
-        .expect("cancelled observation must not await the held read or its 30s timeout")
+        .expect("cancelled observation must not await the held final observation")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cancelled_attempt_does_not_start_a_final_git_read() {
+async fn cancelled_attempt_does_not_start_a_final_workspace_observation() {
     let dir = tempfile::tempdir().unwrap();
     let configuration = configure_repository(&dir);
     let (registry, tool_script) = cause_probe_registry_and_script(Arc::new(WriteTracked {
@@ -207,15 +155,7 @@ async fn cancelled_attempt_does_not_start_a_final_git_read() {
     }))
     .await;
     assert_eq!(count_terminal(&observations), 1);
-    let reader = fs::OpenOptions::new()
-        .write(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(&configuration.fifo);
-    assert_eq!(
-        reader.unwrap_err().raw_os_error(),
-        Some(libc::ENXIO),
-        "a cancelled Attempt must not start its final Git read"
-    );
+    configuration.assert_not_started();
     assert!(
         runtime
             .tool_runtime()
@@ -223,7 +163,6 @@ async fn cancelled_attempt_does_not_start_a_final_git_read() {
             .summary(&attempt)
             .is_none()
     );
-    configuration.restore();
     runtime.submit_inbound(text_content("next task")).unwrap();
     assert_eq!(
         bounded(runtime.child_attempt_settlement(1)).await.ordinal,
@@ -233,7 +172,7 @@ async fn cancelled_attempt_does_not_start_a_final_git_read() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cancelling_final_git_read_releases_terminal_and_handoff_before_read_release() {
+async fn cancelling_final_observation_releases_terminal_and_handoff_before_observation_release() {
     let dir = tempfile::tempdir().unwrap();
     let configuration = configure_repository(&dir);
     let (registry, tool_script) = cause_probe_registry_and_script(Arc::new(WriteTracked {
@@ -254,7 +193,7 @@ async fn cancelling_final_git_read_releases_terminal_and_handoff_before_read_rel
     runtime
         .submit_inbound(text_content("change the file"))
         .unwrap();
-    let (_held_writer, pid) = configuration.reader().await;
+    let release = configuration.wait_until_started().await;
     let attempt = runtime.cancel_active_attempt().unwrap();
     let settlement = bounded(runtime.child_attempt_settlement(0)).await;
     assert_eq!(settlement.attempt_id, attempt);
@@ -273,20 +212,13 @@ async fn cancelling_final_git_read_releases_terminal_and_handoff_before_read_rel
             .summary(&attempt)
             .is_none()
     );
-    // A new task completes while the old FIFO writer still supplies neither
-    // data nor EOF. Restore configuration only for subsequent Git commands.
-    configuration.restore();
+    // A new task completes while the old observation is still held.
     runtime.submit_inbound(text_content("next task")).unwrap();
     assert_eq!(
         bounded(runtime.child_attempt_settlement(1)).await.ordinal,
         2
     );
-    bounded(async {
-        while Path::new(&format!("/proc/{pid}")).exists() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await;
+    let _ = release.send(());
     runtime.shutdown().await.unwrap();
     assert!(
         runtime
