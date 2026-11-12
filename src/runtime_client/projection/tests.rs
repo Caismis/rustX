@@ -273,8 +273,9 @@ fn t14_t20_workflow_native_revision_gaps_preserve_complete_replay_and_checkpoint
                 .iter()
                 .any(|(cursor, event)| { *cursor == record.cursor && event == &record.event })
         );
-        let RuntimeClientEvent::ProjectionTransition { events, metadata } = record.event.as_ref()
-        else {
+        let full = crate::runtime_client::delta::expand_event(&folded, &record.event)
+            .expect("valid cursor delta");
+        let RuntimeClientEvent::ProjectionTransition { events, metadata } = &full else {
             panic!("one complete Runtime transition");
         };
         let [
@@ -6017,7 +6018,11 @@ fn t14_t19_complete_canonical_head_omits_only_exact_unchanged_rows() {
     assert_eq!(
         facts
             .iter()
-            .filter(|event| matches!(event, RuntimeClientEvent::MessageDescriptorCommitted { .. }))
+            .filter(|event| matches!(
+                event,
+                RuntimeClientEvent::MessageDescriptorCommitted { .. }
+                    | RuntimeClientEvent::MessageDescriptorPatched { .. }
+            ))
             .count(),
         1
     );

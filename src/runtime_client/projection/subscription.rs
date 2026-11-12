@@ -62,6 +62,7 @@ impl RuntimeClientProjection {
         self.subscribers.push(Subscriber {
             id: subscriber_id,
             consumed: after_cursor,
+            bases: super::publication::DeliveryBases::default(),
             notify: notify.clone(),
         });
         // A subscriber registered behind the current cursor already has
@@ -126,10 +127,15 @@ impl RuntimeClientProjection {
                 earliest_serviceable: earliest,
             };
         };
+        let Some(event) = subscriber.bases.delivery(event) else {
+            return SubscriberPoll::Unavailable {
+                message: "native replay baseline unavailable".into(),
+            };
+        };
         subscriber.consumed = *cursor;
         SubscriberPoll::Event(RuntimeClientProtocolEvent {
             cursor: *cursor,
-            event: event.clone(),
+            event,
         })
     }
 

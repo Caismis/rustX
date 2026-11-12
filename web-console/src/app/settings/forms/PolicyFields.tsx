@@ -1,4 +1,4 @@
-import type {NativePolicyOverrideDocument} from '../../../../../protocol/app-server/v78';
+import type {NativePolicyOverrideDocument} from '../../../../../protocol/app-server/v79';
 import {useTranslation} from '../../../locale/react';
 import {Choice} from '../primitives/aria';
 export function PolicyFields({ value, change }: { value: NativePolicyOverrideDocument; change: (value: NativePolicyOverrideDocument) => void }) {

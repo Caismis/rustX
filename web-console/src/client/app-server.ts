@@ -1,5 +1,5 @@
 import {newerThreadStatus, ThreadStatusNotifications} from '../../../protocol/app-server/thread-status';
-import type {ThreadStatusEntry} from '../../../protocol/app-server/v78';
+import type {ThreadStatusEntry} from '../../../protocol/app-server/v79';
 import {credentialSubprotocol} from '../../../protocol/app-server/auth';
 import { ServerCallbacks, type HostToolHandler } from '../../../protocol/app-server/callbacks';
 import { AuxiliaryQuestions } from './auxiliary';
@@ -11,7 +11,7 @@ import { lifecycleAvailability, type LifecycleContext } from './session-lifecycl
 import { AgentMeters } from './agent-meters';
 import { publicationHeads } from './publication-heads';
 import { AttachmentIntakes } from './uploads';
-import { checkpointSnapshot, foldRuntimeEvent, observationCheckpoint, transitionFacts } from '../../../protocol/app-server/projection';
+import { checkpointSnapshot, expandRuntimeEvent, foldRuntimeEvent, observationCheckpoint, transitionFacts } from '../../../protocol/app-server/projection';
 import { SourceRepairObserver } from './source-repairs';
 import { SessionCatalog } from './session-catalog';
 import { SessionReads } from './session-reads';
@@ -30,7 +30,7 @@ import type {
   TraceToolLocator, PendingInboundRef, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request1, Response, RuntimeClientSnapshot, RuntimeClientEvent,
   UserInputBlock, UploadReceipt, UploadedFile, SessionModelConfig, RuntimeClientInteractionHeader,
-} from '../../../protocol/app-server/v78';
+} from '../../../protocol/app-server/v79';
 import { transferUpload } from '../../../protocol/app-server/upload';
 import { refreshTranscript, replaceTranscript, type TurnSelection } from './transcript';
 import { RequestPipeline } from './request-pipeline';
@@ -110,7 +110,7 @@ export class AppServerClient {
   private acquiring = new Set<string>();
   private resubscribe = new Set<string>();
   private observationChains = new Map<string, ObservationChain<RuntimeClientEvent>>();
-  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v78').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
+  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v79').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
   private retainAppliedObservations() {
     for(const [id,chain] of this.observationChains) {
       const view=this.state.views[id];
@@ -287,7 +287,7 @@ export class AppServerClient {
         this.resumeSeeds.delete(id);
         const resumable=previous&&previous.target.conversation_id===result.target.conversation_id
           &&previous.target.runtime_incarnation===result.target.runtime_incarnation;
-        let checkpoint:import('../../../protocol/app-server/v78').RuntimeClientCheckpoint;
+        let checkpoint:import('../../../protocol/app-server/v79').RuntimeClientCheckpoint;
         let observed:RuntimeClientSnapshot;
         if(resumable){checkpoint={...previous.checkpoint,cursor:previous.cursor};observed=previous.snapshot;}
         else {
@@ -420,7 +420,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v78', credentialSubprotocol(token)]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v79', credentialSubprotocol(token)]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -438,12 +438,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 78, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 79, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 78 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.shared_writable_clients) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v78 with native multi-Session, headless interactions, and shared writable admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 79 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.shared_writable_clients) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v79 with native multi-Session, headless interactions, and shared writable admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -640,6 +640,7 @@ export class AppServerClient {
   private applyObservation(id: string, target: AttachmentTarget, event: RuntimeClientEvent, cursor: string) {
     const view = this.state.views[id], observation = this.lifecycles.observe(id);
     if (!observation?.current() || !sameTarget(observation.proof.target, target) || !view?.snapshot) throw new Error('Observation view was replaced.');
+    event = expandRuntimeEvent(view.snapshot, event);
     validateRootEvent(target, event, cursor);
     if (transitionFacts(event).some(fact=>fact.type==='pending_inbound_changed')) {
       this.reading.invalidateReading(id);
@@ -711,7 +712,7 @@ export class AppServerClient {
   loadTraceDetail(id: string, record: string) { return this.traces.loadTraceDetail(id, record); }
   projections(id: string, after?: string) { return this.traces.projections(id, after); }
   projectionDetail(id: string, checkpointId: string, offset?: number) { return this.traces.projectionDetail(id, checkpointId, offset); }
-  projectionDetailReader(detail: import('../../../protocol/app-server/v78').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
+  projectionDetailReader(detail: import('../../../protocol/app-server/v79').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
   private readonly controls = new SessionControls({
     request: (...args) => this.request(...args),
     state: () => this.state,

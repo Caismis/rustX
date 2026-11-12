@@ -1,5 +1,5 @@
 import {useEffect,useState} from 'react';
-import type {SkillDescriptor,SourceScope,SourceSettings} from '../../../../../protocol/app-server/v78';
+import type {SkillDescriptor,SourceScope,SourceSettings} from '../../../../../protocol/app-server/v79';
 import type {AppServerClient} from '../../../client/app-server';
 
 /** Native discovery, including descriptions, is independently revisioned and

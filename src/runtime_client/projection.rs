@@ -209,6 +209,7 @@ struct Subscriber {
     id: u64,
     /// The cursor through which this subscriber already consumed events.
     consumed: RuntimeClientCursor,
+    bases: publication::DeliveryBases,
     /// The edge-triggered wakeup handle. Carries no payload.
     notify: Arc<Notify>,
 }
@@ -505,6 +506,7 @@ struct ForegroundResultContent {
 
 #[derive(Clone)]
 pub(crate) struct CheckpointSeed {
+    display: Option<Arc<publication::PublicationBasis>>,
     prepared: prepared_capture::PreparedCaptures,
     attempt_bindings: prepared_capture::PreparedAttemptBindings,
     prepared_attempt: prepared_attempt::PreparedAttemptItems,
@@ -551,6 +553,7 @@ pub(crate) struct CheckpointSeed {
 }
 
 pub(crate) struct PublicationDraft {
+    previous: Option<Arc<CheckpointSeed>>,
     #[cfg(test)]
     encoding_profile: Option<Arc<std::sync::Mutex<PublicationEncodingProfile>>>,
     seed: CheckpointSeed,

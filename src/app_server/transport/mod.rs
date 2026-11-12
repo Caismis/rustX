@@ -507,6 +507,38 @@ fn serialize_envelope_record(value: &impl super::wire::Envelope) -> io::Result<S
     serialize_record(&super::wire::bounded_envelope(value))
 }
 
+/// Exercise the production notification encoder from deterministic host work tests.
+#[cfg(test)]
+pub(crate) fn event_notification_work(
+    event: &crate::runtime_client::RuntimeClientProtocolEvent,
+) -> (usize, usize) {
+    use super::protocol::{AttachmentTarget, JsonRpcVersion, Notification, NotificationMethod};
+    let notification = Notification {
+        jsonrpc: JsonRpcVersion::V2,
+        notification: NotificationMethod::Event {
+            registration_id: "turn-work-registration".into(),
+            target: AttachmentTarget {
+                session_id: crate::local_runtime::session::SessionId::new(
+                    "ses_00000000-0000-7000-8000-000000000001",
+                ),
+                conversation_id: crate::runtime::identity::ConversationId::new(
+                    "conv_00000000-0000-7000-8000-000000000001",
+                ),
+                runtime_incarnation: serde_json::from_str("1").unwrap(),
+                attachment_id: crate::runtime_client::types::AttachmentId::new("turn-work"),
+            },
+            cursor: event.cursor,
+            event: event.event.clone(),
+        },
+    };
+    super::wire::take_native_passes();
+    let record = serialize_control_record_limit(&notification, MAX_MESSAGE_BYTES).unwrap();
+    assert_eq!(super::wire::take_native_passes(), 1);
+    let value: serde_json::Value = serde_json::from_str(&record).unwrap();
+    let payload_bytes = serde_json::to_vec(&value["params"]["event"]).unwrap().len();
+    (record.len(), payload_bytes)
+}
+
 fn serialize_control_record_limit(
     value: &(impl super::wire::Envelope + Serialize),
     limit: usize,

@@ -32,6 +32,7 @@ impl RuntimeClientProjection {
     pub(super) fn capture_working_seed(&self) -> CheckpointSeed {
         let read_cut = self.working_read_cut();
         let mut seed = CheckpointSeed {
+            display: None,
             prepared: prepared_capture::PreparedCaptures::empty(),
             attempt_bindings: self
                 .published_seed

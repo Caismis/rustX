@@ -1,4 +1,4 @@
-import type { WorkflowListOperator, WorkflowVarType } from '../../../../../protocol/app-server/v78';
+import type { WorkflowListOperator, WorkflowVarType } from '../../../../../protocol/app-server/v79';
 import type { Value } from './model';
 export type ItemKind = 'string' | 'number' | 'boolean' | 'object' | 'unknown';
 export function itemKind(schema?: Record<string, unknown>): ItemKind {

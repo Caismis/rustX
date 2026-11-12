@@ -98,17 +98,57 @@ struct TurnWork {
     transitions: usize,
     read_domain_facts: usize,
     delivered_bytes: usize,
+    transport_bytes: usize,
+    transport_payload_bytes: usize,
+    full_json_bytes: usize,
+    full_transport_bytes: usize,
+    full_payload_bytes: usize,
+}
+
+fn captured_wire_value<T: serde::Serialize + schemars::JsonSchema>(value: &T) -> serde_json::Value {
+    struct Wire<'a, T>(&'a T, Arc<crate::observation::structural_json::plan::Plan>);
+    impl<T: serde::Serialize> serde::Serialize for Wire<'_, T> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            crate::observation::structural_json::serialize_wire(self.0, &self.1, serializer)
+        }
+    }
+    let schema = crate::observation::structural_json::root::<T>();
+    let encoded = Wire(value, schema);
+    let bytes = crate::observation::bounded::bounded_bytes(
+        &encoded,
+        crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
+    )
+    .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 fn count_delivered(work: &mut TurnWork, events: &[RuntimeClientProtocolEvent]) {
     for event in events {
         work.transitions += 1;
+        let (bytes, payload) = crate::app_server::transport::event_notification_work(event);
+        work.transport_bytes += bytes;
+        work.transport_payload_bytes += payload;
+        let full = RuntimeClientProtocolEvent {
+            cursor: event.cursor,
+            event: Arc::new(complete_transition(&event.event).clone()),
+        };
+        let (full_bytes, full_payload) =
+            crate::app_server::transport::event_notification_work(&full);
+        work.full_json_bytes += serde_json::to_vec(full.event.as_ref()).unwrap().len();
+        work.full_transport_bytes += full_bytes;
+        work.full_payload_bytes += full_payload;
         work.delivered_bytes += serde_json::to_vec(event.event.as_ref()).unwrap().len();
         work.read_domain_facts += event
             .event
             .facts()
             .iter()
-            .filter(|fact| matches!(fact, RuntimeClientEvent::ReadDomainsUpdated { .. }))
+            .filter(|fact| {
+                matches!(
+                    fact,
+                    RuntimeClientEvent::ReadDomainsUpdated { .. }
+                        | RuntimeClientEvent::ReadDomainsPatched { .. }
+                )
+            })
             .count();
     }
 }
@@ -150,9 +190,10 @@ async fn measure_turns(tool: bool) -> TurnWork {
         .host
         .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .unwrap();
-    let subscription = attachment
-        .subscribe_events(fixture.host.checkpoint().unwrap().cursor)
-        .unwrap();
+    let initial = fixture.host.checkpoint().unwrap();
+    let mut captured = Vec::new();
+    let capture = std::env::var_os("RUSTX_N1_CAPTURE");
+    let subscription = attachment.subscribe_events(initial.cursor).unwrap();
     let mut work = TurnWork::default();
     for turn in 0..turns {
         if turn == WARM_TURNS {
@@ -179,6 +220,15 @@ async fn measure_turns(tool: bool) -> TurnWork {
             events.push(event);
         }
         count_delivered(&mut work, &events);
+        if capture.is_some() {
+            for event in &events {
+                captured.push(serde_json::json!({
+                    "cursor":event.cursor.to_string(),
+                    "event":captured_wire_value(event.event.as_ref()),
+                    "full":captured_wire_value(complete_transition(&event.event)),
+                }));
+            }
+        }
     }
     for (scope, measured) in query_work::take_shared() {
         work.sql.insert(scope, measured);
@@ -188,6 +238,16 @@ async fn measure_turns(tool: bool) -> TurnWork {
     work.records = encoded.records;
     work.encoded_bytes = encoded.bytes;
     assert_eq!(adapter.requests().len(), turns * if tool { 2 } else { 1 });
+    if let Some(path) = capture {
+        use std::io::Write;
+        let value = serde_json::json!({"kind":if tool {"tool"} else {"text"},"initial":captured_wire_value(&initial),"events":captured});
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        writeln!(file, "{value}").unwrap();
+    }
     fixture.runtime.shutdown().await.unwrap();
     work
 }
@@ -222,12 +282,17 @@ fn report(kind: &str, work: &TurnWork) {
         }
     }
     eprintln!(
-        "{kind} turn work publications/turn={:.2} encoded_bytes/turn={:.1} delivered/turn={:.2} read_domain_facts/turn={:.2} delivered_json_bytes/turn={:.1}",
+        "{kind} turn work publications/turn={:.2} encoded_bytes/turn={:.1} delivered/turn={:.2} read_domain_facts/turn={:.2} delivered_json_bytes/turn={:.1} transport_json_bytes/turn={:.1} transport_payload_bytes/turn={:.1} full_json_bytes/turn={:.1} full_transport_bytes/turn={:.1} full_payload_bytes/turn={:.1}",
         per_turn(work.records as f64),
         per_turn(work.encoded_bytes as f64),
         per_turn(work.transitions as f64),
         per_turn(work.read_domain_facts as f64),
         per_turn(work.delivered_bytes as f64),
+        per_turn(work.transport_bytes as f64),
+        per_turn(work.transport_payload_bytes as f64),
+        per_turn(work.full_json_bytes as f64),
+        per_turn(work.full_transport_bytes as f64),
+        per_turn(work.full_payload_bytes as f64),
     );
 }
 
@@ -236,6 +301,28 @@ async fn fixed_turn_observation_work() {
     for (kind, tool) in [("text", false), ("tool", true)] {
         let work = measure_turns(tool).await;
         report(kind, &work);
+        assert_eq!(usize::try_from(work.records).unwrap(), work.transitions);
+        let byte_limit = MEASURED_TURNS * if tool { 115_000 } else { 45_000 };
+        assert!(
+            work.transport_bytes <= byte_limit,
+            "{kind}: complete notification byte bound"
+        );
+        assert!(
+            work.encoded_bytes <= byte_limit,
+            "{kind}: publication metering byte bound"
+        );
+        assert!(
+            work.transport_bytes * 5 < work.full_transport_bytes,
+            "{kind}: complete notifications must shrink below one fifth of the identical full trace"
+        );
+        assert!(
+            work.encoded_bytes * 5 < work.full_payload_bytes,
+            "{kind}: publication metering must shrink below one fifth of the identical full trace"
+        );
+        assert!(
+            work.transport_payload_bytes * 5 < work.full_payload_bytes,
+            "{kind}: transport encoding must shrink below one fifth of the identical full trace"
+        );
         let events: usize = work
             .sql
             .values()

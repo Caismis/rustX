@@ -90,6 +90,7 @@ fn baseline_encode(
 
 fn copy_draft(draft: &PublicationDraft) -> PublicationDraft {
     PublicationDraft {
+        previous: None,
         encoding_profile: None,
         seed: draft.seed.clone(),
         events: draft.events.clone(),
@@ -101,6 +102,7 @@ fn copy_draft(draft: &PublicationDraft) -> PublicationDraft {
 fn empty_draft() -> PublicationDraft {
     let (projection, _store) = initialized_source_projection();
     PublicationDraft {
+        previous: None,
         encoding_profile: None,
         seed: (*projection.checkpoint_seed()).clone(),
         events: vec![RuntimeClientEvent::TraceChanged],
@@ -159,6 +161,7 @@ fn traced_draft() -> PublicationDraft {
         assert!(projection.install_read_domains(&fence, Ok(read), true));
     });
     let mut draft = PublicationDraft {
+        previous: None,
         encoding_profile: None,
         seed: (*projection.checkpoint_seed()).clone(),
         events: Vec::new(),
@@ -1039,4 +1042,119 @@ fn subscriber_delivery_and_eviction_preserve_held_metadata_owners() {
     assert_eq!(released.strong_count(), 0);
     drop(draft);
     assert_eq!(payload(), 0, "the independent raw evidence cache has also been released");
+}
+
+#[test]
+fn cursor_relative_publication_round_trips_without_reencoding_unchanged_lists() {
+    let mut draft = empty_draft();
+    let base = draft.seed.checkpoint_candidate().unwrap();
+    let descriptor = Arc::new(
+        serde_json::from_value::<crate::observation::transcript::RuntimeClientMessageDescriptor>(
+            serde_json::json!({
+                "locator": {"type":"by_ledger_position", "position":0},
+                "role":"assistant", "kind":"message", "block_count":0,
+                "tool_call_count":0, "tool_calls":[], "content":[], "collections":[]
+            }),
+        )
+        .unwrap(),
+    );
+    draft.events = vec![
+        RuntimeClientEvent::ReadDomainsUpdated {
+            projection_head: base.snapshot.context.projection_head.clone(),
+            transcript: Box::new(base.snapshot.transcript.clone()),
+            trace: None,
+            occupancy: None,
+            todos: None,
+        },
+        RuntimeClientEvent::MessageDescriptorCommitted {
+            attempt_id: None,
+            descriptor: descriptor.clone(),
+            head: [descriptor].into_iter().collect(),
+            transcript_cursor: None,
+            evicted_message_id: None,
+        },
+    ];
+    let complete = baseline_encode(copy_draft(&draft), &mut BaselinePath::default()).unwrap();
+    let mut previous = draft.seed.clone();
+    previous.display = Some(Arc::new(super::super::publication::PublicationBasis {
+        cursor:base.cursor,metadata:ProjectionMetadata {read_cut:base.read_cut.clone(),content:base.content.clone(),collections:base.collections.clone()},
+        transcript:Some(Arc::new(base.snapshot.transcript.clone())),descriptors:Some(Arc::new(base.snapshot.message_descriptors.clone())),checkpoint:Some(Arc::new(base.snapshot.clone())),weight:4096,weights:[4096;3],
+    }));
+    draft.previous = Some(Arc::new(previous));
+    let incremental = draft.encode().unwrap();
+    assert_eq!(
+        crate::runtime_client::delta::expand_event(&base, &incremental.event),
+        Some(complete.event)
+    );
+    assert!(incremental.bytes < complete.bytes);
+    let RuntimeClientEvent::ProjectionDelta { events, metadata } = &incremental.event else {
+        panic!("expected typed delta")
+    };
+    assert!(metadata.content.is_none());
+    assert!(metadata.collections.is_none());
+    let RuntimeClientEvent::ReadDomainsPatched { transcript, .. } = &events[0] else {
+        panic!("expected page edit")
+    };
+    assert!(transcript.entries.values.is_empty());
+    let RuntimeClientEvent::MessageDescriptorPatched { head, .. } = &events[1] else {
+        panic!("expected head edit")
+    };
+    assert!(
+        head.values.is_empty(),
+        "new descriptor is supplied exactly once"
+    );
+    // A domain first carried in full inside a delta initializes that domain
+    // just as a full outer transition does; the next edit must stay shared.
+    let mut bases = super::super::publication::DeliveryBases::default();
+    let initial = Arc::new(RuntimeClientEvent::ProjectionTransition {
+        events: vec![],
+        metadata: ProjectionMetadata {
+            read_cut: base.read_cut.clone(),
+            content: base.content.clone(),
+            collections: base.collections.clone(),
+        },
+    });
+    assert!(bases.delivery(&initial).is_some());
+    let mut carrier = incremental.event.clone();
+    if let RuntimeClientEvent::ProjectionDelta { events, metadata } = &mut carrier {
+        *events = metadata.native_transition.as_ref().unwrap().facts().to_vec();
+    }
+    let carrier = Arc::new(carrier);
+    assert!(Arc::ptr_eq(&bases.delivery(&carrier).unwrap(), &carrier));
+    let patched = Arc::new(incremental.event.clone());
+    assert!(Arc::ptr_eq(&bases.delivery(&patched).unwrap(), &patched));
+    let mut wrong = base;
+    wrong.cursor = RuntimeClientCursor::new(wrong.cursor.get() + 1);
+    assert!(crate::runtime_client::delta::expand_event(&wrong, &incremental.event).is_none());
+}
+
+#[test]
+fn editing_overhead_cannot_reject_an_admitted_complete_carrier() {
+    use super::super::publication::{PublicationBasis, incremental_event, meter_candidate};
+    let checkpoint = empty_draft().seed.checkpoint_candidate().unwrap();
+    let frontiers = (0..6000)
+        .map(|index| crate::observation::metadata::MetadataFragment::from(
+            crate::observation::cut::CollectionFrontier {
+                domain: format!("d{index}"), revision: 0, total: 0, loaded: 0, next_offset: None,
+            },
+        ))
+        .collect::<Vec<_>>();
+    let base = PublicationBasis {
+        cursor: checkpoint.cursor,
+        metadata: ProjectionMetadata {
+            read_cut: checkpoint.read_cut, content: Arc::default(), collections: Arc::new(frontiers),
+        },
+        transcript: None, descriptors: None, checkpoint: None, weight: 0, weights: [0; 3],
+    };
+    let mut next = base.metadata.clone();
+    next.read_cut.revision += 1;
+    for frontier in Arc::make_mut(&mut next.collections) {
+        frontier.revision = 1; frontier.total = 1; frontier.loaded = 1; frontier.next_offset = Some(1);
+    }
+    let complete = RuntimeClientEvent::ProjectionTransition {events: vec![], metadata: next};
+    let mut edited = incremental_event(complete.clone(), &base, 0);
+    assert!(crate::observation::bounded::bounded_structural_len(&edited, CHECKPOINT_TARGET_BYTES).is_none());
+    let expected = encoded_event_bytes(&complete, CHECKPOINT_TARGET_BYTES).unwrap();
+    assert_eq!(meter_candidate(&mut edited, &complete, None, None), Some(expected.len()));
+    assert_eq!(edited, complete);
 }

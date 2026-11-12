@@ -3,11 +3,11 @@ import {test} from 'node:test';
 import {summaryFor,threadFor} from '../../protocol/app-server/testing.ts';
 import {AppServerClient} from '../src/app-server/client.ts';
 import {AppServerHost} from '../src/app-server/host.ts';
-import type {ThreadStatusEntry} from '../../protocol/app-server/v78.ts';
+import type {ThreadStatusEntry} from '../../protocol/app-server/v79.ts';
 import {FakeTransport} from './support/app-server-peer.ts';
 import {harness,SERVER_CAPABILITIES} from './support/app-server-harness.ts';
 import {sessionView} from './support/fixtures.ts';
-async function connected(){const transport=new FakeTransport();const work=AppServerClient.initialize({transport});const init=(await transport.log.awaitMethod('initialize'))[0]!;transport.respond(init.id,{type:'initialized',authority_id:'status-authority',protocol_version:78,capabilities:SERVER_CAPABILITIES});const client=await work;return {transport,client,host:new AppServerHost({client,ownership:'external'})};}
+async function connected(){const transport=new FakeTransport();const work=AppServerClient.initialize({transport});const init=(await transport.log.awaitMethod('initialize'))[0]!;transport.respond(init.id,{type:'initialized',authority_id:'status-authority',protocol_version:79,capabilities:SERVER_CAPABILITIES});const client=await work;return {transport,client,host:new AppServerHost({client,ownership:'external'})};}
 const id=sessionView().active_conversation_id;
 const entry=(revision:string,status:ThreadStatusEntry['status'],runtimeIncarnation:string|null='1'):ThreadStatusEntry=>({threadId:id,revision,status,runtimeIncarnation});
 const row=()=>summaryFor({id:sessionView().id,cwd:'/work',name:'A',ownership_generation:'1',active_node:sessionView().active_node,updated_at:'2026-09-14T00:00:00Z'},id);

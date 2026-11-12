@@ -5279,6 +5279,32 @@ export type RuntimeClientEvent =
       type: 'projection_transition';
     }
   | {
+      events: RuntimeClientEvent[];
+      metadata: MetadataDelta;
+      type: 'projection_delta';
+    }
+  | {
+      projection_head?: RuntimeClientProjectionHeadView | null;
+      transcript: TranscriptDelta;
+      trace?: TracePage | null;
+      occupancy?: RuntimeClientContextOccupancy | null;
+      todos?: TodoSnapshot | null;
+      type: 'read_domains_patched';
+    }
+  | {
+      attempt_id?: AttemptId | null;
+      descriptor: RuntimeClientMessageDescriptor;
+      head: ListDelta6;
+      transcript_cursor?: RuntimeClientTranscriptCursor | null;
+      evicted_message_id?: MessageId | null;
+      type: 'message_descriptor_patched';
+    }
+  | {
+      transition: string;
+      checkpoint: CheckpointDelta;
+      type: 'checkpoint_patched';
+    }
+  | {
       transition: string;
       checkpoint: RuntimeClientCheckpoint;
       type: 'checkpoint_advanced';
@@ -5672,7 +5698,7 @@ export type RuntimeClientEvent =
       type: 'configuration_applied';
     }
   | {
-      context: RuntimeClientContextView1;
+      context: RuntimeClientContextView2;
       /**
        * The owning attempt for automatic compaction; absent for manual
        * idle maintenance.
@@ -5681,7 +5707,7 @@ export type RuntimeClientEvent =
       type: 'context_compaction_started';
     }
   | {
-      context: RuntimeClientContextView2;
+      context: RuntimeClientContextView3;
       /**
        * The owning attempt for automatic compaction; absent for manual
        * idle maintenance.
@@ -5699,7 +5725,7 @@ export type RuntimeClientEvent =
        * idle maintenance.
        */
       attempt_id?: AttemptId | null;
-      context: RuntimeClientContextView3;
+      context: RuntimeClientContextView4;
       type: 'context_compacted';
     }
   | {
@@ -5999,7 +6025,7 @@ export type RuntimeClientEvent =
       type: 'agent_updated';
     }
   | {
-      capabilities: CapabilityView1;
+      capabilities: CapabilityView2;
       type: 'capability_updated';
     }
   | {
@@ -6007,8 +6033,8 @@ export type RuntimeClientEvent =
       model?: SessionModelView | null;
       model_status: RuntimeClientModelStatus;
       approval_mode: ApprovalMode;
-      capabilities: CapabilityView2;
-      resources: RuntimeClientResourcesView1;
+      capabilities: CapabilityView3;
+      resources: RuntimeClientResourcesView2;
       type: 'resource_generation_updated';
     }
   | {
@@ -6032,6 +6058,219 @@ export type RuntimeClientEvent =
        */
       diagnostic: string;
       type: 'runtime_durability_failed';
+    };
+/**
+ * The explicit Runtime Client transcript vocabulary.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "RuntimeClientTranscriptItem".
+ */
+export type RuntimeClientTranscriptItem =
+  | {
+      turn: TurnProcessView;
+      type: 'attempt_terminal';
+    }
+  | {
+      /**
+       * The canonical or durably accepted message.
+       */
+      message:
+        | (UserMessageBlock & {
+            role: 'user';
+          })
+        | (AssistantMessageBlock & {
+            role: 'assistant';
+          })
+        | (ToolMessageBlock & {
+            role: 'tool';
+          });
+      type: 'message';
+    }
+  | {
+      audit: PublicationAudit;
+      type: 'publication_audit';
+    }
+  | {
+      /**
+       * Identifies one durable runtime event.
+       */
+      event_id: string;
+      /**
+       * Event timestamp.
+       */
+      timestamp: string;
+      /**
+       * Owning Attempt; absent for native Scheduled work.
+       */
+      attempt_id?: AttemptId | null;
+      /**
+       * Owning turn; absent for native Scheduled work.
+       */
+      turn_id?: TurnId | null;
+      /**
+       * Interaction identity.
+       */
+      interaction_id: string;
+      /**
+       * Bounded durable subject.
+       */
+      subject:
+        | {
+            review: ReviewSpecification;
+            type: 'review';
+          }
+        | {
+            /**
+             * Caller correlation for one native invocation. Capability source is
+             * independently represented by [`ToolOrigin`].
+             */
+            invocation_id:
+              | {
+                  call_id: ToolCallId;
+                  caller: 'agent';
+                }
+              | {
+                  node: WorkflowNodeInstance;
+                  /**
+                   * Which call of the visit: 0, then one more per retry, so each call
+                   * is its own invocation with its own approval and events.
+                   */
+                  retry?: number;
+                  caller: 'workflow';
+                };
+            /**
+             * Identifies a tool definition in the capability set.
+             */
+            tool_id: string;
+            /**
+             * The model-facing tool name.
+             */
+            tool_name: string;
+            /**
+             * The digest of the canonical model-issued arguments.
+             */
+            arguments_digest: string;
+            /**
+             * The bounded policy explanation shown to the client.
+             */
+            reason: string;
+            type: 'approval';
+          }
+        | {
+            invocation_id: ToolInvocationId;
+            requester: InteractionRequester;
+            questionnaire: QuestionnaireSpecification1;
+            type: 'questionnaire';
+          };
+      type: 'interaction_requested';
+    }
+  | {
+      /**
+       * Identifies one durable runtime event.
+       */
+      event_id: string;
+      /**
+       * Event timestamp.
+       */
+      timestamp: string;
+      /**
+       * Owning Attempt; absent for native Scheduled work.
+       */
+      attempt_id?: AttemptId | null;
+      /**
+       * Owning turn; absent for native Scheduled work.
+       */
+      turn_id?: TurnId | null;
+      /**
+       * Interaction identity.
+       */
+      interaction_id: string;
+      /**
+       * Bounded durable settlement.
+       */
+      settlement:
+        | {
+            response: ReviewResponse;
+            type: 'reviewed';
+          }
+        | {
+            kind: ToolDeadlineKind;
+            type: 'deadline_expired';
+          }
+        | {
+            type: 'approved';
+          }
+        | {
+            /**
+             * The bounded client-facing denial reason.
+             */
+            reason: string;
+            type: 'denied';
+          }
+        | {
+            submission: QuestionnaireSubmission1;
+            type: 'questionnaire_submitted';
+          }
+        | {
+            type: 'questionnaire_declined';
+          }
+        | {
+            /**
+             * The first-winner cancellation cause.
+             */
+            reason:
+              | 'user_requested'
+              | 'runtime_shutdown'
+              | 'parent_cancelled'
+              | 'subagent_execution_deadline_exceeded';
+            type: 'cancelled';
+          };
+      type: 'interaction_settled';
+    }
+  | {
+      /**
+       * Identifies one durable runtime event.
+       */
+      event_id: string;
+      /**
+       * Event timestamp.
+       */
+      timestamp: string;
+      change: ConfigurationChange1;
+      type: 'configuration_applied';
+    };
+/**
+ * The externally meaningful state of one foreground tool execution.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ForegroundToolState".
+ */
+export type ForegroundToolState =
+  | {
+      /**
+       * The assembled JSON arguments.
+       */
+      arguments: string;
+      type: 'assembled';
+    }
+  | {
+      /**
+       * The assembled JSON arguments.
+       */
+      arguments: string;
+      /**
+       * The latest bounded progress, when any.
+       */
+      progress?: ToolProgress | null;
+      type: 'running';
+    }
+  | {
+      /**
+       * The assembled JSON arguments.
+       */
+      arguments: string;
+      result: ToolExecutionResult1;
+      type: 'settled';
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -6573,7 +6812,7 @@ export type Notification1 =
     }
   | {
       method: 'fs/changed';
-      params: Changed;
+      params: Changed42;
     }
   | {
       method: 'thread/status/changed';
@@ -8054,219 +8293,6 @@ export type CancellationReason =
  * via the `definition` "ToolCancellationPhase".
  */
 export type ToolCancellationPhase = 'before_start' | 'during_execution';
-/**
- * The externally meaningful state of one foreground tool execution.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ForegroundToolState".
- */
-export type ForegroundToolState =
-  | {
-      /**
-       * The assembled JSON arguments.
-       */
-      arguments: string;
-      type: 'assembled';
-    }
-  | {
-      /**
-       * The assembled JSON arguments.
-       */
-      arguments: string;
-      /**
-       * The latest bounded progress, when any.
-       */
-      progress?: ToolProgress | null;
-      type: 'running';
-    }
-  | {
-      /**
-       * The assembled JSON arguments.
-       */
-      arguments: string;
-      result: ToolExecutionResult1;
-      type: 'settled';
-    };
-/**
- * The explicit Runtime Client transcript vocabulary.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "RuntimeClientTranscriptItem".
- */
-export type RuntimeClientTranscriptItem =
-  | {
-      turn: TurnProcessView;
-      type: 'attempt_terminal';
-    }
-  | {
-      /**
-       * The canonical or durably accepted message.
-       */
-      message:
-        | (UserMessageBlock & {
-            role: 'user';
-          })
-        | (AssistantMessageBlock & {
-            role: 'assistant';
-          })
-        | (ToolMessageBlock & {
-            role: 'tool';
-          });
-      type: 'message';
-    }
-  | {
-      audit: PublicationAudit;
-      type: 'publication_audit';
-    }
-  | {
-      /**
-       * Identifies one durable runtime event.
-       */
-      event_id: string;
-      /**
-       * Event timestamp.
-       */
-      timestamp: string;
-      /**
-       * Owning Attempt; absent for native Scheduled work.
-       */
-      attempt_id?: AttemptId | null;
-      /**
-       * Owning turn; absent for native Scheduled work.
-       */
-      turn_id?: TurnId | null;
-      /**
-       * Interaction identity.
-       */
-      interaction_id: string;
-      /**
-       * Bounded durable subject.
-       */
-      subject:
-        | {
-            review: ReviewSpecification;
-            type: 'review';
-          }
-        | {
-            /**
-             * Caller correlation for one native invocation. Capability source is
-             * independently represented by [`ToolOrigin`].
-             */
-            invocation_id:
-              | {
-                  call_id: ToolCallId;
-                  caller: 'agent';
-                }
-              | {
-                  node: WorkflowNodeInstance;
-                  /**
-                   * Which call of the visit: 0, then one more per retry, so each call
-                   * is its own invocation with its own approval and events.
-                   */
-                  retry?: number;
-                  caller: 'workflow';
-                };
-            /**
-             * Identifies a tool definition in the capability set.
-             */
-            tool_id: string;
-            /**
-             * The model-facing tool name.
-             */
-            tool_name: string;
-            /**
-             * The digest of the canonical model-issued arguments.
-             */
-            arguments_digest: string;
-            /**
-             * The bounded policy explanation shown to the client.
-             */
-            reason: string;
-            type: 'approval';
-          }
-        | {
-            invocation_id: ToolInvocationId;
-            requester: InteractionRequester;
-            questionnaire: QuestionnaireSpecification1;
-            type: 'questionnaire';
-          };
-      type: 'interaction_requested';
-    }
-  | {
-      /**
-       * Identifies one durable runtime event.
-       */
-      event_id: string;
-      /**
-       * Event timestamp.
-       */
-      timestamp: string;
-      /**
-       * Owning Attempt; absent for native Scheduled work.
-       */
-      attempt_id?: AttemptId | null;
-      /**
-       * Owning turn; absent for native Scheduled work.
-       */
-      turn_id?: TurnId | null;
-      /**
-       * Interaction identity.
-       */
-      interaction_id: string;
-      /**
-       * Bounded durable settlement.
-       */
-      settlement:
-        | {
-            response: ReviewResponse;
-            type: 'reviewed';
-          }
-        | {
-            kind: ToolDeadlineKind;
-            type: 'deadline_expired';
-          }
-        | {
-            type: 'approved';
-          }
-        | {
-            /**
-             * The bounded client-facing denial reason.
-             */
-            reason: string;
-            type: 'denied';
-          }
-        | {
-            submission: QuestionnaireSubmission1;
-            type: 'questionnaire_submitted';
-          }
-        | {
-            type: 'questionnaire_declined';
-          }
-        | {
-            /**
-             * The first-winner cancellation cause.
-             */
-            reason:
-              | 'user_requested'
-              | 'runtime_shutdown'
-              | 'parent_cancelled'
-              | 'subagent_execution_deadline_exceeded';
-            type: 'cancelled';
-          };
-      type: 'interaction_settled';
-    }
-  | {
-      /**
-       * Identifies one durable runtime event.
-       */
-      event_id: string;
-      /**
-       * Event timestamp.
-       */
-      timestamp: string;
-      change: ConfigurationChange1;
-      type: 'configuration_applied';
-    };
 /**
  * Typed kind of inbound information.
  *
@@ -16198,6 +16224,32 @@ export interface RuntimeClientProtocolEvent {
         type: 'projection_transition';
       }
     | {
+        events: RuntimeClientEvent[];
+        metadata: MetadataDelta;
+        type: 'projection_delta';
+      }
+    | {
+        projection_head?: RuntimeClientProjectionHeadView | null;
+        transcript: TranscriptDelta;
+        trace?: TracePage | null;
+        occupancy?: RuntimeClientContextOccupancy | null;
+        todos?: TodoSnapshot | null;
+        type: 'read_domains_patched';
+      }
+    | {
+        attempt_id?: AttemptId | null;
+        descriptor: RuntimeClientMessageDescriptor;
+        head: ListDelta6;
+        transcript_cursor?: RuntimeClientTranscriptCursor | null;
+        evicted_message_id?: MessageId | null;
+        type: 'message_descriptor_patched';
+      }
+    | {
+        transition: string;
+        checkpoint: CheckpointDelta;
+        type: 'checkpoint_patched';
+      }
+    | {
         transition: string;
         checkpoint: RuntimeClientCheckpoint;
         type: 'checkpoint_advanced';
@@ -16591,7 +16643,7 @@ export interface RuntimeClientProtocolEvent {
         type: 'configuration_applied';
       }
     | {
-        context: RuntimeClientContextView1;
+        context: RuntimeClientContextView2;
         /**
          * The owning attempt for automatic compaction; absent for manual
          * idle maintenance.
@@ -16600,7 +16652,7 @@ export interface RuntimeClientProtocolEvent {
         type: 'context_compaction_started';
       }
     | {
-        context: RuntimeClientContextView2;
+        context: RuntimeClientContextView3;
         /**
          * The owning attempt for automatic compaction; absent for manual
          * idle maintenance.
@@ -16618,7 +16670,7 @@ export interface RuntimeClientProtocolEvent {
          * idle maintenance.
          */
         attempt_id?: AttemptId | null;
-        context: RuntimeClientContextView3;
+        context: RuntimeClientContextView4;
         type: 'context_compacted';
       }
     | {
@@ -16918,7 +16970,7 @@ export interface RuntimeClientProtocolEvent {
         type: 'agent_updated';
       }
     | {
-        capabilities: CapabilityView1;
+        capabilities: CapabilityView2;
         type: 'capability_updated';
       }
     | {
@@ -16926,8 +16978,8 @@ export interface RuntimeClientProtocolEvent {
         model?: SessionModelView | null;
         model_status: RuntimeClientModelStatus;
         approval_mode: ApprovalMode;
-        capabilities: CapabilityView2;
-        resources: RuntimeClientResourcesView1;
+        capabilities: CapabilityView3;
+        resources: RuntimeClientResourcesView2;
         type: 'resource_generation_updated';
       }
     | {
@@ -16955,12 +17007,855 @@ export interface RuntimeClientProtocolEvent {
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "MetadataDelta".
+ */
+export interface MetadataDelta {
+  base_cursor: RuntimeClientCursor;
+  read_cut: ReadCutDelta;
+  content?: ListDelta | null;
+  collections?: ListDelta2 | null;
+}
+/**
+ * Scope remains explicit on each record. Every other unchanged cut component
+ * is inherited only from the cursor-checked baseline in that same scope.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ReadCutDelta".
+ */
+export interface ReadCutDelta {
+  conversation_id: ConversationId;
+  activation_id?: SubagentId | null;
+  revision: string;
+  through?: string | null;
+  source_cut?: Changed | null;
+  source_cut_patch?: ObservationCutDelta | null;
+  live_publication?: Changed5 | null;
+  canonical_foreground?: Changed6 | null;
+  domain_revisions?: MapDelta | null;
+  collection_cuts?: MapDelta2 | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed".
+ */
+export interface Changed {
+  value?: ObservationReadCut | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ObservationCutDelta".
+ */
+export interface ObservationCutDelta {
+  ledger_through?: Changed2 | null;
+  transcript_total?: Changed2 | null;
+  surface_revision?: Changed3 | null;
+  inherited_through?: Changed4 | null;
+  read?: ReadEvidenceDelta | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed2".
+ */
+export interface Changed2 {
+  value: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed3".
+ */
+export interface Changed3 {
+  value: SurfaceRevision;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed4".
+ */
+export interface Changed4 {
+  value: TranscriptCursor;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ReadEvidenceDelta".
+ */
+export interface ReadEvidenceDelta {
+  journal?: Changed2 | null;
+  transcript?: Changed2 | null;
+  mutation_revision?: Changed2 | null;
+  ledger_through?: Changed2 | null;
+  surface_revision?: Changed3 | null;
+  transcript_total?: Changed2 | null;
+  pending_through?: Changed2 | null;
+  pending_total?: Changed2 | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed5".
+ */
+export interface Changed5 {
+  value?: LivePublicationReadCut | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed6".
+ */
+export interface Changed6 {
+  value?: CanonicalForegroundReadCut | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "MapDelta".
+ */
+export interface MapDelta {
+  removed: string[];
+  values: {
+    [k: string]: string;
+  };
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "MapDelta2".
+ */
+export interface MapDelta2 {
+  removed: string[];
+  values: {
+    [k: string]: ObservationCollectionCut;
+  };
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta".
+ */
+export interface ListDelta {
+  slots: number[];
+  values: ContentBinding[];
+  patches?: ListItemDelta[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListItemDelta".
+ */
+export interface ListItemDelta {
+  base: number;
+  delta: BindingDelta;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "BindingDelta".
+ */
+export interface BindingDelta {
+  path?: Changed7 | null;
+  deferred?: Changed8 | null;
+  content_ref?: RefDelta | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed7".
+ */
+export interface Changed7 {
+  value: string[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed8".
+ */
+export interface Changed8 {
+  value: boolean;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "RefDelta".
+ */
+export interface RefDelta {
+  content_revision?: SafeQuantity | null;
+  readable_end?: SafeQuantity | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SafeQuantity".
+ */
+export interface SafeQuantity {
+  value: number;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta2".
+ */
+export interface ListDelta2 {
+  slots: number[];
+  values: CollectionFrontier[];
+  patches?: ListItemDelta2[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListItemDelta2".
+ */
+export interface ListItemDelta2 {
+  base: number;
+  delta: FrontierDelta;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "FrontierDelta".
+ */
+export interface FrontierDelta {
+  revision?: Changed2 | null;
+  total?: Changed2 | null;
+  loaded?: Changed2 | null;
+  next_offset?: Changed9 | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed9".
+ */
+export interface Changed9 {
+  value?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TranscriptDelta".
+ */
+export interface TranscriptDelta {
+  page: RuntimeClientTranscriptPage2;
+  content: ListDelta;
+  collections: ListDelta2;
+  deferred_entries: ListDelta3;
+  entries: ListDelta4;
+}
+/**
+ * One bounded newest-or-older page of derived transcript history.
+ */
+export interface RuntimeClientTranscriptPage2 {
+  /**
+   * The exact native source cut from which bodies and evidence were read.
+   */
+  source_cut?: ObservationReadCut | null;
+  /**
+   * Deferred bytes remain explicitly recoverable on older historical pages.
+   */
+  content?: ContentBinding[];
+  collections?: CollectionFrontier[];
+  /**
+   * Native items whose structural display requires bounded further reading.
+   */
+  deferred_entries?: CheckpointPageItem[];
+  /**
+   * Last native transcript position inherited by this lineage; zero for an empty prefix.
+   */
+  inherited_through?: RuntimeClientTranscriptCursor | null;
+  /**
+   * Native whole-conversation totals, independent of this page.
+   */
+  statistics?: ConversationStatistics | null;
+  /**
+   * Items in chronological order within this page.
+   */
+  entries?: RuntimeClientTranscriptEntry[];
+  /**
+   * The exclusive cursor for the next older page.
+   */
+  next_cursor?: RuntimeClientTranscriptCursor | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta3".
+ */
+export interface ListDelta3 {
+  slots: number[];
+  values: CheckpointPageItem[];
+  patches?: ListItemDelta3[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListItemDelta3".
+ */
+export interface ListItemDelta3 {
+  base: number;
+  delta: null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta4".
+ */
+export interface ListDelta4 {
+  slots: number[];
+  values: RuntimeClientTranscriptEntry[];
+  patches?: ListItemDelta4[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListItemDelta4".
+ */
+export interface ListItemDelta4 {
+  base: number;
+  delta: EntryDelta;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "EntryDelta".
+ */
+export interface EntryDelta {
+  turn_process?: Changed10 | null;
+  response_pending?: Changed8 | null;
+  completed_response?: Changed11 | null;
+  cursor?: Changed12 | null;
+  item?: Changed13 | null;
+  tool_calls?: ListDelta5 | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed10".
+ */
+export interface Changed10 {
+  value?: TurnProcessView | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed11".
+ */
+export interface Changed11 {
+  value?: CompletedResponseView | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed12".
+ */
+export interface Changed12 {
+  value: RuntimeClientTranscriptCursor;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed13".
+ */
+export interface Changed13 {
+  value: RuntimeClientTranscriptItem;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta5".
+ */
+export interface ListDelta5 {
+  slots: number[];
+  values: ForegroundToolExecution[];
+  patches?: ListItemDelta5[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListItemDelta5".
+ */
+export interface ListItemDelta5 {
+  base: number;
+  delta: ToolDelta;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ToolDelta".
+ */
+export interface ToolDelta {
+  occurrence?: Changed14 | null;
+  message_id?: Changed15 | null;
+  block_index?: Changed16 | null;
+  call_id?: Changed17 | null;
+  metadata_ref?: Changed18 | null;
+  assembly_complete?: Changed8 | null;
+  result_source?: Changed19 | null;
+  result_metadata_ref?: Changed18 | null;
+  committed_result?: Changed20 | null;
+  committed_result_deferred?: Changed8 | null;
+  tool_id?: Changed21 | null;
+  name?: Changed22 | null;
+  state?: Changed23 | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed14".
+ */
+export interface Changed14 {
+  value: RuntimeClientToolOccurrence;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed15".
+ */
+export interface Changed15 {
+  value?: MessageId | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed16".
+ */
+export interface Changed16 {
+  value: ContentBlockIndex;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed17".
+ */
+export interface Changed17 {
+  value?: ToolCallId | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed18".
+ */
+export interface Changed18 {
+  value?: ContentRef | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed19".
+ */
+export interface Changed19 {
+  value?: JournalFieldRef | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed20".
+ */
+export interface Changed20 {
+  value?: ToolExecutionResult | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed21".
+ */
+export interface Changed21 {
+  value?: ToolId | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed22".
+ */
+export interface Changed22 {
+  value: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed23".
+ */
+export interface Changed23 {
+  value: ForegroundToolState;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta6".
+ */
+export interface ListDelta6 {
+  slots: number[];
+  values: RuntimeClientMessageDescriptor[];
+  patches?: ListItemDelta6[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListItemDelta6".
+ */
+export interface ListItemDelta6 {
+  base: number;
+  delta: DescriptorDelta;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "DescriptorDelta".
+ */
+export interface DescriptorDelta {
+  deliveries?: Changed24 | null;
+  identity?: Changed15 | null;
+  locator?: Changed25 | null;
+  role?: Changed22 | null;
+  kind?: Changed22 | null;
+  block_count?: Changed2 | null;
+  tool_call_count?: Changed2 | null;
+  turn_process?: Changed10 | null;
+  completed_response?: Changed11 | null;
+  tool_calls?: ListDelta5 | null;
+  content?: ListDelta | null;
+  collections?: ListDelta2 | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed24".
+ */
+export interface Changed24 {
+  value?: RuntimeClientDeliveryHead | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed25".
+ */
+export interface Changed25 {
+  value: CanonicalContentLocator;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CheckpointDelta".
+ */
+export interface CheckpointDelta {
+  snapshot: SnapshotDelta;
+  cursor: RuntimeClientCursor;
+  read_cut: CheckpointReadCut;
+  content: ContentBinding[];
+  collections: CollectionFrontier[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SnapshotDelta".
+ */
+export interface SnapshotDelta {
+  settings_evidence?: Changed26 | null;
+  effective_plugins?: Changed27 | null;
+  workflows?: Changed28 | null;
+  conversation_id?: Changed29 | null;
+  shutting_down?: Changed8 | null;
+  effective_approval_mode?: Changed30 | null;
+  durability_failure?: Changed31 | null;
+  trace?: Changed32 | null;
+  attempt?: Changed33 | null;
+  inbound?: Changed34 | null;
+  context?: Changed35 | null;
+  capabilities?: Changed36 | null;
+  resources?: Changed37 | null;
+  model?: Changed38 | null;
+  model_status?: Changed39 | null;
+  todos?: Changed40 | null;
+  goal?: Changed41 | null;
+  messages?: ListDelta7 | null;
+  message_descriptors?: ListDelta6 | null;
+  publication_settlements?: ListDelta8 | null;
+  trace_updates?: ListDelta9 | null;
+  pending_interactions?: ListDelta10 | null;
+  jobs?: ListDelta11 | null;
+  agents?: ListDelta12 | null;
+  statuses?: ListDelta13 | null;
+  transcript?: TranscriptDelta | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed26".
+ */
+export interface Changed26 {
+  value: SettingsEvidence;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed27".
+ */
+export interface Changed27 {
+  value?: EffectivePlugins | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed28".
+ */
+export interface Changed28 {
+  value: WorkflowSnapshot1;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowSnapshot".
  */
 export interface WorkflowSnapshot1 {
   revision: string;
   runs: WorkflowRunView[];
   omitted_runs: number;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed29".
+ */
+export interface Changed29 {
+  value: ConversationId;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed30".
+ */
+export interface Changed30 {
+  value: ApprovalMode;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed31".
+ */
+export interface Changed31 {
+  value?: RuntimeDurabilityFailure | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed32".
+ */
+export interface Changed32 {
+  value: TracePage;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed33".
+ */
+export interface Changed33 {
+  value?: RuntimeClientAttempt | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed34".
+ */
+export interface Changed34 {
+  value: InboundDiagnostics1;
+}
+/**
+ * The inbound mailbox diagnostics of the Runtime Client projection.
+ *
+ * A read-only view of authoritative mailbox state: it validates the
+ * Issue #22 ordering contract and supports reconnect, and it can never
+ * drain or mutate the mailbox.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "InboundDiagnostics".
+ */
+export interface InboundDiagnostics1 {
+  /**
+   * The currently pending inbound items in runtime-assigned inbound
+   * sequence order.
+   */
+  pending?: InboundItemView[];
+  /**
+   * The latest observed finite drain boundary, when any drain occurred.
+   */
+  last_drain?: InboundDrainView | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed35".
+ */
+export interface Changed35 {
+  value: RuntimeClientContextView1;
+}
+/**
+ * The context diagnostics carried by the Runtime Client snapshot.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "RuntimeClientContextView".
+ */
+export interface RuntimeClientContextView1 {
+  /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
+  /**
+   * Latest manual operation admitted in this runtime incarnation. Never inferred
+   * from a newer canonical checkpoint. Absence is insufficient evidence.
+   */
+  manual_compaction?: RuntimeClientManualCompaction | null;
+  /**
+   * Latest pre-commit diagnostic; cleared when the next compaction starts.
+   */
+  compaction_error?: string | null;
+  /**
+   * Latest native measured request or committed compacted-context estimate.
+   */
+  occupancy?: RuntimeClientContextOccupancy | null;
+  /**
+   * Whether the runtime currently owns a context-compaction operation.
+   * This is live operation state, not inferred from token usage.
+   */
+  compaction_in_progress: boolean;
+  /**
+   * Runtime Client projection statistic: the number of committed
+   * compaction completions folded into this read model. The compaction
+   * generation remains the conversation-owned identity.
+   */
+  compaction_count: number;
+  /**
+   * The latest committed compaction metadata, when compaction occurred.
+   */
+  latest_compaction?: RuntimeClientCompactionView | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed36".
+ */
+export interface Changed36 {
+  value: CapabilityView1;
+}
+/**
+ * The deterministic capability projection.
+ *
+ * Projected from the active [`CapabilitySnapshot`]
+ * ([`crate::capabilities::CapabilitySnapshot`]) plus the
+ * coordinator-owned availability state (Issue #81): the revision, the
+ * active Tool catalog, the complete available Tool catalog, the deterministic
+ * model-visible Skill catalog, and the typed per-source availability. No
+ * executors, environment paths, package-manager state, or private dependency
+ * internals appear.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CapabilityView".
+ */
+export interface CapabilityView1 {
+  /**
+   * Configured Tool intent before effective model gating.
+   */
+  configured_tools: RuntimeClientTool[];
+  /**
+   * The active monotonic capability revision.
+   */
+  revision: string;
+  /**
+   * The deterministic active Tool catalog in registry order. Model
+   * requests and execution use exactly this set.
+   */
+  tools?: RuntimeClientTool[];
+  /**
+   * The complete available Tool catalog, including inactive Tools. The
+   * active set above is an explicit subset; availability never implies
+   * model activation.
+   */
+  available_tools?: RuntimeClientTool[];
+  /**
+   * The deterministic model-visible Skill catalog ordered by Skill name.
+   * Skills hidden by `disable-model-invocation` remain runtime-owned but
+   * are omitted here. Every entry includes the canonical absolute host
+   * path of its `SKILL.md`.
+   */
+  skills?: RuntimeClientSkill[];
+  /**
+   * The typed availability of every evaluated optional capability
+   * source, in deterministic source-identity order (Issue #81).
+   */
+  sources?: CapabilitySourceView[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed37".
+ */
+export interface Changed37 {
+  value: RuntimeClientResourcesView1;
+}
+/**
+ * The client-visible projection of one immutable runtime resource
+ * generation.
+ *
+ * It carries identity and provenance, never content: a client that wants
+ * the text of a project context file reads the file, exactly as it would
+ * read a `SKILL.md`. Publishing the bytes here would create a second copy
+ * of request input inside a conversation projection.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "RuntimeClientResourcesView".
+ */
+export interface RuntimeClientResourcesView1 {
+  /**
+   * Facts copied from the same immutable generation as this revision.
+   * Deferred inspection facts are loaded through finite native field pages.
+   */
+  inspection?: CapabilityInspection | null;
+  /**
+   * Identifies one immutable process-local runtime resource generation.
+   *
+   * This is deliberately separate from `ContextGeneration` (one context
+   * assembly provenance set) and `CapabilityRevision` (one executable
+   * capability set). A resource-only change may advance this revision while
+   * retaining an identical capability revision.
+   */
+  revision?: string;
+  /**
+   * The runtime-loaded project instruction files, root-most to
+   * workspace, in the exact order the runtime concatenated them.
+   */
+  context_files?: RuntimeClientContextFile[];
+  /**
+   * Whether an immutable agent profile/persona is frozen into this
+   * generation. The persona text itself is runtime-owned request input.
+   */
+  agent_profile?: boolean;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed38".
+ */
+export interface Changed38 {
+  value?: SessionModelView | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed39".
+ */
+export interface Changed39 {
+  value?: RuntimeClientModelStatus | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed40".
+ */
+export interface Changed40 {
+  value?: TodoSnapshot | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "Changed41".
+ */
+export interface Changed41 {
+  value?: RuntimeClientGoalView | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta7".
+ */
+export interface ListDelta7 {
+  slots: number[];
+  values: MessageBlock[];
+  patches?: ListItemDelta3[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta8".
+ */
+export interface ListDelta8 {
+  slots: number[];
+  values: RuntimeClientPublicationSettlementRecord[];
+  patches?: ListItemDelta3[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta9".
+ */
+export interface ListDelta9 {
+  slots: number[];
+  values: TraceLifecycle[];
+  patches?: ListItemDelta3[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta10".
+ */
+export interface ListDelta10 {
+  slots: number[];
+  values: RuntimeClientInteractionHeader[];
+  patches?: ListItemDelta3[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta11".
+ */
+export interface ListDelta11 {
+  slots: number[];
+  values: RuntimeClientJob[];
+  patches?: ListItemDelta3[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta12".
+ */
+export interface ListDelta12 {
+  slots: number[];
+  values: RuntimeClientAgent[];
+  patches?: ListItemDelta3[];
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ListDelta13".
+ */
+export interface ListDelta13 {
+  slots: number[];
+  values: AgentStatusView[];
+  patches?: ListItemDelta3[];
 }
 /**
  * Normalized token accounting for one generation.
@@ -17302,44 +18197,7 @@ export interface ContentRef2 {
   readable_end: number;
 }
 /**
- * Authoritative context state at this lifecycle boundary.
- */
-export interface RuntimeClientContextView1 {
-  /**
-   * Independent current historical projection, including inherited activations.
-   */
-  projection_head?: RuntimeClientProjectionHeadView | null;
-  /**
-   * Latest manual operation admitted in this runtime incarnation. Never inferred
-   * from a newer canonical checkpoint. Absence is insufficient evidence.
-   */
-  manual_compaction?: RuntimeClientManualCompaction | null;
-  /**
-   * Latest pre-commit diagnostic; cleared when the next compaction starts.
-   */
-  compaction_error?: string | null;
-  /**
-   * Latest native measured request or committed compacted-context estimate.
-   */
-  occupancy?: RuntimeClientContextOccupancy | null;
-  /**
-   * Whether the runtime currently owns a context-compaction operation.
-   * This is live operation state, not inferred from token usage.
-   */
-  compaction_in_progress: boolean;
-  /**
-   * Runtime Client projection statistic: the number of committed
-   * compaction completions folded into this read model. The compaction
-   * generation remains the conversation-owned identity.
-   */
-  compaction_count: number;
-  /**
-   * The latest committed compaction metadata, when compaction occurred.
-   */
-  latest_compaction?: RuntimeClientCompactionView | null;
-}
-/**
- * Authoritative context state at this lifecycle boundary.
+ * The context diagnostics carried by the Runtime Client snapshot.
  */
 export interface RuntimeClientContextView2 {
   /**
@@ -17376,9 +18234,46 @@ export interface RuntimeClientContextView2 {
   latest_compaction?: RuntimeClientCompactionView | null;
 }
 /**
- * The context diagnostics after this committed compaction.
+ * The context diagnostics carried by the Runtime Client snapshot.
  */
 export interface RuntimeClientContextView3 {
+  /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
+  /**
+   * Latest manual operation admitted in this runtime incarnation. Never inferred
+   * from a newer canonical checkpoint. Absence is insufficient evidence.
+   */
+  manual_compaction?: RuntimeClientManualCompaction | null;
+  /**
+   * Latest pre-commit diagnostic; cleared when the next compaction starts.
+   */
+  compaction_error?: string | null;
+  /**
+   * Latest native measured request or committed compacted-context estimate.
+   */
+  occupancy?: RuntimeClientContextOccupancy | null;
+  /**
+   * Whether the runtime currently owns a context-compaction operation.
+   * This is live operation state, not inferred from token usage.
+   */
+  compaction_in_progress: boolean;
+  /**
+   * Runtime Client projection statistic: the number of committed
+   * compaction completions folded into this read model. The compaction
+   * generation remains the conversation-owned identity.
+   */
+  compaction_count: number;
+  /**
+   * The latest committed compaction metadata, when compaction occurred.
+   */
+  latest_compaction?: RuntimeClientCompactionView | null;
+}
+/**
+ * The context diagnostics carried by the Runtime Client snapshot.
+ */
+export interface RuntimeClientContextView4 {
   /**
    * Independent current historical projection, including inherited activations.
    */
@@ -17983,44 +18878,15 @@ export interface RuntimeClientAgent1 {
   workspace: string;
 }
 /**
- * The deterministic active capability projection.
- */
-export interface CapabilityView1 {
-  /**
-   * Configured Tool intent before effective model gating.
-   */
-  configured_tools: RuntimeClientTool[];
-  /**
-   * The active monotonic capability revision.
-   */
-  revision: string;
-  /**
-   * The deterministic active Tool catalog in registry order. Model
-   * requests and execution use exactly this set.
-   */
-  tools?: RuntimeClientTool[];
-  /**
-   * The complete available Tool catalog, including inactive Tools. The
-   * active set above is an explicit subset; availability never implies
-   * model activation.
-   */
-  available_tools?: RuntimeClientTool[];
-  /**
-   * The deterministic model-visible Skill catalog ordered by Skill name.
-   * Skills hidden by `disable-model-invocation` remain runtime-owned but
-   * are omitted here. Every entry includes the canonical absolute host
-   * path of its `SKILL.md`.
-   */
-  skills?: RuntimeClientSkill[];
-  /**
-   * The typed availability of every evaluated optional capability
-   * source, in deterministic source-identity order (Issue #81).
-   */
-  sources?: CapabilitySourceView[];
-}
-/**
- * The active capability projection this generation was composed
- * against.
+ * The deterministic capability projection.
+ *
+ * Projected from the active [`CapabilitySnapshot`]
+ * ([`crate::capabilities::CapabilitySnapshot`]) plus the
+ * coordinator-owned availability state (Issue #81): the revision, the
+ * active Tool catalog, the complete available Tool catalog, the deterministic
+ * model-visible Skill catalog, and the typed per-source availability. No
+ * executors, environment paths, package-manager state, or private dependency
+ * internals appear.
  */
 export interface CapabilityView2 {
   /**
@@ -18056,9 +18922,59 @@ export interface CapabilityView2 {
   sources?: CapabilitySourceView[];
 }
 /**
- * The active runtime resource projection after the commit.
+ * The deterministic capability projection.
+ *
+ * Projected from the active [`CapabilitySnapshot`]
+ * ([`crate::capabilities::CapabilitySnapshot`]) plus the
+ * coordinator-owned availability state (Issue #81): the revision, the
+ * active Tool catalog, the complete available Tool catalog, the deterministic
+ * model-visible Skill catalog, and the typed per-source availability. No
+ * executors, environment paths, package-manager state, or private dependency
+ * internals appear.
  */
-export interface RuntimeClientResourcesView1 {
+export interface CapabilityView3 {
+  /**
+   * Configured Tool intent before effective model gating.
+   */
+  configured_tools: RuntimeClientTool[];
+  /**
+   * The active monotonic capability revision.
+   */
+  revision: string;
+  /**
+   * The deterministic active Tool catalog in registry order. Model
+   * requests and execution use exactly this set.
+   */
+  tools?: RuntimeClientTool[];
+  /**
+   * The complete available Tool catalog, including inactive Tools. The
+   * active set above is an explicit subset; availability never implies
+   * model activation.
+   */
+  available_tools?: RuntimeClientTool[];
+  /**
+   * The deterministic model-visible Skill catalog ordered by Skill name.
+   * Skills hidden by `disable-model-invocation` remain runtime-owned but
+   * are omitted here. Every entry includes the canonical absolute host
+   * path of its `SKILL.md`.
+   */
+  skills?: RuntimeClientSkill[];
+  /**
+   * The typed availability of every evaluated optional capability
+   * source, in deterministic source-identity order (Issue #81).
+   */
+  sources?: CapabilitySourceView[];
+}
+/**
+ * The client-visible projection of one immutable runtime resource
+ * generation.
+ *
+ * It carries identity and provenance, never content: a client that wants
+ * the text of a project context file reads the file, exactly as it would
+ * read a `SKILL.md`. Publishing the bytes here would create a second copy
+ * of request input inside a conversation projection.
+ */
+export interface RuntimeClientResourcesView2 {
   /**
    * Facts copied from the same immutable generation as this revision.
    * Deferred inspection facts are loaded through finite native field pages.
@@ -19647,9 +20563,9 @@ export interface OutputDelta {
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "Changed".
+ * via the `definition` "Changed42".
  */
-export interface Changed {
+export interface Changed42 {
   watchId: string;
   changedPaths: string[];
   resyncRequired: boolean;
@@ -20827,27 +21743,6 @@ export interface ModelCapabilities6 {
   jsonSchemaOutput?: boolean;
 }
 /**
- * The inbound mailbox diagnostics of the Runtime Client projection.
- *
- * A read-only view of authoritative mailbox state: it validates the
- * Issue #22 ordering contract and supports reconnect, and it can never
- * drain or mutate the mailbox.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "InboundDiagnostics".
- */
-export interface InboundDiagnostics1 {
-  /**
-   * The currently pending inbound items in runtime-assigned inbound
-   * sequence order.
-   */
-  pending?: InboundItemView[];
-  /**
-   * The latest observed finite drain boundary, when any drain occurred.
-   */
-  last_drain?: InboundDrainView | null;
-}
-/**
  * The latest live-activity projection of one subagent child.
  *
  * Owned and advanced by the child; the parent registry stores the newest
@@ -20954,131 +21849,6 @@ export interface SubagentActivityCounters1 {
    * Tool executions finished (completed plus failed).
    */
   tool_executions: number;
-}
-/**
- * The context diagnostics carried by the Runtime Client snapshot.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "RuntimeClientContextView".
- */
-export interface RuntimeClientContextView4 {
-  /**
-   * Independent current historical projection, including inherited activations.
-   */
-  projection_head?: RuntimeClientProjectionHeadView | null;
-  /**
-   * Latest manual operation admitted in this runtime incarnation. Never inferred
-   * from a newer canonical checkpoint. Absence is insufficient evidence.
-   */
-  manual_compaction?: RuntimeClientManualCompaction | null;
-  /**
-   * Latest pre-commit diagnostic; cleared when the next compaction starts.
-   */
-  compaction_error?: string | null;
-  /**
-   * Latest native measured request or committed compacted-context estimate.
-   */
-  occupancy?: RuntimeClientContextOccupancy | null;
-  /**
-   * Whether the runtime currently owns a context-compaction operation.
-   * This is live operation state, not inferred from token usage.
-   */
-  compaction_in_progress: boolean;
-  /**
-   * Runtime Client projection statistic: the number of committed
-   * compaction completions folded into this read model. The compaction
-   * generation remains the conversation-owned identity.
-   */
-  compaction_count: number;
-  /**
-   * The latest committed compaction metadata, when compaction occurred.
-   */
-  latest_compaction?: RuntimeClientCompactionView | null;
-}
-/**
- * The deterministic capability projection.
- *
- * Projected from the active [`CapabilitySnapshot`]
- * ([`crate::capabilities::CapabilitySnapshot`]) plus the
- * coordinator-owned availability state (Issue #81): the revision, the
- * active Tool catalog, the complete available Tool catalog, the deterministic
- * model-visible Skill catalog, and the typed per-source availability. No
- * executors, environment paths, package-manager state, or private dependency
- * internals appear.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "CapabilityView".
- */
-export interface CapabilityView3 {
-  /**
-   * Configured Tool intent before effective model gating.
-   */
-  configured_tools: RuntimeClientTool[];
-  /**
-   * The active monotonic capability revision.
-   */
-  revision: string;
-  /**
-   * The deterministic active Tool catalog in registry order. Model
-   * requests and execution use exactly this set.
-   */
-  tools?: RuntimeClientTool[];
-  /**
-   * The complete available Tool catalog, including inactive Tools. The
-   * active set above is an explicit subset; availability never implies
-   * model activation.
-   */
-  available_tools?: RuntimeClientTool[];
-  /**
-   * The deterministic model-visible Skill catalog ordered by Skill name.
-   * Skills hidden by `disable-model-invocation` remain runtime-owned but
-   * are omitted here. Every entry includes the canonical absolute host
-   * path of its `SKILL.md`.
-   */
-  skills?: RuntimeClientSkill[];
-  /**
-   * The typed availability of every evaluated optional capability
-   * source, in deterministic source-identity order (Issue #81).
-   */
-  sources?: CapabilitySourceView[];
-}
-/**
- * The client-visible projection of one immutable runtime resource
- * generation.
- *
- * It carries identity and provenance, never content: a client that wants
- * the text of a project context file reads the file, exactly as it would
- * read a `SKILL.md`. Publishing the bytes here would create a second copy
- * of request input inside a conversation projection.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "RuntimeClientResourcesView".
- */
-export interface RuntimeClientResourcesView2 {
-  /**
-   * Facts copied from the same immutable generation as this revision.
-   * Deferred inspection facts are loaded through finite native field pages.
-   */
-  inspection?: CapabilityInspection | null;
-  /**
-   * Identifies one immutable process-local runtime resource generation.
-   *
-   * This is deliberately separate from `ContextGeneration` (one context
-   * assembly provenance set) and `CapabilityRevision` (one executable
-   * capability set). A resource-only change may advance this revision while
-   * retaining an identical capability revision.
-   */
-  revision?: string;
-  /**
-   * The runtime-loaded project instruction files, root-most to
-   * workspace, in the exact order the runtime concatenated them.
-   */
-  context_files?: RuntimeClientContextFile[];
-  /**
-   * Whether an immutable agent profile/persona is frozen into this
-   * generation. The persona text itself is runtime-owned request input.
-   */
-  agent_profile?: boolean;
 }
 /**
  * One live-published requested interaction audit projection.
