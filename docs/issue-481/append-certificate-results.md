@@ -75,7 +75,7 @@ trigger replacement, checkpoint Original deletion, schema changes, overflow
 fail-closed behavior, reopen, and an external writer between COMMIT and seating.
 Final combined FULL/Merge and independent review are still required.
 
-The [compact evidence archive](evidence/certificate-stage.tar.xz) includes every
+The [compact evidence archive](https://drive.google.com/file/d/1Y5WUZ9UhSMOUsNok3kIQ2XwIGGWLCfMP/view?usp=drivesdk "Original file: docs/issue-481/evidence/certificate-stage.tar.xz") includes every
 sample, process result, oracle output, full logical/allocated DB/WAL/temp footprint,
 summary, build identity and development-check failure. Its
 [SHA-256 manifest](evidence/certificate-stage.tar.manifest.json) is checked against
@@ -95,3 +95,5 @@ The [identity audit](evidence/build-identity-audit.json) retains both the invali
 stage-1 records and clean confirmation. Original evidence is unchanged.
 [Plain pair inputs](evidence/pair-inputs) expose executable hashes and every
 numeric pair input; independent recomputation matches all published paired medians.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

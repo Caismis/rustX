@@ -163,7 +163,7 @@ is called physical-device traffic.
 
 ## Reproduction and remaining review gates
 
-[Raw archive](evidence/combined-measurements/measurements.tar.xz) and
+[Raw archive](https://drive.google.com/file/d/1MwzfQqRWY1d3m69vaDg65BBHHcFXDlQ5/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/combined-measurements/measurements.tar.xz") and
 [manifest](evidence/combined-measurements/measurements.tar.manifest.json) include
 all 204 samples, full ordered oracles, build/hardware identities, the actual
 controller commands and separate combined profile. Original evidence and all
@@ -177,3 +177,5 @@ reported separately in the decision matrix. The user chooses retained scope;
 there is no automatic revert or merge. Final exact-head FULL/Merge and independent
 review remain required. A fixture-only FULL failure history is preserved in
 [evidence/final-validation](evidence/final-validation).
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

@@ -71,7 +71,7 @@ and 26 read-layout tests passed on `ac9042ea`, retaining gate 73.
 provide the baseline proof. Diagnostic
 variants are not merge candidates and have no claim of complete variant FULL CI.
 
-[Archive](evidence/auth-leaveout/measurements.tar.xz),
+[Archive](https://drive.google.com/file/d/1Y5WUZ9UhSMOUsNok3kIQ2XwIGGWLCfMP/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/auth-leaveout/measurements.tar.xz"),
 [manifest](evidence/auth-leaveout/measurements.tar.manifest.json), and
 [formal summary](evidence/auth-leaveout/formal-summary.json) preserve every sample,
 profile, exact build identity, and original/corrected diagnostic patches. Originals
@@ -80,3 +80,5 @@ then use `compare-revisions.py` with before `pi-auth-restored-build/conformance`
 after `pi-partial-build/conformance`, and a new output directory; the archived
 `run-cost-stage.py pi-auth-leaveout pi-auth-restored-build pi-partial-build` records
 all commands and verifies each profile identity against its formal counterpart.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

@@ -67,7 +67,7 @@ python3 benchmarks/runtime/summarize-comparisons.py /workspace/issue-481-evidenc
 ```
 
 The [plain summary](evidence/template-summary.json) retains each pair and phase;
-the [verified compact archive](evidence/template-metrics.tar.xz) and
+the [verified compact archive](https://drive.google.com/file/d/1Y5WUZ9UhSMOUsNok3kIQ2XwIGGWLCfMP/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/template-metrics.tar.xz") and
 [manifest](evidence/template-metrics.tar.manifest.json) retain raw samples,
 provider/controller output, build identities and validation logs. Cloud originals
 remain in `/workspace/issue-481-evidence`; no input was destroyed.
@@ -90,7 +90,9 @@ during formal samples. The initial short-case results above remain unchanged.
 These single-turn scenarios have coarse 10 ms CPU ticks; their ratios do not
 establish a general CPU benefit. Large-output CPU is adverse and retained.
 [Complete plain summary](evidence/template-complete-summary.json),
-[additional raw archive](evidence/template-extra-cases.tar.xz) and
+[additional raw archive](https://drive.google.com/file/d/1Y5WUZ9UhSMOUsNok3kIQ2XwIGGWLCfMP/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/template-extra-cases.tar.xz") and
 [manifest](evidence/template-extra-cases.tar.manifest.json) preserve the added
 cohort. Reproduce with the same comparison command using `--case stream --case
 large --case tool --case cancel`, then summarize both directories together.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

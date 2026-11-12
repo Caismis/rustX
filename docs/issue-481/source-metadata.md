@@ -142,7 +142,7 @@ and persisted page construction remain substantial targets for the next stage.
 Original-byte `pread64` calls fall from 91,712 to 40,753 (55.6% fewer) in these
 short-small traces. Disk-index `pread64` calls remain 1,000; disk-index open calls
 remain 160. Those opens approximate connection activity and are not SQL counts.
-The compact [evidence archive](evidence/metadata-stage.tar.xz) preserves raw
+The compact [evidence archive](https://drive.google.com/file/d/1Pm-q9oRDza2AWTzQ6wQNJ4dTx7y_ka1l/view?usp=drivesdk "Original file: docs/issue-481/evidence/metadata-stage.tar.xz") preserves raw
 profiles and successful/failed samples, with a per-file SHA-256
 [manifest](evidence/metadata-stage.tar.manifest.json). Original evidence is retained
 in the cloud workspace.
@@ -150,8 +150,10 @@ in the cloud workspace.
 The shared-target identity audit and plain per-pair numeric inputs are in
 [evidence/pair-inputs](evidence/pair-inputs) and [the build audit](evidence/build-identity-audit.json).
 
-The [identity-repair archive](evidence/identity-repair.tar.xz) and its
+The [identity-repair archive](https://drive.google.com/file/d/1Y5WUZ9UhSMOUsNok3kIQ2XwIGGWLCfMP/view?usp=drivesdk "Original file: docs/issue-481/evidence/identity-repair.tar.xz") and its
 [manifest](evidence/identity-repair.tar.manifest.json) preserve clean build logs,
 full fixture hashes, replacement cold samples and the plain-input verification.
 [Plain cold pairs](evidence/pair-inputs/metadata-append-cold-verified.json) expose
 all measured inputs and executable identities without extracting the archive.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

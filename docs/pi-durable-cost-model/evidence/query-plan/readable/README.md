@@ -1,6 +1,6 @@
 # Readable query-plan comparison inputs
 
-All **84 samples** are exposed here as per-pair numeric inputs: 36 runtime, 24 warm append and 24 cold append. The three `*-summary.json` files and `runtime-uncertainty.json` are byte-identical copies of the corresponding files in the [original verified archive](../../query-plan-results.tar.xz). `provenance.json` records their hashes and the hashes of all 84 raw samples. Original files and archives remain unchanged; no samples were rerun or filtered.
+All **84 samples** are exposed here as per-pair numeric inputs: 36 runtime, 24 warm append and 24 cold append. The three `*-summary.json` files and `runtime-uncertainty.json` are byte-identical copies of the corresponding files in the [original verified archive](https://drive.google.com/file/d/1Y5WUZ9UhSMOUsNok3kIQ2XwIGGWLCfMP/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/query-plan-results.tar.xz"). `provenance.json` records their hashes and the hashes of all 84 raw samples. Original files and archives remain unchanged; no samples were rerun or filtered.
 
 `paired-inputs.csv` presents every numeric before/after value and its paired ratio. Blank ratios mean a zero or unavailable denominator, not a favorable result. Runtime JSON additionally retains lifecycle phase inputs; append JSON retains warm/cold counter scopes and DB/WAL logical/allocated sizes. CPU is product self user+system including driver, at 10 ms resolution; writes are process-attributed, not device writes. Memory values are sampled maxima, not peaks.
 
@@ -19,3 +19,5 @@ python3 docs/pi-durable-cost-model/evidence/query-plan/readable/recompute.py --r
 ```
 
 The recorded check used `/workspace/issue-481-evidence` and passed both levels. Large-case CPU ratio **1.1429**, cancellation wall and warm-append adverse samples are retained. Query-plan stability disables parameter-sensitive optimization; six workloads and four append histories do not establish favorable plans for arbitrary production data distributions or larger scales. No Pi parity or exact-head FULL success is inferred from these arithmetic checks.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../../../../performance-evidence/README.md) for original member paths and byte-level verification.

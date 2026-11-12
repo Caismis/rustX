@@ -103,9 +103,11 @@ cache TTL, allocator policy or runtime tuning interface is retained. Further
 work should target retained cut/metadata ownership and actual page maintenance,
 not another quota value. Keep PR #485 Draft; this report is not a merge gate.
 
-The [archive](evidence/process-cache-20261110/evidence.tar.xz) and
+The [archive](https://drive.google.com/file/d/1Pm-q9oRDza2AWTzQ6wQNJ4dTx7y_ka1l/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/process-cache-20261110/evidence.tar.xz") and
 [manifest](evidence/process-cache-20261110/manifest.json) preserve every accepted
 and failed product, diagnostic helper, native backup, preliminary source and
 check log, excluding product binaries, dependency trees, credentials and live
 runtime/workspace roots. Helpers retain historical absolute paths; no portable
 replay claim is made.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

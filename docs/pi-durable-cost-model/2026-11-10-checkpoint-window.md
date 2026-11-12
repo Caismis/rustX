@@ -212,9 +212,11 @@ Keep #485 Draft and do not merge. Exact-final-HEAD CI state is recorded after
 push without waiting for CI; prior candidate checks are not final integration
 readiness.
 
-The [archive](evidence/checkpoint-window-20261110/evidence.tar.xz) and
+The [archive](https://drive.google.com/file/d/1h7XPTYks7HMenaDgDRizkVxotm4f3oWF/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/checkpoint-window-20261110/evidence.tar.xz") and
 [manifest](evidence/checkpoint-window-20261110/manifest.json) retain every
 product, ordinary/diagnostic identities, full traces, authenticated replay,
 native backups, negative results, source patch and checks. Product binaries,
 dependencies, credentials and live roots are excluded. Helpers retain absolute
 paths; no portable replay claim is made.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

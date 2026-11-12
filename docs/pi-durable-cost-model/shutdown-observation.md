@@ -10,4 +10,6 @@ Three deterministic regressions cover publication with a parked worker, two dorm
 
 This is a correctness repair for the observer-demand stage. It makes no performance claim. Validation passed **492 distinct tests**: 112 host/scripted-host, 84 projection, and 296 App Server manager/protocol/real-transport tests. The three regressions are included. The matching real child was rebuilt; root opt-level 0 was used for correctness only. Formatting and whitespace checks pass. Final exact-head FULL/Merge and independent review remain required.
 
-[Verified evidence archive](evidence/shutdown-observation-validation.tar.xz) and [manifest](evidence/shutdown-observation-validation.tar.manifest.json) retain the red reproductions, initial fixture diagnostics, exact validated source diff, build commands and identities, and all 492 test names. Originals are preserved.
+[Verified evidence archive](https://drive.google.com/file/d/1h7XPTYks7HMenaDgDRizkVxotm4f3oWF/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/shutdown-observation-validation.tar.xz") and [manifest](evidence/shutdown-observation-validation.tar.manifest.json) retain the red reproductions, initial fixture diagnostics, exact validated source diff, build commands and identities, and all 492 test names. Originals are preserved.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

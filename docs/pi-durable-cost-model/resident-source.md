@@ -87,7 +87,7 @@ Repeat the separate syscall command with the before binary for its diagnostic.
 [Formal pair/phase summary](evidence/resident-summary.json),
 [before counters](evidence/resident-source-before.json),
 [after counters](evidence/resident-source-after.json),
-[verified raw archive](evidence/resident-source.tar.xz) and
+[verified raw archive](https://drive.google.com/file/d/1MwzfQqRWY1d3m69vaDg65BBHHcFXDlQ5/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/resident-source.tar.xz") and
 [manifest](evidence/resident-source.tar.manifest.json) retain reproducible inputs.
 The archive preserves the initial Clippy finding and an interleaved retry log;
 `pi-resident-clippy-final.log` is the clean successful final invocation. Originals
@@ -95,3 +95,5 @@ remain under `/workspace/issue-481-evidence`; no failed or slow sample is remove
 
 The subsequent [16 KiB byte-bound refinement](resident-bound.md) preserves these
 4 KiB results as historical stage evidence and keeps navigation at its 4 KiB bound.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

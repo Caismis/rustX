@@ -109,4 +109,6 @@ The 40 ordinary product samples and 936 exact request comparisons all passed. Ev
 
 The rejection restores the complete production and test tree to `1bce12684`. PR #485 remains Draft. Its exact final report HEAD triggers the existing FULL profile. The baseline FULL run had macOS and browser failures. Final remote state is available in [PR checks](https://github.com/Caismis/rustX/pull/485/checks).
 
-The [40-product CSV](evidence/canonical-coordinates-20261109/all-per-run.csv), [raw evidence archive](evidence/canonical-coordinates-20261109/evidence.tar.xz) and [manifest](evidence/canonical-coordinates-20261109/evidence.tar.manifest.json) preserve all initial and supplemental pairs, identities, authenticated ledgers, operation counts and key inventories. Full syscall traces remain in the local measurement directory.
+The [40-product CSV](evidence/canonical-coordinates-20261109/all-per-run.csv), [raw evidence archive](https://drive.google.com/file/d/1Y5WUZ9UhSMOUsNok3kIQ2XwIGGWLCfMP/view?usp=drivesdk "Original file: docs/pi-durable-cost-model/evidence/canonical-coordinates-20261109/evidence.tar.xz") and [manifest](evidence/canonical-coordinates-20261109/evidence.tar.manifest.json) preserve all initial and supplemental pairs, identities, authenticated ledgers, operation counts and key inventories. Full syscall traces remain in the local measurement directory.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.
