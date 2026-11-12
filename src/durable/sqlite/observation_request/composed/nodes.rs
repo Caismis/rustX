@@ -506,13 +506,24 @@ pub(super) fn select(
 /// Path and byte-width traversals split at exactly the same rank-digit boundaries
 /// for one fixed sequence. Read/authenticate each node once. Length errors stay
 /// deferred until every path check succeeds, preserving the staged error order.
+#[cfg(test)]
 pub(super) fn geometry(
     connection: &Connection,
     node: &Augmentation,
     rank: u64,
     sequence: u64,
 ) -> Result<u64, ConversationStoreError> {
-    geometry_paths(connection, node, rank, sequence)?
+    geometry_paths(connection, node, rank, sequence, None)?
+}
+pub(super) fn incremental_geometry(
+    connection: &Connection,
+    node: &Augmentation,
+    digest: index::Hash,
+    rank: u64,
+    sequence: u64,
+    session: &manifest::geometry::Session,
+) -> Result<u64, ConversationStoreError> {
+    geometry_paths(connection, node, rank, sequence, Some((session, digest)))?
 }
 type CheckedLength = Result<u64, ConversationStoreError>;
 fn geometry_paths(
@@ -520,6 +531,39 @@ fn geometry_paths(
     node: &Augmentation,
     rank: u64,
     sequence: u64,
+    proof: Option<(&manifest::geometry::Session, index::Hash)>,
+) -> Result<CheckedLength, ConversationStoreError> {
+    let key = proof
+        .filter(|_| sequence != 0)
+        .map(|(_, source)| manifest::geometry::Key {
+            node: node.native.id,
+            source,
+            rank,
+            sequence_width: weights::digits(sequence),
+        });
+    if let (Some((session, _)), Some(key)) = (proof, key)
+        && let Some(length) = session.get(&key)
+    {
+        return Ok(Ok(length));
+    }
+    let result = geometry_paths_uncached(
+        connection,
+        node,
+        rank,
+        sequence,
+        proof.map(|(session, _)| session),
+    );
+    if let (Ok(Ok(length)), Some((session, _)), Some(key)) = (&result, proof, key) {
+        session.remember(key, *length);
+    }
+    result
+}
+fn geometry_paths_uncached(
+    connection: &Connection,
+    node: &Augmentation,
+    rank: u64,
+    sequence: u64,
+    session: Option<&manifest::geometry::Session>,
 ) -> Result<CheckedLength, ConversationStoreError> {
     let last = rank
         .checked_add(node.native.count)
@@ -551,12 +595,14 @@ fn geometry_paths(
         &load(connection, *left, *left_hash)?,
         rank,
         sequence,
+        session.map(|session| (session, *left_hash)),
     )?;
     let b = geometry_paths(
         connection,
         &load(connection, *right, *right_hash)?,
         rank + left.count,
         sequence,
+        session.map(|session| (session, *right_hash)),
     )?;
     Ok(width.and_then(|_| add(add(a?, b?)?, 1)))
 }

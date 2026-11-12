@@ -1007,7 +1007,7 @@ fn historical_opening_prompt_lookup_ignores_unrelated_future_turns() {
         }
         timeout(&store, "selected");
         let selected_start: i64 = store.lock().unwrap().query_row(
-            "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key='selected' AND json_extract(event_json,'$.event.type')='attempt_started'", [], |r| r.get(0)).unwrap();
+            "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key='selected' AND event_kind='attempt_started'", [], |r| r.get(0)).unwrap();
         let expected = if matches!(mode, "human" | "agent" | "idle") {
             "Opening"
         } else {
@@ -1041,13 +1041,13 @@ fn historical_opening_prompt_lookup_ignores_unrelated_future_turns() {
                     JOIN message_ledger l ON l.message_id=m.value
                     WHERE ",
                         crate::durable::sqlite::event_kind_key::sql!(
-                            "json_extract(e.event_json,'$.event.type')"
+                            "e.event_kind"
                         ),
                         "=x'0001'",
                         " AND e.sequence<=?3
                     AND e.sequence>(SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx WHERE sequence<?2 AND ",
                         crate::durable::sqlite::event_kind_key::sql!(
-                            "json_extract(event_json,'$.event.type')"
+                            "event_kind"
                         ),
                         "=x'0002'",
                         ")\n                    AND (e.attempt_id=?1 OR (e.attempt_id IS NULL AND e.sequence<?2)) AND {} ORDER BY e.sequence,CAST(m.key AS INTEGER)"
@@ -1175,7 +1175,7 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
     let id = ConversationId::generate();
     {
         let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
-        assert_eq!(crate::durable::sqlite::SQLITE_SCHEMA_VERSION, 112);
+        assert_eq!(crate::durable::sqlite::SQLITE_SCHEMA_VERSION, 113);
         store.lock().unwrap().execute_batch("ALTER TABLE bootstrap_identity DROP COLUMN inherited_transcript_through; UPDATE rustx_store SET schema_version=56 WHERE id=1").unwrap();
     }
     assert!(matches!(

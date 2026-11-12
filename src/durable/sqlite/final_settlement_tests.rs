@@ -1300,7 +1300,7 @@ fn final_model_settlement_configuration_trigger_rejects_even_coherent_corruption
                     .unwrap(),
                 None
             );
-            assert_eq!(connection.query_row("SELECT COUNT(*) FROM events WHERE json_extract(event_json,'$.event.type')='model_request_completed'", [], |row| row.get::<_,u64>(0)).unwrap(), 0);
+            assert_eq!(connection.query_row("SELECT COUNT(*) FROM events WHERE event_kind='model_request_completed'", [], |row| row.get::<_,u64>(0)).unwrap(), 0);
             connection
                 .execute_batch("DROP TRIGGER invalidate_final_configuration")
                 .unwrap();

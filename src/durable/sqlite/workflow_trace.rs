@@ -12,16 +12,16 @@ mod query_work;
 // Journal cut. In particular, missing I/O and terminal facts do not scan
 // later visits or unrelated runs to prove absence.
 pub(super) const TOOL_START_SQL: &str = concat!(
-    "SELECT sequence FROM events INDEXED BY events_observation_tool_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_key = ",
+    "SELECT sequence FROM events INDEXED BY events_observation_tool_idx WHERE event_tool_call_id=?1 AND attempt_key = ",
     crate::durable::sqlite::event_owner_key::attempt_parameter!("?2"),
-    " AND json_extract(event_json,'$.event.type')='tool_execution_started' AND sequence<=?3 LIMIT 2"
+    " AND event_kind='tool_execution_started' AND sequence<=?3 LIMIT 2"
 );
 
-const RUN_TOTAL_SQL: &str = "SELECT count(*) FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE json_extract(event_json,'$.event.instance.block.run')=?3 AND json_extract(event_json,'$.event.type')='workflow_node_started' AND sequence>?1 AND sequence<=?2";
-const RUN_REVISION_SQL: &str = "SELECT max(sequence) FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE json_extract(event_json,'$.event.instance.block.run')=?3 AND json_extract(event_json,'$.event.type') IN ('workflow_node_started','workflow_node_waiting','workflow_node_settled') AND sequence>?1 AND sequence<=?2";
-const RUN_NODES_SQL: &str = "SELECT sequence,event_timestamp,CASE WHEN octet_length(json_extract(event_json,'$.event.instance'))<=8192 THEN json_extract(event_json,'$.event.instance') END FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE json_extract(event_json,'$.event.instance.block.run')=?3 AND json_extract(event_json,'$.event.type')='workflow_node_started' AND sequence>?1 AND sequence<=?2 ORDER BY sequence LIMIT ?4 OFFSET ?5";
-const NODE_TERMINAL_SQL: &str = "SELECT event_timestamp,json_extract(event_json,'$.event.outcome') FROM events INDEXED BY events_workflow_node_instance_kind_idx WHERE json_extract(event_json,'$.event.instance')=?3 AND json_extract(event_json,'$.event.type')='workflow_node_settled' AND sequence>?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1";
-const NODE_IO_SQL: &str = "SELECT sequence,json_extract(event_json,'$.event.kind'),substr(json_extract(event_json,'$.event.value'),1,192),CASE WHEN json_type(event_json,'$.event.value')='text' THEN octet_length(json_quote(json_extract(event_json,'$.event.value'))) END FROM events INDEXED BY events_workflow_node_instance_kind_idx WHERE json_extract(event_json,'$.event.instance')=?4 AND json_extract(event_json,'$.event.type')=?1 AND sequence>?2 AND sequence<=?3 ORDER BY sequence LIMIT 1";
+const RUN_TOTAL_SQL: &str = "SELECT count(*) FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE event_instance_run=?3 AND event_kind='workflow_node_started' AND sequence>?1 AND sequence<=?2";
+const RUN_REVISION_SQL: &str = "SELECT max(sequence) FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE event_instance_run=?3 AND event_kind IN ('workflow_node_started','workflow_node_waiting','workflow_node_settled') AND sequence>?1 AND sequence<=?2";
+const RUN_NODES_SQL: &str = "SELECT sequence,event_timestamp,CASE WHEN octet_length(event_instance)<=8192 THEN event_instance END FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE event_instance_run=?3 AND event_kind='workflow_node_started' AND sequence>?1 AND sequence<=?2 ORDER BY sequence LIMIT ?4 OFFSET ?5";
+const NODE_TERMINAL_SQL: &str = "SELECT event_timestamp,json_extract(event_json,'$.event.outcome') FROM events INDEXED BY events_workflow_node_instance_kind_idx WHERE event_instance=?3 AND event_kind='workflow_node_settled' AND sequence>?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1";
+const NODE_IO_SQL: &str = "SELECT sequence,json_extract(event_json,'$.event.kind'),substr(json_extract(event_json,'$.event.value'),1,192),CASE WHEN json_type(event_json,'$.event.value')='text' THEN octet_length(json_quote(json_extract(event_json,'$.event.value'))) END FROM events INDEXED BY events_workflow_node_instance_kind_idx WHERE event_instance=?4 AND event_kind=?1 AND sequence>?2 AND sequence<=?3 ORDER BY sequence LIMIT 1";
 
 fn invalid() -> ConversationStoreError {
     ConversationStoreError::InvalidReference("invalid original Workflow node selection".into())
@@ -39,10 +39,10 @@ pub(super) fn page(
     }
     // Only bounded original identity fields are read; a generic J body is never hydrated.
     let run: Option<String> = connection.query_row(
-        "SELECT CASE WHEN octet_length(json_extract(event_json,'$.event.run_id'))<=8192 THEN json_extract(event_json,'$.event.run_id') END FROM events WHERE sequence=?1 AND json_extract(event_json,'$.event.type')='workflow_started'",
+        "SELECT CASE WHEN octet_length(event_run_id)<=8192 THEN event_run_id END FROM events WHERE sequence=?1 AND event_kind='workflow_started'",
         [start], |row| row.get(0)).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
     let run = run.ok_or_else(invalid)?;
-    let (workflow_id,call_id):(String,Option<String>)=connection.query_row("SELECT json_extract(event_json,'$.event.workflow_id'),json_extract(event_json,'$.event.tool_call_id') FROM events WHERE sequence=?1",[start],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let (workflow_id,call_id):(String,Option<String>)=connection.query_row("SELECT json_extract(event_json,'$.event.workflow_id'),event_tool_call_id FROM events WHERE sequence=?1",[start],|row|Ok((row.get(0)?,row.get(1)?))).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let run_id: crate::runtime::workflow::WorkflowRunId =
         serde_json::from_str(&run).map_err(|error| storage(error.to_string()))?;
     let mut parents = Vec::new();
@@ -60,7 +60,7 @@ pub(super) fn page(
     }
     let parent_sequence = (parents.len() == 1).then(|| parents[0]);
     let end: Option<u64> = connection.query_row(
-        "SELECT min(sequence) FROM events INDEXED BY events_run_id_kind_idx WHERE json_extract(event_json,'$.event.run_id')=?1 AND json_extract(event_json,'$.event.type') IN ('workflow_completed','workflow_failed','workflow_cancelled') AND sequence>?2 AND sequence<=?3",
+        "SELECT min(sequence) FROM events INDEXED BY events_run_id_kind_idx WHERE event_run_id=?1 AND event_kind IN ('workflow_completed','workflow_failed','workflow_cancelled') AND sequence>?2 AND sequence<=?3",
         params![run,start,cut.read.journal], |row| row.get(0)).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let through = end.unwrap_or(cut.read.journal);
     let total: u64 = connection

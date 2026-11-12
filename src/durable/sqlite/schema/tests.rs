@@ -322,7 +322,7 @@ fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 112);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 113);
 
     // And the refusal is not ceremony: had the gate admitted the file,
     // these are the rows the typed decoder would have had to interpret,
@@ -387,7 +387,7 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 112);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 113);
 
     // And the refusal is not ceremony: the envelope framing is unchanged,
     // and the row the gate refused really is undecodable under the current
@@ -424,7 +424,7 @@ fn schema_101_event_indexes_are_refused_without_rewriting_the_store() {
             "UPDATE rustx_store SET schema_version=101 WHERE id=1;
              DROP INDEX events_auxiliary_call_id_kind_idx;
              CREATE INDEX events_auxiliary_call_id_kind_idx
-               ON events(json_extract(event_json,'$.event.call_id'),json_extract(event_json,'$.event.type'));
+               ON events(event_call_id,event_kind);
              CREATE INDEX events_trace_kind_idx ON events(observation_kind) WHERE observation_kind IS NOT NULL;",
         ).unwrap();
     }
@@ -454,7 +454,7 @@ fn schema_102_text_kind_indexes_are_refused_without_rewriting_the_store() {
         let connection = store.conn.lock().unwrap();
         connection.execute_batch(
             "DROP INDEX events_kind_idx;
-             CREATE INDEX events_kind_idx ON events(json_extract(event_json, '$.event.type'));
+             CREATE INDEX events_kind_idx ON events(event_kind);
              DROP INDEX events_primary_trace_kind_idx;
              CREATE INDEX events_primary_trace_kind_idx ON events(observation_kind) WHERE observation_trace_fact_required=1;
              UPDATE rustx_store SET schema_version=102 WHERE id=1;",
@@ -943,7 +943,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
     use crate::runtime::identity::AuxiliaryCallId;
     use crate::runtime::workflow::read_model::WorkflowWait;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 112);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 113);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-wait.sqlite");
@@ -1010,7 +1010,7 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
 fn workflow_node_io_and_indexes_require_current_schema_without_rewrite() {
     use crate::runtime::workflow::read_model::WorkflowNodeKind;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 112);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 113);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-node-io.sqlite");

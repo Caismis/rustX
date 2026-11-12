@@ -34,7 +34,7 @@ fn digest(bytes: &str) -> String {
 // Journal scan is unbounded after a long non-lifecycle tail (or an empty owner).
 pub(super) const OWNER_KIND_SQL: &str = concat!(
     "SELECT sequence FROM events INDEXED BY events_kind_idx WHERE ",
-    crate::durable::sqlite::event_kind_key::sql!("json_extract(event_json,'$.event.type')"),
+    crate::durable::sqlite::event_kind_key::sql!("event_kind"),
     "=?1 ORDER BY sequence DESC LIMIT 1"
 );
 
@@ -286,13 +286,13 @@ fn inherited_count(connection: &Connection) -> Result<u64, ConversationStoreErro
 const COMPLETION_FIELDS: &str = "CASE WHEN typeof(json_extract(event_json,'$.schema_version'))='integer' THEN json_extract(event_json,'$.schema_version') END,CASE WHEN typeof(json_extract(event_json,'$.conversation_id'))='text' AND octet_length(json_extract(event_json,'$.conversation_id'))<=128 THEN json_extract(event_json,'$.conversation_id') END,CASE WHEN typeof(json_extract(event_json,'$.event.activation_id'))='integer' THEN json_extract(event_json,'$.event.activation_id') END,CASE WHEN typeof(json_extract(event_json,'$.event.checkpoint_id'))='text' AND octet_length(json_extract(event_json,'$.event.checkpoint_id'))<=1024 THEN json_extract(event_json,'$.event.checkpoint_id') END,CASE WHEN typeof(json_extract(event_json,'$.event.generation'))='integer' THEN json_extract(event_json,'$.event.generation') END";
 pub(super) fn completion_index_sql() -> String {
     format!(
-        "CREATE INDEX events_projection_completion_idx ON events(sequence,{COMPLETION_FIELDS}) WHERE json_extract(event_json,'$.event.type')='compaction_completed'"
+        "CREATE INDEX events_projection_completion_idx ON events(sequence,{COMPLETION_FIELDS}) WHERE event_kind='compaction_completed'"
     )
 }
 pub(super) fn completion_query() -> &'static str {
     static QUERY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         format!(
-            "SELECT sequence,{COMPLETION_FIELDS} FROM events INDEXED BY events_projection_completion_idx WHERE json_extract(event_json,'$.event.type')='compaction_completed' AND sequence<=?1 ORDER BY sequence DESC LIMIT 1"
+            "SELECT sequence,{COMPLETION_FIELDS} FROM events INDEXED BY events_projection_completion_idx WHERE event_kind='compaction_completed' AND sequence<=?1 ORDER BY sequence DESC LIMIT 1"
         )
     });
     &QUERY

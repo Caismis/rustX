@@ -12,7 +12,7 @@ fn numeric_owner_keys_keep_bounded_scopes_and_reduce_index_bytes() {
 
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     let mut connection = store.lock().unwrap();
-    connection.execute_batch("CREATE INDEX text_owner_reference ON events(attempt_id,turn_id,json_extract(event_json,'$.event.type')) WHERE attempt_id IS NOT NULL AND turn_id IS NOT NULL").unwrap();
+    connection.execute_batch("CREATE INDEX text_owner_reference ON events(attempt_id,turn_id,event_kind) WHERE attempt_id IS NOT NULL AND turn_id IS NOT NULL").unwrap();
     let transaction = connection.transaction().unwrap();
     let mut previous = 0;
     for history in [8, 64, 512, 4096] {
@@ -239,7 +239,7 @@ fn agent_request_scope_keeps_bounded_seeks_and_excludes_unrelated_index_rows() {
     connection
         .execute_batch(
             "CREATE INDEX full_reference ON events(
-            json_extract(event_json, '$.event.type'), json_extract(event_json, '$.event.owner.type')
+            event_kind, event_owner_kind
         );",
         )
         .unwrap();

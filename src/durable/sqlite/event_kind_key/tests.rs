@@ -49,7 +49,7 @@ fn compact_native_and_observation_keys_keep_independent_bounded_sequence_seeks()
     let mut connection = Connection::open_in_memory().unwrap();
     connection
         .execute_batch(&format!(
-            "CREATE TABLE events(sequence INTEGER PRIMARY KEY,event_json TEXT,observation_kind);\n\
+            "CREATE TABLE events(sequence INTEGER PRIMARY KEY,event_json TEXT,observation_kind,event_kind GENERATED ALWAYS AS (json_extract(event_json,'$.event.type')) STORED);\n\
          CREATE INDEX native_kind ON events{NATIVE};\n\
          CREATE INDEX observation_kind ON events{OBSERVATION};"
         ))

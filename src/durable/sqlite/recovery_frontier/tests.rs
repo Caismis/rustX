@@ -195,7 +195,7 @@ fn a_journal_row_missing_behind_the_frontier_is_caught_by_the_debug_oracle() {
         connection.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
         let terminal: u64 = connection
             .query_row(
-                "SELECT min(sequence) FROM events WHERE json_extract(event_json,'$.event.type')='attempt_completed'",
+                "SELECT min(sequence) FROM events WHERE event_kind='attempt_completed'",
                 [],
                 |row| row.get(0),
             )

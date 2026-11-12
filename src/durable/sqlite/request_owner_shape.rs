@@ -4,11 +4,11 @@ use super::{Connection, ConversationStoreError, OptionalExtension};
 const NAME: &str = "events_invalid_request_owner_idx";
 // json_quote preserves JSON objects and safely quotes scalar owner corruption.
 // Removing exactly the allowed keys avoids subqueries in a partial-index predicate.
-const INVALID: &str = r"json_extract(event_json,'$.event.type') IN
+const INVALID: &str = r"event_kind IN
  ('model_request_started','model_request_completed','model_request_failed')
  AND NOT COALESCE((
  json_type(event_json,'$.event.owner')='object' AND (
-  (json_extract(event_json,'$.event.owner.type')='agent'
+  (event_owner_kind='agent'
    AND json_type(event_json,'$.event.owner.identity')='object'
    AND json_remove(json_quote(json_extract(event_json,'$.event.owner')),'$.type','$.identity')='{}'
    AND json_remove(json_quote(json_extract(event_json,'$.event.owner.identity')),'$.attempt_id','$.turn','$.retry_number')='{}'
@@ -17,7 +17,7 @@ const INVALID: &str = r"json_extract(event_json,'$.event.type') IN
    AND json_type(event_json,'$.event.owner.identity.retry_number')='integer'
    AND json_extract(event_json,'$.event.owner.identity.retry_number') BETWEEN 0 AND 4294967295)
   OR
-  (json_extract(event_json,'$.event.owner.type')='auxiliary'
+  (event_owner_kind='auxiliary'
    AND json_remove(json_quote(json_extract(event_json,'$.event.owner')),'$.type','$.call_id','$.ordinal')='{}'
    AND json_type(event_json,'$.event.owner.call_id')='text'
    AND json_type(event_json,'$.event.owner.ordinal')='integer'
@@ -89,7 +89,7 @@ mod tests {
         let connection = Connection::open_in_memory().unwrap();
         connection
             .execute_batch(
-                "CREATE TABLE events(sequence INTEGER PRIMARY KEY,event_json TEXT NOT NULL)",
+                "CREATE TABLE events(sequence INTEGER PRIMARY KEY,event_json TEXT NOT NULL,event_kind GENERATED ALWAYS AS (json_extract(event_json,'$.event.type')) STORED,event_owner_kind GENERATED ALWAYS AS (json_extract(event_json,'$.event.owner.type')) VIRTUAL)",
             )
             .unwrap();
         create_schema(&connection).unwrap();

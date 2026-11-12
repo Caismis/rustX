@@ -79,8 +79,8 @@ pub(super) fn require_compaction_operation_through(
         .query_row(
             "SELECT EXISTS(
                SELECT 1 FROM events INDEXED BY events_compaction_operation_kind_idx
-               WHERE json_extract(event_json,'$.event.operation_id')=?1
-                 AND json_extract(event_json,'$.event.type') IN
+               WHERE event_operation_id=?1
+                 AND event_kind IN
                      ('compaction_started','compaction_completed','compaction_failed')
                  AND sequence<=?2
              )",

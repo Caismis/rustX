@@ -302,6 +302,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "observation_definition_commit",
                 "observation_definition_ordinal",
                 "assistant_message_id",
+                "assistant_ledger_position",
                 "block_index",
                 "call_id",
                 "tool_id",
@@ -564,6 +565,12 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
         }
     }
     for (table, column, target, target_column) in [
+        (
+            "canonical_tool_calls",
+            "assistant_ledger_position",
+            "message_ledger",
+            "position",
+        ),
         (
             "projection_activations",
             "checkpoint_id",
@@ -881,6 +888,7 @@ fn verify_required_index_sql(connection: &Connection) -> Result<(), Conversation
         ("content_frontiers_goal_idx", ("CREATE INDEX content_frontiers_goal_idx ON content_frontiers(source_kind) WHERE source_kind='observation_goal'".to_owned(), false)),
         ("rustx_store_conversation_idx", ("CREATE UNIQUE INDEX rustx_store_conversation_idx ON rustx_store(conversation_id COLLATE BINARY)".to_owned(), false)),
         ("events_alias_idx", ("CREATE UNIQUE INDEX events_alias_idx ON events(event_id) WHERE event_id != conversation_id || '-event-' || sequence".to_owned(), true)),
+        ("canonical_tool_calls_call_ledger_idx", ("CREATE INDEX canonical_tool_calls_call_ledger_idx ON canonical_tool_calls(call_id,assistant_ledger_position,block_index)".to_owned(), false)),
         ("publication_streams_open_idx", ("CREATE INDEX publication_streams_open_idx ON publication_streams(stream_id) WHERE settlement IS NULL".to_owned(), false)),
         ("publication_proposals_call_idx", ("CREATE INDEX publication_proposals_call_idx ON publication_proposals(call_id)".to_owned(), false)),
         ("message_ledger_todo_publication_idx", ("CREATE INDEX message_ledger_todo_publication_idx ON message_ledger(position) WHERE todo_publication=1".to_owned(), false)),
@@ -889,7 +897,7 @@ fn verify_required_index_sql(connection: &Connection) -> Result<(), Conversation
         ("publication_streams_owner_idx", ("CREATE INDEX publication_streams_owner_idx ON publication_streams(attempt_id,turn_id,stream_id)".to_owned(), false)),
         ("projection_ledger_idx", ("CREATE INDEX projection_ledger_idx ON projection_activations(ledger_frontier,activation)".to_owned(), false)),
         ("projection_checkpoint_idx", ("CREATE UNIQUE INDEX projection_checkpoint_idx ON projection_activations(checkpoint_id)".to_owned(), false)),
-        ("events_observation_tool_idx", ("CREATE INDEX events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_key,json_extract(event_json,'$.event.type')) WHERE json_extract(event_json,'$.event.tool_call_id') IS NOT NULL".to_owned(), true)),
+        ("events_observation_tool_idx", ("CREATE INDEX events_observation_tool_idx ON events(event_tool_call_id,attempt_key,event_kind) WHERE event_tool_call_id IS NOT NULL".to_owned(), true)),
         ("inherited_turn_identity_idx", ("CREATE UNIQUE INDEX inherited_turn_identity_idx ON inherited_turn_provenance(json_extract(payload,'$.id.conversation_id'),json_extract(payload,'$.id.attempt_id'))".to_owned(), false)),
         ("inherited_response_closing_idx", ("CREATE UNIQUE INDEX inherited_response_closing_idx ON inherited_response_provenance(json_extract(payload,'$.closing_message_id'))".to_owned(), false)),
         ("message_ledger_identity_position_idx", ("CREATE UNIQUE INDEX message_ledger_identity_position_idx ON message_ledger(position,message_id)".to_owned(), false)),

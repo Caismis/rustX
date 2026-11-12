@@ -40,7 +40,7 @@ fn ordered(kinds: &[&str]) -> String {
              WHERE attempt_key = ",
                     crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"),
                     " AND sequence<=?2 \
-             AND json_extract(event_json,'$.event.type')='{kind}'"
+             AND event_kind='{kind}'"
                 ),
                 kind = kind
             )
@@ -91,7 +91,7 @@ mod tests {
         }
         for (sql, kinds) in [(&**EXECUTION, EXECUTION_KINDS), (&**LINEAGE, LINEAGE_KINDS)] {
             let oracle = format!(
-                "SELECT event_json,sequence FROM events NOT INDEXED WHERE attempt_id=?1 AND sequence<=?2 AND json_extract(event_json,'$.event.type') IN ('{}') ORDER BY sequence",
+                "SELECT event_json,sequence FROM events NOT INDEXED WHERE attempt_id=?1 AND sequence<=?2 AND event_kind IN ('{}') ORDER BY sequence",
                 kinds.join("','")
             );
             for through in 0..=37 {
