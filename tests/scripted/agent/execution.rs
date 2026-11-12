@@ -2444,8 +2444,11 @@ fn agent_sources_spell_no_provider_protocol() {
     for file in files {
         let source = std::fs::read_to_string(&file).expect("read agent source");
         for token in forbidden {
+            // Whole-token match only: "ToolMessages" must not trip the Anthropic
+            // Messages API vocabulary check.
+            let present = source.split(|ch: char| !ch.is_ascii_alphanumeric()).any(|part| part == token);
             assert!(
-                !source.contains(token),
+                !present,
                 "{token} must not appear in the agent kernel: {}",
                 file.display()
             );

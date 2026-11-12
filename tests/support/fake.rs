@@ -319,8 +319,10 @@ pub struct FakeTool {
 /// The watch state is the ordering proof; this bound only contains a broken
 /// fixture so a test binary cannot wait forever.
 pub async fn await_started(started: &mut watch::Receiver<bool>, description: &'static str) {
+    // Keep this short: Plan/Automatic Ask hangs must fail the test quickly
+    // instead of burning a Deterministic-contracts job minute budget.
     tokio::time::timeout(
-        Duration::from_mins(2),
+        Duration::from_secs(15),
         started.wait_for(|is_started| *is_started),
     )
     .await

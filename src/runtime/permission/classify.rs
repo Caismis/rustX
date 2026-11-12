@@ -98,6 +98,33 @@ fn normalize_existing_or_lexical(path: &Path) -> Result<PathBuf, ()> {
     if let Ok(canonical) = path.canonicalize() {
         return Ok(canonical);
     }
+    // When the leaf does not exist yet (Write creates PLAN.md), resolve the
+    // longest existing prefix so symlinked workspace roots still compare equal
+    // to absolute targets spelled through the symlink path.
+    let mut components: Vec<Component<'_>> = path.components().collect();
+    let mut missing: Vec<Component<'_>> = Vec::new();
+    while !components.is_empty() {
+        let candidate: PathBuf = components.iter().collect();
+        if let Ok(canonical) = candidate.canonicalize() {
+            let mut out = canonical;
+            for component in missing.iter().rev() {
+                match component {
+                    Component::Normal(part) => out.push(part),
+                    Component::CurDir => {}
+                    Component::ParentDir => {
+                        if !out.pop() {
+                            return Err(());
+                        }
+                    }
+                    Component::Prefix(_) | Component::RootDir => return Err(()),
+                }
+            }
+            return Ok(out);
+        }
+        if let Some(component) = components.pop() {
+            missing.push(component);
+        }
+    }
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {

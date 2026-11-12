@@ -2043,12 +2043,12 @@ async fn notices_and_reads_carry_the_same_redacted_receipt() {
                 ConfigRepairChange::RemovedField {
                     object_path: String::new()
                 },
-                ConfigRepairChange::RemovedField {
-                    object_path: "agent".into()
-                },
                 // Issue #544: obsolete mcp_tool_policies is an unknown top-level table.
                 ConfigRepairChange::RemovedField {
                     object_path: String::new()
+                },
+                ConfigRepairChange::RemovedField {
+                    object_path: "agent".into()
                 },
                 ConfigRepairChange::RemovedNativeTool {
                     position: 1,

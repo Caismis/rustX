@@ -274,7 +274,7 @@ fn spec(task: &str) -> SubagentStartSpec {
             title: "Explore task".into(),
             execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
             resolved: resolved("explore"),
-            approval_mode: crate::runtime::ApprovalMode::Plan,
+            approval_mode: crate::runtime::ApprovalMode::FullAccess,
         },
         admission: crate::runtime::subagent::ActivationAdmission {
             attachments: Vec::new(),

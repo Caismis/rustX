@@ -3239,7 +3239,7 @@ mod tests {
                     crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
             },
-            approval_mode: crate::runtime::ApprovalMode::Plan,
+            approval_mode: crate::runtime::ApprovalMode::FullAccess,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: crate::context::SessionContextPolicy {

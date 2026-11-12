@@ -324,7 +324,7 @@ impl ToolExecutor for ParkingBackgroundTool {
 /// release and start orderings are established by watch state; this is
 /// fail-fast containment for a broken fixture or registry invariant, not
 /// a synchronization primitive.
-const BACKGROUND_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_mins(2);
+const BACKGROUND_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(45);
 
 async fn await_background_started(started: &mut watch::Receiver<bool>, description: &'static str) {
     tokio::time::timeout(
@@ -947,7 +947,7 @@ fn append_durable_history(
 /// scheduling delay a loaded runner can produce, and it is a whole-call
 /// budget rather than a per-event bound — a single scheduling stall can
 /// never fail a correct run.
-const STREAM_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_mins(2);
+const STREAM_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(45);
 
 /// Receives events until the predicate matches.
 async fn receive_until(

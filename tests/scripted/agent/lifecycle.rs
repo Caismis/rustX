@@ -700,7 +700,8 @@ struct GatedToolHandle {
     invocations: Arc<Mutex<Vec<ToolInvocation>>>,
 }
 
-const GATED_TOOL_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_mins(2);
+// Short guard so a Plan/Ask stall fails the test instead of the CI job.
+const GATED_TOOL_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(15);
 
 impl GatedToolHandle {
     async fn await_started(&mut self) {
@@ -3613,9 +3614,25 @@ async fn deferred_context_never_changes_the_effective_system_prompt() {
         .map(|snapshot| snapshot.effective_system_prompt.clone())
         .collect::<Vec<_>>();
     assert_eq!(prompts.len(), 2, "two admitted model steps");
+    // Sparse §10 permission reminders are injected only on the first
+    // successful request-start; strip them so deferred-context admission is
+    // compared on the stable native system prompt alone.
+    let without_permission_reminder = |prompt: &str| -> String {
+        const MARKER: &str = "Execution permission mode:";
+        if let Some(index) = prompt.find("\n\nExecution permission mode:") {
+            prompt[..index].to_owned()
+        } else if let Some(index) = prompt.find(&format!("\n{MARKER}")) {
+            prompt[..index].to_owned()
+        } else if prompt.starts_with(MARKER) {
+            String::new()
+        } else {
+            prompt.to_owned()
+        }
+    };
     assert_eq!(
-        prompts[0], prompts[1],
-        "the step that admitted deferred context has the same Effective System Prompt"
+        without_permission_reminder(&prompts[0]),
+        without_permission_reminder(&prompts[1]),
+        "the step that admitted deferred context has the same Effective System Prompt aside from the sparse permission reminder"
     );
     assert!(
         !prompts[1].contains("deferred user fact"),

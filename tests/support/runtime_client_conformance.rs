@@ -80,7 +80,9 @@ use crate::scripted_suites::common;
 /// model releases on an explicit signal). This bounds only total wall time
 /// so a scheduling stall on a loaded runner cannot hang the suite; no
 /// assertion depends on its value.
-const LIVENESS_GUARD: Duration = Duration::from_mins(2);
+// Scenario-level guard: long enough for slow CI hosts, short enough that a
+// Plan/Ask stall fails the job instead of burning the contracts timeout.
+const LIVENESS_GUARD: Duration = Duration::from_secs(45);
 
 // ---------------------------------------------------------------------------
 // The driver abstraction

@@ -2125,7 +2125,9 @@ fn conversation_runtime_over_model(
             explicit_model: true,
             agent_id: rustx::runtime::identity::AgentId::new("agent-extension-composition"),
             model: support::model::scripted_session_model(model),
-            approval_mode: rustx::runtime::ApprovalMode::Plan,
+            // Extension composition suites drive FakeTool execution; Plan
+            // would deny starts without elevation and hang liveness waits.
+            approval_mode: rustx::runtime::ApprovalMode::FullAccess,
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: rustx::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: rustx::runtime::ConversationContextConfig {

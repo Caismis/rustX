@@ -151,7 +151,7 @@ pub(super) async fn within_liveness_guard<F: std::future::Future>(
     label: &str,
     future: F,
 ) -> F::Output {
-    tokio::time::timeout(std::time::Duration::from_mins(1), future)
+    tokio::time::timeout(std::time::Duration::from_secs(20), future)
         .await
         .unwrap_or_else(|_| panic!("liveness guard exceeded while waiting for {label}"))
 }

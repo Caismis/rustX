@@ -209,7 +209,7 @@ fn catalog_value(
     rustx::model::catalog::ModelCatalogView { models }
 }
 
-const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
+const LIVENESS: std::time::Duration = std::time::Duration::from_secs(45);
 
 /// The literal credential the fixture catalog binds. It must never appear in
 /// any client-visible value.

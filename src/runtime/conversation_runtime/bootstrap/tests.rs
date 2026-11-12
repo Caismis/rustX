@@ -900,8 +900,11 @@ async fn default_system_prompt_is_frozen_without_optional_instructions() {
     assert_eq!(requests.len(), 2);
     let snapshots = request_snapshots(&runtime.request_history());
     assert_eq!(snapshots.len(), 2);
+    let reminder = crate::runtime::permission::permission_reminder_text(
+        crate::runtime::ApprovalMode::FullAccess,
+    );
     let expected = format!(
-        "{}\n\nCurrent working directory: {}",
+        "{}\n\nCurrent working directory: {}\n\n{reminder}",
         crate::context::DEFAULT_SYSTEM_PROMPT,
         runtime.tool_runtime().workspace().root().display()
     );
@@ -911,10 +914,14 @@ async fn default_system_prompt_is_frozen_without_optional_instructions() {
             snapshot.effective_system_prompt,
             request.effective_system_prompt
         );
-        assert_eq!(snapshot.system_sections.len(), 1);
+        assert_eq!(snapshot.system_sections.len(), 2);
         assert_eq!(
             snapshot.system_sections[0].lane,
             crate::context::SystemSectionLane::CoreRuntimeIdentity
+        );
+        assert_eq!(
+            snapshot.system_sections[1].lane,
+            crate::context::SystemSectionLane::PermissionReminder
         );
     }
     let ledger = runtime.coordinator_ledger().unwrap();
@@ -958,8 +965,11 @@ async fn agent_and_project_instructions_extend_default_system_authority() {
         .submit_inbound(text_content("delegated task"))
         .expect("delegated inbound");
     let _ = await_settled_ledger(&runtime, 0).await;
+    let reminder = crate::runtime::permission::permission_reminder_text(
+        crate::runtime::ApprovalMode::FullAccess,
+    );
     let expected = format!(
-        "{}\n\nCurrent working directory: {}\n\n{persona}\n\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\n{project}\n</project_instructions>",
+        "{}\n\nCurrent working directory: {}\n\n{persona}\n\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\n{project}\n</project_instructions>\n\n{reminder}",
         crate::context::DEFAULT_SYSTEM_PROMPT,
         runtime.tool_runtime().workspace().root().display(),
         dir.path().join("workspace/AGENTS.md").display()
@@ -978,6 +988,7 @@ async fn agent_and_project_instructions_extend_default_system_authority() {
             crate::context::SystemSectionLane::CoreRuntimeIdentity,
             crate::context::SystemSectionLane::AgentProfile,
             crate::context::SystemSectionLane::WorkspaceInstructions,
+            crate::context::SystemSectionLane::PermissionReminder,
         ]
     );
     let ledger = serde_json::to_string(&runtime.coordinator_ledger().unwrap()).unwrap();

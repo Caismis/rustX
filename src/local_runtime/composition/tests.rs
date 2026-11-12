@@ -147,7 +147,10 @@ compat = { chat_reasoning_replay = "omit" }
 
     let echo_call_count_file = root.path().join("echo-call-count");
     let executable = std::env::current_exe().expect("test executable");
-    let mut config_document = serde_json::json!({"schema_version": 12, "agent_id": "agent-parent", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
+    // Tool-execution composition fixtures must not sit on Plan: MCP defaults
+    // are ExternalOrDelegated and Plan denies them without elevation_reason,
+    // so the parent never commits a ToolResult or continues into turn two.
+    let mut config_document = serde_json::json!({"schema_version": 12, "agent_id": "agent-parent", "approval_mode": "full_access", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
             SERVER_NAME: {
                 "command": executable,
                 "args": fixture_spawn_args(test_name),

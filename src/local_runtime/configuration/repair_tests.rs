@@ -223,9 +223,9 @@ fn the_issue_example_converges_to_its_documented_result() {
         plan.changes,
         vec![
             ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 12 },
-            removed("agent.plugins.todo"),
             // Issue #544: the whole obsolete native_tools overlay is unknown.
             removed(""),
+            removed("agent.plugins.todo"),
             unknown_tool(1),
             tool(3, "read", NativeToolRemoval::Duplicate),
         ]
@@ -282,10 +282,10 @@ trust_all = true
             removed(""),
             // Issue #544: obsolete execution overlays are unknown top-level tables.
             removed(""),
+            removed(""),
             removed("agent.plugins.goal"),
             removed("agent.model.max_output_tokens"),
             removed("subagents"),
-            removed(""),
         ]
     );
     for gone in [
@@ -3464,11 +3464,11 @@ fn receipts_never_carry_authored_identities_keys_or_tool_names() {
         vec![
             removed(""),
             removed(""),
+            // Issue #544: obsolete mcp_tool_policies is an unknown top-level table.
+            removed(""),
             removed("providers.*"),
             removed("models.*"),
             removed("models.*.profiles.*"),
-            // Issue #544: obsolete mcp_tool_policies is an unknown top-level table.
-            removed(""),
             unknown_tool(1),
             tool(2, "read", NativeToolRemoval::Duplicate),
             unknown_tool(3),

@@ -463,7 +463,7 @@ impl AgentExecution<'_> {
         //
         // If a group failure arrives after siblings already started, finish a
         // structurally complete result batch before surfacing the failure so
-        // Allow side effects cannot outlive missing ToolMessages.
+        // Allow side effects cannot outlive missing tool-result messages.
         let mut deferred_group_error: Option<CanonicalCommitError> = None;
         let mut index = 0;
         while index < slots.len() {
@@ -478,7 +478,8 @@ impl AgentExecution<'_> {
                     // Todo shares one provisional list per batch. Run each call
                     // alone so later siblings observe earlier mutations. Errors
                     // still defer through batch-wide started tracking so an
-                    // earlier Concurrent Allow cannot outlive missing ToolMessages.
+                    // earlier Concurrent Allow cannot outlive missing tool-result
+                    // messages.
                     let mut group_error: Option<CanonicalCommitError> = None;
                     if slots[index].result.is_none() && !self.cancellation.is_cancelled() {
                         let facts = ParallelAuthFacts::from_execution(index, self, &slots[index]);

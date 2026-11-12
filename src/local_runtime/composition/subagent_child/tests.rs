@@ -194,7 +194,9 @@ fn spec_with_extensions(
                 crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
             extensions,
         },
-        approval_mode: crate::runtime::ApprovalMode::Plan,
+        // Binding/gating proofs may carry tools; Full Access avoids Plan Ask
+        // stalls when a caller registers a mutating FakeTool.
+        approval_mode: crate::runtime::ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: crate::context::SessionContextPolicy {

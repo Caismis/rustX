@@ -863,12 +863,30 @@ fn issue464_a_failure_spanning_both_documents_belongs_to_the_composition() {
 fn cfg235_oversized_incomplete_projection_preserves_incomplete_diagnostic() {
     let f = Fixture::new();
     f.user(json!({}));
-    // A valid partial document that is incomplete (no root model) and large
-    // enough to omit the projection; the sentinel must stay out of output.
-    f.project(json!({"environment": (0..12000).map(|index| (
-        format!("VAR_{index}"),
-        json!(if index == 0 { "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK" } else { "x" })
-    )).collect::<serde_json::Map<_,_>>()}));
+    // Incomplete (no root model). The whole `environment` object redacts to one
+    // token, so pad non-secret projected `models` entries past 256 KiB.
+    let models = (0..2_500)
+        .map(|index| {
+            (
+                format!("host/pad{index}"),
+                json!({
+                    "provider": "host",
+                    "id": format!("pad{index}"),
+                    "context_window": 128000,
+                    "max_output_tokens": 4096,
+                    "capabilities": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                        "json_schema_output": false
+                    }
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    f.project(json!({
+        "models": models,
+        "environment": {"VAR_0": "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"},
+    }));
     let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
     assert_eq!(report.exit_code(), 3);
     assert!(report.partial.is_some());

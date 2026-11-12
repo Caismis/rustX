@@ -75,6 +75,17 @@ async fn t05_complete_policy_registry_publishes_independently_of_instructions() 
     let id = &fixture.sessions[0].id;
     fixture.manager.load(id, None).await.unwrap();
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
+    // Fixture seeds the full native builtin set (including grep). Narrow first
+    // so the later NativeTools publish is an observable Capabilities add.
+    write(
+        &fixture,
+        0,
+        ConfigMutation::NativeTools {
+            authored: Some(vec!["read".into()]),
+        },
+    )
+    .await;
+    applied(&fixture, 0).await;
     let old = runtime.runtime_resources();
     write_guidance(&fixture, "pending instructions".into()).await;
     applied(&fixture, 0).await;
@@ -731,15 +742,32 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         change.reason,
         crate::runtime::configuration_commit::ConfigurationChangeReason::Reallocation
     );
+    // Fixture C1 already includes grep among the full native builtin set. The
+    // deferred C2 authored selection is read+grep, so reallocation removes the
+    // extras rather than adding grep; grep must survive into the catalog.
     assert!(
-        change.tools.added.names.contains(&"grep".to_owned()),
+        !change.tools.removed.names.contains(&"grep".to_owned()),
+        "{change:?}"
+    );
+    assert!(
+        change.tools.removed.total > 0 || change.tools.added.names.contains(&"grep".to_owned()),
         "{change:?}"
     );
     let catalog = configuration_catalogs(&second_runtime.tool_runtime().durable_store())
         .pop()
         .unwrap();
-    let tools = catalog["tools"].as_array().unwrap();
-    assert!(tools.iter().any(|tool| tool["name"] == "grep"), "{catalog}");
+    // Diff catalogs list removed entries by name; surviving tools are proven on
+    // the live registry (grep was already present on C1 and must remain on C2).
+    assert!(
+        second_runtime
+            .runtime_resources()
+            .capability()
+            .tool_registry()
+            .definitions()
+            .iter()
+            .any(|tool| tool.name == "grep"),
+        "grep must remain after reallocation; catalog={catalog}"
+    );
     // Retry the same authored C2: it prepares and every resident Session
     // commits it automatically, while new Sessions bind C2 as well.
     fixture
