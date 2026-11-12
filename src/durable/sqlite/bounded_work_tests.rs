@@ -1244,3 +1244,109 @@ impl SqliteConversationStore {
             .collect()
     }
 }
+
+#[test]
+fn bounded_work_canonical_tool_fallback_seeks_one_native_owner() {
+    use crate::message::types::AssistantMessageBlock;
+    use crate::runtime::identity::{ToolCallId, ToolId};
+    use crate::tools::types::ToolCall;
+    let sql = publication::proposal::CANONICAL_SURFACE_TOOL_SQL;
+    let mut found = Vec::new();
+    let mut absent = Vec::new();
+    for size in HISTORY_SIZES {
+        let store = history(size);
+        let assistant = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("selected-tool-owner"),
+            content: vec![AssistantContentBlock::ToolCall(ToolCall {
+                id: ToolCallId::new("same-call"),
+                tool_id: ToolId::new("read"),
+                name: "read".into(),
+                arguments: serde_json::json!({}),
+            })],
+        });
+        store.append_canonical(&assistant).unwrap();
+        let mut connection = store.lock().unwrap();
+        let end: u64 = connection
+            .query_row("SELECT max(position) FROM message_ledger", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        canonical::ledger::take_head_materializations();
+        {
+            let transaction = connection.transaction().unwrap();
+            query_work::capture(&transaction);
+            assert_eq!(
+                publication::proposal::canonical_surface_tool_id(
+                    &transaction,
+                    &ToolCallId::new("same-call")
+                )
+                .unwrap(),
+                Some(ToolId::new("read"))
+            );
+            let executions = query_work::finish(&transaction);
+            assert_eq!(canonical::ledger::take_head_materializations(), 0);
+            assert!(
+                !executions
+                    .keys()
+                    .any(|sql| sql == canonical::ledger::CANONICAL_SUFFIX_IDS)
+            );
+            assert_eq!(
+                executions
+                    .iter()
+                    .filter(|(sql, _)| sql.contains("SELECT message_json"))
+                    .map(|(_, work)| work.calls)
+                    .sum::<usize>(),
+                1
+            );
+        }
+        // Observation damage must never control the native fallback owner.
+        connection
+            .execute(
+                "UPDATE canonical_tool_calls SET observation_ledger=observation_ledger+100000",
+                [],
+            )
+            .unwrap();
+        {
+            let transaction = connection.transaction().unwrap();
+            assert_eq!(
+                publication::proposal::canonical_surface_tool_id(
+                    &transaction,
+                    &ToolCallId::new("same-call")
+                )
+                .unwrap(),
+                Some(ToolId::new("read"))
+            );
+        }
+        // Populate a long same-call prefix behind this cut to exercise the
+        // composite range seek, independently of canonical body hydration.
+        connection.execute("INSERT INTO canonical_tool_calls(assistant_message_id,assistant_ledger_position,block_index,call_id,tool_id,observation_ledger,observation_tool_ordinal,observation_name) SELECT message_id,position,0,'same-call','read',position,0,'read' FROM message_ledger WHERE position<?1",[end]).unwrap();
+        found.push((
+            size,
+            query_work::measure(&connection, sql, params!["same-call", end - 1, end]),
+        ));
+        absent.push((
+            size,
+            query_work::measure(&connection, sql, params!["absent", 0, end]),
+        ));
+        let plan = connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            .query_map(params!["same-call", end - 1, end], |row| {
+                row.get::<_, String>(3)
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
+        assert!(
+            plan.contains("SEARCH c USING INDEX canonical_tool_calls_call_ledger_idx"),
+            "{plan}"
+        );
+        assert!(
+            !plan.contains("SCAN ") && !plan.contains("TEMP B-TREE"),
+            "{plan}"
+        );
+    }
+    query_work::assert_flat(&found, 64, 1, 4096);
+    query_work::assert_flat(&absent, 32, 0, 0);
+}

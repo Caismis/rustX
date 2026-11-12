@@ -354,7 +354,7 @@ fn request_owner_orphaned_success_or_failure_is_an_integrity_error() {
             .append_event(outcome_envelope(&store, &snapshot, outcome))
             .unwrap();
         store.conn.lock().unwrap().execute_batch(
-            "PRAGMA foreign_keys=OFF; DELETE FROM events WHERE json_extract(event_json,'$.event.type')='model_request_started'; DELETE FROM request_snapshots; PRAGMA foreign_keys=ON;",
+            "PRAGMA foreign_keys=OFF; DELETE FROM events WHERE event_kind='model_request_started'; DELETE FROM request_snapshots; PRAGMA foreign_keys=ON;",
         ).unwrap();
         assert!(
             matches!(store.load_request_owner(&snapshot.request_id), Err(ConversationStoreError::InvalidReference(detail)) if detail.contains("without its request-start owner"))

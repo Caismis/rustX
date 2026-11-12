@@ -317,7 +317,7 @@ impl SqliteConversationStore {
             .transaction()
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let call: Option<String> = transaction.query_row(
-            "SELECT json_extract(event_json,'$.event.call_id') FROM events INDEXED BY events_auxiliary_submission_idx WHERE json_extract(event_json,'$.event.type')='auxiliary_call_started' AND json_extract(event_json,'$.event.business_source.kind')='submission' AND json_extract(event_json,'$.event.business_source.identity.correlation')=?1",
+            "SELECT event_call_id FROM events INDEXED BY events_auxiliary_submission_idx WHERE event_kind='auxiliary_call_started' AND json_extract(event_json,'$.event.business_source.kind')='submission' AND json_extract(event_json,'$.event.business_source.identity.correlation')=?1",
             [correlation], |row| row.get(0),
         ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let Some(call) = call else {

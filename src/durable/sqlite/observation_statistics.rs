@@ -435,7 +435,7 @@ impl NativeFacts {
                 ..
             } => {
                 facts.completed_response = connection
-                    .prepare_cached(concat!("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND json_extract(event_json,'$.event.type')='assistant_message_committed' AND sequence<?2)"))
+                    .prepare_cached(concat!("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND event_kind='assistant_message_committed' AND sequence<?2)"))
                     .and_then(|mut statement| statement.query_row(params![attempt.as_str(),event.sequence],|row|row.get(0)))
                     .map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
             }
@@ -473,7 +473,7 @@ fn tool_settlement(
         "tool_execution_completed",
         "tool_execution_failed",
     ] {
-        let fact:Option<(u64,String)>=connection.prepare_cached(concat!("SELECT sequence,event_timestamp FROM events INDEXED BY events_observation_tool_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?2"), " AND json_extract(event_json,'$.event.type')=?3 AND sequence<?4 ORDER BY sequence DESC LIMIT 1")).and_then(|mut statement| statement.query_row(params![tool_call_id.as_str(),attempt.as_str(),kind,event.sequence],|row|Ok((row.get(0)?,row.get(1)?)))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        let fact:Option<(u64,String)>=connection.prepare_cached(concat!("SELECT sequence,event_timestamp FROM events INDEXED BY events_observation_tool_idx WHERE event_tool_call_id=?1 AND attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?2"), " AND event_kind=?3 AND sequence<?4 ORDER BY sequence DESC LIMIT 1")).and_then(|mut statement| statement.query_row(params![tool_call_id.as_str(),attempt.as_str(),kind,event.sequence],|row|Ok((row.get(0)?,row.get(1)?)))).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         if let Some((sequence, timestamp)) = fact
             && predecessor
                 .as_ref()

@@ -45,6 +45,7 @@ fn event_guard_reuses_only_the_installed_main_and_temp_schema() {
     let guard = Guard::new(
         &connection,
         observation_statistics::FoldCache::uninstalled(),
+        None,
     );
     assert!(guard.installed.is_some());
     GUARD_SCANS.with(|count| count.set(0));
@@ -72,6 +73,7 @@ fn event_guard_does_not_seat_reused_savepoint_schema_versions() {
     let guard = Guard::new(
         &connection,
         observation_statistics::FoldCache::uninstalled(),
+        None,
     );
     connection
         .execute_batch("SAVEPOINT change_schema; CREATE TABLE harmless(value INTEGER)")
@@ -100,6 +102,7 @@ fn event_guard_observes_external_schema_changes_in_the_current_snapshot() {
     let guard = Guard::new(
         &connection,
         observation_statistics::FoldCache::uninstalled(),
+        None,
     );
     let writer = Connection::open(&path).unwrap();
     let transaction = connection.unchecked_transaction().unwrap();
@@ -126,6 +129,7 @@ fn event_guard_does_not_trust_an_initial_custom_trigger_or_a_cleanup_name() {
     let guard = Guard::new(
         &connection,
         observation_statistics::FoldCache::uninstalled(),
+        None,
     );
     assert!(guard.installed.is_none());
     assert!(!guard.can_prepare(&connection).unwrap());

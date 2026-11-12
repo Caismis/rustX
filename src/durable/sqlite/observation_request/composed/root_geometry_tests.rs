@@ -165,3 +165,39 @@ fn fused_root_geometry_reads_shared_boundary_nodes_once() {
         }
     }
 }
+
+#[test]
+fn incremental_geometry_keeps_exact_decimal_boundaries_and_zero_sequence_errors() {
+    let connection = Connection::open_in_memory().unwrap();
+    manifest::create_schema(&connection).unwrap();
+    super::super::create_schema(&connection).unwrap();
+    let a = leaf(&connection, 1, None, 0);
+    let b = leaf(&connection, 2, None, 0);
+    let c = leaf(&connection, 3, None, 0);
+    let left = branch(&connection, 4, &a, &b);
+    let root = branch(&connection, 5, &left, &c);
+    let session = manifest::geometry::Session::for_test();
+    let digest = hash(&super::super::record::encode(&root, 65536).unwrap());
+    super::super::take_work();
+    let first = incremental_geometry(&connection, &root, digest, 9, 1, &session).unwrap();
+    assert_eq!(super::super::take_work().native_nodes, 4);
+    assert_eq!(
+        incremental_geometry(&connection, &root, digest, 9, 9, &session).unwrap(),
+        first
+    );
+    assert_eq!(super::super::take_work().native_nodes, 0);
+    for sequence in [0, 1, 9, 10, 99, 100, u64::MAX] {
+        for rank in [0, 8, 9, 10, 98, 99, 100, 998, 999, 1000, 8189, 8190] {
+            let expected =
+                geometry(&connection, &root, rank, sequence).map_err(|error| error.to_string());
+            for _ in 0..2 {
+                assert_eq!(
+                    incremental_geometry(&connection, &root, digest, rank, sequence, &session)
+                        .map_err(|error| error.to_string()),
+                    expected,
+                    "J={sequence},rank={rank}"
+                );
+            }
+        }
+    }
+}

@@ -19,6 +19,7 @@ pub(super) struct Guard {
     installed: Option<(i64, i64)>,
     statistics: std::sync::Arc<observation_statistics::FoldCache>,
     execution: observation_execution::FoldCache,
+    geometry: Option<std::sync::Arc<super::manifest::geometry::Cache>>,
 }
 impl Guard {
     #[cfg(test)]
@@ -27,11 +28,13 @@ impl Guard {
             installed: None,
             statistics: observation_statistics::FoldCache::uninstalled(),
             execution: observation_execution::FoldCache::default(),
+            geometry: None,
         }
     }
     pub(super) fn new(
         connection: &Connection,
         statistics: std::sync::Arc<observation_statistics::FoldCache>,
+        geometry: Option<std::sync::Arc<super::manifest::geometry::Cache>>,
     ) -> Self {
         let installed = connection
             .unchecked_transaction()
@@ -45,11 +48,15 @@ impl Guard {
             });
         if installed.is_none() {
             statistics.disable();
+            if let Some(geometry) = &geometry {
+                geometry.disable();
+            }
         }
         Self {
             installed,
             statistics,
             execution: observation_execution::FoldCache::default(),
+            geometry,
         }
     }
     pub(super) fn can_prepare(
@@ -67,6 +74,11 @@ impl Guard {
             }
         }
         self.statistics.disable();
+        // Main and TEMP cookies also fence geometry's installed preupdate
+        // column ordinals and reject TEMP tables shadowing native sources.
+        if let Some(geometry) = &self.geometry {
+            geometry.disable();
+        }
         match no_custom_triggers(connection) {
             Ok(available) => Ok(available),
             Err(
