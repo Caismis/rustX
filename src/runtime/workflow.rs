@@ -2476,7 +2476,6 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
                     ..
                 }
                 | WorkflowNodeDefinition::Agent {
-                    permissions: None,
                     on_error: WorkflowValueErrorStrategy::FailBranch,
                     ..
                 }
@@ -2558,7 +2557,6 @@ fn control_flow(definition: &WorkflowBlock) -> Result<ControlFlow, WorkflowCompi
                 on_error: WorkflowModelErrorStrategy::FailBranch,
                 ..
             } | WorkflowNodeDefinition::Agent {
-                permissions: None,
                 on_error: WorkflowValueErrorStrategy::FailBranch,
                 ..
             } | WorkflowNodeDefinition::Tool {
@@ -4304,7 +4302,18 @@ impl WorkflowRuntime {
             )
         })?;
         let approval_mode = context.approval_mode();
-        let resource_permission = agent.resource_permissions.map_or(
+        // Node-authored permissions win; otherwise inherit the Named Agent
+        // profile's frozen permissions. Omitting the node field must not erase
+        // an explicit profile Deny/Ask.
+        let effective_permissions = admission::effective_agent_entry_resource_permissions(
+            agent.resource_permissions,
+            context
+                .resources()
+                .subagents()
+                .get(&agent.profile)
+                .and_then(|definition| definition.profile().permissions),
+        );
+        let resource_permission = effective_permissions.map_or(
             crate::runtime::permission::ResourcePermissionValue::Default,
             |set| set.for_mode(approval_mode),
         );
@@ -5132,6 +5141,8 @@ chat_reasoning_replay = "omit"
             1,
             "Workflow test instructions",
             WorkflowCatalog::empty(),
+            ApprovalMode::FullAccess,
+            None,
         )
     }
 
@@ -5141,6 +5152,8 @@ chat_reasoning_replay = "omit"
         revision: u64,
         instructions: &str,
         workflow_catalog: WorkflowCatalog,
+        approval_mode: ApprovalMode,
+        reviewer_permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
     ) -> crate::runtime::subagent::NativeExecutionContext {
         let model_catalog = ModelCatalog::from_toml_slice(WORKFLOW_TEST_MODELS.as_bytes())
             .expect("workflow test model catalog");
@@ -5164,7 +5177,7 @@ chat_reasoning_replay = "omit"
                 inherit_project_instructions: false,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 workflows: std::collections::BTreeSet::default(),
-                permissions: None,
+                permissions: reviewer_permissions,
             },
             plane.dir.path().join("reviewer.md"),
         )
@@ -5200,16 +5213,13 @@ chat_reasoning_replay = "omit"
             resources,
             SessionModelConfig::of(model),
             models,
-            ApprovalMode::Plan,
+            approval_mode,
         );
-        // Agent-node entry authorize (Issue #544) reads native lifecycle. The
-        // default fixture uses FullAccess so omitted resource permissions stay
-        // Allow under the matrix; explicit Deny/Ask authoring still wins.
         let attempt_id = context.attempt_id().expect("workflow test attempt").clone();
         context.native = Some(std::sync::Arc::new(
             crate::tools::invocation::NativeInvocationServices {
                 lifecycle: crate::agent::AttemptLifecycle::default()
-                    .with_approval_mode(ApprovalMode::FullAccess),
+                    .with_approval_mode(approval_mode),
                 runtime: crate::tools::runtime::ConversationToolRuntime::new(
                     plane.conversation_id.clone(),
                     plane.dir.path().join("workspace"),
@@ -5904,6 +5914,8 @@ chat_reasoning_replay = "omit"
             1,
             "old generation instructions",
             old_catalog.clone(),
+            ApprovalMode::FullAccess,
+            None,
         );
         assert_eq!(old_context.resources().revision().get(), 1);
         assert_eq!(
@@ -5970,6 +5982,8 @@ chat_reasoning_replay = "omit"
             2,
             "new generation instructions",
             new_catalog.clone(),
+            ApprovalMode::FullAccess,
+            None,
         )
         .with_test_policy(new_policy);
         assert_eq!(new_context.resources().revision().get(), 2);

@@ -132,24 +132,30 @@ impl RuntimeInner {
                 .then_some(model_registry)
                 .flatten()
                 .map(|models| {
-                    crate::runtime::subagent::NativeExecutionContext::new(
-                        self.capability.clone(),
-                        attempt_id.clone(),
-                        Arc::clone(&resources),
-                        model_config,
-                        models,
-                        approval_mode,
-                        crate::runtime::subagent::InheritedExecutionPolicy {
-                            model_timeout: model_timeout_policy,
-                            tool_deadline: tool_deadline_policy,
-                            context: resources
-                                .configuration()
-                                .map_or(self.context.policy, |generation| {
-                                    generation.config.context_policy()
-                                }),
-                        },
-                    )
-                    .with_workflow_models(self.auxiliary.clone())
+                    {
+                        let mut context = crate::runtime::subagent::NativeExecutionContext::new(
+                            self.capability.clone(),
+                            attempt_id.clone(),
+                            Arc::clone(&resources),
+                            model_config,
+                            models,
+                            approval_mode,
+                            crate::runtime::subagent::InheritedExecutionPolicy {
+                                model_timeout: model_timeout_policy,
+                                tool_deadline: tool_deadline_policy,
+                                context: resources
+                                    .configuration()
+                                    .map_or(self.context.policy, |generation| {
+                                        generation.config.context_policy()
+                                    }),
+                            },
+                        )
+                        .with_workflow_models(self.auxiliary.clone());
+                        if let Some(registry) = self.subagents.clone() {
+                            context = context.with_agent_registry(std::sync::Arc::new(registry));
+                        }
+                        context
+                    }
                 }),
             workflow_output: self.workflow_output.clone(),
             approval_mode,

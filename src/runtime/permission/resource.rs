@@ -135,6 +135,9 @@ pub fn effective_invocation_resource_permission(
             .unwrap_or_default()
             .for_mode(mode);
     }
+    // Named Agent tools bind the resolved profile into `agent` before authorize
+    // (`subagent` authors it; `send_message` maps durable `agent_id` → profile).
+    // Never key targets by raw `agent_id`: the freeze map is profile-name keyed.
     if let Some(agent) = arguments.get("agent").and_then(serde_json::Value::as_str) {
         return targets
             .get(agent)
@@ -245,6 +248,48 @@ mod tests {
                 ExecutionPermissionMode::Automatic,
             ),
             ResourcePermissionValue::Default
+        );
+    }
+
+    #[test]
+    fn named_agent_target_uses_profile_name_not_agent_id() {
+        let mut targets = BTreeMap::new();
+        targets.insert(
+            "reviewer".into(),
+            ResourcePermissionSet {
+                plan: ResourcePermissionValue::Allow,
+                automatic: ResourcePermissionValue::Allow,
+                full_access: ResourcePermissionValue::Allow,
+            },
+        );
+        targets.insert(
+            "blocked".into(),
+            ResourcePermissionSet {
+                plan: ResourcePermissionValue::Deny,
+                automatic: ResourcePermissionValue::Deny,
+                full_access: ResourcePermissionValue::Deny,
+            },
+        );
+        assert_eq!(
+            effective_invocation_resource_permission(
+                None,
+                &targets,
+                &serde_json::json!({"agent": "reviewer"}),
+                ExecutionPermissionMode::Plan,
+            ),
+            ResourcePermissionValue::Allow
+        );
+        assert_eq!(
+            effective_invocation_resource_permission(
+                None,
+                &targets,
+                &serde_json::json!({
+                    "agent_id": "agent_01900000-0000-7000-8000-0000000000aa"
+                }),
+                ExecutionPermissionMode::Plan,
+            ),
+            ResourcePermissionValue::Deny,
+            "raw agent_id must aggregate, never select a profile target"
         );
     }
 }

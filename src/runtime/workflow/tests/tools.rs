@@ -183,6 +183,8 @@ fn context_with_environment(
         1,
         "Frozen workflow agent instructions",
         WorkflowCatalog::empty(),
+        crate::runtime::types::ApprovalMode::FullAccess,
+        None,
     );
     let resources = Arc::new(
         crate::runtime::RuntimeResourceSnapshot::new(

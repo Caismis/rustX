@@ -7,6 +7,16 @@ use super::{
 use crate::runtime::agent_profile::{
     AgentProfileAuthority, AgentProfileDiagnostic, AgentScope, resolve_agent_profile,
 };
+use crate::runtime::permission::ResourcePermissionSet;
+
+/// Node-authored Agent entry permissions win; otherwise inherit the named profile.
+#[must_use]
+pub(super) fn effective_agent_entry_resource_permissions(
+    node: Option<ResourcePermissionSet>,
+    profile: Option<ResourcePermissionSet>,
+) -> Option<ResourcePermissionSet> {
+    node.or(profile)
+}
 
 impl WorkflowCatalog {
     /// Resolve every required static dependency before publication. A failed node
@@ -145,6 +155,10 @@ fn admit_block(
             }
             WorkflowNodeProgram::Agent(agent) => {
                 if let Some(definition) = agents.get(&agent.profile) {
+                    agent.resource_permissions = effective_agent_entry_resource_permissions(
+                        agent.resource_permissions,
+                        definition.profile().permissions,
+                    );
                     let resolved = resolve_agent_profile(definition.profile(), authority);
                     diagnostics.extend(resolved.diagnostics.iter().cloned().map(|reason| {
                         WorkflowAdmissionDiagnostic {

@@ -48,7 +48,7 @@
 //! [`ToolDefinition`]: crate::tools::types::ToolDefinition
 //! [`ToolExecutor`]: crate::tools::executor::ToolExecutor
 
-mod agents;
+pub(crate) mod agents;
 mod ask_user;
 mod bash;
 mod edit;
@@ -134,7 +134,7 @@ pub(crate) fn is_domain_control(name: &str) -> bool {
 /// Child runtimes never reach this function: their plane is
 /// [`register_subagent_child_tools`], which has no Agent controls at all.
 pub(super) fn freeze_named_agent_permissions(
-    mut registration: NativeToolRegistration,
+    registration: NativeToolRegistration,
     catalog: &crate::runtime::subagent::AgentCatalog,
 ) -> NativeToolRegistration {
     let mut targets = std::collections::BTreeMap::new();
@@ -143,16 +143,14 @@ pub(super) fn freeze_named_agent_permissions(
             targets.insert(definition.name().to_string(), set);
         }
     }
+    // Always keep per-agent target identity. A single authored override must
+    // never become whole-tool `resource_permissions`: other admitted agents
+    // that omit permissions still inherit product defaults, not that override.
     if targets.is_empty() {
-        return registration;
-    }
-    if targets.len() == 1 {
-        registration = registration
-            .with_resource_permissions(targets.into_values().next().expect("exactly one target"));
+        registration
     } else {
-        registration = registration.with_resource_permission_targets(targets);
+        registration.with_resource_permission_targets(targets)
     }
-    registration
 }
 
 fn agent_control_registrations(
@@ -640,7 +638,15 @@ pub(crate) fn test_ask_user_registration() -> crate::tools::executor::ToolRegist
 
 #[cfg(test)]
 mod tests {
-    use super::{register_subagent_child_tools, subagent_child_definition};
+    use super::{
+        ask_user, freeze_named_agent_permissions, register_subagent_child_tools,
+        subagent_child_definition,
+    };
+    use crate::runtime::permission::{
+        ExecutionPermissionMode, ResourcePermissionSet, ResourcePermissionValue,
+        effective_invocation_resource_permission,
+    };
+    use crate::runtime::subagent::catalog::{AgentCatalog, NamedAgentDefinition, SubagentName};
     use crate::tools::executor::ToolRegistry;
     use crate::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolInvocationPolicy};
 
@@ -652,6 +658,117 @@ mod tests {
                     .unwrap_or_else(|| panic!("{name} is a child-plane capability"))
             })
             .collect()
+    }
+
+    fn named_agent(
+        name: &str,
+        permissions: Option<ResourcePermissionSet>,
+    ) -> NamedAgentDefinition {
+        NamedAgentDefinition::new(
+            SubagentName::parse(name).expect("name"),
+            crate::runtime::agent_profile::AgentProfile {
+                description: format!("{name} agent").into(),
+                instructions: "instructions".into(),
+                model: None,
+                execution_deadline: None,
+                tools: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
+                inherit_project_instructions: true,
+                permissions,
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                workflows: std::collections::BTreeSet::default(),
+            },
+            std::path::PathBuf::from(format!("/w/{name}.md")),
+        )
+        .expect("definition")
+    }
+
+    /// A sole authored Allow must stay target-keyed so an omitted sibling keeps
+    /// product defaults instead of inheriting that Allow as whole-tool freeze.
+    #[test]
+    fn freeze_named_agent_permissions_keeps_sole_override_as_target() {
+        let allow = ResourcePermissionSet {
+            plan: ResourcePermissionValue::Allow,
+            automatic: ResourcePermissionValue::Allow,
+            full_access: ResourcePermissionValue::Allow,
+        };
+        let catalog = AgentCatalog::new([
+            named_agent("alpha", Some(allow)),
+            named_agent("beta", None),
+        ])
+        .expect("catalog");
+        let frozen = freeze_named_agent_permissions(ask_user::registration(), &catalog);
+        assert!(
+            frozen.resource_permissions.is_none(),
+            "a single authored override must not promote to whole-tool permissions"
+        );
+        assert_eq!(
+            frozen.resource_permission_targets.get("alpha"),
+            Some(&allow)
+        );
+        assert!(!frozen.resource_permission_targets.contains_key("beta"));
+        assert_eq!(
+            effective_invocation_resource_permission(
+                frozen.resource_permissions,
+                &frozen.resource_permission_targets,
+                &serde_json::json!({"agent": "beta"}),
+                ExecutionPermissionMode::FullAccess,
+            ),
+            ResourcePermissionValue::Default,
+            "omitted agent B must not inherit A's Allow"
+        );
+    }
+
+    /// After send_message injects the named profile into `agent`, A's Allow
+    /// wins for that call even when sibling B is Deny (aggregate would Deny).
+    #[test]
+    fn send_message_permission_lookup_uses_named_profile_not_aggregate() {
+        let allow = ResourcePermissionSet {
+            plan: ResourcePermissionValue::Allow,
+            automatic: ResourcePermissionValue::Allow,
+            full_access: ResourcePermissionValue::Allow,
+        };
+        let deny = ResourcePermissionSet {
+            plan: ResourcePermissionValue::Deny,
+            automatic: ResourcePermissionValue::Deny,
+            full_access: ResourcePermissionValue::Deny,
+        };
+        let catalog = AgentCatalog::new([
+            named_agent("alpha", Some(allow)),
+            named_agent("beta", Some(deny)),
+        ])
+        .expect("catalog");
+        let frozen = freeze_named_agent_permissions(ask_user::registration(), &catalog);
+        assert_eq!(
+            effective_invocation_resource_permission(
+                frozen.resource_permissions,
+                &frozen.resource_permission_targets,
+                &serde_json::json!({"agent": "alpha", "agent_id": "agent_01900000-0000-7000-8000-0000000000aa"}),
+                ExecutionPermissionMode::Automatic,
+            ),
+            ResourcePermissionValue::Allow,
+            "send_message to A must not be blocked by B's Deny"
+        );
+        assert_eq!(
+            effective_invocation_resource_permission(
+                frozen.resource_permissions,
+                &frozen.resource_permission_targets,
+                &serde_json::json!({}),
+                ExecutionPermissionMode::Automatic,
+            ),
+            ResourcePermissionValue::Deny,
+            "aggregate without a named profile stays the strictest target"
+        );
+        assert_eq!(
+            effective_invocation_resource_permission(
+                frozen.resource_permissions,
+                &frozen.resource_permission_targets,
+                &serde_json::json!({"agent_id": "agent_01900000-0000-7000-8000-0000000000aa"}),
+                ExecutionPermissionMode::Automatic,
+            ),
+            ResourcePermissionValue::Deny,
+            "raw agent_id must not select a profile-keyed target"
+        );
     }
 
     #[test]

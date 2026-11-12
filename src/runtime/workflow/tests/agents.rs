@@ -353,6 +353,174 @@ fn routes_reject_root_finite_business_values_without_weakening_the_contract() {
     }
 }
 
+#[test]
+fn agent_fail_branch_requires_fail_edge_when_node_authors_permissions() {
+    let fail = json!({
+        "on_error":{"type":"fail_branch"},
+        "permissions":{"plan":"default","automatic":"default","full_access":"default"}
+    });
+    assert!(compile_test(agent(
+        node(&fail),
+        &[("done", None, "triage.text")],
+    ))
+    .is_err());
+    compile_test(agent(
+        node(&fail),
+        &[
+            ("done", None, "triage.text"),
+            ("recover", Some(WorkflowPort::Fail), "triage.error_message"),
+        ],
+    ))
+    .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_entry_resource_permissions_inherit_named_profile_when_node_omits() {
+    use crate::runtime::permission::{ResourcePermissionSet, ResourcePermissionValue};
+    let plane = workflow_test_plane(1);
+    let profile_permissions = ResourcePermissionSet {
+        plan: ResourcePermissionValue::Default,
+        automatic: ResourcePermissionValue::Default,
+        full_access: ResourcePermissionValue::Deny,
+    };
+    let context = workflow_test_context_for_generation(
+        &plane,
+        1,
+        "Workflow test instructions",
+        WorkflowCatalog::empty(),
+        crate::runtime::types::ApprovalMode::FullAccess,
+        Some(profile_permissions),
+    );
+    let program = compile_test(agent(
+        node(&json!({})),
+        &[("done", None, "triage.text")],
+    ))
+    .unwrap();
+    let WorkflowNodeProgram::Agent(compiled) = &program.block.nodes["triage"] else {
+        panic!("expected agent node");
+    };
+    assert_eq!(compiled.resource_permissions, None);
+    let context = context.with_test_workflow(&program);
+    let admitted = context
+        .resources()
+        .workflows()
+        .executable(program.id())
+        .expect("admitted workflow");
+    let WorkflowNodeProgram::Agent(frozen) = &admitted.block.nodes["triage"] else {
+        panic!("expected agent node");
+    };
+    assert_eq!(frozen.resource_permissions, Some(profile_permissions));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn agent_admit_denies_when_named_profile_entry_permission_denies_without_node_override() {
+    use crate::runtime::permission::{ResourcePermissionSet, ResourcePermissionValue};
+    let plane = workflow_test_plane(1);
+    let mut child = stage_workflow_child(&plane);
+    let runtime = workflow_runtime(&plane);
+    let profile_permissions = ResourcePermissionSet {
+        plan: ResourcePermissionValue::Default,
+        automatic: ResourcePermissionValue::Default,
+        full_access: ResourcePermissionValue::Deny,
+    };
+    let context = workflow_test_context_for_generation(
+        &plane,
+        1,
+        "Workflow test instructions",
+        WorkflowCatalog::empty(),
+        crate::runtime::types::ApprovalMode::FullAccess,
+        Some(profile_permissions),
+    );
+    let (_, cancellation) = workflow_cancellation();
+    let program = Arc::new(compile_test(agent(
+        node(&json!({})),
+        &[("done", None, "triage.text")],
+    ))
+    .unwrap());
+    let task = tokio::spawn(async move {
+        runtime
+            .run_test_foreground(
+                program,
+                ToolCallId::new("agent-profile-deny"),
+                context,
+                json!({"task":"Ship it?"}),
+                cancellation,
+            )
+            .await
+    });
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::select! {
+            result = task => result.expect("workflow task"),
+            () = child.expect_delegate() => panic!("child must not be admitted when profile entry is denied"),
+        }
+    })
+    .await
+    .expect("workflow should settle without admitting a child");
+    let error = outcome.expect_err("denied profile entry must not complete successfully");
+    assert!(
+        error
+            .to_string()
+            .contains("denied by an effective resource permission"),
+        "expected profile resource deny, got {error}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn agent_admit_blocks_before_prepare_when_named_profile_entry_denies_plan_mode() {
+    use crate::runtime::permission::{ResourcePermissionSet, ResourcePermissionValue};
+    let plane = workflow_test_plane(1);
+    let mut child = stage_workflow_child(&plane);
+    let runtime = workflow_runtime(&plane);
+    let profile_permissions = ResourcePermissionSet {
+        plan: ResourcePermissionValue::Deny,
+        automatic: ResourcePermissionValue::Default,
+        full_access: ResourcePermissionValue::Default,
+    };
+    let context = workflow_test_context_for_generation(
+        &plane,
+        1,
+        "Workflow test instructions",
+        WorkflowCatalog::empty(),
+        crate::runtime::types::ApprovalMode::Plan,
+        Some(profile_permissions),
+    );
+    let (_, cancellation) = workflow_cancellation();
+    let program = Arc::new(compile_test(agent(
+        node(&json!({})),
+        &[("done", None, "triage.text")],
+    ))
+    .unwrap());
+    let task = tokio::spawn(async move {
+        runtime
+            .run_test_foreground(
+                program,
+                ToolCallId::new("agent-profile-plan-deny"),
+                context,
+                json!({"task":"Ship it?"}),
+                cancellation,
+            )
+            .await
+    });
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::select! {
+            result = task => result.expect("workflow task"),
+            () = child.expect_delegate() => panic!("child must not reach prepare when profile entry is denied"),
+        }
+    })
+    .await
+    .expect("workflow should settle without admitting a child");
+    let error = outcome.expect_err("plan-mode profile deny must fail before child prepare");
+    assert!(
+        error
+            .to_string()
+            .contains("denied by an effective resource permission"),
+        "expected profile plan deny, got {error}"
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn agent_admit_denies_when_entry_permission_denies_current_mode() {
@@ -360,7 +528,14 @@ async fn agent_admit_denies_when_entry_permission_denies_current_mode() {
     let plane = workflow_test_plane(1);
     let mut child = stage_workflow_child(&plane);
     let runtime = workflow_runtime(&plane);
-    let context = workflow_test_context(&plane);
+    let context = workflow_test_context_for_generation(
+        &plane,
+        1,
+        "Workflow test instructions",
+        WorkflowCatalog::empty(),
+        crate::runtime::types::ApprovalMode::Plan,
+        None,
+    );
     let (_, cancellation) = workflow_cancellation();
     let mut agent_node = node(&json!({}));
     agent_node["permissions"] = json!({

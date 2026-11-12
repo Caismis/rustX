@@ -205,6 +205,9 @@ pub struct NativeExecutionContext {
     pub(crate) native: Option<Arc<crate::tools::invocation::NativeInvocationServices>>,
     pub(crate) workflow_model: Option<crate::runtime::workflow::model::WorkflowModelCapability>,
     workflow_deadline: Option<Arc<NativeWorkflowDeadline>>,
+    /// Live Agent control registry for resolving durable `agent_id` into the
+    /// frozen named-Agent permission target before authorize.
+    agent_registry: Option<Arc<SubagentRegistry>>,
 }
 
 /// Execution policies captured by the parent Attempt. Child preparation may
@@ -334,7 +337,25 @@ impl NativeExecutionContext {
             native: None,
             workflow_model: None,
             workflow_deadline: None,
+            agent_registry: None,
         }
+    }
+
+    /// Attaches the live Agent registry so `send_message` authorize can bind
+    /// durable `agent_id` to the named profile used for resource permissions.
+    #[must_use]
+    pub fn with_agent_registry(mut self, registry: Arc<SubagentRegistry>) -> Self {
+        self.agent_registry = Some(registry);
+        self
+    }
+
+    /// Resolves a durable Agent identity to its frozen named profile, when known.
+    #[must_use]
+    pub fn named_agent_for_id(&self, id: &crate::runtime::identity::AgentId) -> Option<String> {
+        self.agent_registry
+            .as_ref()
+            .and_then(|registry| registry.agent_snapshot(id))
+            .map(|snapshot| snapshot.agent)
     }
 
     /// The native admitted attempt that owns this frozen execution context.
@@ -365,6 +386,7 @@ impl NativeExecutionContext {
             native: None,
             workflow_model: None,
             workflow_deadline: None,
+            agent_registry: None,
         }
     }
 
@@ -572,6 +594,7 @@ impl NativeExecutionContext {
             native: self.native.clone(),
             workflow_model: self.workflow_model.clone(),
             workflow_deadline: self.workflow_deadline.clone(),
+            agent_registry: self.agent_registry.clone(),
         }
     }
 

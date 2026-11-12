@@ -1353,11 +1353,28 @@ impl ParallelAuthFacts {
             .prepared
             .as_ref()
             .expect("a policy decision requires a preflight-ready invocation");
+        let mut permission_arguments = prepared.invocation.arguments.clone();
+        // `send_message` authorizes against durable agent_id; bind it to the
+        // named profile used by frozen resource_permission_targets first.
+        if prepared.invocation.tool_name == crate::tools::native::agents::NAMES[1]
+            && let Some(agent_id) = permission_arguments
+                .get("agent_id")
+                .and_then(serde_json::Value::as_str)
+            && let Some(name) = execution
+                .subagent_context
+                .as_ref()
+                .and_then(|context| {
+                    context.named_agent_for_id(&crate::runtime::identity::AgentId::new(agent_id))
+                })
+            && let Some(object) = permission_arguments.as_object_mut()
+        {
+            object.insert("agent".into(), serde_json::Value::String(name));
+        }
         let resource_permission =
             crate::runtime::permission::effective_invocation_resource_permission(
                 prepared.resource_permissions,
                 &prepared.resource_permission_targets,
-                &prepared.invocation.arguments,
+                &permission_arguments,
                 execution.permission_reminder.mode,
             );
         Self {
