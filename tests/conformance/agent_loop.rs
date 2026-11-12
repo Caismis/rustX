@@ -728,8 +728,15 @@ impl Driver {
                 previous + 1,
                 "complete native records stay contiguous"
             );
-            if let RuntimeClientEvent::ProjectionTransition { metadata, .. } = event.as_ref() {
-                assert_eq!(metadata.read_cut.revision, cursor.get());
+            match event.as_ref() {
+                RuntimeClientEvent::ProjectionTransition { metadata, .. } => {
+                    assert_eq!(metadata.read_cut.revision, cursor.get());
+                }
+                RuntimeClientEvent::ProjectionDelta { metadata, .. } => {
+                    assert_eq!(metadata.read_cut.revision, cursor.get());
+                    assert_eq!(metadata.base_cursor.get() + 1, cursor.get());
+                }
+                _ => {}
             }
             if owner.is_none() {
                 owner = self.submitted_attempt();
