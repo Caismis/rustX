@@ -283,9 +283,9 @@ impl RuntimeInner {
     }
 
     /// Foreground owners that must settle before a staged resource/context
-    /// commit publishes. Pure ExecutionPolicy / approval_mode publication does
-    /// not use this predicate: it applies under the coordinator lock without
-    /// waiting on background or subagent residency (Issue #544 P13).
+    /// commit publishes. Pure `ExecutionPolicy` / `approval_mode` publication
+    /// does not use this predicate: it applies under the coordinator lock
+    /// without waiting on background or subagent residency (Issue #544 P13).
     fn live_execution_blocks_configuration(&self, state: &CoordinatorState) -> bool {
         state.current_attempt.is_some()
             || state.scheduled.is_some()

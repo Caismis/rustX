@@ -206,6 +206,7 @@ async fn resume_workspace_preflight_rejects_missing_and_file_bindings_without_al
     }
 }
 
+#[allow(clippy::too_many_lines)] // One preflight path covering both resume shapes.
 async fn assert_resume_workspace_preflight(
     regular_file: bool,
     attachments: Vec<crate::message::content::UploadedFileRef>,

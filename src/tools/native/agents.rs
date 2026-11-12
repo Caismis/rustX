@@ -86,10 +86,10 @@ impl ToolExecutor for AgentExecutor {
         let cancellation = context.cancellation.clone();
         // Resume freezes the caller's Attempt mode; delivery to a running
         // Activation keeps that Activation's snapshot.
-        let approval_mode = context
-            .subagent_context()
-            .map(|subagent| subagent.approval_mode())
-            .unwrap_or(crate::runtime::types::ApprovalMode::Plan);
+        let approval_mode = context.subagent_context().map_or(
+            crate::runtime::types::ApprovalMode::Plan,
+            crate::runtime::subagent::NativeExecutionContext::approval_mode,
+        );
         ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
                 if invocation.tool_name == NAMES[0] {

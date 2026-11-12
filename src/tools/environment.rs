@@ -304,6 +304,18 @@ mod tests {
                 ("HOME".to_owned(), "/ws".to_owned()),
                 ("LANG".to_owned(), String::from("C.UTF-8")),
                 ("LC_ALL".to_owned(), String::from("C.UTF-8")),
+                ("GIT_CONFIG_COUNT".to_owned(), "4".to_owned()),
+                ("GIT_CONFIG_KEY_0".to_owned(), "diff.external".to_owned()),
+                ("GIT_CONFIG_VALUE_0".to_owned(), String::new()),
+                ("GIT_CONFIG_KEY_1".to_owned(), "diff.orderFile".to_owned()),
+                ("GIT_CONFIG_VALUE_1".to_owned(), String::new()),
+                ("GIT_CONFIG_KEY_2".to_owned(), "core.editor".to_owned()),
+                ("GIT_CONFIG_VALUE_2".to_owned(), "true".to_owned()),
+                ("GIT_CONFIG_KEY_3".to_owned(), "core.pager".to_owned()),
+                ("GIT_CONFIG_VALUE_3".to_owned(), "cat".to_owned()),
+                ("GIT_EXTERNAL_DIFF".to_owned(), String::new()),
+                ("GIT_PAGER".to_owned(), "cat".to_owned()),
+                ("GIT_EDITOR".to_owned(), "true".to_owned()),
             ]
         );
     }
@@ -387,6 +399,18 @@ mod tests {
                 ("VIRTUAL_ENV".to_owned(), "/env/python/abc".to_owned()),
                 ("NODE_PATH".to_owned(), "/env/node/def/node_modules".to_owned()),
                 ("MY_VAR".to_owned(), "1".to_owned()),
+                ("GIT_CONFIG_COUNT".to_owned(), "4".to_owned()),
+                ("GIT_CONFIG_KEY_0".to_owned(), "diff.external".to_owned()),
+                ("GIT_CONFIG_VALUE_0".to_owned(), String::new()),
+                ("GIT_CONFIG_KEY_1".to_owned(), "diff.orderFile".to_owned()),
+                ("GIT_CONFIG_VALUE_1".to_owned(), String::new()),
+                ("GIT_CONFIG_KEY_2".to_owned(), "core.editor".to_owned()),
+                ("GIT_CONFIG_VALUE_2".to_owned(), "true".to_owned()),
+                ("GIT_CONFIG_KEY_3".to_owned(), "core.pager".to_owned()),
+                ("GIT_CONFIG_VALUE_3".to_owned(), "cat".to_owned()),
+                ("GIT_EXTERNAL_DIFF".to_owned(), String::new()),
+                ("GIT_PAGER".to_owned(), "cat".to_owned()),
+                ("GIT_EDITOR".to_owned(), "true".to_owned()),
             ]
         );
         assert_eq!(
@@ -397,6 +421,18 @@ mod tests {
                 ("LANG".to_owned(), "C.UTF-8".to_owned()),
                 ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
                 ("MY_VAR".to_owned(), "1".to_owned()),
+                ("GIT_CONFIG_COUNT".to_owned(), "4".to_owned()),
+                ("GIT_CONFIG_KEY_0".to_owned(), "diff.external".to_owned()),
+                ("GIT_CONFIG_VALUE_0".to_owned(), String::new()),
+                ("GIT_CONFIG_KEY_1".to_owned(), "diff.orderFile".to_owned()),
+                ("GIT_CONFIG_VALUE_1".to_owned(), String::new()),
+                ("GIT_CONFIG_KEY_2".to_owned(), "core.editor".to_owned()),
+                ("GIT_CONFIG_VALUE_2".to_owned(), "true".to_owned()),
+                ("GIT_CONFIG_KEY_3".to_owned(), "core.pager".to_owned()),
+                ("GIT_CONFIG_VALUE_3".to_owned(), "cat".to_owned()),
+                ("GIT_EXTERNAL_DIFF".to_owned(), String::new()),
+                ("GIT_PAGER".to_owned(), "cat".to_owned()),
+                ("GIT_EDITOR".to_owned(), "true".to_owned()),
             ],
             "no ecosystem dependencies means no unnecessary overlay"
         );

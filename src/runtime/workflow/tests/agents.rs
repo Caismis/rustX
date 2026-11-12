@@ -403,13 +403,16 @@ async fn agent_admit_denies_when_entry_permission_denies_current_mode() {
     let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         tokio::select! {
             result = task => result.expect("workflow task"),
-            _ = child.expect_delegate() => panic!("child must not be admitted when entry is denied"),
+            () = child.expect_delegate() => panic!("child must not be admitted when entry is denied"),
         }
     })
     .await
     .expect("workflow should settle without admitting a child");
+    let error = outcome.expect_err("denied agent entry must not complete successfully");
     assert!(
-        outcome.is_err(),
-        "denied agent entry must not complete successfully"
+        error
+            .to_string()
+            .contains("denied by an effective resource permission"),
+        "expected resource deny, got {error}"
     );
 }

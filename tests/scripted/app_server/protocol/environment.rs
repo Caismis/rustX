@@ -119,8 +119,8 @@ pub(crate) async fn buffered_scenario() {
     .unwrap();
     assert_eq!(
         environment.lines().count(),
-        4,
-        "only native basics, no provider or App Server credentials"
+        16,
+        "native basics plus Git readonly execution guards; no provider or App Server credentials"
     );
     assert!(environment.contains("LANG=C.UTF-8"));
     assert_eq!(fixture.manager.diagnostics().loaded, 0);

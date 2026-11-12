@@ -4304,10 +4304,10 @@ impl WorkflowRuntime {
             )
         })?;
         let approval_mode = context.approval_mode();
-        let resource_permission = agent
-            .resource_permissions
-            .map(|set| set.for_mode(approval_mode))
-            .unwrap_or(crate::runtime::permission::ResourcePermissionValue::Default);
+        let resource_permission = agent.resource_permissions.map_or(
+            crate::runtime::permission::ResourcePermissionValue::Default,
+            |set| set.for_mode(approval_mode),
+        );
         let tool_id =
             crate::runtime::identity::ToolId::new(format!("workflow-agent-{}", agent.profile));
         let origin = crate::tools::types::ToolOrigin::Builtin;
@@ -5194,13 +5194,38 @@ chat_reasoning_replay = "omit"
             .with_subagent_catalog(catalog)
             .with_workflow_catalog(workflow_catalog),
         );
-        crate::runtime::subagent::NativeExecutionContext::test_context(
+        let mut context = crate::runtime::subagent::NativeExecutionContext::test_context(
             crate::runtime::identity::AttemptId::new("workflow-test-attempt"),
             resources,
             SessionModelConfig::of(model),
             models,
             ApprovalMode::Plan,
-        )
+        );
+        // Agent-node entry authorize (Issue #544) reads native lifecycle. The
+        // default fixture uses FullAccess so omitted resource permissions stay
+        // Allow under the matrix; explicit Deny/Ask authoring still wins.
+        let attempt_id = context.attempt_id().expect("workflow test attempt").clone();
+        context.native = Some(std::sync::Arc::new(
+            crate::tools::invocation::NativeInvocationServices {
+                lifecycle: crate::agent::AttemptLifecycle::default()
+                    .with_approval_mode(ApprovalMode::FullAccess),
+                runtime: crate::tools::runtime::ConversationToolRuntime::new(
+                    plane.conversation_id.clone(),
+                    plane.dir.path().join("workspace"),
+                    plane.dir.path().join("artifacts"),
+                )
+                .expect("workflow test tool runtime"),
+                clock: std::sync::Arc::new(crate::runtime::ManualMonotonicClock::new()),
+                leaf_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
+                execution: crate::runtime::interaction::InteractionExecution::Attempt {
+                    attempt_id,
+                    turn: 1,
+                },
+                scheduling: std::sync::Arc::new(tokio::sync::RwLock::new(())),
+                descendants: crate::tools::invocation::NativeChildScope::default(),
+            },
+        ));
+        context
     }
 
     #[cfg(unix)]
