@@ -1240,6 +1240,22 @@ pub async fn run_tool_with_cancellation(
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
     );
+    let context = match context.bind_mutation_target(&prepared) {
+        Ok(context) => context,
+        Err(error) => {
+            return rustx::tools::types::ToolExecutionResult {
+                deliveries: Vec::new(),
+                status: rustx::tools::types::ToolExecutionStatus::Failed { error },
+                content: Vec::new(),
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            };
+        }
+    };
     executor
         .start(prepared.invocation, context)
         .completion
@@ -1250,49 +1266,15 @@ pub async fn run_tool_with_cancellation(
 pub async fn run_tool(
     fixture: &NativeFixture,
     name: &str,
-    mut arguments: serde_json::Value,
+    arguments: serde_json::Value,
 ) -> rustx::tools::types::ToolExecutionResult {
-    use rustx::runtime::identity::ToolCallId;
-    use rustx::tools::executor::{PreflightOutcome, ToolExecutionContext};
-    use rustx::tools::types::ToolCall;
-    let definition = fixture
-        .registry
-        .definitions()
-        .into_iter()
-        .find(|definition| definition.name == name)
-        .expect("tool registered");
-    if definition.execution_policy == rustx::tools::types::ToolExecutionPolicy::ModelSelectable {
-        arguments["execution_mode"] = serde_json::json!("foreground");
-    }
-    let call = ToolCall {
-        id: ToolCallId::new("call-m5"),
-        tool_id: definition.id,
-        name: name.to_owned(),
+    run_tool_with_cancellation(
+        fixture,
+        name,
         arguments,
-    };
-    let outcome = fixture.registry.preflight(&call).expect("preflight");
-    let PreflightOutcome::Ready(prepared) = outcome else {
-        panic!("direct native tool calls preflight as ready");
-    };
-    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
-    let reporter = NoopProgress;
-    let context = ToolExecutionContext::new(
-        fixture.runtime.conversation_id(),
-        None,
-        rustx::runtime::ExecutionCancellation::detached(
-            rustx::runtime::CancellationSignal::new(),
-            rustx::runtime::types::CancellationReason::UserRequested,
-        ),
-        fixture.runtime.workspace(),
-        &reporter,
-        fixture.runtime.artifacts(),
-        fixture.runtime.tool_output(),
-        fixture.runtime.environment(),
-    );
-    executor
-        .start(prepared.invocation, context)
-        .completion
-        .await
+        rustx::runtime::CancellationSignal::new(),
+    )
+    .await
 }
 
 /// One canonical compiled model-facing tool definition used by adapter

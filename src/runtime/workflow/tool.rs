@@ -212,6 +212,7 @@ impl WorkflowRuntime {
         let workspace_root = services.runtime.workspace().root();
         let mut prepared = prepared;
         match crate::tools::native::support::bind_invocation_mutation_target(
+            &prepared.origin,
             &prepared.invocation.tool_name,
             &prepared.invocation.arguments,
             workspace_root,

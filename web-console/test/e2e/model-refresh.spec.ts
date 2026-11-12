@@ -326,11 +326,6 @@ for (const replaceLastProvider of [false, true]) test(replaceLastProvider
   const wire = await wireProbe(page);
   const native = await AppServerHost.connectRemote({endpoint:fixture.endpoint, token:fixture.token});
   try {
-    appendFileSync(fixture.settings, `
-[agent.model.auxiliary]
-mode = "explicit"
-model = "fixture/console-model"
-`);
     if (!replaceLastProvider) appendFileSync(fixture.settings, `
 [providers.alternative]
 protocol = "openai_chat_completions"
@@ -358,6 +353,12 @@ compat = { chat_reasoning_replay = "omit" }
     await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     const oldId = await openEmptySession(page, fixture, 'Workspace A');
+    // The source default follows the primary for future Sessions. Only this
+    // existing Session carries an explicit auxiliary selection to recover.
+    const oldSession = await native.attach(oldId);
+    const model = await oldSession.modelGet();
+    await oldSession.modelSet({ ...model.configured, auxiliary: { mode: 'explicit', model: 'fixture/console-model' } });
+
     const input = page.getByRole('textbox', {name:'Message', exact:true});
     const send = page.getByRole('button', {name:'Send', exact:true});
     const trigger = page.locator('[data-model-select]');
@@ -417,6 +418,8 @@ compat = { chat_reasoning_replay = "omit" }
       await expect(unavailable).toBeVisible();
       await expect(trigger).toBeEnabled();
       await trigger.click();
+      const modelMenu = page.getByRole('menuitem', {name:'Model', exact:true});
+      if (await modelMenu.isVisible()) await modelMenu.click();
       await expect(page.getByRole('menuitemradio', {name:replacementModel, exact:true})).toBeEnabled();
       await page.keyboard.press('Escape');
     } else {

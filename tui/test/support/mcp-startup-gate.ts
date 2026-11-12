@@ -121,8 +121,9 @@ export const startupToolSchema = {
     message: { type: 'string' },
     elevation_reason: {
       type: ['string', 'null'],
+      maxLength: 512,
       description:
-        'Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. This is a reason only — never approval evidence — and it never reaches the tool\'s business executor.',
+        'Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never approval evidence — and it never reaches the tool\'s business executor.',
     },
   },
   required: ['message'],

@@ -193,7 +193,9 @@ pub(crate) use mrtr::MCP_MRTR_MAX_ROUNDS;
 pub(crate) use resources::McpResourceOperation;
 #[cfg(all(test, feature = "mcp-fixture"))]
 pub(crate) use resources::translate_fixture_resource;
-pub(crate) use resources_executor::{McpResourceBinding, is_resource_tool, resource_definitions};
+pub(crate) use resources_executor::{
+    McpResourceBinding, RESOURCE_TOOL_NAMES, is_resource_tool, resource_definitions,
+};
 pub use runtime::{McpDiscoveryOutcome, McpNegotiatedCapabilities, McpServerRuntime};
 
 /// The MCP protocol revisions rustX offers, most preferred first.

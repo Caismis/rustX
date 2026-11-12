@@ -4,11 +4,11 @@ import { expectStableScreenshot } from './screenshot';
 import { openWorkspaceSettings } from './shell-actions';
 
 // Classification and Workspace configuration settle independently of the
-// conversation. References own the authorized Policy state, with no model
+// conversation. References own the authorized Plan state, with no model
 // configured by this fixture, rather than an incidental loading paint.
 async function expectReadyShellControls(page: Page) {
   const permission = page.getByRole('button', { name: 'Workspace permissions', exact: true });
-  await expect(permission).toHaveText('Policy');
+  await expect(permission).toHaveText('Plan');
   await expect(permission).toBeEnabled();
   const model = page.locator('[data-model-select]');
   await expect(model).toHaveText('Choose model');

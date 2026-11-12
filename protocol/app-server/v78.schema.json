@@ -34,6 +34,17 @@
           "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])",
           "default": "600000"
         },
+        "permissions": {
+          "description": "Source-default three-mode permission object for this workflow Tool.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourcePermissionSet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "block": {
           "description": "The root lexical execution scope.",
           "$ref": "#/$defs/WorkflowBlock"
@@ -53,6 +64,55 @@
       "required": [
         "description",
         "block"
+      ]
+    },
+    "ResourcePermissionSet": {
+      "description": "Complete three-mode permission object for one resource or exact tool.\n\nAn authored object must supply all three entries. Omission of the whole\nobject inherits the winning source default or product defaults.",
+      "type": "object",
+      "properties": {
+        "plan": {
+          "description": "Plan-mode override.",
+          "$ref": "#/$defs/ResourcePermissionValue"
+        },
+        "automatic": {
+          "description": "Automatic-mode override.",
+          "$ref": "#/$defs/ResourcePermissionValue"
+        },
+        "full_access": {
+          "description": "Full Access-mode override.",
+          "$ref": "#/$defs/ResourcePermissionValue"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "plan",
+        "automatic",
+        "full_access"
+      ]
+    },
+    "ResourcePermissionValue": {
+      "description": "One mode entry on a resource permission object.\n\nAutomatic model review is never a resource enum value: it is Automatic\nmode's built-in `default` behavior.",
+      "oneOf": [
+        {
+          "description": "Delegate to the selected mode's built-in matrix behavior.",
+          "type": "string",
+          "const": "default"
+        },
+        {
+          "description": "Allow the call without ordinary approval or Auxiliary review.",
+          "type": "string",
+          "const": "allow"
+        },
+        {
+          "description": "Require human approval for the exact frozen invocation.",
+          "type": "string",
+          "const": "ask"
+        },
+        {
+          "description": "Hard-deny this invocation; elevation cannot override it.",
+          "type": "string",
+          "const": "deny"
+        }
       ]
     },
     "WorkflowBlock": {
@@ -573,6 +633,17 @@
               "items": {
                 "$ref": "#/$defs/WorkflowAgentRoute"
               }
+            },
+            "permissions": {
+              "description": "Effective resource permission for this Agent entry only.",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResourcePermissionSet"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "on_error": {
               "description": "What a failed or timed-out child run leaves behind. Agents are not\nretried: a workflow child writes the shared Session workspace\ndirectly, and termination must be proven before it is handled.",
@@ -10821,7 +10892,18 @@
         "description": {
           "type": "string"
         },
-        "inputSchema": true
+        "inputSchema": true,
+        "permissions": {
+          "description": "Source-default three-mode permission object (Issue #544).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourcePermissionSet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
       },
       "additionalProperties": false,
       "required": [
@@ -26428,6 +26510,17 @@
               "enabled": false
             }
           }
+        },
+        "permissions": {
+          "description": "Source-default three-mode permission object (Issue #544).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourcePermissionSet"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -27971,55 +28064,6 @@
         }
       ]
     },
-    "ResourcePermissionSet": {
-      "description": "Complete three-mode permission object for one resource or exact tool.\n\nAn authored object must supply all three entries. Omission of the whole\nobject inherits the winning source default or product defaults.",
-      "type": "object",
-      "properties": {
-        "plan": {
-          "description": "Plan-mode override.",
-          "$ref": "#/$defs/ResourcePermissionValue"
-        },
-        "automatic": {
-          "description": "Automatic-mode override.",
-          "$ref": "#/$defs/ResourcePermissionValue"
-        },
-        "full_access": {
-          "description": "Full Access-mode override.",
-          "$ref": "#/$defs/ResourcePermissionValue"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "plan",
-        "automatic",
-        "full_access"
-      ]
-    },
-    "ResourcePermissionValue": {
-      "description": "One mode entry on a resource permission object.\n\nAutomatic model review is never a resource enum value: it is Automatic\nmode's built-in `default` behavior.",
-      "oneOf": [
-        {
-          "description": "Delegate to the selected mode's built-in matrix behavior.",
-          "type": "string",
-          "const": "default"
-        },
-        {
-          "description": "Allow the call without ordinary approval or Auxiliary review.",
-          "type": "string",
-          "const": "allow"
-        },
-        {
-          "description": "Require human approval for the exact frozen invocation.",
-          "type": "string",
-          "const": "ask"
-        },
-        {
-          "description": "Hard-deny this invocation; elevation cannot override it.",
-          "type": "string",
-          "const": "deny"
-        }
-      ]
-    },
     "McpToolPermissionDocument": {
       "description": "Exact-tool permission override authored under one MCP server.",
       "type": "object",
@@ -28172,6 +28216,17 @@
               "enabled": false
             }
           }
+        },
+        "permissions": {
+          "description": "Source-default three-mode permission object (Issue #544).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourcePermissionSet"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false

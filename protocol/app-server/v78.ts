@@ -6934,6 +6934,10 @@ export type WorkflowNodeDefinition =
        */
       routes?: WorkflowAgentRoute[];
       /**
+       * Effective resource permission for this Agent entry only.
+       */
+      permissions?: ResourcePermissionSet | null;
+      /**
        * As Dify's error handling on its Agent and tool nodes, for a call that
        * failed or timed out once it is proven settled. Cancellation, an unknown
        * outcome, unproven settlement and a refused start still stop the run.
@@ -7268,6 +7272,16 @@ export type WorkflowSchemaStep =
   | {
       kind: 'items';
     };
+/**
+ * One mode entry on a resource permission object.
+ *
+ * Automatic model review is never a resource enum value: it is Automatic
+ * mode's built-in `default` behavior.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ResourcePermissionValue".
+ */
+export type ResourcePermissionValue = 'default' | 'allow' | 'ask' | 'deny';
 /**
  * As Dify's error handling, for a call that failed or timed out after its
  * retries. Cancellation, an unknown outcome and authority errors still stop
@@ -9197,16 +9211,6 @@ export type InteractionOutcome =
       type: 'cancelled';
     };
 /**
- * One mode entry on a resource permission object.
- *
- * Automatic model review is never a resource enum value: it is Automatic
- * mode's built-in `default` behavior.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ResourcePermissionValue".
- */
-export type ResourcePermissionValue = 'default' | 'allow' | 'ask' | 'deny';
-/**
  * Whether the native compiler admits the candidate's structure.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9643,6 +9647,33 @@ export interface HostToolDefinition {
   name: string;
   description: string;
   inputSchema: unknown;
+  /**
+   * Source-default three-mode permission object (Issue #544).
+   */
+  permissions?: ResourcePermissionSet | null;
+}
+/**
+ * Complete three-mode permission object for one resource or exact tool.
+ *
+ * An authored object must supply all three entries. Omission of the whole
+ * object inherits the winning source default or product defaults.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ResourcePermissionSet".
+ */
+export interface ResourcePermissionSet {
+  /**
+   * Plan-mode override.
+   */
+  plan: 'default' | 'allow' | 'ask' | 'deny';
+  /**
+   * Automatic-mode override.
+   */
+  automatic: 'default' | 'allow' | 'ask' | 'deny';
+  /**
+   * Full Access-mode override.
+   */
+  full_access: 'default' | 'allow' | 'ask' | 'deny';
 }
 /**
  * Deliberate Session-owned intent. Effective configuration is never persisted.
@@ -9925,29 +9956,6 @@ export interface McpAuthoring {
   tools?: {
     [k: string]: McpToolPermissionDocument;
   };
-}
-/**
- * Complete three-mode permission object for one resource or exact tool.
- *
- * An authored object must supply all three entries. Omission of the whole
- * object inherits the winning source default or product defaults.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ResourcePermissionSet".
- */
-export interface ResourcePermissionSet {
-  /**
-   * Plan-mode override.
-   */
-  plan: 'default' | 'allow' | 'ask' | 'deny';
-  /**
-   * Automatic-mode override.
-   */
-  automatic: 'default' | 'allow' | 'ask' | 'deny';
-  /**
-   * Full Access-mode override.
-   */
-  full_access: 'default' | 'allow' | 'ask' | 'deny';
 }
 /**
  * Exact-tool permission override authored under one MCP server.
@@ -10245,6 +10253,10 @@ export interface NamedAgentProfileDocument {
   skills?: AgentSkillSelection | null;
   agents_md?: AgentProjectInstructionsDocument1;
   plugins?: NativeAgentExtensionsDocument;
+  /**
+   * Source-default three-mode permission object (Issue #544).
+   */
+  permissions?: ResourcePermissionSet | null;
 }
 /**
  * The exact source-qualified capability selection.
@@ -18634,6 +18646,10 @@ export interface AgentProfileDocument {
   skills?: AgentSkillSelection | null;
   agents_md?: AgentProjectInstructionsDocument2;
   plugins?: NativeAgentExtensionsDocument1;
+  /**
+   * Source-default three-mode permission object (Issue #544).
+   */
+  permissions?: ResourcePermissionSet | null;
 }
 /**
  * The exact source-qualified capability selection.
@@ -19737,6 +19753,10 @@ export interface WorkflowFileDocument {
    * Trusted finite total foreground lifetime, including descendant waits.
    */
   timeout_ms?: string;
+  /**
+   * Source-default three-mode permission object for this workflow Tool.
+   */
+  permissions?: ResourcePermissionSet | null;
   block: WorkflowBlock;
   editor?: WorkflowEditorMetadata | null;
 }

@@ -119,10 +119,13 @@ pub(crate) async fn buffered_scenario() {
     .unwrap();
     assert_eq!(
         environment.lines().count(),
-        16,
+        19,
         "native basics plus Git readonly execution guards; no provider or App Server credentials"
     );
     assert!(environment.contains("LANG=C.UTF-8"));
+    assert!(environment.contains("GIT_CONFIG_COUNT=6\n"));
+    assert!(environment.contains("GIT_CONFIG_KEY_4=core.fsmonitor\n"));
+    assert!(environment.contains("GIT_CONFIG_VALUE_4=false\n"));
     assert_eq!(fixture.manager.diagnostics().loaded, 0);
     connection.close();
 }

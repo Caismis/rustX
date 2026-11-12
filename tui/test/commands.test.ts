@@ -1101,61 +1101,62 @@ describe("CommandDispatcher", () => {
     }
   });
 
-  it("auxiliary set carries profile and overrides onto an explicit catalog model", async () => {
-    const h = await harness();
-    const command = h.dispatcher.submit("/model auxiliary set alpha/summary");
-    // Bounded native ID verification only — no first-page catalog membership probe.
-    const read = await nextRequest(h, "session/model");
-    const current = sessionModel("alpha/model-a");
-    current.configured.auxiliary = {
-      mode: "session",
-      profile: { mode: "lowest" },
-      request_params: { summary_tag: "keep" },
-      max_output_tokens: 256,
-    };
-    h.transport.respond(read.id, domainReceipt("model", [current]));
-    const set = await nextRequest(h, "session/setModel");
-    assert.deepEqual(paramsOf(set, "session/setModel").config.auxiliary, {
-      mode: "explicit",
-      model: "alpha/summary",
-      profile: { mode: "lowest" },
-      request_params: { summary_tag: "keep" },
-      max_output_tokens: 256,
-    });
-    assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, true);
-    h.transport.respond(set.id, { type: "model_set", settings_revision: "1" });
-    const confirmed = await nextRequest(h, "session/model");
-    h.transport.respond(
-      confirmed.id,
-      domainReceipt("model", [
-        {
-          ...current,
-          configured: {
-            ...current.configured,
-            auxiliary: {
-              mode: "explicit",
-              model: "alpha/summary",
-              profile: { mode: "lowest" },
-              request_params: { summary_tag: "keep" },
-              max_output_tokens: 256,
+  for (const model of ["alpha/summary", `alpha/${"a".repeat(257)}`]) {
+    it(`auxiliary set carries profile and overrides onto ${model}`, async () => {
+      const h = await harness();
+      const command = h.dispatcher.submit(`/model auxiliary set ${model}`);
+      // Native ID verification only — no first-page catalog membership probe.
+      const read = await nextRequest(h, "session/model");
+      const current = sessionModel("alpha/model-a");
+      current.configured.auxiliary = {
+        mode: "session",
+        profile: { mode: "lowest" },
+        request_params: { summary_tag: "keep" },
+        max_output_tokens: 256,
+      };
+      h.transport.respond(read.id, domainReceipt("model", [current]));
+      const set = await nextRequest(h, "session/setModel");
+      assert.deepEqual(paramsOf(set, "session/setModel").config.auxiliary, {
+        mode: "explicit",
+        model,
+        profile: { mode: "lowest" },
+        request_params: { summary_tag: "keep" },
+        max_output_tokens: 256,
+      });
+      assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, true);
+      h.transport.respond(set.id, { type: "model_set", settings_revision: "1" });
+      const confirmed = await nextRequest(h, "session/model");
+      h.transport.respond(
+        confirmed.id,
+        domainReceipt("model", [
+          {
+            ...current,
+            configured: {
+              ...current.configured,
+              auxiliary: {
+                mode: "explicit",
+                model,
+                profile: { mode: "lowest" },
+                request_params: { summary_tag: "keep" },
+                max_output_tokens: 256,
+              },
             },
           },
-        },
-      ]),
-    );
-    const outcome = await command;
-    assert.equal(outcome.kind, "transient");
-    if (outcome.kind === "transient") assert.match(outcome.text, /alpha\/summary/);
-    assert.equal(h.transport.log.count("session/models"), 0);
-  });
+        ]),
+      );
+      const outcome = await command;
+      assert.equal(outcome.kind, "transient");
+      if (outcome.kind === "transient") assert.ok(outcome.text.includes(model));
+      assert.equal(h.transport.log.count("session/models"), 0);
+    });
+  }
 
-  it("auxiliary set rejects an unbounded or empty native model identity without catalog reads", async () => {
+  it("auxiliary set rejects a malformed or empty native model identity without catalog reads", async () => {
     const h = await harness();
     for (const [command, pattern] of [
       ["/model auxiliary set", /usage: \/model auxiliary/],
       ["/model auxiliary set leading/", /not a valid native model identity/],
       ["/model auxiliary set \/trailing", /not a valid native model identity/],
-      [`/model auxiliary set ${"a".repeat(257)}`, /not a valid native model identity/],
     ] as const) {
       const outcome = await h.dispatcher.submit(command);
       assert.equal(outcome.kind, "transient");

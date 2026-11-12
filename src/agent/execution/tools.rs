@@ -1063,6 +1063,7 @@ impl AgentExecution<'_> {
             return Ok(());
         }
         prepared.mutation_target = crate::tools::native::support::bind_invocation_mutation_target(
+            &prepared.origin,
             &prepared.invocation.tool_name,
             &prepared.invocation.arguments,
             workspace_root,

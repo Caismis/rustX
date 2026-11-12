@@ -578,6 +578,10 @@ mod tests {
             .and_then(serde_json::Value::as_object_mut)
             .expect("properties")
             .remove("elevation_reason");
+        compiled_before_schema
+            .as_object_mut()
+            .unwrap()
+            .remove("$defs");
         assert_eq!(compiled_before_schema, before);
         let mut after = registry().model_definitions().remove(0).input_schema;
         after
@@ -585,6 +589,7 @@ mod tests {
             .and_then(serde_json::Value::as_object_mut)
             .expect("properties")
             .remove("elevation_reason");
+        after.as_object_mut().unwrap().remove("$defs");
         let captured_after: serde_json::Value = serde_json::from_str(include_str!(
             "../../../tests/fixtures/ask_user/schema-after.json"
         ))

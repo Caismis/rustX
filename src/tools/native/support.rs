@@ -148,12 +148,15 @@ pub fn bind_mutation_target(
 /// Binds the Write/Edit mutation target for one prepared invocation, or
 /// returns `None` for non-mutation tools.
 pub fn bind_invocation_mutation_target(
+    origin: &crate::tools::types::ToolOrigin,
     tool_name: &str,
     arguments: &serde_json::Value,
     workspace_root: &Path,
     tool_output: &ManagedToolOutput,
 ) -> Result<Option<BoundMutationTarget>, String> {
-    if !matches!(tool_name, "write" | "edit") {
+    if !matches!(origin, crate::tools::types::ToolOrigin::Builtin)
+        || !matches!(tool_name, "write" | "edit")
+    {
         return Ok(None);
     }
     let requested = arguments
@@ -364,6 +367,66 @@ pub fn success_text(
 mod tests {
     use super::*;
     use crate::tools::managed_output::ManagedToolOutput;
+
+    #[test]
+    fn external_write_and_edit_names_never_bind_local_mutation_targets() {
+        use crate::tools::types::ToolOrigin;
+        let workspace = tempfile::tempdir().unwrap();
+        let output = ManagedToolOutput::new(
+            crate::runtime::identity::ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ),
+            workspace.path().join("tool-output"),
+        )
+        .unwrap();
+        for origin in [
+            ToolOrigin::Mcp {
+                server_id: crate::runtime::identity::McpServerId::new("remote"),
+            },
+            ToolOrigin::ManagedPython {
+                package: "remote".into(),
+            },
+            ToolOrigin::Host {
+                namespace: None,
+                name: "remote".into(),
+            },
+        ] {
+            for name in ["write", "edit"] {
+                assert!(
+                    bind_invocation_mutation_target(
+                        &origin,
+                        name,
+                        &serde_json::json!({}),
+                        workspace.path(),
+                        &output
+                    )
+                    .unwrap()
+                    .is_none()
+                );
+                assert!(
+                    bind_invocation_mutation_target(
+                        &origin,
+                        name,
+                        &serde_json::json!({"path": output.root().unwrap()}),
+                        workspace.path(),
+                        &output
+                    )
+                    .unwrap()
+                    .is_none()
+                );
+            }
+        }
+        assert!(
+            bind_invocation_mutation_target(
+                &ToolOrigin::Builtin,
+                "write",
+                &serde_json::json!({}),
+                workspace.path(),
+                &output
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn bound_target_refuses_when_plan_file_is_replaced_with_external_symlink() {

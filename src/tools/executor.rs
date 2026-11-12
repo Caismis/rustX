@@ -243,6 +243,23 @@ impl<'a> ToolExecutionContext<'a> {
         }
     }
 
+    /// Freezes the effective Write/Edit target before direct native dispatch.
+    /// The caller owns permission admission; executors recheck this binding
+    /// before committing and refuse an independently resolved target.
+    ///
+    /// # Errors
+    /// Returns an error if the path cannot be resolved or names managed output.
+    pub fn bind_mutation_target(mut self, prepared: &PreparedInvocation) -> Result<Self, String> {
+        self.bound_mutation = crate::tools::native::support::bind_invocation_mutation_target(
+            &prepared.origin,
+            &prepared.invocation.tool_name,
+            &prepared.invocation.arguments,
+            self.workspace.root(),
+            self.tool_output,
+        )?;
+        Ok(self)
+    }
+
     /// Binds this invocation to the immutable runtime resource generation
     /// and frozen model authority of the invoking attempt.
     ///
@@ -624,6 +641,13 @@ pub enum ToolRegistryError {
         /// The precise schema-level reason.
         reason: String,
     },
+    /// The canonical schema cannot carry the runtime-owned elevation metadata.
+    ModelSchema {
+        /// The model-facing name of the rejected tool.
+        name: String,
+        /// The precise compilation failure.
+        reason: SchemaError,
+    },
     /// The declared policies are invalid for this tool.
     InvalidPolicy(String),
     /// The model-facing name belongs to a runtime-owned protocol.
@@ -646,6 +670,12 @@ impl core::fmt::Display for ToolRegistryError {
                 write!(f, "{message}")
             }
             Self::InvalidSchema(message) => write!(f, "invalid tool schema: {message}"),
+            Self::ModelSchema { name, reason } => {
+                write!(
+                    f,
+                    "tool {name:?} cannot compile its model-facing schema: {reason}"
+                )
+            }
             Self::ModelSelectableSchema { name, reason } => write!(
                 f,
                 "tool {name:?} cannot be registered as ModelSelectable, because rustX must inject \
@@ -1066,6 +1096,10 @@ impl ToolRegistry {
                 name: definition.name.clone(),
                 reason: error.to_string(),
             })?;
+        compile_model_definition(&definition).map_err(|reason| ToolRegistryError::ModelSchema {
+            name: definition.name.clone(),
+            reason,
+        })?;
         if crate::tools::native::is_domain_control(&definition.name)
             && definition.execution_policy
                 != crate::tools::types::ToolExecutionPolicy::ForegroundOnly
@@ -1801,7 +1835,7 @@ mod tests {
         {
             for (offset, (label, schema)) in cases.iter().enumerate() {
                 let mut registry = ToolRegistry::new();
-                register(
+                let result = register(
                     &mut registry,
                     definition(
                         &format!("tool-fixed-{index}-{offset}"),
@@ -1809,15 +1843,65 @@ mod tests {
                         policy,
                         schema.clone(),
                     ),
-                )
-                .unwrap_or_else(|error| {
-                    panic!("{label} needs no execution_mode injection under {policy:?}: {error}")
-                });
-                assert_eq!(
-                    registry.model_definitions().len(),
-                    1,
-                    "{label} reaches a model request under {policy:?}"
                 );
+                if *label == "whole-instance assertion" {
+                    assert!(matches!(result, Err(ToolRegistryError::ModelSchema { .. })));
+                    assert!(registry.model_definitions().is_empty());
+                } else {
+                    result.unwrap_or_else(|error| panic!("{label} under {policy:?}: {error}"));
+                    assert_eq!(
+                        registry.model_definitions().len(),
+                        1,
+                        "{label} under {policy:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn elevation_compilation_rejection_is_atomic_for_every_execution_policy() {
+        for policy in [
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolExecutionPolicy::BackgroundOnly,
+            ToolExecutionPolicy::ModelSelectable,
+        ] {
+            for schema in [
+                json!({"type": "object", "const": {}}),
+                json!({"type": "object", "enum": [{}]}),
+                json!({"type": "object", "properties": {"elevation_reason": {}}}),
+                json!({"type": "object", "required": ["elevation_reason"]}),
+                json!({"type": "object", "$defs": {"rustx_business": {}}}),
+                json!({"type": "object", "propertyNames": {"pattern": "^business"}}),
+                json!({"type": "object", "maxProperties": u64::MAX}),
+                json!({"type": "object", "minProperties": u64::MAX}),
+                json!({"type": "object", "patternProperties": {"^e": {"type": "integer"}}}),
+                json!({"type": "object", "properties": {"child": {"$dynamicRef": "#"}}}),
+                json!({"$id": "urn:root", "type": "object", "properties": {"child": {"$ref": "urn:root"}}}),
+                json!({"type": "object", "properties": {"child": {"$id": "urn:child", "type": "object"}}}),
+                json!({"$schema": "http://json-schema.org/draft-04/schema#", "type": "object", "properties": {"child": {"id": "#node", "type": "object"}}}),
+            ] {
+                let mut registry = ToolRegistry::new();
+                let result = register(
+                    &mut registry,
+                    definition("rejected", "rejected", policy, schema),
+                );
+                assert!(result.is_err());
+                assert!(registry.entries.is_empty());
+                assert!(registry.by_id.is_empty());
+                assert!(registry.by_name.is_empty());
+                assert!(registry.model_definitions().is_empty());
+                register(
+                    &mut registry,
+                    definition(
+                        "rejected",
+                        "rejected",
+                        policy,
+                        json!({"type": "object", "properties": {}}),
+                    ),
+                )
+                .unwrap();
+                assert_eq!(registry.model_definitions().len(), 1);
             }
         }
     }

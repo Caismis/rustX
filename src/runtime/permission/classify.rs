@@ -101,7 +101,8 @@ mod tests {
     #[test]
     fn only_exact_workspace_plan_file_counts() {
         let root = tempfile::tempdir().expect("workspace");
-        let plan = root.path().join("PLAN.md");
+        let canonical_root = root.path().canonicalize().expect("canonical workspace");
+        let plan = canonical_root.join("PLAN.md");
         std::fs::write(&plan, "plan").expect("plan file");
         assert!(is_workspace_plan_file(Some(root.path()), Some(&plan)));
         assert!(!is_workspace_plan_file(
@@ -131,7 +132,10 @@ mod tests {
         std::os::unix::fs::symlink(&dangling, &plan_link).expect("symlink");
         let effective =
             crate::tools::native::support::resolve_effective_path(&plan_link).expect("resolve");
-        assert_eq!(effective, dangling);
+        assert_eq!(
+            effective,
+            outside.path().canonicalize().unwrap().join("new.txt")
+        );
         assert!(!is_workspace_plan_file(
             Some(workspace.path()),
             Some(&effective)

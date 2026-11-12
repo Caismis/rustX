@@ -858,6 +858,8 @@ impl UserConfigManager {
                     .chain(ResourceDiagnostic::of_managed_python(&managed_python)),
             );
         }
+        #[cfg(test)]
+        self.test_hooks.reach("before_resource_verification");
         for (root, scope) in [
             (host.home_directory.join("rustx/.agents"), SourceScope::User),
             (locations.workspace.join(".agents"), SourceScope::Workspace),

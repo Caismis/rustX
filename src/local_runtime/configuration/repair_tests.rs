@@ -4583,6 +4583,54 @@ fn session_input(fixture: &Fixture) -> super::super::SessionConfigInput {
     super::super::SessionConfigInput::new(fixture.workspace.workspace().unwrap().to_path_buf())
 }
 
+#[test]
+fn python_permission_edit_during_large_candidate_construction_discards_candidate() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, USER);
+    let package = fixture
+        .workspace
+        .workspace()
+        .unwrap()
+        .join(".agents/tools/large");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        package.join("server.py"),
+        "from fastmcp import FastMCP\nmcp = FastMCP('large')\n",
+    )
+    .unwrap();
+    std::fs::write(package.join("requirements.txt"), "").unwrap();
+    std::fs::File::create(package.join("asset.bin"))
+        .unwrap()
+        .set_len(65 * 1024 * 1024)
+        .unwrap();
+    let permissions = package.join("permissions.toml");
+    std::fs::write(
+        &permissions,
+        "[permissions]\nplan = 'allow'\nautomatic = 'default'\nfull_access = 'allow'\n",
+    )
+    .unwrap();
+    assert!(resolved(&fixture).is_ok());
+    fixture
+        .manager
+        .test_hooks
+        .insert("before_resource_verification", move || {
+            std::fs::write(
+                &permissions,
+                "[permissions]\nplan = 'deny'\nautomatic = 'default'\nfull_access = 'allow'\n",
+            )
+            .unwrap();
+        });
+    let failure = fixture
+        .manager
+        .resolve_session(&session_input(&fixture))
+        .unwrap_err();
+    assert_eq!(
+        failure.diagnostic.reason,
+        "authored resources changed during candidate construction"
+    );
+    assert!(resolved(&fixture).is_ok());
+}
+
 /// Session resolution's source revisions, or its failure detail.
 fn resolved(fixture: &Fixture) -> Result<BTreeMap<PathBuf, String>, String> {
     fixture

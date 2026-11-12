@@ -908,21 +908,34 @@ async fn default_system_prompt_is_frozen_without_optional_instructions() {
         crate::context::DEFAULT_SYSTEM_PROMPT,
         runtime.tool_runtime().workspace().root().display()
     );
-    for (request, snapshot) in requests.iter().zip(&snapshots) {
+    for (index, (request, snapshot)) in requests.iter().zip(&snapshots).enumerate() {
+        let expected = if index == 0 {
+            expected.clone()
+        } else {
+            expected
+                .strip_suffix(&format!("\n\n{reminder}"))
+                .unwrap()
+                .to_owned()
+        };
         assert_eq!(request.effective_system_prompt, expected);
         assert_eq!(
             snapshot.effective_system_prompt,
             request.effective_system_prompt
         );
-        assert_eq!(snapshot.system_sections.len(), 2);
+        assert_eq!(
+            snapshot.system_sections.len(),
+            if index == 0 { 2 } else { 1 }
+        );
         assert_eq!(
             snapshot.system_sections[0].lane,
             crate::context::SystemSectionLane::CoreRuntimeIdentity
         );
-        assert_eq!(
-            snapshot.system_sections[1].lane,
-            crate::context::SystemSectionLane::PermissionReminder
-        );
+        if index == 0 {
+            assert_eq!(
+                snapshot.system_sections[1].lane,
+                crate::context::SystemSectionLane::PermissionReminder
+            );
+        }
     }
     let ledger = runtime.coordinator_ledger().unwrap();
     assert!(

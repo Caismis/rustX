@@ -43,10 +43,9 @@ import type { CatalogModelView, SessionModelConfig, SessionSettings, SessionUser
 const AUXILIARY_USAGE =
   "usage: /model auxiliary clear | follow | set <provider/model> | profile lowest | profile model_default | profile set <id> | profile clear";
 
-/** Bounded native model identity (ModelId): nonempty segments, no whitespace, ≤256 UTF-8 bytes. */
-function isBoundedNativeModelId(value: string): boolean {
-  if (!value || value.split("/").some((segment) => segment.length === 0) || /\s/.test(value)) return false;
-  return new TextEncoder().encode(value).length <= 256;
+/** Native model identity (ModelId): nonempty segments without whitespace. */
+function isNativeModelId(value: string): boolean {
+  return value.length > 0 && value.split("/").every((segment) => segment.length > 0) && !/\p{White_Space}/u.test(value);
 }
 
 export interface DispatcherContext {
@@ -776,7 +775,7 @@ export class CommandDispatcher {
         // Never treat the first catalog page as the full catalog. Verify the
         // bounded native identity here; native model_set remains the authority
         // for whether that identity is currently selectable.
-        if (!isBoundedNativeModelId(modelId)) {
+        if (!isNativeModelId(modelId)) {
           return transient("error", `${modelId} is not a valid native model identity.`);
         }
         const current = await session.modelGet();

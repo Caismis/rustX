@@ -538,13 +538,14 @@ pub fn validate_execution_metadata_contract(
 /// The stored canonical schema is never mutated: for a `ModelSelectable`
 /// tool the compiled schema is a clone decorated with the required
 /// `execution_mode` field and the compiled description carries the
-/// runtime-owned reminder that the field is mandatory;
-/// `ForegroundOnly`/`BackgroundOnly` definitions are compiled verbatim.
+/// runtime-owned reminder that the field is mandatory. Every policy receives
+/// optional elevation metadata and an undecorated business-schema definition.
 ///
 /// # Errors
 ///
-/// Returns [`SchemaError::ExecutionModeCollision`] when a `ModelSelectable`
-/// canonical schema already claims the reserved `execution_mode` property.
+/// Returns a [`SchemaError`] when runtime metadata collides with authored
+/// constraints, references cannot be relocated safely, or the compiled schema
+/// is invalid.
 pub fn compile_model_definition(
     definition: &ToolDefinition,
 ) -> Result<ModelToolDefinition, SchemaError> {
@@ -555,6 +556,9 @@ pub fn compile_model_definition(
         decorate_execution_mode(&mut input_schema);
         description = with_execution_mode_reminder(&description);
     }
+    Validator::new(&input_schema).map_err(|error| {
+        SchemaError::UndecorableElevationRoot(format!("compiled schema is invalid: {error}"))
+    })?;
     Ok(ModelToolDefinition {
         id: definition.id.clone(),
         name: definition.name.clone(),
@@ -611,17 +615,36 @@ fn elevation_collision_claim(schema: &serde_json::Value) -> Option<ExecutionMode
 fn compile_elevation_metadata(
     canonical: &serde_json::Value,
 ) -> Result<serde_json::Value, SchemaError> {
-    reject_elevation_collision_on_root_instance(canonical, canonical, &mut Vec::new())?;
-
+    reject_reference_keywords(
+        canonical,
+        "",
+        REFERENCE_APPLICATOR_KEYWORDS,
+        true,
+        canonical,
+    )
+    .map_err(|error| {
+        SchemaError::UndecorableElevationRoot(format!(
+            "only document-local static references can carry elevation metadata: {error}"
+        ))
+    })?;
     let mut business = canonical.clone();
-    rewrite_pound_refs_in_subschemas(&mut business);
+    relocate_business_refs(&mut business);
+    // The embedded schema is the same resource; do not redeclare its URI.
+    business
+        .as_object_mut()
+        .expect("canonical object")
+        .remove("$id");
+    business
+        .as_object_mut()
+        .expect("canonical object")
+        .remove("id");
 
     let mut compiled = canonical.clone();
     // Inline local root `$ref`s and inject elevation before rewriting nested
     // `#` pointers, so closed ref targets receive the optional field instead
     // of relying on ignored/ineffective `$ref` siblings.
-    inject_elevation_for_root_instance(&mut compiled, canonical, &mut Vec::new())?;
-    rewrite_pound_refs_in_subschemas(&mut compiled);
+    inject_elevation_for_root_instance(&mut compiled, canonical, &mut Vec::new(), true)?;
+    relocate_business_refs(&mut compiled);
 
     let root = compiled.as_object_mut().ok_or_else(|| {
         SchemaError::UndecorableElevationRoot("canonical schema root must be a JSON object".into())
@@ -640,58 +663,22 @@ fn compile_elevation_metadata(
     Ok(compiled)
 }
 
-/// Rejects every root-applicable claim on the reserved elevation field,
-/// including composition branches and local `$ref` targets that describe the
-/// same instance as the document root.
-fn reject_elevation_collision_on_root_instance(
-    node: &serde_json::Value,
-    document: &serde_json::Value,
-    stack: &mut Vec<String>,
-) -> Result<(), SchemaError> {
-    if let Some(claim) = elevation_collision_claim(node) {
-        return Err(SchemaError::ElevationReasonCollision(claim));
-    }
-    let Some(object) = node.as_object() else {
-        return Ok(());
-    };
-    if object.contains_key("const") || object.contains_key("enum") {
-        return Err(SchemaError::UndecorableElevationRoot(
-            "root const/enum cannot admit optional elevation_reason".into(),
-        ));
-    }
-    for key in ["$ref", "$recursiveRef"] {
-        if let Some(reference) = object.get(key).and_then(serde_json::Value::as_str)
-            && let Some(target) = resolve_local_schema_ref(document, reference)
-            && !stack.contains(&reference.to_owned())
-        {
-            stack.push(reference.to_owned());
-            reject_elevation_collision_on_root_instance(target, document, stack)?;
-            stack.pop();
-        }
-    }
-    for keyword in ["allOf", "anyOf", "oneOf"] {
-        if let Some(branches) = object.get(keyword).and_then(serde_json::Value::as_array) {
-            for branch in branches {
-                reject_elevation_collision_on_root_instance(branch, document, stack)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Rewrites `$ref`/`$recursiveRef` values of `"#"` to the undecorated business
-/// definition, walking only real subschema positions so nested `const` /
+/// Relocates document-local references to the undecorated business schema,
+/// walking only real subschema positions so nested `const` /
 /// `enum` / annotation data that happens to contain `{"$ref":"#"}` is left
 /// alone.
-fn rewrite_pound_refs_in_subschemas(schema: &mut serde_json::Value) {
+fn relocate_business_refs(schema: &mut serde_json::Value) {
     let Some(node) = schema.as_object_mut() else {
         return;
     };
     for key in ["$ref", "$recursiveRef"] {
-        if node.get(key).and_then(serde_json::Value::as_str) == Some("#") {
+        if let Some(reference) = node.get(key).and_then(serde_json::Value::as_str)
+            && (reference == "#" || reference.starts_with("#/"))
+        {
+            let suffix = reference.strip_prefix('#').expect("local reference");
             node.insert(
                 key.to_owned(),
-                serde_json::Value::String(format!("#/$defs/{RUSTX_BUSINESS_DEF}")),
+                serde_json::Value::String(format!("#/$defs/{RUSTX_BUSINESS_DEF}{suffix}")),
             );
         }
     }
@@ -701,33 +688,33 @@ fn rewrite_pound_refs_in_subschemas(schema: &mut serde_json::Value) {
             continue;
         };
         if SUBSCHEMA_KEYWORDS.contains(&keyword.as_str()) {
-            rewrite_pound_refs_in_subschemas(value);
+            relocate_business_refs(value);
         } else if SUBSCHEMA_LIST_KEYWORDS.contains(&keyword.as_str()) {
             if let serde_json::Value::Array(items) = value {
                 for item in items {
-                    rewrite_pound_refs_in_subschemas(item);
+                    relocate_business_refs(item);
                 }
             }
         } else if SCHEMA_MAP_KEYWORDS.contains(&keyword.as_str()) {
             if let serde_json::Value::Object(members) = value {
                 for subschema in members.values_mut() {
-                    rewrite_pound_refs_in_subschemas(subschema);
+                    relocate_business_refs(subschema);
                 }
             }
         } else if keyword == "items" {
             if let serde_json::Value::Array(items) = value {
                 for item in items {
-                    rewrite_pound_refs_in_subschemas(item);
+                    relocate_business_refs(item);
                 }
             } else {
-                rewrite_pound_refs_in_subschemas(value);
+                relocate_business_refs(value);
             }
         } else if keyword == "dependencies"
             && let serde_json::Value::Object(members) = value
         {
             for subschema in members.values_mut() {
                 if subschema.is_object() {
-                    rewrite_pound_refs_in_subschemas(subschema);
+                    relocate_business_refs(subschema);
                 }
             }
         }
@@ -742,10 +729,43 @@ fn resolve_local_schema_ref<'a>(
         return Some(document);
     }
     let path = reference.strip_prefix("#/")?;
+    let tokens: Vec<_> = path
+        .split('/')
+        .map(|raw| raw.replace("~1", "/").replace("~0", "~"))
+        .collect();
     let mut current = document;
-    for raw in path.split('/') {
-        let token = raw.replace("~1", "/").replace("~0", "~");
-        current = current.as_object()?.get(&token)?;
+    let mut index = 0;
+    while index < tokens.len() {
+        if !std::ptr::eq(current, document)
+            && (current.get("$id").is_some() || current.get("id").is_some())
+        {
+            return None;
+        }
+        let keyword = tokens[index].as_str();
+        let value = current.as_object()?.get(keyword)?;
+        index += 1;
+        current = if SUBSCHEMA_KEYWORDS.contains(&keyword) {
+            value
+        } else if SCHEMA_MAP_KEYWORDS.contains(&keyword) || keyword == "dependencies" {
+            let name = tokens.get(index)?;
+            index += 1;
+            value.as_object()?.get(name)?
+        } else if SUBSCHEMA_LIST_KEYWORDS.contains(&keyword)
+            || keyword == "items" && value.is_array()
+        {
+            let ordinal = tokens.get(index)?.parse::<usize>().ok()?;
+            index += 1;
+            value.as_array()?.get(ordinal)?
+        } else if keyword == "items" {
+            value
+        } else {
+            // Data/annotation objects are not part of the admitted reference
+            // graph, even when they happen to look like JSON Schemas.
+            return None;
+        };
+        if !current.is_object() && !current.is_boolean() {
+            return None;
+        }
     }
     Some(current)
 }
@@ -756,12 +776,69 @@ fn inject_elevation_for_root_instance(
     node: &mut serde_json::Value,
     document: &serde_json::Value,
     stack: &mut Vec<String>,
+    document_root: bool,
 ) -> Result<(), SchemaError> {
-    // Inline local `$ref`/`$recursiveRef` targets that describe this same
-    // root instance. Sibling keywords next to `$ref` cannot open a closed
-    // target (`additionalProperties: false`), so the target must receive the
-    // optional field itself — and only for this root application, via inline.
-    inline_local_root_ref(node, document, stack)?;
+    if !document_root && (node.get("$id").is_some() || node.get("id").is_some()) {
+        return Err(SchemaError::UndecorableElevationRoot(
+            "root-applicable subschemas with independent resource identifiers cannot be decorated"
+                .into(),
+        ));
+    }
+    // Reference targets and siblings constrain the same instance together.
+    // Decorate the target separately and retain it as a conjunction; merging
+    // duplicate keywords would discard constraints (including boolean false).
+    for keyword in ["$ref", "$recursiveRef"] {
+        let reference = node
+            .get(keyword)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        let Some(reference) = reference else { continue };
+        let Some(target) = resolve_local_schema_ref(document, &reference) else {
+            return Err(SchemaError::UndecorableElevationRoot(format!(
+                "root reference {reference:?} must resolve locally"
+            )));
+        };
+        if stack.contains(&reference) {
+            return Err(SchemaError::UndecorableElevationRoot(format!(
+                "cyclic root reference {reference:?} cannot admit elevation metadata"
+            )));
+        }
+        if keyword == "$ref"
+            && document
+                .get("$schema")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|draft| {
+                    ["draft-04", "draft-06", "draft-07"]
+                        .iter()
+                        .any(|version| draft.contains(version))
+                })
+        {
+            node.as_object_mut()
+                .expect("reference object")
+                .retain(|key, _| {
+                    ROOT_ANNOTATION_KEYWORDS.contains(&key.as_str()) || key == "id" || key == "$ref"
+                });
+        }
+        let mut target = target.clone();
+        stack.push(reference);
+        inject_elevation_for_root_instance(&mut target, document, stack, false)?;
+        stack.pop();
+        let object = node
+            .as_object_mut()
+            .expect("reference belongs to a schema object");
+        object.remove(keyword);
+        // Existing branches are decorated by the ordinary traversal below.
+        // Append this already-decorated target only after that traversal.
+        inject_elevation_for_root_instance(node, document, stack, document_root)?;
+        node.as_object_mut()
+            .expect("schema object")
+            .entry("allOf")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .expect("validated allOf array")
+            .push(target);
+        return Ok(());
+    }
 
     {
         let Some(object) = node.as_object_mut() else {
@@ -778,62 +855,68 @@ fn inject_elevation_for_root_instance(
                 continue;
             };
             for branch in &mut branches {
-                inject_elevation_for_root_instance(branch, document, stack)?;
+                inject_elevation_for_root_instance(branch, document, stack, false)?;
             }
             object.insert(keyword.to_owned(), serde_json::Value::Array(branches));
+        }
+    }
+    let object = node.as_object_mut().expect("schema object");
+    for keyword in ["not", "if", "then", "else"] {
+        if let Some(branch) = object.get_mut(keyword) {
+            inject_elevation_for_root_instance(branch, document, stack, false)?;
+        }
+    }
+    for keyword in ["dependentSchemas", "dependencies"] {
+        if let Some(branches) = object
+            .get_mut(keyword)
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for branch in branches.values_mut().filter(|branch| !branch.is_array()) {
+                inject_elevation_for_root_instance(branch, document, stack, false)?;
+            }
         }
     }
     inject_elevation_into_object_schema(node)
 }
 
-fn inline_local_root_ref(
-    node: &mut serde_json::Value,
-    document: &serde_json::Value,
-    stack: &mut Vec<String>,
-) -> Result<(), SchemaError> {
-    let Some(object) = node.as_object_mut() else {
-        return Ok(());
-    };
-    let reference = ["$ref", "$recursiveRef"].iter().find_map(|key| {
-        object
-            .get(*key)
-            .and_then(serde_json::Value::as_str)
-            .map(|value| ((*key).to_owned(), value.to_owned()))
-    });
-    let Some((keyword, reference)) = reference else {
-        return Ok(());
-    };
-    // Document-root `#` stays a reference: nested rewriting points it at the
-    // undecorated business def. Inlining `#` would re-merge the same `$ref`
-    // and never open a closed target.
-    if reference == "#" {
-        return Ok(());
-    }
-    let Some(target) = resolve_local_schema_ref(document, &reference) else {
-        return Ok(());
-    };
-    if stack.contains(&reference) {
-        return Ok(());
-    }
-    let target = target.clone();
-    object.remove(&keyword);
-    if let serde_json::Value::Object(target_object) = target {
-        for (key, value) in target_object {
-            object.entry(key).or_insert(value);
-        }
-    } else {
-        // Boolean / non-object targets have nothing to merge; keep siblings.
-    }
-    stack.push(reference);
-    // Continue inlining if the merged target itself was a ref wrapper.
-    let result = inline_local_root_ref(node, document, stack);
-    stack.pop();
-    result
-}
-
 fn inject_elevation_into_object_schema(schema: &mut serde_json::Value) -> Result<(), SchemaError> {
     if let Some(claim) = elevation_collision_claim(schema) {
         return Err(SchemaError::ElevationReasonCollision(claim));
+    }
+    for pattern in schema
+        .get("patternProperties")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flat_map(|patterns| patterns.keys())
+    {
+        let name_schema = serde_json::json!({"pattern": pattern});
+        if Validator::new(&name_schema)
+            .is_ok_and(|validator| validator.is_valid(&serde_json::json!(ELEVATION_REASON_FIELD)))
+        {
+            return Err(SchemaError::UndecorableElevationRoot(
+                "root patternProperties claims elevation_reason".into(),
+            ));
+        }
+    }
+    for keyword in ["dependentRequired", "dependentSchemas", "dependencies"] {
+        if schema
+            .get(keyword)
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|dependencies| {
+                dependencies.contains_key(ELEVATION_REASON_FIELD)
+                    || dependencies.values().any(|value| {
+                        value.as_array().is_some_and(|required| {
+                            required
+                                .iter()
+                                .any(|name| name.as_str() == Some(ELEVATION_REASON_FIELD))
+                        })
+                    })
+            })
+        {
+            return Err(SchemaError::UndecorableElevationRoot(
+                "root dependencies claim elevation_reason".into(),
+            ));
+        }
     }
     let property_names_ok = match schema
         .as_object()
@@ -857,17 +940,6 @@ fn inject_elevation_into_object_schema(schema: &mut serde_json::Value) -> Result
     let Some(object) = schema.as_object_mut() else {
         return Ok(());
     };
-    let is_objectish = object.get("type").and_then(serde_json::Value::as_str) == Some("object")
-        || object.contains_key("properties")
-        || object.contains_key("additionalProperties")
-        || object.contains_key("minProperties")
-        || object.contains_key("maxProperties")
-        || object.contains_key("$ref")
-        || object.contains_key("$recursiveRef");
-    if !is_objectish {
-        return Ok(());
-    }
-
     // Cardinality must treat elevation as optional metadata: bump the bound
     // only when the field is present. Unconditional ±1 accepts illegal
     // business shapes or rejects empty-after-strip calls.
@@ -928,21 +1000,21 @@ fn adjust_property_cardinality_for_optional_elevation(
     object.remove("maxProperties");
     object.remove("minProperties");
 
-    // If the schema already uses if/then/else for business reasons, refuse
-    // rather than silently overwrite those applicators.
-    if object.contains_key("if") || object.contains_key("then") || object.contains_key("else") {
-        return Err(SchemaError::UndecorableElevationRoot(
-            "root if/then/else combined with minProperties/maxProperties cannot admit optional elevation_reason"
-                .into(),
-        ));
-    }
-
     let mut then_schema = serde_json::Map::new();
     let mut else_schema = serde_json::Map::new();
     if let Some(value) = max {
         then_schema.insert(
             "maxProperties".into(),
-            serde_json::Value::Number((value + 1).into()),
+            serde_json::Value::Number(
+                value
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        SchemaError::UndecorableElevationRoot(
+                            "property cardinality cannot be incremented".into(),
+                        )
+                    })?
+                    .into(),
+            ),
         );
         else_schema.insert(
             "maxProperties".into(),
@@ -952,19 +1024,38 @@ fn adjust_property_cardinality_for_optional_elevation(
     if let Some(value) = min {
         then_schema.insert(
             "minProperties".into(),
-            serde_json::Value::Number((value + 1).into()),
+            serde_json::Value::Number(
+                value
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        SchemaError::UndecorableElevationRoot(
+                            "property cardinality cannot be incremented".into(),
+                        )
+                    })?
+                    .into(),
+            ),
         );
         else_schema.insert(
             "minProperties".into(),
             serde_json::Value::Number(value.into()),
         );
     }
-    object.insert(
-        "if".into(),
-        serde_json::json!({ "required": [ELEVATION_REASON_FIELD] }),
+    then_schema.insert(
+        "required".into(),
+        serde_json::json!([ELEVATION_REASON_FIELD]),
     );
-    object.insert("then".into(), serde_json::Value::Object(then_schema));
-    object.insert("else".into(), serde_json::Value::Object(else_schema));
+    else_schema.insert(
+        "not".into(),
+        serde_json::json!({"required": [ELEVATION_REASON_FIELD]}),
+    );
+    // allOf/anyOf/not/required have the same semantics in every supported
+    // draft, and composing leaves authored if/then/else constraints intact.
+    object
+        .entry("allOf")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .expect("validated allOf array")
+        .push(serde_json::json!({"anyOf": [then_schema, else_schema]}));
     Ok(())
 }
 
@@ -1039,14 +1130,49 @@ fn reject_reference_applicators(
     schema: &serde_json::Value,
     location: &str,
 ) -> Result<(), SchemaError> {
+    reject_reference_keywords(
+        schema,
+        location,
+        REFERENCE_APPLICATOR_KEYWORDS,
+        false,
+        schema,
+    )
+}
+
+fn reject_reference_keywords(
+    schema: &serde_json::Value,
+    location: &str,
+    keywords: &[&str],
+    local_refs_only: bool,
+    document: &serde_json::Value,
+) -> Result<(), SchemaError> {
     // A boolean is a valid schema with nothing to inspect; so is anything
     // malformed enough not to be an object, which registration rejects
     // elsewhere.
     let Some(node) = schema.as_object() else {
         return Ok(());
     };
-    for keyword in REFERENCE_APPLICATOR_KEYWORDS {
+    if local_refs_only
+        && !location.is_empty()
+        && (node.contains_key("$id") || node.contains_key("id"))
+    {
+        return Err(SchemaError::UndecorableElevationRoot(format!(
+            "nested schema resource identifiers at {location} cannot carry elevation metadata; inline the schema in the document resource"
+        )));
+    }
+    for keyword in keywords {
         if node.contains_key(*keyword) {
+            if local_refs_only
+                && *keyword == "$ref"
+                && node
+                    .get(*keyword)
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|reference| {
+                        resolve_local_schema_ref(document, reference).is_some()
+                    })
+            {
+                continue;
+            }
             return Err(SchemaError::ReferenceApplicator {
                 keyword: (*keyword).to_owned(),
                 location: location.to_owned(),
@@ -1056,24 +1182,36 @@ fn reject_reference_applicators(
     for (keyword, value) in node {
         let next = format!("{location}/{}", escape_pointer_token(keyword));
         if SUBSCHEMA_KEYWORDS.contains(&keyword.as_str()) {
-            reject_reference_applicators(value, &next)?;
+            reject_reference_keywords(value, &next, keywords, local_refs_only, document)?;
         } else if SUBSCHEMA_LIST_KEYWORDS.contains(&keyword.as_str()) {
-            reject_reference_applicators_in_list(value, &next)?;
+            reject_reference_applicators_in_list(
+                value,
+                &next,
+                keywords,
+                local_refs_only,
+                document,
+            )?;
         } else if SCHEMA_MAP_KEYWORDS.contains(&keyword.as_str()) {
-            reject_reference_applicators_in_map(value, &next)?;
+            reject_reference_applicators_in_map(value, &next, keywords, local_refs_only, document)?;
         } else if keyword == "items" {
             // One subschema in 2020-12; an array of them in older drafts.
             if value.is_array() {
-                reject_reference_applicators_in_list(value, &next)?;
+                reject_reference_applicators_in_list(
+                    value,
+                    &next,
+                    keywords,
+                    local_refs_only,
+                    document,
+                )?;
             } else {
-                reject_reference_applicators(value, &next)?;
+                reject_reference_keywords(value, &next, keywords, local_refs_only, document)?;
             }
         } else if keyword == "dependencies" {
             // Draft-7 mapped a property name to either a subschema or a list
             // of required property names. 2020-12 split those into
             // `dependentSchemas` and `dependentRequired` precisely because
             // the two shapes are not interchangeable.
-            reject_reference_applicators_in_map(value, &next)?;
+            reject_reference_applicators_in_map(value, &next, keywords, local_refs_only, document)?;
         }
     }
     Ok(())
@@ -1088,12 +1226,21 @@ fn reject_reference_applicators(
 fn reject_reference_applicators_in_list(
     value: &serde_json::Value,
     location: &str,
+    keywords: &[&str],
+    local_refs_only: bool,
+    document: &serde_json::Value,
 ) -> Result<(), SchemaError> {
     let Some(items) = value.as_array() else {
         return Ok(());
     };
     for (index, item) in items.iter().enumerate() {
-        reject_reference_applicators(item, &format!("{location}/{index}"))?;
+        reject_reference_keywords(
+            item,
+            &format!("{location}/{index}"),
+            keywords,
+            local_refs_only,
+            document,
+        )?;
     }
     Ok(())
 }
@@ -1110,6 +1257,9 @@ fn reject_reference_applicators_in_list(
 fn reject_reference_applicators_in_map(
     value: &serde_json::Value,
     location: &str,
+    keywords: &[&str],
+    local_refs_only: bool,
+    document: &serde_json::Value,
 ) -> Result<(), SchemaError> {
     let Some(members) = value.as_object() else {
         return Ok(());
@@ -1118,9 +1268,12 @@ fn reject_reference_applicators_in_map(
         if !subschema.is_object() {
             continue;
         }
-        reject_reference_applicators(
+        reject_reference_keywords(
             subschema,
             &format!("{location}/{}", escape_pointer_token(name)),
+            keywords,
+            local_refs_only,
+            document,
         )?;
     }
     Ok(())
@@ -1939,10 +2092,17 @@ mod tests {
                 ToolExecutionPolicy::ForegroundOnly,
                 ToolExecutionPolicy::BackgroundOnly,
             ] {
-                let compiled = compile_model_definition(&definition(policy, (*schema).clone()))
-                    .unwrap_or_else(|error| {
-                        panic!("references stay legal under {policy:?}: {error}")
-                    });
+                let result = compile_model_definition(&definition(policy, (*schema).clone()));
+                if *keyword != "$ref" || location.is_empty() {
+                    assert!(
+                        result.is_err(),
+                        "unsupported reference must be rejected: {schema}"
+                    );
+                    continue;
+                }
+                let compiled = result.unwrap_or_else(|error| {
+                    panic!("document-local nested references stay legal under {policy:?}: {error}")
+                });
                 assert_eq!(
                     compiled.input_schema["$defs"]["rustx_business"]["properties"]
                         .get(ELEVATION_REASON_FIELD),
@@ -2501,6 +2661,93 @@ mod tests {
                 json!({"a": "1", "elevation_reason": "ask"}),
             ],
         );
+    }
+
+    #[test]
+    fn elevation_preserves_root_applicators_across_supported_drafts() {
+        let candidates = [
+            json!({}),
+            json!({"a": 1}),
+            json!({"a": 1, "b": 2}),
+            json!({"a": {}}),
+            json!({"a": {"elevation_reason": "please"}}),
+        ];
+        for schema in [
+            json!({"type": "object", "if": {"maxProperties": 0}, "then": {"required": ["a"]}}),
+            json!({"type": "object", "not": {"additionalProperties": false}}),
+            json!({"type": "object", "dependentSchemas": {"a": {"maxProperties": 1}}}),
+            json!({"type": "object", "allOf": [{"unevaluatedProperties": false}]}),
+            json!({"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "dependencies": {"a": {"maxProperties": 1}}}),
+            json!({"$schema": "http://json-schema.org/draft-04/schema#", "type": "object", "maxProperties": 1}),
+            json!({"$schema": "http://json-schema.org/draft-06/schema#", "type": "object", "minProperties": 1, "maxProperties": 1}),
+            json!({"$schema": "http://json-schema.org/draft-07/schema#", "type": "object", "$ref": "#/definitions/body", "required": ["b"], "definitions": {"body": {"type": "object", "required": ["a"]}}}),
+            json!({"$id": "urn:root", "type": "object", "properties": {"a": {"$ref": "#"}}, "additionalProperties": false}),
+            json!({"type": "object", "allOf": [{"type": "object", "additionalProperties": false, "properties": {"a": {"$ref": "#/allOf/0"}}}]}),
+        ] {
+            let compiled = compile_model_definition(&definition(
+                ToolExecutionPolicy::ForegroundOnly,
+                schema.clone(),
+            ))
+            .unwrap();
+            for metadata in [None, Some(json!(null)), Some(json!("please"))] {
+                let calls: Vec<_> = candidates
+                    .iter()
+                    .map(|business| {
+                        let mut call = business.clone();
+                        if let Some(value) = &metadata {
+                            call["elevation_reason"] = value.clone();
+                        }
+                        call
+                    })
+                    .collect();
+                assert_elevation_projection_equivalence(&schema, &compiled.input_schema, &calls);
+            }
+        }
+    }
+
+    #[test]
+    fn elevation_root_reference_preserves_sibling_conjunctions_and_boolean_targets() {
+        let candidates = [
+            json!({}),
+            json!({"a": 1}),
+            json!({"b": 1}),
+            json!({"a": 1, "b": 1}),
+            json!({"a": "bad", "b": 1}),
+            json!({"a": 1, "b": 1, "extra": 1}),
+        ];
+        for target in [
+            json!(true),
+            json!(false),
+            json!({"required": ["a"]}),
+            json!({"properties": {"a": {"type": "integer"}}, "minProperties": 2}),
+            json!({"maxProperties": 1}),
+            json!({"allOf": [{"required": ["a"]}], "maxProperties": 2}),
+        ] {
+            let canonical = json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object", "$ref": "#/$defs/body",
+                "required": ["b"], "properties": {"a": {}, "b": {}},
+                "maxProperties": 2, "$defs": {"body": target},
+            });
+            let compiled = compile_model_definition(&definition(
+                ToolExecutionPolicy::ForegroundOnly,
+                canonical.clone(),
+            ))
+            .unwrap();
+            for metadata in [None, Some(json!(null)), Some(json!("please"))] {
+                let calls: Vec<_> = candidates
+                    .iter()
+                    .map(|business| {
+                        let mut call = business.clone();
+                        if let Some(value) = &metadata {
+                            call["elevation_reason"] = value.clone();
+                        }
+                        call
+                    })
+                    .collect();
+                assert_elevation_projection_equivalence(&canonical, &compiled.input_schema, &calls);
+            }
+        }
     }
 
     #[test]
