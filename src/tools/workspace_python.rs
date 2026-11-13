@@ -1161,19 +1161,68 @@ fn isolated_discovery_args() -> [String; 3] {
 }
 
 fn discovery_directory() -> PathBuf {
-    static DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
-    DIRECTORY
-        .get_or_init(|| {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0);
-            let directory = std::env::temp_dir()
-                .join(format!("rustx-uv-discovery-{}-{nanos}", std::process::id()));
-            let _ = std::fs::create_dir_all(&directory);
-            directory
-        })
-        .clone()
+    static DIRECTORY: Mutex<Option<PathBuf>> = Mutex::new(None);
+    let mut cached = DIRECTORY.lock().expect("workspace python discovery");
+    if let Some(directory) = fresh_discovery(&mut cached, &discovery_parents()) {
+        return directory;
+    }
+    std::env::temp_dir().join(format!(
+        "rustx-uv-discovery-{}-{}",
+        std::process::id(),
+        monotonic_nanos()
+    ))
+}
+
+fn discovery_parents() -> Vec<PathBuf> {
+    let mut parents = vec![std::env::temp_dir()];
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let path = PathBuf::from(runtime);
+        if path.is_absolute() && path.is_dir() {
+            parents.push(path);
+        }
+    }
+    let shm = PathBuf::from("/dev/shm");
+    if shm.is_dir() {
+        parents.push(shm);
+    }
+    parents
+}
+
+/// Keeps a discovery directory only after it exists. A failed create is not
+/// remembered, and a deleted directory is replaced on the next use.
+fn fresh_discovery(cached: &mut Option<PathBuf>, parents: &[PathBuf]) -> Option<PathBuf> {
+    if let Some(directory) = cached.as_ref().filter(|directory| directory.is_dir()) {
+        return Some(directory.clone());
+    }
+    let created = create_private_directory(parents, "rustx-uv-discovery")?;
+    *cached = Some(created.clone());
+    Some(created)
+}
+
+fn create_private_directory(parents: &[PathBuf], prefix: &str) -> Option<PathBuf> {
+    for parent in parents {
+        if !parent.is_dir() {
+            continue;
+        }
+        for _ in 0..4 {
+            let directory = parent.join(format!(
+                "{prefix}-{}-{}",
+                std::process::id(),
+                monotonic_nanos()
+            ));
+            if claim_fresh_directory(&directory).is_some() {
+                return Some(directory);
+            }
+        }
+    }
+    None
+}
+
+fn monotonic_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
 }
 
 fn uv_can_create(text: &str) -> bool {
@@ -2659,6 +2708,30 @@ mod tests {
             Some(Record::Ready { .. }) => {}
             other => panic!("expected ready, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn failed_discovery_directory_is_not_cached() {
+        let blocked = tempfile::tempdir().expect("blocked");
+        let file = blocked.path().join("not-a-directory");
+        std::fs::write(&file, "x").expect("file");
+        let mut cached = None;
+        assert!(super::fresh_discovery(&mut cached, std::slice::from_ref(&file)).is_none());
+        assert!(cached.is_none());
+        let good = tempfile::tempdir().expect("good");
+        let first = super::fresh_discovery(&mut cached, &[file.clone(), good.path().to_path_buf()])
+            .expect("later parent");
+        assert!(first.is_dir());
+        assert_eq!(
+            super::fresh_discovery(&mut cached, std::slice::from_ref(&file)).as_ref(),
+            Some(&first)
+        );
+        std::fs::remove_dir(&first).expect("remove");
+        let good_path = good.path().to_path_buf();
+        let second = super::fresh_discovery(&mut cached, std::slice::from_ref(&good_path))
+            .expect("replacement");
+        assert_ne!(first, second);
+        assert!(second.is_dir());
     }
 
     #[test]
