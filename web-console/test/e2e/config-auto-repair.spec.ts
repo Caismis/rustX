@@ -18,7 +18,7 @@ test('automatic configuration repair is announced once and inspected at its exac
     const user = readFileSync(fixture.settings, 'utf8');
     expect(user).not.toContain('legacy_root');
     expect(user).not.toContain('unknown_permission');
-    expect(user).toMatch(/^schema_version = 11\n/);
+    expect(user).toMatch(/^schema_version = 12\n/);
     const backups = readdirSync(join(fixture.directory, 'runtime/configuration-backups'));
     expect(backups).toHaveLength(1);
     expect(readFileSync(join(fixture.directory, 'runtime/configuration-backups', backups[0]), 'utf8')).toContain('legacy_root = true');
@@ -36,7 +36,7 @@ test('automatic configuration repair is announced once and inspected at its exac
     expect(await selectedSettingsPage(page)).toBe('Advanced');
     const section = settings.getByRole('region', { name: 'Auto Repair', exact: true });
     await expect(section.getByRole('status').first()).toHaveText('Automatically repaired: 3 changes committed.');
-    for (const line of ['Updated schema_version 8 → 11', 'Removed an unknown top-level field', 'Removed an unknown field from agent.plugins.todo'])
+    for (const line of ['Updated schema_version 8 → 12', 'Removed an unknown top-level field', 'Removed an unknown field from agent.plugins.todo'])
       await expect(section.getByText(line, { exact: true })).toBeVisible();
     // The receipt names schema objects, never the authored keys it removed.
     for (const authored of ['legacy_root', 'unknown_permission']) await expect(section).not.toContainText(authored);

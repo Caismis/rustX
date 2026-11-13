@@ -96,12 +96,13 @@ function admittedGeometry(input: Uint8Array<ArrayBuffer> | undefined, format: Ex
         let previewStarted = false;
         const startPreview = () => {
           if (finished || previewStarted || !pending.length || !worker) return;
-          previewStarted = true; clearTimeout(previewTimer);
+          previewStarted = true;
           previewTimer = setTimeout(finish, Math.min(L.previewTimeoutMs, Math.max(0, deadline - performance.now())));
           try { worker.postMessage({ kind: 'preview-start' }); } catch { finish(); }
         };
-        if (pending.length) previewTimer = setTimeout(finish, Math.min(L.previewTimeoutMs, Math.max(0, deadline - performance.now())));
-        else finish();
+        // The first GPU frame may take longer than optional preparation. The
+        // original deadline owns that wait; the preview budget starts on demand.
+        if (!pending.length) finish();
         resolve({ ...result, prepareStart, pendingPreview: pending.length > 0, ready, startPreview, dispose });
       } catch { fail('invalid'); }
     };

@@ -56,7 +56,9 @@ test('Workspace settings save permissions and features, and keep configuration r
     await settings.screenshot({ path: test.info().outputPath('settings-repair-needed.png') });
     writeFileSync(file, authored);
     await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
-    await expect(settings.getByRole('form', { name: 'Context', exact: true })).toBeVisible();
+    const timeout = settings.getByRole('form', { name: 'Model timeout', exact: true });
+    await expect(timeout).toBeVisible();
+    await expect(timeout.getByLabel('Response start timeout (ms)', { exact: true })).toBeEnabled();
     await expect(settings.getByRole('form', { name: 'Repair invalid source', exact: true })).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally {

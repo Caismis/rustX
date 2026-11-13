@@ -42,6 +42,43 @@ identified there. A fresh FULL CI run must verify the integrated commit,
 including native macOS and the complete browser shards; historical green runs
 do not establish that result.
 
+## Integrated-head CI follow-up (2026-11-13)
+
+[FULL run 43362630300](https://github.com/Caismis/rustX/actions/runs/43362630300)
+tested `fe632a154`. Linux deterministic contracts, generated protocol, TUI,
+Web/Host/launcher and both native macOS jobs passed. The Linux boundary runner
+received a shutdown signal during in-crate harness compilation after all its
+external boundary targets passed; its remaining tests and coverage were not
+verified by that job.
+
+The browser shards passed 763 of 768 discovered scenarios, intentionally skipped
+two, and failed three. Two failures were stale integration assertions: repaired
+configuration now has schema 12, and Advanced no longer has a Context form.
+Those assertions now use the current schema and an editable Model timeout form.
+
+The 200 MiB STL trace showed a real optional-preview lifetime defect. The receiver
+started its two-second preparation timeout when the original model arrived,
+while the Worker waited for the first GPU-complete frame before receiving its
+start signal. A slow first frame could therefore terminate the waiting Worker
+and leave every drag rendering the full model. The two-second timeout now starts
+with that signal; the original absolute import deadline still bounds the wait,
+and cancellation or disposal still retires the Worker exactly once.
+
+Local follow-up verification passed 394 geometry tests, including 22 Worker
+lifecycle tests, Web typecheck, source/artifact audits and the production build.
+All five scenarios in the two repaired Settings specs and the unchanged geometry
+latency spec passed in the pinned browser. The 200 MiB case completed in 15.3 s,
+retained 100 samples per orbit/pan mode, admitted a 12-triangle exact preview,
+returned to the full 4,191,372-triangle model, and produced zero idle draws.
+The existing 120-second limit, drag count, GPU settlement and disposal checks
+remain unchanged; this functional pass does not establish the opt-in 50 ms
+interaction target.
+
+The eight deterministic regressions addressing the historical review findings
+also passed: reasoning-output recovery and both reduction paths, Summary-only
+history recovery, repeated source identity, and cold cancelled/skipped Trace
+reconstruction. A fresh FULL run must verify the follow-up commit.
+
 ## Accounting and limits
 
 For a declared context window `C`, `M(C) = clamp(ceil(C / 20), 1, 65536)`.
