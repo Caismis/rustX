@@ -1415,7 +1415,11 @@ fn selection_from_guard(specific: Option<PathBuf>, diagnostic: &str) -> PythonSe
 }
 
 fn finish_guard(created: Option<PathBuf>, diagnostic: &str) -> PythonSelection {
-    match created.or_else(provisioned_guard) {
+    directory_guard(created.or_else(provisioned_guard), diagnostic)
+}
+
+fn directory_guard(directory: Option<PathBuf>, diagnostic: &str) -> PythonSelection {
+    match directory {
         Some(directory) => PythonSelection {
             path_prefix: vec![directory],
             virtual_env: None,
@@ -1431,17 +1435,40 @@ fn finish_guard(created: Option<PathBuf>, diagnostic: &str) -> PythonSelection {
     }
 }
 
-/// Scripts shipped with rustX. They participate in `PATH` lookup for `sh`,
-/// `/usr/bin/env`, and `#!/usr/bin/env python3` when no runtime directory can
-/// be created. The diagnostic comes from `RUSTX_PYTHON_GUARD_MESSAGE`.
+const GUARD_PYTHON: &[u8] = include_bytes!("../../assets/python-guard/python");
+const GUARD_PYTHON3: &[u8] = include_bytes!("../../assets/python-guard/python3");
+
+/// `python-guard` installed beside the running executable. The source checkout
+/// is not consulted: a relocated binary keeps this directory next to itself,
+/// and both scripts must match the bytes embedded in that binary.
 fn provisioned_guard() -> Option<PathBuf> {
-    let directory = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/python-guard"));
-    let usable = ["python", "python3"].into_iter().all(|name| {
-        std::fs::metadata(directory.join(name))
-            .ok()
-            .is_some_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-    });
-    usable.then_some(directory)
+    let executable = std::env::current_exe().ok()?;
+    if let Some(directory) = guard_beside_executable(&executable) {
+        return Some(directory);
+    }
+    let canonical = std::fs::canonicalize(&executable).ok()?;
+    if canonical == executable {
+        return None;
+    }
+    guard_beside_executable(&canonical)
+}
+
+fn guard_beside_executable(executable: &Path) -> Option<PathBuf> {
+    validated_guard_directory(&executable.parent()?.join("python-guard"))
+}
+
+fn validated_guard_directory(directory: &Path) -> Option<PathBuf> {
+    for (name, expected) in [("python", GUARD_PYTHON), ("python3", GUARD_PYTHON3)] {
+        let path = directory.join(name);
+        let meta = std::fs::metadata(&path).ok()?;
+        if !meta.is_file() || meta.permissions().mode() & 0o111 == 0 {
+            return None;
+        }
+        if std::fs::read(&path).ok()?.as_slice() != expected {
+            return None;
+        }
+    }
+    Some(directory.to_path_buf())
 }
 
 pub(crate) const GUARD_MESSAGE_KEY: &str = "RUSTX_PYTHON_GUARD_MESSAGE";
@@ -2817,12 +2844,28 @@ mod tests {
             &selection,
         )
         .expect("composition stays available");
+        let deployed = super::provisioned_guard().expect("guard beside the test executable");
+        let executable = std::env::current_exe().expect("test executable");
+        let beside = executable
+            .parent()
+            .expect("executable directory")
+            .join("python-guard");
+        assert!(
+            deployed == beside
+                || std::fs::canonicalize(&executable)
+                    .ok()
+                    .and_then(|path| path.parent().map(|parent| parent.join("python-guard")))
+                    .as_ref()
+                    == Some(&deployed)
+        );
+        assert!(!deployed.ends_with("assets/python-guard"));
+        assert_eq!(selection.path_prefix, vec![deployed]);
         let path = entries
             .iter()
             .find(|(key, _)| key == "PATH")
             .map(|(_, value)| value.as_str())
             .expect("PATH");
-        assert!(path.contains("assets/python-guard"));
+        assert!(!path.contains("/assets/python-guard"));
         assert!(path.contains("/usr/bin"));
         assert!(
             entries
@@ -2842,6 +2885,100 @@ mod tests {
         ));
         let script_dir = tempfile::tempdir().expect("script");
         let script = script_dir.path().join("tool");
+        write_executable(&script, "#!/usr/bin/env python3\nprint(99)\n");
+        assert_guard_rejected(&run_program(&entries, &script.display().to_string(), &[]));
+        let listed = run_program(
+            &entries,
+            "/bin/sh",
+            &["-c", "ls /bin/sh >/dev/null && printf ok"],
+        );
+        assert!(listed.status.success(), "{listed:?}");
+        assert_eq!(String::from_utf8_lossy(&listed.stdout), "ok");
+    }
+
+    fn install_embedded_guard(directory: &Path) {
+        std::fs::create_dir_all(directory).expect("guard directory");
+        for (name, bytes) in [
+            ("python", super::GUARD_PYTHON),
+            ("python3", super::GUARD_PYTHON3),
+        ] {
+            let path = directory.join(name);
+            std::fs::write(&path, bytes).expect("guard script");
+            let mut permissions = std::fs::metadata(&path).expect("meta").permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&path, permissions).expect("mode");
+        }
+    }
+
+    #[test]
+    fn missing_or_altered_deployed_guard_does_not_use_the_build_tree() {
+        let install = tempfile::tempdir().expect("install");
+        let executable = install.path().join("rustx");
+        std::fs::write(&executable, b"bin").expect("executable");
+        assert!(super::guard_beside_executable(&executable).is_none());
+        let source = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/python-guard/python3"
+        ));
+        assert!(
+            source.is_file(),
+            "the checkout copy is not the runtime lookup"
+        );
+        let planted = install.path().join("python-guard");
+        write_executable(
+            &planted.join("python"),
+            "#!/bin/sh\nprintf 'HIJACK\\n'\nexit 0\n",
+        );
+        write_executable(
+            &planted.join("python3"),
+            "#!/bin/sh\nprintf 'HIJACK\\n'\nexit 0\n",
+        );
+        assert!(super::guard_beside_executable(&executable).is_none());
+    }
+
+    #[test]
+    fn relocated_install_rejects_python_without_the_build_tree() {
+        let install = tempfile::tempdir().expect("install");
+        let executable = install.path().join("rustx");
+        std::fs::write(&executable, b"bin").expect("executable");
+        let guard = install.path().join("python-guard");
+        install_embedded_guard(&guard);
+        let resolved = super::guard_beside_executable(&executable).expect("deployed guard");
+        assert_eq!(resolved, guard);
+        assert!(!resolved.starts_with(env!("CARGO_MANIFEST_DIR")));
+
+        let blocked = tempfile::tempdir().expect("blocked");
+        let file = blocked.path().join("not-a-directory");
+        std::fs::write(&file, "x").expect("file");
+        assert!(super::install_process_guard(std::slice::from_ref(&file), "disk full").is_none());
+        let selection = super::directory_guard(Some(resolved), "disk full");
+        assert!(!selection.guard_unavailable);
+        let host = host_from_entries(vec![("PATH", "/usr/bin:/bin"), ("HOME", "/home/ada")]);
+        let entries = crate::tools::execution_environment::compose(
+            &host,
+            &crate::tools::environment::ToolEnvironment::new(),
+            &selection,
+        )
+        .expect("composition stays available");
+        let path = entries
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .map(|(_, value)| value.as_str())
+            .expect("PATH");
+        assert!(path.starts_with(&format!("{}:", guard.display())));
+        assert!(!path.contains("/assets/python-guard"));
+        assert_guard_rejected(&run_bash(&entries, "python3 -c 'print(99)'"));
+        assert_guard_rejected(&run_program(
+            &entries,
+            "/usr/bin/env",
+            &["python3", "-c", "print(99)"],
+        ));
+        assert_guard_rejected(&run_program(
+            &entries,
+            "/bin/sh",
+            &["-c", "python3 -c 'print(99)'"],
+        ));
+        let script = install.path().join("tool");
         write_executable(&script, "#!/usr/bin/env python3\nprint(99)\n");
         assert_guard_rejected(&run_program(&entries, &script.display().to_string(), &[]));
         let listed = run_program(

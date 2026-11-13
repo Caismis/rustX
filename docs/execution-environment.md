@@ -60,11 +60,15 @@ ordinary meaning.
   not. If the Workspace state directory cannot be written, that directory is
   claimed in the temporary directory, `XDG_RUNTIME_DIR`, `/dev/shm`, or the
   directory containing the rustX executable. If every one of those is
-  unwritable, `PATH` still starts with the guard scripts shipped in
-  `assets/python-guard`. Those scripts participate in executable lookup, so
-  `sh`, `/usr/bin/env python3`, and `#!/usr/bin/env python3` exit 127 with
-  the guard diagnostic. Other commands keep the host `PATH`. The failure is
-  not reported as a non-Unicode `PATH` or `HOME`.
+  unwritable, `PATH` still starts with the `python-guard` directory installed
+  beside that executable. `cargo build` places it next to `rustx` and the test
+  binaries, and a deployment copies that directory with the executable.
+  Lookup does not use the build checkout. Both scripts must be executable and
+  match the bytes embedded in the binary. They
+  participate in executable lookup, so `sh`, `/usr/bin/env python3`, and
+  `#!/usr/bin/env python3` exit 127 with the guard diagnostic. Other commands
+  keep the host `PATH`. The failure is not reported as a non-Unicode `PATH`
+  or `HOME`.
 - Registration queues the authorized directory only when the Product Host
   attests a shared filesystem. The location id is not a path. Waiting for
   the cross-process lock observes runtime shutdown and does not stay blocked
