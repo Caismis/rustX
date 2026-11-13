@@ -265,11 +265,6 @@ fn counting_context_request(
         .expect("register test contributor");
     let request = request(adapter);
     let runtime = ContextRuntime::for_attempt_with_assembly(
-        crate::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(crate::context::DefaultTokenEstimator),
         Some(crate::context::AgentStatusEngine::default()),
         assembly,
@@ -616,11 +611,6 @@ async fn failed_start_commit_after_context_append_rolls_back_everything() {
         .expect("register static contributor");
     let request = request(&adapter);
     let runtime = ContextRuntime::for_attempt_with_assembly(
-        crate::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(crate::context::DefaultTokenEstimator),
         Some(crate::context::AgentStatusEngine::default()),
         assembly,

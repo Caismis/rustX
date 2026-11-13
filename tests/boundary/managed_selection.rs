@@ -266,11 +266,6 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
         ]);
         let model_snapshot = support::attempt_model(model.clone(), "managed-selection");
         let context = rustx::context::ContextRuntime::for_attempt(
-            rustx::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             Arc::new(rustx::context::DefaultTokenEstimator),
             None,
             &model_snapshot,

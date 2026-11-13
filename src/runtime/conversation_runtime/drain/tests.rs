@@ -754,7 +754,7 @@ async fn mcp_failure_blocks_manual_compaction_through_lifecycle() {
         .inner
         .fence_mcp_settlement_failure("compaction MCP failure".to_owned());
     assert_eq!(
-        fixture.runtime.compact_context(None).await,
+        fixture.runtime.compact_context(None, None).await,
         Err(crate::runtime::conversation_runtime::ManualCompactionError::Shutdown)
     );
     assert!(!fixture.runtime.has_manual_compaction());
@@ -1321,11 +1321,6 @@ async fn shutdown_drains_after_settlement_control_plane_failure() {
             None,
         ),
         context: ConversationContextConfig {
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator: Arc::new(DefaultTokenEstimator),
             status_engine: Some(AgentStatusEngine::default()),
         },

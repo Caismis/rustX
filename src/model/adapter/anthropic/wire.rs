@@ -284,6 +284,10 @@ pub(crate) struct WireError {
     #[serde(default, rename = "error_type")]
     pub precise_error_type: Option<String>,
     #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub param: Option<String>,
+    #[serde(default)]
     pub message: Option<String>,
 }
 

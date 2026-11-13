@@ -146,11 +146,6 @@ async fn resource_body_enters_context_only_after_one_committed_normal_tool_resul
     ]);
     let model_snapshot = support::attempt_model(model.clone(), "mcp-resource-context");
     let context = crate::context::ContextRuntime::for_attempt(
-        crate::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(crate::context::DefaultTokenEstimator),
         None,
         &model_snapshot,

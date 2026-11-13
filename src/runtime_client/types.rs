@@ -286,7 +286,9 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Session configuration change transcript items and Trace records. Version
 /// 82 added optional, Model-owned reasoning Profile order to full catalog
 /// metadata; selection ordinals and frozen invocation snapshots are unchanged.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 85;
+/// Version 86 combines shared Auxiliary selection, resource permissions, Tool
+/// invocation envelopes, and native compaction skipped/cancelled observations.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 86;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -437,6 +439,9 @@ pub enum RuntimeClientRequest {
     CompactContext {
         /// Attachment-scoped request id.
         id: RequestId,
+        /// Optional focus hints for the summary, bounded in UTF-8 bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instructions: Option<String>,
     },
 
     /// Answer one live native interaction through the runtime-owned
@@ -877,6 +882,8 @@ pub enum RuntimeClientResult {
         /// independently of the latest published context.
         compaction: Option<crate::observation::head::RuntimeClientCompactionView>,
     },
+    /// No historical material was eligible; no checkpoint was committed.
+    ContextCompactionSkipped,
 
     /// `interaction_respond` succeeded: the coordinator accepted the one
     /// terminal response transition.
@@ -1378,7 +1385,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 85);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 86);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

@@ -433,11 +433,6 @@ fn local_snapshot(
         .map_err(|error| storage(format!("auxiliary Summary request rows: {error}")))?
         .collect::<Result<Vec<RequestRow>, _>>()
         .map_err(|error| storage(format!("collect auxiliary Summary requests: {error}")))?;
-    if request_rows.is_empty() {
-        return Err(invalid(
-            "named Summary generation has no physical request prerequisite",
-        ));
-    }
     if request_rows.len() > record_limit {
         return Err(ConversationStoreError::ResourceBoundExceeded(
             "auxiliary Summary request closure exceeds its item bound".into(),
@@ -898,6 +893,28 @@ fn validate_call_metadata(call: &AuxiliaryCallAudit) -> Result<(), ConversationS
             "inherited Summary selected MessageIds must be unique",
         ));
     }
+    if let AuxiliaryInputEvidence::Compaction {
+        source_ranges,
+        previous_summary,
+        ..
+    } = &call.input
+    {
+        if source_ranges.is_empty() {
+            if previous_summary.is_none() {
+                return Err(invalid("a reduction requires a previous Summary"));
+            }
+        } else {
+            crate::durable::auxiliary::validate_compaction_ranges(source_ranges)?;
+        }
+        if !matches!(
+            call.business_source,
+            AuxiliaryBusinessSource::Compaction { .. }
+        ) || call.purpose.as_str() != "summary"
+            || !call.selected_message_ids.is_empty()
+        {
+            return Err(invalid("invalid inherited compaction input owner"));
+        }
+    }
     if matches!(call.input, AuxiliaryInputEvidence::Temporary)
         && !call.selected_message_ids.is_empty()
     {
@@ -1117,6 +1134,7 @@ pub(super) fn validate_snapshot_facts(
     let has_historical_input = matches!(
         &start.input,
         crate::model::auxiliary::AuxiliaryInputEvidence::Historical { cut }
+        | crate::model::auxiliary::AuxiliaryInputEvidence::Compaction { cut, .. }
             if cut.conversation_id == snapshot.source_conversation_id
                 && cut.journal.0 <= start.started_sequence
     );
@@ -1127,14 +1145,6 @@ pub(super) fn validate_snapshot_facts(
         )
         || !has_historical_input
         || start.started_sequence != first.journal_sequence
-        || !snapshot.records.iter().any(|record| {
-            matches!(
-                &record.fact,
-                AuxiliaryAuditFact::RequestStarted(_)
-                    | AuxiliaryAuditFact::RequestSettled(_)
-                    | AuxiliaryAuditFact::RetryScheduled(_)
-            )
-        })
     {
         return Err(invalid(
             "inherited Summary closure lacks physical request prerequisites",
@@ -1150,7 +1160,8 @@ pub(super) fn validate_snapshot_facts(
             (
                 false,
                 Some(
-                    AuxiliaryAuditFact::RequestStarted(_)
+                    AuxiliaryAuditFact::CallStarted(_)
+                        | AuxiliaryAuditFact::RequestStarted(_)
                         | AuxiliaryAuditFact::RequestSettled(_)
                         | AuxiliaryAuditFact::RetryScheduled(_)
                 )
@@ -1253,6 +1264,17 @@ pub(super) fn validate_snapshot_facts(
             "settled inherited Summary retains an open physical request",
         ));
     }
+    if request_starts.is_empty() {
+        if !request_terminals.is_empty()
+            || !request_retries.is_empty()
+            || start.outcome == Some(AuxiliaryCallOutcome::Completed)
+        {
+            return Err(invalid(
+                "Summary without physical requests cannot complete successfully",
+            ));
+        }
+        return Ok(());
+    }
     let final_ordinal = request_starts
         .keys()
         .next_back()
@@ -1298,28 +1320,248 @@ pub(super) fn validate_snapshot_facts(
     Ok(())
 }
 
+fn snapshot_call(
+    snapshot: &AuxiliaryAuditSnapshot,
+) -> Result<&AuxiliaryCallAudit, ConversationStoreError> {
+    match snapshot.records.first().map(|record| &record.fact) {
+        Some(AuxiliaryAuditFact::CallStarted(call)) => Ok(call),
+        _ => Err(invalid("Summary generation closure lacks CallStarted")),
+    }
+}
+
+fn previous_reference(
+    snapshot: &AuxiliaryAuditSnapshot,
+) -> Result<Option<&SummaryGenerationRef>, ConversationStoreError> {
+    let call = snapshot_call(snapshot)?;
+    Ok(match &call.input {
+        AuxiliaryInputEvidence::Compaction {
+            previous_summary, ..
+        } => previous_summary.as_ref(),
+        _ => None,
+    })
+}
+
+fn preceding_reference(
+    snapshot: &AuxiliaryAuditSnapshot,
+) -> Result<Option<SummaryGenerationRef>, ConversationStoreError> {
+    Ok(match &snapshot_call(snapshot)?.business_source {
+        AuxiliaryBusinessSource::Compaction {
+            preceding_call: Some(reference),
+            ..
+        } => Some(SummaryGenerationRef {
+            conversation_id: reference.conversation_id.clone(),
+            call_id: reference.call_id.clone(),
+            through_journal: reference.through_journal,
+        }),
+        _ => None,
+    })
+}
+
+fn validate_preceding_link(
+    child: &AuxiliaryCallAudit,
+    reference: &SummaryGenerationRef,
+    parent: &AuxiliaryAuditSnapshot,
+) -> Result<(), ConversationStoreError> {
+    let source = snapshot_call(parent)?;
+    if reference.conversation_id != parent.source_conversation_id
+        || reference.call_id != parent.call_id
+        || reference.through_journal != parent.through_journal
+        || reference.call_id == child.call_id
+        || reference.through_journal >= child.started_sequence
+        || parent.completeness != AuxiliaryAuditCompleteness::CompleteAtCut
+        || source.outcome.is_none()
+        || !matches!((&child.business_source, &source.business_source),
+            (AuxiliaryBusinessSource::Compaction { operation_id: a, .. }, AuxiliaryBusinessSource::Compaction { operation_id: b, .. }) if a == b)
+    {
+        return Err(invalid(
+            "preceding Summary Call must be settled and earlier in the same Compaction",
+        ));
+    }
+    Ok(())
+}
+
+fn input_cut(
+    input: &AuxiliaryInputEvidence,
+) -> Option<&crate::context::resources::ResourceReadCut> {
+    match input {
+        AuxiliaryInputEvidence::Historical { cut }
+        | AuxiliaryInputEvidence::Compaction { cut, .. } => Some(cut),
+        AuxiliaryInputEvidence::Temporary => None,
+    }
+}
+
+fn compatible_capture(left: &AuxiliaryInputEvidence, right: &AuxiliaryInputEvidence) -> bool {
+    match (input_cut(left), input_cut(right)) {
+        (Some(a), Some(b)) => {
+            a.conversation_id == b.conversation_id
+                && a.ledger == b.ledger
+                && a.transcript == b.transcript
+                && a.projection_activation == b.projection_activation
+        }
+        _ => false,
+    }
+}
+
+fn validate_previous_link(
+    child: &AuxiliaryCallAudit,
+    previous: &SummaryGenerationRef,
+    parent: &AuxiliaryAuditSnapshot,
+) -> Result<(), ConversationStoreError> {
+    let source = snapshot_call(parent)?;
+    if previous.conversation_id != parent.source_conversation_id
+        || previous.call_id != parent.call_id
+        || previous.through_journal != parent.through_journal
+        || previous.call_id == child.call_id
+        || previous.through_journal >= child.started_sequence
+        || parent.completeness != AuxiliaryAuditCompleteness::CompleteAtCut
+        || source.outcome != Some(AuxiliaryCallOutcome::Completed)
+        || !compatible_capture(&child.input, &source.input)
+        || !matches!((&child.business_source, &source.business_source),
+            (AuxiliaryBusinessSource::Compaction { operation_id: a, .. }, AuxiliaryBusinessSource::Compaction { operation_id: b, .. }) if a == b)
+    {
+        return Err(invalid(
+            "previous Summary must be a completed earlier Call of the same Compaction operation",
+        ));
+    }
+    Ok(())
+}
+
+pub(in crate::durable::sqlite) fn validate_previous_summary(
+    connection: &Connection,
+    scope: &ConversationId,
+    child_id: &AuxiliaryCallId,
+    operation: &crate::runtime::identity::CompactionOperationId,
+    previous: &SummaryGenerationRef,
+    cut: &crate::context::resources::ResourceReadCut,
+    frontier: u64,
+) -> Result<(), ConversationStoreError> {
+    if previous.conversation_id != *scope
+        || previous.call_id == *child_id
+        || previous.through_journal == 0
+        || previous.through_journal > frontier
+    {
+        return Err(invalid(
+            "previous Summary must be local and visible before this Call",
+        ));
+    }
+    let snapshot = local_snapshot(
+        connection,
+        scope,
+        previous,
+        ResourceLimits::default().total_items,
+        ResourceLimits::default().total_bytes,
+    )?;
+    validate_snapshot_or_local(&snapshot.value)?;
+    let call = snapshot_call(&snapshot.value)?;
+    if snapshot.value.completeness != AuxiliaryAuditCompleteness::CompleteAtCut
+        || call.outcome != Some(AuxiliaryCallOutcome::Completed)
+        || !input_cut(&call.input).is_some_and(|prior| {
+            prior.conversation_id == cut.conversation_id
+                && prior.ledger == cut.ledger
+                && prior.transcript == cut.transcript
+                && prior.projection_activation == cut.projection_activation
+        })
+        || !matches!(&call.business_source, AuxiliaryBusinessSource::Compaction { operation_id, .. } if operation_id == operation)
+    {
+        return Err(invalid(
+            "previous Summary must be a completed Call of the same Compaction operation",
+        ));
+    }
+    Ok(())
+}
+
+/// Read one completed operation-owned Summary at its exact visible cut.
+pub(in crate::durable::sqlite) fn progress_call(
+    connection: &Connection,
+    scope: &ConversationId,
+    operation: &crate::runtime::identity::CompactionOperationId,
+    reference: &SummaryGenerationRef,
+    remaining_records: &mut usize,
+    remaining_bytes: &mut usize,
+) -> Result<AuxiliaryCallAudit, ConversationStoreError> {
+    if reference.conversation_id != *scope
+        || reference.through_journal == 0
+        || reference.through_journal > journal_prefix(connection)?
+    {
+        return Err(invalid(
+            "compaction progress Summary reference is foreign or future",
+        ));
+    }
+    let snapshot = local_snapshot(
+        connection,
+        scope,
+        reference,
+        *remaining_records,
+        *remaining_bytes,
+    )?;
+    validate_snapshot_or_local(&snapshot.value)?;
+    *remaining_records = remaining_records
+        .checked_sub(snapshot.value.records.len())
+        .ok_or_else(|| {
+            ConversationStoreError::ResourceBoundExceeded(
+                "compaction progress audit items exceed bound".into(),
+            )
+        })?;
+    *remaining_bytes = remaining_bytes
+        .checked_sub(snapshot.encoded_bytes)
+        .ok_or_else(|| {
+            ConversationStoreError::ResourceBoundExceeded(
+                "compaction progress audit bytes exceed bound".into(),
+            )
+        })?;
+    let call = snapshot_call(&snapshot.value)?;
+    if snapshot.value.completeness != AuxiliaryAuditCompleteness::CompleteAtCut
+        || call.outcome != Some(AuxiliaryCallOutcome::Completed)
+        || !matches!(&call.business_source, AuxiliaryBusinessSource::Compaction { operation_id, .. } if operation_id == operation)
+        || !matches!(call.input, AuxiliaryInputEvidence::Compaction { .. })
+    {
+        return Err(invalid(
+            "compaction progress requires a completed operation-owned Summary with Compaction input",
+        ));
+    }
+    Ok(call.clone())
+}
+
 pub(super) fn read_required_snapshots(
     connection: &Connection,
     conversation_id: &ConversationId,
     checkpoints: &[ProjectionCheckpoint],
     authority_through: u64,
 ) -> Result<Vec<AuxiliaryAuditSnapshot>, ConversationStoreError> {
-    let references = sorted_references(checkpoints);
-    if references.len() > ResourceLimits::default().total_items {
-        return Err(ConversationStoreError::ResourceBoundExceeded(
-            "Summary generation dependency count exceeds its bound".into(),
-        ));
-    }
-    let mut snapshots = Vec::with_capacity(references.len());
+    read_snapshot_closure(
+        connection,
+        conversation_id,
+        sorted_references(checkpoints),
+        authority_through,
+    )
+}
+
+fn read_snapshot_closure(
+    connection: &Connection,
+    conversation_id: &ConversationId,
+    references: Vec<SummaryGenerationRef>,
+    authority_through: u64,
+) -> Result<Vec<AuxiliaryAuditSnapshot>, ConversationStoreError> {
+    let mut pending = references;
+    let mut snapshots = BTreeMap::new();
     let mut remaining_records = ResourceLimits::default().total_items;
     let mut remaining_bytes = ResourceLimits::default().total_bytes;
-    for reference in references {
-        if reference.through_journal == 0
+    while let Some(reference) = pending.pop() {
+        let key = (
+            reference.conversation_id.clone(),
+            reference.call_id.clone(),
+            reference.through_journal,
+        );
+        if snapshots.contains_key(&key) {
+            continue;
+        }
+        if snapshots.len() >= ResourceLimits::default().total_items
+            || reference.through_journal == 0
             || (reference.conversation_id == *conversation_id
                 && reference.through_journal > authority_through)
         {
             return Err(invalid(
-                "Summary generation provenance cut is future or empty",
+                "Summary generation provenance cut is future, empty, or exceeds its bound",
             ));
         }
         let snapshot = if reference.conversation_id == *conversation_id {
@@ -1348,9 +1590,66 @@ pub(super) fn read_required_snapshots(
                     "Summary generation audit bytes exceed their cumulative bound".into(),
                 )
             })?;
-        snapshots.push(snapshot.value);
+        if let Some(previous) = previous_reference(&snapshot.value)? {
+            let child = snapshot_call(&snapshot.value)?;
+            if previous.conversation_id != snapshot.value.source_conversation_id
+                || previous.call_id == child.call_id
+                || previous.through_journal >= child.started_sequence
+            {
+                return Err(invalid("invalid previous Summary coordinate"));
+            }
+            pending.push(previous.clone());
+        }
+        if let Some(preceding) = preceding_reference(&snapshot.value)? {
+            let child = snapshot_call(&snapshot.value)?;
+            if preceding.conversation_id != snapshot.value.source_conversation_id
+                || preceding.call_id == child.call_id
+                || preceding.through_journal >= child.started_sequence
+            {
+                return Err(invalid("invalid preceding Compaction Call coordinate"));
+            }
+            pending.push(preceding);
+        }
+        snapshots.insert(key, snapshot.value);
     }
-    Ok(snapshots)
+    validate_snapshot_links(&snapshots)?;
+    Ok(snapshots.into_values().collect())
+}
+
+fn validate_snapshot_links(
+    snapshots: &BTreeMap<(ConversationId, AuxiliaryCallId, u64), AuxiliaryAuditSnapshot>,
+) -> Result<(), ConversationStoreError> {
+    for snapshot in snapshots.values() {
+        if let Some(preceding) = preceding_reference(snapshot)? {
+            if preceding.conversation_id != snapshot.source_conversation_id {
+                return Err(invalid(
+                    "preceding Compaction Call belongs to another Conversation",
+                ));
+            }
+            let parent = snapshots
+                .get(&(
+                    preceding.conversation_id.clone(),
+                    preceding.call_id.clone(),
+                    preceding.through_journal,
+                ))
+                .ok_or_else(|| invalid("preceding Compaction Call audit is missing"))?;
+            validate_preceding_link(snapshot_call(snapshot)?, &preceding, parent)?;
+        }
+        if let Some(previous) = previous_reference(snapshot)? {
+            if previous.conversation_id != snapshot.source_conversation_id {
+                return Err(invalid("previous Summary belongs to another Conversation"));
+            }
+            let parent = snapshots
+                .get(&(
+                    previous.conversation_id.clone(),
+                    previous.call_id.clone(),
+                    previous.through_journal,
+                ))
+                .ok_or_else(|| invalid("previous Summary audit is missing"))?;
+            validate_previous_link(snapshot_call(snapshot)?, previous, parent)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_snapshot_or_local(
@@ -1421,22 +1720,17 @@ pub(super) fn validate_local_reference(
             "new Summary generation requires a successfully completed Call at its declared cut",
         ));
     }
-    let input_matches_capture = matches!(
-        &call.input,
-        crate::model::auxiliary::AuxiliaryInputEvidence::Historical {
-            cut:
-                crate::context::resources::ResourceReadCut {
-                    conversation_id,
-                    ledger,
-                    transcript,
-                    projection_activation,
-                    ..
-                }
-        } if conversation_id == scope
-            && *ledger <= candidate.read_cut.ledger
-            && *transcript <= candidate.read_cut.transcript
-            && *projection_activation <= candidate.read_cut.projection_activation
-    );
+    let input_cut = match &call.input {
+        AuxiliaryInputEvidence::Historical { cut }
+        | AuxiliaryInputEvidence::Compaction { cut, .. } => Some(cut),
+        AuxiliaryInputEvidence::Temporary => None,
+    };
+    let input_matches_capture = input_cut.is_some_and(|cut| {
+        &cut.conversation_id == scope
+            && cut.ledger <= candidate.read_cut.ledger
+            && cut.transcript <= candidate.read_cut.transcript
+            && cut.projection_activation <= candidate.read_cut.projection_activation
+    });
     if !input_matches_capture {
         return Err(invalid(
             "Summary generation input evidence does not match the checkpoint capture",
@@ -1445,6 +1739,7 @@ pub(super) fn validate_local_reference(
     match &call.business_source {
         AuxiliaryBusinessSource::Compaction {
             operation_id: source,
+            ..
         } if source == operation_id => {}
         AuxiliaryBusinessSource::Compaction { .. } => {
             return Err(invalid(
@@ -1489,50 +1784,46 @@ pub(super) fn select_for_checkpoints(
     checkpoints: &[ProjectionCheckpoint],
     snapshots: &[AuxiliaryAuditSnapshot],
 ) -> Result<Vec<AuxiliaryAuditSnapshot>, ConversationStoreError> {
-    let references = sorted_references(checkpoints);
-    let mut by_key: BTreeMap<_, _> = snapshots
-        .iter()
-        .map(|snapshot| {
-            (
-                (
-                    snapshot.source_conversation_id.clone(),
-                    snapshot.call_id.clone(),
-                    snapshot.through_journal,
-                ),
-                snapshot,
-            )
-        })
-        .collect();
-    if by_key.len() != snapshots.len() {
-        return Err(invalid("duplicate inherited Summary audit snapshot"));
+    let mut by_key = BTreeMap::new();
+    for snapshot in snapshots {
+        let key = (
+            snapshot.source_conversation_id.clone(),
+            snapshot.call_id.clone(),
+            snapshot.through_journal,
+        );
+        validate_snapshot_facts(snapshot)?;
+        if by_key.insert(key, snapshot.clone()).is_some() {
+            return Err(invalid("duplicate inherited Summary audit snapshot"));
+        }
     }
-    let expected: BTreeSet<_> = references
-        .iter()
-        .map(|reference| {
-            (
-                reference.conversation_id.clone(),
-                reference.call_id.clone(),
-                reference.through_journal,
-            )
-        })
-        .collect();
-    if by_key.keys().cloned().collect::<BTreeSet<_>>() != expected {
+    validate_snapshot_links(&by_key)?;
+    let mut pending = sorted_references(checkpoints);
+    let mut selected = BTreeSet::new();
+    while let Some(reference) = pending.pop() {
+        let key = (
+            reference.conversation_id,
+            reference.call_id,
+            reference.through_journal,
+        );
+        if !selected.insert(key.clone()) {
+            continue;
+        }
+        let snapshot = by_key
+            .get(&key)
+            .ok_or_else(|| invalid("retained Summary dependency lacks its source audit"))?;
+        if let Some(previous) = previous_reference(snapshot)? {
+            pending.push(previous.clone());
+        }
+        if let Some(preceding) = preceding_reference(snapshot)? {
+            pending.push(preceding);
+        }
+    }
+    if selected.len() != by_key.len() {
         return Err(invalid(
             "retained checkpoint Summary dependencies and source audits differ",
         ));
     }
-    Ok(references
-        .into_iter()
-        .filter_map(|reference| {
-            by_key
-                .remove(&(
-                    reference.conversation_id,
-                    reference.call_id,
-                    reference.through_journal,
-                ))
-                .cloned()
-        })
-        .collect())
+    Ok(by_key.into_values().collect())
 }
 
 pub(super) fn install(
@@ -1760,43 +2051,25 @@ pub(super) fn validate_store_closure(
     let mut expected = BTreeSet::new();
     let mut after = crate::context::checkpoint::ProjectionActivationId(0);
     while after.0 < frontier {
-        let reference = {
-            let checkpoint =
-                super::timeline_prefix(connection, after, 1, frontier, limits.total_bytes)?
-                    .pop()
-                    .ok_or_else(|| invalid("captured Summary timeline did not advance"))?;
-            after = checkpoint.activation.activation;
-            checkpoint.candidate.summary_generation
-        };
-        // The checkpoint payload has been released before materializing audit.
-        let Some(reference) = reference else { continue };
-        if reference.conversation_id == scope {
-            if reference.through_journal > cut.journal.0 {
-                return Err(invalid(
-                    "Summary dependency is after the captured Journal cut",
-                ));
+        let checkpoint =
+            super::timeline_prefix(connection, after, 1, frontier, limits.total_bytes)?
+                .pop()
+                .ok_or_else(|| invalid("captured Summary timeline did not advance"))?;
+        after = checkpoint.activation.activation;
+        for snapshot in read_required_snapshots(connection, &scope, &[checkpoint], cut.journal.0)? {
+            if snapshot.source_conversation_id != scope {
+                let key = (
+                    snapshot.source_conversation_id,
+                    snapshot.call_id,
+                    snapshot.through_journal,
+                );
+                if !inherited_keys.contains(&key) {
+                    return Err(invalid(
+                        "missing inherited Summary dependency at archive cut",
+                    ));
+                }
+                expected.insert(key);
             }
-            let snapshot = local_snapshot(
-                connection,
-                &scope,
-                &reference,
-                limits.total_items,
-                limits.total_bytes,
-            )?;
-            validate_snapshot_or_local(&snapshot.value)?;
-        } else {
-            let key = (
-                reference.conversation_id,
-                reference.call_id,
-                reference.through_journal,
-            );
-            if !inherited_keys.contains(&key) {
-                return Err(invalid(
-                    "missing inherited Summary dependency at archive cut",
-                ));
-            }
-            // Membership is checked first, bounding this set by bootstrap size.
-            expected.insert(key);
         }
     }
     if expected != inherited_keys {

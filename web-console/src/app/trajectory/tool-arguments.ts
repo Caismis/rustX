@@ -1,6 +1,6 @@
 import { getNodeValue, parseTree, type ParseError } from 'jsonc-parser';
 import { modelToolCall } from '../../../../protocol/app-server/model-tool-call';
-import type { TracePreview } from '../../../../protocol/app-server/v78';
+import type { TracePreview } from '../../../../protocol/app-server/v79';
 
 /** Business input for a semantic ledger cell, from the bounded native preview.
  * Slice the original node so opaque number tokens and truncated prefixes stay

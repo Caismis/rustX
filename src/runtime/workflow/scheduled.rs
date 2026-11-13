@@ -210,7 +210,6 @@ impl ScheduledWorkflowPreparation {
                 .config
                 .tool_deadline_policy()
                 .map_err(|_| Error::InvalidPolicy)?,
-            context: configuration.config.context_policy(),
         };
         let models = configuration.models.clone();
         let approval_mode = configuration.config.approval_mode;

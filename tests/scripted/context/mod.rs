@@ -29,5 +29,8 @@
 mod compaction_metadata;
 mod compaction_pipeline;
 mod engine;
+mod fragment_identity;
+mod output_recovery;
 mod runtime_integration;
 mod runtime_multi_compaction;
+mod summary_reduction;

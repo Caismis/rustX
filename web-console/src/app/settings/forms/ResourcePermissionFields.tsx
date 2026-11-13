@@ -1,4 +1,4 @@
-import type { ResourcePermissionSet } from '../../../../../protocol/app-server/v78';
+import type { ResourcePermissionSet } from '../../../../../protocol/app-server/v79';
 import { useTranslation } from '../../../locale/react';
 import { Choice } from '../primitives/aria';
 

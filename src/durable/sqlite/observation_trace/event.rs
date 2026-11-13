@@ -243,7 +243,7 @@ fn terminal_owner(
         E::ToolMessageCommitted{..}=>{
             event.tool_occurrence.as_ref().map(|occurrence|find(connection,"SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND sequence<?3 ORDER BY sequence DESC LIMIT 1",params![occurrence.ledger_position,occurrence.block_index.get(),before])).transpose().map(Option::flatten)
         },
-        E::CompactionCompleted{..}|E::CompactionFailed{..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='compaction_started' AND sequence<?1 ORDER BY sequence DESC LIMIT 1",[before]),
+        E::CompactionCompleted{operation_id,..}|E::CompactionFailed{operation_id,..}|E::CompactionCancelled{operation_id}|E::CompactionSkipped{operation_id}=>find(connection,"SELECT sequence FROM events INDEXED BY events_compaction_operation_kind_idx WHERE json_extract(event_json,'$.event.operation_id')=?1 AND json_extract(event_json,'$.event.type')='compaction_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![operation_id.as_str(),before]),
         E::BackgroundTerminalPublished{execution_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_execution_id_kind_idx WHERE json_extract(event_json,'$.event.execution_id')=?1 AND json_extract(event_json,'$.event.type')='background_execution_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![execution_id.as_str(),before]),
         E::SubagentTerminalPublished{subagent_id,..}|E::SubagentTerminalSettled{subagent_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_subagent_id_kind_idx WHERE json_extract(event_json,'$.event.subagent_id')=?1 AND json_extract(event_json,'$.event.type')='subagent_ownership_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![subagent_id.as_str(),before]),
         E::WorkflowCompleted{run_id,..}|E::WorkflowFailed{run_id,..}|E::WorkflowCancelled{run_id,..}=>{
@@ -608,7 +608,10 @@ fn terminal_data(
             )?);
             terminal(C::Failed)
         }
-        E::AttemptCancelled { .. } | E::WorkflowCancelled { .. } => terminal(C::Cancelled),
+        E::AttemptCancelled { .. }
+        | E::WorkflowCancelled { .. }
+        | E::CompactionCancelled { .. } => terminal(C::Cancelled),
+        E::CompactionSkipped { .. } => terminal(C::Skipped),
         E::AttemptTimedOut { .. } => terminal(C::TimedOut),
         E::AttemptLimitExceeded { .. } => terminal(C::Limited),
         _ => return Err(storage("not a typed native Trace terminal")),

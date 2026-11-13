@@ -306,6 +306,7 @@ async fn review_with_auxiliary(
     };
     let request = match AuxiliaryOutputFormat::JsonSchema(review_schema()).prepare(ModelRequest {
         response_schema: None,
+        prompt_fallback_authorization: crate::model::types::PromptFallbackAuthorization::default(),
         response_byte_limit: Some(crate::model::adapter::response_budget::AUXILIARY_RESPONSE_BYTES),
         images: crate::model::images::ResolvedImages::new(),
         invocation: reviewer.invocation.invocation_config(),

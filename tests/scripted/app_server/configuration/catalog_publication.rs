@@ -870,13 +870,10 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
         assert_eq!(runtime.model_view(), view);
         // Opting in never masks a newly requested invalid policy.
         let mut changed = with_summary(None, summary_on("local/b"));
-        let AuxiliaryModelPolicy::Explicit {
-            max_output_tokens, ..
-        } = &mut changed.auxiliary
-        else {
+        let AuxiliaryModelPolicy::Explicit { request_params, .. } = &mut changed.auxiliary else {
             unreachable!()
         };
-        *max_output_tokens = Some(512);
+        request_params.insert("temperature".into(), json!(0.2));
         assert!(matches!(
             fixture
                 .manager

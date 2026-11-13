@@ -98,11 +98,6 @@ fn context_runtime(
 ) -> rustx::context::ContextRuntime {
     let snapshot = support::attempt_model(model.clone(), "fake-model");
     rustx::context::ContextRuntime::for_attempt(
-        rustx::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(rustx::context::DefaultTokenEstimator),
         Some(rustx::context::AgentStatusEngine::default()),
         &snapshot,

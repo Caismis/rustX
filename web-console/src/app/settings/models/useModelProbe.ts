@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import type { ModelProbeOutcome, ModelProbeSource, SourceSettings } from '../../../../../protocol/app-server/v78';
+import type { ModelProbeOutcome, ModelProbeSource, SourceSettings } from '../../../../../protocol/app-server/v79';
 import type { AppServerClient } from '../../../client/app-server';
 import { RpcFailure } from '../../../client/errors';
 import { sameValue, transportSelection, useClientSelector } from '../../../client/selectors';

@@ -1398,7 +1398,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::agent::execution::test_sync::StartBoundaryPause;
     use crate::capabilities::{CapabilityCoordinator, CapabilityCoordinatorConfig};
-    use crate::context::{AgentStatusEngine, DefaultTokenEstimator, SessionContextPolicy};
+    use crate::context::{AgentStatusEngine, DefaultTokenEstimator};
     use crate::model::adapter::ModelAdapter;
     use crate::runtime::conversation_runtime::{
         ConversationContextConfig, ConversationRuntime, CoordinatorProbe, Gate,
@@ -1540,11 +1540,6 @@ pub(crate) mod tests {
                 tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
                 ),
                 context: ConversationContextConfig {
-                    policy: SessionContextPolicy {
-                        reserve_tokens: 0,
-                        keep_recent_tokens: 0,
-                        summary_output_cap: None,
-                    },
                     estimator: Arc::new(DefaultTokenEstimator),
                     status_engine: Some(AgentStatusEngine::default()),
                 },
@@ -2036,11 +2031,6 @@ pub(crate) mod tests {
             approval_mode: crate::runtime::ApprovalMode::Plan,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-            context: SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             workspace: workspace.clone(),
             incarnation: "incarnation-test".to_owned(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,

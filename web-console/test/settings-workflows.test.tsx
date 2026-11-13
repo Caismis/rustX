@@ -7,7 +7,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../../protocol/app-server/v78';
+import type { RuntimeClientSnapshot, Model, Request1, SourceSettings } from '../../protocol/app-server/v79';
 type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
 import { settingsTransactionOwners } from '../src/app/settings/Settings';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
@@ -139,7 +139,7 @@ it('S2-03 each setting has exactly one primary editor across the six pages', asy
   expect(seen.get('Global instructions')).toBe('Agent');
   expect(seen.get('Built-in tools')).toBe('Tools & Permissions');
   expect(seen.get('Todo extension')).toBe('Extensions');
-  expect(seen.get('Context')).toBe('Advanced');
+  expect(seen.has('Context')).toBe(false);
 });
 
 // ── S2-04 Agent guidance and Tool permissions follow tasks ──────────────────

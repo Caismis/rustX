@@ -1,9 +1,10 @@
-"""The scenario model: strict ordered scripts of expectation + response.
+"""The scenario model: bounded expectations and scripted responses.
 
-A scenario is deliberately non-intelligent. It never inspects the *meaning*
-of a prompt to decide what to do; it matches request number N against step
-number N, asserts what that step declares, and emits the wire response that
-step declares.
+An ordered scenario matches request number N against step number N. A bounded
+adaptive scenario can instead select its next step from prior observed request
+metadata, for runtime-owned boundaries such as the start of compaction. Both
+assert each selected expectation and emit its predetermined wire response;
+neither interprets the meaning of a prompt.
 
 ```text
 step 1: assert request 1 -> emit response 1
@@ -16,7 +17,7 @@ end:    every step consumed, no unexpected request
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Union
+from typing import Any, Callable, Mapping, Union
 
 # ---------------------------------------------------------------------------
 # Protocols
@@ -275,6 +276,22 @@ class Scenario:
     def __init__(self, name: str, *steps: Step) -> None:
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "steps", tuple(steps))
+
+
+@dataclass(frozen=True)
+class AdaptiveScenario:
+    """A bounded state machine for boundaries selected by the runtime.
+
+    The selector returns a strict expectation and response for each request,
+    plus whether that request is the required final step. It must reject
+    invalid ordering and place a finite bound on requests. Every selected step
+    still has the same match/settlement contract as an ordered script.
+    """
+
+    name: str
+    select: Callable[[list["RecordedRequest"]], tuple[Step, bool]]
+    gates: tuple[str, ...] = ()
+    steps: tuple[Step, ...] = ()
 
 
 # ---------------------------------------------------------------------------

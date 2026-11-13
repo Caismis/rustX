@@ -513,11 +513,8 @@ impl ApplicationState {
         }
         .map_err(|error| error.to_string())?;
         // The same native budget validator used at runtime composition.
-        crate::runtime::conversation_runtime::validate_model_context(
-            &capture.config.context_policy(),
-            &model,
-        )
-        .map_err(|error| error.message)
+        crate::runtime::conversation_runtime::validate_model_context(&model)
+            .map_err(|error| error.message)
     }
 
     fn validate_default(

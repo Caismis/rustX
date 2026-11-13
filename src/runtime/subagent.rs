@@ -213,21 +213,10 @@ pub struct NativeExecutionContext {
 /// Execution policies captured by the parent Attempt. Child preparation may
 /// run after publication, so the registry must never supply these values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(test, derive(Default))]
 pub struct InheritedExecutionPolicy {
     pub model_timeout: crate::model::ModelTimeoutPolicy,
     pub tool_deadline: crate::tools::deadline::ToolExecutionDeadlinePolicy,
-    pub context: crate::context::SessionContextPolicy,
-}
-
-#[cfg(test)]
-impl Default for InheritedExecutionPolicy {
-    fn default() -> Self {
-        Self {
-            model_timeout: crate::model::ModelTimeoutPolicy::default(),
-            tool_deadline: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-            context: crate::local_runtime::config::ContextPolicyDocument::default().to_policy(),
-        }
-    }
 }
 
 struct NativeWorkflowDeadline {

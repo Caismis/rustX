@@ -3,7 +3,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, closeSessionView } from './shell-actions';
 import { recoveredThreadStatusReads, supersededHistoryReads, type RequestTiming, type ThreadStatusTiming } from '../session-latency';
-import type { ThreadStatusEntry } from '../../../protocol/app-server/v78';
+import type { ThreadStatusEntry } from '../../../protocol/app-server/v79';
 
 type HttpTiming = { path: string; start: number; end?: number };
 type Mark = { kind: 'click' | 'selected' | 'phase'; name: string; time: number };

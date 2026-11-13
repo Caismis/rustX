@@ -22,7 +22,7 @@ use rustx::agent::{
 };
 use rustx::context::{
     AgentStatusClock, AgentStatusConfig, AgentStatusEngine, ContextRuntime, DefaultTokenEstimator,
-    SessionContextPolicy, TODO_STATUS_EMISSION_KEY,
+    TODO_STATUS_EMISSION_KEY,
 };
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
@@ -248,11 +248,6 @@ fn logical_step_progress_script() -> Vec<Vec<FakeStep>> {
 fn context_runtime(model: &Arc<FakeModel>) -> ContextRuntime {
     let snapshot = support::attempt_model(model.clone(), "issue-130-model");
     ContextRuntime::for_attempt(
-        SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(DefaultTokenEstimator),
         Some(AgentStatusEngine::new(
             AgentStatusConfig::default(),

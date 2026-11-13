@@ -310,11 +310,6 @@ pub(super) fn request<A: ModelAdapter + 'static>(adapter: &Arc<A>) -> AgentExecu
 /// request, so no compaction ever triggers in these tests.
 pub(super) fn runtime<A: ModelAdapter + 'static>(adapter: &Arc<A>) -> ContextRuntime {
     let mut context = ContextRuntime::for_attempt(
-        crate::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(crate::context::DefaultTokenEstimator),
         Some(crate::context::AgentStatusEngine::default()),
         &request(adapter).model,

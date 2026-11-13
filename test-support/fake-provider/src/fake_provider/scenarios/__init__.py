@@ -22,7 +22,7 @@ import dataclasses
 import json
 from typing import Callable
 
-from fake_provider.scenario import Scenario, Step, Stream, ToolCall
+from fake_provider.scenario import AdaptiveScenario, Scenario, Step, Stream, ToolCall
 from fake_provider.scenarios import app_server, conformance, observation, tui, web_console, runtime_benchmark
 
 #: The placeholder of the concrete absolute workspace root of the runtime
@@ -31,7 +31,7 @@ WORKSPACE_PLACEHOLDER = "{workspace}"
 
 #: name -> factory. A factory builds a fresh scenario per process, so a
 #: scenario definition can never accumulate state across runs.
-SCENARIOS: dict[str, Callable[[], Scenario]] = {
+SCENARIOS: dict[str, Callable[[], Scenario | AdaptiveScenario]] = {
     **conformance.SCENARIOS,
     **app_server.SCENARIOS,
     **runtime_benchmark.SCENARIOS,
@@ -41,7 +41,7 @@ SCENARIOS: dict[str, Callable[[], Scenario]] = {
 }
 
 
-def build(name: str, workspace: str | None = None) -> Scenario:
+def build(name: str, workspace: str | None = None) -> Scenario | AdaptiveScenario:
     """Builds one registered scenario.
 
     ``workspace`` is the absolute workspace root of the runtime under test;
@@ -50,8 +50,8 @@ def build(name: str, workspace: str | None = None) -> Scenario:
 
     Raises:
         SystemExit: when the name is not registered, listing what is, or
-            when the scenario carries the workspace placeholder without a
-            workspace value.
+            when a static scenario carries the workspace placeholder without a
+            workspace value. Adaptive placeholders are validated when selected.
     """
     factory = SCENARIOS.get(name)
     if factory is None:
@@ -62,17 +62,28 @@ def build(name: str, workspace: str | None = None) -> Scenario:
     return _compile_calls(_substitute_workspace(scenario, workspace))
 
 
-def _compile_calls(scenario: Scenario) -> Scenario:
+def _map_steps(
+    scenario: Scenario | AdaptiveScenario, transform: Callable[[Step], Step]
+) -> Scenario | AdaptiveScenario:
+    """Apply the same wire transformation to static and selected steps."""
+    if isinstance(scenario, AdaptiveScenario):
+        def select(requests):
+            step, final = scenario.select(requests)
+            return transform(step), final
+
+        return dataclasses.replace(scenario, select=select)
+    return Scenario(scenario.name, *(transform(step) for step in scenario.steps))
+
+
+def _compile_calls(scenario: Scenario | AdaptiveScenario) -> Scenario | AdaptiveScenario:
     """Compile the scenario business-call DSL into the runtime envelope.
 
     Codec/Raw framing fixtures keep their literal bytes. The workflow_output
     terminal protocol has its own contract and is not an ordinary tool.
     """
-    steps = []
-    for step in scenario.steps:
+    def compile_step(step: Step) -> Step:
         if not isinstance(step.respond, Stream):
-            steps.append(step)
-            continue
+            return step
         chunks = []
         for chunk in step.respond.script:
             if isinstance(chunk, ToolCall) and chunk.name != "workflow_output":
@@ -85,43 +96,37 @@ def _compile_calls(scenario: Scenario) -> Scenario:
                     metadata = {key: business.pop(key) for key in ("execution_mode", "elevation_reason") if key in business}
                     chunk = dataclasses.replace(chunk, arguments=json.dumps({"arguments": business, **metadata}, separators=(",", ":")))
             chunks.append(chunk)
-        steps.append(dataclasses.replace(step, respond=Stream(*chunks)))
-    return Scenario(scenario.name, *steps)
+        return dataclasses.replace(step, respond=Stream(*chunks))
+
+    return _map_steps(scenario, compile_step)
 
 
-def _substitute_workspace(scenario: Scenario, workspace: str | None) -> Scenario:
-    """Substitutes the workspace placeholder of every scripted tool call."""
-    steps: list[Step] = []
-    changed = False
-    for step in scenario.steps:
+def _substitute_workspace(
+    scenario: Scenario | AdaptiveScenario, workspace: str | None
+) -> Scenario | AdaptiveScenario:
+    """Substitute paths now for static steps and upon adaptive selection.
+
+    A missing workspace raises during build for static placeholders, or when
+    the adaptive selector returns a step containing a placeholder.
+    """
+    def substitute_step(step: Step) -> Step:
         if not isinstance(step.respond, Stream):
-            steps.append(step)
-            continue
-        script = tuple(
-            dataclasses.replace(
-                chunk,
-                arguments=chunk.arguments.replace(WORKSPACE_PLACEHOLDER, workspace or ""),
-            )
-            if isinstance(chunk, ToolCall) and WORKSPACE_PLACEHOLDER in chunk.arguments
-            else chunk
-            for chunk in step.respond.script
-        )
-        if script != step.respond.script:
-            changed = True
-            # Stream's custom __init__ takes the script positionally, so it
-            # cannot go through dataclasses.replace.
-            steps.append(dataclasses.replace(step, respond=Stream(*script)))
-        else:
-            steps.append(step)
-    if not changed:
-        return scenario
-    if workspace is None:
-        raise SystemExit(
-            f"scenario {scenario.name!r} carries the {WORKSPACE_PLACEHOLDER!r} "
-            "placeholder; start the emulator with --workspace <absolute root>"
-        )
-    # Scenario's custom __init__ takes the steps positionally too.
-    return Scenario(scenario.name, *steps)
+            return step
+        script = []
+        for chunk in step.respond.script:
+            if isinstance(chunk, ToolCall) and WORKSPACE_PLACEHOLDER in chunk.arguments:
+                if workspace is None:
+                    raise SystemExit(
+                        f"scenario {scenario.name!r} carries the {WORKSPACE_PLACEHOLDER!r} "
+                        "placeholder; start the emulator with --workspace <absolute root>"
+                    )
+                chunk = dataclasses.replace(
+                    chunk, arguments=chunk.arguments.replace(WORKSPACE_PLACEHOLDER, workspace)
+                )
+            script.append(chunk)
+        return dataclasses.replace(step, respond=Stream(*script))
+
+    return _map_steps(scenario, substitute_step)
 
 
 __all__ = ["SCENARIOS", "build"]

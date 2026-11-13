@@ -153,7 +153,7 @@ compat = { chat_reasoning_replay = "omit" }
     // Tool-execution composition fixtures must not sit on Plan: MCP defaults
     // are ExternalOrDelegated and Plan denies them without elevation_reason,
     // so the parent never commits a ToolResult or continues into turn two.
-    let mut config_document = serde_json::json!({"schema_version": 12, "agent_id": "agent-parent", "approval_mode": "full_access", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
+    let mut config_document = serde_json::json!({"schema_version": 13, "agent_id": "agent-parent", "approval_mode": "full_access", "mcp_servers": {
             SERVER_NAME: {
                 "command": executable,
                 "args": fixture_spawn_args(test_name),
@@ -622,8 +622,7 @@ async fn headless_first_submission_waits_ten_seconds_for_exact_selected_tools() 
     crate::launch_fixture::write_document(
         &root.path().join("rustx.toml"),
         &toml::to_string_pretty(&serde_json::json!({
-            "schema_version":12,
-            "context":{"reserve_tokens":0,"keep_recent_tokens":0},
+            "schema_version":13,
             "agent":{"model":{"model":"scripted/scripted"},
                 "tools":{"builtin":["read"],"sources":{SERVER_NAME:[TOOL_NAME]}}},
             "providers":{"scripted":{"protocol":"openai_chat_completions","base_url":provider.url("/v1"),"api_key":"fixture"}},

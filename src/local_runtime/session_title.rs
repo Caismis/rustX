@@ -376,6 +376,8 @@ fn title_request(text: &str, invocation: &crate::model::ResolvedModelInvocation)
     };
     use crate::model::projected::{DerivedModelMessage, ProjectedMessage, ProjectedUserKind};
     ModelRequest {
+            prompt_fallback_authorization:
+                crate::model::types::PromptFallbackAuthorization::default(),
         response_schema: None,
         response_byte_limit: None,
         images: std::collections::BTreeMap::new(),

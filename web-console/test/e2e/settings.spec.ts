@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openSettingsPage, openWorkspaceSettings, settledSave } from './shell-actions';
 
@@ -56,11 +56,13 @@ test('Workspace settings save permissions and features, and keep configuration r
     await settings.screenshot({ path: test.info().outputPath('settings-repair-needed.png') });
     writeFileSync(file, authored);
     await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
-    await expect(settings.getByRole('form', { name: 'Context', exact: true })).toBeVisible();
+    const timeout = settings.getByRole('form', { name: 'Model timeout', exact: true });
+    await expect(timeout).toBeVisible();
+    await expect(timeout.getByLabel('Response start timeout (ms)', { exact: true })).toBeEnabled();
     await expect(settings.getByRole('form', { name: 'Repair invalid source', exact: true })).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally {
-    const report = await fixture.stop(false);
+    const report = await stopDogfoodPage(page, fixture, false);
     expect(report.requestCount).toBe(0);
   }
 });

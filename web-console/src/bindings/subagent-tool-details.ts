@@ -1,5 +1,5 @@
 import { parseModelToolCall } from '../../../protocol/app-server/model-tool-call';
-import type { RuntimeClientAgent, SubagentState, ForegroundToolExecution } from '../../../protocol/app-server/v78';
+import type { RuntimeClientAgent, SubagentState, ForegroundToolExecution } from '../../../protocol/app-server/v79';
 import type { TranslationKey } from '../locale/translation';
 
 export interface AgentToolItem {

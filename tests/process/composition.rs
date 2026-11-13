@@ -39,10 +39,6 @@ chat_reasoning_replay = "omit"
 
 const RUNTIME_CONFIG_TOML: &str = r#"agent_id = "agent-composed"
 
-[context]
-reserve_tokens = 1024
-keep_recent_tokens = 8192
-
 
 [environment]
 RUSTX_FIXTURE = "1"

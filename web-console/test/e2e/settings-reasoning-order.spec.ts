@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { returnHome, connectRemote, openEmptySession, openSettingsPage, openWorkspaceSettings, settledSave } from './shell-actions';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
 test('parseable invalid Model orders expose whole-source repair and restore native editing', async ({ page }) => {
@@ -50,7 +50,7 @@ reasoning_profile_order = [${id === 'a' ? '"low", "high"' : second}]
     await modal.getByRole('button', { name: 'Save Model b', exact: true }).click();
     await expect(settledSave(page, 'Model b')).toBeVisible();
     expect(readFileSync(source, 'utf8')).toMatch(/\[models\.b\][\s\S]*?reasoning_profile_order = \[\s*"low",\s*"high",?\s*\]/s);
-  } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
+  } finally { const report = await stopDogfoodPage(page, fixture, false); expect(report.requestCount).toBe(0); }
 });
 
 for (const width of [1440, 390]) test(`reasoning order ${width}: native save, reload, reset, cancel and clear`, async ({ page }) => {
@@ -155,5 +155,5 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     expect(empty).not.toContain('default_profile');
     expect(empty).not.toContain('.profiles');
     expect(errors).toEqual([]);
-  } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
+  } finally { const report = await stopDogfoodPage(page, fixture, false); expect(report.requestCount).toBe(0); }
 });

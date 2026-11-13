@@ -205,6 +205,7 @@ pub(crate) struct RepairPlan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Uneditable {
     NotUtf8,
+    RemovedContext,
     Syntax {
         line: Option<usize>,
         column: Option<usize>,
@@ -219,6 +220,7 @@ impl Uneditable {
             Self::NotUtf8 => {
                 "rustx.toml is not valid UTF-8; it cannot be repaired automatically".into()
             }
+            Self::RemovedContext => super::super::authoring::REMOVED_CONTEXT_DIAGNOSTIC.into(),
             Self::Syntax { line, column } => format!(
                 "malformed TOML at line {}, column {}; syntax is never repaired automatically",
                 line.unwrap_or(1),
@@ -278,6 +280,9 @@ pub(crate) fn plan(bytes: &[u8]) -> Result<RepairPlan, Uneditable> {
             column: prefix.map(|s| s.rsplit('\n').next().unwrap_or_default().chars().count() + 1),
         }
     })?;
+    if super::super::authoring::has_removed_context(&document) {
+        return Err(Uneditable::RemovedContext);
+    }
     reject_obsolete_auxiliary_model_fields(&document)?;
     let mut changes = Vec::new();
     normalize_schema_version(&mut document, &mut changes);

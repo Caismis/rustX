@@ -1093,6 +1093,8 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
         .freeze_input(
             &conversation,
             &crate::model::ModelRequest {
+                prompt_fallback_authorization:
+                    crate::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: None,
                 images: crate::model::images::ResolvedImages::new(),
@@ -1138,6 +1140,8 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
         .freeze_input(
             &conversation,
             &crate::model::ModelRequest {
+                prompt_fallback_authorization:
+                    crate::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: None,
                 continuation_source: Some(source),

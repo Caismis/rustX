@@ -216,8 +216,11 @@ impl RuntimeAttachment {
     pub async fn compact_context(
         &self,
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+        instructions: Option<String>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.access(true)?.compact_context(request_id).await
+        self.access(true)?
+            .compact_context(request_id, instructions)
+            .await
     }
 
     /// Capture native operation authority at admission. Only a server-owned
@@ -611,8 +614,8 @@ impl RuntimeAttachment {
             };
         }
         if !matches!(request, RuntimeClientRequest::Shutdown { .. }) {
-            if matches!(request, RuntimeClientRequest::CompactContext { .. }) {
-                let result = inner.compact_context(None).await;
+            if let RuntimeClientRequest::CompactContext { instructions, .. } = &request {
+                let result = inner.compact_context(None, instructions.clone()).await;
                 return match result {
                     Ok(result) => RuntimeClientResponse {
                         id,

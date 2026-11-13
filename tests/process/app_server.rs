@@ -164,7 +164,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":78,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":79,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -234,9 +234,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v53, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v78"),
+            Some("rustx.app-server.v79"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v78, rustx-token.wrong"),
+            Some("rustx.app-server.v79, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -805,7 +805,7 @@ async fn driver_fails_pending_requests_with_the_transport_cause() {
                     |_: &Upgrade, mut response: Response| {
                         response.headers_mut().insert(
                             "sec-websocket-protocol",
-                            "rustx.app-server.v78".parse().unwrap(),
+                            "rustx.app-server.v79".parse().unwrap(),
                         );
                         Ok(response)
                     },
@@ -1957,7 +1957,7 @@ async fn app_server_ordinary_clients_have_equal_delivery_eligibility() {
             driver::try_socket(
                 &url,
                 &format!(
-                    "rustx.app-server.v78, {}, rustx-delivery-access.obsolete",
+                    "rustx.app-server.v79, {}, rustx-delivery-access.obsolete",
                     driver::credential_offer(driver::TOKEN)
                 )
             )
@@ -2238,7 +2238,7 @@ async fn app_server_startup_repairs_the_user_source_before_process_policy() {
         assert_eq!(
             receipt.changes,
             vec![
-                ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 12 },
+                ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 13 },
                 ConfigRepairChange::RemovedField { object_path: String::new() },
                 ConfigRepairChange::RemovedField {
                     object_path: "app_server".into()

@@ -653,8 +653,9 @@ async fn permission_reminder_ignores_modes_that_never_reached_a_request_start() 
         {
             let mut state = runtime.inner.lock_state();
             let mut config = crate::local_runtime::config::CurrentRuntimeConfig::from_toml_slice(
-                b"agent_id='agent-a'\n[context]\nreserve_tokens=0\nkeep_recent_tokens=0\n[agent.model]\nmodel='scripted/scripted'\n",
-            ).unwrap();
+                b"agent_id='agent-a'\n[agent.model]\nmodel='scripted/scripted'\n",
+            )
+            .unwrap();
             config.approval_mode = ApprovalMode::FullAccess;
             let configuration = crate::runtime::resources::RuntimeConfiguration {
                 config: Arc::new(config),
@@ -796,18 +797,22 @@ async fn permission_reminder_survives_compaction_then_cancel_or_failed_request_s
             store.clone(),
             vec![
                 one_turn_script(),
-                text_turn_script("committed summary"),
+                summary_turn_script("committed summary"),
                 one_turn_script(),
             ],
             None,
         )
         .await;
         runtime.activate();
+        // Successful compaction must shrink real retained history, including
+        // the structured Summary's fixed headings.
         runtime
-            .submit_inbound(text_content("First native user request"))
+            .submit_inbound(text_content(
+                &"First native user request and its retained historical facts; ".repeat(32),
+            ))
             .unwrap();
         await_settled_ledger(&runtime, 0).await;
-        runtime.compact_context(None).await.unwrap();
+        runtime.compact_context(None, None).await.unwrap();
         let mut paused = if cancel {
             let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
             runtime
@@ -901,13 +906,16 @@ async fn permission_reminder_reconstructs_from_primary_request_and_context_activ
             let dir = tempfile::tempdir().unwrap();
             let mut scripts = vec![one_turn_script(), one_turn_script()];
             if compact {
-                scripts.push(text_turn_script("committed summary"));
+                scripts.push(summary_turn_script("committed summary"));
             }
             let (runtime, model) = headless_runtime(&dir, scripts, None, None).await;
             runtime.activate();
             for attempt in 0..2 {
+                // Keep enough real history for one strictly shrinking Summary.
                 runtime
-                    .submit_inbound(text_content("native user task"))
+                    .submit_inbound(text_content(
+                        &"native user task and its retained historical facts; ".repeat(32),
+                    ))
                     .unwrap();
                 await_settled_ledger(&runtime, attempt).await;
             }
@@ -924,7 +932,7 @@ async fn permission_reminder_reconstructs_from_primary_request_and_context_activ
                     .contains(&reminder)
             );
             if compact {
-                runtime.compact_context(None).await.unwrap();
+                runtime.compact_context(None, None).await.unwrap();
             }
             runtime.shutdown().await.unwrap();
             drop(runtime);
@@ -1477,7 +1485,7 @@ async fn cold_reopen_uses_current_resources_without_rewriting_history() {
 
     let (runtime_a, model_a) = headless_runtime_with_options(
         &dir,
-        vec![one_turn_script(), text_turn_script("summary-A")],
+        vec![one_turn_script(), summary_turn_script("summary-A")],
         None,
         None,
         HeadlessRuntimeOptions {
@@ -1488,7 +1496,9 @@ async fn cold_reopen_uses_current_resources_without_rewriting_history() {
     .await;
     runtime_a.activate();
     runtime_a
-        .submit_inbound(text_content("historical request A"))
+        .submit_inbound(text_content(
+            &"historical request A and its facts; ".repeat(32),
+        ))
         .expect("request A");
     let _ = await_settled_ledger(&runtime_a, 0).await;
     let snapshots_a = request_snapshots(&runtime_a.request_history());
@@ -1501,14 +1511,21 @@ async fn cold_reopen_uses_current_resources_without_rewriting_history() {
     let snapshot_a_bytes = serde_json::to_vec(&snapshots_a[0]).expect("snapshot A bytes");
 
     let outcome = runtime_a
-        .compact_context(None)
+        .compact_context(None, None)
         .await
         .expect("compaction under resource generation A");
+    let crate::runtime::conversation_runtime::ManualCompactionOutcome::Compacted {
+        checkpoint_id,
+        ..
+    } = outcome
+    else {
+        panic!("resource generation A produced no checkpoint");
+    };
     let ledger_a = runtime_a.coordinator_ledger().expect("generation A ledger");
     let summary_a = runtime_a
         .inner
         .store
-        .projection_checkpoint(&outcome.checkpoint_id)
+        .projection_checkpoint(&checkpoint_id)
         .unwrap();
     let summary_a_bytes = serde_json::to_vec(&summary_a).expect("summary A bytes");
     assert!(
@@ -1552,7 +1569,7 @@ async fn cold_reopen_uses_current_resources_without_rewriting_history() {
             &runtime_b
                 .inner
                 .store
-                .projection_checkpoint(&outcome.checkpoint_id)
+                .projection_checkpoint(&checkpoint_id)
                 .unwrap()
         )
         .unwrap(),
@@ -2037,11 +2054,6 @@ fn construction_validates_ownership() {
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator: Arc::new(DefaultTokenEstimator),
             status_engine: Some(AgentStatusEngine::default()),
         },
@@ -2121,11 +2133,6 @@ fn construction_outside_execution_runtime_fails_typed() {
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator: Arc::new(DefaultTokenEstimator),
             status_engine: Some(AgentStatusEngine::default()),
         },
@@ -2175,11 +2182,6 @@ async fn invalid_model_timeout_policy_fails_before_runtime_ownership_transfer() 
                 tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
                 ),
                 context: ConversationContextConfig {
-                    policy: crate::context::SessionContextPolicy {
-                        reserve_tokens: 0,
-                        keep_recent_tokens: 0,
-                        summary_output_cap: None,
-                    },
                     estimator: Arc::new(DefaultTokenEstimator),
                     status_engine: Some(AgentStatusEngine::default()),
                 },
@@ -2291,11 +2293,6 @@ async fn invalid_tool_deadline_policy_fails_before_runtime_ownership_transfer() 
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 tool_deadline_policy,
                 context: ConversationContextConfig {
-                    policy: crate::context::SessionContextPolicy {
-                        reserve_tokens: 0,
-                        keep_recent_tokens: 0,
-                        summary_output_cap: None,
-                    },
                     estimator: Arc::new(DefaultTokenEstimator),
                     status_engine: Some(AgentStatusEngine::default()),
                 },
@@ -2948,6 +2945,8 @@ async fn class_c_restart_issues_no_provider_request_of_its_own() {
                 .freeze_input(
                     store.conversation_id(),
                     &crate::model::ModelRequest {
+                        prompt_fallback_authorization:
+                            crate::model::types::PromptFallbackAuthorization::default(),
                         response_schema: None,
                         response_byte_limit: None,
                         messages: history.messages.clone(),
@@ -3085,6 +3084,8 @@ async fn class_e_restart_issues_no_replacement_request() {
                 .freeze_input(
                     store.conversation_id(),
                     &crate::model::ModelRequest {
+                        prompt_fallback_authorization:
+                            crate::model::types::PromptFallbackAuthorization::default(),
                         response_schema: None,
                         response_byte_limit: None,
                         messages: history.messages.clone(),

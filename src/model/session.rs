@@ -1465,6 +1465,37 @@ request_params = '{{"effort":"high"}}'
     }
 
     #[test]
+    fn compaction_honors_the_frozen_shared_auxiliary_output_limit() {
+        let credentials = crate::model::catalog::MapCredentialEnvironment::new([(
+            "RUSTX_EXAMPLE_API_KEY".into(),
+            "test-only".into(),
+        )]);
+        for explicit_cap in [None, Some(128)] {
+            let registry = ModelBindingRegistry::new(
+                profiled_catalog(Some(&["lowest", "high"]))
+                    .resolve(&credentials)
+                    .unwrap(),
+            )
+            .unwrap();
+            let mut config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
+            config.auxiliary = AuxiliaryModelPolicy::Session {
+                profile: AuxiliaryProfileSelection::Lowest,
+                request_params: RequestParams::new(),
+                max_output_tokens: explicit_cap,
+            };
+            let snapshot = SessionModelState::new(registry, config)
+                .unwrap()
+                .snapshot()
+                .unwrap();
+            let allowed = explicit_cap.unwrap_or(256);
+            assert_eq!(snapshot.summary_invocation().max_output_tokens(), allowed);
+            let policy = crate::context::policy::CompactionPolicy::for_models(&snapshot).unwrap();
+            assert_eq!(policy.budgets.summary_output_budget, allowed);
+            assert_eq!(policy.maximum_summary_output, allowed);
+        }
+    }
+
+    #[test]
     fn lowest_picks_first_reasoning_profile_or_model_default() {
         let ordered = profiled_catalog(Some(&["lowest", "high"]));
         let config = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());

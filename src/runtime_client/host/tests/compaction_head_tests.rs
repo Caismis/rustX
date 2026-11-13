@@ -3,6 +3,183 @@ use super::*;
 use crate::durable::{JournalStore, ObservationStore, ProjectionStore};
 use crate::runtime_client::types::RequestId;
 
+#[test]
+#[allow(clippy::too_many_lines)] // One bounded persisted operation covers cold start, accepted progress and cancellation.
+fn cold_read_restores_full_bounded_progress_without_trace_or_completion() {
+    use crate::durable::{AuxiliaryStore, CanonicalStore, SqliteConversationStore};
+    use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEventEnvelope};
+    use crate::model::auxiliary::{
+        AuxiliaryAttribution, AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryCallStart,
+        AuxiliaryFingerprint, AuxiliaryFinishReason, AuxiliaryInputEvidence,
+        AuxiliaryObservedProviderTerminal, AuxiliaryRequestEvidence, AuxiliaryRequestStart,
+        AuxiliarySourceRange, AuxiliarySourceRole, AuxiliaryUsageCompleteness,
+    };
+    use crate::runtime::identity::{CompactionOperationId, ConversationId, EventId};
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    store.initialize(&[]).unwrap();
+    let operation_id = CompactionOperationId::new("cold-progress");
+    let append = |event| {
+        store
+            .append_event(RuntimeEventEnvelope {
+                schema_version: EVENT_SCHEMA_VERSION,
+                event_id: EventId::new(""),
+                sequence: 0,
+                conversation_id: store.conversation_id().clone(),
+                attempt_id: None,
+                turn_id: None,
+                timestamp: chrono::Utc::now(),
+                tool_occurrence: None,
+                observation: None,
+                event,
+            })
+            .unwrap()
+    };
+    append(RuntimeEvent::CompactionStarted {
+        operation_id: operation_id.clone(),
+    });
+    let started_cut = store.observation_read_cut().unwrap();
+    let started = super::super::durable_bootstrap::read(&store, &started_cut).unwrap();
+    assert!(!started.context.compaction_in_progress);
+    assert_eq!(
+        started
+            .context
+            .compaction_progress
+            .unwrap()
+            .accepted_fragments,
+        0
+    );
+    let ranges: Vec<_> = (0..32)
+        .map(|projection_index| AuxiliarySourceRange {
+            projection_index,
+            role: AuxiliarySourceRole::User,
+            byte_start: 0,
+            byte_end: 1,
+        })
+        .collect();
+    let call_id = crate::runtime::identity::AuxiliaryCallId::generate();
+    let request_id = crate::runtime::identity::RequestId::new("auxiliary:cold-progress");
+    store
+        .commit_auxiliary_call_start(
+            &AuxiliaryCallStart {
+                call_id: call_id.clone(),
+                purpose: AuxiliaryAttribution::new("summary").unwrap(),
+                trigger: AuxiliaryAttribution::new("manual").unwrap(),
+                business_source: AuxiliaryBusinessSource::Compaction {
+                    operation_id: operation_id.clone(),
+                    preceding_call: None,
+                },
+                input: AuxiliaryInputEvidence::Compaction {
+                    cut: store.compaction_resource_cut().unwrap(),
+                    source_ranges: ranges.clone(),
+                    previous_summary: None,
+                    output_strategy: crate::model::structured::StructuredOutputStrategy::Prompt,
+                },
+                semantic_input_fingerprint: AuxiliaryFingerprint::new("a".repeat(64)).unwrap(),
+                invocation_fingerprint: AuxiliaryFingerprint::new("b".repeat(64)).unwrap(),
+                selected_message_ids: vec![],
+            },
+            chrono::Utc::now(),
+        )
+        .unwrap();
+    store
+        .commit_auxiliary_request_start(
+            &AuxiliaryRequestStart {
+                call_id: call_id.clone(),
+                ordinal: 0,
+                request_id: request_id.clone(),
+                model: "fixture/summary".into(),
+            },
+            chrono::Utc::now(),
+        )
+        .unwrap();
+    let terminal = crate::durable::auxiliary::auxiliary_settlement_envelope(
+        store.conversation_id().clone(),
+        chrono::Utc::now(),
+        RuntimeEvent::ModelRequestCompleted {
+            owner: crate::model::ModelRequestOwner::Auxiliary {
+                call_id: call_id.clone(),
+                ordinal: 0,
+            },
+            request_id: request_id.clone(),
+            finish_reason: crate::model::ModelFinishReason::Stop,
+            usage: None,
+            generation: None,
+        },
+    )
+    .unwrap();
+    let settled = crate::durable::auxiliary::auxiliary_settlement_envelope(
+        store.conversation_id().clone(),
+        chrono::Utc::now(),
+        RuntimeEvent::AuxiliaryCallSettled {
+            call_id: call_id.clone(),
+            outcome: AuxiliaryCallOutcome::Completed,
+            request_evidence: Some(AuxiliaryRequestEvidence {
+                request_id,
+                observed_provider_terminal: Some(AuxiliaryObservedProviderTerminal::Completed {
+                    finish_reason: AuxiliaryFinishReason::Stop,
+                }),
+                usage: None,
+                usage_completeness: AuxiliaryUsageCompleteness::Unreported,
+                remote_execution_uncertainty: false,
+            }),
+        },
+    )
+    .unwrap();
+    store
+        .commit_auxiliary_request_settlement(terminal, settled)
+        .unwrap();
+    let generation = crate::context::checkpoint::SummaryGenerationRef {
+        conversation_id: store.conversation_id().clone(),
+        call_id,
+        through_journal: store.auxiliary_audit_cut().unwrap().journal,
+    };
+    let event = RuntimeEvent::CompactionChunkAccepted {
+        operation_id: operation_id.clone(),
+        accepted_fragments: 1,
+        source_ranges: ranges.clone(),
+        generation: Some(generation),
+    };
+    assert!(!crate::runtime::observation::trace_fact_requires_publication(&event));
+    append(event);
+    let cut = store.observation_read_cut().unwrap();
+    let cold = super::super::durable_bootstrap::read(&store, &cut).unwrap();
+    assert!(!cold.context.compaction_in_progress);
+    let progress = cold.context.compaction_progress.unwrap();
+    assert_eq!(progress.operation_id, operation_id);
+    assert_eq!(progress.accepted_fragments, 1);
+    assert_eq!(progress.source_ranges, ranges);
+    assert_eq!(cold.context.compaction_count, 0);
+    append(RuntimeEvent::CompactionCancelled { operation_id });
+    let cut = store.observation_read_cut().unwrap();
+    let cold = super::super::durable_bootstrap::read(&store, &cut).unwrap();
+    assert!(!cold.context.compaction_in_progress);
+    assert!(cold.context.compaction_progress.is_none());
+    assert!(cold.context.compaction_error.is_none());
+    assert_eq!(cold.context.compaction_count, 0);
+}
+
+fn committed_view(
+    outcome: &crate::runtime::conversation_runtime::ManualCompactionOutcome,
+) -> crate::observation::head::RuntimeClientCompactionView {
+    let crate::runtime::conversation_runtime::ManualCompactionOutcome::Compacted {
+        generation,
+        checkpoint_id,
+        activation_id,
+        tokens_before,
+        estimated_tokens_after,
+    } = outcome
+    else {
+        panic!("expected committed compaction");
+    };
+    crate::observation::head::RuntimeClientCompactionView {
+        generation: *generation,
+        checkpoint_id: checkpoint_id.clone(),
+        activation_id: *activation_id,
+        tokens_before: *tokens_before,
+        estimated_tokens_after: *estimated_tokens_after,
+    }
+}
+
 struct ParkedProjection<'a>(&'a super::super::ClientInner);
 impl Drop for ParkedProjection<'_> {
     fn drop(&mut self) {
@@ -13,7 +190,9 @@ impl Drop for ParkedProjection<'_> {
 async fn completed_turn(fixture: &HostFixture, subscription: &EventSubscription) {
     fixture
         .runtime
-        .submit_inbound(submit_content("original turn before compaction"))
+        .submit_inbound(submit_content(
+            &"original turn and its retained facts before compaction; ".repeat(32),
+        ))
         .unwrap();
     receive_until(subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
@@ -39,6 +218,7 @@ fn assert_compaction_head(
     context: &crate::runtime_client::snapshot::RuntimeClientContextView,
     outcome: &crate::runtime::conversation_runtime::ManualCompactionOutcome,
 ) {
+    let outcome = committed_view(outcome);
     assert_eq!(context.compaction_count, outcome.generation);
     let compaction = context.latest_compaction.as_ref().unwrap();
     assert_eq!(compaction.generation, outcome.generation);
@@ -52,7 +232,12 @@ fn assert_compaction_head(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn committed_compaction_head_is_atomic_with_context_while_domain_reads_are_parked() {
     let (model, fixture) = host_fixture(
-        (0..4).map(|_| one_turn_stop()).collect(),
+        vec![
+            one_turn_stop(),
+            summary_turn_stop("first checkpoint"),
+            one_turn_stop(),
+            summary_turn_stop("second checkpoint"),
+        ],
         ToolRegistry::new(),
         status_engine(),
     )
@@ -64,7 +249,7 @@ async fn committed_compaction_head_is_atomic_with_context_while_domain_reads_are
     let initial = fixture.host.checkpoint().unwrap();
     let subscription = attachment.subscribe_events(initial.cursor).unwrap();
     completed_turn(&fixture, &subscription).await;
-    let first = fixture.runtime.compact_context(None).await.unwrap();
+    let first = fixture.runtime.compact_context(None, None).await.unwrap();
     fixture.host.projection_settled().await;
     assert_compaction_head(&fixture.host.checkpoint().unwrap().snapshot.context, &first);
     completed_turn(&fixture, &subscription).await;
@@ -74,9 +259,9 @@ async fn committed_compaction_head_is_atomic_with_context_while_domain_reads_are
     fixture.host.inner.park_projection_worker();
     let parked = ParkedProjection(&fixture.host.inner);
     let subscription = attachment.subscribe_events(before.cursor).unwrap();
-    let second = fixture.runtime.compact_context(None).await.unwrap();
+    let second = fixture.runtime.compact_context(None, None).await.unwrap();
     let after = fixture.host.checkpoint().unwrap();
-    assert_eq!(second.generation, 2);
+    assert_eq!(committed_view(&second).generation, 2);
     assert_compaction_head(&after.snapshot.context, &second);
     let store = fixture.store.as_ref().unwrap();
     let native = store.observation_read_cut().unwrap();
@@ -161,6 +346,7 @@ fn assert_receipt(
     result: RuntimeClientResult,
     outcome: &crate::runtime::conversation_runtime::ManualCompactionOutcome,
 ) {
+    let outcome = committed_view(outcome);
     let RuntimeClientResult::ContextCompacted {
         compaction: Some(receipt),
     } = result
@@ -197,7 +383,7 @@ fn original_compactions(
                 estimated_tokens_after,
                 ..
             } => Some(
-                crate::runtime::conversation_runtime::ManualCompactionOutcome {
+                crate::runtime::conversation_runtime::ManualCompactionOutcome::Compacted {
                     generation,
                     checkpoint_id,
                     activation_id,
@@ -231,7 +417,7 @@ impl Drop for ProjectionHeaderFault {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn manual_compaction_receipt_survives_unavailable_published_context() {
     let (model, fixture) = host_fixture(
-        vec![one_turn_stop(), one_turn_stop()],
+        vec![one_turn_stop(), summary_turn_stop("checkpoint")],
         ToolRegistry::new(),
         status_engine(),
     )
@@ -246,7 +432,7 @@ async fn manual_compaction_receipt_survives_unavailable_published_context() {
     let published = fixture.host.checkpoint().unwrap().snapshot.context;
     assert!(published.latest_compaction.is_none());
     let fault = ProjectionHeaderFault::new(&fixture);
-    let result = fixture.host.compact_context(None).await.unwrap();
+    let result = fixture.host.compact_context(None, None).await.unwrap();
     let original = original_compactions(&fixture);
     assert_eq!(original.len(), 1);
     assert_receipt(result, &original[0]);
@@ -259,10 +445,14 @@ async fn manual_compaction_receipt_survives_unavailable_published_context() {
         .projection_head()
         .unwrap()
         .unwrap();
-    assert_eq!(native_head.activation.activation, original[0].activation_id);
+    let original_view = committed_view(&original[0]);
+    assert_eq!(
+        native_head.activation.activation,
+        original_view.activation_id
+    );
     assert_eq!(
         native_head.activation.checkpoint_id,
-        original[0].checkpoint_id
+        original_view.checkpoint_id
     );
     let retained = fixture
         .host
@@ -288,7 +478,12 @@ async fn manual_compaction_receipt_survives_unavailable_published_context() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn manual_compaction_wire_receipt_keeps_a_after_a_valid_successor_b_commits() {
     let (model, fixture) = host_fixture(
-        (0..4).map(|_| one_turn_stop()).collect(),
+        vec![
+            one_turn_stop(),
+            summary_turn_stop("first checkpoint"),
+            one_turn_stop(),
+            summary_turn_stop("second checkpoint"),
+        ],
         ToolRegistry::new(),
         status_engine(),
     )
@@ -318,11 +513,12 @@ async fn manual_compaction_wire_receipt_keeps_a_after_a_valid_successor_b_commit
         first_endpoint
             .handle_request_async(RuntimeClientRequest::CompactContext {
                 id: RequestId::new(41),
+                instructions: None,
             })
             .await
     });
     let a = committed.await.unwrap();
-    assert_eq!(a.generation, 1);
+    assert_eq!(committed_view(&a).generation, 1);
     assert!(!first.is_finished());
     // Native A already released maintenance. A genuine new Attempt supplies
     // new history before B; neither control nor native ownership is bypassed.
@@ -330,6 +526,7 @@ async fn manual_compaction_wire_receipt_keeps_a_after_a_valid_successor_b_commit
     let b_response = endpoint
         .handle_request_async(RuntimeClientRequest::CompactContext {
             id: RequestId::new(42),
+            instructions: None,
         })
         .await;
     assert_eq!(b_response.id, RequestId::new(42));
@@ -337,9 +534,11 @@ async fn manual_compaction_wire_receipt_keeps_a_after_a_valid_successor_b_commit
     let original = original_compactions(&fixture);
     assert_eq!(original.len(), 2);
     assert_eq!(original[0], a);
-    assert_eq!(original[1].generation, 2);
-    assert_ne!(original[1].checkpoint_id, a.checkpoint_id);
-    assert_ne!(original[1].activation_id, a.activation_id);
+    let a_view = committed_view(&a);
+    let b_view = committed_view(&original[1]);
+    assert_eq!(b_view.generation, 2);
+    assert_ne!(b_view.checkpoint_id, a_view.checkpoint_id);
+    assert_ne!(b_view.activation_id, a_view.activation_id);
     assert_receipt(b_response.result.unwrap(), &original[1]);
     fixture.host.projection_settled().await;
     assert_compaction_head(
@@ -368,7 +567,7 @@ async fn manual_compaction_lost_stdio_response_reconciles_without_replaying_oper
     use tokio::io::AsyncWriteExt as _;
 
     let (model, fixture) = host_fixture(
-        vec![one_turn_stop(), one_turn_stop()],
+        vec![one_turn_stop(), summary_turn_stop("checkpoint")],
         ToolRegistry::new(),
         status_engine(),
     )
@@ -396,6 +595,7 @@ async fn manual_compaction_lost_stdio_response_reconciles_without_replaying_oper
     let transport = tokio::spawn(serve_stdio_jsonl_with_io(endpoint, reader, writer));
     let mut request = serde_json::to_vec(&RuntimeClientRequest::CompactContext {
         id: RequestId::new(51),
+        instructions: None,
     })
     .unwrap();
     request.push(b'\n');

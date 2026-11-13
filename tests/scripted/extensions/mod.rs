@@ -574,9 +574,7 @@ use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionObserver, AgentExecutionRequest,
     AgentExecutionResult, AgentStatusObservation,
 };
-use rustx::context::{
-    AgentStatusClock, ContextRuntime, DefaultTokenEstimator, SessionContextPolicy,
-};
+use rustx::context::{AgentStatusClock, ContextRuntime, DefaultTokenEstimator};
 use rustx::durable::ConversationStore;
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
 use rustx::extensions::NativeAgentExtensions;
@@ -755,11 +753,6 @@ fn stop_turn() -> Vec<FakeStep> {
 fn context_runtime(model: &Arc<FakeModel>, extensions: &NativeAgentExtensions) -> ContextRuntime {
     let snapshot = support::attempt_model(model.clone(), "ext256-model");
     ContextRuntime::for_attempt(
-        SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(DefaultTokenEstimator),
         // The one materialization seam under test: the frozen composition
         // decides whether this attempt owns a status engine at all.
@@ -1396,12 +1389,8 @@ fn ext259_todo_is_rejected_on_every_ordinary_selection_surface() {
     use rustx::capabilities::AgentActivation as Selection;
 
     // Root configuration.
-    let config = r#"schema_version = 12
+    let config = r#"schema_version = 13
 agent_id = "agent-ext259"
-
-[context]
-reserve_tokens = 0
-keep_recent_tokens = 0
 
 
 [agent]
@@ -2131,11 +2120,6 @@ fn conversation_runtime_over_model(
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: rustx::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: rustx::runtime::ConversationContextConfig {
-                policy: rustx::context::SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
                 estimator,
                 // The status facet of the same frozen decision.
                 status_engine: tool_runtime

@@ -217,12 +217,12 @@ fn the_issue_example_converges_to_its_documented_result() {
     let plan = plan(before.as_bytes()).unwrap();
     assert_eq!(
         String::from_utf8(plan.candidate.clone()).unwrap(),
-        "schema_version = 12\n\n[agent.tools]\nbuiltin = [\"read\", \"grep\"]\n\n[agent.plugins.todo]\nenabled = true\n"
+        "schema_version = 13\n\n[agent.tools]\nbuiltin = [\"read\", \"grep\"]\n\n[agent.plugins.todo]\nenabled = true\n"
     );
     assert_eq!(
         plan.changes,
         vec![
-            ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 12 },
+            ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 13 },
             // Issue #544: the whole obsolete native_tools overlay is unknown.
             removed(""),
             removed("agent.plugins.todo"),
@@ -364,11 +364,11 @@ CUSTOM_TOKEN = "SECRET_ENV"
 
 #[test]
 fn comments_and_unrelated_bytes_survive_deletions() {
-    let text = "# head comment\nschema_version = 12 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\nstale = 'x'\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"nope\",\n  \"grep\",\n]\n";
+    let text = "# head comment\nschema_version = 13 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\nstale = 'x'\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"nope\",\n  \"grep\",\n]\n";
     let repaired = candidate(text);
     assert_eq!(
         repaired,
-        "# head comment\nschema_version = 12 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"grep\",\n]\n"
+        "# head comment\nschema_version = 13 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"grep\",\n]\n"
     );
 }
 
@@ -440,12 +440,12 @@ fn explicit_schema_versions_are_normalized_and_omission_is_preserved() {
         let text = format!("schema_version = {from} # authored\n");
         assert_eq!(
             changes(&text),
-            vec![ConfigRepairChange::UpdatedSchemaVersion { from, to: 12 }]
+            vec![ConfigRepairChange::UpdatedSchemaVersion { from, to: 13 }]
         );
-        assert_eq!(candidate(&text), "schema_version = 12 # authored\n");
+        assert_eq!(candidate(&text), "schema_version = 13 # authored\n");
     }
-    assert!(changes("schema_version = 12\n").is_empty());
-    assert!(changes("schema_version = 12 # authored\n").is_empty());
+    assert!(changes("schema_version = 13\n").is_empty());
+    assert!(changes("schema_version = 13 # authored\n").is_empty());
     assert!(changes("[agent]\ndescription = 'x'\n").is_empty());
     assert!(!candidate("[agent]\nstale = 1\n").contains("schema_version"));
     // A non-integer version is a type error, not version metadata.
@@ -465,7 +465,9 @@ fn tagged_unions_close_only_their_selected_variant() {
         ]
     );
     // An unknown tag selects no variant: nothing under it is guessed.
-    assert!(changes("[context.summary_output_cap]\nmode = 'future'\nextra = 1\n").is_empty());
+    assert!(
+        changes("[tool_deadline_policy.idle_liveness_ms]\nmode = 'future'\nextra = 1\n").is_empty()
+    );
 }
 
 #[test]
@@ -1116,37 +1118,47 @@ fn a_user_may_select_a_model_its_workspace_defines() {
 }
 
 #[test]
-fn an_available_composition_is_checked_like_session_resolution() {
-    // The User's context reserve cannot fit the Workspace Model's window:
-    // decidable only once both scopes are known.
-    let user = format!("{USER_SELECTING_WORKSPACE_MODEL}[context]\nreserve_tokens = 127000\n");
+fn removed_context_settings_are_never_silently_repaired() {
+    for entry in [
+        "[context]\nreserve_tokens = 321",
+        "[context]\nkeep_recent_tokens = 654",
+        "[context]\nsummary_output_cap = { mode = 'limit', tokens = 111 }",
+        "[context.summary_output_cap]\nmode = 'model_limit'",
+    ] {
+        let fixture = Fixture::new();
+        let original = format!("legacy_field = true\n{USER}\n{entry}\n");
+        fixture.write(&SourceTarget::User, &original);
+        assert_eq!(
+            fixture.repair(&SourceTarget::User, &SourceTarget::User),
+            RepairOutcome::Unchanged,
+            "{entry}"
+        );
+        assert_eq!(fixture.read(&SourceTarget::User), original);
+        assert!(fixture.backups().is_empty());
+        let diagnostic = unresolved_diagnostic(&fixture, &SourceTarget::User);
+        assert!(diagnostic.contains("context"), "{diagnostic}");
+        assert!(diagnostic.contains("remove"), "{diagnostic}");
+    }
+}
+
+#[test]
+fn obsolete_auxiliary_fields_are_diagnosed_without_repairing_the_file() {
     let fixture = Fixture::new();
-    fixture.write(&SourceTarget::User, &user);
-    fixture.write(&fixture.workspace, WORKSPACE_MODEL);
-    let directory = fixture.workspace.workspace().unwrap().to_path_buf();
+    let original = format!(
+        "{USER}\n[agent.model.summary_model]\nmode = 'explicit'\nmodel = 'local/a'\nmax_output_tokens = {{ mode = 'limit', tokens = 128 }}\n"
+    );
+    fixture.write(&SourceTarget::User, &original);
     assert_eq!(
-        fixture.repair(&SourceTarget::User, &fixture.workspace),
+        fixture.repair(&SourceTarget::User, &SourceTarget::User),
         RepairOutcome::Unchanged
     );
-    assert_eq!(fixture.read(&SourceTarget::User), user);
+    assert_eq!(fixture.read(&SourceTarget::User), original);
+    assert!(fixture.backups().is_empty());
     let diagnostic = unresolved_diagnostic(&fixture, &SourceTarget::User);
     assert!(
-        diagnostic.contains("context budgets cannot fit the selected models at context"),
+        diagnostic.contains("obsolete") && diagnostic.contains("agent.model.auxiliary"),
         "{diagnostic}"
     );
-    assert!(fixture.backups().is_empty());
-    // Session resolution rejects the same composition for the same reason.
-    std::fs::write(
-        fixture.path(&SourceTarget::User),
-        user.replace("legacy_field = true\n", ""),
-    )
-    .unwrap();
-    let failure = fixture
-        .manager
-        .resolve_session(&super::super::SessionConfigInput::new(directory))
-        .unwrap_err();
-    assert_eq!(failure.diagnostic.path, "context");
-    assert!(!failure.incomplete);
 }
 
 #[test]
@@ -3228,7 +3240,7 @@ fn a_repair_candidate_exactly_at_the_bound_is_published_and_readable() {
     );
     let published = std::fs::read(fixture.path(&SourceTarget::User)).unwrap();
     assert_eq!(published.len(), bound());
-    assert!(published.starts_with(b"schema_version = 12\n"));
+    assert!(published.starts_with(b"schema_version = 13\n"));
     // The normal native reader accepts exactly what was published.
     let read = fixture
         .manager
@@ -3266,7 +3278,7 @@ fn a_repair_growing_past_the_bound_is_unresolved_without_a_backup() {
     assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
     assert_eq!(
         receipt.changes,
-        [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 12 }]
+        [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 13 }]
     );
     assert!(!receipt.backup_available);
     assert!(receipt.after_revision.is_none());

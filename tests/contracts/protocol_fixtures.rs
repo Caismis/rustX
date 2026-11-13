@@ -199,9 +199,6 @@ fn manifest_round_trip() {
     assert_eq!(manifest.capabilities.skills.len(), 1);
     assert_eq!(manifest.capabilities.tools.len(), 2);
     assert_eq!(manifest.capabilities.mcp.len(), 1);
-    assert_eq!(manifest.context.context_window_tokens, 131_072);
-    assert_eq!(manifest.context.reserve_tokens, 16_384);
-    assert_eq!(manifest.context.keep_recent_tokens, 20_000);
     assert_eq!(manifest.limits.max_turns, 64);
     assert_eq!(manifest.limits.max_tool_calls, 128);
     assert_eq!(manifest.limits.max_runtime_seconds, 1_800);

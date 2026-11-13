@@ -12,7 +12,6 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::capabilities::selection::ToolSelectionDocument;
-use crate::context::SessionContextPolicy;
 use crate::extensions::{NativeAgentExtensions, NativeAgentExtensionsDocument};
 use crate::model::deadline::{
     DEFAULT_RESPONSE_START_TIMEOUT, DEFAULT_STREAM_IDLE_TIMEOUT, ModelTimeoutPolicy,
@@ -27,7 +26,8 @@ use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig}
 use crate::tools::types::ToolInvocationPolicy;
 
 /// The only current runtime configuration schema version this runtime accepts.
-pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 12;
+/// Version 13 combines shared Auxiliary selection, resource permissions and automatic compaction.
+pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 13;
 
 /// Resolved policies and Root profile within one published configuration.
 ///
@@ -55,9 +55,6 @@ pub struct CurrentRuntimeConfig {
     /// The root Agent profile, including its named Agent allowlist.
     #[serde(default)]
     pub agent: AgentProfileDocument,
-    /// Complete context policy resolved from User < Workspace; atomic replacement.
-    #[serde(default)]
-    pub context: ContextPolicyDocument,
     /// The finite runtime-owned deadline policy shared by primary and
     /// summarizer model requests. This is published generation policy resolved
     /// atomically from User < Workspace, frozen into admitted requests.
@@ -408,7 +405,6 @@ impl CurrentRuntimeConfig {
                 model,
                 ..builtin_root_profile()
             },
-            context: ContextPolicyDocument::default(),
             model_timeout_policy: ModelTimeoutPolicyDocument::default(),
             tool_deadline_policy: ToolDeadlinePolicyDocument::default(),
             mcp_startup_policy: McpStartupPolicyDocument::default(),
@@ -427,8 +423,11 @@ impl CurrentRuntimeConfig {
     /// Returns [`CurrentRuntimeConfigError::Syntax`] for malformed TOML or
     /// unknown fields, and a specific validation error otherwise.
     pub fn from_toml_slice(bytes: &[u8]) -> Result<Self, CurrentRuntimeConfigError> {
-        let layer: super::authoring::RuntimeLayer = crate::toml_authoring::parse(bytes)
-            .map_err(|detail| CurrentRuntimeConfigError::Syntax { detail })?;
+        let layer = super::authoring::parse_runtime_layer(bytes).map_err(|error| {
+            CurrentRuntimeConfigError::Syntax {
+                detail: error.into_detail(),
+            }
+        })?;
         let config = layer
             .resolve()
             .map_err(|detail| CurrentRuntimeConfigError::Syntax { detail })?;
@@ -496,9 +495,6 @@ impl CurrentRuntimeConfig {
                 "agent_id must be non-empty".to_owned(),
             )));
         }
-        self.context
-            .validate()
-            .map_err(at("context", "invalid context policy"))?;
         self.timeout_policy()
             .map_err(at("model_timeout_policy", "invalid model timeout policy"))?;
         self.tool_deadline_policy()
@@ -570,12 +566,6 @@ impl CurrentRuntimeConfig {
             }
         }
         Ok(())
-    }
-
-    /// The context policy supplied to the current runtime composition.
-    #[must_use]
-    pub const fn context_policy(&self) -> SessionContextPolicy {
-        self.context.to_policy()
     }
 
     /// Freezes the root Agent's native Agent Extension composition for this
@@ -747,57 +737,6 @@ pub(super) fn validate_unique_workflow_ids(
         }
     }
     Ok(())
-}
-
-/// The static current-runtime context policy document.
-///
-/// There is deliberately no context window here: the window belongs to the
-/// selected model and is derived per attempt from that attempt's immutable
-/// model snapshot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct ContextPolicyDocument {
-    /// Tokens permanently reserved out of whichever model window is in
-    /// force.
-    pub reserve_tokens: u64,
-    /// Tokens of recent conversation history kept uncompressed.
-    pub keep_recent_tokens: u64,
-    /// The summary/output safety cap applied to the summary invocation
-    /// through the runtime-owned protected max-output field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary_output_cap: Option<u32>,
-}
-
-impl ContextPolicyDocument {
-    pub(crate) fn validate(&self) -> Result<(), CurrentRuntimeConfigError> {
-        if self.summary_output_cap == Some(0) {
-            return Err(CurrentRuntimeConfigError::Invalid {
-                detail: "context.summary_output_cap must be positive when present".to_owned(),
-            });
-        }
-        Ok(())
-    }
-
-    /// The native context policy represented by this document.
-    #[must_use]
-    pub const fn to_policy(&self) -> SessionContextPolicy {
-        SessionContextPolicy {
-            reserve_tokens: self.reserve_tokens,
-            keep_recent_tokens: self.keep_recent_tokens,
-            summary_output_cap: self.summary_output_cap,
-        }
-    }
-}
-
-impl Default for ContextPolicyDocument {
-    fn default() -> Self {
-        Self {
-            reserve_tokens: 1024,
-            keep_recent_tokens: 4096,
-            summary_output_cap: Some(1024),
-        }
-    }
 }
 
 /// One `mcpServers` entry, in the shape mainstream MCP clients use.
@@ -1084,11 +1023,6 @@ mod tests {
 
     pub(super) const MINIMAL: &str = r#"agent_id = "agent-a"
 
-[context]
-reserve_tokens = 1024
-keep_recent_tokens = 4096
-
-
 [agent]
 [agent.model]
 model = "p/m"
@@ -1099,7 +1033,6 @@ model = "p/m"
     fn minimal_configuration_parses() {
         let config = CurrentRuntimeConfig::from_toml_slice(MINIMAL.as_bytes()).expect("valid");
         assert_eq!(config.approval_mode, crate::runtime::ApprovalMode::Plan);
-        assert_eq!(config.context_policy().reserve_tokens, 1024);
         assert!(config.agent.extensions.agent_status.time.enabled);
         assert!(config.agent.extensions.agent_status.background.enabled);
         assert_eq!(config.agent.extensions.agent_status.time.timezone, None);
@@ -1400,11 +1333,6 @@ approval_mode = "full_access""#,
         let json = r#"agent_id = "a"
 future_knob = true
 
-[context]
-reserve_tokens = 0
-keep_recent_tokens = 0
-
-
 [agent]
 [agent.model]
 model = "p/m"
@@ -1553,11 +1481,6 @@ plugins = { "agent_status" = { "enabled" = false }, "todo" = { "enabled" = false
         let json = r#"schema_version = 99
 agent_id = "a"
 
-[context]
-reserve_tokens = 0
-keep_recent_tokens = 0
-
-
 [agent]
 [agent.model]
 model = "p/m"
@@ -1574,11 +1497,6 @@ model = "p/m"
         let json = r#"agent_id = "a"
 mcp_servers = [{ server_id = "s", transport = { type = "streamable_http", endpoint = "https://x" } }]
 
-[context]
-reserve_tokens = 0
-keep_recent_tokens = 0
-
-
 [agent]
 [agent.model]
 model = "p/m"
@@ -1587,23 +1505,6 @@ model = "p/m"
             CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail"),
             CurrentRuntimeConfigError::Syntax { .. }
         ));
-    }
-
-    /// A present zero summary cap is a configuration error, even when the
-    /// context would otherwise never need compaction.
-    #[test]
-    fn zero_summary_output_cap_is_rejected() {
-        let json = MINIMAL.replace(
-            "[context]",
-            "[context]\nsummary_output_cap = { mode = 'limit', tokens = 0 }",
-        );
-        let error = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect_err("must fail");
-        assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
-        assert!(
-            error
-                .to_string()
-                .contains("summary_output_cap must be positive")
-        );
     }
 
     #[test]

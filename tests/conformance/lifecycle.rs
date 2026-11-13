@@ -60,10 +60,6 @@ chat_reasoning_replay = "omit"
 
 const RUNTIME_CONFIG_TOML: &str = r#"agent_id = "agent-lifecycle"
 
-[context]
-reserve_tokens = 1024
-keep_recent_tokens = 8192
-
 
 [environment]
 RUSTX_FIXTURE = "1"
@@ -112,7 +108,6 @@ struct SemanticProjection {
     conversation_id: String,
     agent_id: String,
     model: SessionModelView,
-    context_policy: rustx::context::SessionContextPolicy,
     workspace_root: std::path::PathBuf,
     artifacts_root: std::path::PathBuf,
     mailbox_conversation: String,
@@ -124,7 +119,6 @@ fn semantic_projection(
     conversation_id: &rustx::runtime::identity::ConversationId,
     agent_id: &rustx::runtime::identity::AgentId,
     model: SessionModelView,
-    context_policy: rustx::context::SessionContextPolicy,
     tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
     capability: &rustx::capabilities::CapabilityCoordinator,
 ) -> SemanticProjection {
@@ -132,7 +126,6 @@ fn semantic_projection(
         conversation_id: conversation_id.as_str().to_owned(),
         agent_id: agent_id.as_str().to_owned(),
         model,
-        context_policy,
         workspace_root: tool_runtime.workspace().root().to_path_buf(),
         artifacts_root: tool_runtime.artifacts().root().to_path_buf(),
         mailbox_conversation: tool_runtime.mailbox().conversation_id().as_str().to_owned(),
@@ -180,7 +173,6 @@ async fn interactive_and_headless_share_one_semantic_composition() {
                 interactive.runtime().conversation_id(),
                 interactive.runtime().agent_id(),
                 interactive.runtime().model_view(),
-                interactive.runtime().context_config().policy,
                 interactive.tool_runtime(),
                 interactive.capability(),
             );
@@ -216,7 +208,6 @@ async fn interactive_and_headless_share_one_semantic_composition() {
         headless.runtime().conversation_id(),
         headless.runtime().agent_id(),
         headless.runtime().model_view(),
-        headless.runtime().context_config().policy,
         headless.tool_runtime(),
         headless.capability(),
     );
@@ -231,10 +222,6 @@ async fn interactive_and_headless_share_one_semantic_composition() {
     assert_eq!(
         interactive_projection.model, headless_projection.model,
         "the session model configuration resolves identically"
-    );
-    assert_eq!(
-        interactive_projection.context_policy, headless_projection.context_policy,
-        "the context policy is the shared session policy"
     );
     assert_eq!(
         interactive_projection.workspace_root, headless_projection.workspace_root,
@@ -283,7 +270,7 @@ fn emulator_models_json(emulator: &ProviderEmulator) -> String {
 }
 
 fn emulator_session_json() -> String {
-    toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-headless", "context": {"reserve_tokens": 1024, "keep_recent_tokens": 8192}, "agent": {"model": {"model": format!("emulator/{CHAT_MODEL}")}, "tools": {"builtin": ["read", "bash"]}, "plugins": {"agent_status": {"enabled": true}}}}))
+    toml::to_string_pretty(&serde_json::json!({"agent_id": "agent-headless", "agent": {"model": {"model": format!("emulator/{CHAT_MODEL}")}, "tools": {"builtin": ["read", "bash"]}, "plugins": {"agent_status": {"enabled": true}}}}))
     .unwrap()
 }
 

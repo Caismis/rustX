@@ -1188,6 +1188,8 @@ fn t08_t20_request_source_ranges_use_bounded_authenticated_composed_pages() {
         .freeze_input(
             &conversation,
             &crate::model::ModelRequest {
+                prompt_fallback_authorization:
+                    rustx::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: None,
                 images: snapshot.images.clone(),

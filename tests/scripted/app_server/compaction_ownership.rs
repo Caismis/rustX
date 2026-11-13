@@ -29,7 +29,7 @@ async fn proven_auxiliary_exit_releases_failed_unload_for_exclusive_recovery() {
         complete_history_turn(&live).await;
         let compaction = tokio::spawn({
             let live = live.clone();
-            async move { live.compact_context(None).await }
+            async move { live.compact_context(None, None).await }
         });
         f.gates[1].wait_entered().await;
         let gates = live.hold_auxiliary_settlement_for_test();
@@ -99,7 +99,7 @@ async fn auxiliary_failure_orders_coordinator_mutation(
     complete_history_turn(&live).await;
     let compaction = tokio::spawn({
         let live = live.clone();
-        async move { live.compact_context(None).await }
+        async move { live.compact_context(None, None).await }
     });
     f.gates[1].wait_entered().await;
     let writer = live.hold_auxiliary_settlement_for_test();
@@ -235,13 +235,16 @@ async fn catalog_observer_is_registered_before_activation_and_never_competes_aft
         let (attachment, _pin) = loaded.client().attach().unwrap();
         let authority = attachment.operation_authority().unwrap();
         let compaction = authority
-            .admit_compaction_transfer(None)
+            .admit_compaction_transfer(None, None)
             .expect("post-Loaded observer startup owns no semantic admission boundary");
-        assert!(compaction.await.is_err(), "empty history cannot compact");
+        assert!(matches!(
+            compaction.await.unwrap(),
+            crate::runtime_client::types::RuntimeClientResult::ContextCompactionSkipped
+        ));
         assert_eq!(
             events(&runtime)
                 .iter()
-                .filter(|event| matches!(event, RuntimeEvent::CompactionStarted { .. }))
+                .filter(|event| matches!(event, RuntimeEvent::CompactionSkipped { .. }))
                 .count(),
             1
         );
@@ -271,7 +274,7 @@ async fn native_compaction_transfer_releases_its_lease_before_reply_or_waiter_lo
                     .start_native_tail_operation(move |_| async move {
                         // Real native admission owns the business task before the
                         // manager releases its lease. Only reply consumption is gated.
-                        let native = authority.admit_compaction_transfer(None)?;
+                        let native = authority.admit_compaction_transfer(None, None)?;
                         let tail: NativeOperationTail = Box::pin(async move {
                             let _ = entered_tx.send(());
                             release_rx.await.unwrap();
@@ -314,10 +317,10 @@ async fn native_compaction_transfer_releases_its_lease_before_reply_or_waiter_lo
             release_tx.send(()).unwrap();
             finished_rx.await.unwrap();
             if let Some(reply) = reply {
-                assert!(
-                    reply.await.unwrap().is_err(),
-                    "empty history cannot compact"
-                );
+                assert!(matches!(
+                    reply.await.unwrap().unwrap(),
+                    crate::runtime_client::types::RuntimeClientResult::ContextCompactionSkipped
+                ));
             }
             assert!(f.provider.request_bodies().is_empty());
             f.close().await;
@@ -354,7 +357,7 @@ fn park_transferred_reply(
     let (release, released) = tokio::sync::oneshot::channel();
     let reply = client
         .start_native_tail_operation(move |_| async move {
-            let native = authority.admit_compaction_transfer(None)?;
+            let native = authority.admit_compaction_transfer(None, None)?;
             let tail: NativeOperationTail = Box::pin(async move {
                 let _ = admitted_tx.send(());
                 let result = native.await;
@@ -450,6 +453,7 @@ fn assert_one_summary_chain(
                 RuntimeEvent::CompactionStarted { .. }
                     | RuntimeEvent::CompactionCompleted { .. }
                     | RuntimeEvent::CompactionFailed { .. }
+                    | RuntimeEvent::CompactionCancelled { .. }
                     | RuntimeEvent::AuxiliaryCallStarted { .. }
                     | RuntimeEvent::AuxiliaryCallSettled { .. }
                     | RuntimeEvent::ModelRequestStarted {
@@ -491,6 +495,7 @@ fn assert_one_summary_chain(
     assert_eq!(
         business_source,
         &AuxiliaryBusinessSource::Compaction {
+            preceding_call: None,
             operation_id: operation_id.clone()
         }
     );
@@ -569,7 +574,10 @@ fn assert_one_summary_chain(
         RuntimeEvent::CompactionFailed {
             operation_id: terminal_operation,
             ..
-        } if !checkpoint_committed => assert_eq!(terminal_operation, operation_id),
+        } if completed && !checkpoint_committed => assert_eq!(terminal_operation, operation_id),
+        RuntimeEvent::CompactionCancelled {
+            operation_id: terminal_operation,
+        } if !completed && !checkpoint_committed => assert_eq!(terminal_operation, operation_id),
         event => panic!("wrong business terminal: {event:?}"),
     }
     operation_id.clone()
@@ -707,7 +715,7 @@ async fn committed_summary_reply_loss_and_cold_successor_preserve_exact_receipt_
             let b = compaction_receipt(
                 next_client
                     .start_native_tail_operation(move |_| async move {
-                        authority.admit_compaction_transfer(None)
+                        authority.admit_compaction_transfer(None, None)
                     })
                     .unwrap()
                     .await
@@ -850,7 +858,7 @@ async fn parked_completed_compaction_reply_does_not_retain_the_deleted_allocatio
         let (completed, release) = authority.hold_compaction_response_for_test();
         let reply = client
             .start_native_tail_operation(move |_| async move {
-                authority.admit_compaction_transfer(None)
+                authority.admit_compaction_transfer(None, None)
             })
             .unwrap();
         f.gates[1].wait_entered().await;
@@ -881,14 +889,21 @@ async fn parked_completed_compaction_reply_does_not_retain_the_deleted_allocatio
         );
         release.send(()).unwrap();
         let receipt = compaction_receipt(reply.await.unwrap());
-        assert_eq!(receipt.generation, original.generation);
-        assert_eq!(receipt.checkpoint_id, original.checkpoint_id);
-        assert_eq!(receipt.activation_id, original.activation_id);
-        assert_eq!(receipt.tokens_before, original.tokens_before);
-        assert_eq!(
-            receipt.estimated_tokens_after,
-            original.estimated_tokens_after
-        );
+        let crate::runtime::conversation_runtime::ManualCompactionOutcome::Compacted {
+            generation,
+            checkpoint_id,
+            activation_id,
+            tokens_before,
+            estimated_tokens_after,
+        } = original
+        else {
+            panic!("expected committed compaction");
+        };
+        assert_eq!(receipt.generation, generation);
+        assert_eq!(receipt.checkpoint_id, checkpoint_id);
+        assert_eq!(receipt.activation_id, activation_id);
+        assert_eq!(receipt.tokens_before, tokens_before);
+        assert_eq!(receipt.estimated_tokens_after, estimated_tokens_after);
         f.close().await;
     })
     .await;
@@ -907,15 +922,21 @@ async fn completed_retirement_releases_store_before_result_and_deletion() {
         let weak = live.weak_inner();
         let compaction = tokio::spawn({
             let live = live.clone();
-            async move { live.compact_context(None).await }
+            async move { live.compact_context(None, None).await }
         });
         f.gates[1].wait_entered().await;
         let (reaped, release) = live.hold_auxiliary_retirement_for_test();
         f.gates[1].release();
         reaped.await.unwrap();
         let receipt = compaction.await.unwrap().unwrap();
-        assert_eq!(
-            receipt.generation, 1,
+        assert!(
+            matches!(
+                receipt,
+                crate::runtime::conversation_runtime::ManualCompactionOutcome::Compacted {
+                    generation: 1,
+                    ..
+                }
+            ),
             "business compaction completes while its reaper is still parked"
         );
         drop(live);

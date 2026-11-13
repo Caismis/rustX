@@ -243,6 +243,7 @@ impl<'a> AgentExecution<'a> {
             workflow_output_feedback: None,
             lifecycle,
             logical_step: LogicalStep::begin(None),
+            compaction_control: super::compaction::CompactionControl::default(),
             deferred_context: Vec::new(),
             context_generation_serial: 0,
             measurements: RequestMeasurements::default(),

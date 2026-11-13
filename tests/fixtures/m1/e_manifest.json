@@ -37,11 +37,6 @@
       }
     ]
   },
-  "context": {
-    "context_window_tokens": 131072,
-    "reserve_tokens": 16384,
-    "keep_recent_tokens": 20000
-  },
   "limits": {
     "max_turns": 64,
     "max_tool_calls": 128,

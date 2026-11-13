@@ -199,11 +199,6 @@ fn spec_with_extensions(
         approval_mode: crate::runtime::ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-        context: crate::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         workspace: root.join("workspace"),
         incarnation: "incarnation-test".to_owned(),
         terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
@@ -538,12 +533,8 @@ async fn ext256_a_child_projects_only_its_frozen_extension_composition() {
     // enables the extension and configures it differently.
     std::fs::write(
         dir.path().join("workspace/rustx.toml"),
-        r#"schema_version = 12
+        r#"schema_version = 13
 agent_id = "agent-host"
-
-[context]
-reserve_tokens = 0
-keep_recent_tokens = 0
 
 
 [agent]
@@ -704,12 +695,8 @@ async fn ext256_child_materialization_never_rereads_configuration_for_its_extens
     let dir = lab();
     std::fs::write(
         dir.path().join("workspace/rustx.toml"),
-        r#"schema_version = 12
+        r#"schema_version = 13
 agent_id = "agent-host"
-
-[context]
-reserve_tokens = 0
-keep_recent_tokens = 0
 
 
 [agent]

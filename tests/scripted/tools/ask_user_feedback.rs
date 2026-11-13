@@ -215,11 +215,6 @@ async fn run(
         common::capability_lease(fixture.ordinary_registry.clone(), &fixture.runtime).await;
     let model_snapshot = support::attempt_model(model.clone(), "questionnaire-fixture");
     let context = rustx::context::ContextRuntime::for_attempt(
-        rustx::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(rustx::context::DefaultTokenEstimator),
         Some(rustx::context::AgentStatusEngine::default()),
         &model_snapshot,

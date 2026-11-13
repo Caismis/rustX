@@ -253,6 +253,7 @@ pub(super) fn link_summary_generation(
                 purpose: crate::model::auxiliary::AuxiliaryAttribution::new("summary").unwrap(),
                 trigger: AuxiliaryAttribution::new("automatic").unwrap(),
                 business_source: AuxiliaryBusinessSource::Compaction {
+                    preceding_call: None,
                     operation_id: operation_id.clone(),
                 },
                 input: AuxiliaryInputEvidence::Historical {
@@ -339,6 +340,7 @@ pub(super) fn historical_summary_audit_fixture(
                 purpose: crate::model::auxiliary::AuxiliaryAttribution::new("summary").unwrap(),
                 trigger: AuxiliaryAttribution::new("automatic").unwrap(),
                 business_source: AuxiliaryBusinessSource::Compaction {
+                    preceding_call: None,
                     operation_id: operation_id.clone(),
                 },
                 input: AuxiliaryInputEvidence::Historical {

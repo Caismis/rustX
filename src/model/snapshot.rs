@@ -273,6 +273,8 @@ impl RequestSnapshot {
     ) -> Self {
         let provisional_message_id = identity.provisional_message_id();
         let semantic_input_fingerprint = ModelRequest {
+            prompt_fallback_authorization:
+                crate::model::types::PromptFallbackAuthorization::default(),
             response_schema: None,
             response_byte_limit: None,
             images: crate::model::images::ResolvedImages::new(),
@@ -437,6 +439,8 @@ impl RequestSnapshot {
             })
             .collect::<Result<Vec<_>, RequestReconstructionError>>()?;
         let request = ModelRequest {
+            prompt_fallback_authorization:
+                crate::model::types::PromptFallbackAuthorization::default(),
             response_schema: self.response_schema.clone(),
             response_byte_limit: None,
             images: self.images.clone(),

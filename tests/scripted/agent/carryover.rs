@@ -1387,7 +1387,9 @@ async fn overflow_compaction_only_degrades_the_frozen_carryover_source() {
 
     let summary = "s".repeat(360);
     let consumer_runtime = runtime_with_estimator(
-        760,
+        // Include the real permission reminder in the initial request below
+        // proactive pressure; overflow correction still requires metadata-only carryover.
+        900,
         Arc::new(ScriptedEstimator::new(100, 10, 0)),
         vec![FakeSummaryStep::Return(summary)],
     );
@@ -1408,18 +1410,41 @@ async fn overflow_compaction_only_degrades_the_frozen_carryover_source() {
     .await;
     let consumer = common::durable_agent_result(consumer, tool_runtime.durable_store().as_ref());
 
-    assert!(matches!(
+    assert!(
+        matches!(
+            consumer.outcome,
+            AttemptOutcome::Completed {
+                finish_reason: ModelFinishReason::Stop
+            }
+        ),
+        "outcome: {:?}; compaction failures: {:?}",
         consumer.outcome,
-        AttemptOutcome::Completed {
-            finish_reason: ModelFinishReason::Stop
-        }
-    ));
+        consumer
+            .event_history
+            .iter()
+            .filter_map(|event| match event {
+                RuntimeEvent::CompactionFailed { error, .. } => Some(error),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    );
     assert!(
         consumer
             .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::CompactionCompleted { .. }))
     );
+    let overflow = consumer
+        .event_history
+        .iter()
+        .position(|event| matches!(event, RuntimeEvent::ModelRequestFailed { error, .. } if error.kind == ModelErrorKind::ContextWindowExceeded))
+        .expect("the full carryover request reached the provider overflow");
+    let compaction = consumer
+        .event_history
+        .iter()
+        .position(|event| matches!(event, RuntimeEvent::CompactionStarted { .. }))
+        .expect("overflow triggered compaction");
+    assert!(overflow < compaction, "compaction must follow the overflow");
     let requests = model.requests();
     assert_eq!(requests.len(), 3);
     let full = carryover_from(&requests[1]);

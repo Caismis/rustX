@@ -409,6 +409,9 @@ pub struct AgentExecution<'a> {
     /// as one value at every logical-step boundary; the actual-request
     /// retries of the step reuse it.
     logical_step: LogicalStep,
+    /// Attempt-local compaction failure and refill evidence. A new Attempt
+    /// starts with a fresh tracker; it is never a Session circuit breaker.
+    compaction_control: compaction::CompactionControl,
     /// The Agent-Loop-owned staging buffer of deferred context.
     ///
     /// It is **not** canonical history and **not** a second transcript: a

@@ -151,21 +151,22 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
         .into_bytes();
     let config = super::config::CurrentRuntimeConfig::from_toml_slice(&settings_bytes)
         .map_err(|_| "invalid model selection")?;
-    let view = crate::model::invocation::analyze_selection(
-        parsed
-            .model(&config.initial_model().model)
-            .map_err(|_| "invalid model reference")?,
-        &config.initial_model().selection(),
-        crate::model::invocation::RequestParamsLayer::SessionOverrides,
+    let (primary, auxiliary) =
+        crate::model::session::analyze_session_model_config(&parsed, config.initial_model())
+            .map_err(|_| "invalid model selection")?;
+    let reasoning = crate::model::invocation::reasoning_output_minimum(
+        auxiliary.protocol,
+        &auxiliary.request_params,
     )
-    .map_err(|_| "invalid model selection")?;
-    config
-        .context_policy()
-        .validate_budgets(
-            (view.context_window, view.max_output_tokens),
-            (view.context_window, view.max_output_tokens),
-        )
-        .map_err(|_| "declared model limits cannot fit native context budgets")?;
+    .map_err(|_| "invalid summary reasoning budget")?;
+    crate::context::policy::CompactionPolicy::resolve_with_reasoning(
+        primary.context_window,
+        primary.max_output_tokens,
+        auxiliary.context_window,
+        auxiliary.max_output_tokens,
+        reasoning,
+    )
+    .map_err(|_| "declared model limits cannot fit native context budgets")?;
     Ok([settings_bytes])
 }
 
@@ -361,6 +362,57 @@ mod tests {
             let output = String::from_utf8(first[0].clone()).unwrap();
             assert!(output.contains("$RUSTX_TEST_KEY"));
             assert!(!output.contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
+        }
+    }
+
+    #[test]
+    fn initialization_validates_the_derived_margin_against_the_declared_output_cap() {
+        let mut request = declarations();
+        request.context_window = Some(16_000);
+        request.max_output = Some(4_000);
+        assert!(documents(&request).is_ok());
+
+        request.max_output = Some(15_200);
+        assert!(
+            documents(&request)
+                .unwrap_err()
+                .contains("declared model limits cannot fit native context budgets")
+        );
+    }
+
+    #[test]
+    fn initialization_validates_frozen_thinking_against_summary_output_capability() {
+        let root = tempfile::tempdir().unwrap();
+        let mut base = declarations();
+        base.template = Template::Anthropic;
+        base.context_window = Some(16_000);
+        base.max_output = Some(8_000);
+        let bytes = documents(&base).unwrap();
+        let authored: super::super::authoring::RuntimeLayer =
+            crate::toml_authoring::parse(&bytes[0]).unwrap();
+        let mut model = authored.models.unwrap().into_values().next().unwrap();
+        let path = root.path().join("thinking.toml");
+        let custom = InitializationRequest {
+            template: Template::Custom,
+            protocol: Some(crate::model::ModelProtocol::AnthropicMessages),
+            model_id: None,
+            context_window: None,
+            max_output: None,
+            compat: None,
+            model_document: Some(path.clone()),
+            ..declarations()
+        };
+        for (budget, succeeds) in [(5_000, true), (7_500, false)] {
+            model.request_params = Some(crate::toml_authoring::AuthoredRequestParams(
+                [(
+                    "thinking".into(),
+                    serde_json::json!({"type":"enabled","budget_tokens":budget}),
+                )]
+                .into_iter()
+                .collect(),
+            ));
+            std::fs::write(&path, crate::toml_authoring::write(&model).unwrap()).unwrap();
+            assert_eq!(documents(&custom).is_ok(), succeeds);
         }
     }
 

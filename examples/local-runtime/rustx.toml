@@ -1,13 +1,5 @@
-schema_version = 12
+schema_version = 13
 agent_id = "default-agent"
-
-[context]
-reserve_tokens = 4096
-keep_recent_tokens = 12000
-
-[context.summary_output_cap]
-mode = "limit"
-tokens = 1024
 
 [model_timeout_policy]
 response_start_timeout_ms = 30000

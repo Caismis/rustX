@@ -45,10 +45,6 @@ request_params = '{"vendor":{"flag":true}}'
 max_output_tokens = { mode = "limit", tokens = 123 }
 profile = "lower"
 auxiliary = { mode = "explicit", model = "p/summary" }
-[context]
-reserve_tokens = 321
-keep_recent_tokens = 654
-summary_output_cap = { mode = "limit", tokens = 111 }
 [model_timeout_policy]
 response_start_timeout_ms = 1234
 stream_idle_timeout_ms = 5678
@@ -73,10 +69,29 @@ fn absent_atomic_dimensions_inherit() {
         panic!("expected explicit auxiliary");
     };
     assert_eq!(model.as_str(), "p/summary");
-    assert_eq!(config.context.keep_recent_tokens, 654);
     assert_eq!(config.model_timeout_policy.stream_idle_timeout_ms, 5678);
     assert_eq!(config.tool_deadline_policy.idle_liveness_ms, Some(8765));
     assert_eq!(config.subagents.max_concurrent, 17);
+}
+
+#[test]
+fn removed_context_settings_are_rejected_in_authored_documents() {
+    for text in [
+        "[context]\nreserve_tokens = 321",
+        "[context]\nkeep_recent_tokens = 654",
+        "[context]\nsummary_output_cap = { mode = 'limit', tokens = 111 }",
+        "[context.summary_output_cap]\nmode = 'model_limit'",
+        "context.reserve_tokens = 321",
+        "context = { keep_recent_tokens = 654 }",
+    ] {
+        let error = parse_runtime_layer(text.as_bytes())
+            .expect_err("obsolete context settings must fail")
+            .into_detail();
+        assert!(
+            error.contains("context") && error.contains("remove"),
+            "{text}: {error}"
+        );
+    }
 }
 
 #[test]
@@ -110,22 +125,6 @@ fn incomplete_higher_model_selection_does_not_borrow_lower_identity() {
 }
 
 #[test]
-fn context_replacement_uses_product_defaults_for_omitted_members() {
-    let (config, origins) = effective(LOWER, "[context]\nreserve_tokens = 999");
-    let defaults = ContextPolicyDocument::default();
-    assert_eq!(config.context.reserve_tokens, 999);
-    assert_eq!(
-        config.context.keep_recent_tokens,
-        defaults.keep_recent_tokens
-    );
-    assert_eq!(
-        config.context.summary_output_cap,
-        defaults.summary_output_cap
-    );
-    assert_eq!(origins["context.keep_recent_tokens"], workspace());
-}
-
-#[test]
 fn timeout_and_deadline_objects_never_splice() {
     let (config, origins) = effective(
         LOWER,
@@ -155,9 +154,8 @@ fn timeout_and_deadline_objects_never_splice() {
 fn explicit_empty_policy_objects_reset_to_domain_defaults() {
     let (config, _) = effective(
         LOWER,
-        "[context]\n[model_timeout_policy]\n[tool_deadline_policy]\n[subagents]",
+        "[model_timeout_policy]\n[tool_deadline_policy]\n[subagents]",
     );
-    assert_eq!(config.context, ContextPolicyDocument::default());
     assert_eq!(
         config.model_timeout_policy,
         ModelTimeoutPolicyDocument::default()

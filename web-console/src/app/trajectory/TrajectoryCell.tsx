@@ -3,7 +3,7 @@ import { useTranslation } from '../../locale/react';
 import { READ_IMAGE_RECEIPT, READ_IMAGE_TOOL } from '../../bindings/tools';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness TrajectoryTable.tsx semantic cells; see PROVENANCE.md. */
 import type { ReactNode } from 'react';
-import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v78';
+import type { TraceKind, TraceRecord } from '../../../../protocol/app-server/v79';
 import { IconSettingsOutline16, IconSparkle16, IconUserOutline16 } from '../../presentation/primitives/icons';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { recordLabel, type InspectableDisplayItem } from './layout';

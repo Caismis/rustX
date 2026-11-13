@@ -696,7 +696,7 @@ impl ConversationRuntime {
         // context policy. Validating here (and again in `model_set`) is what
         // makes the per-attempt context runtime construction infallible at
         // admission, where there is no caller left to report to.
-        validate_model_context(&config.context.policy, &config.model)
+        validate_model_context(&config.model)
             .map_err(|error| ConversationRuntimeError::Context(error.message))?;
         // The durable store is composed once by the tool runtime's
         // `ConversationStoreBinding`. The runtime receives the full handle

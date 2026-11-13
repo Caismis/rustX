@@ -729,6 +729,7 @@ impl<'a> AgentExecution<'a> {
         // C succeeded: the logical model step is no longer unresolved, even
         // if a later tool/result phase causes the attempt itself to fail.
         self.logical_step.model_step = LogicalModelStepState::CanonicalAccepted;
+        self.compaction_control.accepted_step();
         self.continuation_source = if self.pending_continuation.is_some() {
             let input = self
                 .logical_step

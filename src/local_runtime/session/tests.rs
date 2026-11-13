@@ -60,10 +60,6 @@ use tempfile::TempDir;
 
 const CONFIG: &str = r#"agent_id = "agent-a"
 
-[context]
-reserve_tokens = 1024
-keep_recent_tokens = 4096
-
 
 [agent]
 [agent.model]
@@ -178,6 +174,8 @@ fn freeze_session_test_input(
         .freeze_input(
             store.conversation_id(),
             &crate::model::ModelRequest {
+                prompt_fallback_authorization:
+                    crate::model::types::PromptFallbackAuthorization::default(),
                 response_schema: None,
                 response_byte_limit: None,
                 images: crate::model::images::ResolvedImages::new(),

@@ -201,6 +201,19 @@ impl Fixture {
                 } else if name == "present" { serde_json::json!({"files":[{"path":"报告 file.md", "description":"Declared report"}]}) } else { serde_json::json!({"path":"rustx.toml"}) };
                 return tool_call_reply("interaction", name, &arguments.to_string()).with_header_gate(server_gates[index].clone());
             }
+            if gate_summary && index == 1 {
+                let summary = serde_json::json!({
+                    "goal": "Continue the task",
+                    "constraints_and_preferences": [],
+                    "progress": {"done": [], "in_progress": [], "blocked": []},
+                    "key_decisions": [],
+                    "next_steps": [],
+                    "critical_context": []
+                });
+                let chunk = serde_json::json!({"id":"response","object":"chat.completion.chunk","created":1,"model":"a","choices":[{"index":0,"delta":{"content":summary.to_string()},"finish_reason":null}]});
+                let stream = format!("data: {chunk}\n\ndata: {{\"id\":\"response\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"a\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}]}}\n\ndata: [DONE]\n\n");
+                return FixtureReply::body(200, "OK", "text/event-stream", stream).with_header_gate(server_gates[index].clone());
+            }
             FixtureReply::body(200, "OK", "text/event-stream", concat!(
                 "data: {\"id\":\"response\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"a\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n",
                 "data: {\"id\":\"response\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"a\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",

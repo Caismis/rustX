@@ -430,13 +430,14 @@ impl ClientInner {
     pub(crate) async fn compact_context(
         &self,
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+        instructions: Option<String>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
         let handle = self
             .runtime
             .as_ref()
             .expect("a writable Runtime Client host has a runtime")
-            .admit_compaction(request_id)
+            .admit_compaction(request_id, instructions)
             .map_err(Self::compaction_error)?;
         #[cfg(test)]
         let gate = self.manual_compaction_response_gate.lock().unwrap().take();
@@ -451,6 +452,7 @@ impl ClientInner {
     pub(crate) fn admit_compaction_transfer(
         &self,
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+        instructions: Option<String>,
     ) -> Result<
         futures_util::future::BoxFuture<'static, Result<RuntimeClientResult, RuntimeClientError>>,
         RuntimeClientError,
@@ -460,7 +462,7 @@ impl ClientInner {
             .runtime
             .as_ref()
             .expect("writable runtime")
-            .admit_compaction(request_id)
+            .admit_compaction(request_id, instructions)
             .map_err(Self::compaction_error)?;
         // The transferred reply must not retain the host's Runtime or Store
         // allocation after native retirement. Only the exact receipt travels.
@@ -499,6 +501,9 @@ impl ClientInner {
                     message: error.to_string(),
                 }
             }
+            ManualCompactionError::InvalidInstructions => RuntimeClientError::InvalidRequest {
+                message: error.to_string(),
+            },
             ManualCompactionError::Shutdown => RuntimeClientError::RuntimeShutdown,
             ManualCompactionError::ModelUnavailable { .. } => {
                 RuntimeClientError::InvalidModelConfiguration {
@@ -538,14 +543,25 @@ impl ClientInner {
             let _ = committed.send(outcome.clone());
             let _ = release.await;
         }
-        Ok(RuntimeClientResult::ContextCompacted {
-            compaction: Some(crate::observation::head::RuntimeClientCompactionView {
-                generation: outcome.generation,
-                checkpoint_id: outcome.checkpoint_id,
-                activation_id: outcome.activation_id,
-                tokens_before: outcome.tokens_before,
-                estimated_tokens_after: outcome.estimated_tokens_after,
-            }),
+        Ok(match outcome {
+            crate::runtime::conversation_runtime::ManualCompactionOutcome::Compacted {
+                generation,
+                checkpoint_id,
+                activation_id,
+                tokens_before,
+                estimated_tokens_after,
+            } => RuntimeClientResult::ContextCompacted {
+                compaction: Some(crate::observation::head::RuntimeClientCompactionView {
+                    generation,
+                    checkpoint_id,
+                    activation_id,
+                    tokens_before,
+                    estimated_tokens_after,
+                }),
+            },
+            crate::runtime::conversation_runtime::ManualCompactionOutcome::Skipped => {
+                RuntimeClientResult::ContextCompactionSkipped
+            }
         })
     }
 

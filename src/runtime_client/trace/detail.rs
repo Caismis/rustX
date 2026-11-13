@@ -87,6 +87,8 @@ impl TraceProjection<'_> {
                             "compaction_started",
                             "compaction_completed",
                             "compaction_failed",
+                            "compaction_cancelled",
+                            "compaction_skipped",
                         ],
                         before: None,
                         after: anchor.sequence,

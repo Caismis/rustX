@@ -25,7 +25,7 @@ treat an empty cell as covered. Tip under verification: PR #550 / #546 head.
 | P18 | Sparse first / change / compaction reminder | `src/runtime/permission/reminder.rs`; agent-loop permission reminder placement | Compaction-trigger reminder proof thin |
 | P19 | No Agent Status dependence | Reminder path independent of status extension; child resume inherits mode | Explicit Status-disabled reminder case thin |
 | P20 | Process death / reconstruction | `tests/boundary/durable/process_death/` Plan Ask + Full Access fixtures | Archive/reconstruction under broader grant denial case thin |
-| P21 | WebUI / TUI / protocol | Web `PermissionSelect` + MCP `ResourcePermissionSet` editor; TUI `/settings … approval`; protocol v78+ | TUI lacks interactive MCP three-mode editor (TOML/Web carry authoring) |
+| P21 | WebUI / TUI / protocol | Web `PermissionSelect` + MCP `ResourcePermissionSet` editor; TUI `/settings … approval`; protocol v79+ | TUI lacks interactive MCP three-mode editor (TOML/Web carry authoring) |
 | P22 | Self-edit / injection / credentials / unattended Ask | Hard deny non-elevatable; review treats tool args as untrusted; unattended Ask fails closed (no silent Allow) | Dedicated self-authorization / credential non-disclosure suite thin |
 
 Update again only if FULL CI on the final tip changes the evidence surface (including Merge verification).

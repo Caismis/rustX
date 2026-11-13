@@ -117,9 +117,6 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
         config.initial_model().auxiliary,
         AuxiliaryModelPolicy::default()
     );
-    assert_eq!(config.context.reserve_tokens, 4_096);
-    assert_eq!(config.context.keep_recent_tokens, 12_000);
-    assert_eq!(config.context.summary_output_cap, Some(1_024));
     assert!(config.agent.extensions.agent_status.time.enabled);
     assert_eq!(
         config.agent.extensions.agent_status.time.timezone,

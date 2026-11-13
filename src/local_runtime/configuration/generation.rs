@@ -87,7 +87,6 @@ impl ProspectiveSessionConfig {
             .agent
             .agents_md
             .clone_from(&self.config.agent.agents_md);
-        config.context = self.config.context;
         config.agent.model.clone_from(&self.config.agent.model);
         configuration.models = models;
         let authored = &mut configuration.authored;
@@ -104,10 +103,6 @@ impl ProspectiveSessionConfig {
             .get_or_insert_with(Default::default);
         context.agents_md = agent.and_then(|agent| agent.agents_md.clone());
         context.model = agent.and_then(|agent| agent.model.clone());
-        authored
-            .effective
-            .context
-            .clone_from(&self.effective.context);
         authored.effective.models.clone_from(&self.effective.models);
         authored.effective.providers = redact(self.effective.clone()).providers;
         authored.source_revisions.clone_from(&self.source_revisions);
@@ -259,7 +254,6 @@ impl EffectiveConfiguration {
             generation: resources.revision(),
             document: authored.effective.clone(),
             root_agent: config.agent.clone(),
-            context: config.context,
             model_timeout: config.model_timeout_policy,
             tool_deadline: config.tool_deadline_policy,
             child_capacity: config.subagents.clone(),

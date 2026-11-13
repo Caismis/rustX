@@ -2,7 +2,7 @@
 //! through the Session Catalog.
 
 use super::super::session::SessionId;
-use super::SessionRuntimeManager;
+use super::{ConversationRuntime, SessionRuntimeManager};
 
 impl SessionRuntimeManager {
     /// Native ownership starts before capture and survives loss of the RPC.
@@ -93,7 +93,7 @@ impl SessionRuntimeManager {
         if recover {
             candidate.recover_auxiliary_models(&mut selection);
         }
-        let candidate = runtime.resolve_model_selection(candidate, selection.clone())?;
+        let candidate = ConversationRuntime::resolve_model_selection(candidate, selection.clone())?;
         #[cfg(test)]
         owner
             .configuration

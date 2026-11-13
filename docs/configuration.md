@@ -99,10 +99,11 @@ The authoritative structural reference is
 [`rustx.schema.json`](../schemas/rustx.schema.json), generated from
 `local_runtime::authoring::RuntimeLayer`. Unknown fields are rejected by the
 parser; the App Server deletes them from a source at its native boundaries
-before parsing, together with a few other exactly recognizable constructs (see
-[Automatic source repair](#automatic-source-repair-464)). TOML tables and arrays
+before parsing, together with a few other exactly recognizable constructs. The
+obsolete `[context]` table requires manual removal and is never repaired silently
+(see [Automatic source repair](#automatic-source-repair-464)). TOML tables and arrays
 preserve authored omission versus explicit empty values. The current document
-version is `schema_version = 12`.
+version is `schema_version = 13`.
 
 | Top-level field | Owner and meaning |
 | --- | --- |
@@ -112,7 +113,6 @@ version is `schema_version = 12`.
 | `agent` | Root capability profile and model default |
 | `agent_id` | Root runtime Agent identity label |
 | `approval_mode` | Global `plan`, `automatic`, or `full_access` execution approval mode |
-| `context` | Context reserve, recent-history retention and summary cap |
 | `model_timeout_policy` | Response-start and stream-idle deadlines |
 | `tool_deadline_policy` | Tool hard deadline and optional idle-liveness window |
 | `environment` | Literal Tool environment, keyed by variable; projections carry the identities only |
@@ -364,8 +364,8 @@ fields — model identity, messages/input/instructions, tools, streaming, provid
 continuation state and every output-token field — are protected in every layer
 and again at final wire construction. The output budget is the explicit
 selection limit, else the selected profile default, else the Model hard maximum;
-no limit may exceed the hard maximum, and the Context Engine summary cap still
-applies independently. An omitted `profile` selects `default_profile`; an
+no limit may exceed the hard maximum. Compaction determines its summary output
+allowance automatically from model capabilities. An omitted `profile` selects `default_profile`; an
 unknown or inapplicable explicit profile fails without fallback.
 
 The Root `agent.model` object contains `model` and optional `profile`,
@@ -501,9 +501,9 @@ Root-only Goal pursuit. No dynamic plugin loading, hook API or marketplace exist
 
 ### Runtime policies
 
-`context` has `reserve_tokens` (default 1024), `keep_recent_tokens` (4096), and
-`summary_output_cap` (default 1024 tokens). The cap accepts
-`{ mode = "model_limit" }` or `{ mode = "limit", tokens = N }`.
+Context compaction adjusts automatically to the selected model. Remove the obsolete
+`[context]` table, including `reserve_tokens`, `keep_recent_tokens` and
+`summary_output_cap`, from existing configuration files.
 `model_timeout_policy` has positive `response_start_timeout_ms` and
 `stream_idle_timeout_ms`. `tool_deadline_policy` has positive `hard_deadline_ms`
 (default 120000) and `idle_liveness_ms`, either `{ mode = "disabled" }` or
@@ -596,7 +596,6 @@ units; there is no recursive TOML merge.
 | Agent delegation | Complete `agent.agents` array | `[]` permits no named Agents and composes no Agent controls |
 | Workflow enablement | `agent.workflows` array, merged across User and Workspace | `[]` adds none; it never disables a Global Workflow |
 | Project guidance | Complete `agent.agents_md` object | `{}` uses inherit=true |
-| Context | Complete `context` object | `{}` restores product defaults |
 | Model timeouts | Complete `model_timeout_policy` object | `{}` restores product defaults |
 | Tool deadlines | Complete `tool_deadline_policy` object | `{}` restores product defaults |
 | Initial MCP readiness wait | Complete `mcp_startup_policy` object | `{}` restores the 15,000 ms product default |
@@ -1096,12 +1095,12 @@ resolution and source inspection share:
   model: App Server process policy, every Provider and Model entry on its own
   terms (identities, endpoint, credential source, limits, capabilities, Profiles,
   compatibility fields, Model `request_params`), and every root runtime
-  constraint the document decides alone (context and deadline policies, the Tool
+  constraint the document decides alone (deadline policies, the Tool
   environment, the root Agent profile and Tool selection, subagent concurrency,
   admission and Workflow identities).
 - **Composition-dependent constraints apply once the composition is known**: a
   Model's Provider, a non-empty catalog, the selected models, their Profiles and
-  overrides, and the context budgets they bound. A source may leave these facts
+  overrides. A source may leave these facts
   to the other scope. A Workspace is composed over the current User source; the
   User is composed with the selected Workspace at Session creation, load and
   reconcile, and is checked on its own terms only at startup, where no Workspace

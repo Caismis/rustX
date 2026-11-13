@@ -612,7 +612,7 @@ async fn automatic_compaction_keeps_attempt_pinned_resources_after_external_edit
     ];
     let (runtime, model) = headless_runtime_with_options(
         &dir,
-        vec![overflow_script, text_turn_script("s"), one_turn_script()],
+        vec![overflow_script, summary_turn_script("s"), one_turn_script()],
         Some(tool_registry(
             "tool-generation-a",
             "tool_generation_a",
@@ -625,9 +625,7 @@ async fn automatic_compaction_keeps_attempt_pinned_resources_after_external_edit
             ),
             initial_messages: vec![seed_user(
                 "old",
-                "old history that the overflow compaction retires: this seed carries enough \
-                 retired content that replacing it with the compact summary is measurable \
-                 progress even with the validated metadata the immutable checkpoint carries",
+                &"old history and retained facts for the overflow compaction; ".repeat(32),
             )],
             project_context_files: vec![project_file(
                 &project_path,
@@ -686,7 +684,19 @@ async fn automatic_compaction_keeps_attempt_pinned_resources_after_external_edit
     );
 
     assert!(requests[1].tools.is_empty());
-    assert!(requests[1].effective_system_prompt.is_empty());
+    let summary_schema = requests[1]
+        .response_schema
+        .as_ref()
+        .expect("isolated Summary has its own output schema");
+    assert_eq!(
+        summary_schema.strategy,
+        crate::model::structured::StructuredOutputStrategy::Prompt
+    );
+    assert_eq!(
+        requests[1].effective_system_prompt,
+        summary_schema.schema.prompt_instruction(),
+        "the isolated Summary contains only its runtime-owned output contract"
+    );
     assert!(requests[1].continuation.is_none());
 
     assert_eq!(
@@ -790,11 +800,6 @@ async fn admitted_attempt_executes_under_the_frozen_tool_deadline_policy() {
             None,
         ),
         context: ConversationContextConfig {
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator: Arc::new(DefaultTokenEstimator),
             status_engine: Some(AgentStatusEngine::default()),
         },

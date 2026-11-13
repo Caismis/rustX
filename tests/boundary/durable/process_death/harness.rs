@@ -84,13 +84,12 @@ fn runtime_json(force_ask: bool, include_todo: bool) -> String {
     // keys are rejected by deny_unknown_fields.
     let builtin_tools = vec!["read", "bash", "job_status"];
     toml::to_string_pretty(&serde_json::json!({
-        "schema_version": 12,
+        "schema_version": 13,
         "agent_id": "agent-fnd06",
         "providers": {"fixture": {"protocol":"openai_chat_completions","base_url": "https://fixture.invalid/v1", "api_key": "fixture-key-fixture"}},
         "models": {MODEL: {"provider": "fixture", "id": "fnd06", "context_window": 1_000_000, "max_output_tokens": 4096, "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"]}, "compat": {"chat_reasoning_replay": "omit"}}},
         "agent": {"model": {"model": MODEL}, "tools": {"builtin": builtin_tools}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": include_todo}}, "agents": ["explore"], "skills": "all"},
         "approval_mode": if force_ask { "plan" } else { "full_access" },
-        "context": {"reserve_tokens": 0, "keep_recent_tokens": 0},
         // Issue #544: Bash ModelSelectable is the product default; no native_tools overlay.
         "subagents": {"max_concurrent": 4}
     }))

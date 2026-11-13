@@ -205,6 +205,9 @@ fn fixture_in_process(
         CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
         clock.clone(),
     );
+    // This fixture admits one normal request. Any physical technical retry
+    // charges its own recovery slot under the same original deadline.
+    budget.admit_work(1).unwrap();
     let scope = AuxiliaryExecutor::scope(&budget, &CancellationSignal::new());
     let reservation = executor.reserve_general(&scope).unwrap();
     let adapter = Arc::new(ConsumerAdapter {
@@ -226,6 +229,7 @@ fn fixture_in_process(
     .summary_invocation()
     .clone();
     let request = ModelRequest {
+        prompt_fallback_authorization: crate::model::types::PromptFallbackAuthorization::default(),
         response_schema: None,
         response_byte_limit: None,
         invocation: invocation.invocation_config(),
@@ -1131,7 +1135,7 @@ async fn required_request_start_rollback_refunds_budget_but_fails_native_durabil
             "only CallStarted and CallSettled survive rollback"
         );
         let fresh = CancellationSignal::new();
-        let allowance = (0..12)
+        let allowance = (0..1)
             .map(|_| {
                 fixture
                     .scope
@@ -1145,7 +1149,7 @@ async fn required_request_start_rollback_refunds_budget_but_fails_native_durabil
             .collect::<Vec<_>>();
         assert_eq!(
             allowance.len(),
-            12,
+            1,
             "proven noncommit refunds the start allowance"
         );
         assert!(
@@ -1215,7 +1219,7 @@ async fn cancelled_request_start_rollback_refunds_budget_without_failing_durabil
     );
     assert_eq!(fixture.store.read_events(None, 32).unwrap().events.len(), 2);
     let fresh = CancellationSignal::new();
-    let allowances = (0..12)
+    let allowances = (0..1)
         .map(|_| {
             fixture
                 .scope
@@ -1227,7 +1231,7 @@ async fn cancelled_request_start_rollback_refunds_budget_without_failing_durabil
                 .unwrap()
         })
         .collect::<Vec<_>>();
-    assert_eq!(allowances.len(), 12);
+    assert_eq!(allowances.len(), 1);
     assert!(
         fixture.executor.0.resources.durability.failure().is_none(),
         "confirmed cancellation rollback does not poison native authority"
@@ -1299,7 +1303,7 @@ async fn cancellation_during_shared_start_probes_refunds_budget_without_durabili
                 .is_empty()
         );
         let fresh = CancellationSignal::new();
-        let allowances = (0..12)
+        let allowances = (0..1)
             .map(|_| {
                 fixture
                     .scope
@@ -1313,7 +1317,7 @@ async fn cancellation_during_shared_start_probes_refunds_budget_without_durabili
             .collect::<Vec<_>>();
         assert_eq!(
             allowances.len(),
-            12,
+            1,
             "real SELECT rollback restores the full start allowance: {probe:?}"
         );
         assert_eq!(
@@ -1379,9 +1383,29 @@ fn historical_summary_input(
         .unwrap();
     let cut = fixture.store.compaction_resource_cut().unwrap();
     let before = fixture.store.auxiliary_audit_cut().unwrap();
+    let text = SummaryRequest {
+        retired: vec![ModelInputMessage::Canonical(message)],
+        ..Default::default()
+    }
+    .render_transcript();
+    let byte_end = u32::try_from(text.len()).unwrap();
     (
         SummaryRequest {
-            retired: vec![ModelInputMessage::Canonical(message)],
+            fragment: Some(crate::context::chunks::SummaryFragment {
+                text,
+                sources: vec![crate::context::chunks::SummarySource::User {
+                    source: crate::message::types::UserSource::Human,
+                    kind: crate::context::chunks::SummarySourceKind::Message,
+                    earlier_summary: false,
+                }],
+                ranges: vec![crate::model::auxiliary::AuxiliarySourceRange {
+                    projection_index: 0,
+                    role: crate::model::auxiliary::AuxiliarySourceRole::User,
+                    byte_start: 0,
+                    byte_end,
+                }],
+            }),
+            ..Default::default()
         },
         cut,
         before,

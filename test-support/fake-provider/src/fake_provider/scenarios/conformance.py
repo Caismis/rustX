@@ -12,7 +12,11 @@ passing quietly, because every expectation here is asserted by default.
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from fake_provider.scenario import (
+    AdaptiveScenario,
     ANTHROPIC_MESSAGES,
     OPENAI_CHAT_COMPLETIONS,
     OPENAI_RESPONSES,
@@ -20,6 +24,7 @@ from fake_provider.scenario import (
     Finish,
     Gate,
     HttpError,
+    Raw,
     Reasoning,
     Scenario,
     Step,
@@ -66,19 +71,15 @@ COMPACTION_MARKER = "compaction-filler-marker-93be"
 
 
 def _filler(marker: str) -> str:
-    """~200 KB of deterministic filler, worth roughly 51k estimated tokens.
+    """About 49.6k estimated tokens, between the 56k model's trigger and limit.
 
-    The Rust driver configures a 56k-token window with a 1.5k reserve and a
-    1k output budget. Both the soft input limit and the summary input limit
-    carry the reserve, so both are 53.4k, which sits above this span's
-    estimate and below the whole next-turn request estimate: the next turn
-    provably crosses the soft input limit while the complete-message
-    compaction span provably still fits the summary model's own request
-    budget. Both bounds are crossed by construction, never by hoping a random
-    amount of text happens to be enough.
+    With 1,024 output tokens and a 2,800 automatic margin, the primary hard
+    limit is 52,176 and its proactive trigger is 46,958. This source crosses
+    the trigger while leaving space for the complete Prompt-schema summary
+    request, including its instructions and schema, in the same window.
     """
     return (marker + " ") + " ".join(
-        f"compaction filler block {index:05d}." for index in range(6800)
+        f"compaction filler block {index:05d}." for index in range(6400)
     )
 
 
@@ -86,7 +87,19 @@ FILLER = _filler(COMPACTION_MARKER)
 SUMMARY_TEXT = "conformance summary: the assistant produced one long report."
 #: The exact deterministic prefix `ModelBackedSummarizer` sends. A summary
 #: request is identified structurally, never by guessing at its content.
-SUMMARY_INSTRUCTION = "Summarize the following retired conversation history"
+SUMMARY_INSTRUCTION = "Produce one structured context summary matching the runtime-owned JSON Schema"
+
+
+def summary_json(goal: str) -> str:
+    """A locally valid summary whose rendered Goal carries the fixture marker."""
+    return json.dumps({
+        "goal": goal,
+        "constraints_and_preferences": [],
+        "progress": {"done": [], "in_progress": [], "blocked": []},
+        "key_decisions": [],
+        "next_steps": [],
+        "critical_context": [],
+    }, separators=(",", ":"))
 
 # -- repeated compaction ---------------------------------------------------
 
@@ -540,7 +553,7 @@ def restart_after_request_start() -> Scenario:
     )
 
 
-def _compaction(name: str, summary_model: str) -> Scenario:
+def _compaction(name: str, summary_model: str, summary_protocol: str = OPENAI_CHAT_COMPLETIONS) -> Scenario:
     """Turn one fills the window, turn two must compact through the provider."""
     return Scenario(
         name,
@@ -554,15 +567,16 @@ def _compaction(name: str, summary_model: str) -> Scenario:
         ),
         Step(
             Expect(
-                protocol=OPENAI_CHAT_COMPLETIONS,
+                protocol=summary_protocol,
                 model=summary_model,
                 # A summary invocation is structurally distinct: no tools, no
                 # Agent Status, no Skill catalog, and the runtime's own
                 # deterministic instruction.
                 no_direct_tools=True,
+                json_subset={"temperature": 0.2} if summary_protocol == ANTHROPIC_MESSAGES else None,
                 body_contains=(SUMMARY_INSTRUCTION, COMPACTION_MARKER),
             ),
-            Stream(Text(SUMMARY_TEXT), Finish("stop")),
+            Stream(Text(summary_json(SUMMARY_TEXT)), Finish("stop")),
         ),
         Step(
             Expect(
@@ -585,6 +599,10 @@ def compaction_session_summary() -> Scenario:
 
 def compaction_explicit_summary() -> Scenario:
     return _compaction("compaction_explicit_summary", SUMMARY_MODEL)
+
+
+def compaction_cross_provider_summary() -> Scenario:
+    return _compaction("compaction_cross_provider_summary", ANTHROPIC_MODEL, ANTHROPIC_MESSAGES)
 
 
 def compaction_transient_summary() -> Scenario:
@@ -625,7 +643,7 @@ def _compaction_twice(name: str, summary_model: str) -> Scenario:
                 body_contains=(SUMMARY_INSTRUCTION, FILLER_ONE_MARKER),
                 body_excludes=(FILLER_TWO_MARKER,),
             ),
-            Stream(Text(SUMMARY_ONE_TEXT), Finish("stop")),
+            Stream(Text(summary_json(SUMMARY_ONE_TEXT)), Finish("stop")),
         ),
         Step(
             Expect(
@@ -649,7 +667,7 @@ def _compaction_twice(name: str, summary_model: str) -> Scenario:
                 body_contains=(SUMMARY_INSTRUCTION, SUMMARY_ONE_TEXT, FILLER_TWO_MARKER),
                 body_excludes=(FILLER_ONE_MARKER,),
             ),
-            Stream(Text(SUMMARY_TWO_TEXT), Finish("stop")),
+            Stream(Text(summary_json(SUMMARY_TWO_TEXT)), Finish("stop")),
         ),
         Step(
             Expect(
@@ -672,6 +690,86 @@ def compaction_twice_session_summary() -> Scenario:
 
 def compaction_twice_explicit_summary() -> Scenario:
     return _compaction_twice("compaction_twice_explicit_summary", SUMMARY_MODEL)
+
+
+CHUNKED_PROMPT = "conformance: write the chunked compaction history"
+CHUNKED_SUMMARY = "chunked compaction kept the user's goal"
+PRIMARY_REASONING = "private-primary-reasoning-522"
+SUMMARY_REASONING = "private-summary-reasoning-522"
+
+
+def _chunked_write_content(index: int) -> str:
+    """Distinct, bounded and reproducible bytes without short periodic runs."""
+    data = "".join(
+        hashlib.sha256(f"chunked-write:{index}:{part}".encode()).hexdigest()
+        for part in range(282)
+    )[:18_000]
+    return f"chunked-write-{index:03d}:{data}"
+
+
+def chunked_compaction() -> AdaptiveScenario:
+    """Generate bounded tool history until the runtime selects compaction.
+
+    Request model selects the two legal phases; it does not inspect prompt
+    semantics. Each step validates its own wire request. The post-summary
+    primary request closes the scenario, and too few chunks is a failure.
+    """
+    def select(requests):
+        current = requests[-1]
+        prior = requests[:-1]
+        primary_count = sum(request.model == CHAT_MODEL for request in prior)
+        summary_count = sum(request.model == SUMMARY_MODEL for request in prior)
+        if len(requests) > 320:
+            raise ValueError("chunked compaction exceeded its finite request limit")
+        if current.model == CHAT_MODEL and summary_count == 0:
+            if primary_count >= 63:
+                raise ValueError("primary history never triggered automatic compaction")
+            index = primary_count + 1
+            content = _chunked_write_content(index)
+            return Step(
+                Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL,
+                       tools_include=("write",), body_contains=(CHUNKED_PROMPT,)),
+                Stream(Reasoning(PRIMARY_REASONING),
+                       ToolCall(f"chunked-call-{index:03d}", "write",
+                                json.dumps({"path": f"chunked-{index:03d}.txt", "content": content})),
+                       Finish("tool_calls")),
+            ), False
+        if current.model == SUMMARY_MODEL:
+            if primary_count < 14:
+                raise ValueError("automatic compaction started before enough source history")
+            native = summary_count == 0
+            expect = Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=SUMMARY_MODEL,
+                no_direct_tools=True,
+                json_subset={"reasoning_effort": "medium", **({"response_format": {"type": "json_schema"}} if native else {})},
+                body_contains=(SUMMARY_INSTRUCTION,),
+                body_excludes=(PRIMARY_REASONING, SUMMARY_REASONING) if native else
+                              (PRIMARY_REASONING, SUMMARY_REASONING, '"response_format"'),
+            )
+            if native:
+                return Step(expect, HttpError(400, {"error": {
+                    "type": "invalid_request_error",
+                    "message": "'response_format.type' : value is not one of the allowed values ['text','json_object']",
+                }})), False
+            # Deliberately omit input/total usage: an absent quantity is not
+            # zero. The nonzero output and reasoning subtotals remain real.
+            partial_usage = Raw(b'data: {"id":"usage-522","object":"chat.completion.chunk","choices":[],"usage":{"completion_tokens":49,"completion_tokens_details":{"reasoning_tokens":13}}}\n\n')
+            gate = (Gate("first-prompt-summary"),) if summary_count == 1 else ()
+            return Step(expect, Stream(*gate, Reasoning(SUMMARY_REASONING),
+                                       Text(summary_json(CHUNKED_SUMMARY)), Finish("stop"), partial_usage)), False
+        if current.model == CHAT_MODEL and summary_count:
+            if summary_count <= 13:  # one rejected Native plus at least 13 accepted fragments
+                raise ValueError("compaction did not accept more than twelve fragments")
+            return Step(
+                Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL,
+                       tools_include=("write",), body_contains=(CHUNKED_SUMMARY,),
+                       body_excludes=(PRIMARY_REASONING, SUMMARY_REASONING)),
+                Stream(Text("chunked compaction complete"), Finish("stop")),
+            ), True
+        raise ValueError(f"unexpected model in chunked compaction: {current.model!r}")
+
+    return AdaptiveScenario("chunked_compaction", select, ("first-prompt-summary",))
 
 
 def frozen_attempt_model() -> Scenario:
@@ -752,7 +850,7 @@ def image_tool_round_trip() -> Scenario:
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL, no_direct_tools=True,
                     body_contains=("retired-conversation", "artifact_1"),
                     body_excludes=("image/png", "image_url")),
-             Stream(Text("Image read and text-only delegation completed."), Finish("stop"))),
+             Stream(Text(summary_json("Image read and text-only delegation completed.")), Finish("stop"))),
     )
 
 
@@ -809,7 +907,7 @@ def image_coverage_overflow_retry() -> Scenario:
         # With no continuation anchor, keep-recent selects the first legal
         # prefix. A stale owner instead forces retirement through image #17.
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=SUMMARY_MODEL, body_contains=(SUMMARY_INSTRUCTION,), body_excludes=("seventeenth-image", "complete signed native thinking")),
-             Stream(Text("coverage retirement summary"), Finish("stop"))),
+             Stream(Text(summary_json("coverage retirement summary")), Finish("stop"))),
         Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, body_contains=("coverage retirement summary", "image/png", "Image artifact")),
              HttpError(503, {"error": {"type": "server_error", "message": "temporary unavailable"}})),
         Step(Expect(protocol=ANTHROPIC_MESSAGES, model=ANTHROPIC_MODEL, body_contains=("coverage retirement summary", "image/png", "Image artifact")),
@@ -817,6 +915,7 @@ def image_coverage_overflow_retry() -> Scenario:
 
 
 SCENARIOS = {
+    "chunked_compaction": chunked_compaction,
     "all_protocol_switches": all_protocol_switches,
     "all_protocol_switches_stateless": lambda: all_protocol_switches(True),
     "responses_chat_responses_switch": responses_chat_responses_switch,
@@ -851,6 +950,7 @@ SCENARIOS = {
     "restart_after_request_start": restart_after_request_start,
     "compaction_session_summary": compaction_session_summary,
     "compaction_explicit_summary": compaction_explicit_summary,
+    "compaction_cross_provider_summary": compaction_cross_provider_summary,
     "compaction_transient_summary": compaction_transient_summary,
     "compaction_twice_session_summary": compaction_twice_session_summary,
     "compaction_twice_explicit_summary": compaction_twice_explicit_summary,

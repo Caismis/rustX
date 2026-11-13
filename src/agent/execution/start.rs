@@ -223,7 +223,15 @@ impl AgentExecution<'_> {
         // invoked. Sparse permission reminders are consumed exactly here so
         // pre-start cancellation cannot lose eligibility and retries reuse
         // the same frozen input without duplicating the reminder.
-        self.permission_reminder.consume_after_start_commit();
+        if prepared.snapshot.system_sections.iter().any(|section| {
+            section.lane == crate::context::SystemSectionLane::PermissionReminder
+                && section.contributor
+                    == crate::runtime::identity::ContextContributorIdentity::Native(
+                        crate::runtime::identity::NativeContextContributor::PermissionReminder,
+                    )
+        }) {
+            self.permission_reminder.consume_after_start_commit();
+        }
         // The same transaction froze this task in the RequestSnapshot. A
         // prepared Human task that loses start arbitration must not survive
         // settlement as authority for a later Runtime or Agent input.

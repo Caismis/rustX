@@ -132,13 +132,11 @@ timezone = "UTC"
     // Ask proofs and permission-mode UI stay on Plan so elevation_reason can
     // publish Allow once. Lifecycle fixtures that mutate without a browser Ask
     // use Full Access (root here and/or Workspace rustx.toml below).
-    // Root approval_mode must precede any [context] table header.
     const rootApprovalMode = ['web_composer_context', 'web_chat_history'].includes(scenario)
       ? 'full_access'
       : 'plan';
-    const writeSettings = (model = primaryModel, modelFields = '') => writeFileSync(settings, `approval_mode = "${rootApprovalMode}"\n` + (scenario === 'web_compaction' ? '[context]\nreserve_tokens = 0\nkeep_recent_tokens = 0\n' : '') + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n[agent.model]\nmodel = "fixture/${model}"\n${modelFields}` + imageSource);
+    const writeSettings = (model = primaryModel, modelFields = '') => writeFileSync(settings, `approval_mode = "${rootApprovalMode}"\n` + catalog + `[model_timeout_policy]\nresponse_start_timeout_ms = 600000\nstream_idle_timeout_ms = 600000\n[agent.tools]\nbuiltin = ["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n[agent.model]\nmodel = "fixture/${model}"\n${modelFields}` + imageSource);
     writeSettings();
-    if (['web_child_capabilities', 'web_large_write'].includes(scenario)) writeFileSync(settings, readFileSync(settings, 'utf8') + '\n');
     // Automatically repairable sources (#464): the App Server repairs the User
     // document at startup and Workspace A before its first Session resolves.
     if (scenario === 'web_config_repair') {
@@ -247,9 +245,11 @@ timezone = "UTC"
 /** Retire the browser proxy before the Host it forwards to. Already running
  * Node route callbacks must finish while their Host and native owner are live. */
 export async function stopDogfoodPage(page: Page, fixture: Pick<Awaited<ReturnType<typeof startDogfood>>, 'stop'>, check = true) {
+  let report: Awaited<ReturnType<typeof fixture.stop>>;
   try { await drainWorkspaceHostRoutes(page); await page.unrouteAll({ behavior: 'wait' }); }
   finally {
     try { await page.close(); }
-    finally { await fixture.stop(check); }
+    finally { report = await fixture.stop(check); }
   }
+  return report;
 }

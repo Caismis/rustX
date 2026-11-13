@@ -146,8 +146,6 @@ pub enum ConfigurationChangeReason {
 pub enum ConfigurationDomain {
     /// The effective system instructions, project guidance or Agent profile.
     Instructions,
-    /// The context budgeting/projection policy.
-    ContextPolicy,
     /// The model-facing Tool catalog.
     Tools,
     /// The Skill catalog.
@@ -316,13 +314,10 @@ impl ConfigurationChange {
             snapshot.configuration().map(|configuration| {
                 let config = &configuration.config;
                 (
-                    config.context,
-                    (
-                        config.approval_mode,
-                        config.model_timeout_policy,
-                        config.tool_deadline_policy,
-                        config.mcp_startup_policy,
-                    ),
+                    config.approval_mode,
+                    config.model_timeout_policy,
+                    config.tool_deadline_policy,
+                    config.mcp_startup_policy,
                 )
             })
         };
@@ -341,9 +336,6 @@ impl ConfigurationChange {
             domains.push(ConfigurationDomain::Instructions);
         }
         let (old_configuration, new_configuration) = (configuration(old), configuration(new));
-        if old_configuration.map(|c| c.0) != new_configuration.map(|c| c.0) {
-            domains.push(ConfigurationDomain::ContextPolicy);
-        }
         if !tools.is_empty() {
             domains.push(ConfigurationDomain::Tools);
         }
@@ -357,7 +349,7 @@ impl ConfigurationChange {
         // authorized entries and the shared Skill Python/Node environments,
         // whose content-addressed roots change with their dependencies. It is
         // execution policy; the fact never carries it.
-        if old_configuration.map(|c| c.1) != new_configuration.map(|c| c.1)
+        if old_configuration != new_configuration
             || old.capability().effective_environment() != new.capability().effective_environment()
         {
             domains.push(ConfigurationDomain::ExecutionPolicy);

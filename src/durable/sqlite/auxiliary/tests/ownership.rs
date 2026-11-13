@@ -446,6 +446,7 @@ fn historical_input_uses_the_complete_native_cut() {
 
     let mut missing_compaction = call_start(AuxiliaryCallId::generate());
     missing_compaction.business_source = AuxiliaryBusinessSource::Compaction {
+        preceding_call: None,
         operation_id: crate::runtime::identity::CompactionOperationId::new("missing-compaction"),
     };
     assert_known_not_committed(store.commit_auxiliary_call_start(&missing_compaction, timestamp()));
@@ -1819,7 +1820,10 @@ fn business_sources_may_follow_the_frozen_input_cut() {
         AuxiliaryBusinessSource::HumanMessage {
             message_id: MessageId::new("trigger"),
         },
-        AuxiliaryBusinessSource::Compaction { operation_id },
+        AuxiliaryBusinessSource::Compaction {
+            preceding_call: None,
+            operation_id,
+        },
     ] {
         let mut start = call_start(AuxiliaryCallId::generate());
         start.input = AuxiliaryInputEvidence::Historical {

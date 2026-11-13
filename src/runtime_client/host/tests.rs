@@ -550,11 +550,6 @@ async fn host_fixture_before_activation(
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator,
             status_engine: Some(status_engine),
         },
@@ -647,11 +642,6 @@ async fn host_fixture_with_runtime_probe(
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
-                policy: crate::context::SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
                 estimator,
                 status_engine: Some(status_engine()),
             },
@@ -784,6 +774,28 @@ fn one_turn_stop() -> Vec<GatedStep> {
         GatedStep::Emit(ModelEvent::TextDelta {
             block_index: ContentBlockIndex::new(0),
             text: "done".to_owned(),
+        }),
+        GatedStep::Emit(ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        }),
+    ]
+}
+
+fn summary_turn_stop(goal: &str) -> Vec<GatedStep> {
+    let summary = serde_json::json!({
+        "goal": goal,
+        "constraints_and_preferences": [],
+        "progress": {"done": [], "in_progress": [], "blocked": []},
+        "key_decisions": [],
+        "next_steps": [],
+        "critical_context": []
+    });
+    vec![
+        GatedStep::Emit(ModelEvent::Started),
+        GatedStep::Emit(ModelEvent::TextDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: summary.to_string(),
         }),
         GatedStep::Emit(ModelEvent::Completed {
             finish_reason: ModelFinishReason::Stop,
@@ -2782,17 +2794,7 @@ async fn settled_host_retains_distinct_overflow_request_snapshots() {
                     generation: None,
                 },
             })],
-            vec![
-                GatedStep::Emit(ModelEvent::Started),
-                GatedStep::Emit(ModelEvent::TextDelta {
-                    block_index: ContentBlockIndex::new(0),
-                    text: "historical summary".to_owned(),
-                }),
-                GatedStep::Emit(ModelEvent::Completed {
-                    finish_reason: ModelFinishReason::Stop,
-                    usage: None,
-                }),
-            ],
+            summary_turn_stop("historical summary"),
             one_turn_stop(),
         ],
         ToolRegistry::new(),
@@ -2809,7 +2811,7 @@ async fn settled_host_retains_distinct_overflow_request_snapshots() {
 
     attachment.handle_request(RuntimeClientRequest::SubmitInbound {
         id: crate::runtime_client::RequestId::new(1),
-        content: submit_content("first"),
+        content: submit_content(&"first historical request and its facts; ".repeat(32)),
     });
     receive_until(&subscription, |event| {
         event
@@ -6920,11 +6922,6 @@ async fn host_fixture_probe_with_native_tools(
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator,
             status_engine: Some(status_engine()),
         },
@@ -7018,11 +7015,6 @@ async fn host_fixture_probe_with_runtime_gate(
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
-                policy: crate::context::SessionContextPolicy {
-                    reserve_tokens: 0,
-                    keep_recent_tokens: 0,
-                    summary_output_cap: None,
-                },
                 estimator,
                 status_engine: Some(status_engine()),
             },
@@ -7138,11 +7130,6 @@ async fn runtime_only_fixture(
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator,
             status_engine: Some(status_engine()),
         },
@@ -7554,11 +7541,6 @@ fn claim_config(fixture: &OwnershipFixture) -> RuntimeConversationConfig {
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
-            policy: crate::context::SessionContextPolicy {
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-                summary_output_cap: None,
-            },
             estimator: Arc::new(DefaultTokenEstimator),
             status_engine: Some(status_engine()),
         },
