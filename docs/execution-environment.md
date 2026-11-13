@@ -67,6 +67,14 @@ ordinary meaning.
   validated executable to uv; adoption compares the requested invocation's
   base executable with the environment's, so macOS launchers can resolve to
   their actual interpreter without accepting a different Python binary.
+  Missing, unusable, or changed path-pin interpreters use the existing
+  30-second Unavailable cooldown in both creation and adoption. Installing or
+  repairing that external interpreter can therefore recover without rewriting
+  root version files. Malformed root inputs and invalid or incompatible
+  `.venv` contents remain conflicts.
+  Ready retains the first fixed-interpreter witness across both probes and
+  publication. Its authored path and actual executable stamps are checked on
+  cache hits, so an external pin alias change invalidates Ready immediately.
   The selected
   interpreter is
   checked against both inputs before it is ready. The readiness identity is
@@ -147,8 +155,10 @@ is not an NFS lock. The post-permit target check does not claim a general
 filesystem transaction against arbitrary external mutations after dispatch. Readiness
 identity tracks the Workspace root and the device, inode, mtime, length and
 permissions of its version files, `.venv`, `pyvenv.cfg`, and the resolved
-`.venv/bin/python` plus `python3` targets. An in-place edit that preserves all
-tracked metadata can remain cached until another input changes.
+`.venv/bin/python` plus `python3` targets. For a path pin it also retains the
+authored interpreter path and the probed actual executable. An in-place edit
+that preserves all tracked metadata can remain cached until another input
+changes.
 One process admits at most two uv or interpreter probes at a time; that cap
 does not span processes. One Workspace keeps a single preparation task until
 it finishes, and a process retains a bounded number of finished tasks and Workspace records, including Ready records. Evicting

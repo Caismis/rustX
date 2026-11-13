@@ -83,6 +83,7 @@ enum Record {
         bin: PathBuf,
         virtual_env: PathBuf,
         guard: PathBuf,
+        fixed: Option<Arc<FixedInterpreter>>,
     },
     Unavailable {
         generation: Generation,
@@ -193,6 +194,8 @@ struct Owner {
     before_signal: Mutex<Option<TestGate>>,
     #[cfg(test)]
     waiting_permit: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    #[cfg(test)]
+    cache_miss: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 fn global() -> &'static Arc<Owner> {
@@ -223,6 +226,8 @@ impl Owner {
             before_signal: Mutex::new(None),
             #[cfg(test)]
             waiting_permit: Mutex::new(None),
+            #[cfg(test)]
+            cache_miss: Mutex::new(None),
         }
     }
 
@@ -266,7 +271,11 @@ impl Owner {
                 bin,
                 virtual_env,
                 guard,
-            }) if stored == &generation && validated_guard_directory(guard).is_some() => {
+                fixed,
+            }) if stored == &generation
+                && fixed.as_deref().is_none_or(FixedInterpreter::is_current)
+                && validated_guard_directory(guard).is_some() =>
+            {
                 return PythonSelection {
                     path_prefix: vec![bin.clone(), guard.clone()],
                     virtual_env: Some(virtual_env.clone()),
@@ -288,6 +297,10 @@ impl Owner {
                 return guarded(diagnostic);
             }
             _ => {}
+        }
+        #[cfg(test)]
+        if let Some(miss) = self.cache_miss.lock().expect("cache miss").take() {
+            let _ = miss.send(());
         }
         if self.schedules && std::ptr::eq(self, Arc::as_ptr(global())) {
             global().schedule_on(&canonical);
@@ -522,7 +535,9 @@ impl Owner {
             Ok(fixed) => fixed,
             Err(message) => {
                 if self.inputs_match(root, expected) {
-                    self.conflict(root, message, expected.clone());
+                    // The requested executable is outside Generation. Its
+                    // installation or repair must become observable on retry.
+                    self.unavailable(root, message, expected.clone());
                 }
                 return;
             }
@@ -616,19 +631,37 @@ impl Owner {
             return;
         }
         let host = self.host();
+        let mut fixed: Option<FixedInterpreter> = None;
         for name in ["python", "python3"] {
             let program = target.join("bin").join(name);
-            if let Err(message) = self
+            let current = match self
                 .check_interpreter(root, &program, host.as_ref(), pin, requires, &probed)
                 .await
             {
-                if generation_of(root) == probed {
-                    self.conflict(root, message, probed);
+                Ok(current) => current,
+                Err(error) => {
+                    if generation_of(root) == probed {
+                        match error {
+                            InterpreterError::Conflict(message) => {
+                                self.conflict(root, message, probed);
+                            }
+                            InterpreterError::Unavailable(message) => {
+                                self.unavailable(root, message, probed);
+                            }
+                        }
+                    }
+                    return;
                 }
+            };
+            // Retain the first witness across both probe awaits. Resampling
+            // after an alias change cannot authorize the earlier validation.
+            if generation_of(root) != probed
+                || fixed.as_ref().is_some_and(|fixed| !fixed.is_current())
+            {
                 return;
             }
-            if generation_of(root) != probed {
-                return;
+            if fixed.is_none() {
+                fixed = current;
             }
         }
         let Some(guard) =
@@ -643,7 +676,8 @@ impl Owner {
             }
             return;
         };
-        if generation_of(root) != probed {
+        if generation_of(root) != probed || fixed.as_ref().is_some_and(|fixed| !fixed.is_current())
+        {
             return;
         }
         self.records
@@ -656,6 +690,7 @@ impl Owner {
                     bin: target.join("bin"),
                     virtual_env: target.to_path_buf(),
                     guard,
+                    fixed: fixed.map(Arc::new),
                 },
             );
         self.bound_records();
@@ -749,28 +784,39 @@ impl Owner {
         pin: Option<&str>,
         requires: Option<&str>,
         expected: &Generation,
-    ) -> Result<(), &'static str> {
+    ) -> Result<Option<FixedInterpreter>, InterpreterError> {
+        use InterpreterError::{Conflict, Unavailable};
         let interpreter = self
             .probe_interpreter(root, program, host, expected)
-            .await?;
+            .await
+            .map_err(Conflict)?;
         {
             let venv = root.join(".venv");
             let Ok(actual) = std::fs::canonicalize(&interpreter.prefix) else {
-                return Err("Workspace .venv is not a valid virtual environment");
+                return Err(Conflict(
+                    "Workspace .venv is not a valid virtual environment",
+                ));
             };
             let Ok(expected) = std::fs::canonicalize(&venv) else {
-                return Err("Workspace .venv is not a valid virtual environment");
+                return Err(Conflict(
+                    "Workspace .venv is not a valid virtual environment",
+                ));
             };
             if actual != expected || interpreter.prefix == interpreter.base {
-                return Err("Workspace .venv is not a valid virtual environment");
+                return Err(Conflict(
+                    "Workspace .venv is not a valid virtual environment",
+                ));
             }
         }
-        interpreter.check_requirements(pin, requires)?;
-        if let Some(pin) = pin.filter(|pin| path_request(pin)) {
+        interpreter
+            .check_requirements(pin, requires)
+            .map_err(Conflict)?;
+        let fixed = if let Some(pin) = pin.filter(|pin| path_request(pin)) {
             let requested = absolute_pin(root, pin);
             let fixed = self
                 .check_fixed_interpreter(root, &requested, host, Some(pin), requires, expected)
-                .await?
+                .await
+                .map_err(Unavailable)?
                 .expect("path request");
             // A launcher (notably /usr/bin/python3 on macOS) may exec a
             // different binary. Compare the interpreters' reported base
@@ -779,10 +825,15 @@ impl Owner {
                 || std::fs::canonicalize(&interpreter.executable).ok().as_ref()
                     != Some(&fixed.executable)
             {
-                return Err("Workspace Python does not satisfy .python-version");
+                return Err(Unavailable(
+                    "Workspace Python does not satisfy .python-version",
+                ));
             }
-        }
-        Ok(())
+            Some(fixed)
+        } else {
+            None
+        };
+        Ok(fixed)
     }
 
     async fn probe_interpreter(
@@ -957,6 +1008,12 @@ impl Owner {
     }
 }
 
+enum InterpreterError {
+    Conflict(&'static str),
+    Unavailable(&'static str),
+}
+
+#[derive(Debug)]
 struct FixedInterpreter {
     path: PathBuf,
     stamp: PathStamp,
@@ -1127,6 +1184,7 @@ pub(crate) fn publish_ready_for_test(root: &Path) {
                 bin,
                 virtual_env: target,
                 guard,
+                fixed: None,
             },
         );
 }
@@ -2596,7 +2654,7 @@ pub(crate) mod tests {
         owner.prepare(root.path().to_path_buf()).await;
         assert!(matches!(
             owner.records.lock().unwrap().get(root.path()),
-            Some(Record::Conflict { diagnostic, .. }) if diagnostic.contains(".python-version")
+            Some(Record::Unavailable { diagnostic, .. }) if diagnostic.contains(".python-version")
         ));
         assert_eq!(generation_of(root.path()), original);
         assert!(
@@ -2607,6 +2665,100 @@ pub(crate) mod tests {
                 .iter()
                 .all(|argv| argv.iter().any(|arg| arg == "-I"))
         );
+        owner.stop().await;
+    }
+
+    #[tokio::test]
+    async fn ready_path_pin_alias_change_invalidates_observation_without_new_probes() {
+        let root = workspace();
+        let base = root.path().join("base-python");
+        let other = root.path().join("other-python");
+        let alias = root.path().join("pinned-python");
+        write_executable(&base, "#!/bin/sh\nexit 0\n");
+        write_executable(&other, "#!/bin/sh\nexit 0\n");
+        std::os::unix::fs::symlink(&base, &alias).unwrap();
+        write_linked_venv(&root.path().join(".venv"), &base);
+        std::fs::write(root.path().join(".python-version"), "./pinned-python").unwrap();
+        let original = generation_of(root.path());
+        let probe = Arc::new(Scripted::new("0.10.2"));
+        let owner = Owner::for_test(probe.clone(), None, None, None);
+        owner.prepare(root.path().to_path_buf()).await;
+        assert!(owner.observe(root.path()).virtual_env.is_some());
+        let calls = probe.calls.lock().unwrap().len();
+        std::fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(&other, &alias).unwrap();
+        assert_eq!(generation_of(root.path()), original);
+        let (miss, mut arrival) = tokio::sync::oneshot::channel();
+        *owner.cache_miss.lock().unwrap() = Some(miss);
+        assert!(owner.observe(root.path()).virtual_env.is_none());
+        arrival
+            .try_recv()
+            .expect("the changed path pin invalidates Ready");
+        assert_eq!(
+            probe.calls.lock().unwrap().len(),
+            calls,
+            "observation only inspects metadata"
+        );
+        owner.prepare(root.path().to_path_buf()).await;
+        assert!(matches!(
+            owner.records.lock().unwrap().get(root.path()),
+            Some(Record::Unavailable { .. })
+        ));
+        assert_eq!(
+            generation_of(root.path()),
+            original,
+            "revalidation never rebuilds"
+        );
+        owner.stop().await;
+    }
+
+    #[tokio::test]
+    async fn alias_change_between_interpreter_probes_cannot_replace_the_first_witness() {
+        struct SecondProbeGate {
+            scripted: Scripted,
+            second: PathBuf,
+            gate: Mutex<Option<super::TestGate>>,
+        }
+        impl ProgramProbe for SecondProbeGate {
+            fn run(&self, request: ProgramRequest) -> BoxFuture<'_, Result<ProgramOutput, String>> {
+                Box::pin(async move {
+                    if Path::new(&request.argv[0]) == self.second {
+                        super::pass_gate(&self.gate).await;
+                    }
+                    self.scripted.run(request).await
+                })
+            }
+        }
+        let root = workspace();
+        let base = root.path().join("base-python");
+        let other = root.path().join("other-python");
+        let alias = root.path().join("pinned-python");
+        write_executable(&base, "#!/bin/sh\nexit 0\n");
+        write_executable(&other, "#!/bin/sh\nexit 0\n");
+        std::os::unix::fs::symlink(&base, &alias).unwrap();
+        write_linked_venv(&root.path().join(".venv"), &base);
+        let second = root.path().join(".venv/bin/python3");
+        std::fs::remove_file(&second).unwrap();
+        std::os::unix::fs::symlink(&other, &second).unwrap();
+        std::fs::write(root.path().join(".python-version"), "./pinned-python").unwrap();
+        let original = generation_of(root.path());
+        let probe = Arc::new(SecondProbeGate {
+            scripted: Scripted::new("0.10.2"),
+            second,
+            gate: Mutex::new(None),
+        });
+        let (entered, release) = arm_gate(&probe.gate);
+        let owner = Arc::new(Owner::for_test(probe, None, None, None));
+        let preparing = owner.clone();
+        let path = root.path().to_path_buf();
+        let task = tokio::spawn(async move { preparing.prepare(path).await });
+        entered.await.unwrap();
+        std::fs::remove_file(&alias).unwrap();
+        std::os::unix::fs::symlink(&other, &alias).unwrap();
+        release.send(()).unwrap();
+        task.await.unwrap();
+        assert!(owner.records.lock().unwrap().get(root.path()).is_none());
+        assert_eq!(generation_of(root.path()), original);
         owner.stop().await;
     }
 
@@ -3732,6 +3884,98 @@ pub(crate) mod tests {
         format!("{}:/usr/bin:/bin", uv.parent().unwrap().display())
     }
 
+    pub(crate) async fn repaired_path_pin_recovers_without_rewriting_root_inputs() {
+        for reuse in [false, true] {
+            for unusable in [false, true] {
+                let root = workspace();
+                let pinned = root.path().join("external-python");
+                std::fs::write(root.path().join(".python-version"), "./external-python").unwrap();
+                std::fs::write(
+                    root.path().join("pyproject.toml"),
+                    "[project]\nrequires-python = \">=3\"\n",
+                )
+                .unwrap();
+                if unusable {
+                    std::fs::write(&pinned, "not executable").unwrap();
+                    std::fs::set_permissions(&pinned, std::fs::Permissions::from_mode(0o600))
+                        .unwrap();
+                }
+                if reuse {
+                    let output = std::process::Command::new("/usr/bin/python3")
+                        .args(["-m", "venv", "--without-pip"])
+                        .arg(root.path().join(".venv"))
+                        .env_remove("PYTHONEXECUTABLE")
+                        .env_remove("__PYVENV_LAUNCHER__")
+                        .output()
+                        .unwrap();
+                    assert!(output.status.success(), "{output:?}");
+                }
+                let original = generation_of(root.path());
+                let path = if reuse {
+                    "/usr/bin:/bin".to_owned()
+                } else {
+                    installed_uv_path()
+                };
+                let host = host_from_entries(vec![
+                    ("PATH", &path),
+                    ("UV_OFFLINE", "1"),
+                    ("UV_PYTHON_DOWNLOADS", "never"),
+                ]);
+                let owner = Owner::for_test(
+                    Arc::new(super::SupervisedProbe),
+                    Some(Arc::new(host)),
+                    None,
+                    None,
+                );
+                owner.prepare(root.path().to_path_buf()).await;
+                let (miss, mut arrival) = tokio::sync::oneshot::channel();
+                *owner.cache_miss.lock().unwrap() = Some(miss);
+                assert!(owner.observe(root.path()).virtual_env.is_none());
+                assert!(matches!(
+                    arrival.try_recv(),
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+                ));
+                if unusable {
+                    std::fs::remove_file(&pinned).unwrap();
+                }
+                std::os::unix::fs::symlink("/usr/bin/python3", &pinned).unwrap();
+                assert_eq!(
+                    generation_of(root.path()),
+                    original,
+                    "repair only the external pin"
+                );
+                {
+                    let mut records = owner.records.lock().unwrap();
+                    let Some(Record::Unavailable { retry_after, .. }) =
+                        records.get_mut(root.path())
+                    else {
+                        panic!("external pin failures must expire: {records:?}");
+                    };
+                    *retry_after = std::time::Instant::now();
+                }
+                owner.observe(root.path());
+                arrival
+                    .try_recv()
+                    .expect("expired observation admits preparation again");
+                owner.prepare(root.path().to_path_buf()).await;
+                assert_eq!(
+                    owner.observe(root.path()).virtual_env,
+                    Some(root.path().join(".venv")),
+                    "reuse={reuse}, unusable={unusable}: {:?}",
+                    owner.records.lock().unwrap()
+                );
+                if reuse {
+                    assert_eq!(
+                        generation_of(root.path()),
+                        original,
+                        "adoption never rebuilds"
+                    );
+                }
+                owner.stop().await;
+            }
+        }
+    }
+
     pub(crate) async fn real_uv_missing_interpreter_obeys_download_policy() {
         for policy in ["automatic", "manual", "never"] {
             let root = workspace();
@@ -4264,7 +4508,7 @@ pub(crate) mod tests {
         task.await.unwrap();
         assert!(matches!(
             owner.records.lock().unwrap().get(root.path()),
-            Some(Record::Conflict { .. })
+            Some(Record::Unavailable { .. })
         ));
         assert!(!root.path().join(".venv").exists());
         assert!(

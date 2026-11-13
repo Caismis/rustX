@@ -12,6 +12,11 @@ async fn relative_interpreter_pin_is_bound_to_the_workspace() {
 }
 
 #[tokio::test]
+async fn repaired_path_pin_recovers_without_rewriting_root_inputs() {
+    crate::tools::workspace_python::tests::repaired_path_pin_recovers_without_rewriting_root_inputs().await;
+}
+
+#[tokio::test]
 async fn replaced_root_while_create_waits_for_permit_is_not_written() {
     crate::tools::workspace_python::tests::replaced_root_while_create_waits_for_permit_is_not_written().await;
 }
