@@ -1630,24 +1630,6 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     );
 }
 
-fn linux_child_processes() -> std::collections::BTreeSet<i32> {
-    let mut pids = std::collections::BTreeSet::new();
-    let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
-        return pids;
-    };
-    for task in tasks.flatten() {
-        let Ok(children) = std::fs::read_to_string(task.path().join("children")) else {
-            continue;
-        };
-        pids.extend(
-            children
-                .split_whitespace()
-                .filter_map(|pid| pid.parse::<i32>().ok()),
-        );
-    }
-    pids
-}
-
 fn assert_no_skill_environment(dir: &std::path::Path) {
     let store = dir.join("skill-env");
     assert!(
@@ -1662,12 +1644,232 @@ fn assert_no_skill_environment(dir: &std::path::Path) {
     }
 }
 
-/// S01/S02: selecting Skills that carry Python and Node metadata starts no
-/// interpreter or package manager and creates no Skill environment.
-#[tokio::test]
-async fn skill_metadata_does_not_probe_or_materialize() {
+/// One direct or nested child observed while it existed.
+///
+/// The record outlives the process. A probe that has already exited stays in
+/// the log, which a final `/proc/.../children` snapshot cannot do.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ObservedProcessStart {
+    pid: i32,
+    comm: String,
+    cmdline: String,
+}
+
+/// Counts every descendant that appears during discovery, preparation, and
+/// reload, including commands that exit before the test looks.
+///
+/// Observation requires `/proc`. A missing procfs is an error, never an empty
+/// successful count.
+#[cfg(target_os = "linux")]
+struct ProcessStartRecorder {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    records: std::sync::Arc<Mutex<Vec<ObservedProcessStart>>>,
+    samples: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(target_os = "linux")]
+impl ProcessStartRecorder {
+    fn start() -> Result<Self, String> {
+        match std::fs::read_dir("/proc/self/task") {
+            Ok(mut tasks) => {
+                if tasks.next().is_none() {
+                    return Err(
+                        "process-start observation found no /proc/self/task entries; refusing to report zero"
+                            .to_owned(),
+                    );
+                }
+            }
+            Err(error) => {
+                return Err(format!(
+                    "process-start observation requires /proc/self/task ({error}); refusing to report zero"
+                ));
+            }
+        }
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let records = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let samples = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let stop_thread = std::sync::Arc::clone(&stop);
+        let records_thread = std::sync::Arc::clone(&records);
+        let samples_thread = std::sync::Arc::clone(&samples);
+        let thread = std::thread::spawn(move || {
+            let mut seen = std::collections::BTreeSet::new();
+            while !stop_thread.load(std::sync::atomic::Ordering::Relaxed) {
+                let Ok(found) = sample_descendant_starts() else {
+                    continue;
+                };
+                samples_thread.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let mut guard = records_thread.lock().expect("process-start log");
+                for record in found {
+                    if seen.insert(record.pid) {
+                        guard.push(record);
+                    }
+                }
+            }
+        });
+        Ok(Self {
+            stop,
+            records,
+            samples,
+            thread: Some(thread),
+        })
+    }
+
+    fn pids(&self) -> std::collections::BTreeSet<i32> {
+        self.records
+            .lock()
+            .expect("process-start log")
+            .iter()
+            .map(|record| record.pid)
+            .collect()
+    }
+
+    fn started_since(&self, before: &std::collections::BTreeSet<i32>) -> Vec<ObservedProcessStart> {
+        self.records
+            .lock()
+            .expect("process-start log")
+            .iter()
+            .filter(|record| !before.contains(&record.pid))
+            .cloned()
+            .collect()
+    }
+
+    fn successful_samples(&self) -> u64 {
+        self.samples.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn stop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ProcessStartRecorder {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn sample_descendant_starts() -> std::io::Result<Vec<ObservedProcessStart>> {
+    let mut queue = direct_child_pids(std::process::id())?;
+    let mut queued = queue
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut found = Vec::new();
+    while let Some(pid) = queue.pop() {
+        found.push(observe_process(pid));
+        if let Ok(children) = direct_child_pids(u32::try_from(pid).unwrap_or(0)) {
+            for child in children {
+                if queued.insert(child) {
+                    queue.push(child);
+                }
+            }
+        }
+    }
+    Ok(found)
+}
+
+#[cfg(target_os = "linux")]
+fn direct_child_pids(pid: u32) -> std::io::Result<Vec<i32>> {
+    let task_dir = if pid == std::process::id() {
+        std::path::PathBuf::from("/proc/self/task")
+    } else {
+        std::path::PathBuf::from(format!("/proc/{pid}/task"))
+    };
+    let mut pids = Vec::new();
+    for task in std::fs::read_dir(task_dir)? {
+        let Ok(task) = task else { continue };
+        let Ok(text) = std::fs::read_to_string(task.path().join("children")) else {
+            continue;
+        };
+        pids.extend(
+            text.split_whitespace()
+                .filter_map(|token| token.parse::<i32>().ok()),
+        );
+    }
+    Ok(pids)
+}
+
+#[cfg(target_os = "linux")]
+fn observe_process(pid: i32) -> ObservedProcessStart {
+    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm"))
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+    let cmdline = String::from_utf8_lossy(&cmdline).replace('\0', " ");
+    ObservedProcessStart { pid, comm, cmdline }
+}
+
+/// Runs this test again in a fresh process so parallel suite children cannot
+/// enter the process-start log. A harness that runs zero tests is a failure.
+#[cfg(target_os = "linux")]
+fn run_isolated_observation(test_name: &str) {
+    let output =
+        std::process::Command::new(std::env::current_exe().expect("current test executable"))
+            .args(["--exact", test_name, "--test-threads=1"])
+            .env("RUSTX_SKILL_PROBE_CHILD", "1")
+            .output()
+            .expect("spawn the isolated process-start observation");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stdout.contains("test result: ok. 1 passed"),
+        "isolated observation failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+/// Negative control: an awaited `python3 --version` has exited, and the
+/// recorder still contains its pid. The two-second bound is a liveness guard;
+/// the loop yields and does not sleep.
+#[cfg(target_os = "linux")]
+#[test]
+fn process_start_recorder_detects_an_exited_interpreter_probe() {
+    let mut recorder = ProcessStartRecorder::start().expect("process-start recorder");
+    let ready = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while recorder.successful_samples() == 0 && std::time::Instant::now() < ready {
+        std::thread::yield_now();
+    }
+    assert!(
+        recorder.successful_samples() > 0,
+        "process-start observation never sampled /proc; refusing to treat that as a detection"
+    );
+    let mut child = std::process::Command::new("python3")
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn python3 --version");
+    let pid = i32::try_from(child.id()).expect("probe pid fits in i32");
+    let status = child.wait().expect("wait for python3 --version");
+    assert!(status.success(), "{status}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline && !recorder.pids().contains(&pid) {
+        std::thread::yield_now();
+    }
+    assert!(
+        recorder.pids().contains(&pid),
+        "recorder missed exited pid {pid} after {} samples; observed {:?}",
+        recorder.successful_samples(),
+        recorder.started_since(&std::collections::BTreeSet::new())
+    );
+    assert!(
+        !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+        "the probe must already have exited"
+    );
+    assert!(recorder.successful_samples() > 0);
+    recorder.stop();
+}
+
+async fn exercise_skill_catalog_without_environments() {
     let conversation = conversation();
-    let before = linux_child_processes();
     write_skill(
         conversation.workspace.root(),
         "pdf",
@@ -1684,12 +1886,6 @@ async fn skill_metadata_does_not_probe_or_materialize() {
         &[python_deps(r#"{"pypdf":"9.9.9"}"#), node_deps("malformed")],
     );
     let snapshot = prepare_and_commit(&conversation.coordinator).await;
-    let after = linux_child_processes();
-    assert!(
-        after.difference(&before).next().is_none(),
-        "new child processes: {:?}",
-        after.difference(&before).collect::<Vec<_>>()
-    );
     assert_eq!(
         snapshot
             .skills()
@@ -1701,6 +1897,58 @@ async fn skill_metadata_does_not_probe_or_materialize() {
     );
     assert_eq!(snapshot.effective_environment(), &ToolEnvironment::new());
     assert_no_skill_environment(conversation.dir.path());
+    write_skill(
+        conversation.workspace.root(),
+        "pdf",
+        "PDF skill reloaded.",
+        &[python_deps(r#"{"pypdf":"5.10.0"}"#)],
+    );
+    let reloaded = prepare_and_commit(&conversation.coordinator).await;
+    assert_eq!(
+        reloaded.effective_environment(),
+        snapshot.effective_environment()
+    );
+    assert_eq!(
+        reloaded
+            .skills()
+            .catalog_entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["pdf", "slides"]
+    );
+    assert_no_skill_environment(conversation.dir.path());
+}
+
+/// S01/S02: selecting and reloading Skills that carry Python and Node metadata
+/// starts no interpreter or package manager and creates no Skill environment.
+#[tokio::test]
+async fn skill_metadata_does_not_probe_or_materialize() {
+    if std::env::var_os("RUSTX_SKILL_PROBE_CHILD").is_some() {
+        #[cfg(target_os = "linux")]
+        {
+            let mut recorder = ProcessStartRecorder::start().expect("process-start recorder");
+            let before = recorder.pids();
+            exercise_skill_catalog_without_environments().await;
+            let started = recorder.started_since(&before);
+            let samples = recorder.successful_samples();
+            recorder.stop();
+            assert!(samples > 0, "process-start observation took no samples");
+            assert!(
+                started.is_empty(),
+                "skill discovery started processes: {started:?}"
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        panic!("process-start observation was requested without /proc; refusing to report zero");
+        return;
+    }
+    #[cfg(target_os = "linux")]
+    run_isolated_observation(
+        "scripted_suites::capability::snapshots::skill_metadata_does_not_probe_or_materialize",
+    );
+    #[cfg(not(target_os = "linux"))]
+    exercise_skill_catalog_without_environments().await;
 }
 
 /// S03: zero, one, many, and hidden Skills share one effective environment.
