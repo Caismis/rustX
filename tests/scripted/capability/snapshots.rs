@@ -1086,9 +1086,11 @@ async fn stale_candidate_cannot_overwrite_a_newer_revision() {
     ));
 }
 
-/// Failed candidate preparation leaves the current revision authoritative.
+/// Conflicting dependency text prepares and publishes. Preparation itself
+/// does not move the revision; only the commit does. The tool environment
+/// stays the one already published.
 #[tokio::test]
-async fn failed_preparation_leaves_revision_authoritative() {
+async fn conflicting_dependency_text_does_not_fail_preparation() {
     let conversation = conversation();
     write_skill(
         conversation.workspace.root(),
@@ -1097,24 +1099,38 @@ async fn failed_preparation_leaves_revision_authoritative() {
         &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
     );
     let snapshot = prepare_and_commit(&conversation.coordinator).await;
-    // A conflict across two *valid* Skills is still a whole-candidate
-    // preparation failure: the merged dependency set has no answer.
     write_skill(
         conversation.workspace.root(),
         "b",
         "Skill B.",
         &[python_deps(r#"{"pypdf":"5.10.0"}"#)],
     );
-    let _ = conversation
+    let prepared = conversation
         .coordinator
         .prepare_candidate()
         .await
-        .map(drop)
-        .expect_err("malformed candidate");
+        .expect("conflicting dependency text still prepares");
     assert_eq!(
         conversation.coordinator.current_snapshot().revision(),
-        snapshot.revision()
+        snapshot.revision(),
+        "preparation does not publish"
     );
+    let committed = conversation
+        .coordinator
+        .commit(prepared)
+        .expect("commit the expanded catalog");
+    assert_ne!(committed.revision(), snapshot.revision());
+    assert_eq!(
+        committed.effective_environment(),
+        snapshot.effective_environment()
+    );
+    let names = committed
+        .skills()
+        .catalog_entries()
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["a", "b"]);
 }
 
 #[tokio::test]

@@ -3238,6 +3238,34 @@ body
         assert!(coordinator.commit(selected).is_ok());
     }
 
+    /// An activation failure during preparation does not publish and leaves
+    /// the last committed revision in place.
+    #[tokio::test]
+    async fn failed_tool_activation_leaves_the_revision_authoritative() {
+        let (_dir, coordinator) = coordinator();
+        let first = coordinator
+            .commit(prepare(&coordinator).await)
+            .expect("commit");
+        coordinator
+            .inner
+            .resource_inputs
+            .lock()
+            .expect("inputs")
+            .agent_activation
+            .profile
+            .tools
+            .builtin = vec!["not-a-builtin".into()];
+        let error = coordinator
+            .prepare_candidate()
+            .await
+            .expect_err("an unknown builtin fails activation");
+        assert!(matches!(
+            error,
+            crate::capabilities::CapabilityPreparationError::ToolActivation(_)
+        ));
+        assert_eq!(coordinator.current_snapshot().revision(), first.revision());
+    }
+
     /// A runtime claim closes the ordinary coordinator publication path, but
     /// leaves standalone commit semantics intact for unclaimed coordinators
     /// and gives the claiming runtime its private publication operation.

@@ -2063,11 +2063,10 @@ mod tests {
         let mut command = spec("touch started; sleep 30", cancellation.clone());
         command.cwd = directory.path().to_path_buf();
         let control = harness.control.clone();
-        let invocation = tokio::spawn(async move {
-            RunnerBackedProcessRunner
-                .run(command, Some(control))
-                .await
-        });
+        let invocation =
+            tokio::spawn(
+                async move { RunnerBackedProcessRunner.run(command, Some(control)).await },
+            );
         let offered = tokio::time::timeout(Duration::from_secs(15), harness.offers.recv())
             .await
             .expect("the native anchor reaches its parent gate")
