@@ -17,6 +17,7 @@ pub mod artifacts;
 pub mod background;
 pub mod deadline;
 pub mod environment;
+pub mod execution_environment;
 pub mod executor;
 pub mod host;
 pub mod invocation;
@@ -33,6 +34,7 @@ pub mod session_files;
 pub mod todo;
 pub mod types;
 pub mod workspace;
+pub mod workspace_python;
 
 pub use native::{NativeToolPolicies, NativeToolResources, register_native_tools};
 

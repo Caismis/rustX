@@ -632,14 +632,17 @@ impl CurrentRuntimeConfig {
             .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })
     }
 
-    /// The base authorized tool environment this configuration expresses.
+    /// The base tool environment this configuration expresses.
+    ///
+    /// `PATH`, `HOME`, `LANG`, and `LC_ALL` are host-baseline overrides for
+    /// native Agent Bash. Excluded executors still compose
+    /// [`ToolEnvironment::child_environment`], which keeps its own baseline.
     ///
     /// # Errors
     ///
-    /// Returns [`CurrentRuntimeConfigError::Environment`] when an entry is
-    /// malformed or claims a runtime-owned key.
+    /// Returns [`CurrentRuntimeConfigError::Environment`] when an entry is malformed.
     pub fn tool_environment(&self) -> Result<ToolEnvironment, CurrentRuntimeConfigError> {
-        ToolEnvironment::from_authorized(
+        ToolEnvironment::from_configured(
             self.environment
                 .iter()
                 .map(|(key, value)| (key.clone(), value.clone())),

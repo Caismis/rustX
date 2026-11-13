@@ -819,6 +819,8 @@ fn spawn_process(
         .map_err(|error| SpawnError::WorkspaceSetup {
             detail: error.to_string(),
         })?;
+    crate::tools::execution_environment::publish_child_snapshot(runtime_root.path())
+        .map_err(|detail| SpawnError::Spawn { detail })?;
     let mut command = tokio::process::Command::new(&plan.program);
     command.envs(credentials.iter().map(|(key, value)| (key, value)));
     command

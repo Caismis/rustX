@@ -225,6 +225,17 @@ async fn serve_transport(
     host: AppServerHost,
     shutdown: CancellationToken,
 ) -> io::Result<()> {
+    crate::tools::workspace_python::start_admit_watcher(shutdown.clone());
+    let result = serve_transport_inner(options, host, shutdown).await;
+    crate::tools::workspace_python::shutdown().await;
+    result
+}
+
+async fn serve_transport_inner(
+    options: Request,
+    host: AppServerHost,
+    shutdown: CancellationToken,
+) -> io::Result<()> {
     if options.listen == "stdio" {
         let _connection = host
             .admit_connection(false)

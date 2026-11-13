@@ -680,10 +680,11 @@ JSON return. Valid large returns therefore do not trigger retries merely
 because the presentation preview is shorter than the result.
 
 The node lowers to one ordinary admitted builtin Bash invocation in the
-calling Session's workspace. `python3` or `node` must be available in that
-Bash tool's approved environment. It does not install interpreters, load arbitrary shell startup files
-or inherit the launching process's PATH. Workspace Python imports and Node
-require calls use the calling workspace. Source and typed inputs arrive as
+calling Session's workspace. It does not install interpreters or load shell
+startup files. As Workflow Bash, it inherits the launched host environment.
+`python` and `python3` use the Workspace `.venv` when that environment is
+ready, and a guard that exits 127 when it is not. `node` remains a host
+`PATH` lookup. Workspace Python imports use that default environment. Source and typed inputs arrive as
 quoted JSON stdin data, never shell interpolation or command-line arguments.
 Native approval, physical settlement, deadline, cancellation and Scheduled
 effects retain their existing owners. A failed process or invalid return

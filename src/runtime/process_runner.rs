@@ -1724,6 +1724,48 @@ pub(crate) async fn run_supervised_command(
     })
 }
 
+/// Runs one direct argv through the same supervisor as Bash.
+///
+/// The program is not a shell command. Callers pass the executable and its
+/// arguments; the supervisor still clears the process environment and applies
+/// only `spec.command_environment`.
+#[cfg(unix)]
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) async fn run_supervised_program(
+    spec: SupervisedCommandSpec,
+    program: ProgramInvocation,
+) -> Result<CapturedProcessResult, String> {
+    #[cfg(test)]
+    crate::local_runtime::static_effects::observe(
+        crate::local_runtime::static_effects::Effect::Process,
+    );
+    let (mut runner, stdout_pipe, stderr_pipe) =
+        SupervisedCommandRunner::spawn_program(&spec, None, Some(&program))
+            .map_err(|error| error.to_string())?;
+    let stdout_task = stdout_pipe.map(|pipe| tokio::spawn(capture_bounded(pipe)));
+    let stderr_task = stderr_pipe.map(|pipe| tokio::spawn(capture_bounded(pipe)));
+    let termination = runner.settle().await;
+    let stdout = await_capture(stdout_task).await?;
+    let stderr = await_capture(stderr_task).await?;
+    let exit_code = match (&termination.intent, termination.exit_status) {
+        (ProcessOutcomeIntent::Completed, Some(status)) => {
+            use std::os::unix::process::ExitStatusExt;
+            if status.signal().is_some() {
+                None
+            } else {
+                status.code()
+            }
+        }
+        _ => None,
+    };
+    Ok(CapturedProcessResult {
+        exit_code,
+        intent: termination.intent,
+        stdout,
+        stderr,
+    })
+}
+
 /// Reads one child pipe up to the bounded capture limit, retaining a
 /// deterministic truncation marker when the stream exceeds it.
 #[cfg(unix)]
