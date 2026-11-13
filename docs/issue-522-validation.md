@@ -79,6 +79,24 @@ also passed: reasoning-output recovery and both reduction paths, Summary-only
 history recovery, repeated source identity, and cold cancelled/skipped Trace
 reconstruction. A fresh FULL run must verify the follow-up commit.
 
+The subsequent [FULL run 43377502654](https://github.com/Caismis/rustX/actions/runs/43377502654)
+passed all Rust, macOS, TUI, Web and Host jobs, including the previously
+interrupted Linux boundary lane. The repaired Settings and 200 MiB geometry
+scenarios passed. One reasoning-order browser case exposed an independent
+teardown race: its product assertions and zero-request check passed, but a
+configuration convergence read reached the Node proxy after its Workspace Host
+had closed.
+
+The affected Settings specs now use the existing page-aware cleanup helper:
+drain intercepted responses, retire interception, close the page, then stop the
+fixture. The helper returns the exact shutdown report so request-count checks
+remain at the original boundary, without a return from `finally` that could
+suppress a prior cleanup error. A barrier-driven localhost HTTP regression
+proves this order; two error-path cases prove cleanup failures remain visible.
+All 30 cleanup/browser-verification unit tests passed, as did Web typecheck.
+The three affected specs passed all 15 executions across three pinned-browser
+repetitions. A new FULL run must verify this teardown follow-up.
+
 ## Accounting and limits
 
 For a declared context window `C`, `M(C) = clamp(ceil(C / 20), 1, 65536)`.

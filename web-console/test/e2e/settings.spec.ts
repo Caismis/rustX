@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openSettingsPage, openWorkspaceSettings, settledSave } from './shell-actions';
 
@@ -62,7 +62,7 @@ test('Workspace settings save permissions and features, and keep configuration r
     await expect(settings.getByRole('form', { name: 'Repair invalid source', exact: true })).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally {
-    const report = await fixture.stop(false);
+    const report = await stopDogfoodPage(page, fixture, false);
     expect(report.requestCount).toBe(0);
   }
 });
