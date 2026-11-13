@@ -53,3 +53,8 @@ async fn targets_added_while_creation_waits_for_capacity_are_never_initialized()
 async fn real_multi_interpreter_selection_satisfies_both_root_inputs() {
     crate::tools::workspace_python::tests::real_multi_interpreter_selection_satisfies_both_root_inputs().await;
 }
+
+#[tokio::test]
+async fn launcher_selection_change_between_probes_cannot_publish_ready() {
+    crate::tools::workspace_python::tests::launcher_selection_change_between_probes_cannot_publish_ready().await;
+}

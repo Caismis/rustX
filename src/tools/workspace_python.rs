@@ -196,6 +196,8 @@ struct Owner {
     waiting_permit: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     #[cfg(test)]
     cache_miss: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    #[cfg(test)]
+    after_interpreter: Mutex<Option<TestGate>>,
 }
 
 fn global() -> &'static Arc<Owner> {
@@ -228,6 +230,8 @@ impl Owner {
             waiting_permit: Mutex::new(None),
             #[cfg(test)]
             cache_miss: Mutex::new(None),
+            #[cfg(test)]
+            after_interpreter: Mutex::new(None),
         }
     }
 
@@ -660,9 +664,23 @@ impl Owner {
             {
                 return;
             }
+            if fixed.as_ref().is_some_and(|first| {
+                current
+                    .as_ref()
+                    .is_none_or(|current| current.executable != first.executable)
+            }) {
+                self.unavailable(
+                    root,
+                    "the Python interpreter changed during validation",
+                    probed,
+                );
+                return;
+            }
             if fixed.is_none() {
                 fixed = current;
             }
+            #[cfg(test)]
+            pass_gate(&self.after_interpreter).await;
         }
         let Some(guard) =
             ensure_guard("Workspace Python is no longer available").or_else(fallback_guard)
@@ -4333,6 +4351,66 @@ pub(crate) mod tests {
             .collect();
         interpreters.sort_by(|a, b| a.0.cmp(&b.0));
         interpreters
+    }
+
+    pub(crate) async fn launcher_selection_change_between_probes_cannot_publish_ready() {
+        let interpreters = installed_python_interpreters();
+        let first = python_base_executable(&interpreters.first().expect("two Python minors").1);
+        let second = python_base_executable(&interpreters.last().unwrap().1);
+        assert_ne!(first, second, "two real Python interpreters required");
+        let root = workspace();
+        let target = root.path().join(".venv");
+        std::fs::create_dir_all(target.join("bin")).unwrap();
+        std::fs::write(
+            target.join("pyvenv.cfg"),
+            "include-system-site-packages = false\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&first, target.join("bin/python")).unwrap();
+        std::os::unix::fs::symlink(&second, target.join("bin/python3")).unwrap();
+        let selector = root.path().join("selector");
+        std::fs::write(&selector, format!("{}\n", first.display())).unwrap();
+        let launcher = root.path().join("launcher");
+        write_executable(
+            &launcher,
+            "#!/bin/sh\nread -r selected < \"$PATH_PIN_SELECTOR\"\nexec \"$selected\" \"$@\"\n",
+        );
+        std::fs::write(root.path().join(".python-version"), "./launcher").unwrap();
+        let original = generation_of(root.path());
+        let paths = [&launcher, &first, &second];
+        let stamps = paths.map(|path| super::stamp(path));
+        let host = host_from_entries(vec![
+            ("PATH", "/usr/bin:/bin"),
+            ("PATH_PIN_SELECTOR", selector.to_str().unwrap()),
+        ]);
+        let owner = Arc::new(Owner::for_test(
+            Arc::new(super::SupervisedProbe),
+            Some(Arc::new(host)),
+            None,
+            None,
+        ));
+        let (entered, release) = arm_gate(&owner.after_interpreter);
+        let preparing = owner.clone();
+        let path = root.path().to_path_buf();
+        let task = tokio::spawn(async move { preparing.prepare(path).await });
+        tokio::time::timeout(super::PROBE_TIMEOUT * 4, entered)
+            .await
+            .expect("first-candidate validation reaches its gate")
+            .expect("the first candidate and fixed launcher were validated");
+        std::fs::write(&selector, format!("{}\n", second.display())).unwrap();
+        release.send(()).unwrap();
+        task.await.unwrap();
+        assert!(
+            matches!(owner.records.lock().unwrap().get(root.path()), Some(Record::Unavailable { diagnostic, .. }) if diagnostic.contains("changed during validation"))
+        );
+        assert!(owner.observe(root.path()).virtual_env.is_none());
+        assert_eq!(generation_of(root.path()), original);
+        assert_eq!(
+            paths.map(|path| super::stamp(path)),
+            stamps,
+            "all recorded metadata stayed unchanged"
+        );
+        owner.stop().await;
     }
 
     pub(crate) async fn real_multi_interpreter_selection_satisfies_both_root_inputs() {

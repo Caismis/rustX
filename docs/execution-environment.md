@@ -73,7 +73,9 @@ ordinary meaning.
   root version files. Malformed root inputs and invalid or incompatible
   `.venv` contents remain conflicts.
   Ready retains the first fixed-interpreter witness across both probes and
-  publication. Its authored path and actual executable stamps are checked on
+  publication, and both probes must report the same actual executable even
+  when launcher configuration changes without altering tracked metadata.
+  Its authored path and actual executable stamps are checked on
   cache hits, so an external pin alias change invalidates Ready immediately.
   The selected
   interpreter is
