@@ -28,7 +28,7 @@ const CONTROL_KEYS: &[&str] = &[
     "RUSTX_SUPERVISOR_COMMAND",
     "RUSTX_SUPERVISOR_ANCHOR_PID_FILE",
     "RUSTX_SUPERVISOR_PROGRAM",
-    "RUSTX_COMMAND_ENVIRONMENT",
+    "RUSTX_COMMAND_ENVIRONMENT_FILE",
     "RUSTX_INTERACTIVE_CONTROL",
     "RUSTX_INTERACTIVE_INNER_CONTROL",
     "RUSTX_INTERACTIVE_ANCHOR_PID_FILE",
@@ -39,6 +39,8 @@ const PYTHON_ACTIVATION: &[&str] = &[
     "PYTHONHOME",
     "PYTHONPATH",
     "PYTHONSTARTUP",
+    "PYTHONEXECUTABLE",
+    "__PYVENV_LAUNCHER__",
     "VIRTUAL_ENV",
     "CONDA_PREFIX",
     "CONDA_DEFAULT_ENV",
@@ -49,7 +51,12 @@ const PYTHON_ACTIVATION: &[&str] = &[
     "_CE_M",
 ];
 
-const UV_BOOTSTRAP_DROPS: &[&str] = &["UV_VENV_CLEAR", "UV_PROJECT_ENVIRONMENT"];
+const UV_BOOTSTRAP_DROPS: &[&str] = &[
+    "UV_VENV_CLEAR",
+    "UV_VENV_SEED",
+    "UV_PROJECT",
+    "UV_PROJECT_ENVIRONMENT",
+];
 
 /// One captured host environment. Values are not part of [`std::fmt::Debug`].
 #[derive(Clone, PartialEq, Eq)]
@@ -231,7 +238,9 @@ pub(crate) fn freeze_bash(base: &ToolEnvironment, workspace: &Workspace) -> Tool
         Ok(entries) => base
             .clone()
             .with_prepared_command(PreparedCommand::Entries(Arc::new(entries))),
-        Err(()) => base.clone().with_prepared_command(PreparedCommand::Closed),
+        Err(reason) => base
+            .clone()
+            .with_prepared_command(PreparedCommand::Closed(reason)),
     }
 }
 
@@ -241,16 +250,13 @@ pub(crate) fn command_entries(
     workspace: &Workspace,
 ) -> Result<Vec<(String, String)>, String> {
     if let Some(prepared) = environment.prepared_command() {
-        return prepared.entries().map(<[_]>::to_vec).ok_or_else(|| {
-            "the execution environment could not be composed because PATH or HOME is not Unicode"
-                .to_owned()
-        });
+        return match prepared {
+            PreparedCommand::Entries(entries) => Ok(entries.as_ref().clone()),
+            PreparedCommand::Closed(reason) => Err((*reason).to_owned()),
+        };
     }
     let selection = workspace_python::observe(workspace.root());
-    compose(current().as_ref(), environment, &selection).map_err(|()| {
-        "the execution environment could not be composed because PATH or HOME is not Unicode"
-            .to_owned()
-    })
+    compose(current().as_ref(), environment, &selection).map_err(str::to_owned)
 }
 
 /// Composes one native Bash environment from an explicit host snapshot.
@@ -258,9 +264,16 @@ pub(crate) fn compose(
     host: &ExecutionHost,
     base: &ToolEnvironment,
     selection: &PythonSelection,
-) -> Result<Vec<(String, String)>, ()> {
+) -> Result<Vec<(String, String)>, &'static str> {
     if host.closed.is_some() {
-        return Err(());
+        return Err(
+            "the execution environment could not be composed because PATH or HOME is not Unicode",
+        );
+    }
+    if selection.guard_unavailable {
+        return Err(
+            "Workspace Python is unavailable and no executable Python guard can be installed",
+        );
     }
     let mut entries = host.entries.clone();
     for (key, value) in base.authorized_entries() {
@@ -432,7 +445,10 @@ mod tests {
                 "BASH_FUNC_python%%".to_owned(),
                 "() { /usr/bin/python; }".to_owned(),
             ),
-            ("RUSTX_COMMAND_ENVIRONMENT".to_owned(), "secret".to_owned()),
+            (
+                "RUSTX_COMMAND_ENVIRONMENT_FILE".to_owned(),
+                "secret".to_owned(),
+            ),
         ])
         .expect("configured");
         let map: std::collections::BTreeMap<_, _> = compose(&host, &configured, &selection(false))
@@ -443,7 +459,7 @@ mod tests {
             "BASH_ENV",
             "ENV",
             "BASH_FUNC_python%%",
-            "RUSTX_COMMAND_ENVIRONMENT",
+            "RUSTX_COMMAND_ENVIRONMENT_FILE",
             "RUSTX_SUPERVISOR_ROLE",
             "RUSTX_TEST_INJECT",
         ] {

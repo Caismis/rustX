@@ -1694,7 +1694,7 @@ async fn ordinary_environment_cannot_enable_supervisor_controls() {
         "RUSTX_TEST_AFTER_ANCHOR_STOP_SOCKET",
         "RUSTX_TEST_FAIL_CONTAINMENT",
         "RUSTX_PHYSICAL_CONTINUATION",
-        "RUSTX_COMMAND_ENVIRONMENT",
+        "RUSTX_COMMAND_ENVIRONMENT_FILE",
     ];
     let mut environment: Vec<_> = keys
         .iter()

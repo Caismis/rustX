@@ -6,7 +6,8 @@
 
 use std::env;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 #[path = "src/tools/profile_dir.rs"]
@@ -28,11 +29,20 @@ fn install(source: &Path, directory: &Path) {
     fs::create_dir_all(directory).expect("python-guard directory");
     for name in ["python", "python3"] {
         let destination = directory.join(name);
-        fs::copy(source.join(name), &destination).expect("copy python guard");
-        let mut permissions = fs::metadata(&destination)
-            .expect("guard metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&destination, permissions).expect("guard mode");
+        // A running installation may still execute the old inode. Never
+        // truncate that script or hold it open for writing across exec.
+        let pending = directory.join(format!(".{name}-{}", std::process::id()));
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o755)
+            .open(&pending)
+            .expect("private guard staging file");
+        file.write_all(&fs::read(source.join(name)).expect("guard bytes"))
+            .expect("write guard");
+        file.set_permissions(fs::Permissions::from_mode(0o755))
+            .expect("guard mode");
+        drop(file);
+        fs::rename(pending, destination).expect("publish python guard");
     }
 }

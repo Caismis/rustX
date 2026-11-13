@@ -3353,7 +3353,12 @@ hold attempt leases and never block a capability commit.
   keep the fixed `child_environment` baseline. Skills do not change either
   environment. Workspace Python preparation never deletes or rebuilds an
   existing `.venv`. `uv` is optional for reuse and must be at least 0.10.0
-  to create a missing environment. See `docs/execution-environment.md`.
+  to create a missing environment. Preparation belongs to process/host drain,
+  not transport lifetime. The original root identity and one validated input
+  generation authorize physical work and Ready publication; physical programs
+  inherit that Owner's cancellation signal. Command environments travel in
+  private snapshots retained through settlement, not an aggregated OS
+  environment string. See `docs/execution-environment.md`.
 - Skill, native-tool, and MCP capability mutations (a Python tool package's
   included, since it is an MCP source) in a live product
   runtime occur through native configuration coordination. Complete preserved

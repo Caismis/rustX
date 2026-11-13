@@ -16,7 +16,9 @@ The composition order is:
 
 `PATH` or `HOME` values that are not Unicode fail that composition. Other
 non-Unicode host values are omitted because the supervisor receives the
-command environment as JSON. An authorized command can still read ordinary
+command environment as JSON in an owner-only private snapshot. The native
+process owner retains the snapshot through physical settlement; only its path
+is passed to the supervisors, avoiding per-string OS environment limits. An authorized command can still read ordinary
 credentials that were already in the host environment. This is not an
 operating-system sandbox.
 
@@ -30,7 +32,9 @@ ordinary meaning.
 - A valid existing virtual environment is reused after its interpreters are
   probed. `uv` is not required for reuse.
 - A missing environment is created only with `uv` 0.10.0 or newer, at the
-  final path, without `--clear`, `--seed`, or `--allow-existing`. Bootstrap
+  final path, without `--clear`, `--seed`, or `--allow-existing`. `uv venv`
+  performs interpreter discovery and automatic download under uv's effective
+  download/offline policy; `uv python find` is not a prerequisite. Bootstrap
   `uv` commands pass `--directory` pointing at a private directory outside the
   Workspace tree, so a `.python-version` on the Workspace or its parents
   cannot select the interpreter. A pin above that private directory can still
@@ -47,13 +51,19 @@ ordinary meaning.
   such as `cpython-` or `pypy-` must match `sys.implementation.name`; an
   unknown or trailing qualifier is rejected. With no pin, the root
   `pyproject.toml` `[project].requires-python` specifier is passed to
-  `uv python find --no-project --directory <outside the Workspace>`. A relative
+  `uv venv --no-project --directory <outside the Workspace> --python <request>`. A relative
   path request is made absolute from the Workspace root before that command
   sees it. The selected interpreter is
   checked against both inputs before it is ready. The readiness identity is
-  snapshotted after the environment exists and before those probes. A pin,
+  snapshotted after the environment exists and before those probes. That same
+  snapshot must match the original root and version inputs. Every physical
+  request carries the originally admitted root device/inode to the supervisor,
+  including after waiting for a concurrency permit. A pin,
   project, or interpreter change during a probe does not publish Ready.
-  Unreadable version pins are conflicts, and exact pins retain prerelease
+  Version files use the shared 1 MiB bounded reader, which opens with
+  `O_NONBLOCK` and verifies that the opened descriptor is a regular file. FIFO,
+  linked FIFO and oversized inputs fail before any subprocess starts; links
+  to ordinary files remain supported. Unreadable version pins are conflicts, and exact pins retain prerelease
   and postrelease qualifiers. Changes to `pyvenv.cfg`, environment-root
   identity, interpreter targets or permissions invalidate cached readiness.
   Neither root file is edited.
@@ -65,9 +75,14 @@ ordinary meaning.
   directory containing the rustX executable. If every one of those is
   unwritable, `PATH` still starts with the `python-guard` directory installed
   beside that executable. `cargo build` places it next to `rustx` and the test
-  binaries, and a deployment copies that directory with the executable.
+  binaries using atomic file replacement, and a deployment copies that
+  directory with the executable.
   Lookup does not use the build checkout. Both scripts must be executable and
-  match the bytes embedded in the binary. They
+  match the bytes embedded in the binary. Every cache hit is revalidated; a
+  deleted or damaged temporary guard is replaced. If no writable resource and
+  no valid deployed guard remain, native Bash fails explicitly at composition
+  instead of inheriting an unguarded host PATH. Other native tools and excluded
+  execution paths remain available. They
   participate in executable lookup, so `sh`, `/usr/bin/env python3`, and
   `#!/usr/bin/env python3` exit 127 with the guard diagnostic. Other commands
   keep the host `PATH`. The failure is not reported as a non-Unicode `PATH`
@@ -81,9 +96,14 @@ Registration and session creation schedule this work and do not wait for it.
 Read-only listing does not create an environment. The first native Bash use
 observes the current selection immediately and does not wait either.
 
+Python activation cleanup removes `PYTHONHOME`, `PYTHONPATH`, `PYTHONSTARTUP`,
+`PYTHONEXECUTABLE`, `__PYVENV_LAUNCHER__`, and inherited venv/Conda state, both
+for bootstrap and after native Bash configuration overrides.
+
 `uv` itself is resolved from the host `PATH` before the Workspace environment
-is activated. Bootstrap does not follow `UV_PROJECT_ENVIRONMENT` or
-`UV_VENV_CLEAR`. User commands are not rewritten, and the runtime does not
+is activated. Bootstrap removes `UV_PROJECT`, `UV_PROJECT_ENVIRONMENT`,
+`UV_VENV_CLEAR`, and `UV_VENV_SEED`; operational download, offline, mirror,
+proxy, certificate and cache policy remains in force. User commands are not rewritten, and the runtime does not
 inject `UV_PROJECT_ENVIRONMENT` into them.
 
 ## Excluded execution
@@ -98,6 +118,11 @@ supervisor that spawned it.
 
 ## Residual limits
 
+Stdio EOF only detaches a client. The process/host drain owns cancellation and
+joining of preparation, alongside its other runtime resources. Physical probes
+inherit the Owner cancellation signal, including children derived after
+cancellation. The subagent process joins its preparation before exiting.
+
 The lock coordinates rustX processes on one machine. Shutdown stops waiting
 for it. It does not stop an unrelated program from changing `.venv`, and it
 is not an NFS lock. Readiness
@@ -107,8 +132,7 @@ permissions of its version files, `.venv`, `pyvenv.cfg`, and the resolved
 tracked metadata can remain cached until another input changes.
 One process admits at most two uv or interpreter probes at a time; that cap
 does not span processes. One Workspace keeps a single preparation task until
-it finishes, and a process retains a bounded number of finished tasks, probe
-cancellation signals, and Workspace records, including Ready records. Evicting
+it finishes, and a process retains a bounded number of finished tasks and Workspace records, including Ready records. Evicting
 a record only drops cached readiness; later use revalidates the existing
 environment without rebuilding it. A launcher that starts rustX
 with a short `PATH` is a launcher configuration problem: a running host does

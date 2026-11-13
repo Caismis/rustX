@@ -1878,7 +1878,9 @@ tools/execution_environment.rs
                            Agent, Workflow, and Subagent Bash
 tools/workspace_python.rs  One Workspace `.venv`: reuse a valid environment,
                            or create it with uv >= 0.10.0 without blocking
-                           registration or model turns
+                           registration or model turns; process/host drain owns
+                           cancellation and joins; original root identity and
+                           input generation fence execution and Ready
 tools/background.rs        ConversationBackgroundRegistry: conversation-owned
                            background executions (lifecycle state machine,
                            dispatch ownership commit, cancel-vs-complete

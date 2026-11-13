@@ -2621,3 +2621,116 @@ async fn auxiliary_classification_real_stdio_and_websocket_preserve_primary_and_
     }))
     .await;
 }
+
+async fn python_preparation_event(
+    listener: &tokio::net::UnixListener,
+) -> (tokio::net::UnixStream, serde_json::Value) {
+    let (stream, _) = listener.accept().await.unwrap();
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    (reader.into_inner(), serde_json::from_str(&line).unwrap())
+}
+
+#[tokio::test]
+async fn workspace_python_survives_stdio_eof_and_joins_on_sigterm() {
+    bounded(async {
+        use std::os::unix::fs::PermissionsExt;
+        use tokio::io::AsyncReadExt;
+        let f = Fixture::new().await;
+        let gate_dir = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = gate_dir.path().join("gate");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let bin = f.root.path().join("host-bin");
+        std::fs::create_dir(&bin).unwrap();
+        let uv = bin.join("uv");
+        std::fs::write(
+            &uv,
+            r"#!/usr/bin/python3
+import json, os, socket, subprocess, sys
+s = socket.socket(socket.AF_UNIX)
+s.connect(os.environ['UV_TEST_GATE'])
+if sys.argv[1] == '--version':
+    s.sendall((json.dumps(['version', os.getcwd(), os.getpid()]) + '\n').encode())
+    if s.recv(1) != b'1':
+        sys.exit(2)
+    print('uv 0.10.2')
+else:
+    subprocess.run(['/usr/bin/python3', '-m', 'venv', '--without-pip', sys.argv[-1]], check=True)
+    s.sendall((json.dumps(['created', os.getcwd(), os.getpid()]) + '\n').encode())
+",
+        )
+        .unwrap();
+        std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut child = f
+            .command("stdio")
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("UV_TEST_GATE", &socket)
+            .spawn()
+            .unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        for cwd in ["a", "b"] {
+            result(
+                &client,
+                rustx::app_server::protocol::Method::SessionCreate {
+                    dynamic_tools: Vec::new(),
+                    submission: None,
+                    settings: SessionPersistentState::from_input(&SessionConfigInput::new(
+                        f.root.path().join(cwd),
+                    )),
+                },
+            )
+            .await;
+        }
+        let mut versions = std::collections::BTreeMap::new();
+        for _ in 0..2 {
+            let (stream, event) = python_preparation_event(&listener).await;
+            assert_eq!(event[0], "version");
+            versions.insert(
+                event[1].as_str().unwrap().to_owned(),
+                (stream, event[2].as_i64().unwrap()),
+            );
+        }
+        client.close_output().await;
+        let mut diagnostics = BufReader::new(child.stderr.take().unwrap()).lines();
+        loop {
+            if diagnostics
+                .next_line()
+                .await
+                .unwrap()
+                .unwrap()
+                .contains("stdio detached")
+            {
+                break;
+            }
+        }
+        let a = f.root.path().join("a").display().to_string();
+        let b = f.root.path().join("b").display().to_string();
+        let (mut first, _) = versions.remove(&a).unwrap();
+        let (mut pending, pending_pid) = versions.remove(&b).unwrap();
+        first
+            .write_all(b"1")
+            .await
+            .expect("EOF did not cancel preparation");
+        let (_stream, event) = python_preparation_event(&listener).await;
+        assert_eq!(event[0], "created");
+        assert_eq!(event[1], a);
+        assert!(f.root.path().join("a/.venv/pyvenv.cfg").is_file());
+        assert!(child.try_wait().unwrap().is_none());
+        terminate(&child);
+        assert_eq!(
+            pending.read(&mut [0u8; 1]).await.unwrap(),
+            0,
+            "SIGTERM closes the held uv only after cancellation"
+        );
+        assert!(child.wait().await.unwrap().success());
+        assert_eq!(
+            kill(Pid::from_raw(i32::try_from(pending_pid).unwrap()), None),
+            Err(nix::errno::Errno::ESRCH),
+            "shutdown joined the uv process"
+        );
+        client.close().await;
+    })
+    .await;
+}

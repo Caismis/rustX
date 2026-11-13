@@ -37,24 +37,15 @@ pub const RUNTIME_OWNED_KEYS: [&str; 4] = ["PATH", "HOME", "LANG", "LC_ALL"];
 pub(crate) enum PreparedCommand {
     /// The exact environment the supervisor will apply.
     Entries(std::sync::Arc<Vec<(String, String)>>),
-    /// Host `PATH` or `HOME` could not be carried without substitution.
-    Closed,
+    /// A bounded composition failure; never proceed with an unguarded host PATH.
+    Closed(&'static str),
 }
 
 impl std::fmt::Debug for PreparedCommand {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Entries(entries) => write!(formatter, "Entries({} redacted)", entries.len()),
-            Self::Closed => write!(formatter, "Closed"),
-        }
-    }
-}
-
-impl PreparedCommand {
-    pub(crate) fn entries(&self) -> Option<&[(String, String)]> {
-        match self {
-            Self::Entries(entries) => Some(entries),
-            Self::Closed => None,
+            Self::Closed(reason) => write!(formatter, "Closed({reason})"),
         }
     }
 }

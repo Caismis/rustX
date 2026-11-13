@@ -779,6 +779,7 @@ impl RunnerTestControl {
 /// intent. The child is reaped by the runner.
 pub(crate) struct SupervisedCommandRunner {
     child: tokio::process::Child,
+    _environment_snapshot: tempfile::NamedTempFile,
     stream: tokio::net::unix::OwnedWriteHalf,
     incoming: tokio::net::unix::OwnedReadHalf,
     event_reader: SupervisorEventReader,
@@ -939,10 +940,13 @@ impl SupervisedCommandRunner {
         let mut supervisor = tokio::process::Command::new(&supervisor_path);
         supervisor.current_dir(&spec.cwd);
         supervisor.env_clear();
+        let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
+            &spec.command_environment,
+        )
+        .map_err(RunnerSpawnError::ControlChannel)?;
         supervisor.env(
-            crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
-            serde_json::to_string(&spec.command_environment)
-                .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?,
+            crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+            environment_snapshot.path(),
         );
         if let Some(control) = &control {
             control.diagnostics.configure(&mut supervisor);
@@ -1016,6 +1020,7 @@ impl SupervisedCommandRunner {
         Ok((
             Self {
                 child,
+                _environment_snapshot: environment_snapshot,
                 stream,
                 incoming,
                 event_reader: SupervisorEventReader::default(),
@@ -1859,6 +1864,20 @@ mod tests {
         )
         .await
         .expect("rustX must reap the direct supervisor child");
+    }
+
+    #[tokio::test]
+    async fn large_environment_reaches_the_real_supervisor_as_individual_entries() {
+        let mut command = spec(
+            "printf '%s' \"$LARGE_099\"; test -z \"${RUSTX_COMMAND_ENVIRONMENT_FILE+x}\"",
+            CancellationSignal::new(),
+        );
+        command
+            .command_environment
+            .extend((0..100).map(|i| (format!("LARGE_{i:03}"), "x".repeat(1510))));
+        let captured = super::run_supervised_command(command, None).await.unwrap();
+        assert_eq!(captured.exit_code, Some(0), "{captured:?}");
+        assert_eq!(captured.stdout, vec![b'x'; 1510]);
     }
 
     // ---- Issue #145: the nested containment gate ----

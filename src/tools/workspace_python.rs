@@ -67,6 +67,15 @@ struct Generation {
     python3: Option<PathStamp>,
 }
 
+impl Generation {
+    fn same_inputs(&self, expected: &Self) -> bool {
+        self.root_dev == expected.root_dev
+            && self.root_ino == expected.root_ino
+            && self.pin_file == expected.pin_file
+            && self.project_file == expected.project_file
+    }
+}
+
 #[derive(Clone, Debug)]
 enum Record {
     Ready {
@@ -131,6 +140,7 @@ impl Flight {
 pub(crate) struct ProgramRequest {
     pub argv: Vec<String>,
     pub cwd: PathBuf,
+    pub cwd_identity: (u64, u64),
     pub env: Vec<(String, String)>,
     pub timeout: Duration,
     pub cancellation: crate::runtime::cancellation::CancellationSignal,
@@ -147,20 +157,40 @@ pub(crate) trait ProgramProbe: Send + Sync {
     fn run(&self, request: ProgramRequest) -> BoxFuture<'_, Result<ProgramOutput, String>>;
 }
 
+#[cfg(test)]
+struct TestGate {
+    entered: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[cfg(test)]
+async fn pass_gate(slot: &Mutex<Option<TestGate>>) {
+    let gate = slot.lock().expect("test gate").take();
+    if let Some(gate) = gate {
+        let _ = gate.entered.send(());
+        let _ = gate.release.await;
+    }
+}
+
 struct Owner {
     records: Mutex<HashMap<PathBuf, Record>>,
     flights: Mutex<HashMap<PathBuf, Arc<Flight>>>,
     permits: tokio::sync::Semaphore,
-    shutdown: tokio_util::sync::CancellationToken,
+    shutdown: crate::runtime::cancellation::CancellationSignal,
     probe: Arc<dyn ProgramProbe>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     admitted: Mutex<HashSet<PathBuf>>,
-    signals: Mutex<Vec<Arc<crate::runtime::cancellation::CancellationSignal>>>,
     host_override: Option<Arc<ExecutionHost>>,
     state_override: Option<PathBuf>,
     schedules: bool,
     #[cfg(test)]
     before_lock: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    #[cfg(test)]
+    before_create: Mutex<Option<TestGate>>,
+    #[cfg(test)]
+    before_snapshot: Mutex<Option<TestGate>>,
+    #[cfg(test)]
+    before_signal: Mutex<Option<TestGate>>,
 }
 
 fn global() -> &'static Arc<Owner> {
@@ -174,16 +204,21 @@ impl Owner {
             records: Mutex::new(HashMap::new()),
             flights: Mutex::new(HashMap::new()),
             permits: tokio::sync::Semaphore::new(EXTERNAL_PERMITS),
-            shutdown: tokio_util::sync::CancellationToken::new(),
+            shutdown: crate::runtime::cancellation::CancellationSignal::new(),
             probe: production_probe(),
             tasks: Mutex::new(Vec::new()),
             admitted: Mutex::new(HashSet::new()),
-            signals: Mutex::new(Vec::new()),
             host_override: None,
             state_override: None,
             schedules: true,
             #[cfg(test)]
             before_lock: Mutex::new(None),
+            #[cfg(test)]
+            before_create: Mutex::new(None),
+            #[cfg(test)]
+            before_snapshot: Mutex::new(None),
+            #[cfg(test)]
+            before_signal: Mutex::new(None),
         }
     }
 
@@ -227,7 +262,7 @@ impl Owner {
                 bin,
                 virtual_env,
                 guard,
-            }) if stored == &generation => {
+            }) if stored == &generation && validated_guard_directory(guard).is_some() => {
                 return PythonSelection {
                     path_prefix: vec![bin.clone(), guard.clone()],
                     virtual_env: Some(virtual_env.clone()),
@@ -278,6 +313,13 @@ impl Owner {
             }
         }
         let mut tasks = self.tasks.lock().expect("workspace python tasks");
+        if self.shutdown.is_cancelled() {
+            self.admitted
+                .lock()
+                .expect("workspace python admission")
+                .remove(&canonical);
+            return;
+        }
         tasks.retain(|task| !task.is_finished());
         if tasks.len() >= MAX_LIVE_TASKS {
             drop(tasks);
@@ -309,6 +351,9 @@ impl Owner {
         };
         let (flight, leader) = {
             let mut flights = self.flights.lock().expect("workspace python flights");
+            if self.shutdown.is_cancelled() {
+                return;
+            }
             if let Some(existing) = flights.get(&canonical) {
                 (Arc::clone(existing), false)
             } else {
@@ -420,10 +465,7 @@ impl Owner {
             return false;
         }
         let current = generation_of(root);
-        current.root_dev == expected.root_dev
-            && current.root_ino == expected.root_ino
-            && current.pin_file == expected.pin_file
-            && current.project_file == expected.project_file
+        current.same_inputs(expected)
     }
 
     async fn create(
@@ -445,7 +487,7 @@ impl Owner {
             self.unavailable(root, "uv was not found on the host PATH", expected.clone());
             return;
         };
-        let version = match self.uv_version(root, &uv, host.as_ref()).await {
+        let version = match self.uv_version(root, &uv, host.as_ref(), expected).await {
             Ok(version) => version,
             Err(message) => {
                 if self.inputs_match(root, expected) {
@@ -465,49 +507,48 @@ impl Owner {
             );
             return;
         }
-        let interpreter = match self
-            .find_interpreter(root, &uv, host.as_ref(), pin, requires)
-            .await
-        {
-            Ok(path) => path,
-            Err(message) => {
-                if self.inputs_match(root, expected) {
-                    self.unavailable(root, &message, expected.clone());
-                }
+        if !self.inputs_match(root, expected) {
+            return;
+        }
+        match classify_target(&root.join(".venv")) {
+            Target::Absent => {}
+            Target::Directory => {
+                self.adopt(root, &root.join(".venv"), pin, requires, expected)
+                    .await;
                 return;
             }
-        };
-        if !self.inputs_match(root, expected) {
-            return;
-        }
-        if let Err(message) = self
-            .check_interpreter(root, &interpreter, host.as_ref(), pin, requires, false)
-            .await
-        {
-            if self.inputs_match(root, expected) {
-                self.conflict(root, message, expected.clone());
+            Target::Conflict(message) => {
+                self.conflict(root, message, generation_of(root));
+                return;
             }
-            return;
-        }
-        if !self.inputs_match(root, expected) {
-            return;
-        }
-        if classify_target(&root.join(".venv")) != Target::Absent {
-            self.adopt(root, &root.join(".venv"), pin, requires, expected)
-                .await;
-            return;
         }
         let target = root.join(".venv");
         let mut argv = vec![uv.display().to_string(), "venv".to_owned()];
         argv.extend(isolated_discovery_args());
-        argv.extend([
-            "--python".to_owned(),
-            interpreter.display().to_string(),
-            target.display().to_string(),
-        ]);
-        if let Err(message) = self.run(root, argv, host.as_ref(), CREATE_TIMEOUT).await {
+        // venv performs uv's find-or-download operation under the effective
+        // automatic/manual/never and offline policy. `python find` cannot do so.
+        if let Some(pin) = pin {
+            argv.extend(["--python".to_owned(), absolute_pin(root, pin)]);
+        } else if let Some(requires) = requires {
+            argv.extend(["--python".to_owned(), requires.to_owned()]);
+        }
+        argv.push(target.display().to_string());
+        #[cfg(test)]
+        pass_gate(&self.before_create).await;
+        let result = self
+            .run(root, argv, host.as_ref(), CREATE_TIMEOUT, expected)
+            .await;
+        let failure = match result {
+            Ok(output) if output.status == 0 => None,
+            Ok(output) => Some(bounded_diagnostic(
+                "uv could not create Workspace Python",
+                &output.stderr,
+            )),
+            Err(message) => Some(message),
+        };
+        if let Some(message) = failure {
             if self.inputs_match(root, expected) {
-                self.unavailable(root, &message, expected.clone());
+                self.unavailable(root, &message, generation_of(root));
             }
             return;
         }
@@ -522,18 +563,32 @@ impl Owner {
         requires: Option<&str>,
         expected: &Generation,
     ) {
-        if !self.inputs_match(root, expected) {
-            return;
-        }
         // Snapshot after the environment exists and before its interpreters are
         // probed. Creating `.venv` changes these stamps; a later replacement or
         // a pin edit has not been checked and cannot be published.
+        #[cfg(test)]
+        pass_gate(&self.before_snapshot).await;
         let probed = generation_of(root);
+        if self.shutdown.is_cancelled() || !probed.same_inputs(expected) {
+            return;
+        }
+        // The same snapshot authorizes inputs, probes and Ready publication.
+        // Root links are conflicts even if their resolved prefix is valid.
+        if let Target::Conflict(message) = classify_target(target) {
+            self.conflict(root, message, probed);
+            return;
+        }
+        if classify_target(target) != Target::Directory {
+            return;
+        }
+        if generation_of(root) != probed {
+            return;
+        }
         let host = self.host();
         for name in ["python", "python3"] {
             let program = target.join("bin").join(name);
             if let Err(message) = self
-                .check_interpreter(root, &program, host.as_ref(), pin, requires, true)
+                .check_interpreter(root, &program, host.as_ref(), pin, requires, &probed)
                 .await
             {
                 if generation_of(root) == probed {
@@ -580,6 +635,7 @@ impl Owner {
         root: &Path,
         uv: &Path,
         host: &ExecutionHost,
+        expected: &Generation,
     ) -> Result<String, String> {
         let output = self
             .run(
@@ -587,6 +643,7 @@ impl Owner {
                 vec![uv.display().to_string(), "--version".to_owned()],
                 host,
                 PROBE_TIMEOUT,
+                expected,
             )
             .await?;
         if output.status != 0 {
@@ -600,46 +657,6 @@ impl Owner {
             .ok_or_else(|| "uv --version could not be parsed".to_owned())
     }
 
-    async fn find_interpreter(
-        &self,
-        root: &Path,
-        uv: &Path,
-        host: &ExecutionHost,
-        pin: Option<&str>,
-        requires: Option<&str>,
-    ) -> Result<PathBuf, String> {
-        let mut argv = vec![
-            uv.display().to_string(),
-            "python".to_owned(),
-            "find".to_owned(),
-        ];
-        // `--no-project` does not stop a parent `.python-version` walk.
-        // `--directory` runs discovery outside the Workspace tree, so that
-        // walk cannot see it. User and system uv.toml files still apply.
-        argv.extend(isolated_discovery_args());
-        // The root pin is the request. With no pin, requires-python constrains
-        // uv's selection. Ancestor version files are not a request.
-        if let Some(pin) = pin {
-            // `--directory` would resolve `./pinned-python` outside the
-            // Workspace. Path requests are absolute before uv sees them.
-            argv.push(absolute_pin(root, pin));
-        } else if let Some(requires) = requires {
-            argv.push(requires.to_owned());
-        }
-        let output = self.run(root, argv, host, CREATE_TIMEOUT).await?;
-        if output.status != 0 {
-            return Err(bounded_diagnostic(
-                "uv could not select a Python interpreter",
-                &output.stderr,
-            ));
-        }
-        let path = output.stdout.lines().next().unwrap_or("").trim();
-        if path.is_empty() {
-            return Err("uv did not report a Python interpreter".to_owned());
-        }
-        Ok(PathBuf::from(path))
-    }
-
     async fn check_interpreter(
         &self,
         root: &Path,
@@ -647,7 +664,7 @@ impl Owner {
         host: &ExecutionHost,
         pin: Option<&str>,
         requires: Option<&str>,
-        require_venv: bool,
+        expected: &Generation,
     ) -> Result<(), &'static str> {
         let output = self
             .run(
@@ -660,6 +677,7 @@ impl Owner {
                 ],
                 host,
                 PROBE_TIMEOUT,
+                expected,
             )
             .await
             .map_err(|_| "the Python interpreter could not be probed")?;
@@ -671,7 +689,7 @@ impl Owner {
         let base = lines.next().unwrap_or("").trim();
         let version_text = lines.next().unwrap_or("").trim();
         let implementation = lines.next().unwrap_or("").trim().to_owned();
-        if require_venv {
+        {
             let venv = root.join(".venv");
             let Ok(actual) = std::fs::canonicalize(prefix) else {
                 return Err("Workspace .venv is not a valid virtual environment");
@@ -721,31 +739,24 @@ impl Owner {
         argv: Vec<String>,
         host: &ExecutionHost,
         timeout: Duration,
+        expected: &Generation,
     ) -> Result<ProgramOutput, String> {
-        let _permit = self
-            .permits
-            .acquire()
-            .await
-            .map_err(|_| "Workspace Python preparation stopped".to_owned())?;
-        if self.shutdown.is_cancelled() {
-            return Err("Workspace Python preparation stopped".to_owned());
-        }
-        let signal = Arc::new(crate::runtime::cancellation::CancellationSignal::new());
-        {
-            let mut signals = self.signals.lock().expect("workspace python signals");
-            signals.retain(|existing| !existing.is_cancelled());
-            signals.push(Arc::clone(&signal));
-        }
-        let _leave = SignalLeave {
-            owner: self,
-            signal: Arc::clone(&signal),
+        let _permit = tokio::select! {
+            result = self.permits.acquire() => result.map_err(|_| "Workspace Python preparation stopped".to_owned())?,
+            () = self.shutdown.cancelled() => return Err("Workspace Python preparation stopped".to_owned()),
         };
+        if !self.inputs_match(root, expected) {
+            return Err("Workspace Python preparation stopped or inputs changed".to_owned());
+        }
+        #[cfg(test)]
+        pass_gate(&self.before_signal).await;
         let request = ProgramRequest {
             argv,
             cwd: root.to_path_buf(),
+            cwd_identity: (expected.root_dev, expected.root_ino),
             env: execution_environment::bootstrap_environment(host),
             timeout,
-            cancellation: signal.child(),
+            cancellation: self.shutdown.child(),
         };
         self.probe.run(request).await
     }
@@ -844,21 +855,6 @@ impl Drop for AdmitLeave {
     }
 }
 
-struct SignalLeave<'a> {
-    owner: &'a Owner,
-    signal: Arc<crate::runtime::cancellation::CancellationSignal>,
-}
-
-impl Drop for SignalLeave<'_> {
-    fn drop(&mut self) {
-        self.owner
-            .signals
-            .lock()
-            .expect("workspace python signals")
-            .retain(|existing| !Arc::ptr_eq(existing, &self.signal));
-    }
-}
-
 fn production_probe() -> Arc<dyn ProgramProbe> {
     #[cfg(test)]
     {
@@ -880,20 +876,16 @@ impl ProgramProbe for ClosedProbe {
     }
 }
 
-#[cfg(not(test))]
 struct SupervisedProbe;
 
-#[cfg(not(test))]
 impl ProgramProbe for SupervisedProbe {
     fn run(&self, request: ProgramRequest) -> BoxFuture<'_, Result<ProgramOutput, String>> {
         Box::pin(async move {
-            use std::os::unix::fs::MetadataExt;
-            let metadata = std::fs::metadata(&request.cwd).map_err(|error| error.to_string())?;
             let invocation = crate::runtime::process_runner::ProgramInvocation {
                 argv: request.argv,
                 stdin_socket: None,
                 terminal: None,
-                cwd_identity: (metadata.dev(), metadata.ino()),
+                cwd_identity: request.cwd_identity,
             };
             let spec = crate::runtime::process_runner::SupervisedCommandSpec {
                 command: "workspace-python".to_owned(),
@@ -991,22 +983,26 @@ pub(crate) fn start_admit_watcher(shutdown: tokio_util::sync::CancellationToken)
 }
 
 pub(crate) async fn shutdown() {
-    global().shutdown.cancel();
-    for signal in global()
-        .signals
-        .lock()
-        .expect("workspace python signals")
-        .drain(..)
-    {
-        signal.cancel();
-    }
-    join_preparation().await;
+    global().stop().await;
 }
 
-async fn join_preparation() {
-    let tasks = std::mem::take(&mut *global().tasks.lock().expect("workspace python tasks"));
-    for task in tasks {
-        let _ = task.await;
+impl Owner {
+    async fn stop(&self) {
+        self.shutdown.cancel();
+        let tasks = std::mem::take(&mut *self.tasks.lock().expect("workspace python tasks"));
+        for task in tasks {
+            let _ = task.await;
+        }
+        let flights: Vec<_> = self
+            .flights
+            .lock()
+            .expect("workspace python flights")
+            .values()
+            .cloned()
+            .collect();
+        for flight in flights {
+            flight.wait().await;
+        }
     }
 }
 
@@ -1016,7 +1012,7 @@ fn scan_admit(directory: &Path) {
     };
     for entry in entries.take(32).flatten() {
         let path = entry.path();
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(Some(text)) = read_optional_file(&path) else {
             continue;
         };
         let location = text.trim();
@@ -1138,17 +1134,12 @@ fn read_pin(root: &Path) -> Result<Option<String>, &'static str> {
 }
 
 fn read_optional_file(path: &Path) -> Result<Option<String>, ()> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(error)
-            if error.kind() == std::io::ErrorKind::NotFound
-                && std::fs::symlink_metadata(path)
-                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
-        {
-            Ok(None)
-        }
-        Err(_) => Err(()),
+    if std::fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+        return Ok(None);
     }
+    // Shared bounded reads open with O_NONBLOCK and validate the opened FD.
+    let bytes = crate::bounded_file::read_bounded(path).map_err(|_| ())?;
+    String::from_utf8(bytes).map(Some).map_err(|_| ())
 }
 
 fn read_requires(root: &Path) -> Requires {
@@ -1506,7 +1497,7 @@ fn validated_guard_directory(directory: &Path) -> Option<PathBuf> {
         if !meta.is_file() || meta.permissions().mode() & 0o111 == 0 {
             return None;
         }
-        if std::fs::read(&path).ok()?.as_slice() != expected {
+        if read_optional_file(&path).ok()??.as_bytes() != expected {
             return None;
         }
     }
@@ -1516,17 +1507,19 @@ fn validated_guard_directory(directory: &Path) -> Option<PathBuf> {
 pub(crate) const GUARD_MESSAGE_KEY: &str = "RUSTX_PYTHON_GUARD_MESSAGE";
 
 fn fallback_guard() -> Option<PathBuf> {
-    static GUARD: OnceLock<PathBuf> = OnceLock::new();
-    if let Some(directory) = GUARD.get() {
-        return Some(directory.clone());
-    }
-    let directory = install_fallback_guard()?;
-    let _ = GUARD.set(directory.clone());
-    Some(directory)
+    static GUARD: Mutex<Option<PathBuf>> = Mutex::new(None);
+    cached_guard(
+        &mut GUARD.lock().expect("workspace python guard"),
+        &fallback_parents(),
+    )
 }
 
-fn install_fallback_guard() -> Option<PathBuf> {
-    install_process_guard(&fallback_parents(), "Workspace Python is not ready")
+fn cached_guard(cached: &mut Option<PathBuf>, parents: &[PathBuf]) -> Option<PathBuf> {
+    if let Some(valid) = cached.as_deref().and_then(validated_guard_directory) {
+        return Some(valid);
+    }
+    *cached = install_process_guard(parents, "Workspace Python is not ready");
+    cached.clone()
 }
 
 fn fallback_parents() -> Vec<PathBuf> {
@@ -1584,10 +1577,7 @@ fn ensure_guard(diagnostic: &str) -> Option<PathBuf> {
 
 fn install_guard(directory: &Path, diagnostic: &str) -> Option<PathBuf> {
     std::fs::create_dir_all(directory).ok()?;
-    let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' '{}' >&2\nexit 127\n",
-        shell_line(diagnostic)
-    );
+    let _ = diagnostic; // The immutable script reads the per-command diagnostic.
     for name in ["python", "python3"] {
         let path = directory.join(name);
         if path.exists() {
@@ -1603,19 +1593,9 @@ fn install_guard(directory: &Path, diagnostic: &str) -> Option<PathBuf> {
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(_) => return None,
         };
-        file.write_all(script.as_bytes()).ok()?;
+        file.write_all(GUARD_PYTHON).ok()?;
     }
-    for name in ["python", "python3"] {
-        let path = directory.join(name);
-        let meta = std::fs::metadata(&path).ok()?;
-        if !meta.is_file()
-            || meta.permissions().mode() & 0o111 == 0
-            || std::fs::read(&path).ok()?.as_slice() != script.as_bytes()
-        {
-            return None;
-        }
-    }
-    Some(directory.to_path_buf())
+    validated_guard_directory(directory)
 }
 
 fn guard_name(diagnostic: &str) -> String {
@@ -1647,7 +1627,7 @@ async fn acquire_lock(
     root: &Path,
     before_lock: Option<tokio::sync::oneshot::Sender<()>>,
     state_override: Option<PathBuf>,
-    shutdown: tokio_util::sync::CancellationToken,
+    shutdown: crate::runtime::cancellation::CancellationSignal,
 ) -> Result<nix::fcntl::Flock<std::fs::File>, String> {
     let state = state_override
         .or_else(state_dir)
@@ -1786,32 +1766,13 @@ pub(crate) mod tests {
                         stderr: String::new(),
                     });
                 }
-                if argv.iter().any(|arg| arg == "find") {
-                    if let Some(request) = argv.last() {
-                        let requested = PathBuf::from(request);
-                        if requested.is_absolute() && requested.is_file() {
-                            return Ok(ProgramOutput {
-                                status: 0,
-                                stdout: format!("{}\n", requested.display()),
-                                stderr: String::new(),
-                            });
-                        }
-                    }
-                    let base = request.cwd.join("base-python");
-                    write_executable(&base, "#!/bin/sh\nexit 0\n");
-                    return Ok(ProgramOutput {
-                        status: 0,
-                        stdout: format!("{}\n", base.display()),
-                        stderr: String::new(),
-                    });
-                }
                 if argv.iter().any(|arg| arg == "venv") {
                     let target = PathBuf::from(argv.last().expect("target"));
                     let interpreter = argv
                         .iter()
                         .position(|arg| arg == "--python")
                         .map(|index| PathBuf::from(&argv[index + 1]));
-                    if let Some(interpreter) = interpreter {
+                    if let Some(interpreter) = interpreter.filter(|p| p.is_absolute()) {
                         write_linked_venv(&target, &interpreter);
                     } else {
                         write_venv(&target);
@@ -1966,7 +1927,7 @@ pub(crate) mod tests {
         assert!(argv.iter().any(|arg| arg == "--no-project"));
         assert!(argv.iter().any(|arg| arg == "--directory"));
         assert!(argv.iter().all(|arg| arg != "--no-config"));
-        assert!(argv.iter().any(|arg| arg == "--python"));
+        assert!(!argv.iter().any(|arg| arg == "find"));
         assert!(
             !argv
                 .iter()
@@ -2253,7 +2214,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn issue_u07_unpinned_requires_python_is_the_find_request() {
+    async fn issue_u07_unpinned_requires_python_is_the_create_request() {
         let parent = tempfile::tempdir().expect("parent");
         let root = parent.path().join("workspace");
         std::fs::create_dir(&root).expect("workspace");
@@ -2272,8 +2233,8 @@ pub(crate) mod tests {
         let calls = probe.calls.lock().expect("calls");
         let find = calls
             .iter()
-            .find(|argv| argv.iter().any(|arg| arg == "find"))
-            .expect("find");
+            .find(|argv| argv.iter().any(|arg| arg == "venv"))
+            .expect("venv");
         assert!(find.iter().any(|arg| arg == "--no-project"));
         assert!(find.iter().any(|arg| arg == "--directory"));
         assert!(find.iter().all(|arg| arg != "--no-config"));
@@ -2362,10 +2323,12 @@ pub(crate) mod tests {
         let calls = probe.calls.lock().expect("calls");
         let find = calls
             .iter()
-            .find(|argv| argv.iter().any(|arg| arg == "find"))
-            .expect("find");
+            .find(|argv| argv.iter().any(|arg| arg == "venv"))
+            .expect("venv");
         assert_eq!(
-            find.last().map(String::as_str),
+            find.iter()
+                .position(|arg| arg == "--python")
+                .map(|i| find[i + 1].as_str()),
             Some(pinned.display().to_string().as_str())
         );
         let venv = calls
@@ -2387,7 +2350,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn relative_pin_is_absolute_in_the_find_request() {
+    async fn relative_pin_is_absolute_in_the_create_request() {
         let root = workspace();
         let pinned = root.path().join("pinned-python");
         write_executable(&pinned, "#!/bin/sh\nexit 0\n");
@@ -2401,9 +2364,13 @@ pub(crate) mod tests {
         let calls = probe.calls.lock().expect("calls");
         let find = calls
             .iter()
-            .find(|argv| argv.iter().any(|arg| arg == "find"))
-            .expect("find");
-        let requested = find.last().expect("pin");
+            .find(|argv| argv.iter().any(|arg| arg == "venv"))
+            .expect("venv");
+        let requested = &find[find
+            .iter()
+            .position(|arg| arg == "--python")
+            .expect("python request")
+            + 1];
         assert_eq!(
             requested,
             &super::absolute_pin(&root_path, "./pinned-python")
@@ -2811,7 +2778,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_admission_keeps_one_task_and_drops_probe_signals() {
+    async fn repeated_admission_keeps_one_task() {
         let root = workspace();
         write_venv(&root.path().join(".venv"));
         let root_path = std::fs::canonicalize(root.path()).expect("canonical");
@@ -2831,14 +2798,12 @@ pub(crate) mod tests {
             owner.schedule_on(&root_path);
         }
         assert!(owner.tasks.lock().expect("tasks").len() <= 1);
-        assert!(owner.signals.lock().expect("signals").len() <= 1);
         let follower = owner.tasks.lock().expect("tasks").pop();
         release_tx.send(()).expect("release");
         prepare.await.expect("prepare");
         if let Some(follower) = follower {
             follower.await.expect("follower");
         }
-        assert!(owner.signals.lock().expect("signals").is_empty());
         assert_eq!(owner.records.lock().expect("records").len(), 1);
     }
 
@@ -3301,6 +3266,413 @@ pub(crate) mod tests {
                 .await
                 .expect("shutdown joins a live preparation")
                 .expect("task");
+        }
+    }
+    fn arm_gate(
+        slot: &Mutex<Option<super::TestGate>>,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered, arrival) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *slot.lock().unwrap() = Some(super::TestGate {
+            entered,
+            release: released,
+        });
+        (arrival, release)
+    }
+
+    #[tokio::test]
+    async fn special_and_oversized_version_files_fail_without_probes_and_join() {
+        for name in [".python-version", "pyproject.toml"] {
+            for kind in ["fifo", "fifo-link", "oversized"] {
+                let root = workspace();
+                let path = root.path().join(name);
+                if kind == "oversized" {
+                    let file = std::fs::File::create(&path).unwrap();
+                    file.set_len(1024 * 1024 + 1).unwrap();
+                } else {
+                    let fifo = root.path().join("pipe");
+                    nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRUSR).unwrap();
+                    if kind == "fifo" {
+                        std::fs::rename(fifo, &path).unwrap();
+                    } else {
+                        std::os::unix::fs::symlink(fifo, &path).unwrap();
+                    }
+                }
+                let probe = Arc::new(Scripted::new("0.10.2"));
+                let owner = Owner::for_test(probe.clone(), None, None, None);
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    owner.prepare(root.path().to_path_buf()),
+                )
+                .await
+                .unwrap();
+                assert!(
+                    matches!(
+                        owner.records.lock().unwrap().get(root.path()),
+                        Some(Record::Conflict { .. })
+                    ),
+                    "{name}: {kind}"
+                );
+                assert!(probe.calls.lock().unwrap().is_empty());
+                tokio::time::timeout(std::time::Duration::from_secs(2), owner.stop())
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn changed_pin_before_adopt_snapshot_is_never_validated_as_new_generation() {
+        let root = workspace();
+        write_venv(&root.path().join(".venv"));
+        std::fs::write(root.path().join(".python-version"), "3.12").unwrap();
+        let probe = Arc::new(Scripted::new("0.10.2"));
+        let owner = Arc::new(Owner::for_test(probe.clone(), None, None, None));
+        let (entered, release) = arm_gate(&owner.before_snapshot);
+        let preparing = owner.clone();
+        let path = root.path().to_path_buf();
+        let task = tokio::spawn(async move { preparing.prepare(path).await });
+        entered.await.unwrap();
+        std::fs::write(root.path().join(".python-version"), "3.11").unwrap();
+        release.send(()).unwrap();
+        task.await.unwrap();
+        assert!(owner.records.lock().unwrap().get(root.path()).is_none());
+        assert!(probe.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn environment_root_link_appearing_during_uv_discovery_is_a_conflict() {
+        let root = workspace();
+        let external = workspace();
+        write_venv(&external.path().join("venv"));
+        let bin = workspace();
+        write_executable(&bin.path().join("uv"), "#!/bin/sh\nexit 0\n");
+        let probe = Arc::new(Scripted::new("0.10.2"));
+        let (entered, arrival) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *probe.entered.lock().unwrap() = Some(entered);
+        *probe.release.lock().unwrap() = Some(released);
+        let owner = Arc::new(Owner::for_test(
+            probe.clone(),
+            Some(host_for(bin.path())),
+            None,
+            None,
+        ));
+        let preparing = owner.clone();
+        let path = root.path().to_path_buf();
+        let task = tokio::spawn(async move { preparing.prepare(path).await });
+        arrival.await.unwrap();
+        std::os::unix::fs::symlink(external.path().join("venv"), root.path().join(".venv"))
+            .unwrap();
+        release.send(()).unwrap();
+        task.await.unwrap();
+        assert!(matches!(
+            owner.records.lock().unwrap().get(root.path()),
+            Some(Record::Conflict { .. })
+        ));
+        assert_eq!(
+            probe.calls.lock().unwrap().len(),
+            1,
+            "no create or interpreter execution after conflict"
+        );
+    }
+
+    #[test]
+    fn cached_guard_deletion_and_mode_changes_select_a_verified_replacement() {
+        let parent = workspace();
+        let mut cached = None;
+        let parents = [parent.path().to_path_buf()];
+        let first = super::cached_guard(&mut cached, &parents).unwrap();
+        std::fs::remove_dir_all(&first).unwrap();
+        let second = super::cached_guard(&mut cached, &parents).unwrap();
+        assert_ne!(first, second);
+        std::fs::set_permissions(
+            second.join("python3"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let third = super::cached_guard(&mut cached, &parents).unwrap();
+        assert_ne!(second, third);
+        let host = host_from_entries(vec![("PATH", "/usr/bin:/bin")]);
+        let selection = super::directory_guard(Some(third), "disk full");
+        let entries = crate::tools::execution_environment::compose(
+            &host,
+            &crate::tools::environment::ToolEnvironment::new(),
+            &selection,
+        )
+        .unwrap();
+        assert_guard_rejected(&run_bash(&entries, "python3"));
+        assert_guard_rejected(&run_bash(&entries, "/usr/bin/env python3"));
+        assert!(run_bash(&entries, "ls /bin/sh >/dev/null").status.success());
+    }
+
+    pub(crate) async fn replaced_root_while_create_waits_for_permit_is_not_written() {
+        let parent = workspace();
+        let root = parent.path().join("workspace");
+        std::fs::create_dir(&root).unwrap();
+        let bin = workspace();
+        write_executable(
+            &bin.path().join("uv"),
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then printf 'uv 0.10.2\\n'; else /usr/bin/touch physical-start; fi\n",
+        );
+        let owner = Arc::new(Owner::for_test(
+            Arc::new(super::SupervisedProbe),
+            Some(host_for(bin.path())),
+            None,
+            None,
+        ));
+        let (entered, release) = arm_gate(&owner.before_create);
+        let preparing = owner.clone();
+        let path = root.clone();
+        let task = tokio::spawn(async move { preparing.prepare(path).await });
+        entered.await.unwrap();
+        let held = owner.permits.acquire_many(2).await.unwrap();
+        release.send(()).unwrap();
+        std::fs::rename(&root, parent.path().join("old-workspace")).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        drop(held);
+        task.await.unwrap();
+        assert!(!root.join("physical-start").exists());
+        assert!(!root.join(".venv").exists());
+        assert!(owner.records.lock().unwrap().get(&root).is_none());
+    }
+
+    pub(crate) async fn shutdown_between_check_and_signal_cannot_start_a_program() {
+        let root = workspace();
+        write_venv(&root.path().join(".venv"));
+        for name in ["python", "python3"] {
+            write_executable(
+                &root.path().join(".venv/bin").join(name),
+                "#!/bin/sh\n/usr/bin/touch physical-start\n",
+            );
+        }
+        let mut owner = Owner::for_test(Arc::new(super::SupervisedProbe), None, None, None);
+        owner.schedules = true;
+        let owner = Arc::new(owner);
+        let (entered, release) = arm_gate(&owner.before_signal);
+        owner.schedule_on(root.path());
+        entered.await.unwrap();
+        let stopping = owner.clone();
+        let task = tokio::spawn(async move { stopping.stop().await });
+        owner.shutdown.cancelled().await;
+        release.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!root.path().join("physical-start").exists());
+        assert!(owner.tasks.lock().unwrap().is_empty());
+        assert!(owner.flights.lock().unwrap().is_empty());
+    }
+    #[test]
+    fn all_guard_sources_missing_cannot_compose_an_unguarded_host_path() {
+        let blocked = workspace();
+        let file = blocked.path().join("not-directory");
+        std::fs::write(&file, "blocked").unwrap();
+        let mut cached = None;
+        assert!(super::cached_guard(&mut cached, &[file]).is_none());
+        let selection = super::directory_guard(None, "no guard resource");
+        let host = host_from_entries(vec![("PATH", "/usr/bin:/bin")]);
+        let error = crate::tools::execution_environment::compose(
+            &host,
+            &crate::tools::environment::ToolEnvironment::new(),
+            &selection,
+        )
+        .unwrap_err();
+        assert!(error.contains("guard"));
+    }
+
+    fn installed_uv_path() -> String {
+        let uv = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|dir| dir.join("uv"))
+            .find(|path| path.is_file())
+            .expect("uv required by boundary suite");
+        format!("{}:/usr/bin:/bin", uv.parent().unwrap().display())
+    }
+
+    pub(crate) async fn real_uv_missing_interpreter_obeys_download_policy() {
+        for policy in ["automatic", "manual", "never"] {
+            let root = workspace();
+            std::fs::write(root.path().join(".python-version"), "3.12").unwrap();
+            let managed = workspace();
+            let cache = workspace();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mirror = format!("http://{}", listener.local_addr().unwrap());
+            let (stop, mut stopped) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut requests = 0;
+                loop {
+                    tokio::select! {
+                        _ = &mut stopped => break,
+                        connection = listener.accept() => {
+                            let (mut connection, _) = connection.unwrap();
+                            let mut bytes = [0u8; 8192];
+                            let count = connection.read(&mut bytes).await.unwrap();
+                            assert!(String::from_utf8_lossy(&bytes[..count]).starts_with("GET "));
+                            requests += 1;
+                            connection.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+                        }
+                    }
+                }
+                requests
+            });
+            let path = installed_uv_path();
+            let host = host_from_entries(vec![
+                ("PATH", &path),
+                ("UV_PYTHON_INSTALL_DIR", managed.path().to_str().unwrap()),
+                ("UV_CACHE_DIR", cache.path().to_str().unwrap()),
+                ("UV_PYTHON_PREFERENCE", "only-managed"),
+                ("UV_PYTHON_DOWNLOADS", policy),
+                ("UV_PYTHON_INSTALL_MIRROR", &mirror),
+                ("UV_HTTP_RETRIES", "0"),
+            ]);
+            let owner = Owner::for_test(
+                Arc::new(super::SupervisedProbe),
+                Some(Arc::new(host)),
+                None,
+                None,
+            );
+            owner.prepare(root.path().to_path_buf()).await;
+            stop.send(()).unwrap();
+            let requests = server.await.unwrap();
+            assert_eq!(
+                requests > 0,
+                policy == "automatic",
+                "{policy}: download requests = {requests}"
+            );
+            assert!(
+                matches!(
+                    owner.records.lock().unwrap().get(root.path()),
+                    Some(Record::Unavailable { .. })
+                ),
+                "{policy}"
+            );
+            assert!(!root.path().join(".venv").exists());
+            owner.stop().await;
+        }
+    }
+
+    pub(crate) async fn real_uv_does_not_seed_or_select_an_external_project() {
+        let root = workspace();
+        let foreign = workspace();
+        std::fs::write(foreign.path().join(".python-version"), "9.99").unwrap();
+        let managed = workspace();
+        let cache = workspace();
+        let path = installed_uv_path();
+        let host = host_from_entries(vec![
+            ("PATH", &path),
+            ("UV_PROJECT", foreign.path().to_str().unwrap()),
+            ("UV_VENV_SEED", "1"),
+            ("UV_OFFLINE", "1"),
+            ("UV_PYTHON_DOWNLOADS", "never"),
+            ("UV_PYTHON_INSTALL_DIR", managed.path().to_str().unwrap()),
+            ("UV_CACHE_DIR", cache.path().to_str().unwrap()),
+        ]);
+        let owner = Owner::for_test(
+            Arc::new(super::SupervisedProbe),
+            Some(Arc::new(host)),
+            None,
+            None,
+        );
+        owner.prepare(root.path().to_path_buf()).await;
+        assert!(
+            matches!(
+                owner.records.lock().unwrap().get(root.path()),
+                Some(Record::Ready { .. })
+            ),
+            "{:?}",
+            owner.records.lock().unwrap()
+        );
+        let output = std::process::Command::new(root.path().join(".venv/bin/python"))
+            .args([
+                "-I",
+                "-c",
+                "import importlib.util; assert importlib.util.find_spec('pip') is None",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        owner.stop().await;
+    }
+
+    pub(crate) async fn real_dual_venv_launcher_variables_cannot_change_prefix() {
+        let root = workspace();
+        let foreign = workspace();
+        for target in [root.path().join(".venv"), foreign.path().join("venv")] {
+            let output = std::process::Command::new("/usr/bin/python3")
+                .args(["-m", "venv", "--without-pip"])
+                .arg(target)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+        }
+        let foreign_python = foreign.path().join("venv/bin/python");
+        for key in ["PYTHONEXECUTABLE", "__PYVENV_LAUNCHER__"] {
+            for configured in [false, true] {
+                let mut host_entries = vec![("PATH", "/usr/bin:/bin")];
+                if !configured {
+                    host_entries.push((key, foreign_python.to_str().unwrap()));
+                }
+                let host = Arc::new(host_from_entries(host_entries));
+                let owner = Owner::for_test(
+                    Arc::new(super::SupervisedProbe),
+                    Some(host.clone()),
+                    None,
+                    None,
+                );
+                owner.prepare(root.path().to_path_buf()).await;
+                assert!(
+                    matches!(
+                        owner.records.lock().unwrap().get(root.path()),
+                        Some(Record::Ready { .. })
+                    ),
+                    "{key} host={}: {:?}",
+                    !configured,
+                    owner.records.lock().unwrap()
+                );
+                let base =
+                    crate::tools::environment::ToolEnvironment::from_configured(if configured {
+                        vec![(key.to_owned(), foreign_python.display().to_string())]
+                    } else {
+                        vec![]
+                    })
+                    .unwrap();
+                let entries = crate::tools::execution_environment::compose(
+                    &host,
+                    &base,
+                    &owner.observe(root.path()),
+                )
+                .unwrap();
+                let script = "import sys; print(sys.prefix)";
+                for absolute in [false, true] {
+                    let mut command = if absolute {
+                        let mut command =
+                            std::process::Command::new(root.path().join(".venv/bin/python"));
+                        command.args(["-I", "-c", script]);
+                        command
+                    } else {
+                        let mut command = std::process::Command::new("/bin/bash");
+                        command.args(["-c", "python -I -c 'import sys; print(sys.prefix)'"]);
+                        command
+                    };
+                    let output = command
+                        .env_clear()
+                        .envs(entries.iter().cloned())
+                        .output()
+                        .unwrap();
+                    assert!(output.status.success(), "{output:?}");
+                    assert_eq!(
+                        Path::new(String::from_utf8(output.stdout).unwrap().trim()),
+                        root.path().join(".venv"),
+                        "{key}, configured={configured}, absolute={absolute}"
+                    );
+                }
+                owner.stop().await;
+            }
         }
     }
 }
