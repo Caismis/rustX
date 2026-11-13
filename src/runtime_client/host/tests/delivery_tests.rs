@@ -23,7 +23,7 @@ fn commit_delivery_result(
                     id: call_id.clone(),
                     tool_id: tool_id.clone(),
                     name: "present".into(),
-                    arguments: serde_json::json!({"files":[{"path":file.path}]}),
+                    arguments: serde_json::json!({"arguments":{"files":[{"path":file.path}]}}),
                 })],
             },
         ))

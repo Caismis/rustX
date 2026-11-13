@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
 import { Tabs, TabList, Tab, TabPanel } from 'react-aria-components';
-import type { SkillDescriptor, SourceMutation, SourceScope, SourceSettings } from '../../../../protocol/app-server/v77';
+import type { SkillDescriptor, SourceMutation, SourceScope, SourceSettings } from '../../../../protocol/app-server/v78';
 import { bindResourceTransfer } from '../../workspaces/resource-transfer';
 import type { AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';

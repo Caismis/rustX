@@ -255,10 +255,11 @@ impl CapabilityCoordinator {
             if state.snapshot.resource_sources().contains(source) {
                 resource_bindings.insert(
                     source.clone(),
-                    crate::tools::mcp::McpResourceBinding::new(
-                        generation.binding(),
-                        bindings[id].policy.approval,
-                    ),
+                    crate::tools::mcp::McpResourceBinding::new(generation.binding())
+                        .with_permissions(
+                            bindings[id].permissions,
+                            bindings[id].tool_permissions.clone(),
+                        ),
                 );
             }
             if let Some((epoch, Ok(discovery))) = generation.connection().catalog_snapshot() {
@@ -267,10 +268,11 @@ impl CapabilityCoordinator {
                 if discovery.capabilities.resources {
                     resource_bindings.insert(
                         source.clone(),
-                        crate::tools::mcp::McpResourceBinding::new(
-                            generation.binding(),
-                            bindings[id].policy.approval,
-                        ),
+                        crate::tools::mcp::McpResourceBinding::new(generation.binding())
+                            .with_permissions(
+                                bindings[id].permissions,
+                                bindings[id].tool_permissions.clone(),
+                            ),
                     );
                 } else {
                     resource_bindings.remove(source);
@@ -403,13 +405,12 @@ impl CapabilityCoordinator {
                 .filter(|entry| entry.definition.origin.source().as_ref() == Some(&source))
                 .cloned()
                 .collect::<Vec<_>>();
+            let binding = &snapshot.mcp_servers()[id];
             if snapshot.resource_sources().contains(&source) {
                 resource_bindings.insert(
                     source.clone(),
-                    crate::tools::mcp::McpResourceBinding::new(
-                        generation.binding(),
-                        snapshot.mcp_servers()[id].policy.approval,
-                    ),
+                    crate::tools::mcp::McpResourceBinding::new(generation.binding())
+                        .with_permissions(binding.permissions, binding.tool_permissions.clone()),
                 );
             }
             if let Some((epoch, Ok(discovery))) = generation.connection().catalog_snapshot() {
@@ -418,15 +419,15 @@ impl CapabilityCoordinator {
                 if discovery.capabilities.resources {
                     resource_bindings.insert(
                         source.clone(),
-                        crate::tools::mcp::McpResourceBinding::new(
-                            generation.binding(),
-                            snapshot.mcp_servers()[id].policy.approval,
-                        ),
+                        crate::tools::mcp::McpResourceBinding::new(generation.binding())
+                            .with_permissions(
+                                binding.permissions,
+                                binding.tool_permissions.clone(),
+                            ),
                     );
                 } else {
                     resource_bindings.remove(&source);
                 }
-                let binding = &snapshot.mcp_servers()[id];
                 let live = crate::tools::mcp::definitions_owned_for_source(
                     &source,
                     id,
@@ -436,7 +437,7 @@ impl CapabilityCoordinator {
                 )
                 .into_iter()
                 .map(|(definition, executor)| {
-                    crate::tools::executor::ToolRegistration::plain(definition, executor)
+                    crate::tools::mcp::with_binding_permissions(definition, executor, binding)
                 })
                 .collect::<Vec<_>>();
                 changed |= previous
@@ -515,7 +516,7 @@ fn live_registrations(
     )
     .into_iter()
     .map(|(definition, executor)| {
-        crate::tools::executor::ToolRegistration::plain(definition, executor)
+        crate::tools::mcp::with_binding_permissions(definition, executor, binding)
     })
     .collect()
 }

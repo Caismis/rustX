@@ -2302,7 +2302,6 @@ mod tests {
                 "background",
                 "tool-background",
                 crate::tools::types::ToolExecutionPolicy::ModelSelectable,
-                crate::tools::types::ToolConcurrencyPolicy::Sequential,
             ),
             crate::scripted_suites::support::fake::success_result("done"),
         );
@@ -2881,7 +2880,6 @@ mod tests {
                 "background",
                 "tool-background",
                 crate::tools::types::ToolExecutionPolicy::ModelSelectable,
-                crate::tools::types::ToolConcurrencyPolicy::Sequential,
             ),
             crate::scripted_suites::support::fake::success_result("done"),
         );

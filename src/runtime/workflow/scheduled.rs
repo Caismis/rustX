@@ -11,7 +11,7 @@ use super::{
 };
 use crate::capabilities::ToolSourceId;
 use crate::capabilities::selection::ExactToolSelector;
-use crate::model::frozen::{FrozenModelInvocation, FrozenSummaryModel};
+use crate::model::frozen::FrozenModelInvocation;
 use crate::model::invocation::ModelBindingRegistry;
 use crate::model::session::SessionModelConfig;
 use crate::runtime::ApprovalMode;
@@ -444,12 +444,7 @@ impl ScheduledWorkflowPreparation {
                         .bind(&self.resources, &self.model, &self.models)
                         .map_err(|_| Error::DependencyUnavailable)?;
                     let primary_provider = provider_identity(&spec.model.primary)?;
-                    let summary_provider = match &spec.model.summary {
-                        FrozenSummaryModel::Session => None,
-                        FrozenSummaryModel::Explicit(invocation) => {
-                            Some(provider_identity(invocation)?)
-                        }
-                    };
+                    let summary_provider = Some(provider_identity(&spec.model.summary.0)?);
                     let sources = spec
                         .materialization
                         .sources
@@ -465,12 +460,7 @@ impl ScheduledWorkflowPreparation {
                         profile_digest: digest(&(
                             spec.profile_digest().as_str(),
                             &spec.model.primary.wire_model,
-                            match &spec.model.summary {
-                                FrozenSummaryModel::Session => None,
-                                FrozenSummaryModel::Explicit(invocation) => {
-                                    Some(&invocation.wire_model)
-                                }
-                            },
+                            &spec.model.summary.0.wire_model,
                         )),
                         primary_provider,
                         summary_provider,

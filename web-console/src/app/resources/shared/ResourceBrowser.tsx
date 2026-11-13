@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { SkillDescriptor, SourceScope, SourceSettings, TransferOperation } from '../../../../../protocol/app-server/v77';
+import type { SkillDescriptor, SourceScope, SourceSettings, TransferOperation } from '../../../../../protocol/app-server/v78';
 import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
 import type { CatalogView } from '../../../presentation/catalog/CatalogControls';

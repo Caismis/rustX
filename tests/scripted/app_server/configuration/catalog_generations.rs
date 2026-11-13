@@ -932,13 +932,12 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
         issue459_pin_fast(&fixture).await;
         let summary_on = |model: &str| AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse(model).unwrap(),
-            profile: None,
+            profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
             request_params: RequestParams::new(),
             max_output_tokens: Some(256),
         };
         let with_summary = |profile, summary| SessionModelConfig {
-            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: summary,
+            auxiliary: summary,
             ..issue459_pinned(profile)
         };
         fixture
@@ -999,7 +998,7 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
         );
         let view = runtime.model_view();
         assert!(view.unavailable.as_deref().unwrap().contains("fast"));
-        assert_eq!(view.configured.summary_model, summary_on("local/b"));
+        assert_eq!(view.configured.auxiliary, summary_on("local/b"));
         refused_by_owner(with_summary(Some("fast"), summary_on("local/b")), "fast").await;
         let view = fixture
             .manager
@@ -1008,7 +1007,7 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             .unwrap()
             .0;
         assert!(view.unavailable.is_none());
-        let Some(AuxiliaryModelView::Explicit(summary)) = &view.summary else {
+        let Some(AuxiliaryModelView::Explicit { effective: summary }) = &view.auxiliary else {
             panic!("explicit summary")
         };
         assert_eq!(
@@ -1036,6 +1035,40 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             with_summary(Some("deep"), summary_on("local/b"))
         );
         refused_by_owner(with_summary(None, summary_on("local/b")), "local/b").await;
+
+        // Catalog primary choice must not silently recover an unavailable explicit Summary.
+        let before = runtime.model_view();
+        let binding =
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+                &runtime,
+            )
+            .unwrap()
+            .adopted_binding;
+        let catalog = runtime.model_read_source().catalog_source();
+        let model_position = (0..catalog.model_count() as u64)
+            .find(|position| catalog.model_at(*position).unwrap().model.as_str() == "local/a")
+            .unwrap();
+        let Err(ModelSelectionError::Model(
+            crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(
+                diagnostic,
+            ),
+        )) = fixture
+            .manager
+            .select_catalog_model(
+                &id,
+                crate::model::session::CatalogModelSelection {
+                    binding_revision: binding,
+                    model_position,
+                    profile_position: None,
+                },
+            )
+            .await
+        else {
+            panic!("catalog primary choice must not mask an unavailable explicit Summary");
+        };
+        assert!(diagnostic.contains("local/b"), "{diagnostic}");
+        assert_eq!(runtime.model_view(), before);
+        assert_eq!(before.configured.auxiliary, summary_on("local/b"));
 
         // A complete correction committed by the owner is visible on both surfaces.
         let corrected = with_summary(None, summary_on("local/a"));

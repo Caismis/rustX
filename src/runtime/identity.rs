@@ -216,6 +216,23 @@ id_type! {
     AgentId
 }
 
+impl AgentId {
+    /// Fallible construction for untrusted caller strings (tool arguments).
+    ///
+    /// Rejects empty identities so authorize binding can skip closed without
+    /// panicking on malformed `send_message` input.
+    ///
+    /// # Errors
+    /// Returns a validation message when the value is empty.
+    pub fn parse(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into();
+        if value.is_empty() {
+            return Err("agent id must not be empty".into());
+        }
+        Ok(Self::new(value))
+    }
+}
+
 id_type! {
     /// Identifies an immutable agent version.
     AgentVersionId
@@ -538,6 +555,8 @@ pub enum NativeContextContributor {
     /// this owner explains the native ones inside the accepted context
     /// generation; no observer supplies its own provenance or identity.
     RuntimeToolObservation,
+    /// Sparse execution-permission mode reminder (Issue #544).
+    PermissionReminder,
 }
 
 impl schemars::JsonSchema for NativeContextContributor {
@@ -559,7 +578,7 @@ impl NativeContextContributor {
     /// Every native semantic owner, in contract order. This is the source
     /// used by the compatibility manifest and reserved-identity validation;
     /// callers must not maintain a second list of native slots.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::GoalStatus,
         Self::WorkspaceInstructions,
         Self::SkillGuidance,
@@ -567,6 +586,7 @@ impl NativeContextContributor {
         Self::CoreSystemIdentity,
         Self::AgentProfile,
         Self::RuntimeToolObservation,
+        Self::PermissionReminder,
     ];
 
     /// The canonical extension-key spelling reserved for this native owner.
@@ -584,6 +604,7 @@ impl NativeContextContributor {
             Self::CoreSystemIdentity => "core-runtime-identity",
             Self::AgentProfile => "agent-profile",
             Self::RuntimeToolObservation => "runtime-tool-observation",
+            Self::PermissionReminder => "permission-reminder",
         }
     }
 
@@ -602,6 +623,7 @@ impl NativeContextContributor {
             Self::CoreSystemIdentity => "core_runtime_identity",
             Self::AgentProfile => "agent_profile",
             Self::RuntimeToolObservation => "runtime_tool_observation",
+            Self::PermissionReminder => "permission_reminder",
         }
     }
 }
@@ -841,6 +863,11 @@ mod tests {
         ));
         let _ = round_trip(&MessageId::new("msg-1"));
         let _ = round_trip(&AgentId::new("agent-a"));
+        assert_eq!(
+            AgentId::parse("agent-a").expect("parse").as_str(),
+            "agent-a"
+        );
+        assert!(AgentId::parse("").is_err());
         let _ = round_trip(&AgentVersionId::new("agent-v1"));
         let _ = round_trip(&SubagentId::new("conv-1-subagent-1"));
         let _ = round_trip(&AttemptId::new("attempt-1"));

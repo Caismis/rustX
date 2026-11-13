@@ -52,9 +52,8 @@ use crate::tools::todo::{
     TODO_TOOL_ID, TodoMutationError, TodoSnapshot, TodoStatus, TodoTask, TodoUpdate, TodoWriter,
 };
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
-    ToolResultContent,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolOrigin, ToolReplayPolicy, ToolResultContent,
 };
 
 use input::{TodoAction, TodoInput};
@@ -65,10 +64,10 @@ pub const NAME: &str = "todo";
 /// The tool-owned registration of the native `todo` tool.
 ///
 /// The list is conversation state rather than a filesystem or process
-/// effect, so the tool keeps the fixed foreground-only, sequential,
-/// approval-never policy of the runtime intrinsics: two concurrent
-/// mutations of one list would make the published snapshots race, and there
-/// is nothing here for a human to approve.
+/// effect, so the tool keeps fixed foreground-only ownership and an exclusive
+/// batch barrier (Issue #544): two concurrent mutations of one list would
+/// make the published snapshots race. Permission allows Todo mutations in
+/// every mode.
 #[must_use]
 pub(super) fn registration() -> NativeToolRegistration {
     NativeToolRegistration::new(definition(), std::sync::Arc::new(TodoExecutor))
@@ -94,8 +93,6 @@ pub(super) fn definition() -> ToolDefinition {
         .to_owned(),
         input_schema: input_schema::<TodoInput>(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }

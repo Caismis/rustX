@@ -10,7 +10,7 @@ import { useTranslation } from '../../locale/react';
 // Native textarea replaces Lexical. Commands are client grammar; effects are typed.
 import { useCallback, useEffect, useLayoutEffect, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { AttachmentIntake, transferInputs, pasteText, type IntakeInput, type IntakeFile, type UploadPort } from '../../client/uploads';
-import type { AttachmentTarget, UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v77';
+import type { AttachmentTarget, UploadPolicy, UploadReceipt, UploadedFile, UserInputBlock } from '../../../../protocol/app-server/v78';
 import { commands, available, parseCommand, type CommandId } from '../commands/registry';
 import { matchCommands } from '../commands/matching';
 import { ModelPicker, type ModelPickerState } from '../composer/ModelPicker';
@@ -28,13 +28,13 @@ import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
 import { observeControlRow } from '../../presentation/agent/control-row-layout';
 const emptyContent: UserInputBlock[] = [];
-export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, conversationIdentity, submissionTarget, binding = 'default', firstSubmission, disabled, submitDisabled = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = active && !disabled, cancellationScope, cancellationOnly = false, separateStop = false }: {
+export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, conversationIdentity, submissionTarget, binding = 'default', firstSubmission, disabled, submitDisabled = false, submitPending = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = active && !disabled, cancellationScope, cancellationOnly = false, separateStop = false }: {
   placeholder?: string; messageLabel?: string; busyEnterBehavior?: import('../composer/preferences').BusyEnterBehavior;
   modelPicker?: ModelPickerState;
   onRetainedRemove?: (id: string) => void; onRetainedRecover?: (retry: boolean) => void;
   intakeOwner?: AttachmentIntake; uploadPolicy?: UploadPolicy; onReconcile?: UploadPort['status'];
   draftOwner?: ComposerDraft; draftIdentity?: string; receiptAuthority?: string; conversationIdentity?: ComposerConversation; submissionTarget?: AttachmentTarget;
-  firstSubmission?: FirstSubmission; binding?: string; submitDisabled?: boolean; disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
+  firstSubmission?: FirstSubmission; binding?: string; submitDisabled?: boolean; submitPending?: boolean; disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
   onDraftSend?: (text: string, files: readonly File[], ids?: readonly string[], submission?: ComposerSubmission) => Promise<boolean>; cancellationAvailable?: boolean; cancellationScope?: StopScope;
   /** Exact live Root attachment permits cancellation while observation is unavailable. */
   cancellationOnly?: boolean;
@@ -120,11 +120,14 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   const selectedCommand = selected && selected !== 'file' ? selected : parsed.type === 'command' ? parsed.id : undefined;
   const facts = { running: active, busyEnter, actionable: !!draft.trim() || files.length > 0 || restored.length > 0,
     draftKind: parsed.type === 'text' ? 'message' as const : selectedCommand ? 'command' as const : 'unsupported-command' as const,
-    blocked: disabled || submitDisabled, acknowledging: busy || owner.blocked(editor), uploadsPending: pending, cancellationAvailable, separateStop };
+    blocked: disabled || submitDisabled || submitPending, acknowledging: busy || owner.blocked(editor), uploadsPending: pending, cancellationAvailable, separateStop };
   const primary = composerSubmissionPolicy(facts);
   // A retained uncertain/unsent draft is blocked, but no longer sending.
   const sending = primary.kind === 'message' && (busy || owner.blocked(editor))
     && (!editor?.submission || editor.submission.outcome === 'pending');
+  const preparing = submitPending && primary.kind === 'message' && !sending;
+  const primaryLabel = preparing ? 'agent:submission.preparing' : sending ? 'agent:submission.sending' : primary.label;
+  const primaryTitle = preparing ? 'agent:submission.preparing' : sending ? 'agent:submission.sending' : primary.title;
   useEffect(() => { stopSequence.reset(); }, [stopSequence, binding, cancellationScope?.authority, cancellationScope?.identity, active, cancellationAvailable, menu]);
   useEffect(() => {
     // Window blur only resets; keyboard recognition stays on the focused editor.
@@ -239,12 +242,12 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
             disabled={!cancellationAvailable} onMouseDown={event => event.preventDefault()} onClick={onCancel}>
             <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
           </button>}
-          <button type="button" className={css.primary} data-composer-primary={primary.kind} aria-label={tx(sending ? 'agent:submission.sending' : primary.label)} title={tx(sending ? 'agent:submission.sending' : primary.title)}
-            aria-busy={sending || undefined} data-sending={sending || undefined}
+          <button type="button" className={css.primary} data-composer-primary={primary.kind} aria-label={tx(primaryLabel)} title={tx(primaryTitle)}
+            aria-busy={sending || preparing || undefined} data-sending={sending || undefined} data-preparing={preparing || undefined}
             disabled={primary.disabled} onMouseDown={event => event.preventDefault()} onClick={() => { if (primary.kind === 'stop') onCancel(); else void submit(); }}>
             {primary.kind === 'stop'
               ? <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
-              : sending ? <svg className={css.sendingSpinner} viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              : sending || preparing ? <svg className={css.sendingSpinner} viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
                 <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.35" strokeWidth="2"/>
                 <path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
               </svg> : <span aria-hidden="true"><IconSendOutline14 /></span>}

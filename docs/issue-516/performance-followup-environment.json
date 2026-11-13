@@ -1,0 +1,59 @@
+{
+  "date": "2026-11-03",
+  "browser": "153.0.8010.12",
+  "image": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
+  "wrapper": "Bubblewrap; immutable OCI rootfs, image fonts, private temporary browser data",
+  "cpuModel": "Intel(R) Core(TM) i9-14900K",
+  "cpuAffinity": [
+    0,
+    1
+  ],
+  "additionalMemoryQuota": null,
+  "gpu": {
+    "available": true,
+    "vendor": "Google Inc. (Google)",
+    "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+  },
+  "baseline_commit": "47b46025f2d78459cec305a46ccf792051685f8b",
+  "samplesPerAction": 5,
+  "viewport": {
+    "width": 1440,
+    "height": 1000,
+    "deviceScaleFactor": 1
+  },
+  "samples_sha256": "40a29088770deffacf29e162235f4b8aeb37b02ef7a306a3f5ec81024dd60d63",
+  "source_and_fixture_sha256": {
+    "before": {
+      "web-console/src/app/components/documents/geometry/viewport.ts": "514448cf244664c2c569d8cc08e22eff47537b9465877aa3ae5d410632da8315",
+      "web-console/src/app/components/documents/geometry/GeometryPreview.tsx": "7a776807912377d7fd4dad817729c66e1908b39be425e48e16e4fd989c90fcf2",
+      "web-console/src/app/components/ArtifactPreview.tsx": "630163d65e78eb494c38ca3bf2388f00c942bd78e9aabc0767b315e9e5921916",
+      "web-console/src/app/components/documents/GeometryDocument.tsx": "a09cc41d53da00b7ff2566b2905504efb09e50ee00ba0c4b72e259edf66dd051",
+      "web-console/src/app/components/workbench-documents/DocumentBody.tsx": "92f0ff80ef5a0eef43958f27ca56d84eba1c39531d89bfc82c398dff34c67fbe",
+      "web-console/src/app/preview-workspace.ts": "ee82d482385ab356e1e371802c92a51c69268955860077554c822e0c59654cc8",
+      "web-console/src/client/session-files.ts": "22e8fdcf77014815fd786b7525ffa52574b9e20a59baeb5e5965e0f5ce009692",
+      "web-console/src/workspaces/file-response.ts": "3e3ebdc6e981dba71c78ca24bdba180a61bf59564bedfd6c542b03d9d1ad5ffc",
+      "web-console/src/workspaces/http-host.ts": "c27ab27973ee4bf710d555fc541e47a14573f02331c9127c0f7240c69f74e983",
+      "web-console/test/e2e/geometry-performance.spec.ts": "5d240a435272bb8d3b7021d76e3eb1921669ac8bc4ef08abd9ab1d8fd1a7568f",
+      "web-console/test/e2e/geometry-observation.ts": "427e001fd558b8508f22c4aaad7fc3097dba6c6eee0268773161d9829ed895d9",
+      "web-console/test/fixtures/geometry.tsx": "c5258952ac863a9eb4c61750ea79ecc1d00db49f31a73c06f0a8b885ad4505a3",
+      "web-console/test/fixtures/geometry/bracket-array.step": "36e1bcdf85073c8744fe6a5a6e006b14ba64689ebd3bbb739ea34cd4fffdff46",
+      "web-console/test/fixtures/geometry/cube.glb": "4e9507aec871302de6c8d7e0e4b9c8ec4e2e8850ea834b67a9ab21662b79b96b"
+    },
+    "after": {
+      "web-console/src/app/components/documents/geometry/viewport.ts": "47da588e636dae7da9251eba2afa8beb841df41a6a82cd46b194aaa854562ef5",
+      "web-console/src/app/components/documents/geometry/GeometryPreview.tsx": "dcc8a765f541f4d686995fd0fcb4ec8164838d3e7496e7b5ff44deb33677c9a9",
+      "web-console/src/app/components/ArtifactPreview.tsx": "5779db11594511cc6d6debaca9b263e8d49301fe37ae582fff8a1ddc510c9369",
+      "web-console/src/app/components/documents/GeometryDocument.tsx": "749a6cfbfdad0c33b4fb32ffc5158794b6fa23e30d31515d20ae0afb6030ccb2",
+      "web-console/src/app/components/workbench-documents/DocumentBody.tsx": "e15f2c5e23c19e6b15203ca4b88b0d853e7a2cdcb68b720f5e66a724d963c3ee",
+      "web-console/src/app/preview-workspace.ts": "827261b76209df1a91830061ec0cb30b65fc7dfe94b4f2f191a1918570d27a30",
+      "web-console/src/client/session-files.ts": "4d023642c4e1fd0c16da27534278270ffb4f1108c1318d59a69fc05b68cb0aa3",
+      "web-console/src/workspaces/file-response.ts": "382015867237e743a0291152c11ba716ac560087cdbcebe314101096a1df78e1",
+      "web-console/src/workspaces/http-host.ts": "fc8059b5a70c22661b45abe74917480473ec1099892f0e5c4c75736d3366c6da",
+      "web-console/test/e2e/geometry-performance.spec.ts": "5d240a435272bb8d3b7021d76e3eb1921669ac8bc4ef08abd9ab1d8fd1a7568f",
+      "web-console/test/e2e/geometry-observation.ts": "427e001fd558b8508f22c4aaad7fc3097dba6c6eee0268773161d9829ed895d9",
+      "web-console/test/fixtures/geometry.tsx": "c5258952ac863a9eb4c61750ea79ecc1d00db49f31a73c06f0a8b885ad4505a3",
+      "web-console/test/fixtures/geometry/bracket-array.step": "36e1bcdf85073c8744fe6a5a6e006b14ba64689ebd3bbb739ea34cd4fffdff46",
+      "web-console/test/fixtures/geometry/cube.glb": "4e9507aec871302de6c8d7e0e4b9c8ec4e2e8850ea834b67a9ab21662b79b96b"
+    }
+  }
+}

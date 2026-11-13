@@ -2,7 +2,7 @@ import { checkpointSnapshot, foldRuntimeEvent, statusIdentity } from '../../prot
 import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v77';
+import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v78';
 import { App } from '../src/app/App';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { agentStatusFacets, agentStatusAnchor, agentStatusPlacement, isRuntimeStatusContext, statusesAt } from '../src/bindings/agent-status';
@@ -25,8 +25,8 @@ const todoSection = (subject: string): RuntimeClientStatusSection =>
 const user = (id: string, cursor: string, text = `Ask ${id}`): RuntimeClientTranscriptEntry =>
   ({ cursor, item: { type: 'message', message: { role: 'user', id, source: 'human', content: [{ type: 'text', text }] } } });
 const assistant = (id: string, cursor: string, text = `Answer ${id}`): RuntimeClientTranscriptEntry =>
-  ({ cursor, item: { type: 'message', message: { role: 'assistant', id, content: [{ type: 'text', text }, { type: 'tool_call', id: `call-${id}`, tool_id: 'bash', name: 'bash', arguments: {} }] } },
-    tool_calls: [{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:id},block_index:1},assembly_complete:true, message_id: id, block_index: 1, call_id: `call-${id}`, tool_id: 'bash', name: 'bash', state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'native tool output' }] } } }] });
+  ({ cursor, item: { type: 'message', message: { role: 'assistant', id, content: [{ type: 'text', text }, { type: 'tool_call', id: `call-${id}`, tool_id: 'bash', name: 'bash', arguments: { arguments: {} } }] } },
+    tool_calls: [{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:id},block_index:1},assembly_complete:true, message_id: id, block_index: 1, call_id: `call-${id}`, tool_id: 'bash', name: 'bash', state: { type: 'settled', arguments: "{\"arguments\":{}}", result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'native tool output' }] } } }] });
 /** A canonical ToolResult entry. Its standalone body is suppressed by ordinary Web
  * rendering — the native call projection already draws the result beside the call —
  * yet it keeps its authoritative transcript position. */
@@ -191,7 +191,7 @@ describe('cold attach, live folding and resync converge on one placement', () =>
   const mount = async (initial: RuntimeClientSnapshot, holdHistory = false) => {
     server = new Server(); if (holdHistory) server.held.add('session/transcript'); server.snapshots.set('A', initial);
     await server.attached('A');
-    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
     await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   };
   const transcript = () => document.querySelector('[aria-label="Canonical conversation"]') as HTMLElement;

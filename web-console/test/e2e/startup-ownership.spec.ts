@@ -11,7 +11,7 @@ for (const width of [390, 1440]) test(`initial Workspace reads are silent and pr
   const input = page.getByRole('textbox', { name: 'Message', exact: true }), card = page.locator('[data-composer-card]');
   await input.fill('Typing while configuration loads');
   await input.evaluate(element => { element.setAttribute('data-retained-editor', ''); (element as HTMLTextAreaElement).setSelectionRange(2, 8); });
-  await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Preparing to send…', exact: true })).toBeDisabled();
   await expect(page.getByText('Awaiting authoritative Workspace permissions.', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Model and thinking effort' })).toBeHidden();
   const before = await card.boundingBox();

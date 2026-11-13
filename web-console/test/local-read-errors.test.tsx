@@ -12,7 +12,7 @@ it.each(['history', 'trace'] as const)('%s pagination failure has one local erro
   server.handlers.set(kind === 'history' ? 'session/transcript' : 'session/trace', () => { throw new RpcFailure({ code: -32000, message: `${kind} read failed` }); });
   server.snapshots.set('A', value);
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
   if (kind === 'trace') await act(async () => fireEvent.click(screen.getByRole('tab', { name: 'Trajectory' })));
   server.handlers.set(kind === 'history' ? 'session/transcript' : 'session/trace', () => { throw new RpcFailure({ code: -32000, message: `${kind} read failed` }); });
@@ -27,7 +27,7 @@ it('connection and durable authority failures retain blocking recovery presentat
   value.durability_failure = { operation: 'commit', diagnostic: 'durable write failed' };
   server.snapshots.set('A', value);
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
   expect(screen.getByLabelText('Session status').textContent).toContain('Changes may not be saved');
   expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);

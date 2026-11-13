@@ -11,7 +11,7 @@ import { sessionDeletionNotice } from '../src/bindings/session-deletion';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { Server, endpoint, interaction, snapshot } from './fixture';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v77';
+import type { RuntimeClientSnapshot, RuntimeClientSessionDeletionResult } from '../../protocol/app-server/v78';
 
 let server: Server;
 beforeEach(() => {
@@ -22,7 +22,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); server.client.disconnect(); localStorage.clear(); });
 async function mount(ids = ['A', 'B']) {
   await server.attached(...ids);
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ids }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ids, route: ids[0] ? { kind: 'session', sessionId: ids[0] } : { kind: 'new-conversation' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
 }
 const row = (id: string) => document.querySelector<HTMLButtonElement>(`button[data-session-id="${id}"]`)!;
@@ -452,16 +452,18 @@ it('deletion shows the catalog title and impact, never raw identity/CAS, while s
 it('unlisted restored views cannot strand the finite view capacity', async () => {
   await server.connect();
   const missing = Array.from({ length: 32 }, (_, i) => `missing-${i}`);
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: missing }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: missing, route: { kind: 'new-conversation' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   await select('A');
-  expect(screen.getByRole('alert').textContent).toContain('32 Session views');
+  expect(screen.getByText(/^32 Session views/).closest('[role="alert"]')?.textContent).toContain('32 Session views');
   const before = methods().length;
   fireEvent.click(screen.getByRole('button', { name: 'View options' }));
   await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Close all views' })));
-  expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!).openViews).toEqual([]);
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v3')!).openViews).toEqual([]);
   expect(missing.every(id => server.client.getSnapshot().views[id].attachmentIntent === 'released')).toBe(true);
-  expect(methods().slice(before)).toEqual([]); // No controller exists to release.
+  // Resetting the automatically selected Workspace may cancel its unsent
+  // preparation; no missing Session has a native controller to detach.
+  expect(methods().slice(before).filter(method => method !== 'mcp/draftCancel')).toEqual([]);
   await select('A');
   expect(screen.getByLabelText('Session title').textContent).toBe('Session A');
   expect(methods()).not.toContain('session/unload'); expect(methods()).not.toContain('turn/interrupt');
@@ -488,7 +490,7 @@ it('reviewing a notice restores capacity at the 64-diagnostic limit without repl
     await act(async () => { server.socket.close(); await lost; await server.connect(); });
   }
   expect(server.client.getSnapshot().uncertain).toHaveLength(64);
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   await expect(server.client.request({ method: 'session/name', params: { session_id: 'A', name: 'Blocked' } }, 'session')).rejects.toThrow();
   expect(methods().filter(method => method === 'session/name')).toHaveLength(64);
@@ -700,7 +702,7 @@ const reads = (id?: string) => server.requests.filter(({ request }) => request.m
   && (!id || ('session_id' in request.params && request.params.session_id === id))).length;
 /** Freeze a held response against native state now, so releasing it later
  * cannot recompute a newer one. */
-function freeze(request: import('../../protocol/app-server/v77').Request) { server.commit(request); return request; }
+function freeze(request: import('../../protocol/app-server/v78').Request) { server.commit(request); return request; }
 /** Let every automatic follow-up the client decided to issue run to completion. */
 async function settle() { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve(); }); }
 

@@ -18,7 +18,7 @@ import { describe, it } from "node:test";
 
 import { SlashCommandAutocompleteProvider, commandPrefix } from "../src/commands/autocomplete.ts";
 import { CommandDispatcher } from "../src/commands/dispatcher.ts";
-import { renderTools } from "../src/commands/presentation.ts";
+import { renderModel, renderTools } from "../src/commands/presentation.ts";
 import { COMMANDS, parseCommandLine } from "../src/commands/registry.ts";
 import { emptyPresentationState } from "../src/presentation/projection.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
@@ -60,7 +60,7 @@ function deferred<T>(): {
 
 it("T19 bounded binary content remains exact bytes with an explicit Base64 view", async () => {
   const h = await harness();
-  const ref: import("../../protocol/app-server/v77.ts").ContentRef = {
+  const ref: import("../../protocol/app-server/v78.ts").ContentRef = {
     conversation_id: h.session.state.conversationId,
     source: { type: "canonical_message_block", component: "payload", locator:{type:"by_message_id",message_id:"binary-source"}, block_index: 0 },
     representation: "binary_bytes", version: 1, content_revision: 1, readable_end: 3,
@@ -439,16 +439,13 @@ describe("CommandDispatcher", () => {
   });
 
   it("changes the model only through model_catalog_get + model_set", async () => {
-    const summaryPolicy = {
+    const auxiliaryPolicy = {
       mode: "explicit" as const,
       model: "summary/model-s",
-      profile: "compact",
+      profile: { mode: "explicit" as const, id: "compact" },
       request_params: { summary_tag: "keep" },
       max_output_tokens: 300,
     };
-    const titlePolicy = { ...summaryPolicy, model: "title/model-t", max_output_tokens: 128 };
-    const classificationPolicy = { ...summaryPolicy, model: "classifier/model-c" };
-    const btwPolicy = { mode: "session" as const };
     const h = await harness(
       snapshot({
         model: {
@@ -458,10 +455,7 @@ describe("CommandDispatcher", () => {
             profile: "on",
             requestParams: { temperature: 0.2 },
             maxOutputTokens: 777,
-            summaryModel: summaryPolicy,
-            titleModel: titlePolicy,
-            classificationModel: classificationPolicy,
-            btwModel: btwPolicy,
+            auxiliary: auxiliaryPolicy,
           },
         },
         attempt: {
@@ -510,10 +504,7 @@ describe("CommandDispatcher", () => {
     assert.deepEqual(paramsOf(modelSet, "session/setModel").config, {
       model: "beta/model-b",
       requestParams: {},
-      summaryModel: summaryPolicy,
-      titleModel: titlePolicy,
-      classificationModel: classificationPolicy,
-      btwModel: btwPolicy,
+      auxiliary: auxiliaryPolicy,
     });
     h.transport.respond(modelSet.id, {type:"model_set",settings_revision:"1"});
     const confirmedModelRead = await nextRequest(h,"session/model");
@@ -966,7 +957,7 @@ describe("CommandDispatcher", () => {
       current.configured.profile = "previous";
       current.configured.requestParams = { temperature: 0.5 };
       current.configured.maxOutputTokens = 2048;
-      current.configured.summaryModel = {
+      current.configured.auxiliary = {
         mode: "explicit",
         model: "alpha/summary",
         request_params: { temperature: 0.2 },
@@ -978,9 +969,16 @@ describe("CommandDispatcher", () => {
       if (profile === null) delete expected.profile;
       else expected.profile = profile;
       assert.deepEqual(paramsOf(set, "session/setModel").config, expected);
-      assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, true);
-      h.transport.respond(set.id, domainReceipt('model',[{ ...current, configured: expected }]));
-      assert.equal((await command).kind, "transient");
+      assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, undefined);
+      h.transport.respond(set.id, { type: "model_set", settings_revision: "1" });
+      const readback = await nextRequest(h, "session/model");
+      h.transport.respond(readback.id, domainReceipt("model", [{ ...current, configured: expected }]));
+      const outcome = await command;
+      assert.equal(outcome.kind, "transient");
+      if (outcome.kind === "transient") {
+        assert.equal(outcome.level, "info");
+        assert.match(outcome.text, /profile/);
+      }
       assert.equal(h.transport.log.count("session/setModel"), 1);
       assert.deepEqual(
         h.session.state,
@@ -994,12 +992,12 @@ describe("CommandDispatcher", () => {
     const h = await harness();
     const choosing = h.dispatcher.selectModel(catalogModel("alpha/model-a"));
     const current = sessionModel("alpha/model-a");
-    current.configured = { model: "alpha/model-a", profile: "high", requestParams: { temperature: 0.3 }, maxOutputTokens: 777, summaryModel: { mode: "explicit", model: "alpha/summary" } };
+    current.configured = { model: "alpha/model-a", profile: "high", requestParams: { temperature: 0.3 }, maxOutputTokens: 777, auxiliary: { mode: "explicit", model: "alpha/summary" } };
     const read = await nextRequest(h, "session/model");
     h.transport.respond(read.id, domainReceipt('model',[current]));
     const set = await nextRequest(h, "session/setModel");
     assert.deepEqual(paramsOf(set, "session/setModel").config, current.configured);
-    assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, true);
+    assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, undefined);
     let acknowledged = false;
     void choosing.then(() => { acknowledged = true; });
     await Promise.resolve();
@@ -1050,6 +1048,173 @@ describe("CommandDispatcher", () => {
           result.text,
           "usage: /model profile set <id> | /model profile clear",
         );
+    }
+    assert.equal(h.transport.log.requests.length, before);
+  });
+
+  it("renders configured and effective auxiliary model facts in /model show", () => {
+    const effective = sessionModel("alpha/model-a", { profile: "low" });
+    effective.configured.auxiliary = {
+      mode: "explicit",
+      model: "alpha/summary",
+      profile: { mode: "explicit", id: "compact" },
+    };
+    effective.auxiliary = {
+      mode: "explicit",
+      effective: { ...effective.effective!, model: "alpha/summary", profile: "compact" },
+    };
+    const rendered = renderModel(emptyPresentationState(effective));
+    assert.match(rendered, /configured auxiliary model: `alpha\/summary`/);
+    assert.match(rendered, /configured auxiliary profile strategy: compact/);
+    assert.match(rendered, /effective auxiliary model: `alpha\/summary`/);
+    assert.match(rendered, /effective auxiliary profile: compact/);
+  });
+
+  it("auxiliary follow resets session mode and lowest profile through model_set", async () => {
+    const h = await harness();
+    const command = h.dispatcher.submit("/model auxiliary follow");
+    const read = await nextRequest(h, "session/model");
+    const current = sessionModel("alpha/model-a");
+    current.configured.auxiliary = {
+      mode: "explicit",
+      model: "alpha/summary",
+      profile: { mode: "explicit", id: "compact" },
+    };
+    h.transport.respond(read.id, domainReceipt("model", [current]));
+    const set = await nextRequest(h, "session/setModel");
+    assert.deepEqual(paramsOf(set, "session/setModel").config.auxiliary, {
+      mode: "session",
+      profile: { mode: "lowest" },
+    });
+    h.transport.respond(set.id, { type: "model_set", settings_revision: "1" });
+    const confirmed = await nextRequest(h, "session/model");
+    h.transport.respond(
+      confirmed.id,
+      domainReceipt("model", [
+        {
+          ...current,
+          configured: {
+            ...current.configured,
+            auxiliary: { mode: "session", profile: { mode: "lowest" } },
+          },
+        },
+      ]),
+    );
+    const outcome = await command;
+    assert.equal(outcome.kind, "transient");
+    if (outcome.kind === "transient") {
+      assert.match(outcome.text, /follows session primary model/);
+      assert.match(outcome.text, /profile strategy lowest/);
+    }
+  });
+
+  for (const model of ["alpha/summary", `alpha/${"a".repeat(257)}`]) {
+    it(`auxiliary set carries profile and overrides onto ${model}`, async () => {
+      const h = await harness();
+      const command = h.dispatcher.submit(`/model auxiliary set ${model}`);
+      // Native ID verification only — no first-page catalog membership probe.
+      const read = await nextRequest(h, "session/model");
+      const current = sessionModel("alpha/model-a");
+      current.configured.auxiliary = {
+        mode: "session",
+        profile: { mode: "lowest" },
+        request_params: { summary_tag: "keep" },
+        max_output_tokens: 256,
+      };
+      h.transport.respond(read.id, domainReceipt("model", [current]));
+      const set = await nextRequest(h, "session/setModel");
+      assert.deepEqual(paramsOf(set, "session/setModel").config.auxiliary, {
+        mode: "explicit",
+        model,
+        profile: { mode: "lowest" },
+        request_params: { summary_tag: "keep" },
+        max_output_tokens: 256,
+      });
+      assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, undefined);
+      h.transport.respond(set.id, { type: "model_set", settings_revision: "1" });
+      const confirmed = await nextRequest(h, "session/model");
+      h.transport.respond(
+        confirmed.id,
+        domainReceipt("model", [
+          {
+            ...current,
+            configured: {
+              ...current.configured,
+              auxiliary: {
+                mode: "explicit",
+                model,
+                profile: { mode: "lowest" },
+                request_params: { summary_tag: "keep" },
+                max_output_tokens: 256,
+              },
+            },
+          },
+        ]),
+      );
+      const outcome = await command;
+      assert.equal(outcome.kind, "transient");
+      if (outcome.kind === "transient") assert.ok(outcome.text.includes(model));
+      assert.equal(h.transport.log.count("session/models"), 0);
+    });
+  }
+
+  it("auxiliary set rejects a malformed or empty native model identity without catalog reads", async () => {
+    const h = await harness();
+    for (const [command, pattern] of [
+      ["/model auxiliary set", /usage: \/model auxiliary/],
+      ["/model auxiliary set leading/", /not a valid native model identity/],
+      ["/model auxiliary set \/trailing", /not a valid native model identity/],
+    ] as const) {
+      const outcome = await h.dispatcher.submit(command);
+      assert.equal(outcome.kind, "transient");
+      if (outcome.kind === "transient") {
+        assert.equal(outcome.level, "error");
+        assert.match(outcome.text, pattern);
+      }
+      assert.equal(h.transport.log.count("session/models"), 0);
+      assert.equal(h.transport.log.count("session/setModel"), 0);
+    }
+  });
+
+  for (const [command, expectedProfile] of [
+    ["/model auxiliary profile lowest", { mode: "lowest" }],
+    ["/model auxiliary profile model_default", { mode: "model_default" }],
+    ["/model auxiliary profile clear", { mode: "model_default" }],
+    ["/model auxiliary profile set compact", { mode: "explicit", id: "compact" }],
+  ] as const) {
+    it(`auxiliary profile grammar commits ${expectedProfile.mode} through model_set`, async () => {
+      const h = await harness();
+      const changing = h.dispatcher.submit(command);
+      const read = await nextRequest(h, "session/model");
+      const current = sessionModel("alpha/model-a");
+      current.configured.auxiliary = { mode: "explicit", model: "alpha/summary" };
+      h.transport.respond(read.id, domainReceipt("model", [current]));
+      const set = await nextRequest(h, "session/setModel");
+      assert.deepEqual(paramsOf(set, "session/setModel").config.auxiliary, {
+        mode: "explicit",
+        model: "alpha/summary",
+        profile: expectedProfile,
+      });
+      assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, undefined);
+      h.transport.respond(set.id, { type: "model_set", settings_revision: "1" });
+      const readback = await nextRequest(h, "session/model");
+      h.transport.respond(readback.id, domainReceipt("model", [{ ...current, configured: { ...current.configured, auxiliary: { mode: "explicit", model: "alpha/summary", profile: expectedProfile } } }]));
+      const outcome = await changing;
+      assert.equal(outcome.kind, "transient");
+      if (outcome.kind === "transient") {
+        assert.equal(outcome.level, "info");
+        assert.match(outcome.text, /Session auxiliary profile strategy/);
+      }
+    });
+  }
+
+  it("rejects obsolete auxiliary syntax without a native operation", async () => {
+    const h = await harness();
+    const before = h.transport.log.requests.length;
+    for (const text of ["/model auxiliary", "/model auxiliary set", "/model auxiliary profile", "/model auxiliary profile set"]) {
+      const result = await h.dispatcher.submit(text);
+      assert.equal(result.kind, "transient");
+      if (result.kind === "transient") assert.match(result.text, /usage: \/model auxiliary/);
     }
     assert.equal(h.transport.log.requests.length, before);
   });

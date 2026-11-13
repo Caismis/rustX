@@ -3,6 +3,19 @@ import { test, expect, type Page } from '@playwright/test';
 import { expectStableScreenshot } from './screenshot';
 import { openWorkspaceSettings } from './shell-actions';
 
+// Classification and Workspace configuration settle independently of the
+// conversation. References own the authorized Plan state, with no model
+// configured by this fixture, rather than an incidental loading paint.
+async function expectReadyShellControls(page: Page) {
+  const permission = page.getByRole('button', { name: 'Workspace permissions', exact: true });
+  await expect(permission).toHaveText('Plan');
+  await expect(permission).toBeEnabled();
+  const model = page.locator('[data-model-select]');
+  await expect(model).toHaveText('Choose model');
+  await expect(model).toBeEnabled();
+  await expect(model).toHaveAttribute('aria-busy', 'false');
+}
+
 for (const width of [390, 1440]) test(`later accepted input stays visible through attempt updates (${width}px)`, async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -50,6 +63,7 @@ async function openClassifiedShell(page: Page, initial?: 'other-uncertain') {
   await expect(tree).not.toContainText('Workspace not yet classified');
   await expect(tree).not.toContainText('Refreshing Workspace associations');
   await expect(page.getByRole('button', { name: 'Workspace permissions', exact: true })).toBeVisible();
+  await expectReadyShellControls(page);
 }
 
 test('narrow sidebar overlays the conversation without squeezing its composer', async ({ page }) => {
@@ -146,6 +160,7 @@ for (const mode of ['empty', 'preview', 'named', 'delete', 'other-uncertain', 'b
   if (mode === 'other-uncertain') await openClassifiedShell(page, mode);
   else await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
   await expect(page.getByLabel('Session title')).toHaveText('Session A');
+  await expectReadyShellControls(page);
   if (mode !== 'background' && mode !== 'other-uncertain') await page.evaluate(mode => window.sessionFixture.presentation(mode), mode);
   await expect(page.getByRole('tree', { name: 'Session browser' })).toHaveCount(1);
   await expect(page.getByRole('tablist')).toHaveCount(1);
@@ -233,6 +248,9 @@ test('Session product states stay concise without developer diagnostics', async 
     await page.goto(`${fixtureOrigin}/test/fixtures/shell.html`);
     await expect(page.getByLabel('Session status')).toHaveCount(0);
     await expect(page.getByRole('status').filter({ hasText: 'Deep diving' }).first()).toBeVisible();
+    // Establish configuration before modes that deliberately disconnect the
+    // Session; those captures must retain an observed label, not a loading one.
+    await expectReadyShellControls(page);
     await page.evaluate(mode => window.sessionFixture.state(mode), mode);
     // Queue acceptance and cancellation intent do not change Native execution status.
     const expected = { idle: undefined, queued: undefined, stopping: undefined, reconnect: undefined, uncertain: 'Needs verification' }[mode];
@@ -478,7 +496,7 @@ for (const departure of ['drawer', 'User Settings', 'Workspace Settings'] as con
   await page.evaluate(() => window.sessionFixture.settleInput());
 });
 
-const nativeMutations = (requests: import('../../../protocol/app-server/v77').Request[]) => requests.filter(request => [
+const nativeMutations = (requests: import('../../../protocol/app-server/v78').Request[]) => requests.filter(request => [
   'thread/start', 'thread/resume', 'thread/fork', 'thread/archive', 'thread/unarchive', 'thread/name/set',
   'session/detach', 'session/switchNode', 'session/unload',
   'turn/start', 'turn/steer', 'turn/interrupt', 'inbound/queue', 'inbound/edit', 'inbound/remove',

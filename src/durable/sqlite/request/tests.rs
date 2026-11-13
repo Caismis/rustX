@@ -1575,6 +1575,7 @@ fn request_snapshot_history_is_bounded_and_cursor_paged() {
 
     for index in 0..7_u64 {
         let mut snapshot = RequestSnapshot::new(
+            crate::runtime::types::ApprovalMode::FullAccess,
             RequestIdentity {
                 attempt_id: AttemptId::new(format!("request-page-attempt-{index}")),
                 turn: TurnId::new("1"),
@@ -1793,6 +1794,7 @@ fn corrupt_frozen_request_revision_metadata_fails_closed() {
         .initialize(std::slice::from_ref(&message))
         .unwrap();
     let mut snapshot = RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: AttemptId::new("request-corruption-attempt"),
             turn: TurnId::new("1"),
@@ -1970,6 +1972,7 @@ fn missing_frozen_original_ledger_dependency_fails_closed() {
         .initialize(std::slice::from_ref(&missing_message))
         .unwrap();
     let mut missing_snapshot = RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: AttemptId::new("missing-message-attempt"),
             turn: TurnId::new("1"),

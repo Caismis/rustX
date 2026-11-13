@@ -472,7 +472,7 @@ fn stateless_state() -> ProviderContinuationState {
                 "id": "rs_1",
                 "encrypted_content": "opaque"
             }),
-            serde_json::json!({"type":"function_call", "id":"fc_1", "call_id":"call-1", "name":"alpha", "arguments":"{}"}),
+            serde_json::json!({"type":"function_call", "id":"fc_1", "call_id":"call-1", "name":"alpha", "arguments":"{\"arguments\":{}}"}),
         ],
     })
 }
@@ -1303,7 +1303,9 @@ async fn cancellation_after_preparation_compaction_keeps_it_and_discards_staged_
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
-    let runtime = runtime_with_assembly(250, 0, 5, weighted(100, 10, 0), summarizer, assembly);
+    // Sparse Full Access reminder (~51 tokens) must fit the scripted occupancy
+    // that previously assumed an empty system prompt at the prep-compaction gate.
+    let runtime = runtime_with_assembly(310, 0, 5, weighted(100, 10, 0), summarizer, assembly);
     let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
@@ -2273,7 +2275,9 @@ async fn expired_proactive_compaction_budget_preserves_later_overflow() {
             capability.into_lease(),
             &cancellation,
             policy,
-            runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer.clone()),
+            // Sparse Full Access reminder (~51 tokens) must fit the scripted
+            // occupancy that previously assumed an empty system prompt.
+            runtime_with(310, 0, 0, weighted(100, 10, 0), summarizer.clone()),
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
         )
@@ -2614,7 +2618,7 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
             capability.into_lease(),
             &cancellation,
             crate::scripted_suites::support::default_execution_policy(),
-            runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer),
+            runtime_with(310, 0, 0, weighted(100, 10, 0), summarizer),
             &tool_runtime,
             rustx::agent::AttemptLifecycle::inert(),
         )

@@ -163,8 +163,6 @@ async fn headless_tool_cycle_with_zero_attachments() {
         description: "echoes the call arguments".to_owned(),
         input_schema: serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: crate::tools::types::ToolConcurrencyPolicy::default(),
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };
@@ -198,7 +196,9 @@ async fn headless_tool_cycle_with_zero_attachments() {
                     id: ToolCallId::new(call_id),
                     tool_id: definition.id.clone(),
                     name: definition.name.clone(),
-                    arguments: serde_json::json!({"text": "hi"}),
+                    arguments: crate::scripted_suites::common::tool_call_envelope(
+                        serde_json::json!({"text": "hi"}),
+                    ),
                 },
             }),
             FakeStep::Emit(ModelEvent::Completed {
@@ -298,9 +298,36 @@ async fn headless_tool_cycle_with_zero_attachments() {
         "tool continuation retains the attempt capability revision"
     );
     assert_eq!(snapshots[0].tool_definitions, snapshots[1].tool_definitions);
+    // Sparse §10 permission reminders appear only on the first successful
+    // request-start of an attempt (and again after compaction). Strip them so
+    // the tool-continuation request is compared on the frozen native prompt.
+    let without_permission_reminder = |prompt: &str| -> String {
+        const MARKER: &str = "Execution permission mode:";
+        if let Some(index) = prompt.find("\n\nExecution permission mode:") {
+            prompt[..index].to_owned()
+        } else if let Some(index) = prompt.find(&format!("\n{MARKER}")) {
+            prompt[..index].to_owned()
+        } else if prompt.starts_with(MARKER) {
+            String::new()
+        } else {
+            prompt.to_owned()
+        }
+    };
     assert_eq!(
-        snapshots[0].effective_system_prompt,
-        snapshots[1].effective_system_prompt
+        without_permission_reminder(&snapshots[0].effective_system_prompt),
+        without_permission_reminder(&snapshots[1].effective_system_prompt)
+    );
+    assert!(
+        snapshots[0]
+            .effective_system_prompt
+            .contains("Execution permission mode: full_access."),
+        "inert Full Access admits a first-request sparse reminder"
+    );
+    assert!(
+        !snapshots[1]
+            .effective_system_prompt
+            .contains("Execution permission mode:"),
+        "tool continuation does not re-emit the sparse reminder"
     );
     // The coordinator owns the one authoritative ConversationState
     // again: the runtime keeps no second derived read model to reset.
@@ -543,8 +570,6 @@ async fn automatic_compaction_keeps_attempt_pinned_resources_after_external_edit
             description: description.to_owned(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::default(),
-            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         };
@@ -758,7 +783,7 @@ async fn admitted_attempt_executes_under_the_frozen_tool_deadline_policy() {
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter),
-        approval_mode: ApprovalMode::Policy,
+        approval_mode: ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
             std::time::Duration::from_secs(10),

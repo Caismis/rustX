@@ -176,11 +176,11 @@ use crate::tools::types::ToolInvocationPolicy;
 
 pub(crate) use connect::OwnedConnect;
 pub(crate) use connection::McpConnection;
-pub(crate) use executor::definitions_owned_for_source;
 pub use executor::{
     CanonicalMcpTool, McpToolExecutor, definitions, mcp_tool_id, source_server_id,
     source_tool_identity,
 };
+pub(crate) use executor::{definitions_owned_for_source, with_binding_permissions};
 pub(crate) use generation::{
     McpRuntimeBinding, McpRuntimeGeneration, McpRuntimeLeaseAuthority, McpRuntimeLeaseSet,
     McpRuntimeRetirementRegistry,
@@ -193,7 +193,9 @@ pub(crate) use mrtr::MCP_MRTR_MAX_ROUNDS;
 pub(crate) use resources::McpResourceOperation;
 #[cfg(all(test, feature = "mcp-fixture"))]
 pub(crate) use resources::translate_fixture_resource;
-pub(crate) use resources_executor::{McpResourceBinding, is_resource_tool, resource_definitions};
+pub(crate) use resources_executor::{
+    McpResourceBinding, RESOURCE_TOOL_NAMES, is_resource_tool, resource_definitions,
+};
 pub use runtime::{McpDiscoveryOutcome, McpNegotiatedCapabilities, McpServerRuntime};
 
 /// The MCP protocol revisions rustX offers, most preferred first.
@@ -351,6 +353,13 @@ pub struct McpServerBinding {
     pub transport: McpTransportConfig,
     /// One origin-independent policy for all tools from this server.
     pub policy: ToolInvocationPolicy,
+    /// Source-default three-mode permission object (Issue #544).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+    /// Exact-tool permission exceptions keyed by remote tool name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_permissions:
+        std::collections::BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
 }
 
 impl McpServerBinding {
@@ -407,6 +416,8 @@ impl std::fmt::Debug for McpServerBinding {
             .field("credentials", &self.credentials)
             .field("transport", &self.transport)
             .field("policy", &self.policy)
+            .field("permissions", &self.permissions)
+            .field("tool_permissions", &self.tool_permissions)
             .finish()
     }
 }

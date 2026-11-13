@@ -168,6 +168,7 @@ pub(super) fn test_request_snapshot(
     invocation: ModelInvocationConfig,
 ) -> RequestSnapshot {
     RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: AttemptId::new("attempt-1"),
             turn: TurnId::new("1"),
@@ -203,6 +204,7 @@ pub(super) fn progress_request_snapshot(
     request_context_ids: Vec<MessageId>,
 ) -> RequestSnapshot {
     RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: AttemptId::new(attempt_id),
             turn: TurnId::new(turn),

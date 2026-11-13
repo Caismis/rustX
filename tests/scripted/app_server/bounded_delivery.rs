@@ -29,7 +29,7 @@ async fn granted_connection(
             .await
         });
         let offered = format!(
-            "rustx.app-server.v77, {}",
+            "rustx.app-server.v78, {}",
             driver::credential_offer(driver::TOKEN)
         );
         (driver::websocket_offering(&url, &offered).await, server)
@@ -81,7 +81,7 @@ async fn t08_t11_t12_t14_t19_numeric_delivery_carrier_keeps_real_stdio_and_webso
             store.append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
                 id: proposal.clone(),
                 content: vec![AssistantContentBlock::ToolCall(crate::tools::ToolCall {
-                    id: call_id.clone(), tool_id: tool_id.clone(), name: "present".into(), arguments: serde_json::json!({"files":[{"path":file.path}]}),
+                    id: call_id.clone(), tool_id: tool_id.clone(), name: "present".into(), arguments: crate::scripted_suites::common::tool_call_envelope(serde_json::json!({"files":[{"path":file.path}]})),
                 })],
             })).unwrap();
             let original_id = MessageId::new("original-delivery🙂水".repeat(100));

@@ -29,7 +29,7 @@
 //! - client attach/detach is projection ownership only: compactions commit
 //!   while no client is attached, canonical reads answer while detached, and
 //!   a fresh attachment replays the continuous history;
-//! - under `summaryModel.mode = "session"`, a `model_set` linearized while
+//! - under `auxiliary.mode = "session"`, a `model_set` linearized while
 //!   an attempt is parked mid-turn cannot change that attempt's summary
 //!   model (the session-mode complement of Issue #42's explicit-mode freeze
 //!   test).
@@ -461,10 +461,9 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     let session_model = SessionModelState::new(
         registry,
         SessionModelConfig {
-            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: AuxiliaryModelPolicy::Explicit {
+            auxiliary: AuxiliaryModelPolicy::Explicit {
                 model: ModelRef::parse("fixture/summary-model").expect("valid reference"),
-                profile: None,
+                profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                 request_params: RequestParams::new(),
                 max_output_tokens: None,
             },
@@ -699,10 +698,9 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     assert_eq!(
         view.configured,
         SessionModelConfig {
-            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: AuxiliaryModelPolicy::Explicit {
+            auxiliary: AuxiliaryModelPolicy::Explicit {
                 model: ModelRef::parse("fixture/summary-model").expect("valid reference"),
-                profile: None,
+                profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                 request_params: RequestParams::new(),
                 max_output_tokens: None,
             },
@@ -1259,7 +1257,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
 // Session-mode summary race
 // ---------------------------------------------------------------------------
 
-/// **`summaryModel.mode = "session"` freezes the attempt's summary model.**
+/// **`auxiliary.mode = "session"` freezes the attempt's summary model.**
 ///
 /// Issue #42 proved the explicit-mode freeze; this is the session-mode
 /// complement. An attempt admitted with model A parks mid-stream; a valid

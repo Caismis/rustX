@@ -1,5 +1,5 @@
 import { useId, useRef, useState } from 'react';
-import type { ResourceTransfer, SourceScope, TransferOperation } from '../../../../../protocol/app-server/v77';
+import type { ResourceTransfer, SourceScope, TransferOperation } from '../../../../../protocol/app-server/v78';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Modal } from '../../../presentation/primitives/Modal';

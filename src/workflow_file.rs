@@ -29,6 +29,8 @@ impl<'de> Deserialize<'de> for WorkflowFileDocument {
             description: String,
             #[serde(default = "default_timeout")]
             timeout_ms: u64,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
             block: WorkflowBlock,
             #[serde(default)]
             editor: Option<WorkflowEditorMetadata>,
@@ -41,6 +43,7 @@ impl<'de> Deserialize<'de> for WorkflowFileDocument {
             definition: WorkflowDefinition {
                 description: file.description,
                 timeout_ms: file.timeout_ms,
+                permissions: file.permissions,
                 block: file.block,
             },
             editor: file.editor,

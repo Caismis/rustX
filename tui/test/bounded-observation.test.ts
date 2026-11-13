@@ -5,7 +5,7 @@ import { ObservationChain } from '../../protocol/app-server/observation.ts';
 import { ChildObservation } from '../../protocol/app-server/child-observation.ts';
 import { ContentCache } from '../../protocol/app-server/content-cache.ts';
 import { readEditor } from '../../protocol/app-server/editor.ts';
-import type { ContentRef, ContentChunk, EditorLocator, EditorPage, AgentObservation } from '../../protocol/app-server/v77.ts';
+import type { ContentRef, ContentChunk, EditorLocator, EditorPage, AgentObservation } from '../../protocol/app-server/v78.ts';
 import { JsonlDecoder, encodeRecord } from '../src/protocol/jsonl.ts';
 import { checkpoint, snapshot } from './support/fixtures.ts';
 
@@ -152,7 +152,7 @@ it('T08/T19 deferred Native Tool result reads retain exact source bytes and fenc
  const {foreground,attemptView,toolResult}=await import('./support/fixtures.ts');
  const bytes=Buffer.from('{"raw":{"number":9007199254740993},"text":"🙂水"}');
  const ref={sequence:17,path:['event','result'],encoded_bytes:bytes.length};
- const h=await harness(snapshot({attempt:attemptView({foreground:[{...foreground('call','tool','native Tool',{type:'settled',result:toolResult(),arguments:'{}'}),result_source:ref}]})}));
+ const h=await harness(snapshot({attempt:attemptView({foreground:[{...foreground('call','tool','native Tool',{type:'settled',result:toolResult(),arguments:"{\"arguments\":{}}"}),result_source:ref}]})}));
  const first=h.session.readJournalField(ref,0);const read=await nextRequest(h,'conversation/checkpointValueRead');
  assert.deepEqual(read.params,{target:h.target,agent_id:null,cut:h.session.checkpoint!.read_cut,domain:'journal.17',item_offset:0,path:ref.path,offset:0,max_bytes:65536});
  const split=bytes.length-5;
@@ -170,7 +170,7 @@ it('T08 T19 canonical Tool result metadata retains exact original JSON bytes thr
  const {attemptView,foreground,toolResult}=await import('./support/fixtures.ts');
  const original=Buffer.from('{"result":{"large":9007199254740993,"text":"🙂水"},"arguments":"{ \\"raw\\": 1 }"}');
  const source:ContentRef={...reference(original.length),source:{type:'canonical_message_block',component:'block_metadata',locator:{type:'by_ledger_position',position:7},block_index:0},representation:'canonical_json_v1'};
- const initial=snapshot({attempt:attemptView({foreground:[{...foreground('call','tool','native Tool',{type:'settled',result:toolResult(),arguments:'{}'}),result_metadata_ref:source,committed_result_deferred:true}]})});
+ const initial=snapshot({attempt:attemptView({foreground:[{...foreground('call','tool','native Tool',{type:'settled',result:toolResult(),arguments:"{\"arguments\":{}}"}),result_metadata_ref:source,committed_result_deferred:true}]})});
  const h=await harness(initial);
  const cut=checkpoint(initial,'1');
  cut.content=[{path:['attempt','foreground','0','state','result'],source_path:['result'],content_ref:source,deferred:true}];
@@ -283,11 +283,11 @@ it('T14 T18 Child native event metadata must retain exact activation before Appl
 
 it('T14 native C and J refine every loaded Tool cache by occurrence without aliasing reused provider IDs',async()=>{
  const {foldRuntimeEvent}=await import('../../protocol/app-server/projection.ts');
- const make=(position:number,message:string)=>({committed_result_deferred:false,occurrence:{locator:{type:'by_ledger_position' as const,position},block_index:0},message_id:message,block_index:0,call_id:'reused-provider-id',tool_id:'tool',name:'native Tool',assembly_complete:true,state:{type:'assembled' as const,arguments:'{"original":true}'}});
+ const make=(position:number,message:string)=>({committed_result_deferred:false,occurrence:{locator:{type:'by_ledger_position' as const,position},block_index:0},message_id:message,block_index:0,call_id:'reused-provider-id',tool_id:'tool',name:'native Tool',assembly_complete:true,state:{type:'assembled' as const,arguments:'{"arguments":{"original":true}}'}});
  const old=make(7,'old'),current=make(8,'current');
  let native=snapshot({attempt:{attempt_id:'current-attempt',phase:{type:'running'},turn:0,foreground:[current]},
    message_descriptors:[old,current].map(tool=>({identity:tool.message_id,locator:tool.occurrence.locator,role:'assistant',kind:'assistant',block_count:'1',tool_call_count:'1',tool_calls:[tool],content:[],collections:[]})),
-   transcript:{entries:[old,current].map((tool,index)=>({cursor:String(index+1),tool_calls:[tool],item:{type:'message' as const,message:{role:'assistant' as const,id:tool.message_id,content:[{type:'tool_call' as const,id:tool.call_id,tool_id:tool.tool_id,name:tool.name,arguments:{original:true}}]}}}))},
+   transcript:{entries:[old,current].map((tool,index)=>({cursor:String(index+1),tool_calls:[tool],item:{type:'message' as const,message:{role:'assistant' as const,id:tool.message_id,content:[{type:'tool_call' as const,id:tool.call_id,tool_id:tool.tool_id,name:tool.name,arguments:{ arguments: {original:true} }}]}}}))},
  });
  const result={status:{type:'success' as const},duration_ms:'1',content:[]};
  native=foldRuntimeEvent(native,{result_deferred:false,type:'tool_result_committed',attempt_id:'old-attempt',occurrence:old.occurrence,result});

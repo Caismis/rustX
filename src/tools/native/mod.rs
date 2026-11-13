@@ -2,16 +2,18 @@
 //! normal [`ToolDefinition`] + [`ToolExecutor`] registrations.
 //!
 //! Read, Write, Edit, Glob, Grep, and Bash are all ordinary registrations;
-//! their executor implementations and their execution-ownership and approval
-//! policies are independent, so each tool is configured with its own
+//! their executor implementations and foreground/background ownership are
+//! independent. Each ordinary tool is configured with its own
 //! [`ToolInvocationPolicy`] (`ForegroundOnly`, `BackgroundOnly`, or
-//! `ModelSelectable` execution, `Sequential`/`Parallel` concurrency, and
-//! `Never`/`Always` approval through the concrete bounded
-//! [`NativeToolPolicies`] configuration. The only intentionally fixed
-//! policies belong to Job/Agent controls (foreground-only,
-//! sequential, approval-never), and `ask_user` is likewise fixed to
-//! foreground-only, sequential, approval-never because it is the native
-//! Questionnaire capability itself.
+//! `ModelSelectable`) through the concrete bounded [`NativeToolPolicies`]
+//! table. Permission (whether an eligible invocation may start) is decided by
+//! Issue #544's closed modes and resource overrides, not by a per-tool
+//! never/always authoring axis. Tool-level Sequential/Parallel authoring is
+//! removed; independent authorized calls may start concurrently.
+//!
+//! The only intentionally fixed ownership policies belong to Job/Agent
+//! controls (foreground-only) and `ask_user` (foreground-only, because it is
+//! the native Questionnaire capability itself).
 //!
 //! # `todo` is not here
 //!
@@ -22,10 +24,8 @@
 //! must explicitly enable it. Root and named Plugins default off. The Tool's
 //! implementation lives here, while composition belongs to the Plugin owner.
 //!
-//! Read/Glob/Grep default to foreground, parallel, approval-never.
-//! Write/Edit default to foreground, sequential, approval-always.
-//! Bash defaults to model-selectable, sequential, approval-always.
-//! Missing override axes retain each Tool's product default.
+//! Read/Write/Edit/Glob/Grep default to foreground-only ownership.
+//! Bash defaults to model-selectable foreground|background via `execution_mode`.
 //!
 //! # Module ownership
 //!
@@ -48,7 +48,7 @@
 //! [`ToolDefinition`]: crate::tools::types::ToolDefinition
 //! [`ToolExecutor`]: crate::tools::executor::ToolExecutor
 
-mod agents;
+pub(crate) mod agents;
 mod ask_user;
 mod bash;
 mod edit;
@@ -63,6 +63,7 @@ pub(crate) use goal::NAMES as GOAL_TOOL_NAMES;
 pub(crate) use goal::registrations as goal_tool_registrations;
 mod grep;
 mod input;
+mod mutation;
 mod present;
 mod read;
 mod read_image;
@@ -73,7 +74,7 @@ pub(crate) use registration::input_schema;
 // because Glob and Grep must observe one filesystem universe.
 mod search;
 pub(crate) mod subagent;
-mod support;
+pub(crate) mod support;
 mod todo;
 mod workflow;
 #[cfg(test)]
@@ -133,6 +134,26 @@ pub(crate) fn is_domain_control(name: &str) -> bool {
 ///
 /// Child runtimes never reach this function: their plane is
 /// [`register_subagent_child_tools`], which has no Agent controls at all.
+pub(super) fn freeze_named_agent_permissions(
+    registration: NativeToolRegistration,
+    catalog: &crate::runtime::subagent::AgentCatalog,
+) -> NativeToolRegistration {
+    let mut targets = std::collections::BTreeMap::new();
+    for definition in catalog.definitions() {
+        if let Some(set) = definition.profile().permissions {
+            targets.insert(definition.name().to_string(), set);
+        }
+    }
+    // Always keep per-agent target identity. A single authored override must
+    // never become whole-tool `resource_permissions`: other admitted agents
+    // that omit permissions still inherit product defaults, not that override.
+    if targets.is_empty() {
+        registration
+    } else {
+        registration.with_resource_permission_targets(targets)
+    }
+}
+
 fn agent_control_registrations(
     subagents: Option<&crate::runtime::subagent::SubagentRegistry>,
     catalog: &crate::runtime::subagent::AgentCatalog,
@@ -145,7 +166,7 @@ fn agent_control_registrations(
             "the Root admits named Agents, but the subagent registry is unavailable".into(),
         )
     })?;
-    let mut registrations = agents::registrations(subagents);
+    let mut registrations = agents::registrations(subagents, catalog);
     registrations.push(subagent::registration(subagents.clone(), catalog));
     Ok(registrations)
 }
@@ -271,12 +292,12 @@ pub struct NativeToolResources {
 /// configurable native tools. `ask_user`, domain controls, and `todo` own
 /// fixed policies and are not configurable through this table.
 ///
-/// Execution policy belongs to the registered tool definition, not to the
+/// Execution ownership belongs to the registered tool definition, not to the
 /// native tool plane as a whole: each ordinary native tool independently
-/// selects its execution and concurrency policy. This deliberately models
-/// only the six known M5 tools — no generic policy maps, plugin
-/// configuration frameworks, strategy traits, factories, or global
-/// configuration registries.
+/// selects its foreground/background policy. Permission is owned by the
+/// Issue #544 mode matrix. This deliberately models only the six known M5
+/// tools — no generic policy maps, plugin configuration frameworks, strategy
+/// traits, factories, or global configuration registries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeToolPolicies {
     /// The policy of the native Read tool.
@@ -295,20 +316,14 @@ pub struct NativeToolPolicies {
 
 impl Default for NativeToolPolicies {
     fn default() -> Self {
-        use crate::tools::types::{
-            ToolApprovalPolicy::{Always, Never},
-            ToolConcurrencyPolicy::{Parallel, Sequential},
-            ToolExecutionPolicy::{ForegroundOnly, ModelSelectable},
-        };
-        // Read/search executors own their buffers, decoders, matchers and
-        // collectors per invocation; no shared mutation requires a barrier.
+        use crate::tools::types::ToolExecutionPolicy::{ForegroundOnly, ModelSelectable};
         Self {
-            read: ToolInvocationPolicy::new(ForegroundOnly, Parallel, Never),
-            write: ToolInvocationPolicy::new(ForegroundOnly, Sequential, Always),
-            edit: ToolInvocationPolicy::new(ForegroundOnly, Sequential, Always),
-            glob: ToolInvocationPolicy::new(ForegroundOnly, Parallel, Never),
-            grep: ToolInvocationPolicy::new(ForegroundOnly, Parallel, Never),
-            bash: ToolInvocationPolicy::new(ModelSelectable, Sequential, Always),
+            read: ToolInvocationPolicy::new(ForegroundOnly),
+            write: ToolInvocationPolicy::new(ForegroundOnly),
+            edit: ToolInvocationPolicy::new(ForegroundOnly),
+            glob: ToolInvocationPolicy::new(ForegroundOnly),
+            grep: ToolInvocationPolicy::new(ForegroundOnly),
+            bash: ToolInvocationPolicy::new(ModelSelectable),
         }
     }
 }
@@ -336,8 +351,8 @@ impl NativeToolPolicies {
 /// `policies.edit`, `glob` from `policies.glob`, `grep` from
 /// `policies.grep`, and `bash` from `policies.bash`. Job/Agent controls
 /// are intentionally outside this configurable set and stay fixed to
-/// foreground-only sequential execution, which the registry
-/// enforces regardless of the configured policies.
+/// foreground-only ownership, which the registry enforces regardless of the
+/// configured policies.
 ///
 /// # Errors
 ///
@@ -353,13 +368,7 @@ pub fn register_native_tools(
     // tool-owned registration, and this list is the only place that knows
     // which native capabilities exist.
     for registration in native_tool_registrations(resources, policies)? {
-        let NativeToolRegistration {
-            definition,
-            executor,
-            normalizer,
-            foreground,
-        } = registration;
-        registry.register_with_execution_metadata(definition, executor, normalizer, foreground)?;
+        registry.register_registration(registration.into_tool_registration())?;
     }
     Ok(())
 }
@@ -394,13 +403,7 @@ fn register_workflow_registrations(
     registrations: Vec<NativeToolRegistration>,
 ) -> Result<(), ToolRegistryError> {
     for registration in registrations {
-        let NativeToolRegistration {
-            definition,
-            executor,
-            normalizer,
-            foreground,
-        } = registration;
-        registry.register_with_execution_metadata(definition, executor, normalizer, foreground)?;
+        registry.register_registration(registration.into_tool_registration())?;
     }
     Ok(())
 }
@@ -501,6 +504,7 @@ pub(crate) fn todo_tool_registration() -> crate::tools::executor::ToolRegistrati
         // what `ToolRegistration::plain` composes. Asserting it here keeps a
         // later policy change from silently crossing this seam.
         foreground: crate::tools::deadline::ForegroundPolicy::Leaf,
+        ..
     } = todo::registration()
     else {
         unreachable!("the todo Tool registration is a foreground leaf")
@@ -548,12 +552,11 @@ pub(crate) fn subagent_child_definition(
 /// `frozen` is the sequence of exact [`ToolDefinition`]s the invoking
 /// generation admitted and the parent resolution froze. Each one is
 /// registered **verbatim**: its identity, description, input schema, replay
-/// policy, origin, and all three invocation-policy axes are the ones the
-/// parent authorized, never a locally rebuilt default. A generation that
-/// admits `grep` as model-selectable, parallel, and approval-required must
-/// give the child that `grep` — quietly substituting a foreground-only,
-/// sequential, approval-never `grep` would hand the child different
-/// semantics under the same name.
+/// policy, origin, and execution-ownership axis are the ones the parent
+/// authorized, never a locally rebuilt default. A generation that admits
+/// `grep` as model-selectable must give the child that `grep` — quietly
+/// substituting a foreground-only `grep` would hand the child different
+/// ownership semantics under the same name.
 ///
 /// Materialization is therefore checked, not assumed: the child plane
 /// reconstructs the native implementation for the frozen name under the
@@ -584,11 +587,7 @@ pub fn register_subagent_child_tools(
     frozen: &[crate::tools::types::ToolDefinition],
 ) -> Result<(), ToolRegistryError> {
     for definition in frozen {
-        let policy = ToolInvocationPolicy::new(
-            definition.execution_policy,
-            definition.concurrency_policy,
-            definition.approval_policy,
-        );
+        let policy = ToolInvocationPolicy::new(definition.execution_policy);
         let Some(registration) = subagent_child_registration(&definition.name, policy) else {
             return Err(ToolRegistryError::InvalidIdentity(format!(
                 "the subagent child plane does not implement the built-in capability {:?}",
@@ -640,12 +639,17 @@ pub(crate) fn test_ask_user_registration() -> crate::tools::executor::ToolRegist
 
 #[cfg(test)]
 mod tests {
-    use super::{register_subagent_child_tools, subagent_child_definition};
-    use crate::tools::executor::ToolRegistry;
-    use crate::tools::types::{
-        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
-        ToolInvocationPolicy,
+    use super::{
+        ask_user, freeze_named_agent_permissions, register_subagent_child_tools,
+        subagent_child_definition,
     };
+    use crate::runtime::permission::{
+        ExecutionPermissionMode, ResourcePermissionSet, ResourcePermissionValue,
+        effective_invocation_resource_permission,
+    };
+    use crate::runtime::subagent::catalog::{AgentCatalog, NamedAgentDefinition, SubagentName};
+    use crate::tools::executor::ToolRegistry;
+    use crate::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolInvocationPolicy};
 
     fn frozen(names: &[&str], policy: ToolInvocationPolicy) -> Vec<ToolDefinition> {
         names
@@ -655,6 +659,112 @@ mod tests {
                     .unwrap_or_else(|| panic!("{name} is a child-plane capability"))
             })
             .collect()
+    }
+
+    fn named_agent(name: &str, permissions: Option<ResourcePermissionSet>) -> NamedAgentDefinition {
+        NamedAgentDefinition::new(
+            SubagentName::parse(name).expect("name"),
+            crate::runtime::agent_profile::AgentProfile {
+                description: format!("{name} agent"),
+                instructions: "instructions".into(),
+                model: None,
+                execution_deadline: None,
+                tools: Vec::new(),
+                skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
+                inherit_project_instructions: true,
+                permissions,
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+                workflows: std::collections::BTreeSet::default(),
+            },
+            std::path::PathBuf::from(format!("/w/{name}.md")),
+        )
+        .expect("definition")
+    }
+
+    /// A sole authored Allow must stay target-keyed so an omitted sibling keeps
+    /// product defaults instead of inheriting that Allow as whole-tool freeze.
+    #[test]
+    fn freeze_named_agent_permissions_keeps_sole_override_as_target() {
+        let allow = ResourcePermissionSet {
+            plan: ResourcePermissionValue::Allow,
+            automatic: ResourcePermissionValue::Allow,
+            full_access: ResourcePermissionValue::Allow,
+        };
+        let catalog =
+            AgentCatalog::new([named_agent("alpha", Some(allow)), named_agent("beta", None)])
+                .expect("catalog");
+        let frozen = freeze_named_agent_permissions(ask_user::registration(), &catalog);
+        assert!(
+            frozen.resource_permissions.is_none(),
+            "a single authored override must not promote to whole-tool permissions"
+        );
+        assert_eq!(
+            frozen.resource_permission_targets.get("alpha"),
+            Some(&allow)
+        );
+        assert!(!frozen.resource_permission_targets.contains_key("beta"));
+        assert_eq!(
+            effective_invocation_resource_permission(
+                frozen.resource_permissions,
+                &frozen.resource_permission_targets,
+                &serde_json::json!({"agent": "beta"}),
+                ExecutionPermissionMode::FullAccess,
+            ),
+            ResourcePermissionValue::Default,
+            "omitted agent B must not inherit A's Allow"
+        );
+    }
+
+    /// After `send_message` injects the named profile into `agent`, A's Allow
+    /// wins for that call even when sibling B is Deny (aggregate would Deny).
+    #[test]
+    fn send_message_permission_lookup_uses_named_profile_not_aggregate() {
+        let allow = ResourcePermissionSet {
+            plan: ResourcePermissionValue::Allow,
+            automatic: ResourcePermissionValue::Allow,
+            full_access: ResourcePermissionValue::Allow,
+        };
+        let deny = ResourcePermissionSet {
+            plan: ResourcePermissionValue::Deny,
+            automatic: ResourcePermissionValue::Deny,
+            full_access: ResourcePermissionValue::Deny,
+        };
+        let catalog = AgentCatalog::new([
+            named_agent("alpha", Some(allow)),
+            named_agent("beta", Some(deny)),
+        ])
+        .expect("catalog");
+        let frozen = freeze_named_agent_permissions(ask_user::registration(), &catalog);
+        assert_eq!(
+            effective_invocation_resource_permission(
+                frozen.resource_permissions,
+                &frozen.resource_permission_targets,
+                &serde_json::json!({"agent": "alpha", "agent_id": "agent_01900000-0000-7000-8000-0000000000aa"}),
+                ExecutionPermissionMode::Automatic,
+            ),
+            ResourcePermissionValue::Allow,
+            "send_message to A must not be blocked by B's Deny"
+        );
+        assert_eq!(
+            effective_invocation_resource_permission(
+                frozen.resource_permissions,
+                &frozen.resource_permission_targets,
+                &serde_json::json!({}),
+                ExecutionPermissionMode::Automatic,
+            ),
+            ResourcePermissionValue::Deny,
+            "aggregate without a named profile stays the strictest target"
+        );
+        assert_eq!(
+            effective_invocation_resource_permission(
+                frozen.resource_permissions,
+                &frozen.resource_permission_targets,
+                &serde_json::json!({"agent_id": "agent_01900000-0000-7000-8000-0000000000aa"}),
+                ExecutionPermissionMode::Automatic,
+            ),
+            ResourcePermissionValue::Deny,
+            "raw agent_id must not select a profile-keyed target"
+        );
     }
 
     #[test]
@@ -735,11 +845,7 @@ mod tests {
     /// semantics under the same tool name.
     #[test]
     fn a_non_default_frozen_policy_survives_child_registration_exactly() {
-        let policy = ToolInvocationPolicy::new(
-            ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Parallel,
-            ToolApprovalPolicy::Always,
-        );
+        let policy = ToolInvocationPolicy::new(ToolExecutionPolicy::ModelSelectable);
         let frozen_definitions = frozen(&["grep"], policy);
         let frozen_grep = &frozen_definitions[0];
         assert_ne!(
@@ -766,11 +872,6 @@ mod tests {
             registered.execution_policy,
             ToolExecutionPolicy::ModelSelectable
         );
-        assert_eq!(
-            registered.concurrency_policy,
-            ToolConcurrencyPolicy::Parallel
-        );
-        assert_eq!(registered.approval_policy, ToolApprovalPolicy::Always);
     }
 
     /// A frozen definition this build cannot reproduce faithfully fails
@@ -797,8 +898,7 @@ mod tests {
         let mut conflicting =
             subagent_child_definition("ask_user", ToolInvocationPolicy::default())
                 .expect("ask_user exists");
-        assert_eq!(conflicting.approval_policy, ToolApprovalPolicy::Never);
-        conflicting.approval_policy = ToolApprovalPolicy::Always;
+        conflicting.execution_policy = ToolExecutionPolicy::ModelSelectable;
         let mut registry = ToolRegistry::new();
         assert!(
             register_subagent_child_tools(&mut registry, &[conflicting]).is_err(),

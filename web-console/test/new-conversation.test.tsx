@@ -10,7 +10,7 @@ import { routeFixture } from './shell-navigation-fixture';
 import { RpcFailure } from '../src/client/errors';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v77';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v78';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
@@ -30,7 +30,7 @@ const authored = { provider: 'transport', id: 'wire', context_window: '128000', 
  * native Session catalog does not publish, and whose catalog carries native
  * reasoning vocabulary the documents never mention. */
 function workspaceSource(session_models: SourceSettings['session_models'] = { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/native', ['low', 'high'], 'high'), nativeModel('fixture/second')] } }): SourceSettings {
-  return { ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace' }, prospective_approval_mode: 'policy',
+  return { ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace' }, prospective_approval_mode: 'plan',
     resolved: { models: { 'fixture/configuration-only': authored, 'fixture/native': authored } }, session_models };
 }
 async function mount({ current = () => true, source = workspaceSource(), configureWorkspace, ready = true, workspaceHost }: { workspaceHost?: Partial<ProductHostWorkspaces>; current?: () => boolean; source?: SourceSettings; configureWorkspace?: (id: string) => Promise<{ kind: 'read'; projection: SourceSettings }>; ready?: boolean } = {}) {
@@ -109,7 +109,11 @@ it('loads initial permissions and models silently without replacing the editor o
   expect(screen.queryByRole('button', { name: 'Model and thinking effort' })).toBeNull();
   expect(screen.queryByRole('button', { name: 'Workspace permissions' })).toBeNull();
   expect(screen.queryByRole('status')).toBeNull();
-  expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true);
+  const preparing = await screen.findByRole('button', { name: 'Preparing to send…' });
+  expect(preparing).toHaveProperty('disabled', true);
+  expect(preparing.getAttribute('aria-busy')).toBe('true');
+  await act(async () => fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' }));
+  expect(methods().filter(method => ['thread/start', 'session/submissionIntent', 'session/setModel', 'inbound/queue', 'turn/start'].includes(method))).toEqual([]);
   fireEvent.change(input, { target: { value: 'Typed while loading' } });
   input.setSelectionRange(2, 7);
   await act(async () => source.resolve({ kind: 'read', projection: workspaceSource() }));
@@ -118,7 +122,7 @@ it('loads initial permissions and models silently without replacing the editor o
   expect(input.value).toBe('Typed while loading'); expect(document.activeElement).toBe(input);
   expect([input.selectionStart, input.selectionEnd]).toEqual([2, 7]);
   expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('fixture/native');
-  expect(screen.getByRole('button', { name: 'Workspace permissions' }).textContent).toBe('Policy');
+  expect(screen.getByRole('button', { name: 'Workspace permissions' }).textContent).toBe('Plan');
 });
 it.each(['current', 'replacement'] as const)('Composer Add Workspace dispatches its opened picker scope to the %s Host', async kind => {
   let catalog: WorkspaceCatalog = { authorityId: 'host-A', endpoint,
@@ -428,4 +432,18 @@ it('a persisted Profile the catalog stops declaring blocks Send until it is clea
   // The committed creation persists the recovered intent: no Profile at all.
   expect(JSON.parse(stored.get('rustx-new-session-model-v1')!)).toEqual({ [endpoint]: { model: 'example/chat' } });
   expect(new NewSessionModelPreference({ getItem: key => stored.get(key) ?? null, setItem: () => {} }).read(endpoint)).toEqual({ model: 'example/chat' });
+});
+
+
+it.each([false, true])('a saved recent model is requested only while offered by the Workspace: %s', async offered => {
+  vi.mocked(modelPreferences().read).mockReturnValue({ model: 'fixture/recent', profile: 'fast' });
+  await mount({ source: workspaceSource({ kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/native'), ...(offered ? [nativeModel('fixture/recent', ['fast'])] : [])] } }) });
+  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain(offered ? 'fixture/recent' : 'fixture/native');
+  expect(methods().filter(method => ['thread/start', 'session/setModel', 'inbound/queue'].includes(method))).toEqual([]);
+  server.held.add('thread/start');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
+  const create = await server.waitFor('thread/start', 1);
+  if (create.method !== 'thread/start') throw new Error('Expected Session creation');
+  if (offered) expect(create.params.settings?.model).toEqual({ model: 'fixture/recent', profile: 'fast' });
+  else expect(create.params.settings).not.toHaveProperty('model');
 });

@@ -1,4 +1,5 @@
-import type { CheckpointPage, CheckpointPageItem, CheckpointReadCut, CollectionFrontier, CanonicalContentLocator, ContentBinding, TraceContentBlock, TraceFieldSource, TraceInspectionMessage, TraceInspectionMessages, TraceToolSource, RuntimeClientToolOccurrence } from '../../../protocol/app-server/v77';
+import { modelToolCall } from '../../../protocol/app-server/model-tool-call';
+import type { CheckpointPage, CheckpointPageItem, CheckpointReadCut, CollectionFrontier, CanonicalContentLocator, ContentBinding, TraceContentBlock, TraceFieldSource, TraceInspectionMessage, TraceInspectionMessages, TraceToolSource, RuntimeClientToolOccurrence } from '../../../protocol/app-server/v78';
 import { checkpointReadCutKey, messageSource } from '../../../protocol/app-server/content-identity';
 import { ContentCache } from '../../../protocol/app-server/content-cache';
 import { readTraceFieldWindow, readTraceSelectedWindow, type TraceValueField, type TraceValueSelector } from '../../../protocol/app-server/trace-field';
@@ -139,6 +140,6 @@ export async function readRequestField(reader: TraceFieldReader, cut: Checkpoint
 export function traceProgram(toolId: string | null | undefined, args: unknown): TraceToolSource | undefined {
   const field = toolId === 'tool-bash' ? 'command' : toolId === 'tool-write' ? 'content' : undefined;
   if (!field) return;
-  const body = object(args)[field];
+  const body = modelToolCall(args)?.arguments[field];
   return typeof body === 'string' ? { field, text: text(body), language: toolId === 'tool-bash' ? 'shell' : undefined } : undefined;
 }

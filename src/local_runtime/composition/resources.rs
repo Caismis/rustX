@@ -83,7 +83,7 @@ impl LocalRuntimeResourceLoader {
                     subagent_catalog: main_catalog,
                     ..self.native_resources.clone()
                 },
-                config.native_tools.to_policies(),
+                crate::tools::NativeToolPolicies::default(),
             )
             .map_err(|error| {
                 RuntimeResourceLoadError::new(format!(
@@ -424,6 +424,7 @@ mod tests {
                     inherit_project_instructions: false,
                     extensions: crate::extensions::NativeAgentExtensions::none(),
                     workflows: std::collections::BTreeSet::default(),
+                    permissions: None,
                 },
                 PathBuf::from("instructions.md"),
             )

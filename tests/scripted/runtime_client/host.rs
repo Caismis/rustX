@@ -20,9 +20,7 @@ use rustx::runtime_client::{
     RuntimeClientRequest, RuntimeClientResult,
 };
 use rustx::tools::executor::ToolRegistry;
-use rustx::tools::types::{
-    ToolConcurrencyPolicy, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-};
+use rustx::tools::types::{ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, success_result, tool_call_events,
 };
@@ -401,21 +399,11 @@ async fn foreground_tools_project_with_stable_identities() {
     }));
     let model = FakeModel::new(vec![first, one_turn_stop()]);
     let (tool_a, release_a) = FakeTool::parking(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let (tool_b, release_b) = FakeTool::parking(
-        common::tool_policies(
-            "beta",
-            "tool-beta",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+        common::tool_policies("beta", "tool-beta", ToolExecutionPolicy::ForegroundOnly),
         success_result("b"),
     );
     let mut started_a = tool_a.started();
@@ -1182,12 +1170,7 @@ async fn agent_status_is_composed_exactly_once_per_request() {
     }));
     let model = FakeModel::new(vec![first, one_turn_stop()]);
     let tool = FakeTool::new(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let mut tools = ToolRegistry::new();
@@ -1318,8 +1301,6 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
                 description: "list files".to_owned(),
                 input_schema: serde_json::json!({"type": "object"}),
                 execution_policy: ToolExecutionPolicy::ForegroundOnly,
-                concurrency_policy: ToolConcurrencyPolicy::Sequential,
-                approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Builtin,
             },
@@ -1330,8 +1311,6 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
                     description: "list files".to_owned(),
                     input_schema: serde_json::json!({"type": "object"}),
                     execution_policy: ToolExecutionPolicy::ForegroundOnly,
-                    concurrency_policy: ToolConcurrencyPolicy::Sequential,
-                    approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
                     replay_policy: ToolReplayPolicy::Never,
                     origin: ToolOrigin::Builtin,
                 },

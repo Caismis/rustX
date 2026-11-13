@@ -524,17 +524,13 @@ pub fn bind_accepted_continuation_source(
 /// One canonical tool definition used by adapter tests.
 pub fn tool(name: &str, id: &str) -> rustx::tools::types::ToolDefinition {
     use rustx::runtime::identity::ToolId;
-    use rustx::tools::types::{
-        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-    };
+    use rustx::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
     ToolDefinition {
         id: ToolId::new(id),
         name: name.to_owned(),
         description: format!("Tool {name}"),
         input_schema: serde_json::json!({"type": "object", "properties": {}}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Idempotent,
         origin: ToolOrigin::Builtin,
     }
@@ -961,14 +957,12 @@ pub fn tool_runtime(conversation_id: &str) -> ToolRuntimeFixture {
     tool_runtime_with_store(conversation_id, None)
 }
 
-/// A canonical tool definition with explicit execution/concurrency
-/// policies.
+/// A canonical tool definition with an explicit execution-ownership policy.
 #[must_use]
 pub fn tool_policies(
     name: &str,
     id: &str,
     execution: rustx::tools::types::ToolExecutionPolicy,
-    concurrency: rustx::tools::types::ToolConcurrencyPolicy,
 ) -> rustx::tools::types::ToolDefinition {
     use rustx::runtime::identity::ToolId;
     use rustx::tools::types::{ToolDefinition, ToolOrigin, ToolReplayPolicy};
@@ -978,8 +972,6 @@ pub fn tool_policies(
         description: format!("Tool {name}"),
         input_schema: serde_json::json!({"type": "object", "properties": {}}),
         execution_policy: execution,
-        concurrency_policy: concurrency,
-        approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }
@@ -1045,15 +1037,11 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
 /// preflight into the native executor.
 #[must_use]
 pub fn model_selectable_native_fixture() -> NativeFixture {
-    use rustx::tools::types::{
-        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy,
-    };
+    use rustx::tools::types::{ToolExecutionPolicy, ToolInvocationPolicy};
     native_fixture_with(
         Vec::new(),
         rustx::tools::native::NativeToolPolicies::uniform(ToolInvocationPolicy::new(
             ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Sequential,
-            ToolApprovalPolicy::Never,
         )),
     )
 }
@@ -1231,7 +1219,7 @@ pub async fn run_tool_with_cancellation(
         id: ToolCallId::new("call-m5"),
         tool_id: definition.id,
         name: name.to_owned(),
-        arguments,
+        arguments: tool_call_envelope(arguments),
     };
     let outcome = fixture.registry.preflight(&call).expect("preflight");
     let PreflightOutcome::Ready(prepared) = outcome else {
@@ -1252,6 +1240,22 @@ pub async fn run_tool_with_cancellation(
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
     );
+    let context = match context.bind_mutation_target(&prepared) {
+        Ok(context) => context,
+        Err(error) => {
+            return rustx::tools::types::ToolExecutionResult {
+                deliveries: Vec::new(),
+                status: rustx::tools::types::ToolExecutionStatus::Failed { error },
+                content: Vec::new(),
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            };
+        }
+    };
     executor
         .start(prepared.invocation, context)
         .completion
@@ -1262,49 +1266,15 @@ pub async fn run_tool_with_cancellation(
 pub async fn run_tool(
     fixture: &NativeFixture,
     name: &str,
-    mut arguments: serde_json::Value,
+    arguments: serde_json::Value,
 ) -> rustx::tools::types::ToolExecutionResult {
-    use rustx::runtime::identity::ToolCallId;
-    use rustx::tools::executor::{PreflightOutcome, ToolExecutionContext};
-    use rustx::tools::types::ToolCall;
-    let definition = fixture
-        .registry
-        .definitions()
-        .into_iter()
-        .find(|definition| definition.name == name)
-        .expect("tool registered");
-    if definition.execution_policy == rustx::tools::types::ToolExecutionPolicy::ModelSelectable {
-        arguments["execution_mode"] = serde_json::json!("foreground");
-    }
-    let call = ToolCall {
-        id: ToolCallId::new("call-m5"),
-        tool_id: definition.id,
-        name: name.to_owned(),
+    run_tool_with_cancellation(
+        fixture,
+        name,
         arguments,
-    };
-    let outcome = fixture.registry.preflight(&call).expect("preflight");
-    let PreflightOutcome::Ready(prepared) = outcome else {
-        panic!("direct native tool calls preflight as ready");
-    };
-    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
-    let reporter = NoopProgress;
-    let context = ToolExecutionContext::new(
-        fixture.runtime.conversation_id(),
-        None,
-        rustx::runtime::ExecutionCancellation::detached(
-            rustx::runtime::CancellationSignal::new(),
-            rustx::runtime::types::CancellationReason::UserRequested,
-        ),
-        fixture.runtime.workspace(),
-        &reporter,
-        fixture.runtime.artifacts(),
-        fixture.runtime.tool_output(),
-        fixture.runtime.environment(),
-    );
-    executor
-        .start(prepared.invocation, context)
-        .completion
-        .await
+        rustx::runtime::CancellationSignal::new(),
+    )
+    .await
 }
 
 /// One canonical compiled model-facing tool definition used by adapter
@@ -1327,10 +1297,7 @@ pub fn model_tool(name: &str, id: &str) -> rustx::tools::types::ModelToolDefinit
 pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::ModelToolDefinition {
     use rustx::runtime::identity::ToolId;
     use rustx::tools::compile_model_definition;
-    use rustx::tools::types::{
-        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
-        ToolReplayPolicy,
-    };
+    use rustx::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
     compile_model_definition(&ToolDefinition {
         id: ToolId::new(id),
         name: name.to_owned(),
@@ -1341,8 +1308,6 @@ pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::Model
             "required": ["command"],
         }),
         execution_policy: ToolExecutionPolicy::ModelSelectable,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     })
@@ -1350,7 +1315,7 @@ pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::Model
 }
 
 /// Asserts one provider tool-parameter payload carries the compiled
-/// `execution_mode` selector verbatim next to the untouched business schema.
+/// `execution_mode` selector outside the required business `arguments`.
 ///
 /// Provider adapters are policy-unaware: they translate the already-compiled
 /// [`rustx::tools::types::ModelToolDefinition`] and never inject, rename, or
@@ -1377,13 +1342,29 @@ pub fn assert_compiled_execution_mode_schema(
         "the selector is required: {parameters}"
     );
     assert!(
-        required.contains(&serde_json::json!(business_property)),
-        "the tool's own required arguments survive decoration: {parameters}"
+        required.contains(&serde_json::json!("arguments")),
+        "the business object is required: {parameters}"
     );
-    assert_eq!(
-        parameters["properties"][business_property]["type"],
-        serde_json::json!("string"),
-        "the business schema reaches the provider untouched: {parameters}"
+    let validator = jsonschema::Validator::new(parameters).expect("compiled provider schema");
+    let mut business = serde_json::json!({});
+    business[business_property] = serde_json::json!("printf actual");
+    for mode in ["foreground", "background"] {
+        assert!(validator.is_valid(&serde_json::json!({
+            "arguments": business, "execution_mode": mode,
+        })));
+    }
+    assert!(
+        !validator.is_valid(&serde_json::json!({
+            "arguments": {}, "execution_mode": "foreground",
+        })),
+        "the original business property remains required"
+    );
+    business[business_property] = serde_json::json!(7);
+    assert!(
+        !validator.is_valid(&serde_json::json!({
+            "arguments": business, "execution_mode": "foreground",
+        })),
+        "the original business property remains a string"
     );
     assert!(
         !parameters.to_string().contains("__rustx_execution"),
@@ -1999,4 +1980,23 @@ pub fn native_domain_catalog(
         panic!("bounded native catalog page");
     };
     native_catalog_page(page)
+}
+
+/// Compile this suite's business-call DSL to the current invocation envelope.
+pub fn tool_call_envelope(arguments: serde_json::Value) -> serde_json::Value {
+    let mut business = arguments;
+    let mode = business
+        .as_object_mut()
+        .and_then(|fields| fields.remove("execution_mode"));
+    let reason = business
+        .as_object_mut()
+        .and_then(|fields| fields.remove("elevation_reason"));
+    let mut envelope = serde_json::json!({"arguments":business});
+    if let Some(mode) = mode {
+        envelope["execution_mode"] = mode;
+    }
+    if let Some(reason) = reason {
+        envelope["elevation_reason"] = reason;
+    }
+    envelope
 }

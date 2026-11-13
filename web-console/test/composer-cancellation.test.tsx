@@ -1,7 +1,7 @@
 import { compactReceipt } from './fixture';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { RuntimeClientSnapshot } from '../../protocol/app-server/v77';
+import type { RuntimeClientSnapshot } from '../../protocol/app-server/v78';
 import { composerPreferences } from '../src/app/composer/preferences';
 import { App } from '../src/app/App';
 import { isOutcomeUncertain } from '../src/client/errors';
@@ -15,7 +15,7 @@ const input = () => screen.getByRole('textbox', { name: 'Message' }) as HTMLText
 const escape = () => fireEvent.keyDown(input(), { key: 'Escape' });
 async function mount(initial = running()) {
   server.snapshots.set('A', initial); await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
   const editor = screen.queryByRole('textbox', { name: 'Message' });
   if (editor) act(() => editor.focus());

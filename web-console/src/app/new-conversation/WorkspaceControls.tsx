@@ -2,7 +2,7 @@ import { message } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import type { ReactNode } from 'react';
 import { useSelector } from '@xstate/react';
-import type { ApprovalMode, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v77';
+import type { ExecutionPermissionMode as ApprovalMode, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v78';
 import type { AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import { PermissionSelect } from '../../presentation/agent/PermissionSelect';
@@ -20,14 +20,18 @@ export function WorkspaceControls({ client, host, workspaceId, visible, presenta
   const { actor } = useSettingsTarget(client, workspaceId ? workspaceSettingsTarget(workspaceId) : userSettingsTarget, host, visible && !!workspaceId, presentationKey);
   const source = useSelector(actor, s => s.context.observation);
   const error = useSelector(actor, s => s.context.readError);
-  return <SettingsActorContext value={actor}><SourceContext value={source}>{<ApprovalScope source={source}>{children}</ApprovalScope>}{error && <span role="alert">{error}<Button size="sm" onClick={() => actor.send({ type: 'REFRESH' })}>{tx('workspace:workspace-controls.reread-workspace')}</Button></span>}</SourceContext></SettingsActorContext>;
+  const settled = useSelector(actor, s => s.matches({ authority: { attached: 'idle' } }));
+  const diagnostic = settled && source?.target.kind === 'workspace' && !source.prospective_approval_mode
+    ? source.prospective_diagnostic ?? tx('workspace:workspace-controls.permissions-unavailable') : undefined;
+  return <SettingsActorContext value={actor}><SourceContext value={source}>{<ApprovalScope source={source}>{children}</ApprovalScope>}{(error || diagnostic) && <span role="alert">{error || diagnostic}<Button size="sm" onClick={() => actor.send({ type: 'REFRESH' })}>{tx('workspace:workspace-controls.reread-workspace')}</Button></span>}</SourceContext></SettingsActorContext>;
 }
 function useWorkspaceApproval(source?: SourceSettings) {
   const actor = useSettingsActor();
   const readError = useSelector(actor, s => s.context.readError);
+  const reading = useSelector(actor, state => state.matches({ authority: { attached: 'reading' } }));
   const revision = source?.workspace?.revision ?? '';
-  const unit = useUnitEditing<ApprovalMode>({ authored: source?.workspace?.authored?.approval_mode ?? undefined, blank: 'policy', revision, mutation: approvalMutation });
-  return { actor, revision, unit, loading: !source && !readError, block: () => { const reason = workspaceApprovalBlock(actor); return reason && message(reason); } };
+  const unit = useUnitEditing<ApprovalMode>({ authored: source?.workspace?.authored?.approval_mode ?? undefined, blank: 'plan', revision, mutation: approvalMutation });
+  return { actor, revision, unit, reading, loading: !source && !readError, block: () => { const reason = workspaceApprovalBlock(actor); return reason && message(reason); } };
 }
 type WorkspaceApproval = ReturnType<typeof useWorkspaceApproval>;
 function ApprovalScope({ source, children }: { source?: SourceSettings; children: (source: SourceSettings | undefined, approval: WorkspaceApproval) => ReactNode }) {
@@ -44,7 +48,7 @@ export function WorkspacePermission({ source, approval, disabled = false }: { so
     unit.edit(value);
     actor.send({ type: 'UNIT.SUBMIT', identity: unit.identity, selector: revisionSelector(mutation(null)), revision, mutation: mutation(value) });
   }}/>
-    {unit.draft && <small>{tx('workspace:workspace-controls.requested')}{' '}{unit.displayed === 'full_access' ? tx('workspace:workspace-controls.full-access') : tx('workspace:workspace-controls.policy')}</small>}
+    {unit.draft && <small>{tx('workspace:workspace-controls.requested')}{' '}{unit.displayed === 'full_access' ? tx('workspace:workspace-controls.full-access') : unit.displayed === 'automatic' ? tx('workspace:workspace-controls.automatic') : tx('workspace:workspace-controls.plan')}</small>}
     {outcome.kind === 'conflict' && <small role="alert">{tx('workspace:workspace-controls.workspace-changed-your-selection-is-preserved')}</small>}
     {outcome.kind === 'rejected' && <small role="alert">{outcome.detail}</small>}
     {outcome.kind === 'uncertain' && <small role="alert">{tx('workspace:workspace-controls.outcome-uncertain-reread-before-another-change-no-replay')}</small>}

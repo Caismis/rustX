@@ -286,7 +286,7 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Session configuration change transcript items and Trace records. Version
 /// 82 added optional, Model-owned reasoning Profile order to full catalog
 /// metadata; selection ordinals and frozen invocation snapshots are unchanged.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 84;
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 85;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1378,7 +1378,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 84);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 85);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1576,19 +1576,22 @@ mod tests {
         use crate::model::types::ModelProtocol;
 
         let capabilities = ModelCapabilities::text_only();
+        let primary = ModelInvocationView {
+            model: ModelRef::parse(reference).expect("a valid model reference"),
+            protocol: ModelProtocol::OpenAiChatCompletions,
+            context_window: 128_000,
+            model_max_output_tokens: 4096,
+            max_output_tokens: 4096,
+            profile: None,
+            request_params: RequestParams::new(),
+            capabilities: capabilities.clone(),
+            declared_capabilities: capabilities,
+        };
         AttemptModelView {
-            primary: ModelInvocationView {
-                model: ModelRef::parse(reference).expect("a valid model reference"),
-                protocol: ModelProtocol::OpenAiChatCompletions,
-                context_window: 128_000,
-                model_max_output_tokens: 4096,
-                max_output_tokens: 4096,
-                profile: None,
-                request_params: RequestParams::new(),
-                capabilities: capabilities.clone(),
-                declared_capabilities: capabilities,
+            summary: AuxiliaryModelView::Session {
+                effective: Box::new(primary.clone()),
             },
-            summary: AuxiliaryModelView::Session,
+            primary,
         }
     }
 

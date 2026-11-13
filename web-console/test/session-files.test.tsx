@@ -9,7 +9,7 @@ import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { validateRaster, RASTER_MAX_PIXELS } from '../src/client/raster';
 import { WorkspaceHostError, type DeliveryBytes, type DeliveryRead, type ProductHostWorkspaces } from '../src/workspaces/host';
 import type { DocumentRequest, DocumentResult } from '../shared/documents';
-import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v77';
+import type { SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v78';
 import { Server } from './fixture';
 import { PreviewWorkspaceOwner } from '../src/app/preview-workspace';
 import { PreviewWorkspaceNotice } from '../src/app/components/PreviewWorkspace';
@@ -60,6 +60,25 @@ function WorkspaceNotice({ owner }: { owner: PreviewWorkspaceOwner }) {
   const snapshot = useSyncExternalStore(owner.subscribe, owner.getSnapshot);
   return <PreviewWorkspaceNotice snapshot={snapshot} dismiss={() => owner.dismissProblem()}/>;
 }
+it('saves a retiring camera at full real body capacity before replacing its pane without reentering admission', async () => {
+  const f = await fixture(), owner = new PreviewWorkspaceOwner(server.client, f.host, f.authority), stop = owner.start();
+  owner.selectSession('A');
+  const errors: unknown[] = [], error = (event: ErrorEvent) => { errors.push(event.error); event.preventDefault(); };
+  window.addEventListener('error', error);
+  try {
+    const open = (id: string) => owner.openPreview({ name: `${id}.glb`, image: false, source: { kind: 'artifact', id } })!;
+    const a = open('a'), b = open('b'); owner.measure(1200, owner.getSnapshot().geometryEpoch); owner.split();
+    const c = open('c'); owner.selectTab(b);
+    const old = owner.getSnapshot().leases.get(b)!; expect(owner.getSnapshot().leases.size).toBe(2);
+    let retired = false;
+    const geometry: NonNullable<import('../src/presentation/right-panel/preview-view-state').PreviewViewState['geometry']> = { copyId: 'copy', camera: { projection: 'perspective', position: [9,8,7], target: [0,0,0], up: [0,1,0] } };
+    old.signal.addEventListener('abort', () => { owner.updateView(b, { geometry }); retired = true; }, { once: true });
+    owner.selectTab(c);
+    expect(errors).toEqual([]); expect(retired).toBe(true); expect(old.signal.aborted).toBe(true);
+    expect(owner.getSnapshot().leases.size).toBe(2); expect(owner.getSnapshot().leases.has(a)).toBe(true); expect(owner.getSnapshot().leases.has(c)).toBe(true);
+    expect(owner.getSnapshot().workspace!.tabs.find(tab => tab.id === b)!.view.geometry).toEqual(geometry);
+  } finally { window.removeEventListener('error', error); stop(); }
+});
 it.each(['valid', 'Session', 'attachment', 'Host'] as const)('independent Download failure after the final preview closes reports only its %s scope', async scope => {
   const f = await fixture(), owner = new PreviewWorkspaceOwner(server.client, f.host, f.authority), stop = owner.start(); owner.selectSession('A');
   const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {}), ui = render(<><WorkspaceBody owner={owner}/><WorkspaceNotice owner={owner}/></>);
@@ -666,4 +685,16 @@ it('foreign locator source CID is refused before lookup and a retired Child owne
  const work=f.resources.acquire(8,child).load(),rejected=expect(work).rejects.toThrow('Obsolete');expect(f.calls).toHaveLength(1);
  owned=false;f.reply(0);await rejected;expect(create).not.toHaveBeenCalled();
  expect(samePreviewSource(child,{...child,owned:()=>true})).toBe(false);
+});
+it('allows final inert metadata for a hidden retained occurrence but fences replacement, deletion and authority retirement', async () => {
+  const f = await fixture(); expect(f.lease.sourceCurrent()).toBe(true);
+  f.lease.dispose(); expect(f.lease.current()).toBe(false); expect(f.lease.sourceCurrent()).toBe(true);
+  f.resources.forget(1); expect(f.lease.sourceCurrent()).toBe(false);
+  const next = f.resources.acquire(1, source); expect(next.sourceCurrent()).toBe(true); expect(f.lease.sourceCurrent()).toBe(false);
+  await f.replaceHost(); expect(next.sourceCurrent()).toBe(false);
+});
+it('final metadata cannot outlive a child source permission', async () => {
+  const f = await fixture(); let owned = true;
+  const child = f.resources.acquire(2, { kind: 'artifact', id: 'child', agentId: 'child', owned: () => owned });
+  child.dispose(); expect(child.sourceCurrent()).toBe(true); owned = false; expect(child.sourceCurrent()).toBe(false);
 });

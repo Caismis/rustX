@@ -196,15 +196,10 @@ impl FrozenModelInvocation {
     }
 }
 
-/// The frozen summary-model policy of a frozen authority.
+/// The frozen shared auxiliary invocation of a frozen authority.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-pub enum FrozenSummaryModel {
-    /// Summaries follow the frozen primary invocation.
-    Session,
-    /// Summaries use this separately frozen explicit invocation.
-    Explicit(Box<FrozenModelInvocation>),
-}
+#[serde(transparent)]
+pub struct FrozenSummaryModel(pub Box<FrozenModelInvocation>);
 
 /// The complete frozen model authority of one out-of-process runtime.
 ///
@@ -245,9 +240,7 @@ impl FrozenModelSpec {
             }
         };
         export(&mut self.primary.binding, "PRIMARY");
-        if let FrozenSummaryModel::Explicit(invocation) = &mut self.summary {
-            export(&mut invocation.binding, "SUMMARY");
-        }
+        export(&mut self.summary.0.binding, "SUMMARY");
     }
     /// Rehydrate only the private credential capture committed with this authority.
     pub(crate) fn restore_admitted_credentials(
@@ -258,10 +251,10 @@ impl FrozenModelSpec {
             &self.primary.binding,
             credentials,
         )?);
-        if let FrozenSummaryModel::Explicit(invocation) = &mut self.summary {
-            invocation.binding.resolved_credential =
-                Some(resolve_frozen_credential(&invocation.binding, credentials)?);
-        }
+        self.summary.0.binding.resolved_credential = Some(resolve_frozen_credential(
+            &self.summary.0.binding,
+            credentials,
+        )?);
         Ok(())
     }
 
@@ -274,20 +267,18 @@ impl FrozenModelSpec {
     ///
     /// # Errors
     ///
-    /// Returns the first resolution failure of the primary model or of an
-    /// explicit summary model.
+    /// Returns the first resolution failure of the primary or shared auxiliary.
     pub fn freeze(
         registry: &ModelBindingRegistry,
         configured: &SessionModelConfig,
     ) -> Result<Self, ModelInvocationError> {
         let primary = registry.freeze(&configured.selection())?;
-        let summary = match configured.summary_selection() {
-            None => FrozenSummaryModel::Session,
-            Some(selection) => FrozenSummaryModel::Explicit(Box::new(registry.freeze_with_layer(
-                &selection,
-                crate::model::invocation::RequestParamsLayer::SummaryOverrides,
-            )?)),
-        };
+        let selection =
+            crate::model::session::auxiliary_selection(registry.catalog().catalog(), configured)?;
+        let summary = FrozenSummaryModel(Box::new(registry.freeze_with_layer(
+            &selection,
+            crate::model::invocation::RequestParamsLayer::AuxiliaryOverrides,
+        )?));
         Ok(Self {
             configured: configured.clone(),
             primary,
@@ -305,24 +296,20 @@ impl FrozenModelSpec {
         credentials: &dyn CredentialEnvironment,
     ) -> Result<(ResolvedModelInvocation, AttemptSummaryModel), ModelInvocationError> {
         let primary = self.primary.materialize(credentials)?;
-        let summary = match &self.summary {
-            FrozenSummaryModel::Session => AttemptSummaryModel::Session,
-            FrozenSummaryModel::Explicit(invocation) => {
-                AttemptSummaryModel::Explicit(Box::new(invocation.materialize(credentials)?))
-            }
-        };
+        let summary = AttemptSummaryModel::frozen(
+            !self.configured.auxiliary.is_explicit(),
+            self.summary.0.materialize(credentials)?,
+        );
         Ok((primary, summary))
     }
 
     /// The catalog view a frozen authority serves: exactly the models it
-    /// froze, in primary-then-explicit-summary order.
+    /// froze, in primary-then-distinct-auxiliary order.
     #[must_use]
     pub fn catalog_view(&self) -> ModelCatalogView {
         let mut models = vec![self.primary.catalog_model_view()];
-        if let FrozenSummaryModel::Explicit(invocation) = &self.summary
-            && invocation.model != self.primary.model
-        {
-            models.push(invocation.catalog_model_view());
+        if self.summary.0.model != self.primary.model {
+            models.push(self.summary.0.catalog_model_view());
         }
         ModelCatalogView { models }
     }
@@ -336,10 +323,7 @@ impl FrozenModelSpec {
     ) -> Option<crate::model::catalog::CatalogModelReadView<'_>> {
         let model = match ordinal {
             0 => &self.primary,
-            1 => match &self.summary {
-                FrozenSummaryModel::Explicit(value) if value.model != self.primary.model => value,
-                _ => return None,
-            },
+            1 if self.summary.0.model != self.primary.model => self.summary.0.as_ref(),
             _ => return None,
         };
         Some(crate::model::catalog::CatalogModelReadView {
@@ -365,12 +349,8 @@ impl Serialize for FrozenCatalogReadView<'_> {
         struct Models<'a>(&'a FrozenModelSpec);
         impl Serialize for Models<'_> {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                let extra = match &self.0.summary {
-                    FrozenSummaryModel::Explicit(value) if value.model != self.0.primary.model => {
-                        Some(value.as_ref())
-                    }
-                    _ => None,
-                };
+                let extra = (self.0.summary.0.model != self.0.primary.model)
+                    .then_some(self.0.summary.0.as_ref());
                 let mut seq = serializer.serialize_seq(Some(1 + usize::from(extra.is_some())))?;
                 for model in std::iter::once(&self.0.primary).chain(extra) {
                     seq.serialize_element(&crate::model::catalog::CatalogModelReadView {
@@ -406,28 +386,29 @@ impl Serialize for FrozenCatalogReadView<'_> {
 #[cfg(test)]
 #[must_use]
 pub(crate) fn test_frozen_model_spec(model: ModelRef) -> FrozenModelSpec {
+    let invocation = |model: ModelRef| FrozenModelInvocation {
+        binding: FrozenProviderBinding {
+            resolved_credential: Some(ResolvedCredential::new("test-only-secret")),
+            provider: ProviderId::new("test"),
+            base_url: "http://127.0.0.1:9/v1".to_owned(),
+            credential: CredentialSource::Environment("RUSTX_TEST_FROZEN_KEY".to_owned()),
+        },
+        model,
+        wire_model: "test-model".into(),
+        protocol: ModelProtocol::OpenAiChatCompletions,
+        context_window: 128_000,
+        model_max_output_tokens: 512,
+        max_output_tokens: 512,
+        profile: None,
+        request_params: RequestParams::new(),
+        capabilities: ModelCapabilities::text_only(),
+        declared_capabilities: ModelCapabilities::text_only(),
+        compat: ModelCompat::default(),
+    };
     FrozenModelSpec {
         configured: SessionModelConfig::of(model.clone()),
-        primary: FrozenModelInvocation {
-            binding: FrozenProviderBinding {
-                resolved_credential: Some(ResolvedCredential::new("test-only-secret")),
-                provider: ProviderId::new("test"),
-                base_url: "http://127.0.0.1:9/v1".to_owned(),
-                credential: CredentialSource::Environment("RUSTX_TEST_FROZEN_KEY".to_owned()),
-            },
-            model,
-            wire_model: "test-model".into(),
-            protocol: ModelProtocol::OpenAiChatCompletions,
-            context_window: 128_000,
-            model_max_output_tokens: 512,
-            max_output_tokens: 512,
-            profile: None,
-            request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(),
-            declared_capabilities: ModelCapabilities::text_only(),
-            compat: ModelCompat::default(),
-        },
-        summary: FrozenSummaryModel::Session,
+        primary: invocation(model.clone()),
+        summary: FrozenSummaryModel(Box::new(invocation(model))),
     }
 }
 
@@ -458,7 +439,7 @@ fn resolve_frozen_credential(
 
 #[cfg(test)]
 mod tests {
-    use super::{FrozenModelSpec, FrozenSummaryModel};
+    use super::FrozenModelSpec;
     use crate::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
     use crate::model::invocation::ModelBindingRegistry;
     use crate::model::session::SessionModelConfig;
@@ -520,11 +501,8 @@ chat_reasoning_replay = "omit"
         assert_eq!(primary.compat(), resolved.compat());
         assert_eq!(primary.provider(), resolved.provider());
         assert_eq!(primary.model_ref(), resolved.model_ref());
-        assert!(matches!(
-            summary,
-            crate::model::AttemptSummaryModel::Session
-        ));
-        assert!(matches!(decoded.summary, FrozenSummaryModel::Session));
+        assert_eq!(summary.invocation().model_ref(), resolved.model_ref());
+        assert_eq!(decoded.summary.0.model, decoded.primary.model);
     }
 
     /// The declared credential source crosses as a *source*, never as a

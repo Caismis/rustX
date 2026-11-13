@@ -7,7 +7,7 @@ import { schedulerModel, taskKey, taskRef } from '../src/app/scheduler/model';
 import { CreatedTasks, createdReceipt } from '../src/app/scheduler/CreatedTasks';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
 import { checkpoint, snapshot } from './fixture';
-import type { ForegroundToolExecution } from '../../protocol/app-server/v77';
+import type { ForegroundToolExecution } from '../../protocol/app-server/v78';
 import { timingDraft, timingValue, TimingInputError } from '../src/app/scheduler/timing';
 import { localeController } from '../src/locale/controller';
 import { schedulerFixture, task, header, nodeA, nodeB, workflowFixture } from './scheduler-fixture';
@@ -154,7 +154,7 @@ it.each([false, true])('preserves unsaved fields through App Workbench reconnect
     return { type: 'workflow_library', library: { target: request.params.target, directory: '/workflows', absent_revision: 'empty', files: [], diagnostic: null } };
   });
   await server.client.attach('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
   fireEvent.click(await screen.findByRole('button', { name: '1 automation task' }));
   const original = await screen.findByRole('textbox', { name: 'Automation task name' });
@@ -547,7 +547,7 @@ it('opens a canonical creation card through its original task binding, independe
   const result = { status: { type: 'success' as const }, duration_ms: '0', content: [{ type: 'json' as const, value: { status: 'applied', receipt: { id: task().id, spec: task().spec } } }] };
   const tool: ForegroundToolExecution = { occurrence: { locator: { type: 'by_message_id', message_id: 'create-task' }, block_index: 0 },
     block_index: 0, assembly_complete: true, name: 'schedule_command', tool_id: 'native.schedule_command', committed_result: result, committed_result_deferred: false,
-    state: { type: 'settled', arguments: JSON.stringify({ mutation: { type: 'create', title: task().title } }), result } };
+    state: { type: 'settled', arguments: JSON.stringify({ arguments: { mutation: { type: 'create', title: task().title } } }), result } };
   f.server.handlers.set('session/tracePage', request => {
     if (request.method !== 'session/tracePage') throw Error('original Tool');
     return { type: 'checkpoint_page', page: { read_cut: cut, cursor: cut.revision, domain: request.params.domain, total: '1',

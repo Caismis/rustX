@@ -51,13 +51,18 @@ async fn host_effect_is_unknown_after_process_death_and_is_never_automatically_r
         std::fs::create_dir_all(&workspace).unwrap();std::fs::create_dir(root.path().join("home")).unwrap();
         std::fs::write(root.path().join("token"),"trusted-host-test").unwrap();
         std::fs::write(root.path().join("rustx.toml"),toml::to_string_pretty(&serde_json::json!({
+            // Host crash recovery is not a permission-mode test; Full Access
+            // admits Host tools without Ask so the fixture reaches the
+            // SIGKILL / OutcomeUnknown boundary.
+            "approval_mode":"full_access",
             "agent":{"model":{"model":"emulator/chat-model"},"tools":{"builtin":[]}},
             "providers":{"emulator":{"protocol":"openai_chat_completions","base_url":provider.openai_base_url(),"api_key":"$HOST_TEST_KEY"}},
             "models":{"emulator/chat-model":{"provider":"emulator","id":"chat-model","context_window":128_000,"max_output_tokens":1024,"capabilities":{"input_modalities":["text"],"output_modalities":["text"]},"compat":{"chat_reasoning_replay":"omit"}}}
         })).unwrap()).unwrap();
         let (mut process,endpoint,diagnostics)=start(root.path()).await;
         let mut client=Peer::connect(&endpoint).await;
-        let definition=HostToolDefinition {namespace:Some("business".into()),name:"lookup".into(),description:"Read application record".into(),input_schema:serde_json::json!({"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false})};
+        let definition=HostToolDefinition {namespace:Some("business".into()),name:"lookup".into(),description:"Read application record".into(),permissions: None,
+            input_schema:serde_json::json!({"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false})};
         let MethodResult::SessionTransition {thread,session,..}=client.rpc(Method::SessionCreate {settings:SessionPersistentState {cwd:workspace,model:None},submission:None,dynamic_tools:vec![definition.clone()]}).await else {panic!("Thread")};
         client.rpc(Method::SessionName {session_id:session.id.clone(),name:"Host crash recovery".into()}).await;
         let target=client.follow(thread.id.clone()).await;

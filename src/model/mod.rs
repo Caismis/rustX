@@ -93,7 +93,8 @@ pub use invocation::{
 };
 pub use session::{
     AttemptModelSnapshot, AttemptModelView, AttemptSummaryModel, AuxiliaryModelPolicy,
-    AuxiliaryModelView, SessionModelConfig, SessionModelState, SessionModelView,
+    AuxiliaryModelView, AuxiliaryProfileSelection, DirectModelPolicy, SessionModelConfig,
+    SessionModelState, SessionModelView,
 };
 pub use snapshot::{
     ContributionStart, ModelRequestOwner, RequestIdentity, RequestReconstructionError,

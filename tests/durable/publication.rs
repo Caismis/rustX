@@ -136,6 +136,7 @@ fn agent_owner(turn: &str) -> ModelRequestOwner {
 fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
     let head = store.load_head().expect("head");
     let mut snapshot = RequestSnapshot::new(
+        rustx::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: attempt(),
             turn: TurnId::new(turn),
@@ -3381,6 +3382,7 @@ fn t08_t15_t20_request_detail_ranges_are_frozen_allowlisted_and_physically_bound
         serde_json::json!("secret-key".repeat(200_000)),
     );
     let mut snapshot = RequestSnapshot::new(
+        rustx::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: attempt(),
             turn: TurnId::new("trace-source"),
@@ -3527,6 +3529,7 @@ fn t08_t15_request_field_pages_advance_past_large_keys_without_losing_source_byt
     schema.insert("@80".into(), serde_json::json!("reserved-looking-key"));
     schema.insert(huge_key.clone(), serde_json::json!("large-key-value"));
     let mut snapshot = RequestSnapshot::new(
+        rustx::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: attempt(),
             turn: TurnId::new("source-large-key"),

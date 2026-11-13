@@ -1,3 +1,4 @@
+import { modelToolCall } from '../../../../protocol/app-server/model-tool-call';
 import {traceInspectionHead} from '../../client/trace';
 import {traceRequestAccepts,sameTraceStep,traceOccurrenceKey,traceFieldKey} from '../../../../protocol/app-server/trace-identity';
 import type { TraceDisplayBlock } from '../../client/trace-content';
@@ -24,7 +25,7 @@ import { recordedToolDetails } from '../../bindings/recorded-tool-details';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v77';
+import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v78';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -388,7 +389,7 @@ function ToolResult({ record, detail, preview = false }: { record: TraceRecord; 
   const error = result.outcome !== 'success';
   const artifacts = [...new Map([...record.attachments, ...result.attachments, ...blockArtifacts(result.blocks)].map(artifact => [artifact.artifact_id, artifact])).values()];
   const imageRead = !error && record.tool?.tool_id === READ_IMAGE_TOOL && artifacts.some(artifact => artifact.image);
-  const args = detail?.arguments?.value;
+  const args = modelToolCall(detail?.arguments?.value)?.arguments;
   const path = args && typeof args === 'object' && 'path' in args && typeof args.path === 'string' ? args.path : undefined;
   const imageName = imageRead ? readImageName(path) ?? tx('tools:tool-card.read-image') : undefined;
   const blocks = imageRead ? result.blocks.filter(block => block.type !== 'text' || block.text.truncated || block.text.text !== READ_IMAGE_RECEIPT) : result.blocks;
@@ -572,7 +573,7 @@ export interface TrajectoryInspectorProps {
   facet: TrajectoryFacet;
   onFacet: (facet: TrajectoryFacet) => void;
   detail?: TraceDetail | undefined;
-  detailPage?:import('../../../../protocol/app-server/v77').CheckpointPage;
+  detailPage?:import('../../../../protocol/app-server/v78').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
   loading?: boolean | undefined;
   stale?: boolean;

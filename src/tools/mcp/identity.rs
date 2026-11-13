@@ -28,17 +28,17 @@
 //! runtime's invocation semantics of that contract:
 //!
 //! ```text
-//! MCP_TOOL_IDENTITY_V1
+//! MCP_TOOL_IDENTITY_V2
 //!   + server_id
 //!   + canonical tool name
 //!   + description
 //!   + canonical(input_schema)
-//!   + effective execution policy   (execution / concurrency / approval)
+//!   + effective execution policy
 //! ```
 //!
 //! The execution policy participates because it is part of the semantics
-//! rustX authorizes: a server whose tools were admitted as
-//! approval-required must not silently become approval-free in a child.
+//! rustX authorizes for ownership and settlement. Permission is decided by
+//! the built-in mode matrix and resource overrides, not by this fingerprint.
 //! `ToolId` deliberately does **not** participate: it is derived from
 //! `(server_id, name)` and would only restate them.
 //!
@@ -60,14 +60,13 @@
 //! by a child build of the same rustX version are equal exactly when the
 //! Tool contract is equal.
 //!
-//! # V1 frame format (architecture-independent)
+//! # V2 frame format (architecture-independent)
 //!
 //! The hashed preimage is a sequence of framed fields:
 //!
 //! ```text
 //! frame  = field(domain) field(server_id) field(name) field(description)
 //!        , field(canonical_json(input_schema)) field(execution)
-//!        , field(concurrency) field(approval)
 //! field  = u64_le_byte_length ++ utf8_bytes
 //! ```
 //!
@@ -84,15 +83,13 @@
 use sha2::Digest;
 
 use crate::runtime::identity::{McpServerId, SourceToolIdentity};
-use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
-};
+use crate::tools::types::{ToolDefinition, ToolExecutionPolicy};
 
 /// The versioned domain separator of the canonical MCP Tool identity.
 ///
 /// It is part of the hashed input, so a future revision of the covered
 /// field set can never collide with a `V1` digest.
-pub const MCP_TOOL_IDENTITY_DOMAIN: &str = "MCP_TOOL_IDENTITY_V1";
+pub const MCP_TOOL_IDENTITY_DOMAIN: &str = "MCP_TOOL_IDENTITY_V2";
 
 /// Derives the deterministic cross-process identity of one canonical MCP
 /// Tool definition.
@@ -106,18 +103,8 @@ pub fn mcp_tool_identity(
     description: &str,
     input_schema: &serde_json::Value,
     execution: ToolExecutionPolicy,
-    concurrency: ToolConcurrencyPolicy,
-    approval: ToolApprovalPolicy,
 ) -> SourceToolIdentity {
-    let frame = identity_frame(
-        server_id,
-        name,
-        description,
-        input_schema,
-        execution,
-        concurrency,
-        approval,
-    );
+    let frame = identity_frame(server_id, name, description, input_schema, execution);
     let digest = sha2::Sha256::digest(&frame);
     let mut hex = String::with_capacity(71);
     hex.push_str("sha256:");
@@ -128,7 +115,7 @@ pub fn mcp_tool_identity(
     SourceToolIdentity::new(hex)
 }
 
-/// Builds the canonical V1 preimage bytes (see the module documentation for
+/// Builds the canonical V2 preimage bytes (see the module documentation for
 /// the exact frame format).
 ///
 /// Every component is length-prefixed with a fixed-width `u64`
@@ -141,8 +128,6 @@ fn identity_frame(
     description: &str,
     input_schema: &serde_json::Value,
     execution: ToolExecutionPolicy,
-    concurrency: ToolConcurrencyPolicy,
-    approval: ToolApprovalPolicy,
 ) -> Vec<u8> {
     let mut frame = Vec::new();
     let mut field = |value: &str| {
@@ -160,8 +145,6 @@ fn identity_frame(
     field(description);
     field(&canonical_json(input_schema));
     field(execution_token(execution));
-    field(concurrency_token(concurrency));
-    field(approval_token(approval));
     frame
 }
 
@@ -183,20 +166,6 @@ const fn execution_token(policy: ToolExecutionPolicy) -> &'static str {
         ToolExecutionPolicy::ForegroundOnly => "execution=foreground_only",
         ToolExecutionPolicy::BackgroundOnly => "execution=background_only",
         ToolExecutionPolicy::ModelSelectable => "execution=model_selectable",
-    }
-}
-
-const fn concurrency_token(policy: ToolConcurrencyPolicy) -> &'static str {
-    match policy {
-        ToolConcurrencyPolicy::Sequential => "concurrency=sequential",
-        ToolConcurrencyPolicy::Parallel => "concurrency=parallel",
-    }
-}
-
-const fn approval_token(policy: ToolApprovalPolicy) -> &'static str {
-    match policy {
-        ToolApprovalPolicy::Never => "approval=never",
-        ToolApprovalPolicy::Always => "approval=always",
     }
 }
 
@@ -300,7 +269,7 @@ fn write_string(value: &str, output: &mut String) {
 mod tests {
     use super::{canonical_json, identity_frame, mcp_tool_identity};
     use crate::runtime::identity::McpServerId;
-    use crate::tools::types::{ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy};
+    use crate::tools::types::ToolExecutionPolicy;
 
     fn identity(schema: &serde_json::Value) -> String {
         mcp_tool_identity(
@@ -309,56 +278,50 @@ mod tests {
             "Reads one issue.",
             schema,
             ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-            ToolApprovalPolicy::Never,
         )
         .into_string()
     }
 
-    /// The V1 frame is frozen byte-for-byte: every field is prefixed by a
+    /// The V2 frame is frozen byte-for-byte: every field is prefixed by a
     /// **fixed-width** `u64` little-endian length, so the canonical bytes
     /// are identical on 32-bit and 64-bit targets. This vector must never
     /// change; a framing change is a new identity version.
     #[test]
-    fn the_v1_frame_is_frozen_byte_for_byte() {
+    fn the_v2_frame_is_frozen_byte_for_byte() {
         let frame = identity_frame(
             &McpServerId::new("github"),
             "get_issue",
             "Reads one issue.",
             &serde_json::json!({"type": "object"}),
             ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-            ToolApprovalPolicy::Never,
         );
         let mut expected = Vec::new();
         let mut field = |value: &str| {
             expected.extend_from_slice(&(value.len() as u64).to_le_bytes());
             expected.extend_from_slice(value.as_bytes());
         };
-        field("MCP_TOOL_IDENTITY_V1");
+        field("MCP_TOOL_IDENTITY_V2");
         field("github");
         field("get_issue");
         field("Reads one issue.");
         field(r#"{"type":"object"}"#);
         field("execution=foreground_only");
-        field("concurrency=sequential");
-        field("approval=never");
-        assert_eq!(frame, expected, "the V1 frame format is frozen");
+        assert_eq!(frame, expected, "the V2 frame format is frozen");
         // Every length prefix is exactly 8 bytes: fixed-width framing, not
         // the target-width-dependent `usize` encoding.
         assert_eq!(&frame[..8], &20u64.to_le_bytes());
     }
 
-    /// The V1 identity digest over the frozen frame is a fixed constant.
+    /// The V2 identity digest over the frozen frame is a fixed constant.
     /// The expected value below is reproduced independently of the
     /// implementation (the frame format is fully specified in the module
     /// documentation), so this test freezes the architecture-independent
-    /// V1 representation rather than the code's current output.
+    /// V2 representation rather than the code's current output.
     #[test]
-    fn the_v1_identity_digest_is_frozen() {
+    fn the_v2_identity_digest_is_frozen() {
         assert_eq!(
             identity(&serde_json::json!({"type": "object"})),
-            "sha256:638dbb487df8367bcb91ba4638cf7119d6e1f7974a2456dd265d5d0334bb68c9"
+            "sha256:3d04b21e29fa0116238964b59bba2a7c746413c9ea3f8895e6e78eab472c61a8"
         );
     }
 
@@ -403,8 +366,6 @@ mod tests {
             "Reads one issue.",
             &schema,
             ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-            ToolApprovalPolicy::Never,
         );
         let variants = [
             mcp_tool_identity(
@@ -413,8 +374,6 @@ mod tests {
                 "Reads one issue.",
                 &schema,
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
-                ToolApprovalPolicy::Never,
             ),
             mcp_tool_identity(
                 &McpServerId::new("github"),
@@ -422,8 +381,6 @@ mod tests {
                 "Reads one issue.",
                 &schema,
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
-                ToolApprovalPolicy::Never,
             ),
             mcp_tool_identity(
                 &McpServerId::new("github"),
@@ -431,8 +388,6 @@ mod tests {
                 "Reads one issue!",
                 &schema,
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
-                ToolApprovalPolicy::Never,
             ),
             mcp_tool_identity(
                 &McpServerId::new("github"),
@@ -440,8 +395,6 @@ mod tests {
                 "Reads one issue.",
                 &serde_json::json!({"type": "array"}),
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
-                ToolApprovalPolicy::Never,
             ),
             mcp_tool_identity(
                 &McpServerId::new("github"),
@@ -449,26 +402,13 @@ mod tests {
                 "Reads one issue.",
                 &schema,
                 ToolExecutionPolicy::BackgroundOnly,
-                ToolConcurrencyPolicy::Sequential,
-                ToolApprovalPolicy::Never,
             ),
             mcp_tool_identity(
                 &McpServerId::new("github"),
                 "get_issue",
                 "Reads one issue.",
                 &schema,
-                ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Parallel,
-                ToolApprovalPolicy::Never,
-            ),
-            mcp_tool_identity(
-                &McpServerId::new("github"),
-                "get_issue",
-                "Reads one issue.",
-                &schema,
-                ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
-                ToolApprovalPolicy::Always,
+                ToolExecutionPolicy::ModelSelectable,
             ),
         ];
         for variant in variants {
@@ -487,8 +427,6 @@ mod tests {
             "",
             &schema,
             ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-            ToolApprovalPolicy::Never,
         );
         let right = mcp_tool_identity(
             &McpServerId::new("a"),
@@ -496,8 +434,6 @@ mod tests {
             "",
             &schema,
             ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-            ToolApprovalPolicy::Never,
         );
         assert_ne!(left, right);
     }

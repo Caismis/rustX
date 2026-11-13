@@ -1,0 +1,24 @@
+.root { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
+.search { display: flex; flex: none; align-items: center; gap: 4px; padding: 6px; border-bottom: .5px solid var(--dsw-alias-border-l3); }
+.search > span { flex: 1; min-width: 0; height: 28px; }
+.search input { width: 100%; font-size: 12px; line-height: 18px; }
+.search input::-webkit-search-cancel-button { display: none; }
+.search .clear { flex: none; width: 24px; height: 24px; padding: 0; color: var(--dsw-alias-label-secondary); }
+.scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.parts { list-style: none; padding: 6px; margin: 0; }
+.parts ul { list-style: none; padding-inline-start: 12px; margin: 0; }
+.partRow { display: flex; align-items: center; gap: 2px; min-width: 0; border-radius: var(--dsw-radius-sm); }
+.partRow:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.parts .disclosure { width: 20px; flex: none; padding: 0; color: var(--dsw-alias-label-tertiary); }
+.disclosure svg { transition: transform 140ms ease; }
+.expanded { transform: rotate(90deg); }
+.branchSpace { width: 20px; flex: none; }
+.parts .partButton { justify-content: flex-start; min-width: 0; flex: 1; padding-inline: 6px; border-radius: var(--dsw-radius-sm); text-align: start; font-size: 12px; }
+.partButton > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.partButton > span:first-child { flex: none; color: var(--dsw-alias-label-tertiary); }
+.parts .partButton[aria-pressed="true"] { background: var(--dsw-alias-interactive-bg-active); }
+.parts .visibility { flex: none; width: 28px; padding: 0; color: var(--dsw-alias-label-secondary); }
+.visibilityAnchor { display: flex; flex: none; }
+.parts [data-hidden] .partButton { opacity: .5; }
+.empty { margin: 0; padding: 8px 12px 14px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
+@media (prefers-reduced-motion: reduce) { .disclosure svg { transition: none; } }

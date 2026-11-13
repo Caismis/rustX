@@ -17,7 +17,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
-import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v77';
+import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v78';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -192,7 +192,7 @@ describe('shared Fork naming', () => {
 describe('successful command draft consumption', () => {
   async function open(draft: string) {
     await subject();
-    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
     render(<App client={server.client} workspaceHost={server.workspaceHost} />);
     const input = screen.getByLabelText('Message'); input.focus();
     fireEvent.change(input, { target: { value: draft } });
@@ -217,7 +217,7 @@ describe('successful command draft consumption', () => {
   });
   it.each([['Branch into a new Session', 'thread/fork', 'after'], ['Regenerate', 'session/branch', 'before']] as const)('%s runs on the click without a chooser and locks the response actions until it settles', async (name, method, side) => {
     await subject();
-    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
     render(<App client={server.client} workspaceHost={server.workspaceHost} />);
     server.held.add(method);
     await act(async () => fireEvent.click(screen.getByRole('button', { name })));
@@ -241,7 +241,7 @@ describe('successful command draft consumption', () => {
   });
   it('Retry shows progress throughout its intentional detach, attach and replay handoff', async () => {
     const { scope } = await subject();
-    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
     render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
     for (const method of ['session/branch', 'session/switchNode', 'thread/resume', 'inbound/queue'] as const) server.held.add(method);
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Regenerate' })));
@@ -279,7 +279,7 @@ describe('successful command draft consumption', () => {
   });
   it('a rejected Retry restores the original reply in the resident viewport and sends no replay', async () => {
     await subject();
-    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
     render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
     const surface = document.querySelector('.chat-reading-surface');
     server.held.add('session/branch');
@@ -296,7 +296,7 @@ describe('successful command draft consumption', () => {
   });
   it('leaving during Retry retires its reading prefix and a late commit cannot send input or replace the new route', async () => {
     await subject();
-    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
+    localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
     render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
     server.held.add('session/branch');
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Regenerate' })));
@@ -465,7 +465,7 @@ describe('restored native editor content', () => {
   it('a genuine Fork seeds once and sidebar reselect preserves authored text, native uploads, selection and incarnation', async () => {
     const f = nativeFixture(); f.content.splice(0, f.content.length, { type: 'upload', session_id: 'A', batch_id: 'seed-batch', token: 'seed-token' }, { type: 'text', text: 'Authorized Fork input' });
     await server.attached('A');
-    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
     await act(async () => render(<App client={server.client} workspaceHost={server.workspaceHost}/>));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Branch into a new Session' })).toHaveProperty('disabled', false));
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Branch into a new Session' })));
@@ -513,7 +513,7 @@ describe('typed native operations and continuation fencing', () => {
     if (source === 'pending-settled') history.attempt = { attempt_id: 'settled-attempt', turn: 1, phase: { type: 'settled', outcome: { type: 'completed', finish_reason: { type: 'stop' } } } };
     history.transcript.entries!.unshift({ cursor: '0', item: { type: 'message', message: { role: 'user', source: 'human', id: 'user-cut', content: [{ type: 'text', text: 'Try this' }] } } });
     await server.update('A', history);
-    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
     render(<App client={server.client} workspaceHost={server.workspaceHost} />);
     const pending = { revision: "0", sequence: '1', message: { id: 'accepted-user', source: 'human' as const, content: [{ type: 'text' as const, text: 'Accepted task' }] } };
     if (source === 'acknowledgement') {
@@ -642,7 +642,7 @@ describe('typed native operations and continuation fencing', () => {
     navigation.invalidate(); const count = server.requests.length;
     server.socket.deliver(response); await work;
     expect(server.requests).toHaveLength(count);
-    expect(server.client.getSnapshot().views.B.snapshot?.effective_approval_mode).toBe('policy');
+    expect(server.client.getSnapshot().views.B.snapshot?.effective_approval_mode).toBe('plan');
     if (method === 'session/setModel') expect(fixture.model()).toBe('fixture/second');
   });
   it.each(['fork', 'branch', 'retry'] as const)('%s commit/held response/navigation/release leaves the mutation valid without continuation', async action => {
@@ -822,7 +822,7 @@ describe('typed native operations and continuation fencing', () => {
   });
   it.each(['fork', 'branch'] as const)('App navigation after committed %s cannot be redirected by a late reply', async action => {
     const { fixture } = await subject();
-    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
+    localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
     render(<App client={server.client} workspaceHost={server.workspaceHost} />);
     const input = screen.getByLabelText('Message');
     fireEvent.change(input, { target: { value: `/${action}` } });

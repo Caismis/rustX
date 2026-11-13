@@ -637,6 +637,8 @@ impl HttpFixture {
                 headers,
             },
             policy: crate::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
         }
     }
 

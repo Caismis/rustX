@@ -1,5 +1,5 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v77.js';
+import type {ProtocolMessage} from './v78.js';
 export const fixtures = [
   {
     "jsonrpc": "2.0",
@@ -87,17 +87,12 @@ export const fixtures = [
         "model": {
           "model": "provider/selected",
           "requestParams": {},
-          "summaryModel": {
-            "mode": "session"
-          },
-          "titleModel": {
-            "mode": "session"
-          },
-          "classificationModel": {
-            "mode": "session"
-          },
-          "btwModel": {
-            "mode": "session"
+          "auxiliary": {
+            "mode": "session",
+            "profile": {
+              "mode": "lowest"
+            },
+            "request_params": {}
           }
         }
       }
@@ -289,7 +284,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 77,
+      "protocol_version": 78,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -307,7 +302,7 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 77,
+      "protocol_version": 78,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
@@ -677,17 +672,12 @@ export const fixtures = [
       "config": {
         "model": "local/replacement",
         "requestParams": {},
-        "summaryModel": {
-          "mode": "session"
-        },
-        "titleModel": {
-          "mode": "session"
-        },
-        "classificationModel": {
-          "mode": "session"
-        },
-        "btwModel": {
-          "mode": "session"
+        "auxiliary": {
+          "mode": "session",
+          "profile": {
+            "mode": "lowest"
+          },
+          "request_params": {}
         }
       },
       "recover_unavailable_auxiliary": true

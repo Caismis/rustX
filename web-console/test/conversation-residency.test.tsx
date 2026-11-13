@@ -15,7 +15,7 @@ import { modelPreferences, NewSessionModelPreference, selectSessionModel } from 
 import { inputTrigger } from '../src/app/composer/input-trigger';
 import { cfg3Source, cfg3Effective } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
-import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v77';
+import type { CatalogModelView, RuntimeClientEvent, RuntimeClientSnapshot, SessionModelConfig, SourceSettings } from '../../protocol/app-server/v78';
 import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 
 // These spies execute the actual functions, including their hooks. Calls count
@@ -41,7 +41,7 @@ it('streaming publications update the transcript but do not render AppFrame or c
   const emit = (event: RuntimeClientEvent) => server.socket.deliver({ jsonrpc: '2.0', method: 'session/event', params: { target: server.target('A'), cursor: String(++server.cursor), event } });
   emit({ type: 'attempt_started', attempt_id: 'exact-attempt' });
   emit({ type: 'assistant_message_started', attempt_id: 'exact-attempt', message_id: 'exact-message' });
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
   const message = input(), seat = message.closest('[data-composer-seat]'), header = screen.getByLabelText('Session title').closest('header');
   fireEvent.change(message, { target: { value: 'untouched draft' } }); message.focus(); message.setSelectionRange(4, 7);
@@ -75,7 +75,7 @@ it('streaming publications update the transcript but do not render AppFrame or c
 
 const model = (id: string): CatalogModelView => ({ model: id, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: { inputModalities: ['text'], outputModalities: ['text'], jsonSchemaOutput: false }, effectiveCapabilities: { inputModalities: ['text'], outputModalities: ['text'], jsonSchemaOutput: false }, profiles: [] });
 function host() {
-  const source: SourceSettings = { ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace/A' }, prospective_approval_mode: 'policy', session_models: { kind: 'available', default_model: { model: 'fixture/root' }, catalog: { models: [model('fixture/root'), model('fixture/chosen')] } } };
+  const source: SourceSettings = { ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace/A' }, prospective_approval_mode: 'plan', session_models: { kind: 'available', default_model: { model: 'fixture/root' }, catalog: { models: [model('fixture/root'), model('fixture/chosen')] } } };
   return { ...server.workspaceHost, configureWorkspace: async () => ({ kind: 'read' as const, projection: source }), resolveWorkspace: async () => ({ cwd: '/workspace/A' }), classifyLocations: async (paths: string[]) => paths.map(() => ({ authorized: true as const, workspaceId: 'workspace-a' })) };
 }
 function nativeModel() {
@@ -131,7 +131,7 @@ it('hero and committed Session retain the exact composer card/input; internal ph
 });
 
 it.each([false, true])('one launcher grammar preserves unrelated draft and caret (active=%s)', async active => {
-  if (active) { await server.attached('A'); localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] })); }
+  if (active) { await server.attached('A'); localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } })); }
   else await server.connect();
   await act(async () => { render(<App client={server.client} workspaceHost={host()}/>); });
   const message = input(); fireEvent.change(message, { target: { value: 'unrelated prose' } }); message.focus(); message.setSelectionRange(3, 6);
@@ -152,7 +152,7 @@ it('the durable preference is authority-scoped data, never an existing Session m
   preference.select(endpoint, { model: 'last-used', profile: 'low' });
   expect(new NewSessionModelPreference(localStorage).read(endpoint)).toEqual({ model: 'last-used', profile: 'low' });
   expect(preference.read('ws://other/')).toBeUndefined(); expect(existing).toEqual({ model: 'session-owned', profile: 'high' });
-  expect(localStorage.getItem('rustx-console-view-v2')).toBeNull();
+  expect(localStorage.getItem('rustx-console-view-v3')).toBeNull();
 });
 
 it.each(['/model', 'unrelated prose'])('hero model selection settles the command without consuming unrelated input (%s)', async draft => {
@@ -178,7 +178,7 @@ it.each([false, true])('a confirmed native model selection seeds the next Sessio
   server.handlers.set('session/models', () => (domainReceipt('model_catalog.models',({ models: [model('fixture/root'), model('fixture/chosen')] }).models??[])));
   server.handlers.set('session/model', () => (domainReceipt('model',[server.snapshots.get('A')!.model!])));
   await server.attached('A', 'B');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={host()}/>); });
   fireEvent.click(screen.getByRole('button', { name: 'Model and thinking effort' }));
   await waitFor(() => expect(screen.queryByText('Reading native models…')).toBeNull());
@@ -246,7 +246,7 @@ vi.mock('../src/workspaces/WorkspaceNavigation', async original => {
 
 it.each(['cancelled', 'failed', 'timed_out', 'limit_exceeded'] as const)('execution transitions stay below real chrome functions (%s)', async outcome => {
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
   const calls = () => [AppFrame, HomeSidebar, WorkspaceNavigation, ConversationHeader].map(component => vi.mocked(component).mock.calls.length);
   const before = calls();
@@ -385,7 +385,7 @@ it('a cold connection failure keeps the unsent prompt recoverable without dispat
 
 it('restoring a cold selected view does not retire its own in-flight admission', async () => {
   await server.connect(); nativeModel(); server.held.add('thread/resume');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
   await server.waitFor('thread/resume', 1);
   expect(input().disabled).toBe(false);
@@ -437,7 +437,7 @@ it('cold /model uses the workspace catalog and applies the last choice before th
 
 it.each(['release', 'switch'] as const)('Composer controls agree with synchronous %s revocation while the native reply is held', async transition => {
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
   fireEvent.change(input(), { target: { value: 'preserved draft' } });
   const send = screen.getByRole('button', { name: 'Send' });

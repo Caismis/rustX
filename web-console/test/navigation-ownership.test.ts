@@ -6,6 +6,7 @@ import { routeFixture } from './shell-navigation-fixture';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import type { ShellNavigationActor } from '../src/app/navigation/machine';
 import { firstSubmissions } from '../src/app/new-conversation/first-submit';
+import { saveRoute } from '../src/app/navigation/preferences';
 
 const cleanups: (() => void)[] = [];
 afterEach(() => { cleanups.splice(0).forEach(stop => stop()); });
@@ -301,4 +302,44 @@ it.each(['cancel', 'newer Session', 'new authority'] as const)('same-generation 
   expect(f.actor.getSnapshot().context.draftSession).toBeUndefined();
   expect(f.server.requests.filter(row => row.request.method === 'thread/resume' && f.server.sessionForThread(row.request.params.threadId) === 'C')).toHaveLength(1);
   expect(f.server.requests.filter(row => ['session/submissionIntent', 'inbound/queue', 'turn/steer', 'turn/interrupt', 'session/detach'].includes(row.request.method))).toEqual([]);
+});
+
+
+it.each(['subagents', 'mcp', 'skills'] as const)('a committed Home keeps its saved hint through repeated offline %s returns without native execution', async module => {
+  const f = await fixture();
+  f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'B', sidebar: false } });
+  await f.server.client.disconnect();
+  const { binding, control } = f.actor.getSnapshot().context;
+  const before = f.server.requests.length;
+  for (let round = 0; round < 2; round++) {
+    f.actor.send({ type: 'RESOURCES', module });
+    expect(f.actor.getSnapshot().context.route).toEqual({ kind: module });
+    f.actor.send({ type: 'HOME' }); await idle(f.actor);
+    const context = f.actor.getSnapshot().context;
+    expect(context.route).toEqual({ kind: 'session-draft', sessionId: 'B' });
+    expect(context.binding).toBe(binding); expect(context.control).toBe(control);
+    expect(saveRoute(context, ['A', 'B'])).toEqual({ kind: 'session', sessionId: 'B' });
+    expect(f.server.client.isAttachmentControlCurrent('B', f.server.client.getSnapshot().views.B?.attachmentObservation)).toBe(false);
+  }
+  expect(f.server.requests.slice(before)).toEqual([]);
+});
+
+it.each(['subagents', 'mcp', 'skills'] as const)('a cold selection stays ephemeral across repeated %s/Home returns until Native admits it', async module => {
+  const f = await fixture(); await f.server.client.listSessions(); f.server.held.add('thread/resume');
+  f.actor.send({ type: 'OPEN', destination: { kind: 'session', sessionId: 'C', sidebar: false } });
+  const pending = await f.server.waitFor('thread/resume', 3);
+  const { binding, control } = f.actor.getSnapshot().context, before = f.server.requests.length;
+  for (let round = 0; round < 2; round++) {
+    f.actor.send({ type: 'RESOURCES', module });
+    f.actor.send({ type: 'HOME' }); await idle(f.actor);
+    const context = f.actor.getSnapshot().context;
+    expect(context.route).toEqual({ kind: 'session-draft', sessionId: 'C' });
+    expect(context.binding).toBe(binding); expect(context.control).toBe(control);
+    expect(saveRoute(context, ['A', 'B', 'C'])).toEqual({ kind: 'new-conversation' });
+  }
+  expect(f.server.requests.slice(before).filter(row => ['thread/start', 'thread/resume', 'session/submissionIntent', 'inbound/queue', 'turn/start'].includes(row.request.method))).toEqual([]);
+  f.server.reply(pending);
+  await f.server.client.waitForAttachment('C', () => true); await idle(f.actor);
+  expect(f.actor.getSnapshot().context.route).toEqual({ kind: 'session', sessionId: 'C' });
+  expect(saveRoute(f.actor.getSnapshot().context, ['A', 'B', 'C'])).toEqual({ kind: 'session', sessionId: 'C' });
 });

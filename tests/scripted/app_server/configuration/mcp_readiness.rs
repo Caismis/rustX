@@ -182,10 +182,16 @@ fn tool_schema(body: &str) -> Option<String> {
         .iter()
         .find(|tool| tool["function"]["name"] == TOOL)
         .map(|tool| {
-            tool["function"]["parameters"]["properties"]["id"]["type"]
-                .as_str()
-                .unwrap()
-                .to_owned()
+            let validator = jsonschema::Validator::new(&tool["function"]["parameters"]).unwrap();
+            let string = validator.is_valid(&serde_json::json!({"arguments":{"id":"fixture"}}));
+            let integer = validator.is_valid(&serde_json::json!({"arguments":{"id":7}}));
+            let fractional = validator.is_valid(&serde_json::json!({"arguments":{"id":7.5}}));
+            match (string, integer, fractional) {
+                (true, false, false) => "string".to_owned(),
+                (false, true, false) => "integer".to_owned(),
+                (false, true, true) => "number".to_owned(),
+                other => panic!("fixture tool contract must distinguish string/integer/number business input: {other:?}"),
+            }
         })
 }
 

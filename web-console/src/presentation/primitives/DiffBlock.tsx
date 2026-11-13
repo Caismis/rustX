@@ -166,6 +166,12 @@ function copyText(rows: DiffRow[]): string {
   }).join('\n')
 }
 
+/** Serialize the admitted local diff with the same paths, gaps and prefixes as Copy. */
+export function diffCopyText(diffs: DiffHunk[]): string {
+  const { rows } = buildRows(diffs)
+  return rows.some(row => row.kind !== 'path' && row.kind !== 'gap') ? copyText(rows) : ''
+}
+
 /**
  * Render a file mutation as an inline diff surface.
  * @param props - see {@link DiffBlockProps}.

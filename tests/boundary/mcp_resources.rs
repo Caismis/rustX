@@ -1,5 +1,4 @@
 //! A real resource-only MCP source enters context solely through a committed Tool call.
-mod approval;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -20,6 +19,22 @@ use crate::tools::executor::ToolRegistry;
 use crate::tools::mcp::{McpServerBinding, McpTransportConfig, fixture};
 use support::fake::{FakeStep, ScriptedCall, fake_model, model_release, tool_call_events};
 
+/// Resource-derived System authority comparisons ignore the sparse permission
+/// reminder (Issue #544 §10): it appears on the first request only and is not
+/// part of the frozen resource generation under test.
+fn without_permission_reminder(prompt: &str) -> &str {
+    const MARKER: &str = "Execution permission mode:";
+    if let Some(index) = prompt.find("\n\nExecution permission mode:") {
+        &prompt[..index]
+    } else if let Some(index) = prompt.find(&format!("\n{MARKER}")) {
+        &prompt[..index]
+    } else if prompt.starts_with(MARKER) {
+        ""
+    } else {
+        prompt
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resource_body_enters_context_only_after_one_committed_normal_tool_result() {
     if fixture::serve_if_fixture_mode(fixture::FixtureServer::from_env()).await {
@@ -38,6 +53,8 @@ async fn resource_body_enters_context_only_after_one_committed_normal_tool_resul
     let binding = McpServerBinding {
         credentials: crate::credentials::SourceCredentials::default(),
         policy: crate::tools::types::ToolInvocationPolicy::default(),
+        permissions: None,
+        tool_permissions: std::collections::BTreeMap::new(),
         transport: McpTransportConfig::Stdio {
             program: std::env::current_exe()
                 .unwrap()
@@ -167,7 +184,7 @@ async fn resource_body_enters_context_only_after_one_committed_normal_tool_resul
         support::default_execution_policy(),
         context,
         &fixture.runtime,
-        crate::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .unwrap();
     let mut run = Box::pin(execution.run());
@@ -199,9 +216,25 @@ async fn resource_body_enters_context_only_after_one_committed_normal_tool_resul
         "one Tool round adds exactly one subsequent model invocation"
     );
     assert_eq!(requests[1].tools, declarations);
+    // Issue #544 §10: sparse permission reminder appears on the first request
+    // only; ordinary subsequent Tool rounds keep the same resource-derived
+    // System authority without repeating the reminder.
+    assert!(
+        requests[0]
+            .effective_system_prompt
+            .contains("Execution permission mode:"),
+        "first request carries the sparse permission reminder"
+    );
+    assert!(
+        !requests[1]
+            .effective_system_prompt
+            .contains("Execution permission mode:"),
+        "ordinary Tool round does not repeat the permission reminder"
+    );
     assert_eq!(
-        requests[0].effective_system_prompt,
-        requests[1].effective_system_prompt
+        without_permission_reminder(&requests[0].effective_system_prompt),
+        without_permission_reminder(&requests[1].effective_system_prompt),
+        "resource-derived System authority is stable across the Tool round"
     );
     assert!(
         serde_json::to_string(&requests[1].messages)

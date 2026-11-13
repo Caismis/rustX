@@ -102,6 +102,7 @@ impl crate::agent::PreToolPolicy for AskPolicy {
     fn evaluate<'a>(
         &'a self,
         _: &'a crate::agent::PreToolView<'a>,
+        _: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> futures_util::future::BoxFuture<
         'a,
         Result<crate::agent::PreToolDecision, crate::agent::LifecycleError>,
