@@ -1,13 +1,14 @@
 //! Workspace interpreter-discovery contracts against the installed uv executable.
 
-#[test]
-fn ancestor_python_version_does_not_bind_workspace_discovery() {
-    crate::tools::workspace_python::tests::ancestor_python_version_does_not_bind_workspace_discovery();
+#[tokio::test]
+async fn ancestor_python_version_does_not_bind_workspace_discovery() {
+    crate::tools::workspace_python::tests::ancestor_python_version_does_not_bind_workspace_discovery().await;
 }
 
-#[test]
-fn relative_interpreter_pin_is_bound_to_the_workspace() {
-    crate::tools::workspace_python::tests::relative_interpreter_pin_is_bound_to_the_workspace();
+#[tokio::test]
+async fn relative_interpreter_pin_is_bound_to_the_workspace() {
+    crate::tools::workspace_python::tests::relative_interpreter_pin_is_bound_to_the_workspace()
+        .await;
 }
 
 #[tokio::test]
@@ -36,4 +37,14 @@ async fn real_uv_does_not_seed_or_select_an_external_project() {
 async fn real_dual_venv_launcher_variables_cannot_change_prefix() {
     crate::tools::workspace_python::tests::real_dual_venv_launcher_variables_cannot_change_prefix()
         .await;
+}
+
+#[tokio::test]
+async fn targets_added_while_creation_waits_for_capacity_are_never_initialized() {
+    crate::tools::workspace_python::tests::targets_added_while_creation_waits_for_capacity_are_never_initialized().await;
+}
+
+#[tokio::test]
+async fn real_multi_interpreter_selection_satisfies_both_root_inputs() {
+    crate::tools::workspace_python::tests::real_multi_interpreter_selection_satisfies_both_root_inputs().await;
 }

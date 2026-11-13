@@ -3355,7 +3355,9 @@ hold attempt leases and never block a capability commit.
   existing `.venv`. `uv` is optional for reuse and must be at least 0.10.0
   to create a missing environment. Preparation belongs to process/host drain,
   not transport lifetime. The original root identity and one validated input
-  generation authorize physical work and Ready publication; physical programs
+  generation authorize physical work and Ready publication. Creation rechecks
+  its target after acquiring capacity, and uv selects over all root version
+  constraints. An existing empty directory is never initialized. Physical programs
   inherit that Owner's cancellation signal. Command environments travel in
   private snapshots retained through settlement, not an aggregated OS
   environment string. See `docs/execution-environment.md`.

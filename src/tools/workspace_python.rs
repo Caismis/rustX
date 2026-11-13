@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::future::BoxFuture;
 use notify::Watcher;
-use pep440_rs::{Version, VersionSpecifiers};
+use pep440_rs::{Version, VersionSpecifier, VersionSpecifiers};
 use sha2::{Digest, Sha256};
 
 use super::execution_environment::{self, ExecutionHost};
@@ -191,6 +191,8 @@ struct Owner {
     before_snapshot: Mutex<Option<TestGate>>,
     #[cfg(test)]
     before_signal: Mutex<Option<TestGate>>,
+    #[cfg(test)]
+    waiting_permit: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 fn global() -> &'static Arc<Owner> {
@@ -219,6 +221,8 @@ impl Owner {
             before_snapshot: Mutex::new(None),
             #[cfg(test)]
             before_signal: Mutex::new(None),
+            #[cfg(test)]
+            waiting_permit: Mutex::new(None),
         }
     }
 
@@ -480,9 +484,6 @@ impl Owner {
             self.unavailable(root, "PATH or HOME is not Unicode", expected.clone());
             return;
         }
-        if !self.inputs_match(root, expected) {
-            return;
-        }
         let Some(uv) = find_uv(host.as_ref(), root) else {
             self.unavailable(root, "uv was not found on the host PATH", expected.clone());
             return;
@@ -507,14 +508,53 @@ impl Owner {
             );
             return;
         }
+        let request = match creation_request(root, pin, requires) {
+            Ok(request) => request,
+            Err(message) => {
+                self.conflict(root, message, expected.clone());
+                return;
+            }
+        };
+        let fixed = match self
+            .check_fixed_interpreter(root, &request, host.as_ref(), pin, requires, expected)
+            .await
+        {
+            Ok(fixed) => fixed,
+            Err(message) => {
+                if self.inputs_match(root, expected) {
+                    self.conflict(root, message, expected.clone());
+                }
+                return;
+            }
+        };
+        let target = root.join(".venv");
+        let mut argv = vec![uv.display().to_string(), "venv".to_owned()];
+        argv.extend(isolated_discovery_args());
+        // An explicit request always bypasses ancestor version files, including
+        // ancestors of the private directory. uv still owns discovery, policy,
+        // downloads and version selection; the PEP 440 conjunction includes
+        // every root requirement before uv can write the final target.
+        argv.extend(["--python".to_owned(), request]);
+        argv.push(target.display().to_string());
+        #[cfg(test)]
+        pass_gate(&self.before_create).await;
+        let Ok(permit) = self.acquire_permit().await else {
+            return;
+        };
         if !self.inputs_match(root, expected) {
             return;
         }
-        match classify_target(&root.join(".venv")) {
+        if fixed.as_ref().is_some_and(|fixed| !fixed.is_current()) {
+            return;
+        }
+        // This is the last classification before native creation dispatch.
+        // Waiting for capacity grants no permission to initialize a target
+        // another process added while this operation was suspended.
+        match classify_target(&target) {
             Target::Absent => {}
             Target::Directory => {
-                self.adopt(root, &root.join(".venv"), pin, requires, expected)
-                    .await;
+                drop(permit);
+                self.adopt(root, &target, pin, requires, expected).await;
                 return;
             }
             Target::Conflict(message) => {
@@ -522,22 +562,13 @@ impl Owner {
                 return;
             }
         }
-        let target = root.join(".venv");
-        let mut argv = vec![uv.display().to_string(), "venv".to_owned()];
-        argv.extend(isolated_discovery_args());
-        // venv performs uv's find-or-download operation under the effective
-        // automatic/manual/never and offline policy. `python find` cannot do so.
-        if let Some(pin) = pin {
-            argv.extend(["--python".to_owned(), absolute_pin(root, pin)]);
-        } else if let Some(requires) = requires {
-            argv.extend(["--python".to_owned(), requires.to_owned()]);
-        }
-        argv.push(target.display().to_string());
-        #[cfg(test)]
-        pass_gate(&self.before_create).await;
         let result = self
-            .run(root, argv, host.as_ref(), CREATE_TIMEOUT, expected)
+            .dispatch(
+                self.program_request(root, argv, host.as_ref(), CREATE_TIMEOUT, expected),
+                &permit,
+            )
             .await;
+        drop(permit);
         let failure = match result {
             Ok(output) if output.status == 0 => None,
             Ok(output) => Some(bounded_diagnostic(
@@ -657,6 +688,34 @@ impl Owner {
             .ok_or_else(|| "uv --version could not be parsed".to_owned())
     }
 
+    /// Path requests cannot select a different interpreter to satisfy the
+    /// project requirement. Validate the fixed executable before target writes
+    /// and retain its stamp across the later capacity wait.
+    async fn check_fixed_interpreter(
+        &self,
+        root: &Path,
+        request: &str,
+        host: &ExecutionHost,
+        pin: Option<&str>,
+        requires: Option<&str>,
+        expected: &Generation,
+    ) -> Result<Option<FixedInterpreter>, &'static str> {
+        let Some(pin) = pin.filter(|pin| path_request(pin)) else {
+            return Ok(None);
+        };
+        let path = if Path::new(pin).is_absolute() {
+            PathBuf::from(pin)
+        } else {
+            root.join(pin)
+        };
+        let stamp = stamp(&path).ok_or("the Python interpreter cannot be inspected")?;
+        let interpreter = self
+            .probe_interpreter(root, Path::new(request), host, expected)
+            .await?;
+        interpreter.check_requirements(root, Path::new(request), Some(pin), requires)?;
+        Ok(Some(FixedInterpreter { path, stamp }))
+    }
+
     async fn check_interpreter(
         &self,
         root: &Path,
@@ -666,6 +725,31 @@ impl Owner {
         requires: Option<&str>,
         expected: &Generation,
     ) -> Result<(), &'static str> {
+        let interpreter = self
+            .probe_interpreter(root, program, host, expected)
+            .await?;
+        {
+            let venv = root.join(".venv");
+            let Ok(actual) = std::fs::canonicalize(&interpreter.prefix) else {
+                return Err("Workspace .venv is not a valid virtual environment");
+            };
+            let Ok(expected) = std::fs::canonicalize(&venv) else {
+                return Err("Workspace .venv is not a valid virtual environment");
+            };
+            if actual != expected || interpreter.prefix == interpreter.base {
+                return Err("Workspace .venv is not a valid virtual environment");
+            }
+        }
+        interpreter.check_requirements(root, program, pin, requires)
+    }
+
+    async fn probe_interpreter(
+        &self,
+        root: &Path,
+        program: &Path,
+        host: &ExecutionHost,
+        expected: &Generation,
+    ) -> Result<Interpreter, &'static str> {
         let output = self
             .run(
                 root,
@@ -685,52 +769,17 @@ impl Owner {
             return Err("the Python interpreter could not be probed");
         }
         let mut lines = output.stdout.lines();
-        let prefix = lines.next().unwrap_or("").trim();
-        let base = lines.next().unwrap_or("").trim();
+        let prefix = lines.next().unwrap_or("").trim().to_owned();
+        let base = lines.next().unwrap_or("").trim().to_owned();
         let version_text = lines.next().unwrap_or("").trim();
         let implementation = lines.next().unwrap_or("").trim().to_owned();
-        {
-            let venv = root.join(".venv");
-            let Ok(actual) = std::fs::canonicalize(prefix) else {
-                return Err("Workspace .venv is not a valid virtual environment");
-            };
-            let Ok(expected) = std::fs::canonicalize(&venv) else {
-                return Err("Workspace .venv is not a valid virtual environment");
-            };
-            if actual != expected || prefix == base {
-                return Err("Workspace .venv is not a valid virtual environment");
-            }
-        }
-        let version = Version::from_str(version_text)
-            .map_err(|_| "the Python version could not be verified")?;
-        if let Some(requires) = requires {
-            let specs = VersionSpecifiers::from_str(requires)
-                .map_err(|_| "requires-python cannot be parsed")?;
-            if !specs.contains(&version) {
-                return Err("Workspace Python does not satisfy requires-python");
-            }
-        }
-        if let Some(pin) = pin {
-            if path_request(pin) {
-                let requested = if Path::new(pin).is_absolute() {
-                    PathBuf::from(pin)
-                } else {
-                    root.join(pin)
-                };
-                let Ok(actual) = std::fs::canonicalize(program) else {
-                    return Err("Workspace Python does not satisfy .python-version");
-                };
-                let Ok(expected) = std::fs::canonicalize(&requested) else {
-                    return Err("Workspace Python does not satisfy .python-version");
-                };
-                if actual != expected {
-                    return Err("Workspace Python does not satisfy .python-version");
-                }
-            } else {
-                request_satisfied(pin, &version, &implementation)?;
-            }
-        }
-        Ok(())
+        Ok(Interpreter {
+            prefix,
+            base,
+            version: Version::from_str(version_text)
+                .map_err(|_| "the Python version could not be verified")?,
+            implementation,
+        })
     }
 
     async fn run(
@@ -741,23 +790,64 @@ impl Owner {
         timeout: Duration,
         expected: &Generation,
     ) -> Result<ProgramOutput, String> {
-        let _permit = tokio::select! {
-            result = self.permits.acquire() => result.map_err(|_| "Workspace Python preparation stopped".to_owned())?,
-            () = self.shutdown.cancelled() => return Err("Workspace Python preparation stopped".to_owned()),
-        };
+        let permit = self.acquire_permit().await?;
         if !self.inputs_match(root, expected) {
             return Err("Workspace Python preparation stopped or inputs changed".to_owned());
         }
+        self.dispatch(
+            self.program_request(root, argv, host, timeout, expected),
+            &permit,
+        )
+        .await
+    }
+
+    async fn acquire_permit(&self) -> Result<tokio::sync::SemaphorePermit<'_>, String> {
+        let acquire = self.permits.acquire();
         #[cfg(test)]
-        pass_gate(&self.before_signal).await;
-        let request = ProgramRequest {
+        let acquire = {
+            let mut acquire = Box::pin(acquire);
+            futures_util::future::poll_fn(move |cx| {
+                let state = std::future::Future::poll(acquire.as_mut(), cx);
+                if state.is_pending()
+                    && let Some(waiting) =
+                        self.waiting_permit.lock().expect("waiting permit").take()
+                {
+                    let _ = waiting.send(());
+                }
+                state
+            })
+        };
+        tokio::select! {
+            result = acquire => result.map_err(|_| "Workspace Python preparation stopped".to_owned()),
+            () = self.shutdown.cancelled() => Err("Workspace Python preparation stopped".to_owned()),
+        }
+    }
+
+    fn program_request(
+        &self,
+        root: &Path,
+        argv: Vec<String>,
+        host: &ExecutionHost,
+        timeout: Duration,
+        expected: &Generation,
+    ) -> ProgramRequest {
+        ProgramRequest {
             argv,
             cwd: root.to_path_buf(),
             cwd_identity: (expected.root_dev, expected.root_ino),
             env: execution_environment::bootstrap_environment(host),
             timeout,
             cancellation: self.shutdown.child(),
-        };
+        }
+    }
+
+    async fn dispatch(
+        &self,
+        request: ProgramRequest,
+        _permit: &tokio::sync::SemaphorePermit<'_>,
+    ) -> Result<ProgramOutput, String> {
+        #[cfg(test)]
+        pass_gate(&self.before_signal).await;
         self.probe.run(request).await
     }
 
@@ -820,6 +910,63 @@ impl Owner {
     #[allow(clippy::unused_self)]
     fn before_lock(&self) -> Option<tokio::sync::oneshot::Sender<()>> {
         None
+    }
+}
+
+struct FixedInterpreter {
+    path: PathBuf,
+    stamp: PathStamp,
+}
+
+impl FixedInterpreter {
+    fn is_current(&self) -> bool {
+        stamp(&self.path).as_ref() == Some(&self.stamp)
+    }
+}
+
+struct Interpreter {
+    prefix: String,
+    base: String,
+    version: Version,
+    implementation: String,
+}
+
+impl Interpreter {
+    fn check_requirements(
+        &self,
+        root: &Path,
+        program: &Path,
+        pin: Option<&str>,
+        requires: Option<&str>,
+    ) -> Result<(), &'static str> {
+        if let Some(requires) = requires {
+            let specs = VersionSpecifiers::from_str(requires)
+                .map_err(|_| "requires-python cannot be parsed")?;
+            if !specs.contains(&self.version) {
+                return Err("Workspace Python does not satisfy requires-python");
+            }
+        }
+        if let Some(pin) = pin {
+            if path_request(pin) {
+                let requested = if Path::new(pin).is_absolute() {
+                    PathBuf::from(pin)
+                } else {
+                    root.join(pin)
+                };
+                let Ok(actual) = std::fs::canonicalize(program) else {
+                    return Err("Workspace Python does not satisfy .python-version");
+                };
+                let Ok(expected) = std::fs::canonicalize(&requested) else {
+                    return Err("Workspace Python does not satisfy .python-version");
+                };
+                if actual != expected {
+                    return Err("Workspace Python does not satisfy .python-version");
+                }
+            } else {
+                request_satisfied(pin, &self.version, &self.implementation)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1158,6 +1305,7 @@ fn read_requires(root: &Path) -> Requires {
         None => Requires::Absent,
         Some(value) => value
             .as_str()
+            .filter(|spec| VersionSpecifiers::from_str(spec).is_ok())
             .map_or(Requires::Invalid, |spec| Requires::Spec(spec.to_owned())),
     }
 }
@@ -1264,6 +1412,53 @@ fn uv_can_create(text: &str) -> bool {
         return false;
     };
     version >= minimum
+}
+
+/// Translate partial release requests to PEP 440 equality patterns and let uv
+/// perform selection over the conjunction. This does not implement a solver.
+fn creation_request(
+    root: &Path,
+    pin: Option<&str>,
+    requires: Option<&str>,
+) -> Result<String, &'static str> {
+    let Some(pin) = pin else {
+        return Ok(requires
+            .filter(|spec| !spec.trim().is_empty())
+            .unwrap_or("default")
+            .to_owned());
+    };
+    if path_request(pin) {
+        return Ok(absolute_pin(root, pin));
+    }
+    let Some(requires) = requires else {
+        return Ok(pin.to_owned());
+    };
+    let parsed = parse_request(pin).map_err(|()| ".python-version cannot be verified")?;
+    let (implementation, pinned): (_, VersionSpecifiers) = match parsed {
+        ParsedRequest::Spec {
+            implementation,
+            spec,
+        } => (
+            implementation,
+            VersionSpecifiers::from_str(&spec).map_err(|_| ".python-version cannot be verified")?,
+        ),
+        ParsedRequest::Release {
+            implementation,
+            version,
+        } => {
+            let specifier =
+                if version.release().len() < 3 && version == Version::new(version.release()) {
+                    VersionSpecifier::equals_star_version(version)
+                } else {
+                    VersionSpecifier::equals_version(version)
+                };
+            (implementation, std::iter::once(specifier).collect())
+        }
+    };
+    let additional =
+        VersionSpecifiers::from_str(requires).map_err(|_| "requires-python cannot be parsed")?;
+    let combined: VersionSpecifiers = pinned.into_iter().chain(additional).collect();
+    Ok(implementation.map_or_else(|| combined.to_string(), |name| format!("{name}@{combined}")))
 }
 
 fn exact_pin_conflicts(pin: &str, requires: &str) -> bool {
@@ -2807,83 +3002,72 @@ pub(crate) mod tests {
         assert_eq!(owner.records.lock().expect("records").len(), 1);
     }
 
-    pub(crate) fn ancestor_python_version_does_not_bind_workspace_discovery() {
-        let uv = std::env::var_os("PATH").and_then(|path| {
-            std::env::split_paths(&path).find_map(|directory| {
-                let candidate = directory.join("uv");
-                candidate.is_file().then_some(candidate)
-            })
-        });
-        let Some(uv) = uv else {
-            panic!("uv is required to prove an ancestor .python-version is ignored");
-        };
-        let parent = tempfile::tempdir().expect("parent");
-        std::fs::write(parent.path().join(".python-version"), "9.99\n").expect("pin");
-        let child = parent.path().join("workspace");
-        std::fs::create_dir(&child).expect("child");
-        let private = tempfile::tempdir().expect("discovery");
-        let config_home = parent.path().join("xdg");
-        std::fs::create_dir_all(config_home.join("uv")).expect("uv config");
-        std::fs::write(
-            config_home.join("uv/uv.toml"),
-            "python-preference = \"only-managed\"\n",
-        )
-        .expect("uv.toml");
-        let managed = parent.path().join("managed");
-        std::fs::create_dir(&managed).expect("managed");
-        let configured = std::process::Command::new(&uv)
-            .args([
-                "python",
-                "find",
-                "--no-project",
-                "--directory",
-                private.path().to_str().expect("utf8"),
-                "--offline",
-                "--no-python-downloads",
-            ])
-            .current_dir(&child)
-            .env("UV_OFFLINE", "1")
-            .env("XDG_CONFIG_HOME", &config_home)
-            .env("UV_PYTHON_INSTALL_DIR", &managed)
-            .output()
-            .expect("uv");
-        let configured_text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&configured.stdout),
-            String::from_utf8_lossy(&configured.stderr)
-        );
-        assert!(!configured.status.success());
+    pub(crate) async fn ancestor_python_version_does_not_bind_workspace_discovery() {
+        const CASE: &str = "RUSTX_TEST_DISCOVERY_ANCESTOR_ROOT";
+        if let Some(base) = std::env::var_os(CASE) {
+            let base = PathBuf::from(base);
+            let path = installed_uv_path();
+            let managed = base.join("managed");
+            std::fs::create_dir(&managed).unwrap();
+            for (name, preference, ready) in [
+                ("ordinary", "only-system", true),
+                ("restricted", "only-managed", false),
+            ] {
+                let root = base.join(name);
+                std::fs::create_dir(&root).unwrap();
+                let config = base.join(format!("config-{name}"));
+                std::fs::create_dir_all(config.join("uv")).unwrap();
+                std::fs::write(config.join("uv/uv.toml"), format!("offline = true\npython-downloads = \"never\"\npython-preference = {preference:?}\n")).unwrap();
+                let host = host_from_entries(vec![
+                    ("PATH", &path),
+                    ("XDG_CONFIG_HOME", config.to_str().unwrap()),
+                    ("UV_PYTHON_INSTALL_DIR", managed.to_str().unwrap()),
+                ]);
+                let owner = Owner::for_test(
+                    Arc::new(super::SupervisedProbe),
+                    Some(Arc::new(host)),
+                    Some(base.join("state")),
+                    None,
+                );
+                owner.prepare(root.clone()).await;
+                let is_ready = matches!(
+                    owner.records.lock().unwrap().get(&root),
+                    Some(Record::Ready { .. })
+                );
+                assert_eq!(
+                    is_ready,
+                    ready,
+                    "{name}: {:?}",
+                    owner.records.lock().unwrap()
+                );
+                if ready {
+                    assert!(root.join(".venv/bin/python").is_file());
+                } else {
+                    assert!(!root.join(".venv").exists());
+                }
+                owner.stop().await;
+            }
+            assert!(super::discovery_directory().starts_with(base.join("tmp")));
+            return;
+        }
+        let base = workspace();
+        std::fs::write(base.path().join(".python-version"), "9.99").unwrap();
+        std::fs::create_dir(base.path().join("tmp")).unwrap();
+        let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "boundary_suites::workspace_python::ancestor_python_version_does_not_bind_workspace_discovery", "--nocapture"])
+            .env(CASE, base.path()).env("TMPDIR", base.path().join("tmp"))
+            .kill_on_drop(true).output().await.unwrap();
         assert!(
-            !configured_text.contains("9.99"),
-            "ancestor pin leaked through configured discovery: {configured_text}"
-        );
-        assert!(
-            configured_text.contains("managed"),
-            "file-backed python-preference was ignored: {configured_text}"
-        );
-        let discovered = std::process::Command::new(&uv)
-            .args([
-                "python",
-                "find",
-                "--no-project",
-                "--offline",
-                "--no-python-downloads",
-            ])
-            .current_dir(&child)
-            .env("UV_OFFLINE", "1")
-            .env("XDG_CONFIG_HOME", &config_home)
-            .env("UV_PYTHON_INSTALL_DIR", &managed)
-            .output()
-            .expect("uv");
-        let discovered_text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&discovered.stdout),
-            String::from_utf8_lossy(&discovered.stderr)
+            output.status.success(),
+            "child production pipeline: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
         assert!(
-            discovered_text.contains("9.99"),
-            "the fixture did not reproduce ancestor discovery: {discovered_text}"
+            base.path().join("ordinary/.venv/pyvenv.cfg").is_file(),
+            "the child must execute the production preparation case"
         );
+        assert!(!base.path().join("restricted/.venv").exists());
     }
 
     #[test]
@@ -3171,71 +3355,51 @@ pub(crate) mod tests {
         assert_eq!(String::from_utf8_lossy(&listed.stdout), "ok");
     }
 
-    pub(crate) fn relative_interpreter_pin_is_bound_to_the_workspace() {
-        let uv = std::env::var_os("PATH").and_then(|path| {
-            std::env::split_paths(&path).find_map(|directory| {
-                let candidate = directory.join("uv");
-                candidate.is_file().then_some(candidate)
-            })
-        });
-        let Some(uv) = uv else {
-            panic!("uv is required to prove a relative interpreter pin stays in the Workspace");
-        };
-        let root = tempfile::tempdir().expect("root");
-        let root_path = std::fs::canonicalize(root.path()).expect("canonical");
+    pub(crate) async fn relative_interpreter_pin_is_bound_to_the_workspace() {
+        let root = workspace();
         let interpreter = PathBuf::from("/usr/bin/python3");
-        assert!(interpreter.is_file(), "python3 is required");
-        std::os::unix::fs::symlink(&interpreter, root_path.join("pinned-python")).expect("link");
-        let private = tempfile::tempdir().expect("private");
-        let private = private.path().to_str().expect("utf8");
-        let relative = std::process::Command::new(&uv)
-            .args([
-                "python",
-                "find",
-                "--no-project",
-                "--directory",
-                private,
-                "--offline",
-                "--no-python-downloads",
-                "./pinned-python",
-            ])
-            .current_dir(&root_path)
-            .env("UV_OFFLINE", "1")
-            .output()
-            .expect("uv");
         assert!(
-            !relative.status.success(),
-            "the fixture must show that --directory drops a relative pin: {}",
-            String::from_utf8_lossy(&relative.stderr)
+            interpreter.is_file(),
+            "system Python required by boundary suite"
         );
-        let requested = super::absolute_pin(&root_path, "./pinned-python");
-        assert!(Path::new(&requested).is_absolute());
-        let found = std::process::Command::new(&uv)
-            .args([
-                "python",
-                "find",
-                "--no-project",
-                "--directory",
-                private,
-                "--offline",
-                "--no-python-downloads",
-                &requested,
-            ])
-            .current_dir(&root_path)
-            .env("UV_OFFLINE", "1")
-            .output()
-            .expect("uv");
+        std::os::unix::fs::symlink(&interpreter, root.path().join("pinned-python")).unwrap();
+        std::fs::write(root.path().join(".python-version"), "./pinned-python").unwrap();
+        let version = python_version(&interpreter);
+        std::fs::write(
+            root.path().join("pyproject.toml"),
+            format!(
+                "[project]\nrequires-python = \">={}.{}\"\n",
+                version.release()[0],
+                version.release()[1]
+            ),
+        )
+        .unwrap();
+        let path = installed_uv_path();
+        let host = host_from_entries(vec![
+            ("PATH", &path),
+            ("UV_OFFLINE", "1"),
+            ("UV_PYTHON_DOWNLOADS", "never"),
+        ]);
+        let owner = Owner::for_test(
+            Arc::new(super::SupervisedProbe),
+            Some(Arc::new(host)),
+            None,
+            None,
+        );
+        owner.prepare(root.path().to_path_buf()).await;
         assert!(
-            found.status.success(),
-            "{}",
-            String::from_utf8_lossy(&found.stderr)
+            matches!(
+                owner.records.lock().unwrap().get(root.path()),
+                Some(Record::Ready { .. })
+            ),
+            "{:?}",
+            owner.records.lock().unwrap()
         );
-        let reported = String::from_utf8_lossy(&found.stdout);
-        let reported = reported.lines().next().unwrap_or("").trim();
         assert_eq!(
-            std::fs::canonicalize(reported).expect("reported"),
-            std::fs::canonicalize(&interpreter).expect("python3")
+            std::fs::canonicalize(root.path().join(".venv/bin/python")).unwrap(),
+            std::fs::canonicalize(interpreter).unwrap()
         );
+        owner.stop().await;
     }
 
     #[tokio::test]
@@ -3673,6 +3837,322 @@ pub(crate) mod tests {
                 }
                 owner.stop().await;
             }
+        }
+    }
+    #[test]
+    fn creation_requests_combine_root_requirements_without_losing_request_semantics() {
+        for (pin, requires, expected) in [
+            (None, None, "default"),
+            (None, Some(""), "default"),
+            (None, Some(">=3.13"), ">=3.13"),
+            (Some("3"), Some(">=3.13"), "==3.*, >=3.13"),
+            (Some("3.12"), Some(">=3.12.5"), "==3.12.*, >=3.12.5"),
+            (Some("cpython-3"), Some(">=3.13"), "cpython@==3.*, >=3.13"),
+            (Some("pypy@>=3.10"), Some("<3.14"), "pypy@>=3.10, <3.14"),
+            (Some("3.13.0rc1"), Some(">=3"), "==3.13.0rc1, >=3"),
+        ] {
+            let actual = super::creation_request(Path::new("/workspace"), pin, requires).unwrap();
+            // Specifier display order is maintained by pep440_rs, so compare
+            // parsed constraints and the implementation, not authored order.
+            let (actual_impl, actual_spec) = actual
+                .split_once('@')
+                .map_or((None, actual.as_str()), |(name, spec)| (Some(name), spec));
+            let (expected_impl, expected_spec) = expected
+                .split_once('@')
+                .map_or((None, expected), |(name, spec)| (Some(name), spec));
+            assert_eq!(actual_impl, expected_impl);
+            if expected_spec == "default" {
+                assert_eq!(actual_spec, expected_spec);
+            } else {
+                assert_eq!(
+                    pep440_rs::VersionSpecifiers::from_str(actual_spec).unwrap(),
+                    pep440_rs::VersionSpecifiers::from_str(expected_spec).unwrap()
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_requires_with_a_pin_is_rejected_before_any_probe_or_target() {
+        for invalid in ["not-a-specifier", ">=>3.12"] {
+            let root = workspace();
+            std::fs::write(root.path().join(".python-version"), "3").unwrap();
+            std::fs::write(
+                root.path().join("pyproject.toml"),
+                format!("[project]\nrequires-python = {invalid:?}\n"),
+            )
+            .unwrap();
+            let probe = Arc::new(Scripted::new("0.10.2"));
+            let owner = Owner::for_test(probe.clone(), None, None, None);
+            owner.prepare(root.path().to_path_buf()).await;
+            assert!(matches!(
+                owner.records.lock().unwrap().get(root.path()),
+                Some(Record::Conflict { .. })
+            ));
+            assert!(probe.calls.lock().unwrap().is_empty());
+            assert!(!root.path().join(".venv").exists());
+        }
+    }
+
+    pub(crate) async fn targets_added_while_creation_waits_for_capacity_are_never_initialized() {
+        for kind in ["symlink", "directory", "file"] {
+            let root = workspace();
+            let external = workspace();
+            let path = installed_uv_path();
+            let host = host_from_entries(vec![
+                ("PATH", &path),
+                ("UV_OFFLINE", "1"),
+                ("UV_PYTHON_DOWNLOADS", "never"),
+            ]);
+            let owner = Arc::new(Owner::for_test(
+                Arc::new(super::SupervisedProbe),
+                Some(Arc::new(host)),
+                None,
+                None,
+            ));
+            let (entered, release) = arm_gate(&owner.before_create);
+            let preparing = owner.clone();
+            let workspace = root.path().to_path_buf();
+            let task = tokio::spawn(async move { preparing.prepare(workspace).await });
+            entered.await.unwrap();
+            let held = owner.permits.acquire_many(2).await.unwrap();
+            let (waiting, blocked) = tokio::sync::oneshot::channel();
+            *owner.waiting_permit.lock().unwrap() = Some(waiting);
+            release.send(()).unwrap();
+            blocked
+                .await
+                .expect("create is queued behind the held permits");
+            let target = root.path().join(".venv");
+            match kind {
+                "symlink" => std::os::unix::fs::symlink(external.path(), &target).unwrap(),
+                "directory" => std::fs::create_dir(&target).unwrap(),
+                _ => std::fs::write(&target, "preserve me").unwrap(),
+            }
+            drop(held);
+            tokio::time::timeout(std::time::Duration::from_secs(10), task)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                matches!(
+                    owner.records.lock().unwrap().get(root.path()),
+                    Some(Record::Conflict { .. })
+                ),
+                "{kind}"
+            );
+            assert_eq!(
+                std::fs::read_dir(external.path()).unwrap().count(),
+                0,
+                "external target must remain empty"
+            );
+            if kind == "directory" {
+                assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0);
+            }
+            if kind == "file" {
+                assert_eq!(std::fs::read_to_string(&target).unwrap(), "preserve me");
+            }
+            owner.stop().await;
+        }
+    }
+
+    fn python_version(program: &Path) -> Version {
+        let output = std::process::Command::new(program)
+            .args([
+                "-I",
+                "-c",
+                "import platform; print(platform.python_version())",
+            ])
+            .env_remove("PYTHONEXECUTABLE")
+            .env_remove("__PYVENV_LAUNCHER__")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        Version::from_str(String::from_utf8(output.stdout).unwrap().trim()).unwrap()
+    }
+
+    fn installed_python_interpreters() -> Vec<(Version, PathBuf)> {
+        // Enumeration supplies fixture executables only. The selection under
+        // test goes through Owner::prepare and the production supervisor.
+        let installed = std::process::Command::new("uv")
+            .args([
+                "python",
+                "list",
+                "--only-installed",
+                "--output-format",
+                "json",
+            ])
+            .env("UV_OFFLINE", "1")
+            .output()
+            .unwrap();
+        assert!(installed.status.success(), "{installed:?}");
+        let listed: Vec<serde_json::Value> = serde_json::from_slice(&installed.stdout).unwrap();
+        let mut interpreters: Vec<_> = listed
+            .iter()
+            .filter(|entry| entry["implementation"] == "cpython" && entry["variant"] == "default")
+            .filter_map(|entry| {
+                Some((
+                    Version::from_str(entry["version"].as_str()?).ok()?,
+                    PathBuf::from(entry["path"].as_str()?),
+                ))
+            })
+            .filter(|(version, _)| version.release()[0] == 3 && !version.any_prerelease())
+            .collect();
+        interpreters.sort_by(|a, b| a.0.cmp(&b.0));
+        interpreters
+    }
+
+    pub(crate) async fn real_multi_interpreter_selection_satisfies_both_root_inputs() {
+        let interpreters = installed_python_interpreters();
+        let (low_version, low) = interpreters
+            .first()
+            .expect("two installed Python minors required");
+        let (high_version, high) = interpreters.last().unwrap();
+        assert!(
+            low_version.release()[1] < high_version.release()[1],
+            "the boundary requires two real Python minors: {interpreters:?}"
+        );
+        let fixture = workspace();
+        let first = fixture.path().join("first");
+        let second = fixture.path().join("second");
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&second).unwrap();
+        std::os::unix::fs::symlink(low, first.join("python3")).unwrap();
+        std::os::unix::fs::symlink(high, second.join("python3")).unwrap();
+        let uv_path = installed_uv_path();
+        let uv_bin = uv_path.split(':').next().unwrap();
+        let path = format!("{}:{}:{uv_bin}", first.display(), second.display());
+        let managed = fixture.path().join("managed");
+        std::fs::create_dir(&managed).unwrap();
+        let host = Arc::new(host_from_entries(vec![
+            ("PATH", &path),
+            ("UV_PYTHON_INSTALL_DIR", managed.to_str().unwrap()),
+            ("UV_PYTHON_PREFERENCE", "only-system"),
+            ("UV_OFFLINE", "1"),
+            ("UV_PYTHON_DOWNLOADS", "never"),
+        ]));
+        // Prove that a pin alone chooses the first (incompatible) interpreter.
+        let control = fixture.path().join("pin-only");
+        let output = std::process::Command::new(Path::new(uv_bin).join("uv"))
+            .args(["venv", "--no-project", "--python", "3"])
+            .arg(&control)
+            .env_clear()
+            .envs(crate::tools::execution_environment::bootstrap_environment(
+                &host,
+            ))
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(python_version(&control.join("bin/python")), *low_version);
+        let requires = format!(">=3.{}", high_version.release()[1]);
+        for pin in ["3", "cpython-3", "cpython@>=3"] {
+            let root = workspace();
+            std::fs::write(root.path().join(".python-version"), pin).unwrap();
+            std::fs::write(
+                root.path().join("pyproject.toml"),
+                format!("[project]\nrequires-python = {requires:?}\n"),
+            )
+            .unwrap();
+            let owner = Owner::for_test(
+                Arc::new(super::SupervisedProbe),
+                Some(host.clone()),
+                None,
+                None,
+            );
+            owner.prepare(root.path().to_path_buf()).await;
+            assert!(
+                matches!(
+                    owner.records.lock().unwrap().get(root.path()),
+                    Some(Record::Ready { .. })
+                ),
+                "{pin}: {:?}",
+                owner.records.lock().unwrap()
+            );
+            assert_eq!(
+                python_version(&root.path().join(".venv/bin/python")),
+                *high_version
+            );
+            owner.stop().await;
+        }
+        // A fixed path cannot be made compatible by selecting another Python.
+        // A disjoint version conjunction must also fail without a target.
+        for pin in [
+            low.display().to_string(),
+            format!("3.{}", low_version.release()[1]),
+        ] {
+            let root = workspace();
+            std::fs::write(root.path().join(".python-version"), &pin).unwrap();
+            std::fs::write(
+                root.path().join("pyproject.toml"),
+                format!("[project]\nrequires-python = {requires:?}\n"),
+            )
+            .unwrap();
+            let owner = Owner::for_test(
+                Arc::new(super::SupervisedProbe),
+                Some(host.clone()),
+                None,
+                None,
+            );
+            owner.prepare(root.path().to_path_buf()).await;
+            assert!(
+                matches!(
+                    owner.records.lock().unwrap().get(root.path()),
+                    Some(Record::Conflict { .. } | Record::Unavailable { .. })
+                ),
+                "{pin}"
+            );
+            assert!(!root.path().join(".venv").exists());
+            owner.stop().await;
+        }
+    }
+    #[tokio::test]
+    async fn changed_fixed_interpreter_during_capacity_wait_does_not_create_a_target() {
+        for change in ["entry", "target"] {
+            let root = workspace();
+            let base = root.path().join("base-python");
+            let other = root.path().join("other-python");
+            write_executable(&base, "#!/bin/sh\nexit 0\n");
+            write_executable(&other, "#!/bin/sh\nexit 0\n");
+            let alias = root.path().join("pinned-python");
+            std::os::unix::fs::symlink(&base, &alias).unwrap();
+            std::fs::write(root.path().join(".python-version"), "./pinned-python").unwrap();
+            let bin = workspace();
+            write_executable(&bin.path().join("uv"), "#!/bin/sh\nexit 0\n");
+            let probe = Arc::new(Scripted::new("0.10.2"));
+            let owner = Arc::new(Owner::for_test(
+                probe.clone(),
+                Some(host_for(bin.path())),
+                None,
+                None,
+            ));
+            let (entered, release) = arm_gate(&owner.before_create);
+            let preparing = owner.clone();
+            let path = root.path().to_path_buf();
+            let task = tokio::spawn(async move { preparing.prepare(path).await });
+            entered.await.unwrap();
+            let held = owner.permits.acquire_many(2).await.unwrap();
+            let (waiting, blocked) = tokio::sync::oneshot::channel();
+            *owner.waiting_permit.lock().unwrap() = Some(waiting);
+            release.send(()).unwrap();
+            blocked.await.unwrap();
+            if change == "entry" {
+                std::fs::rename(&alias, root.path().join("old-alias")).unwrap();
+                std::os::unix::fs::symlink(&other, &alias).unwrap();
+            } else {
+                std::fs::rename(&base, root.path().join("old-base")).unwrap();
+                write_executable(&base, "#!/bin/sh\nexit 0\n");
+            }
+            drop(held);
+            task.await.unwrap();
+            assert!(!root.path().join(".venv").exists());
+            assert!(owner.records.lock().unwrap().get(root.path()).is_none());
+            assert!(
+                !probe
+                    .calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|argv| argv.iter().any(|arg| arg == "venv"))
+            );
         }
     }
 }

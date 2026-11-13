@@ -30,22 +30,27 @@ not rewrite the command string, so an absolute interpreter path keeps its
 ordinary meaning.
 
 - A valid existing virtual environment is reused after its interpreters are
-  probed. `uv` is not required for reuse.
+  probed. `uv` is not required for reuse. A missing environment is left absent
+  if uv is missing; rustX does not install uv or use another environment creator.
 - A missing environment is created only with `uv` 0.10.0 or newer, at the
   final path, without `--clear`, `--seed`, or `--allow-existing`. `uv venv`
   performs interpreter discovery and automatic download under uv's effective
   download/offline policy; `uv python find` is not a prerequisite. Bootstrap
   `uv` commands pass `--directory` pointing at a private directory outside the
   Workspace tree, so a `.python-version` on the Workspace or its parents
-  cannot select the interpreter. A pin above that private directory can still
-  be walked. User and system `uv.toml` files still apply, together with
+  cannot select the interpreter. An explicit `--python` request also excludes
+  pins above the private directory; without root requirements it is `default`.
+  User and system `uv.toml` files still apply, together with
   offline, proxy, certificate, index, and cache settings from the captured
   environment. There is no installer, `python -m venv` fallback, `uv sync`,
   or package seed. At most 64 preparations run at once. A further Workspace is
   left for a later schedule, and shutdown joins every preparation that was
   started.
 - A symlink, file, or invalid directory at `.venv` is left in place and
-  reported internally as a conflict.
+  reported internally as a conflict. After acquiring creation capacity, the
+  runtime classifies the target again immediately before dispatch. A directory
+  added during the wait enters validation; even an empty directory is never
+  initialized. A new root symlink or file is a conflict before uv starts.
 - The Workspace-root `.python-version` is the explicit interpreter request.
   A path request must resolve to that interpreter. An implementation prefix
   such as `cpython-` or `pypy-` must match `sys.implementation.name`; an
@@ -53,7 +58,12 @@ ordinary meaning.
   `pyproject.toml` `[project].requires-python` specifier is passed to
   `uv venv --no-project --directory <outside the Workspace> --python <request>`. A relative
   path request is made absolute from the Workspace root before that command
-  sees it. The selected interpreter is
+  sees it. `requires-python` is parsed before probing. When both root files
+  specify versions, pep440_rs constructs their conjunction, preserving
+  implementation and partial/exact-version semantics, and uv selects over
+  that joint request. A fixed path interpreter must satisfy both inputs before
+  creation and retain its identity across the capacity wait. The selected
+  interpreter is
   checked against both inputs before it is ready. The readiness identity is
   snapshotted after the environment exists and before those probes. That same
   snapshot must match the original root and version inputs. Every physical
@@ -109,8 +119,11 @@ inject `UV_PROJECT_ENVIRONMENT` into them.
 ## Excluded execution
 
 Managed Python, manual terminals, generic App Server `command/exec`, and MCP
-servers do not enter the Workspace environment. They keep the explicit
-baseline from `ToolEnvironment::child_environment`.
+servers do not enter the Workspace environment. Managed Python, generic
+execution, and MCP retain their `ToolEnvironment::child_environment` contract.
+Manual terminals retain the existing Desktop environment allowlist; the
+terminal process owner passes it through the same private snapshot protocol
+and retains that snapshot until the outer supervisor exits.
 
 A subagent receives the parent's captured host snapshot in a mode-0600 file
 inside its private runtime root. It does not recapture the environment of the
@@ -125,7 +138,8 @@ cancellation. The subagent process joins its preparation before exiting.
 
 The lock coordinates rustX processes on one machine. Shutdown stops waiting
 for it. It does not stop an unrelated program from changing `.venv`, and it
-is not an NFS lock. Readiness
+is not an NFS lock. The post-permit target check does not claim a general
+filesystem transaction against arbitrary external mutations after dispatch. Readiness
 identity tracks the Workspace root and the device, inode, mtime, length and
 permissions of its version files, `.venv`, `pyvenv.cfg`, and the resolved
 `.venv/bin/python` plus `python3` targets. An in-place edit that preserves all
@@ -140,3 +154,9 @@ not observe later changes made in a parent terminal. `uv` is optional and is
 installed separately; creation requires 0.10.0 or newer. The environment is
 frozen on the native Bash invocation before permission approval, so a later
 Ready publication does not change a command that was already prepared.
+
+Command-environment transport currently needs an owner-only named temporary
+file for every supervised launch, including small foreground Bash commands.
+This is independent of lazy output spill. Failure to allocate that snapshot
+refuses launch; moving it to a retained private FD or control-frame transport
+would require a separate supervisor transport change.
