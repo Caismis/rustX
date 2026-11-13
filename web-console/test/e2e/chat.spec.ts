@@ -310,9 +310,10 @@ test('native history, rich settlement, real image previews, reconnect and native
     // Opening the normal detail tab owns automatic bounded reads at its retained cut.
     await inspector.getByRole('tab', { name: 'Payload', exact: true }).click();
     let selectedField = inspector.getByRole('tabpanel');
-    // Empty trees have no rows; their visible braces belong to the surrounding JSON view.
+    // Original Tool payloads retain the wire envelope, including an empty
+    // business arguments object; business cards alone unpack that object.
     await expect(selectedField.getByRole('tree',{name:'Payload JSON'})).toBeAttached();
-    await expect(selectedField).toHaveText(/^\{\s*\}$/);
+    await expect(selectedField).toHaveText(/^\{\s*arguments:\s*\{\s*\}\s*\}$/);
     await inspector.getByRole('tab', { name: 'Result', exact: true }).click();
     selectedField = inspector.getByRole('tabpanel');
     await expect(selectedField.getByRole('button',{name:'Preview artifact_1',exact:true})).toBeVisible();
