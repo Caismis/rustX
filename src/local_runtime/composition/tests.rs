@@ -61,7 +61,10 @@ fn mcp_call_script(tool_id: &ToolId, arguments: serde_json::Value) -> Vec<FakeSt
                 id: call_id,
                 tool_id: tool_id.clone(),
                 name: TOOL_NAME.to_owned(),
-                arguments,
+                arguments: serde_json::Value::Object(serde_json::Map::from_iter([(
+                    "arguments".to_owned(),
+                    arguments,
+                )])),
             },
         }),
         FakeStep::Emit(ModelEvent::Completed {
@@ -147,7 +150,10 @@ compat = { chat_reasoning_replay = "omit" }
 
     let echo_call_count_file = root.path().join("echo-call-count");
     let executable = std::env::current_exe().expect("test executable");
-    let mut config_document = serde_json::json!({"schema_version": 12, "agent_id": "agent-parent", "mcp_servers": {
+    // Tool-execution composition fixtures must not sit on Plan: MCP defaults
+    // are ExternalOrDelegated and Plan denies them without elevation_reason,
+    // so the parent never commits a ToolResult or continues into turn two.
+    let mut config_document = serde_json::json!({"schema_version": 13, "agent_id": "agent-parent", "approval_mode": "full_access", "mcp_servers": {
             SERVER_NAME: {
                 "command": executable,
                 "args": fixture_spawn_args(test_name),
@@ -305,7 +311,7 @@ async fn named_subagent_and_mcp_share_one_frozen_parent_generation() {
         id: ToolCallId::new("mcp-call-163"),
         tool_id: fixture.tool_id.clone(),
         name: TOOL_NAME.to_owned(),
-        arguments: serde_json::json!({}),
+        arguments: serde_json::json!({"arguments":{}}),
     };
     let ledger = fixture
         .runtime
@@ -397,7 +403,7 @@ async fn malformed_mcp_arguments_remain_a_normal_preflight_rejection() {
             id: expected_call_id.clone(),
             tool_id: fixture.tool_id.clone(),
             name: TOOL_NAME.to_owned(),
-            arguments: serde_json::json!({"unexpected": true}),
+            arguments: serde_json::json!({"arguments":{"unexpected": true}}),
         }
     );
     let tool_result = ledger
@@ -616,7 +622,7 @@ async fn headless_first_submission_waits_ten_seconds_for_exact_selected_tools() 
     crate::launch_fixture::write_document(
         &root.path().join("rustx.toml"),
         &toml::to_string_pretty(&serde_json::json!({
-            "schema_version":12,
+            "schema_version":13,
             "agent":{"model":{"model":"scripted/scripted"},
                 "tools":{"builtin":["read"],"sources":{SERVER_NAME:[TOOL_NAME]}}},
             "providers":{"scripted":{"protocol":"openai_chat_completions","base_url":provider.url("/v1"),"api_key":"fixture"}},

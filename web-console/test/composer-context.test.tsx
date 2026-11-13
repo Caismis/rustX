@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RuntimeClientGoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v78';
+import type { RuntimeClientGoalSnapshot, RuntimeClientSnapshot, TodoTask } from '../../protocol/app-server/v79';
 import { App } from '../src/app/App';
 import { ComposerContextStack } from '../src/app/composer/ComposerContextStack';
 import { GoalDock } from '../src/app/composer/GoalDock';
@@ -45,7 +45,7 @@ const withStatusHistory = (base = snapshot()): RuntimeClientSnapshot => {
 
 /** Historical execution facts only: a `todo` call and its committed result. */
 const withTodoHistory = (base = snapshot()): RuntimeClientSnapshot => {
-  const call = { role: 'assistant' as const, id: 'history-call', content: [{ type: 'tool_call' as const, id: 'call-todo', tool_id: 'tool-todo', name: 'todo', arguments: { action: 'create', subject: 'Historical task' } }] };
+  const call = { role: 'assistant' as const, id: 'history-call', content: [{ type: 'tool_call' as const, id: 'call-todo', tool_id: 'tool-todo', name: 'todo', arguments: { arguments: { action: 'create', subject: 'Historical task' } } }] };
   const result = { role: 'tool' as const, occurrence: { assistant_message_id: 'history-call', block_index: 0 }, id: 'history-result', tool_call_id: 'call-todo', tool_id: 'tool-todo', result: { status: { type: 'success' as const }, duration_ms: '1' } };
   return { ...base, transcript: { entries: [call, result].map((message, index) => ({ cursor: String(index + 1), item: { type: 'message' as const, message }, tool_calls: message.role === 'assistant' ? [{ message_id: call.id, occurrence: { locator: { type: 'by_message_id' as const, message_id: call.id }, block_index: 0 }, block_index: 0, call_id: 'call-todo', tool_id: 'tool-todo', name: 'todo', assembly_complete: true, committed_result_deferred: false, committed_result: result.result, state: { type: 'assembled' as const, arguments: JSON.stringify(call.content[0].arguments) } }] : [] })) } };
 };

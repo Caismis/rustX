@@ -593,9 +593,7 @@ use rustx::tools::background::{
     BackgroundDispatchOutcome, BackgroundLifecycle, ConversationBackgroundRegistry,
 };
 use rustx::tools::executor::ToolRegistry;
-use rustx::tools::types::{
-    ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocation, ToolInvocationMode,
-};
+use rustx::tools::types::{ToolExecutionPolicy, ToolInvocation, ToolInvocationMode};
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, success_result, tool_call_events,
 };
@@ -937,12 +935,7 @@ async fn ext256_an_empty_extension_composition_changes_nothing_but_agent_status(
         let extensions = composition(document);
         let fixture = common::native_fixture();
         let tool = FakeTool::new(
-            common::tool_policies(
-                "worker",
-                "ext256-tool",
-                ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
-            ),
+            common::tool_policies("worker", "ext256-tool", ToolExecutionPolicy::ForegroundOnly),
             success_result("worker"),
         );
         let mut tools = fixture.ordinary_registry.clone();
@@ -1004,12 +997,7 @@ async fn ext256_a_disabled_agent_status_extension_emits_nothing_anywhere() {
     let call = scripted("ext256-none", "ext256-tool", "worker");
     let fixture = common::native_fixture();
     let tool = FakeTool::new(
-        common::tool_policies(
-            "worker",
-            "ext256-tool",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+        common::tool_policies("worker", "ext256-tool", ToolExecutionPolicy::ForegroundOnly),
         success_result("worker"),
     );
     let mut tools = fixture.ordinary_registry.clone();
@@ -1158,7 +1146,6 @@ async fn seed_detached_execution(
             "detached",
             "ext256-detached",
             ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Parallel,
         ),
         success_result("detached"),
     );
@@ -1402,7 +1389,7 @@ fn ext259_todo_is_rejected_on_every_ordinary_selection_surface() {
     use rustx::capabilities::AgentActivation as Selection;
 
     // Root configuration.
-    let config = r#"schema_version = 12
+    let config = r#"schema_version = 13
 agent_id = "agent-ext259"
 
 
@@ -1649,12 +1636,7 @@ async fn ext259_todo_and_agent_status_are_independent_and_change_no_loop_semanti
         }
 
         let tool = FakeTool::new(
-            common::tool_policies(
-                "worker",
-                "ext259-tool",
-                ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
-            ),
+            common::tool_policies("worker", "ext259-tool", ToolExecutionPolicy::ForegroundOnly),
             success_result("worker"),
         );
         let mut tools = fixture.ordinary_registry.clone();
@@ -2132,7 +2114,9 @@ fn conversation_runtime_over_model(
             explicit_model: true,
             agent_id: rustx::runtime::identity::AgentId::new("agent-extension-composition"),
             model: support::model::scripted_session_model(model),
-            approval_mode: rustx::runtime::ApprovalMode::Policy,
+            // Extension composition suites drive FakeTool execution; Plan
+            // would deny starts without elevation and hang liveness waits.
+            approval_mode: rustx::runtime::ApprovalMode::FullAccess,
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: rustx::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: rustx::runtime::ConversationContextConfig {
@@ -2595,12 +2579,7 @@ fn goal_inspection_tools() -> ToolRegistry {
         ("bash", "goal-bash", "Tests need further work"),
     ] {
         FakeTool::new(
-            common::tool_policies(
-                name,
-                id,
-                ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
-            ),
+            common::tool_policies(name, id, ToolExecutionPolicy::ForegroundOnly),
             success_result(output),
         )
         .register(&mut tools);

@@ -80,6 +80,8 @@ pub struct AgentProfile {
     pub extensions: NativeAgentExtensions,
     pub workflows: BTreeSet<WorkflowId>,
     pub inherit_project_instructions: bool,
+    /// Source-default three-mode permission object for Agent control tools.
+    pub permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AgentScope {
@@ -723,7 +725,6 @@ mod tests {
             .find(|tool| tool.name == "read")
             .unwrap();
         definition.id = ToolId::new("frozen-read");
-        definition.approval_policy = crate::tools::types::ToolApprovalPolicy::Always;
         let first = resolve(
             &profile(&["read"]),
             &AvailableToolCatalog::metadata([definition.clone()]),
@@ -732,7 +733,6 @@ mod tests {
         );
         assert_eq!(first.tools, [definition.clone()]);
         definition.description = "later publication".into();
-        definition.approval_policy = crate::tools::types::ToolApprovalPolicy::Never;
         let later = resolve(
             &profile(&["read"]),
             &AvailableToolCatalog::metadata([definition]),
@@ -741,8 +741,8 @@ mod tests {
         );
         assert_ne!(first.tools, later.tools);
         assert_eq!(
-            first.tools[0].approval_policy,
-            crate::tools::types::ToolApprovalPolicy::Always
+            first.tools[0].execution_policy,
+            crate::tools::types::ToolExecutionPolicy::ForegroundOnly
         );
     }
 }
@@ -838,7 +838,9 @@ mod composition_tests {
                 id: crate::runtime::identity::ToolCallId::new("root-cannot-call-child-tool"),
                 tool_id: crate::runtime::identity::ToolId::new("tool-grep"),
                 name: "grep".into(),
-                arguments: serde_json::json!({"pattern": "review"}),
+                arguments: crate::scripted_suites::common::tool_call_envelope(
+                    serde_json::json!({"pattern": "review"})
+                ),
             }),
             Err(crate::tools::executor::ToolPreflightError::UnknownTool { .. })
         ));

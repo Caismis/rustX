@@ -530,7 +530,7 @@ fn stateless_state() -> ProviderContinuationState {
                 "id": "rs_1",
                 "encrypted_content": "opaque"
             }),
-            serde_json::json!({"type":"function_call", "id":"fc_1", "call_id":"call-1", "name":"alpha", "arguments":"{}"}),
+            serde_json::json!({"type":"function_call", "id":"fc_1", "call_id":"call-1", "name":"alpha", "arguments":"{\"arguments\":{}}"}),
         ],
     })
 }
@@ -694,7 +694,9 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
         "baseline summary".to_owned(),
     )]));
     let runtime = ContextRuntime::with_scripted_summarizer_and_assembly(
-        engine(250, 0, 100, weighted(100, 10, 0)),
+        // Retained recent history and Summary must fit alongside extension guidance
+        // and the real permission reminder while exactly two sources retire.
+        engine(310, 0, 100, weighted(100, 10, 0)),
         summarizer.clone(),
         Some(rustx::context::AgentStatusEngine::default()),
         assembly,
@@ -1367,7 +1369,9 @@ async fn cancellation_after_preparation_compaction_keeps_it_and_discards_staged_
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
-    let runtime = runtime_with_assembly(300, 0, 5, weighted(100, 10, 0), summarizer, assembly);
+    // Sparse Full Access reminder (~51 tokens) must fit the scripted occupancy
+    // that previously assumed an empty system prompt at the prep-compaction gate.
+    let runtime = runtime_with_assembly(310, 0, 5, weighted(100, 10, 0), summarizer, assembly);
     let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
@@ -1698,8 +1702,10 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
             }),
         )
         .expect("register overflow contributor");
+    // The corrected complete candidate includes the real permission reminder;
+    // retain its fresh/context generation within the 3/4 overflow allowance.
     let runtime = runtime_with_assembly(
-        500,
+        550,
         0,
         5,
         weighted(100, 10, 0),
@@ -2728,7 +2734,9 @@ async fn proactive_compaction_failure_continues_with_the_frozen_request() {
             &cancellation,
             crate::scripted_suites::support::default_execution_policy(),
             ContextRuntime::with_scripted_summarizer(
-                engine(320, 0, 0, weighted(100, 10, 0)),
+                // Three messages plus the real permission reminder remain below the
+                // hard limit and above proactive pressure, so failure is optional.
+                engine(380, 0, 0, weighted(100, 10, 0)),
                 summarizer.clone(),
                 None,
                 CompactionBudgets::new(1, 1, 1_000_000),

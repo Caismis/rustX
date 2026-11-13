@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v78';
+import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../protocol/app-server/v79';
 import { presentRow, presentedDeliveries } from '../src/bindings/present';
 import { Tool } from '../src/app/agent/Tool';
 import { TurnDeliveries } from '../src/app/agent/TurnDeliveries';
@@ -10,7 +10,7 @@ import { localeController } from '../src/locale/controller';
 afterEach(() => { cleanup(); act(() => localeController.setLocale('en')); });
 const file = (name: string, description: string | null = null): SessionFileReference =>
   ({ scope: { conversation_id: 'original', device: '1', inode: '2' }, path: `out/${name}`, name, description, mime_type: 'text/plain' });
-const ARGS = JSON.stringify({ files: [{ path: 'out/报告 file.md' }, { path: 'out/data set.csv' }] });
+const ARGS = JSON.stringify({ arguments: { files: [{ path: 'out/报告 file.md' }, { path: 'out/data set.csv' }] } });
 const result = (status: ToolExecutionResult['status'], deliveries: SessionFileReference[] = []): ToolExecutionResult =>
   ({ status, duration_ms: "1", content: [{ type: 'text', text: 'Declared 1 deliverable(s)' }], deliveries });
 const tool = (state: ForegroundToolExecution['state']): ForegroundToolExecution =>

@@ -114,7 +114,8 @@ use super::resolver::ResolvedSubagentSpec;
 /// interaction origins and prepared execution inputs.
 /// Version 39 combines frozen Skill definitions and live locations with
 /// model-derived compaction budgets; no package file lists or authored context tuning.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 39;
+/// Version 40 also freezes shared Auxiliary selection and resource permissions.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 40;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -939,10 +940,7 @@ mod tests {
     };
     use crate::runtime::subagent::catalog::SubagentName;
     use crate::runtime::subagent::resolver::ResolvedSubagentTool;
-    use crate::tools::types::{
-        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
-        ToolReplayPolicy,
-    };
+    use crate::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 
     fn pair() -> (tokio::net::UnixStream, tokio::net::UnixStream) {
         tokio::net::UnixStream::pair().expect("control socket pair")
@@ -955,8 +953,6 @@ mod tests {
             description: format!("{name} tool"),
             input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin,
         }
@@ -1062,6 +1058,8 @@ mod tests {
                                 .collect(),
                         },
                         policy: crate::tools::types::ToolInvocationPolicy::default(),
+                        permissions: None,
+                        tool_permissions: std::collections::BTreeMap::new(),
                     },
                 )]
                 .into_iter()
@@ -1218,7 +1216,7 @@ mod tests {
         old_version["protocolVersion"] = serde_json::json!(30);
         let decoded = serde_json::from_value::<SubagentChildSpec>(old_version).unwrap();
         assert_ne!(decoded.protocol_version, SUBAGENT_IPC_VERSION);
-        assert_eq!(SUBAGENT_IPC_VERSION, 39);
+        assert_eq!(SUBAGENT_IPC_VERSION, 40);
     }
 
     #[test]

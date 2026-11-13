@@ -1,4 +1,4 @@
-import type { Request, TraceDetail, TracePage, TraceRecord } from '../../protocol/app-server/v78';
+import type { Request, TraceDetail, TracePage, TraceRecord } from '../../protocol/app-server/v79';
 
 /** One bounded summary record, as the server pages them. */
 export const traceRecord = (n: number, overrides: Partial<TraceRecord> = {}): TraceRecord => ({
@@ -47,7 +47,7 @@ export const traceTool = (n: number, overrides: Partial<TraceRecord> = {}): Trac
       call_id: `call-${n}`,
       tool_id: 'tool-bash',
       name: 'bash',
-      arguments: { text: '{"command":"ls -la"}', truncated: false },
+      arguments: { text: '{"arguments":{"command":"ls -la"},"execution_mode":"foreground"}', truncated: false },
       started: true,
       outcome: 'success',
       detail: null,
@@ -121,7 +121,7 @@ export const toolDetail = (n: number, overrides: Partial<TraceDetail> = {}): Tra
     tool_id: 'tool-bash',
     name: 'bash',
     lifecycle: 'settled',
-    arguments: { value: { command: 'ls -la' }, truncated: false },
+    arguments: { value: { arguments: { command: 'ls -la' }, execution_mode: 'foreground' }, truncated: false },
     source: { field: 'command', text: { text: 'ls -la', truncated: false }, language: 'shell' },
     definition: {
       tool_id: 'tool-bash',
@@ -170,13 +170,13 @@ export function semanticLedgerRecords(): TraceRecord[] {
   updated.request!.system_prompt = { state: 'changed', preview: { text: 'Inspect the final diff and report validation evidence.', truncated: false } };
   updated.request!.retry_number = 0;
   const tool = traceTool(104, { location: a, preview: { text: '3 files changed, 28 insertions', truncated: false } });
-  tool.tool!.arguments = { text: '{"command":"git diff --stat"}', truncated: false };
+  tool.tool!.arguments = { text: '{"arguments":{"command":"git diff --stat"},"execution_mode":"foreground"}', truncated: false };
   tool.tool!.occurrence={locator:{type:'by_message_id',message_id:'ledger-assistant-103'},block_index:0};
   const failed = traceTool(105, { location: a, state: 'failed', preview: { text: 'error: missing field `name` in source record', truncated: false } });
   failed.tool!.occurrence={locator:{type:'by_message_id',message_id:'ledger-assistant-103'},block_index:1};
-  failed.tool!.arguments = { text: '{"command":"cargo test --lib"}', truncated: false }; failed.tool!.outcome = 'failed';
+  failed.tool!.arguments = { text: '{"arguments":{"command":"cargo test --lib"},"execution_mode":"foreground"}', truncated: false }; failed.tool!.outcome = 'failed';
   const finalTool = traceTool(114, { location: b, preview: { text: 'All focused tests passed. Additional output omitted…', truncated: true } });
-  finalTool.tool!.arguments = { text: '{"command":"cargo test --lib runtime_client::trace::', truncated: true };
+  finalTool.tool!.arguments = { text: '{"arguments":{"command":"cargo test --lib runtime_client::trace::', truncated: true };
   const retry = traceRecord(107, { location: { ...a, step_id: 'ledger-step-recovery' }, state: 'failed' });
   retry.request!.retry_number = 0;
   const recovery = traceRecord(108, { location: retry.location }); recovery.request!.retry_number = 1;

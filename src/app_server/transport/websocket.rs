@@ -30,7 +30,7 @@ pub const MAX_CLIENTS: usize = 32;
 /// Incomplete/authentication handshakes cannot retain slots indefinitely.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Browser clients offer this protocol plus `rustx-token.<base64url-no-pad encoded bearer>`.
-pub const SUBPROTOCOL: &str = "rustx.app-server.v78";
+pub const SUBPROTOCOL: &str = "rustx.app-server.v79";
 
 pub use super::auth::Credential;
 

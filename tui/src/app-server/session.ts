@@ -84,7 +84,7 @@ import type { PresentationState } from "../presentation/state.ts";
 import { AppServerClient, isResyncRequired, isUncertainOutcome } from "./client.ts";
 import { requestEffect } from "../../../protocol/app-server/method-policy.ts";
 import { sameTarget } from "../../../protocol/app-server/attachment-identity.ts";
-import type { Request1 } from "../../../protocol/app-server/v78.ts";
+import type { Request1 } from "../../../protocol/app-server/v79.ts";
 import { SessionReaders, TRANSCRIPT_PROJECTION_PAGE_LIMIT } from "./session-readers.ts";
 
 type StateListener = (state: PresentationState) => void;
@@ -115,7 +115,7 @@ export class AppServerSession {
   /** Serializes repairs so two resyncs cannot interleave their installs. */
   #repair: Promise<void> | undefined;
   readonly #observation = new ObservationChain<Parameters<typeof reduce>[1]['event']>();
-  #checkpoint?: import('../../../protocol/app-server/v78.ts').RuntimeClientCheckpoint;
+  #checkpoint?: import('../../../protocol/app-server/v79.ts').RuntimeClientCheckpoint;
   get observationPhase() { return this.#observation.phase; }
   /** Cancellation needs the live attachment, not an observed execution baseline. */
   get cancellationReady() { return !this.#released && !this.#serverClosed; }
@@ -234,7 +234,7 @@ export class AppServerSession {
         threadId = selected.active_conversation_id; nodeId = selected.active_node;
       }
     }
-    let attached: Extract<import('../../../protocol/app-server/v78.ts').MethodResult,{type:'attached'}>;
+    let attached: Extract<import('../../../protocol/app-server/v79.ts').MethodResult,{type:'attached'}>;
     try {
       attached = await client.call('thread/resume', {threadId}, 'attached');
     } catch (error) {
@@ -545,7 +545,7 @@ export class AppServerSession {
     if (!deferred.length) return undefined;
     return `Binding ${this.#state.modelStatus?.binding_revision ?? 'unavailable'}: deferred model/profile choices at native positions ${deferred.map(item => item.offset).join(', ')}. Read /observation model_catalog.models; /model-position selects native defaults at the displayed binding revision.`;
   }
-  #modelCatalogPage?: import('../../../protocol/app-server/v78.ts').CheckpointPage;
+  #modelCatalogPage?: import('../../../protocol/app-server/v79.ts').CheckpointPage;
   get nextModelOffset() { return this.#modelCatalogPage?.next_offset == null ? undefined : Number(this.#modelCatalogPage.next_offset); }
   /** Runs one manual idle compaction to its committed or skipped result. */
   async compactContext(instructions?: string): Promise<NonNullable<ResultOf<'context_compacted'>['compaction']> | undefined> {
@@ -568,12 +568,12 @@ export class AppServerSession {
     return domainValue<RuntimeClientGoalView>(page,this.#reads.domainReader());
   }
 
-  #configurationCut?:import('../../../protocol/app-server/v78.ts').BoundedSessionApplication;
+  #configurationCut?:import('../../../protocol/app-server/v79.ts').BoundedSessionApplication;
   #configurationRead?:Promise<void>;
   #configurationObservationError?:string;
   get configurationObservationError(){return this.#configurationObservationError;}
   get deferredConfiguration(){return this.#configurationRead?this.#configurationCut:undefined;}
-  #observeConfiguration(cut:import('../../../protocol/app-server/v78.ts').BoundedSessionApplication) {
+  #observeConfiguration(cut:import('../../../protocol/app-server/v79.ts').BoundedSessionApplication) {
     if(this.#configurationCut && BigInt(cut.version)<=BigInt(this.#configurationCut.version))return;
     this.#configurationCut=cut;
     if(cut.inline){this.#configurationObservationError=undefined;this.#installConfiguration(cut.inline);return;}
@@ -653,7 +653,7 @@ export class AppServerSession {
    * a NoOp acknowledgement cannot settle an earlier unanswered request.
    */
   /** Selects native catalog defaults by finite ordinals at the displayed source revision. */
-  async modelSelect(choice:import('../../../protocol/app-server/v78.ts').CatalogModelSelection) {
+  async modelSelect(choice:import('../../../protocol/app-server/v79.ts').CatalogModelSelection) {
     if(!Number.isSafeInteger(choice.model_position)||choice.model_position<0 ||choice.profile_position!=null&&(!Number.isSafeInteger(choice.profile_position)||choice.profile_position<0))throw new Error('Invalid native model selection ordinal.');
     if(this.#released||this.#serverClosed)throw new Error('Session attachment is unavailable.');
     if(this.#modelMutationInFlight)throw new Error('A model selection request is still in flight; wait for its response or connection recovery.');
@@ -679,8 +679,7 @@ export class AppServerSession {
     const epoch = this.#epoch;
     this.#modelMutationInFlight = true;
     try {
-      const hasExplicitAuxiliary = [config.summaryModel, config.titleModel, config.classificationModel, config.btwModel]
-        .some(policy => policy?.mode === "explicit");
+      const hasExplicitAuxiliary = config.auxiliary?.mode === "explicit";
       await this.#call(
         "session/setModel",
         { target: this.#target, config, ...(recoverCarriedAuxiliary && hasExplicitAuxiliary ? { recover_unavailable_auxiliary: true } : {}) },
@@ -738,7 +737,7 @@ export class AppServerSession {
   }
 
   /** One native bounded Agent viewport; continuations retain its exact cut. */
-  async agentPage(offset = 0, previous?: import('../../../protocol/app-server/v78.ts').CheckpointPage) {
+  async agentPage(offset = 0, previous?: import('../../../protocol/app-server/v79.ts').CheckpointPage) {
     const epoch=this.#epoch;
     const page=previous
       ? await this.#reads.domainReader().page(previous,offset)
@@ -754,7 +753,7 @@ export class AppServerSession {
     return domainValue<RuntimeClientAgent>(page,this.#reads.domainReader());
   }
 
-  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v78.js").UploadReceipt[] = []) {
+  async sendMessage(agentId: AgentId, message: string, attachments: import("../../../protocol/app-server/v79.js").UploadReceipt[] = []) {
     return this.#call("agent/sendMessage", { target: this.#target, agent_id: agentId, message, attachments }, "agent_message");
   }
 

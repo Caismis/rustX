@@ -546,7 +546,7 @@ previous file, so an invalid one stays editable.
 records, derived from `RuntimeLayer::overlay`: `replace` records a whole-unit
 path, `named` records `<container>.<identity>`, and `replace_origin` drops that
 path's descendants. So `providers.a`, `models.a`, `agent.tools.sources.a`,
-`native_tools.read`, `mcp_tool_policies.a`, `environment.A` and `mcp_servers.a`
+`environment.A` and `mcp_servers.a`
 each resolve independently; a sibling identity's name, length or insertion order
 cannot change the answer. `unitProvenance` then takes the exact key, else the
 nearest recorded ancestor (a member omitted from a replaced object belongs to
@@ -1054,8 +1054,8 @@ available. Settings renders native per-unit state without inferring field impact
 
 Agent edits Root identity, description, instructions and project guidance.
 Tools & Permissions edits approval, Native Tools, Tool-source selection, Skill
-visibility, the delegation allowlists and per-Tool/MCP policies. Advanced edits
-context, model and Tool deadlines, environment and child capacity. App Server
+visibility, the delegation allowlists and MCP permission modes. Advanced edits
+model and Tool deadlines, environment and child capacity. App Server
 process policy is User-only. Native classification distinguishes hot fields from restart fields;
 the source projection retains desired and actual process bindings across reopening.
 Reverting desired to actual clears restart state through native authority.

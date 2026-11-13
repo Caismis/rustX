@@ -201,6 +201,7 @@ fn todo_status_start_snapshot(
         retry_number: 0,
     };
     let mut snapshot = RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         identity,
         crate::context::resources::LedgerFrontier((revision).get()),
         "frozen".to_owned(),

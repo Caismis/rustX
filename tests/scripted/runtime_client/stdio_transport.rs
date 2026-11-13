@@ -49,7 +49,7 @@ use tokio::sync::watch;
 
 /// The outer liveness guard of one whole wait. Every wait below is exact;
 /// no assertion depends on this value.
-const LIVENESS_GUARD: Duration = Duration::from_mins(2);
+const LIVENESS_GUARD: Duration = Duration::from_secs(45);
 
 /// The client pipe capacity for ordinary records.
 const PIPE_BYTES: usize = 256 * 1024;
@@ -739,7 +739,7 @@ async fn invalid_records_are_fatal_and_write_nothing() {
         ),
         (
             "wrong-type",
-            br#"{"method":"initialize","id":"two","protocol_version":85}"#,
+            br#"{"method":"initialize","id":"two","protocol_version":86}"#,
         ),
     ];
     for (name, record) in cases {

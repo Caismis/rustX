@@ -5,7 +5,7 @@
 use super::*;
 use crate::local_runtime::configuration::settings::SourceTarget;
 use crate::model::catalog::{ModelProfileId, ModelRef};
-use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
 use crate::runtime::conversation_runtime::{Gate, ModelUpdateError};
 use crate::runtime_client::{EventDelivery, RuntimeClientEvent};
 
@@ -142,19 +142,13 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
         let id = &f.sessions[0].id;
         let runtime = f.manager.configuration_runtime(id).unwrap();
         let mut original = selection("local/a");
-        let summary = SummaryModelPolicy::Explicit {
+        let summary = AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse("local/b").unwrap(),
-            profile: None,
-            request_params: serde_json::Map::default(),
-        };
-        original.summary_model = summary.clone();
-        let title = crate::model::session::AuxiliaryModelPolicy::Explicit {
-            model: ModelRef::parse("local/b").unwrap(),
-            profile: None,
+            profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
             request_params: serde_json::Map::default(),
             max_output_tokens: Some(128),
         };
-        original.title_model = title.clone();
+        original.auxiliary = summary.clone();
         f.manager.set_model(id, original).await.unwrap();
         let before =
             crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
@@ -208,13 +202,16 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
         // The independent Summary may select the same large catalog entry.
         // Its configuration fits admission; the complete resolved primary +
         // Summary view is genuinely larger than a transport record.
-        let summary = SummaryModelPolicy::Explicit {
+        let summary = AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse(&enormous_model).unwrap(),
-            profile: Some(ModelProfileId::parse(&enormous_profile).unwrap()),
+            profile: crate::model::AuxiliaryProfileSelection::Explicit {
+                id: ModelProfileId::parse(&enormous_profile).unwrap(),
+            },
             request_params: serde_json::Map::default(),
+            max_output_tokens: Some(128),
         };
         let mut retained = runtime.model_view().configured;
-        retained.summary_model = summary.clone();
+        retained.auxiliary = summary.clone();
         f.manager.set_model(id, retained).await.unwrap();
         let binding =
             crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
@@ -263,8 +260,7 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
             "native model body exceeds the complete transport record budget"
         );
         let configured = model_view.configured;
-        assert_eq!(configured.summary_model, summary);
-        assert_eq!(configured.title_model, title);
+        assert_eq!(configured.auxiliary, summary);
         assert_eq!(configured.model.as_str(), enormous_model);
         assert_eq!(configured.profile.unwrap().as_str(), enormous_profile);
         let (_, durable) = f.manager.sessions.read_settings(id).await.unwrap();
@@ -335,12 +331,12 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
                 )
                 .unwrap(),
                 max_output_tokens: Some(333),
-                title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-                summary_model: SummaryModelPolicy::Explicit {
+                auxiliary: AuxiliaryModelPolicy::Explicit {
                     model: ModelRef::parse("local/a").unwrap(),
-                    profile: None,
+                    profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                     request_params: serde_json::from_value(serde_json::json!({"temperature": 0.2}))
                         .unwrap(),
+                    max_output_tokens: Some(111),
                 },
                 ..selection("local/a")
             };
@@ -351,12 +347,12 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
                 profile: Some(ModelProfileId::new("low")),
                 request_params: serde_json::from_value(serde_json::json!({"seed": 17})).unwrap(),
                 max_output_tokens: Some(888),
-                title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-                summary_model: SummaryModelPolicy::Explicit {
+                auxiliary: AuxiliaryModelPolicy::Explicit {
                     model: ModelRef::parse("local/a").unwrap(),
-                    profile: None,
+                    profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                     request_params: serde_json::from_value(serde_json::json!({"temperature": 0.6}))
                         .unwrap(),
+                    max_output_tokens: Some(222),
                 },
                 ..selection("local/b")
             };

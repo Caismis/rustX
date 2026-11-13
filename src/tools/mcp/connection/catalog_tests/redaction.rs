@@ -60,6 +60,8 @@ async fn incomplete_stderr_capture_cannot_publish_a_clipped_credential() {
             environment: std::collections::BTreeMap::new(),
         },
         policy: crate::tools::types::ToolInvocationPolicy::default(),
+        permissions: None,
+        tool_permissions: std::collections::BTreeMap::new(),
     };
     let connection = McpConnection::lazy(
         McpServerId::new("stderr-owner"),
@@ -167,6 +169,8 @@ async fn assert_malformed_stdio_redaction(secret: &str, test_name: &str) {
             .into(),
         },
         policy: crate::tools::types::ToolInvocationPolicy::default(),
+        permissions: None,
+        tool_permissions: std::collections::BTreeMap::new(),
     };
     let connection = McpConnection::lazy(
         McpServerId::new("credential-catalog"),

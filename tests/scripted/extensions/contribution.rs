@@ -1,6 +1,7 @@
 use super::*;
 use crate::extensions::probe::{Behavior, ProbeConfig};
 use crate::runtime::identity::{ContextContributorIdentity, NativeContextContributor};
+use rustx::tools::types::ToolExecutionPolicy;
 use std::sync::atomic::Ordering;
 
 fn composed(probes: Vec<ProbeConfig>) -> NativeAgentExtensions {
@@ -75,12 +76,7 @@ async fn issue383_native_deferred_and_request_time_share_registered_provenance()
     let (_dir, runtime) =
         todo_tool_runtime("conv_e676044a-be02-7f84-92a4-1d66bc24ce9e", &composition);
     let tool = FakeTool::new(
-        common::tool_policies(
-            "worker",
-            "worker",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+        common::tool_policies("worker", "worker", ToolExecutionPolicy::ForegroundOnly),
         success_result("done"),
     );
     let mut tools = ToolRegistry::new();
@@ -174,7 +170,6 @@ async fn issue383_retry_and_corrective_requests_freeze_goal_and_native_receipts(
                 "worker",
                 "probe-worker",
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Sequential,
             ),
             success_result("done"),
         );
@@ -320,13 +315,23 @@ async fn issue383_common_budget_drops_content_and_receipt_together() {
     let snapshot = &snapshots.snapshots[0];
     let alpha = ContextContributorIdentity::Native(NativeContextContributor::TestAlpha);
     assert_eq!(snapshot.contributions[0].producer, alpha);
+    let producers: Vec<_> = snapshot
+        .context_generation
+        .contributors
+        .iter()
+        .filter(|contributor| {
+            contributor.identity
+                != ContextContributorIdentity::Native(NativeContextContributor::PermissionReminder)
+        })
+        .cloned()
+        .collect();
     assert_eq!(
-        snapshot.context_generation.contributors,
+        producers,
         vec![crate::context::ContributorGeneration {
             identity: alpha,
             attestation: None,
         }],
-        "persisted generation describes only the final accepted producer"
+        "persisted generation describes only the final accepted producer (sparse permission reminders are system authority, not extension producers)"
     );
 }
 
@@ -347,7 +352,6 @@ async fn issue383_domain_changes_after_capture_only_reach_the_next_logical_step(
             "worker",
             "probe-worker",
             ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
         ),
         success_result("done"),
     );
@@ -461,7 +465,19 @@ async fn issue383_production_composed_noop_and_optional_failure_preserve_runtime
         assert_eq!(snapshots.len(), 1);
         assert!(snapshots[0].request_context_ids.is_empty());
         assert!(snapshots[0].contributions.is_empty());
-        assert!(snapshots[0].context_generation.contributors.is_empty());
+        assert!(
+            snapshots[0]
+                .context_generation
+                .contributors
+                .iter()
+                .all(|contributor| {
+                    contributor.identity
+                        == ContextContributorIdentity::Native(
+                            NativeContextContributor::PermissionReminder,
+                        )
+                }),
+            "noop/optional-failure producers leave only the sparse permission reminder in generation"
+        );
         assert!(
             store
                 .latest_contribution_emission(

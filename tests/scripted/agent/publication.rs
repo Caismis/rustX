@@ -496,7 +496,6 @@ async fn tool_proposal_boundaries_are_released_as_their_own_frames() {
         "alpha",
         "tool-alpha",
         rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-        rustx::tools::types::ToolConcurrencyPolicy::Sequential,
     );
     let mut tools = ToolRegistry::new();
     support::fake::FakeTool::new(definition, support::fake::success_result("ok"))

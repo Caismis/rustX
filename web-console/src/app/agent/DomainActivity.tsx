@@ -1,10 +1,11 @@
+import { parseModelToolCall } from '../../../../protocol/app-server/model-tool-call';
 import { useToolInspection } from './tool-inspection';
 import { IconAgentPresetOutline16, IconChecklistOutline14 } from '../../presentation/primitives/icons';
 import { subagentToolDetails } from '../../bindings/subagent-tool-details';
 import { useSubagents } from './subagent-context';
 import { useTranslation } from '../../locale/react';
 import type { TranslationKey } from '../../locale/translation';
-import type { ForegroundToolExecution } from '../../../../protocol/app-server/v78';
+import type { ForegroundToolExecution } from '../../../../protocol/app-server/v79';
 import { ToolCard } from '../../presentation/agent/ToolCard';
 import { toolCard } from '../../bindings/tools';
 import { recordedToolDetails } from '../../bindings/recorded-tool-details';
@@ -31,8 +32,8 @@ export function DomainActivity({ tool }: { tool: ForegroundToolExecution }) {
   const body = tool.committed_result ?? (tool.state.type === 'settled' ? tool.state.result : undefined);
   let details = view.state === 'success' && body?.status.type === 'success' ? recordedToolDetails(tool.tool_id, body.content, tx) : undefined;
   const result = subagentToolDetails(tool);
-  let target: string | undefined;
-  try { const args = JSON.parse(tool.state.arguments); target = typeof args?.job_id === 'string' ? args.job_id : undefined; } catch { /* Streaming arguments. */ }
+  const jobId = parseModelToolCall(tool.state.arguments)?.arguments.job_id;
+  const target = typeof jobId === 'string' ? jobId : undefined;
   if (domain.domain === 'agent' && view.state === 'success' && body?.status.type === 'success') {
     // Human titles and outcomes come only from this receipt. The current roster
     // supplies navigation authority, never replacement historical state/text.

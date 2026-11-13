@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution, MessageBlock, RuntimeClientSnapshot, TurnProcessView } from '../../../protocol/app-server/v78';
+import type { ForegroundToolExecution, MessageBlock, RuntimeClientSnapshot, TurnProcessView } from '../../../protocol/app-server/v79';
 import type { Server } from '../fixture';
 import { workflowRun } from '../workflow-data';
 
@@ -23,10 +23,10 @@ export function workflowRunsFixture(server: Server, current: RuntimeClientSnapsh
     return run;
   });
   const user: MessageBlock = { role: 'user', source: 'human', id: 'workflow-user', content: [{ type: 'text', text: '运行两次工作流并汇总结果。' }] };
-  const calls: Extract<MessageBlock, { role: 'assistant' }> = { role: 'assistant', id: 'workflow-work', content: runs.map(run => ({ type: 'tool_call', id: run.tool_call_id!, tool_id: `workflow:${run.workflow_id}`, name: `workflow:${run.workflow_id}`, arguments: {} })) };
+  const calls: Extract<MessageBlock, { role: 'assistant' }> = { role: 'assistant', id: 'workflow-work', content: runs.map(run => ({ type: 'tool_call', id: run.tool_call_id!, tool_id: `workflow:${run.workflow_id}`, name: `workflow:${run.workflow_id}`, arguments: { arguments: {} } })) };
   const tools: ForegroundToolExecution[] = runs.map((run, index) => ({ message_id: calls.id, block_index: index, call_id: run.tool_call_id!, tool_id: `workflow:${run.workflow_id}`, name: `workflow:${run.workflow_id}`,
     assembly_complete: true, committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: calls.id }, block_index: index },
-    state: { type: 'settled', arguments: '{}', result: { status: index ? { type: 'cancelled', reason: 'user_requested', phase: 'during_execution' } : { type: 'success' }, duration_ms: '9000', content: [{ type: 'text', text: index ? 'Cancelled by the user.' : 'bark' }] } } }));
+    state: { type: 'settled', arguments: "{\"arguments\":{}}", result: { status: index ? { type: 'cancelled', reason: 'user_requested', phase: 'during_execution' } : { type: 'success' }, duration_ms: '9000', content: [{ type: 'text', text: index ? 'Cancelled by the user.' : 'bark' }] } } }));
   const answer: MessageBlock = { role: 'assistant', id: 'workflow-answer', content: [{ type: 'text', text: '两次调用的结果：\n\n| 工作流 | 结果 |\n| --- | --- |\n| test_flow | 已完成 |\n| 第二次调用 | 已取消，可能已产生部分副作用 |' }] };
   current.messages = [user, calls, answer]; current.attempt = null;
   current.transcript.entries = [{ cursor: '1', item: { type: 'message', message: user } },

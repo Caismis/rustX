@@ -245,6 +245,28 @@ async fn child_fixture_with_activation(
     .await
 }
 
+/// Ask proofs: Plan on the child runtime so `elevation_reason` becomes human Ask.
+async fn child_fixture_with_activation_for_approval(
+    dir: &tempfile::TempDir,
+    conversation_id: &ConversationId,
+    scripts: Vec<Vec<FakeStep>>,
+    tools: ToolRegistry,
+    initial_messages: Vec<MessageBlock>,
+    activation: SubagentId,
+) -> ChildFixture {
+    child_fixture_scoped_at_with_mode(
+        dir,
+        conversation_id,
+        scripts,
+        tools,
+        initial_messages,
+        dir.path().join("child-artifacts"),
+        Some(activation),
+        rustx::runtime::ApprovalMode::Plan,
+    )
+    .await
+}
+
 async fn child_fixture_scoped_at(
     dir: &tempfile::TempDir,
     conversation_id: &ConversationId,
@@ -253,6 +275,30 @@ async fn child_fixture_scoped_at(
     initial_messages: Vec<MessageBlock>,
     artifacts_dir: std::path::PathBuf,
     activation: Option<SubagentId>,
+) -> ChildFixture {
+    child_fixture_scoped_at_with_mode(
+        dir,
+        conversation_id,
+        scripts,
+        tools,
+        initial_messages,
+        artifacts_dir,
+        activation,
+        rustx::runtime::ApprovalMode::FullAccess,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)] // Fixture matrix: mode × activation × artifacts.
+async fn child_fixture_scoped_at_with_mode(
+    dir: &tempfile::TempDir,
+    conversation_id: &ConversationId,
+    scripts: Vec<Vec<FakeStep>>,
+    tools: ToolRegistry,
+    initial_messages: Vec<MessageBlock>,
+    artifacts_dir: std::path::PathBuf,
+    activation: Option<SubagentId>,
+    approval_mode: rustx::runtime::ApprovalMode,
 ) -> ChildFixture {
     let workspace = dir.path().join("child-workspace");
     std::fs::create_dir_all(&workspace).expect("child workspace");
@@ -298,7 +344,10 @@ async fn child_fixture_scoped_at(
             explicit_model: true,
             agent_id: AgentId::new("agent-child-138"),
             model: support::model::scripted_session_model(adapter),
-            approval_mode: rustx::runtime::ApprovalMode::Policy,
+            // Lifecycle/progress fixtures are not permission proofs: Full Access
+            // lets elevating tools run. Ask proofs use Plan plus
+            // `launch_wired_child_for_approval` and `elevation_reason`.
+            approval_mode,
             model_timeout_policy: inherited_policy(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
@@ -425,8 +474,6 @@ fn child_approval_tools() -> (
             "additionalProperties": false
         }),
         execution_policy: rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: rustx::tools::types::ToolConcurrencyPolicy::Sequential,
-        approval_policy: rustx::tools::types::ToolApprovalPolicy::Always,
         replay_policy: rustx::tools::types::ToolReplayPolicy::Never,
         origin: rustx::tools::types::ToolOrigin::Builtin,
     };
@@ -631,7 +678,7 @@ async fn compose_parent_runtime_plane(
         explicit_model: true,
         agent_id: AgentId::new("agent-parent-138"),
         model: support::model::scripted_session_model(adapter),
-        approval_mode: rustx::runtime::ApprovalMode::Policy,
+        approval_mode: rustx::runtime::ApprovalMode::FullAccess,
         model_timeout_policy: inherited_policy(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -730,13 +777,38 @@ async fn launch_wired_child(plane: &ParentPlane, child: &ChildFixture, task: &st
     launch_wired_child_with_shell(plane, child, task, "true").await
 }
 
+/// Ask proofs: freeze Plan on the child activation so `elevation_reason` can Ask.
+async fn launch_wired_child_for_approval(
+    plane: &ParentPlane,
+    child: &ChildFixture,
+    task: &str,
+) -> WiredChild {
+    launch_wired_child_full(
+        plane,
+        child,
+        task,
+        "true",
+        ObservationWiring::Live,
+        rustx::runtime::ApprovalMode::Plan,
+    )
+    .await
+}
+
 async fn launch_wired_child_with_shell(
     plane: &ParentPlane,
     child: &ChildFixture,
     task: &str,
     shell: &str,
 ) -> WiredChild {
-    launch_wired_child_full(plane, child, task, shell, ObservationWiring::Live).await
+    launch_wired_child_full(
+        plane,
+        child,
+        task,
+        shell,
+        ObservationWiring::Live,
+        rustx::runtime::ApprovalMode::FullAccess,
+    )
+    .await
 }
 
 async fn launch_wired_child_full(
@@ -745,6 +817,7 @@ async fn launch_wired_child_full(
     task: &str,
     shell: &str,
     observation_wiring: ObservationWiring,
+    approval_mode: rustx::runtime::ApprovalMode,
 ) -> WiredChild {
     let (driver_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
     // The disposable observation channel (Issue #178): a second socket pair
@@ -800,7 +873,6 @@ async fn launch_wired_child_full(
                     title: "Explore task".into(),
                     execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: resolved_child_spec("conformance"),
-                    approval_mode: rustx::runtime::ApprovalMode::Policy,
                 },
                 admission: crate::runtime::subagent::ActivationAdmission {
                     attachments: Vec::new(),
@@ -810,6 +882,7 @@ async fn launch_wired_child_full(
                         tool_call_id: ToolCallId::new("call-138"),
                     },
                     terminal: rustx::runtime::subagent::SubagentTerminalMode::Normal,
+                    approval_mode,
                 },
             },
             &CancellationSignal::new(),
@@ -1276,7 +1349,7 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
         &AgentId::new("agent-child"),
         &AgentId::new("agent-parent"),
         &resolved_child_spec("conformance"),
-        rustx::runtime::ApprovalMode::Policy,
+        rustx::runtime::ApprovalMode::Plan,
         rustx::runtime::subagent::InheritedExecutionPolicy {
             model_timeout: inherited_policy(),
             tool_deadline: inherited_tool_deadline_policy(),
@@ -1515,7 +1588,7 @@ async fn retry_exhaustion_publishes_one_bounded_failure_without_child_content() 
             FakeStep::Emit(ModelEvent::ToolCallArgumentsDelta {
                 block_index: ContentBlockIndex::new(2),
                 call_id: ToolCallId::new("call-secret"),
-                arguments_delta: "{\"secret\":\"CHILD-SECRET-ARGS\"}".to_owned(),
+                arguments_delta: "{\"arguments\":{\"secret\":\"CHILD-SECRET-ARGS\"}}".to_owned(),
             }),
             // The proposal never completes: the stream fails transiently
             // with an uncommitted partial generation.
@@ -2572,7 +2645,7 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
     let (tools, mut calls, _started) = child_approval_tools();
     let invocation_arguments = serde_json::json!({"target": "staging"});
     let child_conversation = ConversationId::new("conv_8cb27edc-7469-7f11-80e8-cfd61970a05b");
-    let child = child_fixture_with_activation(
+    let child = child_fixture_with_activation_for_approval(
         &dir,
         &child_conversation,
         vec![
@@ -2580,7 +2653,7 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
                 id: "call-approval-allow",
                 tool_id: "tool-approved",
                 name: "approved_tool",
-                arguments: invocation_arguments.clone(),
+                arguments: serde_json::json!({"target": "staging", "elevation_reason": "child approval Ask fixture"}),
             }),
             answer_script("CHILD-APPROVAL-ALLOW-CONTINUED"),
         ],
@@ -2589,7 +2662,8 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
         SubagentId::for_conversation(parent.plane.store.conversation_id(), 1),
     )
     .await;
-    let wired = launch_wired_child(&parent.plane, &child, "run the approved child tool").await;
+    let wired =
+        launch_wired_child_for_approval(&parent.plane, &child, "run the approved child tool").await;
     let _inspection = interaction_read::bind(&parent.plane, &child, &wired);
 
     let routed = await_root_interaction(
@@ -2768,7 +2842,7 @@ async fn child_approval_deny_routes_to_child_and_never_starts_executor() {
         .expect("root event subscription");
     let (tools, calls, started) = child_approval_tools();
     let child_conversation = ConversationId::new("conv_0a5b2055-9982-791e-881a-f4c2e2986d6e");
-    let child = child_fixture_with_activation(
+    let child = child_fixture_with_activation_for_approval(
         &dir,
         &child_conversation,
         vec![
@@ -2776,7 +2850,10 @@ async fn child_approval_deny_routes_to_child_and_never_starts_executor() {
                 id: "call-approval-deny",
                 tool_id: "tool-approved",
                 name: "approved_tool",
-                arguments: serde_json::json!({"target": "production"}),
+                arguments: serde_json::json!({
+                    "target": "production",
+                    "elevation_reason": "child approval Ask fixture",
+                }),
             }),
             answer_script("CHILD-APPROVAL-DENY-CONTINUED"),
         ],
@@ -2785,7 +2862,7 @@ async fn child_approval_deny_routes_to_child_and_never_starts_executor() {
         SubagentId::for_conversation(parent.plane.store.conversation_id(), 1),
     )
     .await;
-    let wired = launch_wired_child(&parent.plane, &child, "deny the child tool").await;
+    let wired = launch_wired_child_for_approval(&parent.plane, &child, "deny the child tool").await;
     let _inspection = interaction_read::bind(&parent.plane, &child, &wired);
     let routed = await_root_interaction(
         &attachment,
@@ -3048,7 +3125,7 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
     .await;
     let child_two_conversation = ConversationId::new("conv_1e203843-ca70-7ee7-8612-924f55a9fa53");
     let (child_two_tools, _child_two_calls, _child_two_started) = child_approval_tools();
-    let child_two = child_fixture_scoped_at(
+    let child_two = child_fixture_scoped_at_with_mode(
         &dir,
         &child_two_conversation,
         vec![
@@ -3056,7 +3133,10 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
                 id: "call-mixed-approval",
                 tool_id: "tool-approved",
                 name: "approved_tool",
-                arguments: serde_json::json!({"target": "MIXED-APPROVAL-ARGUMENT"}),
+                arguments: serde_json::json!({
+                    "target": "MIXED-APPROVAL-ARGUMENT",
+                    "elevation_reason": "child approval Ask fixture",
+                }),
             }),
             answer_script("MIXED-APPROVAL-ANSWER-OBSERVED-BY-CHILD-TWO"),
         ],
@@ -3067,10 +3147,11 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
             parent.plane.store.conversation_id(),
             2,
         )),
+        rustx::runtime::ApprovalMode::Plan,
     )
     .await;
     let first = launch_wired_child(&parent.plane, &child_one, "mixed questionnaire").await;
-    let second = launch_wired_child(&parent.plane, &child_two, "mixed approval").await;
+    let second = launch_wired_child_for_approval(&parent.plane, &child_two, "mixed approval").await;
     let _first_inspection = interaction_read::bind(&parent.plane, &child_one, &first);
     let _second_inspection = interaction_read::bind(&parent.plane, &child_two, &second);
 
@@ -3591,12 +3672,14 @@ async fn root_detach_preserves_headless_child_publication_and_routed_cancellatio
 
     let (release_model, model_released) = support::fake::model_release();
     let (tools, calls, executor_started) = child_approval_tools();
-    let invocation_arguments = serde_json::json!({"target": "stale-cache"});
     let call = support::fake::ScriptedCall {
         id: "call-admission-race",
         tool_id: "tool-approved",
         name: "approved_tool",
-        arguments: invocation_arguments,
+        arguments: serde_json::json!({
+            "target": "staging",
+            "elevation_reason": "child approval Ask fixture",
+        }),
     };
     let mut approval_script = vec![
         FakeStep::Emit(started()),
@@ -3611,16 +3694,20 @@ async fn root_detach_preserves_headless_child_publication_and_routed_cancellatio
         finish_reason: ModelFinishReason::ToolCalls,
         usage: None,
     }));
-    let child = child_fixture(
+    let child = child_fixture_scoped_at_with_mode(
         &dir,
         &ConversationId::new("conv_701adfe4-8ac7-7c17-84a5-61f4a67aae8d"),
         vec![approval_script, answer_script("ADMISSION-RACE-CONTINUED")],
         tools,
         Vec::new(),
+        dir.path().join("child-artifacts"),
+        None,
+        rustx::runtime::ApprovalMode::Plan,
     )
     .await;
 
-    let wired = launch_wired_child(&parent.plane, &child, "headless publication").await;
+    let wired =
+        launch_wired_child_for_approval(&parent.plane, &child, "headless publication").await;
     await_journal_fact(&child.store, 1, is_request_started, "gated child request").await;
     attachment.detach();
     release_model.send_replace(true);
@@ -3805,7 +3892,6 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
             "probe",
             "tool-probe",
             rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
         ),
         support::fake::success_result("probe done"),
     );
@@ -3816,7 +3902,6 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
             "scan",
             "tool-scan",
             rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
         ),
         support::fake::success_result("scan done"),
     );
@@ -4029,7 +4114,6 @@ async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
             "probe-a",
             "tool-probe-a",
             rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-            rustx::tools::types::ToolConcurrencyPolicy::Parallel,
         ),
         support::fake::success_result("a done"),
     );
@@ -4040,7 +4124,6 @@ async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
             "probe-b",
             "tool-probe-b",
             rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-            rustx::tools::types::ToolConcurrencyPolicy::Parallel,
         ),
         support::fake::success_result("b done"),
         &["b phase 2"],
@@ -4427,7 +4510,6 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
                 "scan",
                 "tool-scan",
                 rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-                rustx::tools::types::ToolConcurrencyPolicy::Sequential,
             ),
             support::fake::success_result("scan done"),
         );
@@ -4469,8 +4551,15 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
             Topology::ObservationBroken => ObservationWiring::Broken,
             _ => ObservationWiring::Live,
         };
-        let wired =
-            launch_wired_child_full(&plane, &child, "inspect the workspace", "true", wiring).await;
+        let wired = launch_wired_child_full(
+            &plane,
+            &child,
+            "inspect the workspace",
+            "true",
+            wiring,
+            rustx::runtime::ApprovalMode::FullAccess,
+        )
+        .await;
         let subagent_id = wired.accepted.subagent_id.clone();
 
         // The reliable baseline of the stalled consumer: once the Running
@@ -4757,7 +4846,6 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
             "scan",
             "tool-scan",
             rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
         ),
         support::fake::success_result("scan done"),
     );
@@ -4998,7 +5086,6 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
             "phased",
             "tool-phased",
             rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
         ),
         support::fake::success_result("phased done"),
         &["phase 1", "phase 2"],
@@ -5455,7 +5542,6 @@ async fn a_fresh_request_after_a_retry_projects_retry_zero() {
             "probe",
             "tool-probe",
             rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
         ),
         support::fake::success_result("probe done"),
     )
@@ -5560,7 +5646,6 @@ async fn activity_frames_commit_no_parent_journal_facts() {
             "scan",
             "tool-scan",
             rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
         ),
         support::fake::success_result("scan done"),
     );
@@ -5670,7 +5755,6 @@ async fn child_activity_never_enters_the_parent_model_context() {
             "scan178",
             "tool-178-secret",
             rustx::tools::types::ToolExecutionPolicy::ModelSelectable,
-            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
         ),
         support::fake::success_result("scan done"),
     )
@@ -6178,7 +6262,8 @@ async fn a_steer_is_consumed_by_the_same_child_conversation_and_agent_loop() {
             &wired.accepted.child_agent_id,
             "Focus on cancellation ownership and ignore TUI code.",
             crate::runtime::subagent::AgentActivationOrigin::ClientControl,
-            crate::runtime::cancellation::CancellationSignal::new(),
+            rustx::runtime::types::ApprovalMode::FullAccess,
+            CancellationSignal::new(),
         )
         .await
         .expect("the running child durably accepts the guidance");
@@ -6291,7 +6376,8 @@ async fn accepted_steers_are_observed_in_their_durable_acceptance_order() {
                 &wired.accepted.child_agent_id,
                 message,
                 crate::runtime::subagent::AgentActivationOrigin::ClientControl,
-                crate::runtime::cancellation::CancellationSignal::new(),
+                rustx::runtime::types::ApprovalMode::FullAccess,
+                CancellationSignal::new(),
             )
             .await
             .unwrap_or_else(|error| panic!("{message} is accepted: {error}"));

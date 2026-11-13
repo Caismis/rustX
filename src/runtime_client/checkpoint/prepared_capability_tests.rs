@@ -3,9 +3,7 @@ use crate::observation::bounded::prepare_capture_item;
 use crate::observation::capability_source::{CapabilityReadSource, PreparedCapabilityHead};
 use crate::observation::capability_source::{CapabilityView, RuntimeClientTool};
 use crate::observation::capture::Capture;
-use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-};
+use crate::tools::types::{ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 
 fn tool() -> RuntimeClientTool {
     RuntimeClientTool {
@@ -14,8 +12,6 @@ fn tool() -> RuntimeClientTool {
         description: "水🙂\\\"\n".into(),
         input_schema: serde_json::json!({"type":"object","properties":{"n":{"minimum":1}}}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Parallel,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }

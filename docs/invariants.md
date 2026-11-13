@@ -571,7 +571,7 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
-SQLite schema 87 binds request fingerprints to the native JSON Schema capability
+SQLite schema 88 binds request fingerprints to the native JSON Schema capability
 and the per-Call prepared response schema and strategy. These semantics also
 change fingerprints for text requests. Schema 84 also admits bounded native
 `WorkflowNodeWaiting` Journal facts and reserved Auxiliary Call identities, plus
@@ -1173,10 +1173,11 @@ Loop replacement.
 ```text
 ToolRegistry::preflight
   -> canonical Assistant ToolCall
-  -> effective ToolApprovalPolicy / ApprovalMode
+  -> ExecutionPermissionMode via PreToolPolicy (Issue #544)
        Allow -> existing start frontier
        Deny  -> one ToolExecutionStatus::Denied result slot
-       Ask   -> InteractionCoordinator -> typed Runtime Client response
+       Elevate/Ask -> InteractionCoordinator -> typed Runtime Client response
+       Automatic Review -> Auxiliary (fail closed)
   -> exact original PreparedInvocation, or no executor
 ```
 
@@ -1205,11 +1206,12 @@ The ownership contract is:
   replace that owner with an arbitrary rendezvous. No public
   generic interaction trait is exposed. A standalone inert
   execution has no interaction provider and fails `Ask` closed. The
-  runtime-created policy is derived from the effective `ApprovalMode`:
-  `Policy` consults the resolved Tool's `Never`/`Always`
-  `ToolApprovalPolicy`, while `FullAccess` makes effective approval `Never`
-  only. There are no optional approval hooks, policy chains, priorities,
-  wrappers, or callbacks hidden in `ToolExecutor`.
+  runtime-created policy is derived from the effective `ApprovalMode`
+  (`plan` / `automatic` / `full_access`). The built-in matrix, resource
+  overrides, elevation, and Automatic review decide admission — see
+  `docs/permission-modes.md`. There are no per-tool Never/Always axes,
+  optional approval hooks, policy chains, priorities, wrappers, or callbacks
+  hidden in `ToolExecutor`.
 - `PreToolPolicy` runs only after `ToolRegistry::preflight` has resolved the
   tool identity, invocation metadata, execution mode, and validated business
   arguments, and after the Assistant `ToolCall` has committed canonically.
@@ -1591,8 +1593,9 @@ projection.
 
 ### Questionnaire and `ask_user`
 
-`ask_user` is one ordinary foreground, sequential, approval-never Tool. Its
-model-facing input is a single closed root object with required `questions`:
+`ask_user` is one ordinary foreground-only Tool (Issue #544 matrix: Allow in
+every mode). Its answer is not a Tool Approval token. Its model-facing input
+is a single closed root object with required `questions`:
 1–4 questions; each has required `question` (1–4096 Unicode scalar values),
 `header` (1–16), 2–4 options, and optional `multi_select` (default false).
 Each option has a non-empty `label` (at most 60 scalar values) and
@@ -3211,7 +3214,7 @@ the launch-boundary policy inheritance.
   transcripts.
 - **Native authorities remain native.** WorkflowRuntime composes the named
   SubagentRuntime, frozen model/capability/Skill resources, retry/timeout,
-  ApprovalMode, ToolApprovalPolicy, InteractionCoordinator,
+  ExecutionPermissionMode / ApprovalMode, InteractionCoordinator,
   process containment, the frozen Session workspace binding, and physical
   settlement. It creates no child scheduler, permission system, TUI path,
   Tool Plane dispatch path, or second Agent Loop.
@@ -3419,10 +3422,12 @@ A package rewrite is observed only at the next quiescent re-discovery.
   servers are entries of the same sorted server map); active
   registries are never mutated in place. Global model-facing name collisions
   reject the whole candidate.
-- `ToolOrigin` identifies provenance only. Execution ownership and batch
-  scheduling remain `ToolExecutionPolicy` and `ToolConcurrencyPolicy`, and
-  all origins use the canonical Agent Loop, progress, cancellation, and
-  background paths.
+- `ToolOrigin` identifies provenance only. Execution ownership remains
+  `ToolExecutionPolicy` (foreground/background). Tool-level Sequential/Parallel
+  authoring is removed (Issue #544): independent authorized calls may start
+  concurrently; ToolResults commit in original call order; domain owners keep
+  their own barriers. All origins use the canonical Agent Loop, progress,
+  cancellation, and background paths.
 - **MCP Resources have a negotiated zero-or-three Tool contract.** Only a ready
   source with negotiated Resources support and the profile's `All` selection
   enters that profile's resource authority. `Exact` selection, configured or
@@ -3922,64 +3927,65 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 
 ## Tool plane (M5)
 
-- Foreground/background execution policy and sequential/parallel scheduling
-  are two independent axes: ownership/settlement is decided by
-  `ToolExecutionPolicy`, concurrency within a batch by
-  `ToolConcurrencyPolicy`. The two are never combined into one axis.
-- The canonical tool input schema is tool-owned and never mutated. The
-  model-facing execution-ownership selector `execution_mode` exists only in
-  the compiled model-facing schema of a `ModelSelectable` tool, is required
-  on every such invocation, is resolved exactly once at preflight, is
-  stripped before business-argument validation, and is never forwarded to
-  any executor. A missing or invalid value is a deterministic rejection with
-  actionable diagnostics, never a silent foreground default.
-- `execution_mode` is reserved, and the canonical root schema must match the
-  decoratable root profile, when and only when the effective execution policy
-  is `ModelSelectable`. The profile is an allowlist: the root instance
-  semantics must be owned entirely by `type`, `properties`, `required`, and
-  `additionalProperties`, plus purely descriptive keywords; every other root
-  keyword is refused whatever draft introduced it. Registration additionally
-  rejects a canonical schema claiming the top-level `execution_mode` name —
-  in root `properties`, in root `required`, or both — and one using a
-  reference applicator (`$ref`, `$dynamicRef`, `$recursiveRef`) at any depth,
-  since decoration edits the root in place and a reference may re-enter it.
-  Apart from references, nested subschemas stay unrestricted. None of this
-  carries an automatic compatibility mapping.
-- The three rejections together enforce the **projection equivalence** that
-  "clone and decorate the root" claims: `canonical(B)` ⇔
-  `compiled(B + top-level execution_mode)` for any business arguments `B` and
-  either mode, and any invocation the compiled schema accepts must satisfy
-  the canonical schema once the top-level selector is stripped. Each class
-  closes one way of breaking it — decoration contradicting a root assertion
-  (`maxProperties`, a root `const`/`enum`), stripping leaving arguments the
-  canonical schema must reject (a claimed `required` entry, a Draft-7
-  `dependencies`, an unaware composition branch), and a reference carrying
-  the injected property into nested objects. A registered tool therefore can
-  never reach a state where no correct model invocation can succeed.
-- None of the three rules applies under `ForegroundOnly`/`BackgroundOnly`,
-  which receive no synthetic field: an arbitrary composed, reference-heavy
-  root schema is valid there, `execution_mode` included. The policy-unaware
-  canonical schema validation stays permissive for fixed-policy tools, while
-  the native `ask_user` questionnaire remains a normal closed root object and
-  arbitrary MCP server schemas keep registering.
-- The `__rustx_` top-level namespace stays reserved for other runtime
-  concerns under every policy: registration rejects canonical schemas
-  claiming `__rustx_*` properties and preflight rejects invocations carrying
-  them.
-- The registry is a validity boundary: duplicate ids, duplicate model-facing
-  names, empty identities, invalid or non-root JSON Schema, reserved
-  property collisions, invalid policy combinations, and background-capable control Tool registrations are rejected. A canonical call whose id
+- Foreground/background ownership/settlement is decided by
+  `ToolExecutionPolicy`. Tool-level Sequential/Parallel authoring is removed
+  (Issue #544): independent authorized calls may start concurrently; ToolResults
+  still commit atomically in original call order. Domain owners (Todo, Goal, …)
+  retain their own synchronization. Ownership and permission are never combined
+  into one axis.
+- Every ordinary model Tool call uses a strict envelope with required
+  `arguments` business input, optional `elevation_reason`, and required
+  `execution_mode` only for `ModelSelectable`. Flat calls, unknown outer fields,
+  reserved `__rustx_*` envelope fields and invalid metadata fail preflight.
+  Executors and business normalizers receive only `arguments`.
+- Business schema semantics are independent of runtime metadata. Business
+  properties may use runtime-looking names. The compiler preserves original
+  resource identities, dialects and reference scopes rather than decorating
+  the business root. For valid metadata, `canonical(B)` equals
+  `compiled({arguments:B,...metadata})`, including finite objects,
+  property-name constraints, compositions and recursive references.
+- Schema compilation has no host file or network authority. Native resource
+  owners supply resource bytes in a self-contained document; bundled resource
+  IDs preserve reference semantics but never authorize retrieval. Missing
+  resources fail before host access, regardless of URI scheme or tool origin.
+  Registration freezes the canonical validator, supplied resources and model
+  definition atomically. Observation, cloning, selected catalogs and calls reuse
+  that capture without schema I/O. Structural catalog checks do not resolve
+  references; executable admission still rejects invalid contracts.
+- Git is `Unproven`: argv-only analysis cannot exclude repository-configured
+  helpers. Plan, Automatic and FullAccess apply their ordinary permission
+  decisions. Child Git environment defaults preserve real patch output, and
+  every forcibly supplied environment key is rejected as an authorized override.
+- Native Write/Edit keep the authorized parent directory object through commit.
+  Reads, temporary-file creation/write and final rename use held directory/file
+  handles. Ancestor pathname replacement after authorization cannot redirect
+  the mutation to another tree.
+- Automatic review inspects bounded native task provenance, prepared invocation
+  facts and structured Bash analysis. Model-authored task claims and elevation
+  reasons never substitute for Human authority. A successful primary request
+  start commits the current canonical task identity in its request snapshot.
+  A new Human input or unresolved native adoption supplies a request candidate;
+  cancellation before request start cannot replace the committed task. Live
+  settlement and reconstruction retain that same committed identity rather
+  than guessing from historical text. Agent input establishes only an initial
+  task; Runtime input cannot establish task authority.
+- Reminder consumption belongs to successful primary request starts. Recovery
+  uses the latest request's frozen mode and context activation; a successful
+  compaction followed by cancellation or failed start remains pending. Mode
+  changes without an intervening request do not erase consumed context identity.
+- The registry rejects duplicate ids/names, empty identities, invalid or non-root
+  JSON Schema, invalid policies and background-capable controls. A call whose id
   and name disagree is a contract violation, never an id-first fallback.
 - The native executor implementation and its execution-ownership policy are
   independent: each ordinary native tool (Read/Write/Edit/Glob/Grep/Bash)
-  independently selects its execution and concurrency policy through the
-  concrete bounded `NativeToolPolicies` configuration and may use any legal
-  execution policy (`ForegroundOnly`, `BackgroundOnly`, `ModelSelectable`);
-  defaults are intentional per-tool values in the
-  [native policy table](runtime-resources.md#exact-tool-authority-and-native-defaults). The
-  Job and Agent controls are fixed foreground/sequential Tools. Native image
-  reading is fixed foreground/parallel/approval-never; all three are outside
-  the configurable policy set.
+  independently selects ownership through the concrete bounded
+  `NativeToolPolicies` configuration and may use any legal execution policy
+  (`ForegroundOnly`, `BackgroundOnly`, `ModelSelectable`); defaults are
+  intentional per-tool values in the
+  [native policy table](runtime-resources.md#exact-tool-authority-and-native-defaults).
+  Job/Agent controls and native image reading are fixed foreground-only and
+  outside the configurable ownership set. Permission is the Issue #544 mode
+  matrix, not a per-tool never/always axis.
 - Invocation order is frozen: resolve tool, extract/resolve invocation
   metadata, strip metadata, apply tool-owned business-argument normalization,
   validate the normalized arguments against the canonical schema, dispatch
@@ -8151,6 +8157,11 @@ when required by lineage/dependency closure; no stronger global audit is implied
 ## Classification and BTW delivery invariants
 
 Original admission scope, current controller and result reservation precede native transfer. Closure and registration share a fence. Exact local correlation never authorizes replay; negative confirmation requires closed original admission, joined physical writes and authoritative absence. Read/discard/expiry cannot release an executing Call permit or a response copy before physical disposition. Observation loss is independent of native cancellation. Domain acceptance, durable settlement and displayed completion are separate facts. [All enforced component limits and ownership points](auxiliary-consumers.md) are part of this contract.
+
+A failed preparation returns its public admission error only after the native
+owner has released its result reservation, active generation entry, physical
+Call capacity and lifecycle admission. Successful admission still returns at
+confirmed `CallStarted`, without waiting for inference or retirement.
 
 ## Workflow Model invariants (Issue #496)
 

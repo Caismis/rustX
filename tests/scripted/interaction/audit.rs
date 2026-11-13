@@ -60,8 +60,7 @@ use rustx::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
 };
 use rustx::tools::types::{
-    ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
-    ToolInvocation,
+    ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
 };
 use tokio::sync::watch;
 
@@ -138,6 +137,7 @@ impl PreToolPolicy for ScriptedAskPolicy {
     fn evaluate<'a>(
         &'a self,
         _view: &'a PreToolView<'a>,
+        _cancellation: &'a rustx::runtime::cancellation::ExecutionCancellation,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
         let decision = self
             .decisions
@@ -161,12 +161,7 @@ impl SpyTool {
         id: &str,
     ) -> Arc<Mutex<Vec<ToolInvocation>>> {
         let invocations = Arc::new(Mutex::new(Vec::new()));
-        let definition = common::tool_policies(
-            name,
-            id,
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        );
+        let definition = common::tool_policies(name, id, ToolExecutionPolicy::ForegroundOnly);
         registry
             .register(
                 definition,
@@ -570,7 +565,7 @@ async fn requested_fact_commits_before_the_prompt_reaches_a_client() {
             _ => None,
         })
         .expect("the canonical Assistant proposed the approved call");
-    assert_eq!(canonical, scripted_arguments());
+    assert_eq!(canonical, common::tool_call_envelope(scripted_arguments()));
     assert_eq!(*arguments_digest, interaction_arguments_digest(&canonical));
 }
 

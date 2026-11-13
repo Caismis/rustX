@@ -80,7 +80,10 @@ function fold(
 describe("session model A -> B invariant", () => {
   it("same-model profile changes retain the complete frozen invocation across events and reconnect", () => {
     const frozen = attemptModel(MODEL_A, { profile: "high", requestParams: { effort: "high", temperature: 0.2 }, maxOutputTokens: 777 });
-    frozen.summary = { mode: "explicit", ...frozen.primary, model: "summary/original" };
+    frozen.summary = {
+      mode: "explicit",
+      effective: { ...frozen.primary, model: "summary/original" },
+    };
     const initial = snapshot({ model: sessionModel(MODEL_A, frozen.primary), attempt: { attempt_id: "profile-attempt", phase: { type: "running" }, turn: 1, model: frozen, execution_settings: null } });
     const low = sessionModel(MODEL_A, { profile: "low", requestParams: { effort: "low", temperature: 0.2 }, maxOutputTokens: 777 });
     low.configured.profile = "low";

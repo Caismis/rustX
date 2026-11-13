@@ -83,6 +83,8 @@ chat_reasoning_replay = "omit"
                 environment,
             },
             policy: ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
         }
     }
 
@@ -349,6 +351,8 @@ chat_reasoning_replay = "omit"
                 ]),
             },
             policy: ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
         };
 
         let runtime = McpServerRuntime::connect(
@@ -530,6 +534,8 @@ chat_reasoning_replay = "omit"
                 ]),
             },
             policy: ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
         };
 
         let runtime = McpServerRuntime::connect(
@@ -620,6 +626,8 @@ chat_reasoning_replay = "omit"
                 )]),
             },
             policy: ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
         };
         let error = McpServerRuntime::connect(
             &McpServerId::new("legacy-no-overlap"),
@@ -801,10 +809,10 @@ chat_reasoning_replay = "omit"
     }
 
     /// The whole ownership chain, end to end: one named `mcpServers` entry
-    /// plus explicit source selection and a keyed policy become exactly one runtime
-    /// server identity whose stdio command/args/env reach the real stdio
-    /// transport, and whose tools reach the committed capability snapshot as
-    /// canonical tools carrying the overlaid policy.
+    /// plus explicit source selection become exactly one runtime server
+    /// identity whose stdio command/args/env reach the real stdio transport,
+    /// and whose tools reach the committed capability snapshot as canonical
+    /// tools under the product-default foreground execution policy.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // one complete composition fixture
     async fn a_named_map_entry_composes_into_exactly_one_runtime_server() {
@@ -831,9 +839,7 @@ chat_reasoning_replay = "omit"
                 },
             }),
         );
-        let session = serde_json::json!({"agent_id": "agent-46", "mcp_tool_policies": {
-                "exa-local": {"execution": "background_only", "concurrency": "parallel"},
-            }, "agent": {"model": {"model": "local/composed-model"}, "tools": {"sources": {"exa-local": "all"}}}});
+        let session = serde_json::json!({"agent_id": "agent-46", "agent": {"model": {"model": "local/composed-model"}, "tools": {"sources": {"exa-local": "all"}}}});
         let config_path = root.path().join("rustx.toml");
         crate::launch_fixture::write_document(
             &config_path,
@@ -889,12 +895,8 @@ chat_reasoning_replay = "omit"
         for definition in &mcp_tools {
             assert_eq!(
                 definition.execution_policy,
-                rustx::tools::types::ToolExecutionPolicy::BackgroundOnly,
-                "the keyed policy overlay reaches the canonical definition"
-            );
-            assert_eq!(
-                definition.concurrency_policy,
-                rustx::tools::types::ToolConcurrencyPolicy::Parallel
+                rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+                "MCP tools inherit the product-default foreground execution policy"
             );
         }
     }
@@ -940,6 +942,8 @@ chat_reasoning_replay = "omit"
                     headers: BTreeMap::new(),
                 },
                 policy: ToolInvocationPolicy::default(),
+                permissions: None,
+                tool_permissions: std::collections::BTreeMap::new(),
             },
             &workspace,
             Arc::new(McpInvalidationState::new()),
@@ -1014,6 +1018,8 @@ chat_reasoning_replay = "omit"
                 ]),
             },
             policy: ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
         }
     }
 
@@ -1460,6 +1466,8 @@ chat_reasoning_replay = "omit"
                     headers: BTreeMap::new(),
                 },
                 policy: ToolInvocationPolicy::default(),
+                permissions: None,
+                tool_permissions: std::collections::BTreeMap::new(),
             }
         }
 
@@ -1909,6 +1917,8 @@ async fn measure_configured_http_mcp() {
             headers: std::collections::BTreeMap::default(),
         },
         policy: rustx::tools::types::ToolInvocationPolicy::default(),
+        permissions: None,
+        tool_permissions: std::collections::BTreeMap::new(),
     };
     for sample in 1..=3 {
         let started = Instant::now();

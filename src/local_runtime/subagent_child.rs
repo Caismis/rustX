@@ -1535,7 +1535,7 @@ pub(crate) mod tests {
                 explicit_model: true,
                 agent_id: AgentId::new("agent-child"),
                 model: scripted_session_model(adapter),
-                approval_mode: crate::runtime::ApprovalMode::Policy,
+                approval_mode: crate::runtime::ApprovalMode::Plan,
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
                 ),
@@ -2028,7 +2028,7 @@ pub(crate) mod tests {
                     crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
             },
-            approval_mode: crate::runtime::ApprovalMode::Policy,
+            approval_mode: crate::runtime::ApprovalMode::Plan,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             workspace: workspace.clone(),

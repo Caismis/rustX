@@ -1278,12 +1278,12 @@ async fn carryover_degrades_and_is_omitted_before_cannot_fit_or_compaction() {
             "attempt-137-fit-consumer",
             first.result.conversation,
             &model,
-            48,
+            100,
             1,
         ),
         &cancellation,
         &tool_runtime,
-        runtime_with_window(48),
+        runtime_with_window(100),
     )
     .await
     .run()
@@ -1387,9 +1387,9 @@ async fn overflow_compaction_only_degrades_the_frozen_carryover_source() {
 
     let summary = "s".repeat(360);
     let consumer_runtime = runtime_with_estimator(
-        // Leave the original full carryover below proactive pressure while
-        // the overflow correction still requires metadata-only carryover.
-        801,
+        // Include the real permission reminder in the initial request below
+        // proactive pressure; overflow correction still requires metadata-only carryover.
+        900,
         Arc::new(ScriptedEstimator::new(100, 10, 0)),
         vec![FakeSummaryStep::Return(summary)],
     );

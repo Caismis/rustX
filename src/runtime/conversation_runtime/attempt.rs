@@ -95,15 +95,22 @@ impl RuntimeInner {
             )
             .expect("admission validated this model against the session context policy");
         let context_runtime = context_runtime.with_runtime_resources(&resources);
+        let (
+            record_changes,
+            last_permission_reminder_mode,
+            permission_task_message,
+            recovered_permission_task_message,
+        ) = {
+            let mut state = self.state.lock().expect("coordinator lock");
+            (
+                state.parent_turn_permits.is_none(),
+                state.last_permission_reminder_mode,
+                state.permission_task_message.clone(),
+                state.recovered_permission_task_message.take(),
+            )
+        };
         let execution_policy = crate::agent::execution::AgentExecutionRuntimePolicy {
-            workspace_changes: if self
-                .state
-                .lock()
-                .expect("coordinator lock")
-                .parent_turn_permits
-                .is_none()
-                && self.workflow_output.is_none()
-            {
+            workspace_changes: if record_changes && self.workflow_output.is_none() {
                 crate::workspace_changes::ChangeRecording::start(
                     attempt_id.clone(),
                     self.tool_runtime.workspace().root().to_owned(),
@@ -132,7 +139,7 @@ impl RuntimeInner {
                 .then_some(model_registry)
                 .flatten()
                 .map(|models| {
-                    crate::runtime::subagent::NativeExecutionContext::new(
+                    let mut context = crate::runtime::subagent::NativeExecutionContext::new(
                         self.capability.clone(),
                         attempt_id.clone(),
                         Arc::clone(&resources),
@@ -144,11 +151,20 @@ impl RuntimeInner {
                             tool_deadline: tool_deadline_policy,
                         },
                     )
-                    .with_workflow_models(self.auxiliary.clone())
+                    .with_workflow_models(self.auxiliary.clone());
+                    if let Some(registry) = self.subagents.clone() {
+                        context = context.with_agent_registry(std::sync::Arc::new(registry));
+                    }
+                    context
                 }),
             workflow_output: self.workflow_output.clone(),
+            approval_mode,
+            last_permission_reminder_mode,
+            permission_task_message,
+            recovered_permission_task_message,
         };
         let workspace_changes = execution_policy.workspace_changes.clone();
+        let auxiliary_invocation = model.summary_invocation().clone();
         let request = AgentExecutionRequest {
             agent_id: self.agent_id.clone(),
             conversation_id: self.conversation_id.clone(),
@@ -160,9 +176,18 @@ impl RuntimeInner {
             },
             model,
         };
+        let reviewer = std::sync::Arc::new(
+            crate::runtime::permission::review::AuxiliaryPermissionReviewer::new(
+                self.auxiliary.clone(),
+                auxiliary_invocation,
+                model_timeout_policy,
+                resources.revision().get(),
+                cancellation.signal().child(),
+            ),
+        );
         let lifecycle = crate::agent::AttemptLifecycle::inert()
             .with_native_interaction(self.interaction.clone())
-            .with_approval_mode(approval_mode);
+            .with_approval_mode_and_reviewer(approval_mode, reviewer);
         #[cfg(test)]
         let lifecycle = {
             let test_policy = self
@@ -279,6 +304,8 @@ impl RuntimeInner {
                 fanout.child_settled();
             }
             state.conversation = Some(result.conversation);
+            state.permission_task_message = result.permission_task_message;
+            state.last_permission_reminder_mode = result.permission_reminder_consumed;
             if let Some(diagnostic) = durable_failure {
                 let operation = match result.durable_failure_kind {
                     Some(crate::agent::DurableFailureKind::Compaction) => {

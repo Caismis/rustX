@@ -45,7 +45,7 @@ impl CompactionPolicy {
             model.primary().context_window(),
             model.primary().max_output_tokens(),
             summary.context_window(),
-            summary.output_capability(),
+            summary.max_output_tokens(),
             reasoning,
         )
     }

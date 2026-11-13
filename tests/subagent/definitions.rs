@@ -189,7 +189,7 @@ impl Lab {
         }
         let root_agents = subagents.as_object_mut().unwrap().remove("agents").unwrap();
         crate::launch_fixture::write_roles(&self.workspace(), &mut subagents);
-        let document = serde_json::json!({"schema_version": 12, "agent_id": "agent-issue144", "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "skills": "all", "agents": root_agents}});
+        let document = serde_json::json!({"schema_version": 13, "agent_id": "agent-issue144", "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "skills": "all", "agents": root_agents}});
         std::fs::write(
             self.root().join("rustx.toml"),
             format!(
@@ -538,7 +538,7 @@ async fn an_explicit_ask_user_selection_is_admitted_for_a_child() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_named_agent_only_source_remains_unprepared_until_child_admission() {
     let lab = Lab::new();
-    let mut document = serde_json::json!({"schema_version": 12, "agent_id": "agent-issue144", "mcp_servers": {
+    let mut document = serde_json::json!({"schema_version": 13, "agent_id": "agent-issue144", "mcp_servers": {
             "offline": {"type": "stdio", "command": "missing-rustx-issue144-mcp"}
         }, "subagents": {"max_concurrent": 4, "roles": {"explore": {"description": "Read-only repository exploration.", "tools": {"sources": {"offline": ["get_issue"]}}}}}, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": ["read"]}, "agents": ["explore"]}});
     if let Some(mcp) = document.as_object_mut().unwrap().remove("mcp_servers") {
@@ -1084,20 +1084,14 @@ async fn a_frozen_child_model_never_observes_a_later_rustx_toml_edit() {
 /// non-default invocation policy on all three axes — is what the child's
 /// `ToolRegistry` ends up holding, across the serialization boundary.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
+async fn a_product_default_builtin_policy_survives_child_materialization_exactly() {
     use rustx::tools::executor::ToolRegistry;
     use rustx::tools::native::register_subagent_child_tools;
-    use rustx::tools::types::{ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy};
+    use rustx::tools::types::ToolExecutionPolicy;
 
     let lab = Lab::new();
-    // The generation admits `grep` with a non-default policy on every axis.
-    let mut document = serde_json::json!({"schema_version": 12, "agent_id": "agent-issue144", "native_tools": {
-            "grep": {
-                "execution": "model_selectable",
-                "concurrency": "parallel",
-                "approval": "always",
-            }
-        }, "subagents": explore(&["grep"]), "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": ["read"]}}});
+    // Issue #544: Bash keeps product-default ModelSelectable without config overlays.
+    let mut document = serde_json::json!({"schema_version": 13, "agent_id": "agent-issue144", "subagents": explore(&["bash"]), "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": ["read"]}}});
     document["agent"]["agents"] = document["subagents"]
         .as_object_mut()
         .unwrap()
@@ -1130,10 +1124,8 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
     assert_eq!(
         frozen.execution_policy,
         ToolExecutionPolicy::ModelSelectable,
-        "the generation really admitted a non-default policy"
+        "Bash product default is ModelSelectable"
     );
-    assert_eq!(frozen.concurrency_policy, ToolConcurrencyPolicy::Parallel);
-    assert_eq!(frozen.approval_policy, ToolApprovalPolicy::Always);
 
     // Cross the real wire, then materialize the child registry.
     let over_the_wire: rustx::runtime::subagent::ResolvedSubagentSpec =
@@ -1150,12 +1142,12 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
     let child_definition = registry
         .definitions()
         .into_iter()
-        .find(|definition| definition.name == "grep")
-        .expect("the child registered grep")
+        .find(|definition| definition.name == "bash")
+        .expect("the child registered bash")
         .clone();
     assert_eq!(
         child_definition, frozen,
-        "the child holds the whole parent-frozen definition, not a default-policy rebuild"
+        "the child holds the whole parent-frozen definition, not a rebuilt default"
     );
 }
 
@@ -1168,7 +1160,7 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
     let lab = Lab::new();
-    let mut document = serde_json::json!({"schema_version": 12, "agent_id": "agent-issue144", "mcp_servers": {
+    let mut document = serde_json::json!({"schema_version": 13, "agent_id": "agent-issue144", "mcp_servers": {
             "offline": {"type": "stdio", "command": "missing-rustx-issue144-mcp"}
         }, "subagents": {"max_concurrent": 4, "roles": {"explore": {"description": "Read-only repository exploration.", "tools": {
                         // `offline` sorts before `python:ghost` in canonical
@@ -1343,7 +1335,7 @@ fn write_config_with_root_extensions(
     }
     let root_agents = subagents.as_object_mut().unwrap().remove("agents").unwrap();
     crate::launch_fixture::write_roles(&lab.workspace(), &mut subagents);
-    let document = serde_json::json!({"schema_version": 12, "agent_id": "agent-issue256", "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "plugins": root_extensions.clone(), "tools": {"builtin": ["read"]}, "agents": root_agents}});
+    let document = serde_json::json!({"schema_version": 13, "agent_id": "agent-issue256", "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "plugins": root_extensions.clone(), "tools": {"builtin": ["read"]}, "agents": root_agents}});
     std::fs::write(
         lab.root().join("rustx.toml"),
         format!(

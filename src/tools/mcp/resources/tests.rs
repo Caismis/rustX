@@ -56,6 +56,8 @@ impl HttpPeer {
             binding: McpServerBinding {
                 credentials: crate::credentials::SourceCredentials::default(),
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
+                permissions: None,
+                tool_permissions: std::collections::BTreeMap::new(),
                 transport: McpTransportConfig::StreamableHttp {
                     endpoint: format!("http://{address}/mcp"),
                     headers: BTreeMap::new(),
@@ -460,6 +462,8 @@ async fn resource_only_stdio_negotiates_modern_and_legacy_without_tools_list() {
         let binding = McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
             policy: crate::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .unwrap()
@@ -564,24 +568,21 @@ fn resource_decoding_and_metadata_limits_reject_excess_without_allocating_decode
 }
 
 async fn run_helper(
-    entry: &(
-        crate::tools::types::ToolDefinition,
-        Arc<dyn crate::tools::executor::ToolExecutor>,
-    ),
+    entry: &crate::tools::executor::ToolRegistration,
     arguments: serde_json::Value,
     tools: &crate::tools::runtime::ConversationToolRuntime,
 ) -> ToolExecutionResult {
     use crate::tools::types::{ToolInvocation, ToolInvocationId, ToolInvocationMode};
     let progress = NoProgress;
     entry
-        .1
+        .executor
         .start(
             ToolInvocation {
                 id: ToolInvocationId::Agent {
                     call_id: crate::runtime::identity::ToolCallId::new("resource-helper"),
                 },
-                tool_id: entry.0.id.clone(),
-                tool_name: entry.0.name.clone(),
+                tool_id: entry.definition.id.clone(),
+                tool_name: entry.definition.name.clone(),
                 mode: ToolInvocationMode::Foreground,
                 arguments,
             },
@@ -623,10 +624,7 @@ async fn native_resource_helpers_route_only_frozen_sources_with_one_identity_ord
         if name != "excluded" {
             authorized.insert(
                 ToolSourceId::Mcp(McpServerId::new(name)),
-                crate::tools::mcp::McpResourceBinding::new(
-                    generation.binding(),
-                    crate::tools::types::ToolApprovalPolicy::Never,
-                ),
+                crate::tools::mcp::McpResourceBinding::new(generation.binding()),
             );
         }
         generations.push(generation);
@@ -637,7 +635,7 @@ async fn native_resource_helpers_route_only_frozen_sources_with_one_identity_ord
     assert_eq!(
         helpers
             .iter()
-            .map(|entry| entry.0.name.as_str())
+            .map(|entry| entry.definition.name.as_str())
             .collect::<Vec<_>>(),
         vec![
             "list_mcp_resources",
@@ -820,6 +818,8 @@ async fn opaque_http_diagnostics_never_replay_debug_escaped_response_headers() {
                     headers,
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
+                permissions: None,
+                tool_permissions: std::collections::BTreeMap::new(),
             },
             tools.workspace().clone(),
             Arc::default(),
@@ -897,13 +897,15 @@ async fn repeated_redaction_keeps_tool_and_resource_final_diagnostics_bounded() 
         peer.binding.policy,
         &generation.binding(),
         catalog,
-    );
+    )
+    .into_iter()
+    .map(|(definition, executor)| {
+        crate::tools::executor::ToolRegistration::plain(definition, executor)
+    })
+    .collect::<Vec<_>>();
     let resource = crate::tools::mcp::resource_definitions(BTreeMap::from([(
         ToolSourceId::Mcp(McpServerId::new("bounded")),
-        McpResourceBinding::new(
-            generation.binding(),
-            crate::tools::types::ToolApprovalPolicy::Never,
-        ),
+        McpResourceBinding::new(generation.binding()),
     )]));
     for (entry, arguments) in [
         (&ordinary[0], serde_json::json!({})),
@@ -1076,10 +1078,7 @@ async fn resource_error_redaction_survives_named_helpers_and_aggregate_spills() 
         );
         sources.insert(
             ToolSourceId::Mcp(McpServerId::new(name)),
-            McpResourceBinding::new(
-                generation.binding(),
-                crate::tools::types::ToolApprovalPolicy::Never,
-            ),
+            McpResourceBinding::new(generation.binding()),
         );
         generations.push(generation);
         peers.push((peer, connection));

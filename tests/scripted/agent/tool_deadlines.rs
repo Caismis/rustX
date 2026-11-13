@@ -58,8 +58,8 @@ use rustx::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry, ToolSettlement,
 };
 use rustx::tools::types::{
-    ToolCancellationPhase, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolProgress,
+    ToolCancellationPhase, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
+    ToolInvocation, ToolProgress,
 };
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, fake_model, success_result,
@@ -118,6 +118,10 @@ fn execution_policy(
         monotonic_clock: clock as Arc<dyn MonotonicClock>,
         subagent_context: None,
         workflow_output: None,
+        last_permission_reminder_mode: None,
+        permission_task_message: None,
+        recovered_permission_task_message: None,
+        approval_mode: rustx::runtime::ApprovalMode::FullAccess,
     }
 }
 
@@ -196,7 +200,6 @@ async fn native_agent_cancellation_preserves_attempt_provenance() {
         &mut tools,
         "user",
         "tool-user",
-        ToolConcurrencyPolicy::Sequential,
         success_result("not reached"),
         &[],
         ProbeCancelSettlement::Cancelled,
@@ -436,12 +439,7 @@ impl UncooperativeTool {
         );
         registry
             .register(
-                common::tool_policies(
-                    name,
-                    tool_id,
-                    ToolExecutionPolicy::ForegroundOnly,
-                    ToolConcurrencyPolicy::Sequential,
-                ),
+                common::tool_policies(name, tool_id, ToolExecutionPolicy::ForegroundOnly),
                 Arc::new(tool),
             )
             .expect("uncooperative tool registration");
@@ -498,7 +496,6 @@ fn register_probe(
     registry: &mut ToolRegistry,
     name: &str,
     tool_id: &str,
-    concurrency: ToolConcurrencyPolicy,
     result: ToolExecutionResult,
     phase_messages: &[&str],
     on_cancel: ProbeCancelSettlement,
@@ -530,12 +527,7 @@ fn register_probe(
     };
     registry
         .register(
-            common::tool_policies(
-                name,
-                tool_id,
-                ToolExecutionPolicy::ForegroundOnly,
-                concurrency,
-            ),
+            common::tool_policies(name, tool_id, ToolExecutionPolicy::ForegroundOnly),
             Arc::new(probe),
         )
         .expect("probe tool registration");
@@ -589,12 +581,7 @@ impl DetachedSettlementTool {
         };
         registry
             .register(
-                common::tool_policies(
-                    name,
-                    tool_id,
-                    ToolExecutionPolicy::ForegroundOnly,
-                    ToolConcurrencyPolicy::Sequential,
-                ),
+                common::tool_policies(name, tool_id, ToolExecutionPolicy::ForegroundOnly),
                 Arc::new(tool),
             )
             .expect("detached settlement tool registration");
@@ -700,12 +687,7 @@ impl RemoteFrontierTool {
         };
         registry
             .register(
-                common::tool_policies(
-                    name,
-                    tool_id,
-                    ToolExecutionPolicy::ForegroundOnly,
-                    ToolConcurrencyPolicy::Sequential,
-                ),
+                common::tool_policies(name, tool_id, ToolExecutionPolicy::ForegroundOnly),
                 Arc::new(tool),
             )
             .expect("remote frontier tool registration");
@@ -775,7 +757,7 @@ async fn run(
         execution_policy(policy, clock.clone()),
         context_runtime(model, clock.clone()),
         &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     let started = std::time::Instant::now();
@@ -1022,7 +1004,6 @@ async fn issue204_progress_refreshes_idle_liveness() {
         &mut tools,
         "progressive",
         "tool-progress",
-        ToolConcurrencyPolicy::Sequential,
         success_result("not reached"),
         &["phase one"],
         ProbeCancelSettlement::Cancelled,
@@ -1093,7 +1074,6 @@ async fn issue204_progress_never_extends_the_hard_deadline() {
         &mut tools,
         "chatty",
         "tool-chatty",
-        ToolConcurrencyPolicy::Sequential,
         success_result("not reached"),
         &["phase one", "phase two"],
         ProbeCancelSettlement::Cancelled,
@@ -1166,7 +1146,6 @@ async fn issue204_idle_deadline_cancels_a_silent_execution() {
         &mut tools,
         "silent",
         "tool-silent",
-        ToolConcurrencyPolicy::Sequential,
         success_result("not reached"),
         &[],
         ProbeCancelSettlement::Cancelled,
@@ -1223,7 +1202,6 @@ async fn issue204_simultaneous_hard_and_idle_have_one_winner() {
         &mut tools,
         "tied",
         "tool-tie",
-        ToolConcurrencyPolicy::Sequential,
         success_result("not reached"),
         &[],
         ProbeCancelSettlement::Cancelled,
@@ -1305,7 +1283,6 @@ async fn issue204_unconfirmed_external_termination_is_outcome_unknown() {
         &mut tools,
         "remote",
         "tool-remote",
-        ToolConcurrencyPolicy::Sequential,
         success_result("not reached"),
         &[],
         ProbeCancelSettlement::OutcomeUnknown,
@@ -1372,7 +1349,6 @@ async fn issue204_executor_proven_completion_survives_deadline_intent() {
         &mut tools,
         "racing",
         "tool-race",
-        ToolConcurrencyPolicy::Sequential,
         success_result("real completion"),
         &[],
         ProbeCancelSettlement::Completed,
@@ -1429,7 +1405,6 @@ async fn issue204_physical_completion_winner_never_fires_a_deadline() {
         &mut tools,
         "fast",
         "tool-fast",
-        ToolConcurrencyPolicy::Sequential,
         success_result("immediate"),
         &[],
         ProbeCancelSettlement::Cancelled,
@@ -1468,7 +1443,7 @@ async fn issue204_physical_completion_winner_never_fires_a_deadline() {
         execution_policy(deadline_policy(5_000, None), clock.clone()),
         context_runtime(&model, clock),
         &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     execution.install_tool_physical_settlement_pause(pause);
@@ -1546,7 +1521,6 @@ async fn issue204_repeated_cancellation_intent_settles_exactly_once() {
         &mut tools,
         "repeated",
         "tool-repeat",
-        ToolConcurrencyPolicy::Sequential,
         success_result("not reached"),
         &[],
         ProbeCancelSettlement::OutcomeUnknown,
@@ -1639,7 +1613,6 @@ async fn issue204_batch_siblings_settle_exactly_once_in_model_order() {
         &mut tools,
         "slow",
         "tool-slow",
-        ToolConcurrencyPolicy::Parallel,
         success_result("slow not reached"),
         &[],
         ProbeCancelSettlement::Cancelled,
@@ -1651,7 +1624,6 @@ async fn issue204_batch_siblings_settle_exactly_once_in_model_order() {
             "fast_sibling",
             "tool-fast-sibling",
             ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
         ),
         success_result("sibling done"),
     )
@@ -1687,7 +1659,7 @@ async fn issue204_batch_siblings_settle_exactly_once_in_model_order() {
         execution_policy(deadline_policy(10_000, None), clock.clone()),
         context_runtime(&model, clock),
         &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     execution.install_tool_physical_settlement_pause(pause);
@@ -2092,7 +2064,7 @@ async fn issue204_remote_frontier_settlement_settles_unconfirmed() {
         execution_policy(deadline_policy(20_000, None), clock.clone()),
         context_runtime(&model, clock),
         &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     let result = tokio::time::timeout(GUARD, execution.run())
@@ -2397,7 +2369,6 @@ async fn issue206_executor_panic_cannot_orphan_parallel_siblings() {
                     "panic_probe",
                     "tool-panic",
                     ToolExecutionPolicy::ForegroundOnly,
-                    ToolConcurrencyPolicy::Parallel,
                 ),
                 Arc::new(ConformancePanicTool {
                     construction,
@@ -2418,12 +2389,7 @@ async fn issue206_executor_panic_cannot_orphan_parallel_siblings() {
             ),
         ] {
             FakeTool::new(
-                common::tool_policies(
-                    name,
-                    id,
-                    ToolExecutionPolicy::ForegroundOnly,
-                    ToolConcurrencyPolicy::Parallel,
-                ),
+                common::tool_policies(name, id, ToolExecutionPolicy::ForegroundOnly),
                 result,
             )
             .register(&mut tools);
@@ -2523,7 +2489,6 @@ async fn issue206_settlement_panic_never_manufactures_confirmed_timeout() {
                 "panic_probe",
                 "tool-panic",
                 ToolExecutionPolicy::ForegroundOnly,
-                ToolConcurrencyPolicy::Parallel,
             ),
             Arc::new(CancellationPanicTool {
                 started,

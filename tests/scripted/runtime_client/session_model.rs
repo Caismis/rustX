@@ -25,7 +25,7 @@ use rustx::message::content::TextBlock;
 use rustx::message::types::{ContentBlockIndex, UserContentBlock};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelProfileId, ModelRef, ProviderId};
 use rustx::model::invocation::ModelBindingRegistry;
-use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelPolicy};
+use rustx::model::session::{AuxiliaryModelPolicy, SessionModelConfig, SessionModelState};
 use rustx::model::{ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol};
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest};
 use rustx::runtime_client::{
@@ -229,12 +229,14 @@ fn parked_tool_turn(
     ]
 }
 
-const ALPHA_CALL: ScriptedCall = ScriptedCall {
-    id: "call-1",
-    tool_id: "tool-alpha",
-    name: "alpha",
-    arguments: serde_json::Value::Null,
-};
+fn alpha_call() -> ScriptedCall {
+    ScriptedCall {
+        id: "call-1",
+        tool_id: "tool-alpha",
+        name: "alpha",
+        arguments: serde_json::json!({}),
+    }
+}
 
 /// Builds the runtime under test over an explicit session model authority.
 async fn runtime(model: SessionModelState) -> RuntimeClientHost {
@@ -293,7 +295,7 @@ async fn a_model_update_after_admission_affects_only_future_attempts() {
     let alpha = Provider::new(
         ALPHA,
         "model-a",
-        vec![parked_tool_turn(&ALPHA_CALL, receiver), one_turn_stop()],
+        vec![parked_tool_turn(&alpha_call(), receiver), one_turn_stop()],
     )
     .output(4096)
     .params(serde_json::json!({"temperature": 0.1, "provider_tag": "alpha"}));
@@ -532,7 +534,7 @@ async fn a_transient_retry_after_live_selection_keeps_the_admitted_invocation() 
 /// The same canonical history is presented to two models: A's window
 /// comfortably holds it, B's does not. The attempt on A performs exactly one
 /// provider request; the attempt on B performs a summary request *and* the
-/// turn, proving the second attempt planned against B's 4 000-token window
+/// turn, proving the second attempt planned against B's 8 000-token window
 /// and not against A's.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_attempt_plans_compaction_with_its_own_model_window() {
@@ -560,7 +562,7 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
             one_turn_stop(),
         ],
     )
-    .window(4_000)
+    .window(8_000)
     .output(256);
 
     let host = runtime(session_model(
@@ -570,8 +572,10 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
     .await;
     let (attachment, subscription) = attach(&host);
 
-    // A long inbound turn: comfortably inside A's window, well past B's.
-    let long = "compaction pressure ".repeat(600);
+    // Each inbound plus the compiled invocation envelopes fits B's window;
+    // two inbound turns exceed it. Compaction can therefore retain the fresh
+    // turn and summarize prior history, rather than reject uncompactable input.
+    let long = "compaction pressure ".repeat(1_000);
     submit(&attachment, 1, &long);
     receive_until(&host, &subscription, |event| {
         event
@@ -631,9 +635,9 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
     );
 }
 
-/// `summaryModel.mode = "session"` sends the summary to the admitted
-/// attempt's own primary invocation, subject only to the documented context
-/// summary output cap.
+/// `auxiliary.mode = "session"` sends the summary to the admitted
+/// attempt's primary Model with independent Model-default Profile resolution
+/// and the automatically derived Summary output allowance.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn session_summary_mode_uses_the_admitted_primary_invocation() {
     let alpha = Provider::new(
@@ -657,7 +661,7 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
             one_turn_stop(),
         ],
     )
-    .window(4_000)
+    .window(8_000)
     .output(300)
     .params(serde_json::json!({"temperature": 0.25, "provider_tag": "alpha"}));
 
@@ -667,10 +671,10 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
     ))
     .await;
     let (attachment, subscription) = attach(&host);
-    // The first turn fits the 4 000-token window; the second pushes the
-    // accumulated history past the soft input limit and forces exactly one
-    // compaction.
-    let long = "compaction pressure ".repeat(600);
+    // One turn plus the compiled invocation envelopes fits the 8 000-token
+    // window. The second pushes accumulated history past the soft input limit,
+    // while leaving enough room for the fresh turn after exactly one compaction.
+    let long = "compaction pressure ".repeat(1_000);
     submit(&attachment, 1, &long);
     receive_until(&host, &subscription, |event| {
         event
@@ -705,7 +709,7 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
     assert_eq!(
         summary.request_params(),
         requests[2].request_params(),
-        "the summary uses the attempt's exact effective request parameters"
+        "both invocations resolve the same catalog parameters without Session overrides"
     );
     assert_eq!(
         summary.request_params()["provider_tag"],
@@ -719,7 +723,7 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
     assert_eq!(requests[2].max_output_tokens(), 300);
 }
 
-/// `summaryModel.mode = "explicit"` resolves a different catalog
+/// `auxiliary.mode = "explicit"` resolves a different catalog
 /// model/provider/profile through the same resolution path, and the
 /// resolution is **frozen at admission**: mutating live session state during
 /// the attempt cannot change that attempt's summary model.
@@ -732,7 +736,7 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
         ALPHA,
         "model-a",
         vec![
-            parked_tool_turn(&ALPHA_CALL, receiver),
+            parked_tool_turn(&alpha_call(), receiver),
             vec![
                 FakeStep::Emit(ModelEvent::Started),
                 FakeStep::Emit(ModelEvent::Failed {
@@ -776,29 +780,31 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
     let decoy = Provider::new(BETA, "decoy-summary", vec![one_turn_stop()]);
 
     let initial = SessionModelConfig {
-        title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-        summary_model: SummaryModelPolicy::Explicit {
+        auxiliary: AuxiliaryModelPolicy::Explicit {
             model: summary.reference(),
-            profile: None,
+            profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
             request_params: rustx::model::RequestParams::new(),
+            max_output_tokens: None,
         },
         ..SessionModelConfig::of(alpha.reference())
     };
     let host = runtime(session_model(&[&alpha, &summary, &decoy], initial)).await;
     let (attachment, subscription) = attach(&host);
 
-    submit(&attachment, 1, "start");
+    // A structured Summary must genuinely reduce the retained source; enough
+    // original facts keep this binding-freeze scenario to one Summary request.
+    submit(&attachment, 1, &"retained original fact ".repeat(200));
     await_parked(&alpha.handle).await;
 
     // Mutate the live session's explicit summary model while the attempt runs.
     let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
         id: RequestId::new(2),
         config: Box::new(SessionModelConfig {
-            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: SummaryModelPolicy::Explicit {
+            auxiliary: AuxiliaryModelPolicy::Explicit {
                 model: decoy.reference(),
-                profile: None,
+                profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                 request_params: rustx::model::RequestParams::new(),
+                max_output_tokens: None,
             },
             ..SessionModelConfig::of(alpha.reference())
         }),
@@ -870,7 +876,7 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
         ALPHA,
         "model-a",
         vec![
-            parked_tool_turn(&ALPHA_CALL, receiver),
+            parked_tool_turn(&alpha_call(), receiver),
             overflow,
             one_turn_stop(),
             one_turn_stop(),
@@ -914,11 +920,13 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
     let selected = |primary: &str, summary_profile: &str| SessionModelConfig {
         profile: Some(ModelProfileId::new(primary)),
         request_params: common::request_params(serde_json::json!({"seed": null})),
-        title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-        summary_model: SummaryModelPolicy::Explicit {
+        auxiliary: AuxiliaryModelPolicy::Explicit {
             model: summary.reference(),
-            profile: Some(ModelProfileId::new(summary_profile)),
+            profile: crate::model::AuxiliaryProfileSelection::Explicit {
+                id: ModelProfileId::new(summary_profile),
+            },
             request_params: common::request_params(serde_json::json!({"summary_seed": [null]})),
+            max_output_tokens: None,
         },
         ..SessionModelConfig::of(alpha.reference())
     };
@@ -976,7 +984,7 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
     // The compaction summary used the admitted Summary profile.
     let summaries = summary.handle.requests();
     assert_eq!(summaries.len(), 1);
-    assert_eq!(summaries[0].max_output_tokens(), 1024);
+    assert_eq!(summaries[0].max_output_tokens(), 256);
     assert_eq!(
         serde_json::Value::Object(summaries[0].request_params().clone()),
         serde_json::json!({"summary_tag": "brief", "summary_seed": [null]})
@@ -1192,7 +1200,7 @@ fn a_session_override_may_not_claim_a_profile_owned_key() {
     ] {
         for layer in [
             RequestParamsLayer::SessionOverrides,
-            RequestParamsLayer::SummaryOverrides,
+            RequestParamsLayer::AuxiliaryOverrides,
         ] {
             let selection = rustx::model::ModelSelection {
                 request_params: common::request_params(contested.clone()),
@@ -1291,21 +1299,21 @@ async fn a_rejected_model_update_changes_nothing() {
         },
         // An unresolvable explicit summary model.
         SessionModelConfig {
-            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: SummaryModelPolicy::Explicit {
+            auxiliary: AuxiliaryModelPolicy::Explicit {
                 model: ModelRef::parse("alpha/missing").expect("reference"),
-                profile: None,
+                profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                 request_params: rustx::model::RequestParams::new(),
+                max_output_tokens: None,
             },
             ..SessionModelConfig::of(alpha.reference())
         },
         // A protected wire key in the explicit summary overrides.
         SessionModelConfig {
-            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: SummaryModelPolicy::Explicit {
+            auxiliary: AuxiliaryModelPolicy::Explicit {
                 model: alpha.reference(),
-                profile: None,
+                profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                 request_params: common::request_params(serde_json::json!({"stream": false})),
+                max_output_tokens: None,
             },
             ..SessionModelConfig::of(alpha.reference())
         },

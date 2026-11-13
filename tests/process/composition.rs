@@ -40,12 +40,6 @@ chat_reasoning_replay = "omit"
 const RUNTIME_CONFIG_TOML: &str = r#"agent_id = "agent-composed"
 
 
-[native_tools]
-[native_tools.bash]
-execution = "model_selectable"
-concurrency = "sequential"
-
-
 [environment]
 RUSTX_FIXTURE = "1"
 

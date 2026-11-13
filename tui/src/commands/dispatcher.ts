@@ -31,14 +31,22 @@ import { renderRepairInspection, type SourceRepairObservation } from "../present
 
 import type { AppServerHost } from "../app-server/host.ts";
 import type { AppServerSession } from "../app-server/session.ts";
-import { capabilitySummary, describeProfile, sessionLabel, skills } from "../presentation/selectors.ts";
+import { capabilitySummary, describeConfiguredAuxiliaryModel, describeConfiguredAuxiliaryProfile, describeProfile, sessionLabel, skills } from "../presentation/selectors.ts";
 import { isTodoComposed, selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import { renderTodoInspection, deferredTodoRecords } from "../ui/components/todos.ts";
 import { parseCommandLine } from "./registry.ts";
 import { expandPreference, failure, focusTransition, inspect, reasoningPreference, transient, usage, type CommandOutcome } from "./outcome.ts";
 import { goalSummary, renderDebug, renderHelp, renderModel, renderSettings, renderSkills, renderStatus, renderTools, type DebugDiagnostics } from "./presentation.ts";
-import type { CatalogModelView, SessionSettings, SessionUserMessageBoundaryObservation } from "../protocol/app-server.ts";
+import type { CatalogModelView, SessionModelConfig, SessionSettings, SessionUserMessageBoundaryObservation } from "../protocol/app-server.ts";
+
+const AUXILIARY_USAGE =
+  "usage: /model auxiliary clear | follow | set <provider/model> | profile lowest | profile model_default | profile set <id> | profile clear";
+
+/** Native model identity (ModelId): nonempty segments without whitespace. */
+function isNativeModelId(value: string): boolean {
+  return value.length > 0 && value.split("/").every((segment) => segment.length > 0) && !/\p{White_Space}/u.test(value);
+}
 
 export interface DispatcherContext {
   /** The connection and its durable Session catalog. */
@@ -54,11 +62,11 @@ export interface DispatcherContext {
 const NO_CURRENT_WORKSPACE = 'No Session is focused, so there is no current Workspace. Name one with /settings workspace "<path>" repairs.';
 
 export class CommandDispatcher {
-  readonly #occupancyCuts = new WeakMap<AppServerSession, {domain:string;cut:import('../../../protocol/app-server/v78.ts').CheckpointReadCut}>();
-  readonly #attemptCuts=new WeakMap<AppServerSession,{identity:string;cut:import('../../../protocol/app-server/v78.ts').CheckpointReadCut}>();
+  readonly #occupancyCuts = new WeakMap<AppServerSession, {domain:string;cut:import('../../../protocol/app-server/v79.ts').CheckpointReadCut}>();
+  readonly #attemptCuts=new WeakMap<AppServerSession,{identity:string;cut:import('../../../protocol/app-server/v79.ts').CheckpointReadCut}>();
   #inspectionView = {};
-  readonly #observationPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v78.ts').CheckpointPage>();
-  readonly #agentPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v78.ts').CheckpointPage>();
+  readonly #observationPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v79.ts').CheckpointPage>();
+  readonly #agentPages = new WeakMap<AppServerSession, import('../../../protocol/app-server/v79.ts').CheckpointPage>();
   #context: DispatcherContext;
   // A retained command is one submission until its response is classified.
   // Other controls and commands (including on a replacement attachment) remain usable.
@@ -581,10 +589,10 @@ export class CommandDispatcher {
 
   async #settings(argument: string): Promise<CommandOutcome> {
     const words = argument.match(/"(?:[^"\\]|\\.)*"|\S+/g)?.map(word => word.startsWith('"') ? JSON.parse(word) as string : word) ?? [];
-    const usage = transient("error", 'usage: /settings [repairs] | [user | workspace ["<canonical absolute path>"]] [repairs | rescan | approval policy|full_access|inherit]');
+    const usage = transient("error", 'usage: /settings [repairs] | [user | workspace ["<canonical absolute path>"]] [repairs | rescan | approval plan|automatic|full_access|inherit]');
     if (words.length === 1 && words[0] === "repairs") return this.#repairs("current");
     const owner = words.shift() ?? "user";
-    let target: import("../../../protocol/app-server/v78.ts").SourceTarget;
+    let target: import("../../../protocol/app-server/v79.ts").SourceTarget;
     if (owner === "user") target = { kind: "user" };
     else if (owner === "workspace" && words[0] === "repairs" && words.length === 1) return this.#repairs("current workspace");
     else if (owner === "workspace" && words[0]) target = { kind: "workspace", directory: words.shift()! };
@@ -599,7 +607,7 @@ export class CommandDispatcher {
     if (action === "rescan") await client.call("configuration/reconcile", { target }, "configuration_receipt");
     else if (action === "approval") {
       const mode = words.shift();
-      if (mode !== "policy" && mode !== "full_access" && mode !== "inherit") return transient("error", "approval expects policy, full_access, or inherit");
+      if (mode !== "plan" && mode !== "automatic" && mode !== "full_access" && mode !== "inherit") return transient("error", "approval expects plan, automatic, full_access, or inherit");
       await client.call("configuration/sourceWrite", { target, expected_revision: source[target.kind]!.revision,
         mutation: { kind: "config", mutation: { unit: "approval", authored: mode === "inherit" ? null : mode } } }, "sources_written");
     } else if (action) return transient("error", "Unknown Settings action");
@@ -622,10 +630,10 @@ export class CommandDispatcher {
    * retarget it, and a result from a replaced App Server is never shown.
    */
   async #repairs(
-    target: import("../../../protocol/app-server/v78.ts").SourceTarget | "current" | "current workspace",
+    target: import("../../../protocol/app-server/v79.ts").SourceTarget | "current" | "current workspace",
   ): Promise<CommandOutcome> {
     const { host, session } = this.#context;
-    let workspace: import("../../../protocol/app-server/v78.ts").SourceTarget | undefined;
+    let workspace: import("../../../protocol/app-server/v79.ts").SourceTarget | undefined;
     if (typeof target === "string") {
       if (session !== undefined) {
         const { summary } = await host.client.call("session/summary", { session_id: session.sessionId }, "session_summary");
@@ -740,8 +748,89 @@ export class CommandDispatcher {
       const configured = { ...current.configured };
       if (clear) delete configured.profile;
       else if (profile !== undefined) configured.profile = profile;
-      const updated = await session.modelSet(configured, true);
+      const updated = await session.modelSet(configured);
       return transient("info", withModelOutcomeNotice(session, `Session model profile -> ${updated.configured.profile ?? "model default"}; future independent attempts. Running attempts stay frozen.`));
+    }
+    if (/^auxiliary(?:\s|$)/.test(argument)) {
+      const parts = argument.split(/\s+/);
+      const verb = parts[1];
+      if (verb === "clear" || verb === "follow") {
+        if (parts.length !== 2) return transient("error", AUXILIARY_USAGE);
+        const current = await session.modelGet();
+        const configured: SessionModelConfig = {
+          ...current.configured,
+          auxiliary: { mode: "session", profile: { mode: "lowest" } },
+        };
+        const updated = await session.modelSet(configured);
+        return transient(
+          "info",
+          withModelOutcomeNotice(
+            session,
+            `Session auxiliary model -> ${describeConfiguredAuxiliaryModel(updated.configured.auxiliary)}; profile strategy ${describeConfiguredAuxiliaryProfile(updated.configured.auxiliary)}; future independent attempts. Running attempts stay frozen.`,
+          ),
+        );
+      }
+      if (verb === "set") {
+        if (parts.length !== 3) return transient("error", AUXILIARY_USAGE);
+        const modelId = parts[2]!;
+        // Never treat the first catalog page as the full catalog. Verify the
+        // bounded native identity here; native model_set remains the authority
+        // for whether that identity is currently selectable.
+        if (!isNativeModelId(modelId)) {
+          return transient("error", `${modelId} is not a valid native model identity.`);
+        }
+        const current = await session.modelGet();
+        const prev = current.configured.auxiliary;
+        const configured: SessionModelConfig = {
+          ...current.configured,
+          auxiliary: {
+            mode: "explicit",
+            model: modelId,
+            ...(prev?.profile ? { profile: prev.profile } : {}),
+            ...(prev?.request_params ? { request_params: prev.request_params } : {}),
+            ...(prev?.max_output_tokens != null ? { max_output_tokens: prev.max_output_tokens } : {}),
+          },
+        };
+        const updated = await session.modelSet(configured);
+        return transient(
+          "info",
+          withModelOutcomeNotice(
+            session,
+            `Session auxiliary model -> ${describeConfiguredAuxiliaryModel(updated.configured.auxiliary)}; profile strategy ${describeConfiguredAuxiliaryProfile(updated.configured.auxiliary)}; overrides preserved; future independent attempts. Running attempts stay frozen.`,
+          ),
+        );
+      }
+      if (verb === "profile") {
+        const strategy = parts[2];
+        const explicitId = parts.length === 4 && strategy === "set" ? parts[3] : undefined;
+        const lowest = strategy === "lowest" && parts.length === 3;
+        const modelDefault =
+          (strategy === "model_default" || strategy === "clear") && parts.length === 3;
+        if (!lowest && !modelDefault && explicitId === undefined) {
+          return transient("error", AUXILIARY_USAGE);
+        }
+        const profile = lowest
+          ? ({ mode: "lowest" } as const)
+          : explicitId !== undefined
+            ? ({ mode: "explicit", id: explicitId } as const)
+            : ({ mode: "model_default" } as const);
+        const current = await session.modelGet();
+        const base =
+          current.configured.auxiliary ?? ({ mode: "session", profile: { mode: "lowest" } } as const);
+        const configured: SessionModelConfig = {
+          ...current.configured,
+          auxiliary: { ...base, profile },
+        };
+        const updated = await session.modelSet(configured);
+        return transient(
+          "info",
+          withModelOutcomeNotice(
+            session,
+            `Session auxiliary profile strategy -> ${describeConfiguredAuxiliaryProfile(updated.configured.auxiliary)}; future independent attempts. Running attempts stay frozen.`,
+          ),
+        );
+      }
+      return transient("error", AUXILIARY_USAGE);
     }
     if (argument === "show") {
       return inspect("Model", withModelOutcomeNotice(session, renderModel(state)));
@@ -796,14 +885,11 @@ export class CommandDispatcher {
       const replacement = sameModel ? current : {
         model: model.model,
         requestParams: {},
-        summaryModel: current.summaryModel,
-        titleModel: current.titleModel,
-        classificationModel: current.classificationModel,
-        btwModel: current.btwModel,
+        auxiliary: current.auxiliary,
       };
-      const updated = await session.modelSet(replacement, true);
-      const auxiliaryRecovered = (["summaryModel", "titleModel", "classificationModel", "btwModel"] as const)
-        .some(key => current[key]?.mode === "explicit" && updated.configured[key]?.mode !== "explicit");
+      const updated = await session.modelSet(replacement);
+      const auxiliaryRecovered =
+        current.auxiliary?.mode === "explicit" && updated.configured.auxiliary?.mode !== "explicit";
       const selectionNote = auxiliaryRecovered
         ? `${sameModel ? "profile and overrides preserved" : "primary overrides reset"}; unavailable auxiliary models now follow the primary`
         : sameModel ? "profile, overrides and auxiliary policies preserved" : "primary overrides reset; auxiliary policies preserved";

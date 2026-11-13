@@ -2565,6 +2565,7 @@ impl ConversationBackgroundRegistry {
                 // subagent against. `subagent` is foreground-only, so this
                 // is structural rather than a policy decision.
                 subagent: None,
+                bound_mutation: None,
             };
             // The registry remains the detached lifecycle owner. Cancellation
             // transfers physical ownership to the same settlement plane used
@@ -5223,6 +5224,7 @@ mod tests {
                     questionnaire_requester: None,
                     todos: None,
                     subagent: None,
+                    bound_mutation: None,
                 },
             )
             .completion
@@ -5275,6 +5277,7 @@ mod tests {
                     questionnaire_requester: None,
                     todos: None,
                     subagent: None,
+                    bound_mutation: None,
                 },
             )
             .completion

@@ -848,6 +848,63 @@ impl ConversationRuntime {
             }
         };
 
+        let (
+            last_permission_reminder_mode,
+            permission_task_message,
+            recovered_permission_task_message,
+        ) = match recovery
+            .latest_primary_request()
+            .map(|request_id| {
+                let snapshot = store.load_request_snapshot(request_id)?;
+                let current = store.projected_history()?;
+                Ok::<_, crate::durable::ConversationStoreError>((
+                    (snapshot.history_cut.activation == current.cut.activation)
+                        .then_some(snapshot.permission_mode),
+                    snapshot.permission_task_message,
+                ))
+            })
+            .transpose()
+            .and_then(|evidence| {
+                let (mode, task) = evidence.unwrap_or((None, None));
+                let mut candidate = None;
+                if let Some(id) = recovery.continuation_task_message() {
+                    let messages = store.load_messages(std::slice::from_ref(id))?;
+                    let Some(crate::message::MessageBlock::User(message)) =
+                        messages.first().filter(|message| message.id() == id)
+                    else {
+                        return Err(crate::durable::ConversationStoreError::InvalidReference(
+                            "recovered permission task does not name a canonical input".into(),
+                        ));
+                    };
+                    if message.kind != crate::message::InboundKind::Message
+                        || !matches!(
+                            message.source,
+                            crate::message::UserSource::Human
+                                | crate::message::UserSource::Agent { .. }
+                        )
+                    {
+                        return Err(crate::durable::ConversationStoreError::InvalidReference(
+                            "recovered permission task has no Human or delegated provenance".into(),
+                        ));
+                    }
+                    // Recover only the candidate for the unanswered turn. A
+                    // Human can replace the established task, while Agent
+                    // input supplies only an initial task. Neither becomes
+                    // committed authority until a primary request starts.
+                    if task.is_none() || message.source == crate::message::UserSource::Human {
+                        candidate = Some(id.clone());
+                    }
+                }
+                Ok((mode, task, candidate))
+            }) {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                config.capability.release_conversation_runtime_claim();
+                config.tool_runtime.release_conversation_runtime_claim();
+                return Err(ConversationRuntimeError::Storage(error.to_string()));
+            }
+        };
+
         // ---- Infallible wiring: from here construction always succeeds. ----
         let mailbox = config.tool_runtime.mailbox();
         // The conversation is inert until `activate`: the ownership
@@ -952,6 +1009,9 @@ impl ConversationRuntime {
                 resources: config.resources,
                 mcp_settlement_failure: None,
                 effective_approval_mode: config.approval_mode,
+                last_permission_reminder_mode,
+                permission_task_message,
+                recovered_permission_task_message,
                 conversation: Some(conversation),
                 current_attempt: None,
                 scheduled: None,

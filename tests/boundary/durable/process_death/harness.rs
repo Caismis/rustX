@@ -72,24 +72,25 @@ impl RuntimeClock for FixedClock {
 }
 
 /// The runtime configuration a child composes from.
-fn runtime_json(read_approval: &str, include_todo: bool) -> String {
+fn runtime_json(force_ask: bool, include_todo: bool) -> String {
     // Issue #259: Todo is composed through the closed extension surface, not
     // through `agent.tools.builtin` — which no longer accepts the name at all. The
     // bounded catalog the rest of FND-06 relies on is preserved by composing
     // no Todo extension unless a case asks for one.
+    //
+    // Lifecycle fixtures use Full Access. Ask/approval interaction proofs use
+    // Plan plus an elevating tool call with elevation_reason (native Read can
+    // never Ask under the built-in matrix). Obsolete native_tools.*.approval
+    // keys are rejected by deny_unknown_fields.
     let builtin_tools = vec!["read", "bash", "job_status"];
     toml::to_string_pretty(&serde_json::json!({
-        "schema_version": 12,
+        "schema_version": 13,
         "agent_id": "agent-fnd06",
         "providers": {"fixture": {"protocol":"openai_chat_completions","base_url": "https://fixture.invalid/v1", "api_key": "fixture-key-fixture"}},
         "models": {MODEL: {"provider": "fixture", "id": "fnd06", "context_window": 1_000_000, "max_output_tokens": 4096, "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"]}, "compat": {"chat_reasoning_replay": "omit"}}},
         "agent": {"model": {"model": MODEL}, "tools": {"builtin": builtin_tools}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": include_todo}}, "agents": ["explore"], "skills": "all"},
-        "approval_mode": "policy",
-        "native_tools": {
-            "read": {"approval": read_approval},
-            // Process-death tests own execution gates, not approval interaction.
-            "bash": {"execution": "model_selectable", "approval": "never"}
-        },
+        "approval_mode": if force_ask { "plan" } else { "full_access" },
+        // Issue #544: Bash ModelSelectable is the product default; no native_tools overlay.
         "subagents": {"max_concurrent": 4}
     }))
     .unwrap()
@@ -99,12 +100,12 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
 /// composed. Only the Issue #130 process-death scenarios need it; the rest of
 /// FND-06 retains its original bounded catalog.
 pub(crate) fn write_runtime_config_with_todo(root: &Path) {
-    crate::launch_fixture::write_document(&root.join("rustx.toml"), &runtime_json("never", true));
+    crate::launch_fixture::write_document(&root.join("rustx.toml"), &runtime_json(false, true));
 }
 
 pub(crate) fn write_runtime_config_with_goal(root: &Path) {
     let mut document: serde_json::Value =
-        rustx::toml_authoring::parse(runtime_json("never", false).as_bytes()).unwrap();
+        rustx::toml_authoring::parse(runtime_json(false, false).as_bytes()).unwrap();
     document["agent"]["plugins"]["goal"] = serde_json::json!({"enabled": true});
     crate::launch_fixture::write_document(
         &root.join("rustx.toml"),
@@ -133,7 +134,7 @@ impl Lab {
         )
         .expect("explore instructions");
         std::fs::create_dir_all(lab.root().join("private")).expect("runtime-private root");
-        lab.write_runtime_config("never");
+        lab.write_runtime_config(false);
         lab.write_project_instructions("R1 project instructions.");
         lab.write_skill_frontmatter("alpha", "R1 alpha summary");
         std::fs::write(lab.workspace().join("note.txt"), "R1 note body\n").expect("note.txt");
@@ -153,10 +154,26 @@ impl Lab {
         self.root().join("private/sessions/ses_0199c989-03a0-7000-8000-000000000001/conversations/conv_0199c989-03a0-7000-8000-000000000001/conversation.sqlite")
     }
 
-    pub(crate) fn write_runtime_config(&self, read_approval: &str) {
+    /// When `force_ask` is true, Plan mode is used so elevating tool calls with
+    /// `elevation_reason` publish a human Ask; otherwise Full Access.
+    pub(crate) fn write_runtime_config(&self, force_ask: bool) {
         crate::launch_fixture::write_document(
             &self.root().join("rustx.toml"),
-            &runtime_json(read_approval, false),
+            &runtime_json(force_ask, false),
+        );
+    }
+
+    /// Rewrites the on-disk runtime config to a different Full Access document.
+    ///
+    /// Used by live external-edit proofs: the file must change, but flipping to
+    /// Plan would conflate permission-mode migration with generation freezing.
+    pub(crate) fn write_divergent_full_access_config(&self) {
+        let mut document: serde_json::Value =
+            rustx::toml_authoring::parse(runtime_json(false, false).as_bytes()).unwrap();
+        document["subagents"]["max_concurrent"] = serde_json::json!(5);
+        crate::launch_fixture::write_document(
+            &self.root().join("rustx.toml"),
+            &toml::to_string_pretty(&document).unwrap(),
         );
     }
 

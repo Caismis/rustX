@@ -74,7 +74,7 @@ that operator-owned integration. Use the launcher for complete local composition
 
 Native authentication admits trusted clients of one user's App Server. WebUI,
 TUI and external clients may share writable attachments to one Conversation.
-The browser sends subprotocols `rustx.app-server.v78` and `rustx-token.<base64url-no-pad(token bytes)>` in its
+The browser sends subprotocols `rustx.app-server.v79` and `rustx-token.<base64url-no-pad(token bytes)>` in its
 WebSocket handshake. No arbitrary authorization header, native URL credential,
 OAuth, tenancy, BFF or production hosting layer is introduced. Use the matching
 App Server transport token, never a provider key. Provider/MCP credentials are
@@ -135,7 +135,7 @@ and never rewrites an unsaved draft's base outside the explicit review workflow.
   come from `snapshot.messages`; current activity comes from `snapshot.attempt`.
   An in-flight message with an already committed ID is suppressed. No Harness
   event model, fake V3 Session log, optimistic conversation or event reducer exists.
-- `src/client/`: one WebSocket, generated `protocol/app-server/v78.ts` unions,
+- `src/client/`: one WebSocket, generated `protocol/app-server/v79.ts` unions,
   correlation IDs, initialize/capabilities, bounded requests, native routing,
   replaceable snapshots, connection/attachment fences and wire observer. Rust DTOs
   remain authoritative. The shared generator normalizes schema `$ref` siblings
@@ -705,7 +705,7 @@ checked write; a conflict keeps local changes for explicit reconciliation.
 See [the authoring contract](../docs/workflow-authoring.md) and [design, evidence
 and test traceability](../docs/workflow-visual-editor.md).
 
-Existing Workspace row status uses Native v78 Thread status independently of full
+Existing Workspace row status uses Native v79 Thread status independently of full
 transcript attachments. Exact Thread identity and process-local revision order
 snapshots and notifications; reconnect/overflow repairs use pure reads. Runtime
 status, connection availability and native Turn outcomes remain separate.

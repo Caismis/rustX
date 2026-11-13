@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -20,6 +21,7 @@ from fake_provider.scenario import (
     Step,
     Stream,
     Text,
+    ToolCall,
     sanitize_headers,
     split_text,
 )
@@ -289,6 +291,14 @@ def test_chunked_compaction_scenario_enforces_fallback_and_fragment_count():
     scenario = build("chunked_compaction")
     assert isinstance(scenario, AdaptiveScenario)
     primary = recorded({"model": "chat-model"})
+    first_write, final = scenario.select([primary])
+    assert not final
+    assert scenario.gates == ("first-prompt-summary",)
+    write = next(chunk for chunk in first_write.respond.script if isinstance(chunk, ToolCall))
+    from fake_provider.scenarios.conformance import _chunked_write_content
+    assert json.loads(write.arguments) == {
+        "arguments": {"path": "chunked-001.txt", "content": _chunked_write_content(1)}
+    }
     native = recorded({"model": "summary-model"})
     with pytest.raises(ValueError, match="before enough source history"):
         scenario.select([primary, native])
@@ -307,6 +317,34 @@ def test_chunked_compaction_scenario_enforces_fallback_and_fragment_count():
     completed, final = scenario.select([*history, *([native] * 14), primary])
     assert final
     assert completed.expect.model == "chat-model"
+
+
+def test_adaptive_workspace_substitution_uses_the_shared_envelope(monkeypatch):
+    def factory():
+        def select(requests):
+            return Step(
+                Expect(protocol=OPENAI_CHAT_COMPLETIONS),
+                Stream(ToolCall("dynamic-write", "write", json.dumps({
+                    "path": "{workspace}/note.txt", "content": "fact",
+                    "execution_mode": "foreground",
+                }))),
+            ), True
+        return AdaptiveScenario("adaptive-workspace", select, ("preserved-gate",))
+
+    monkeypatch.setitem(SCENARIOS, "adaptive-workspace", factory)
+    scenario = build("adaptive-workspace", "/tmp/rustx-ws")
+    assert isinstance(scenario, AdaptiveScenario)
+    assert scenario.name == "adaptive-workspace"
+    assert scenario.gates == ("preserved-gate",)
+    step, final = scenario.select([recorded({"model": "chat-model"})])
+    assert final
+    assert json.loads(step.respond.script[0].arguments) == {
+        "arguments": {"path": "/tmp/rustx-ws/note.txt", "content": "fact"},
+        "execution_mode": "foreground",
+    }
+    missing = build("adaptive-workspace")
+    with pytest.raises(SystemExit, match="--workspace"):
+        missing.select([recorded({"model": "chat-model"})])
 
 
 def test_chunked_tool_history_is_bounded_distinct_and_not_short_periodic():

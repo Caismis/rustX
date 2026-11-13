@@ -1,6 +1,6 @@
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,expect,it,vi} from 'vitest';
-import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v78';
+import type {CheckpointPage,CheckpointReadCut,TraceInspectionHead,TraceInspectionMessage,TraceRecord,ContentRef,ForegroundToolExecution} from '../../protocol/app-server/v79';
 import {TrajectoryInspector,type TrajectoryInspectorProps} from '../src/app/trajectory/TrajectoryInspector';
 import {readTraceCollection} from '../src/client/trace-content';
 import {traceTool} from './trace-fixture';
@@ -83,7 +83,7 @@ it('Source retains original generated provenance without exposing content read c
  const original=cut(),page=head(original,'user',1),value=page.items[0].value as unknown as TraceInspectionHead;if(value.content.type!=='messages')throw Error('fixture');value.content.page.items[0].source={agent:{agent_id:'original-agent'}};
  render(<TrajectoryInspector {...props(record())} facet="source" detailPage={page}/>);expect(screen.getByRole('tree',{name:'Message source JSON'})).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'Expand'}));expect(screen.getAllByText('"original-agent"').length).toBeGreaterThan(0);expect(screen.queryByRole('button',{name:/Read original/})).toBeNull();expect(screen.queryByText('ORIGINAL_PREVIEW_0')).toBeNull();
 });
-function nativeForeground(block:number):ForegroundToolExecution{return {occurrence:{locator:{type:'by_ledger_position',position:1},block_index:block},message_id:'message-0',block_index:block,call_id:`original-call-${block}`,tool_id:'original-tool',name:`native-tool-${block}`,assembly_complete:true,committed_result_deferred:false,state:{type:'assembled',arguments:'{}'}};}
+function nativeForeground(block:number):ForegroundToolExecution{return {occurrence:{locator:{type:'by_ledger_position',position:1},block_index:block},message_id:'message-0',block_index:block,call_id:`original-call-${block}`,tool_id:'original-tool',name:`native-tool-${block}`,assembly_complete:true,committed_result_deferred:false,state:{type:'assembled',arguments:"{\"arguments\":{}}"}};}
 it('Tool index pages keep sparse native coordinates at the source boundary',async()=>{
  const original=cut(),reader=direct(original),domain='messages.ledger:1.tools';
  reader.page.mockImplementation(async(_cut,_domain,offset)=>{const block=offset===0?2:offset,next=block===2?'7':block===7?'11':null;return {read_cut:original,cursor:original.revision,domain,total:'3',next_offset:next,collections:[],items:[{offset:String(block),identity:`ledger:1:${block}`,key:null,value:JSON.parse(JSON.stringify(nativeForeground(block))),content:[],deferred:false,body_complete:null}]};});
@@ -98,6 +98,6 @@ it.each(['next','duplicate','unsafe','empty'] as const)('rejects malformed spars
 });
 it('a complete small canonical block preserves its original opaque JSON formatting automatically',async()=>{
  const original=cut(),reader=direct(original),domain='messages.ledger:1.blocks',initial=head(original,'user',1),raw=' {"n":1.0000,"integer":18446744073709551615} ',bytes=new TextEncoder().encode(raw),reference:ContentRef={conversation_id:original.conversation_id,source:{type:'canonical_message_block',component:'payload',locator:{type:'by_ledger_position',position:1},block_index:0},representation:'raw_json_utf8',version:1,content_revision:1,readable_end:bytes.length};advertise(initial,domain,'1');
- reader.page.mockResolvedValue({read_cut:original,cursor:original.revision,domain,total:'1',next_offset:null,collections:[],items:[{offset:'0',identity:'tool_call',key:null,value:{id:'original-call',tool_id:'original-tool',name:'native-tool',arguments:{n:1}},content:[{path:['value','arguments'],source_path:null,content_ref:reference,deferred:false}],deferred:false,body_complete:null}]});
+ reader.page.mockResolvedValue({read_cut:original,cursor:original.revision,domain,total:'1',next_offset:null,collections:[],items:[{offset:'0',identity:'tool_call',key:null,value:{id:'original-call',tool_id:'original-tool',name:'native-tool',arguments:{ arguments: {n:1} }},content:[{path:['value','arguments'],source_path:null,content_ref:reference,deferred:false}],deferred:false,body_complete:null}]});
  reader.content.mockResolvedValue({content_ref:reference,offset:0,data_base64:btoa(raw),end_offset:bytes.length,readable_end:bytes.length,next_offset:null,complete:true});render(<TrajectoryInspector {...props(record())} detailPage={initial} detailReader={reader.reader}/>);await waitFor(()=>expect(document.body.textContent).toContain('18446744073709551615'));expect(document.body.textContent).toContain('1.0000');expect(reader.content.mock.calls[0].slice(0,3)).toEqual([original,reference,0]);expect(reader.value).not.toHaveBeenCalled();
 });

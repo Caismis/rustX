@@ -102,7 +102,7 @@ class Fixture {
   }
 }
 
-function cutDiagnostic(cut: import('../../protocol/app-server/v78.ts').CheckpointReadCut | undefined) {
+function cutDiagnostic(cut: import('../../protocol/app-server/v79.ts').CheckpointReadCut | undefined) {
   if (!cut) return undefined;
   const source = cut.source_cut;
   return { conversation_id: cut.conversation_id, activation_id: cut.activation_id,
@@ -112,7 +112,7 @@ function cutDiagnostic(cut: import('../../protocol/app-server/v78.ts').Checkpoin
       pending: source.read.pending_through } : null };
 }
 
-function eventDiagnostic(event: import('../../protocol/app-server/v78.ts').RuntimeClientEvent) {
+function eventDiagnostic(event: import('../../protocol/app-server/v79.ts').RuntimeClientEvent) {
   if (event.type === 'checkpoint_advanced') return { type: event.type, cursor: event.checkpoint.cursor,
     conversation_id: event.checkpoint.snapshot.conversation_id, cut: cutDiagnostic(event.checkpoint.read_cut),
     attempt: event.checkpoint.snapshot.attempt?.phase.type };
@@ -225,9 +225,25 @@ async function inspectPresentDefinition(host:AppServerHost,session:AppServerSess
   assert.equal(original.name,'present');assert.equal(original.tool_id,'tool-present');
   const schema=original.input_schema;
   assert.ok(schema&&typeof schema==='object'&&'truncated' in schema&&'value' in schema);assert.equal(schema.truncated,false);
-  const value=schema.value;assert.ok(value&&typeof value==='object'&&'properties' in value);
-  const properties=value.properties;assert.ok(properties&&typeof properties==='object'&&'files' in properties);
-  assert.equal((await provider.requests()).length,before,'head and Definition observation issue no provider requests');
+  const value=schema.value;assert.ok(value&&typeof value==='object'&&'properties' in value&&'definitions' in value);
+  const properties=value.properties;assert.ok(properties&&typeof properties==='object'&&'arguments' in properties&&'elevation_reason' in properties);
+  assert.deepEqual(properties.arguments,{$ref:'json-schema:///'});
+  assert.equal('files' in properties,false,'business fields stay inside the invocation arguments');
+  const resources=value.definitions;assert.ok(resources&&typeof resources==='object'&&'json-schema:///' in resources);
+  const business=resources['json-schema:///'];assert.ok(business&&typeof business==='object'&&'allOf' in business&&'definitions' in business);
+  assert.deepEqual(business.allOf,[{$ref:'json-schema:///#/definitions/schema0'}]);
+  const schemaIndex=business.definitions;assert.ok(schemaIndex&&typeof schemaIndex==='object'&&'schema0' in schemaIndex);
+  assert.deepEqual(schemaIndex.schema0,{allOf:[{$ref:'json-schema:///#/x-rustx-schema-nodes/schema0'}]});
+  assert.ok('x-rustx-schema-nodes' in business);
+  const nodes=business['x-rustx-schema-nodes'];assert.ok(nodes&&typeof nodes==='object'&&'schema0' in nodes);
+  const root=nodes.schema0;assert.ok(root&&typeof root==='object'&&'properties' in root);
+  assert.ok(root.properties&&typeof root.properties==='object'&&'files' in root.properties,'the referenced business contract still describes present.files');
+  const requests=await provider.requests();
+  assert.equal(requests.length,before,'head and Definition observation issue no provider requests');
+  const body=requests[0]!.body as {tools:{function:{name:string;parameters:unknown}}[]};
+  const presented=body.tools.find(tool=>tool.function.name==='present');
+  assert.ok(presented,'the provider received the real present definition');
+  assert.deepEqual(value,presented.function.parameters,'inspection preserves the exact model-facing invocation contract');
 }
 
 function rejectedWith(reason: string) {

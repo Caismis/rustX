@@ -1,7 +1,7 @@
 import {threadFor} from '../../protocol/app-server/testing.ts';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { Request } from '../../protocol/app-server/v78';
+import type { Request } from '../../protocol/app-server/v79';
 import { App } from '../src/app/App';
 import { firstSubmissions } from '../src/app/new-conversation/first-submit';
 import { Server, boundedSettings, snapshot } from './fixture';
@@ -52,7 +52,7 @@ it('an uncertain Attach across Settings retains the selected local editor withou
 async function firstSend(hold?: 'thread/resume' | 'session/subscribe', file?: File) {
   const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
   server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: {
-    ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace/A' }, prospective_approval_mode: 'policy',
+    ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace/A' }, prospective_approval_mode: 'plan',
     session_models: { kind: 'available', default_model: { model: 'main' }, catalog: { models: [{ model: 'main', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] }] } },
   } });
   const session = { id: 'created', active_node: 'node-created', active_conversation_id: 'conversation-created', node_count: 1, created_at: '0', updated_at: '0' };

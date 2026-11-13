@@ -76,6 +76,8 @@ fn recovery_binding(
             environment: control.environment(script),
         },
         policy: rustx::tools::types::ToolInvocationPolicy::default(),
+        permissions: None,
+        tool_permissions: std::collections::BTreeMap::new(),
     }
 }
 
@@ -477,10 +479,14 @@ where
             monotonic_clock: clock.clone() as Arc<dyn MonotonicClock>,
             subagent_context: None,
             workflow_output: None,
+            last_permission_reminder_mode: None,
+            permission_task_message: None,
+            recovered_permission_task_message: None,
+            approval_mode: rustx::runtime::ApprovalMode::FullAccess,
         },
         context_runtime,
         &fixture.runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
 
@@ -512,7 +518,13 @@ where
     let result = tokio::time::timeout(Duration::from_mins(2), execution.run())
         .await
         .expect("anti-hang guard: the manual-clock lifecycle always settles");
-    driver.await.expect("boundary controller");
+    // Fail closed if the controller is still waiting on a frontier the run
+    // never crossed (for example Plan denied before dispatch). Without this
+    // bound the suite can block the Boundary job after the run itself settles.
+    tokio::time::timeout(Duration::from_secs(30), driver)
+        .await
+        .expect("anti-hang guard: the boundary controller always finishes")
+        .expect("boundary controller");
     common::durable_agent_result(result, fixture.store.as_ref())
 }
 
@@ -2515,11 +2527,17 @@ async fn a_policy_change_failure_preserves_the_published_generation() {
     assert_eq!(published_mcp_tools(&before, &capability.server_id).len(), 3);
 
     let mut b2 = recovery_binding(test_name, &control, &script);
-    b2.policy.approval = rustx::tools::types::ToolApprovalPolicy::Always;
+    // Resource-permission overrides replaced approval-policy on the binding:
+    // a distinct permission set is still a candidate-changing binding edit.
+    b2.permissions = Some(rustx::runtime::permission::ResourcePermissionSet {
+        plan: rustx::runtime::permission::ResourcePermissionValue::Ask,
+        automatic: rustx::runtime::permission::ResourcePermissionValue::Ask,
+        full_access: rustx::runtime::permission::ResourcePermissionValue::Allow,
+    });
     assert_ne!(
         before.mcp_servers().get(&capability.server_id),
         Some(&b2),
-        "an approval-policy change is a binding change"
+        "a resource-permission change is a binding change"
     );
 
     let failure = capability
@@ -2604,8 +2622,7 @@ async fn concurrent_mcp_progress_refreshes_every_idle_watchdog_above_the_old_rou
     // The batch must actually run in parallel, so the binding's own
     // concurrency policy — an execution-relevant field of the binding — says
     // so for every tool of this server.
-    let mut binding = server.binding();
-    binding.policy.concurrency = rustx::tools::types::ToolConcurrencyPolicy::Parallel;
+    let binding = server.binding();
     let capability = http_capability(
         &fixture.runtime,
         &McpServerId::new("http-progress"),
@@ -3029,8 +3046,7 @@ async fn progress_that_beats_every_subscription_still_refreshes_every_idle_watch
     let fixture = common::native_fixture_without_extensions();
     let server =
         streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
-    let mut binding = server.binding();
-    binding.policy.concurrency = rustx::tools::types::ToolConcurrencyPolicy::Parallel;
+    let binding = server.binding();
     let capability = http_capability(
         &fixture.runtime,
         &McpServerId::new("http-pre-subscription"),

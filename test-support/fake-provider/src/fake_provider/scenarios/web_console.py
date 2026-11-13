@@ -24,8 +24,10 @@ def web_console_dogfood() -> Scenario:
         Step(expected("Long action in A"), Stream(Text("A is running."), Gate("finish-a"), Text(" A finished."), Finish())),
         Step(expected("Use B while A runs"), Stream(Text("B stayed responsive."), Finish())),
         Step(expected("Approval please"), Stream(ToolCall("console-bash", "bash", json.dumps({
-            "command": "printf console-approved; printf x >> console-effect", "execution_mode": "foreground",
-        })), Finish("tool_calls"))),
+            "command": "printf console-approved; printf x >> console-effect",
+            "execution_mode": "foreground",
+            "elevation_reason": "integration fixture escalates mutating bash under Plan mode",
+        }, separators=(",", ":"))), Finish("tool_calls"))),
         Step(expected("console-approved"), Stream(Text("Approval completed."), Finish())),
         Step(expected("Questionnaire please"), Stream(ToolCall("console-question", "ask_user", questions), Finish("tool_calls"))),
         Step(expected("Keep native"), Stream(Text("Questionnaire completed."), Finish())),
@@ -156,8 +158,10 @@ def web_upload_conformance() -> Scenario:
             Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
                         body_contains=("Use my uploaded files", "<user_uploaded_files>", "acceptance.txt")),
                  Stream(ToolCall(f"upload-{phase.lower()}", "bash", json.dumps({
-                     "command": command, "execution_mode": "foreground",
-                 })), Finish("tool_calls"))),
+                     "command": command,
+                     "execution_mode": "foreground",
+                     "elevation_reason": "integration fixture escalates unproven upload bash under Plan mode",
+                 }, separators=(",", ":"))), Finish("tool_calls"))),
             Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
                         body_contains=("UPLOAD_NATIVE_SENTINEL", ".agents/uploads/")),
                  Stream(Text(f"{phase} upload read through native Tool."), Finish())),
@@ -259,7 +263,11 @@ def web_harness_convergence() -> Scenario:
         "web_harness_convergence",
         Step(expected, Stream(Reasoning("## Plan\n\n- Inspect the workspace.\n- Keep **native authority**.\n\n`exact identity`"),
                               Text("I will prepare a small workspace change."),
-                              ToolCall("write-402", "write", json.dumps({"path": "hello.txt", "content": "hello native world\n"})), Finish("tool_calls"))),
+                              ToolCall("write-402", "write", json.dumps({
+                                  "path": "hello.txt",
+                                  "content": "hello native world\n",
+                                  "elevation_reason": "integration fixture escalates write under Plan mode",
+                              }, separators=(",", ":"))), Finish("tool_calls"))),
         Step(expected, Stream(Reasoning("Verify the committed file before answering."),
                               ToolCall("bash-402", "bash", json.dumps({"command": "cat hello.txt", "execution_mode": "foreground"})), Finish("tool_calls"))),
         Step(expected, Stream(ToolCall("read-402", "read", json.dumps({"path": "hello.txt"})), Finish("tool_calls"))),
@@ -282,8 +290,11 @@ def web_agent_continuation() -> Scenario:
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
                     body_contains=("WEB_AGENT_PARENT",), tools_include=("subagent",)),
              Stream(ToolCall("web-agent-create", "subagent", json.dumps({
-                 "agent": "reviewer", "title": "Review workspace", "task": "WEB_AGENT_CHILD: review the workspace",
-             })), Finish("tool_calls"))),
+                 "agent": "reviewer",
+                 "title": "Review workspace",
+                 "task": "WEB_AGENT_CHILD: review the workspace",
+                 "elevation_reason": "integration fixture escalates subagent under Plan mode",
+             }, separators=(",", ":"))), Finish("tool_calls"))),
         *(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model"),
                Stream(Gate(f"agent-initial-{index}"), Text("Initial request completed."), Finish()),
                allow_disconnect=True) for index in range(2)),
@@ -370,8 +381,16 @@ print(json.dumps({'deliveries':[{'path':'a/report.md'}]}))
     def tool(call: str, name: str, arguments: dict[str, object]) -> Stream:
         return Stream(ToolCall(call, name, json.dumps(arguments, ensure_ascii=False)), Finish('tool_calls'))
     return Scenario('web_file_delivery',
-        Step(expected, tool('delivery-write', 'write', {'path': '报告 file.md', 'content': markdown})),
-        Step(expected, tool('delivery-bash', 'bash', {'command': "python3 - <<'PY'\n" + script + 'PY\n', 'execution_mode': 'foreground'})),
+        Step(expected, tool('delivery-write', 'write', {
+            'path': '报告 file.md',
+            'content': markdown,
+            'elevation_reason': 'integration fixture escalates write under Plan mode',
+        })),
+        Step(expected, tool('delivery-bash', 'bash', {
+            'command': "python3 - <<'PY'\n" + script + 'PY\n',
+            'execution_mode': 'foreground',
+            'elevation_reason': 'integration fixture escalates mutating bash under Plan mode',
+        })),
         Step(expected, Stream(Text('I created report.md and 报告 file.md.'), Gate('delivery-before-declaration'),
                               ToolCall('delivery-malformed', 'present', json.dumps({'files': [{'path': '../escape'}]})), Finish('tool_calls'))),
         Step(expected, tool('delivery-present', 'present', {'files': files + [{'path': './报告 file.md', 'description': 'Duplicate discarded'}]})),
@@ -425,7 +444,13 @@ def web_stop() -> Scenario:
         Step(expected("Stop during proposal"), Stream(Text("Preparing a file without executing it."),
             Raw(b'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"stopped-write","type":"function","function":{"name":"write","arguments":"{\\\"path\\\":"}}]},"finish_reason":null}]}\n\n'),
             Gate("stop-proposal"), Finish("tool_calls")), allow_disconnect=True),
-        Step(expected("Stop running tool"), Stream(ToolCall("stopped-bash", "bash", json.dumps({"command": "sleep 30; printf must-not-run", "execution_mode": "foreground"})), Finish("tool_calls"))),
+        # Redirect keeps the chain unproven: sleep+printf alone is read-only and
+        # would Allow under Plan without the Ask this Stop-while-running case needs.
+        Step(expected("Stop running tool"), Stream(ToolCall("stopped-bash", "bash", json.dumps({
+            "command": "sleep 30; printf must-not-run >> stop-effect",
+            "execution_mode": "foreground",
+            "elevation_reason": "integration fixture escalates unproven bash under Plan mode",
+        }, separators=(",", ":"))), Finish("tool_calls"))),
         Step(expected("Continue after all stops"), Stream(Text("The conversation continued after all stops."), Finish())))
 
 
@@ -545,8 +570,11 @@ def web_child_capabilities() -> Scenario:
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
                     body_contains=("CHILD_CAPABILITIES_PARENT",), tools_include=("subagent",)),
              Stream(ToolCall("child-capabilities-create", "subagent", json.dumps({
-                 "agent": "reviewer", "title": "Research UI capabilities", "task": "CHILD_CAPABILITIES_TASK",
-             })), Finish("tool_calls"))),
+                 "agent": "reviewer",
+                 "title": "Research UI capabilities",
+                 "task": "CHILD_CAPABILITIES_TASK",
+                 "elevation_reason": "integration fixture escalates subagent under Plan mode",
+             }, separators=(",", ":"))), Finish("tool_calls"))),
         *(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model"),
                Stream(Text("Live child first chunk."), Gate(f"child-first-{index}"),
                       Text(" Second live chunk."), Gate(f"child-second-{index}"), Finish())) for index in range(2)),
@@ -554,8 +582,10 @@ def web_child_capabilities() -> Scenario:
                     body_contains=("ACTIVE_CHILD_UPLOAD", "active.txt", "user_uploaded_files", ".agents/uploads/"),
                     body_excludes=("CHILD_CAPABILITIES_PARENT",)),
              Stream(ToolCall("child-write-report", "write", json.dumps({
-                 "path": "child-report.md", "content": "# Child deliverable\n\n**Verified native output.**\n",
-             })), Finish("tool_calls"))),
+                 "path": "child-report.md",
+                 "content": "# Child deliverable\n\n**Verified native output.**\n",
+                 "elevation_reason": "integration fixture escalates write under Plan mode",
+             }, separators=(",", ":"))), Finish("tool_calls"))),
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("child-write-report",)),
              Stream(ToolCall("child-present-report", "present", json.dumps({"files": [{"path":"child-report.md", "description":"Child result"}]})), Finish("tool_calls"))),
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", tools_include=("render_image",)),
@@ -597,8 +627,10 @@ def web_large_write() -> Scenario:
     expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model")
     return Scenario("web_large_write",
         Step(expected, Stream(ToolCall("large-write", "write", json.dumps({
-            "path": "large-write.md", "content": content,
-        }, ensure_ascii=False)), Finish("tool_calls"))),
+            "path": "large-write.md",
+            "content": content,
+            "elevation_reason": "integration fixture escalates write under Plan mode",
+        }, ensure_ascii=False, separators=(",", ":"))), Finish("tool_calls"))),
         Step(expected, Stream(ToolCall("large-write-present", "present", json.dumps({
             "files": [{"path": "large-write.md", "description": "Native write report"}],
         })), Finish("tool_calls"))),

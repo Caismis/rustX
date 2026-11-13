@@ -9,7 +9,7 @@ use rustx::message::types::{
     ContentBlockIndex, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::catalog::ModelRef;
-use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelPolicy};
+use rustx::model::session::{AuxiliaryModelPolicy, SessionModelConfig, SessionModelState};
 use rustx::model::{ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol, RequestParams};
 use rustx::runtime::identity::{ConversationId, MessageId};
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest};
@@ -71,10 +71,11 @@ async fn smaller_primary_reduces_summary_only_history_and_preserves_fresh_input(
         &ScriptedAdapterFactory::new(adapter.clone() as Arc<dyn ModelAdapter>),
     );
     let config = |model: &str| SessionModelConfig {
-        summary_model: SummaryModelPolicy::Explicit {
+        auxiliary: AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse("fixture/summary").unwrap(),
-            profile: None,
+            profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
             request_params: RequestParams::new(),
+            max_output_tokens: None,
         },
         ..SessionModelConfig::of(ModelRef::parse(model).unwrap())
     };

@@ -37,8 +37,8 @@ use rustx::tools::executor::{PreflightOutcome, ToolExecutor, ToolRegistry};
 use rustx::tools::native::{NativeToolPolicies, NativeToolResources, register_native_tools};
 use rustx::tools::runtime::ConversationToolRuntime;
 use rustx::tools::types::{
-    ToolCall, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
-    ToolInvocation, ToolInvocationMode, ToolInvocationPolicy,
+    ToolCall, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolInvocationMode, ToolInvocationPolicy,
 };
 
 /// A background Bash command whose combined output provably crosses the
@@ -75,8 +75,6 @@ fn fixture() -> IssueFixture {
         },
         NativeToolPolicies::uniform(ToolInvocationPolicy::new(
             ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Sequential,
-            rustx::tools::types::ToolApprovalPolicy::Never,
         )),
     )
     .expect("native tools");
@@ -98,10 +96,10 @@ async fn dispatch_big_background_bash(
         id: ToolCallId::new("call-big"),
         tool_id: ToolId::new("tool-bash"),
         name: "bash".to_owned(),
-        arguments: serde_json::json!({
+        arguments: common::tool_call_envelope(serde_json::json!({
             "execution_mode": "background",
             "command": BIG_OUTPUT_COMMAND,
-        }),
+        })),
     };
     let outcome = fixture.registry.preflight(&call).expect("preflight");
     let PreflightOutcome::Ready(prepared) = outcome else {
@@ -370,7 +368,7 @@ async fn adopted_textual_terminal_inbound_reaches_the_provider_for_a_text_only_m
         support::default_execution_policy(),
         context_runtime,
         &fixture.runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -448,7 +446,7 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
     );
     let arguments = serde_json::json!({
         "execution_mode": "background",
-        "command": command,
+        "arguments": {"command": command},
     })
     .to_string();
     // A dynamically built SSE turn-one reply: one background Bash tool
@@ -530,7 +528,7 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
         support::default_execution_policy(),
         context_runtime,
         &fixture.runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -717,7 +715,7 @@ async fn a_genuine_file_block_is_still_rejected_locally_for_a_text_only_model() 
         support::default_execution_policy(),
         context_runtime,
         &fixture.runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()

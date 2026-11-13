@@ -89,7 +89,7 @@ fn call(id: &str, arguments: Value) -> ToolCall {
         id: ToolCallId::new(id),
         tool_id: ToolId::new("tool-ask-user"),
         name: "ask_user".to_owned(),
-        arguments,
+        arguments: common::tool_call_envelope(arguments),
     }
 }
 
@@ -367,7 +367,7 @@ async fn unicode_arguments_survive_stream_normalization_history_and_questionnair
     else {
         panic!("the Unicode questionnaire is valid");
     };
-    let mut normalized = proposal.arguments.clone();
+    let mut normalized = proposal.arguments["arguments"].clone();
     normalized["questions"][0]["multi_select"] = json!(false);
     assert_eq!(
         prepared.invocation.arguments, normalized,

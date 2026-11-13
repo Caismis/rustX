@@ -10,7 +10,7 @@ import { routeFixture } from './shell-navigation-fixture';
 import { RpcFailure } from '../src/client/errors';
 import { sameEndpoint } from '../src/workspaces/endpoint';
 import { WorkspaceHostError, type WorkspaceCatalog, type ProductHostWorkspaces } from '../src/workspaces/host';
-import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v78';
+import type { CatalogModelView, SourceSettings } from '../../protocol/app-server/v79';
 import { cfg3Source } from './cfg3-data';
 import { Server, snapshot, endpoint } from './fixture';
 import { modelPreferences, NewSessionModelPreference } from '../src/app/model-preference';
@@ -30,7 +30,7 @@ const authored = { provider: 'transport', id: 'wire', context_window: '128000', 
  * native Session catalog does not publish, and whose catalog carries native
  * reasoning vocabulary the documents never mention. */
 function workspaceSource(session_models: SourceSettings['session_models'] = { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: [nativeModel('fixture/native', ['low', 'high'], 'high'), nativeModel('fixture/second')] } }): SourceSettings {
-  return { ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace' }, prospective_approval_mode: 'policy',
+  return { ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace' }, prospective_approval_mode: 'plan',
     resolved: { models: { 'fixture/configuration-only': authored, 'fixture/native': authored } }, session_models };
 }
 async function mount({ current = () => true, source = workspaceSource(), configureWorkspace, ready = true, workspaceHost }: { workspaceHost?: Partial<ProductHostWorkspaces>; current?: () => boolean; source?: SourceSettings; configureWorkspace?: (id: string) => Promise<{ kind: 'read'; projection: SourceSettings }>; ready?: boolean } = {}) {
@@ -122,7 +122,7 @@ it('loads initial permissions and models silently without replacing the editor o
   expect(input.value).toBe('Typed while loading'); expect(document.activeElement).toBe(input);
   expect([input.selectionStart, input.selectionEnd]).toEqual([2, 7]);
   expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('fixture/native');
-  expect(screen.getByRole('button', { name: 'Workspace permissions' }).textContent).toBe('Policy');
+  expect(screen.getByRole('button', { name: 'Workspace permissions' }).textContent).toBe('Plan');
 });
 it.each(['current', 'replacement'] as const)('Composer Add Workspace dispatches its opened picker scope to the %s Host', async kind => {
   let catalog: WorkspaceCatalog = { authorityId: 'host-A', endpoint,

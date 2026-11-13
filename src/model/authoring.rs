@@ -175,7 +175,7 @@ mod tests {
     };
     use crate::model::invocation::{ModelBindingRegistry, ModelSelection};
     use crate::model::session::{
-        AuxiliaryModelPolicy, SessionModelConfig, SessionModelState, SummaryModelPolicy,
+        AuxiliaryModelPolicy, AuxiliaryProfileSelection, SessionModelConfig, SessionModelState,
     };
     use serde_json::json;
 
@@ -325,25 +325,26 @@ request_params = '{"thinking":{"type":"disabled"}}'
                 for auxiliary in [None, Some(None), Some(Some("off"))] {
                     let mut config = SessionModelConfig::of(ModelRef::parse("p/m").unwrap());
                     config.profile = primary.map(ModelProfileId::new);
-                    let policy = auxiliary.map_or(AuxiliaryModelPolicy::Session, |profile| {
-                        AuxiliaryModelPolicy::Explicit {
-                            model: config.model.clone(),
-                            profile: profile.map(ModelProfileId::new),
+                    // ModelDefault keeps this matrix order-independent; Lowest
+                    // resolution against reasoning_profile_order is covered elsewhere.
+                    config.auxiliary = match auxiliary {
+                        None => AuxiliaryModelPolicy::Session {
+                            profile: AuxiliaryProfileSelection::ModelDefault,
                             request_params: serde_json::Map::new(),
                             max_output_tokens: None,
-                        }
-                    });
-                    config.summary_model =
-                        auxiliary.map_or(SummaryModelPolicy::Session, |profile| {
-                            SummaryModelPolicy::Explicit {
-                                model: config.model.clone(),
-                                profile: profile.map(ModelProfileId::new),
-                                request_params: serde_json::Map::new(),
-                            }
-                        });
-                    config.title_model = policy.clone();
-                    config.classification_model = Box::new(policy.clone());
-                    config.btw_model = Box::new(policy);
+                        },
+                        Some(profile) => AuxiliaryModelPolicy::Explicit {
+                            model: config.model.clone(),
+                            profile: match profile {
+                                None => AuxiliaryProfileSelection::ModelDefault,
+                                Some(id) => AuxiliaryProfileSelection::Explicit {
+                                    id: ModelProfileId::new(id),
+                                },
+                            },
+                            request_params: serde_json::Map::new(),
+                            max_output_tokens: None,
+                        },
+                    };
                     let state = SessionModelState::new(bindings.clone(), config).unwrap();
                     let attempt = state.snapshot().unwrap();
                     let admitted = serde_json::to_value(attempt.view()).unwrap();

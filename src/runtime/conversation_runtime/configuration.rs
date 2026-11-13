@@ -274,6 +274,19 @@ impl RuntimeInner {
     /// they never starve a ready candidate. The next Attempt they produce is
     /// admitted after the commit and captures it.
     fn configuration_commit_blocked(&self, state: &CoordinatorState) -> bool {
+        self.live_execution_blocks_configuration(state)
+            || self.tool_runtime.background().configuration_busy()
+            || self
+                .subagents
+                .as_ref()
+                .is_some_and(crate::runtime::subagent::SubagentRegistry::configuration_busy)
+    }
+
+    /// Foreground owners that must settle before a staged resource/context
+    /// commit publishes. Pure `ExecutionPolicy` / `approval_mode` publication
+    /// does not use this predicate: it applies under the coordinator lock
+    /// without waiting on background or subagent residency (Issue #544 P13).
+    fn live_execution_blocks_configuration(&self, state: &CoordinatorState) -> bool {
         state.current_attempt.is_some()
             || state.scheduled.is_some()
             || state.manual_compaction.is_some()
@@ -283,11 +296,6 @@ impl RuntimeInner {
                 .expect("manual tail owner")
                 .is_some()
             || self.durability_gate.is_failed()
-            || self.tool_runtime.background().configuration_busy()
-            || self
-                .subagents
-                .as_ref()
-                .is_some_and(crate::runtime::subagent::SubagentRegistry::configuration_busy)
     }
 
     /// Report one staged candidate's outcome outside the coordinator lock. A
@@ -980,6 +988,9 @@ impl ConversationRuntime {
         if !self.inner.lifecycle.is_running() {
             return Err("runtime is not running".into());
         }
+        // Approval / ExecutionPolicy publishes immediately under this lock.
+        // Live Attempts keep the mode frozen at their admission; background and
+        // subagent residency never delay the session-level mode swap (P13).
         let Some(configuration) = state.resources.configuration().and_then(|c| compose(c)) else {
             return Ok(StagedOutcome::Committed);
         };

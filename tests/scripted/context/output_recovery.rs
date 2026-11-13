@@ -10,7 +10,7 @@ use rustx::message::types::{
     ContentBlockIndex, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
-use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelPolicy};
+use rustx::model::session::{AuxiliaryModelPolicy, SessionModelConfig, SessionModelState};
 use rustx::model::structured::StructuredOutputStrategy;
 use rustx::model::{
     ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol, ModelRequest, ModelStream,
@@ -71,8 +71,17 @@ fn user(id: &str, text: String) -> MessageBlock {
 }
 
 #[tokio::test]
-#[allow(clippy::too_many_lines)] // One operation proves recovery, exact coverage and atomic activation.
 async fn reasoning_output_growth_reprices_fragments_and_commits_once() {
+    reasoning_output_growth(None).await;
+}
+
+#[tokio::test]
+async fn explicit_auxiliary_output_cap_prevents_reasoning_growth_and_activation() {
+    reasoning_output_growth(Some(4_000)).await;
+}
+
+#[allow(clippy::too_many_lines)] // One operation proves recovery, exact coverage and atomic activation.
+async fn reasoning_output_growth(output_cap: Option<u32>) {
     let adapter = Arc::new(ReasoningModel::default());
     let mut document = fixture_catalog_document(&[
         FixtureModel::text("primary/small", ModelProtocol::OpenAiChatCompletions)
@@ -104,10 +113,11 @@ async fn reasoning_output_growth_reprices_fragments_and_commits_once() {
     )
     .unwrap();
     let mut config = SessionModelConfig::of(ModelRef::parse("primary/small").unwrap());
-    config.summary_model = SummaryModelPolicy::Explicit {
+    config.auxiliary = AuxiliaryModelPolicy::Explicit {
         model: ModelRef::parse("summary/reasoning").unwrap(),
-        profile: None,
+        profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
         request_params: RequestParams::new(),
+        max_output_tokens: output_cap,
     };
     let snapshot = SessionModelState::new(registry, config)
         .unwrap()
@@ -147,7 +157,7 @@ async fn reasoning_output_growth_reprices_fragments_and_commits_once() {
     let fresh =
         rustx::runtime::inbound::FreshInboundTurn::new(vec![MessageId::new("fresh")]).unwrap();
     let attribution = crate::context::compaction::CompactionAttribution::default();
-    crate::context::compaction::execute_compaction(
+    let result = crate::context::compaction::execute_compaction(
         &mut state,
         &context,
         &conversation_id,
@@ -162,8 +172,50 @@ async fn reasoning_output_growth_reprices_fragments_and_commits_once() {
         &CancellationSignal::new(),
         attribution,
     )
-    .await
-    .expect("reasoning Length recovers without changing the selected Profile");
+    .await;
+    if let Some(cap) = output_cap {
+        let error = result.expect_err("Length cannot recover beyond the frozen Auxiliary cap");
+        assert!(matches!(error,
+            crate::context::compaction::CompactionExecutionError::Context(ref error)
+                if error.kind == rustx::context::ContextErrorKind::SummaryOutputExhausted));
+        let requests = adapter.requests.lock().unwrap();
+        assert!(!requests.is_empty());
+        assert_eq!(requests[0].max_output_tokens(), 3_550);
+        for request in requests.iter() {
+            assert!(request.max_output_tokens() <= cap);
+            let mut expected = requests[0].invocation.clone();
+            expected.max_output_tokens = request.max_output_tokens();
+            assert_eq!(request.invocation, expected);
+            assert_eq!(request.response_schema, requests[0].response_schema);
+            assert_eq!(
+                request.invocation.request_params["reasoning_effort"],
+                "high"
+            );
+            assert_eq!(
+                request.response_schema.as_ref().unwrap().strategy,
+                StructuredOutputStrategy::Native
+            );
+        }
+        assert_eq!(store.load_canonical().unwrap(), history);
+        assert_eq!(
+            store.load_head().unwrap().compaction_generation,
+            head.compaction_generation
+        );
+        assert!(
+            store
+                .projection_timeline(rustx::context::checkpoint::ProjectionActivationId(0), 64)
+                .unwrap()
+                .is_empty()
+        );
+        let events = store.read_events(None, 128).unwrap().events;
+        assert!(!events.iter().any(|event| matches!(
+            event.event,
+            rustx::events::types::RuntimeEvent::CompactionCompleted { .. }
+                | rustx::events::types::RuntimeEvent::CompactionChunkAccepted { .. }
+        )));
+        return;
+    }
+    result.expect("reasoning Length recovers without changing the selected Profile");
 
     let requests = adapter.requests.lock().unwrap();
     assert!(
@@ -451,10 +503,11 @@ async fn reduction_recovers_reasoning_length(path: ReductionPath, learn_before_r
     )
     .unwrap();
     let mut config = SessionModelConfig::of(ModelRef::parse("primary/small").unwrap());
-    config.summary_model = SummaryModelPolicy::Explicit {
+    config.auxiliary = AuxiliaryModelPolicy::Explicit {
         model: ModelRef::parse("summary/reasoning").unwrap(),
-        profile: None,
+        profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
         request_params: RequestParams::new(),
+        max_output_tokens: None,
     };
     let snapshot = SessionModelState::new(registry, config)
         .unwrap()

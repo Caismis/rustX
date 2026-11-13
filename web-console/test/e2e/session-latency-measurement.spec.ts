@@ -2,11 +2,12 @@ import { test, expect, type Page, type TestInfo } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, closeSessionView } from './shell-actions';
-import { recoveredThreadStatusReads, supersededHistoryReads, type RequestTiming } from '../session-latency';
+import { recoveredThreadStatusReads, supersededHistoryReads, type RequestTiming, type ThreadStatusTiming } from '../session-latency';
+import type { ThreadStatusEntry } from '../../../protocol/app-server/v79';
 
 type HttpTiming = { path: string; start: number; end?: number };
 type Mark = { kind: 'click' | 'selected' | 'phase'; name: string; time: number };
-interface SessionLatency { marks: Mark[]; rpc: RequestTiming[]; http: HttpTiming[] }
+interface SessionLatency { marks: Mark[]; rpc: RequestTiming[]; http: HttpTiming[]; statuses: ThreadStatusTiming[] }
 declare global { interface Window { __sessionLatency: SessionLatency } }
 
 /** Observe the production client using one browser performance clock. No RPC
@@ -14,11 +15,21 @@ declare global { interface Window { __sessionLatency: SessionLatency } }
  * method/identity/path/timing metadata is recorded; conversation content stays private. */
 async function observeLatency(page: Page) {
   await page.addInitScript(() => {
-    const evidence: SessionLatency = { marks: [], rpc: [], http: [] };
+    const evidence: SessionLatency = { marks: [], rpc: [], http: [], statuses: [] };
     window.__sessionLatency = evidence;
     const NativeSocket = window.WebSocket;
     const lineage = new Map<string, { sessionId: string; nodeId: string }>();
     let connectionSequence = 0;
+    // thread/resume only names a Conversation on the wire. Map each known
+    // Conversation back to its Session/Node so cold-preview recovery can prove
+    // the overlapping stale history belonged to the same node that attached.
+    const conversationOwner = new Map<string, { sessionId: string; nodeId: string }>();
+    const rememberConversation = (sessionId: unknown, nodeId: unknown, conversationId: unknown) => {
+      if (typeof sessionId === 'string' && sessionId && typeof nodeId === 'string' && nodeId
+        && typeof conversationId === 'string' && conversationId) {
+        conversationOwner.set(conversationId, { sessionId, nodeId });
+      }
+    };
     const attachmentIdentity = (target?: Record<string, unknown>) => {
       if (!target) return undefined;
       const identity = [target.session_id, target.conversation_id, target.runtime_incarnation, target.attachment_id];
@@ -30,30 +41,74 @@ async function observeLatency(page: Page) {
       constructor(url: string | URL, protocols?: string | string[]) {
         super(url, protocols);
         this.addEventListener('message', event => {
-          const reply = JSON.parse(event.data) as { id?: unknown; error?: { data?: { kind?: string } }; result?: {
-            type?: string; target?: Record<string, unknown>; thread?: { id?: string };
-            session?: { id: string; active_node: string; active_conversation_id: string };
-            node?: { id: string; conversation_id: string };
-          } };
+          const reply = JSON.parse(event.data) as {
+            id?: unknown;
+            method?: string;
+            params?: ThreadStatusEntry;
+            error?: { data?: { kind?: string } };
+            result?: {
+              type?: string;
+              target?: Record<string, unknown>;
+              thread?: { id: string; status: ThreadStatusEntry['status']; statusRevision: string; runtimeIncarnation?: string | null };
+              sessions?: { thread_status?: ThreadStatusEntry | null }[];
+              summary?: { thread_status?: ThreadStatusEntry | null };
+              node?: { id?: string; conversation_id?: string };
+              session?: { id?: string; active_node?: string; active_conversation_id?: string };
+            };
+          };
+          const statusTime = { connection: this.connection, time: performance.now() };
+          if (reply.method === 'thread/status/resyncRequired') evidence.statuses.push({ ...statusTime, kind: 'resync' });
+          if (reply.method === 'thread/status/changed' && reply.params) evidence.statuses.push({ ...statusTime, kind: 'notification', entry: reply.params });
+          const snapshots = [...(reply.result?.sessions ?? []).map(row => row.thread_status), reply.result?.summary?.thread_status];
+          if (reply.result?.thread) {
+            const thread = reply.result.thread;
+            snapshots.push({ threadId: thread.id, status: thread.status, revision: thread.statusRevision, runtimeIncarnation: thread.runtimeIncarnation });
+          }
+          for (const entry of snapshots) if (entry) evidence.statuses.push({ ...statusTime, kind: 'snapshot', entry });
           const row = this.calls.get(reply.id);
           if (reply.result?.type === 'session' || reply.result?.type === 'session_transition') {
             const session = reply.result.session;
             if (session?.id && session.active_node && session.active_conversation_id) lineage.set(session.active_conversation_id, { sessionId: session.id, nodeId: session.active_node });
           }
-          if (row?.method === 'session/node' && row.sessionId && reply.result?.type === 'node' && reply.result.node) {
-            lineage.set(reply.result.node.conversation_id, { sessionId: row.sessionId, nodeId: reply.result.node.id });
+          if (row?.method === 'session/node' && reply.result?.type === 'node' && reply.result.node) {
+            const node = reply.result.node;
+            // Optional wire fields must be narrowed before a string-keyed map write.
+            if (typeof row.sessionId === 'string' && row.sessionId
+              && typeof node.id === 'string' && node.id
+              && typeof node.conversation_id === 'string' && node.conversation_id) {
+              lineage.set(node.conversation_id, { sessionId: row.sessionId, nodeId: node.id });
+            }
           }
           if (row) {
             row.end = performance.now(); row.bytes = event.data.length;
             row.error = reply.error ? reply.error.data?.kind || 'untyped_rpc_error' : undefined;
             row.resultType = reply.result?.type;
-            if (row.method === 'thread/resume' && !row.error) {
-              const target = reply.result?.target;
-              const observed = typeof target?.conversation_id === 'string' ? lineage.get(target.conversation_id) : undefined;
-              row.target = attachmentIdentity(target);
-              if (observed && observed.sessionId === target?.session_id) { row.sessionId = observed.sessionId; row.nodeId = observed.nodeId; }
+            if (!row.error && reply.result) {
+              if (row.method === 'session/node' && reply.result.node) {
+                rememberConversation(row.sessionId, reply.result.node.id, reply.result.node.conversation_id);
+              }
+              if (row.method === 'session/switchNode' && reply.result.session) {
+                const targetSession = row.target ? JSON.parse(row.target)[0] : undefined;
+                rememberConversation(
+                  reply.result.session.id ?? row.sessionId ?? targetSession,
+                  reply.result.session.active_node ?? row.nodeId,
+                  reply.result.session.active_conversation_id,
+                );
+              }
+              if (row.method === 'thread/resume') {
+                row.target = attachmentIdentity(reply.result.target);
+                const sessionId = typeof reply.result.target?.session_id === 'string' ? reply.result.target.session_id : undefined;
+                const conversationId = typeof reply.result.target?.conversation_id === 'string'
+                  ? reply.result.target.conversation_id
+                  : row.threadId;
+                const owner = conversationId ? conversationOwner.get(conversationId) : undefined;
+                const observed = conversationId ? lineage.get(conversationId) : undefined;
+                row.sessionId = sessionId ?? owner?.sessionId;
+                row.nodeId = owner?.nodeId;
+                if (!row.nodeId && observed && observed.sessionId === row.sessionId) row.nodeId = observed.nodeId;
+              }
+              if (row.method === 'thread/read') row.resultThreadId = reply.result.thread?.id;
             }
-            if (row.method === 'thread/read' && !row.error) row.resultThreadId = reply.result?.thread?.id;
             this.calls.delete(reply.id);
           }
         });
@@ -96,9 +151,9 @@ async function report(page: Page, info: TestInfo) {
     expect(attach).toMatchObject({ sessionId: expect.any(String), nodeId: expect.any(String), target: expect.any(String) });
   }
   // Preserve every rejection. A cold preview needs its exact live handoff;
-  // unavailable status capture needs a new strong read proving recovery.
+  // unavailable status capture needs a strong read or newer native notification.
   // Unrelated reads and every required operation must still succeed.
-  const recovered = new Set([...supersededHistoryReads(evidence.rpc), ...recoveredThreadStatusReads(evidence.rpc)]);
+  const recovered = new Set([...supersededHistoryReads(evidence.rpc), ...recoveredThreadStatusReads(evidence.rpc, evidence.statuses)]);
   expect(evidence.rpc.filter(row => row.error !== undefined && !recovered.has(row))).toEqual([]);
   return evidence;
 }

@@ -1,6 +1,6 @@
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { isOutcomeUncertain } from './errors';
-import type { AttachmentTarget, SessionModelConfig, SessionModelView } from '../../../protocol/app-server/v78';
+import type { AttachmentTarget, SessionModelConfig, SessionModelView } from '../../../protocol/app-server/v79';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, SessionView } from './contracts';
 
@@ -43,7 +43,7 @@ export class ModelSelection {
         if (!current()) throw new Error('Model selection retired with its connection.');
         const selection = this.port.state().views[id].modelIntent!.config;
         this.port.setSession(id, { modelIntent: { config: selection, phase: 'applying' } });
-        await this.setAgentModel(id, selection, true);
+        await this.setAgentModel(id, selection);
         if (!current()) throw new Error('Model selection retired with its connection.');
         await this.repairAgentModel(id);
         if (!current()) throw new Error('Model selection retired with its connection.');
@@ -70,8 +70,7 @@ export class ModelSelection {
     const operation = { generation, status: 'in-flight' as const };
     this.port.setSession(id, { modelMutation: operation });
     try {
-      const hasExplicitAuxiliary = [config.summaryModel, config.titleModel, config.classificationModel, config.btwModel]
-        .some(policy => policy?.mode === 'explicit');
+      const hasExplicitAuxiliary = config.auxiliary?.mode === 'explicit';
       await this.port.request({ method: 'session/setModel', params: {
         target, config, ...(recoverCarriedAuxiliary && hasExplicitAuxiliary ? { recover_unavailable_auxiliary: true } : {}),
       } }, 'model_set');

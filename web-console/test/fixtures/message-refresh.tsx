@@ -1,6 +1,6 @@
 import { useState, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { RuntimeClientGoalSnapshot, RuntimeClientJob } from '../../../protocol/app-server/v78';
+import type { RuntimeClientGoalSnapshot, RuntimeClientJob } from '../../../protocol/app-server/v79';
 import { useComposerContent } from '../../src/app/agent/useComposerContent';
 import { useWorkflowContent } from '../../src/app/agent/useWorkflowContent';
 import { WorkflowRunPanel } from '../../src/app/agent/WorkflowRunPanel';
@@ -84,7 +84,7 @@ function Audit() {
   const content = useComposerContent(server.client, view), workflows = useWorkflowContent(server.client, view, true);
   const [expanded, setExpanded] = useState(true);
   return <main data-refresh-audit style={{ width: 'min(740px, 100%)', margin: '24px auto', padding: '0 16px', boxSizing: 'border-box', display: 'grid', gap: 16 }}>
-    <Content messageId="streaming-proposal" streaming blocks={[{ type: 'tool_call', id: 'proposal', tool_id: 'tool-bash', name: 'bash', arguments: {} }]}/>
+    <Content messageId="streaming-proposal" streaming blocks={[{ type: 'tool_call', id: 'proposal', tool_id: 'tool-bash', name: 'bash', arguments: { arguments: {} } }]}/>
     <GoalDock state={goalDock(content.snapshot)} observation={view.snapshot?.goal ?? undefined} disabled={false} mutate={async () => ({ status: 'obsolete' })}/>
     <WorkflowRunPanel run={workflows.snapshot!.runs[0]}/>
     <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}><BackgroundJobItem job={view.snapshot!.jobs![0]} now={0} expanded={expanded} onToggle={() => setExpanded(value => !value)} armed={false} onArm={() => {}} stopping={false} onStopped={() => {}} client={server.client} sessionId="A"/></ul>

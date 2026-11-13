@@ -748,7 +748,7 @@ impl LocalConversationCore {
             register_native_tools(
                 &mut base_registry,
                 native_resources.clone(),
-                runtime_config.native_tools.to_policies(),
+                crate::tools::NativeToolPolicies::default(),
             )
             .map_err(|error| LocalRuntimeError::NativeTools {
                 detail: format!("{error:?}"),

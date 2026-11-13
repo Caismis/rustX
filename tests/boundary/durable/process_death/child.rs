@@ -998,7 +998,7 @@ fn structurally_incomplete_turn() -> Vec<FakeStep> {
         FakeStep::Emit(ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(1),
             call_id: ToolCallId::new("call-partial"),
-            arguments_delta: "{\"file_p".to_owned(),
+            arguments_delta: "{\"arguments\":{\"file_p".to_owned(),
         }),
         done(ModelFinishReason::Stop),
     ]
@@ -1170,8 +1170,40 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 note("settled");
             }
         }
-        TOOL_TURN | TOOL_APPROVAL | TOOL_APPROVAL_PENDING => {
+        TOOL_TURN => {
             let call = read_call("call-read-1", "note.txt");
+            let child = Child::require(
+                root,
+                vec![
+                    calling_turn(&call),
+                    vec![started(), text("continued"), done(ModelFinishReason::Stop)],
+                ],
+                false,
+                true,
+            )
+            .await;
+            child.submit("read the note");
+            child.log.wait_settled(1).await;
+            note("settled");
+        }
+        TOOL_APPROVAL | TOOL_APPROVAL_PENDING => {
+            // Native Read is always Allow under the built-in matrix; Ask for
+            // these approval-interaction proofs comes from Plan + elevation
+            // on an elevating tool (Bash other).
+            let call = ScriptedCall {
+                id: "call-bash-approval-1",
+                tool_id: "tool-bash",
+                name: "bash",
+                arguments: serde_json::json!({
+                    // `true` is proven read-only and would Allow under Plan;
+                    // a mutating command stays Unproven so elevation Asks.
+                    // Bash is ModelSelectable: execution_mode is required metadata.
+                    "command": "touch approval-probe.flag",
+                    "description": "Process-death approval probe",
+                    "execution_mode": "foreground",
+                    "elevation_reason": "process-death approval interaction fixture"
+                }),
+            };
             let child = Child::require(
                 root,
                 vec![
@@ -1182,7 +1214,10 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 true,
             )
             .await;
-            child.submit("read the note");
+            // Connect control before the Ask wait so a missing InteractionPending
+            // surfaces as a note timeout rather than a silent accept hang.
+            note("approval-composed");
+            child.submit("probe approval");
             if scenario == TOOL_APPROVAL_PENDING {
                 // The waiter is process-owned state that never settles here:
                 // the parent kills this child while the request is pending.
@@ -2086,7 +2121,8 @@ async fn real_subagent_scenario(root: &Path, scenario: &str) {
                 &agent_id,
                 "follow up after physical settlement",
                 crate::runtime::subagent::AgentActivationOrigin::ClientControl,
-                crate::runtime::CancellationSignal::new(),
+                crate::runtime::types::ApprovalMode::FullAccess,
+                crate::runtime::cancellation::CancellationSignal::new(),
             )
             .await
             .expect("resumed canonical Delegate acceptance");

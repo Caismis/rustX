@@ -1,4 +1,4 @@
-import type { ModelCatalogView, SessionModelConfig } from '../../../protocol/app-server/v78';
+import type { ModelCatalogView, SessionModelConfig } from '../../../protocol/app-server/v79';
 import type { ModelChoice, ModelSelectionIntent } from '../presentation/agent/ModelSelect';
 /** Native catalog order, Model Profiles and default profile, unchanged. */
 export function catalogChoices(catalog?: ModelCatalogView): ModelChoice[] {
@@ -32,14 +32,14 @@ export function selectionChanges(model: string | undefined, pinned: string | und
  * one (native `SessionModelConfig` is whole-state). Equivalent values still
  * form an explicit selection: only native authority can decide a durable NoOp.
  *
- * A gesture changes primary-model-owned settings only; auxiliary policies are
- * independently owned and always carried unchanged. A Profile gesture on the
- * same Model changes only `profile` and keeps every other setting — request
- * overrides, output limit, explicit Summary; native validation still decides
- * whether they suit the new Profile. Choosing the current Model keeps its
- * pinned Profile. A different Model starts from its own primary defaults — its
- * default Profile unless one is chosen, no request overrides, no output limit —
- * exactly as the TUI's `/model`. */
+ * A gesture changes primary-model-owned settings only; the shared auxiliary
+ * policy is independently owned and always carried unchanged. A Profile gesture
+ * on the same Model changes only `profile` and keeps every other setting —
+ * request overrides, output limit, and auxiliary; native validation still
+ * decides whether they suit the new Profile. Choosing the current Model keeps
+ * its pinned Profile. A different Model starts from its own primary defaults —
+ * its default Profile unless one is chosen, no request overrides, no output
+ * limit — exactly as the TUI's `/model`. */
 export function nextModelSelection(configured: SessionModelConfig | undefined, intent: ModelSelectionIntent): SessionModelConfig {
   const pinned = configured?.profile ?? undefined;
   if (configured && !selectionChanges(configured.model, pinned, intent)) return configured;

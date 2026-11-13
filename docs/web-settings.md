@@ -387,7 +387,7 @@ stays unsettled across an editor unmount or a page change.
 
 Provenance is looked up by the exact native key a semantic unit owns
 (`providers.<id>`, `models.<id>`, `agent.tools.sources.<id>`,
-`native_tools.<id>`, `mcp_tool_policies.<id>`, `environment.<name>`,
+`environment.<name>`,
 `mcp_servers.<id>`, and whole-unit paths such as `agent.model`,
 `agent.tools.builtin` or `context`). Sibling identities are independent: one
 Provider resolving to User never depends on another Provider's name or length. A

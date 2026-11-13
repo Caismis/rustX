@@ -13,7 +13,7 @@ import { AgentCard } from '../../src/app/components/ActivityCards';
 import { RuntimeFacts } from '../runtime-facts';
 import { BackgroundJobs } from '../../src/app/agent/BackgroundJobs';
 import { InboundMessage } from '../../src/app/agent/InboundMessage';
-import type { RuntimeClientAgent, RuntimeClientJob } from '../../../protocol/app-server/v78';
+import type { RuntimeClientAgent, RuntimeClientJob } from '../../../protocol/app-server/v79';
 import { Server, snapshot, childConversation } from '../fixture';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
@@ -78,7 +78,7 @@ function ImageTrace() {
     record.attachments = [{ artifact_id: 'artifact_1', image: true }];
     const detail = toolDetail(295);
     detail.tool!.definition = null;
-    detail.tool!.arguments = { value: { path: imagePath }, truncated: false };
+    detail.tool!.arguments = { value: { arguments: { path: imagePath } }, truncated: false };
     detail.tool!.result!.blocks = [
       { type: 'text', text: { text: imageReceipt, truncated: false } },
       { type: 'image', artifact: record.attachments[0]! },
@@ -99,8 +99,8 @@ window.activityFixture = {
 };
 function Fixture() {
   const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
-  const backgroundChat = <><section aria-label="Background launch in chat"><Tool tool={{ committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'background-launch' }, block_index: 0 }, assembly_complete: true, message_id: 'background-launch', block_index: 0, call_id: 'launch-call', tool_id: 'tool-bash', name: 'bash', state: { type: 'settled', arguments: '{"command":"sleep 5","execution_mode":"background"}', result: { status: { type: 'success' }, duration_ms: '0', content: [{ type: 'json', value: { job_id: 'job-launched', tool: 'bash', state: 'starting', output_path: '/workspace/output.txt' } }] } } }}/></section>
+  const backgroundChat = <><section aria-label="Background launch in chat"><Tool tool={{ committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'background-launch' }, block_index: 0 }, assembly_complete: true, message_id: 'background-launch', block_index: 0, call_id: 'launch-call', tool_id: 'tool-bash', name: 'bash', state: { type: 'settled', arguments: '{"arguments":{"command":"sleep 5"},"execution_mode":"background"}', result: { status: { type: 'success' }, duration_ms: '0', content: [{ type: 'json', value: { job_id: 'job-launched', tool: 'bash', state: 'starting', output_path: '/workspace/output.txt' } }] } } }}/></section>
     <section aria-label="Background completion in chat"><InboundMessage message={{ role: 'user', id: 'background-job-finished-terminal', source: 'runtime', kind: 'message', content: [{ type: 'text', text: 'Background execution job-finished (bash) settled: failed\n\nResult:\nBuild output failed verification' }] }}/></section></>;
-  return <div style={{ maxWidth: 760, margin: '24px auto', padding: 16 }}><header style={{ position: 'sticky', top: 0, zIndex: 10, display: 'flex', alignItems: 'center', gap: 16, background: 'var(--dsw-alias-bg-base)' }}><h1 style={{ fontSize: 14, minWidth: 0, flex: 1 }}>Jobs and Agents</h1><BackgroundJobs client={server.client} sessionId="A"/><button type="button">Session actions</button></header><div id="subagent-header-actions"/>{backgroundChat}<ArtifactContext.Provider value={artifacts}><Tool tool={{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:"image-message"},block_index:0},assembly_complete:true, message_id: "image-message", block_index: 0, call_id: "read-image", tool_id: "tool-read-image", name: "read_image", state: { type: "settled", arguments: JSON.stringify({ path: imagePath }), result: { status: { type: "success" }, duration_ms: "1", content: [{ type: 'text', text: imageReceipt }, { type: "image", artifact_id: "artifact_1" }] } } }}/></ArtifactContext.Provider><AgentCard agent={state.views.A.snapshot!.agents![0]} client={server.client} sessionId="A"/><RuntimeFacts snapshot={state.views.A.snapshot!}/><div style={{ height: 1600 }} aria-label="Long conversation"/></div>;
+  return <div style={{ maxWidth: 760, margin: '24px auto', padding: 16 }}><header style={{ position: 'sticky', top: 0, zIndex: 10, display: 'flex', alignItems: 'center', gap: 16, background: 'var(--dsw-alias-bg-base)' }}><h1 style={{ fontSize: 14, minWidth: 0, flex: 1 }}>Jobs and Agents</h1><BackgroundJobs client={server.client} sessionId="A"/><button type="button">Session actions</button></header><div id="subagent-header-actions"/>{backgroundChat}<ArtifactContext.Provider value={artifacts}><Tool tool={{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:"image-message"},block_index:0},assembly_complete:true, message_id: "image-message", block_index: 0, call_id: "read-image", tool_id: "tool-read-image", name: "read_image", state: { type: "settled", arguments: JSON.stringify({ arguments: { path: imagePath } }), result: { status: { type: "success" }, duration_ms: "1", content: [{ type: 'text', text: imageReceipt }, { type: "image", artifact_id: "artifact_1" }] } } }}/></ArtifactContext.Provider><AgentCard agent={state.views.A.snapshot!.agents![0]} client={server.client} sessionId="A"/><RuntimeFacts snapshot={state.views.A.snapshot!}/><div style={{ height: 1600 }} aria-label="Long conversation"/></div>;
 }
 createRoot(document.getElementById('root')!).render(new URLSearchParams(location.search).has('image-trace') ? <ImageTrace/> : <Fixture/>);

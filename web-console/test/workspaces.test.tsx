@@ -19,7 +19,7 @@ import { WorkspaceHostError, type ProductHostWorkspaces, type WorkspaceCatalog, 
 import { configurationSystem } from '../src/app/settings/machines/system';
 import { Server, endpoint, snapshot, boundedSettings } from './fixture';
 import { cfg3Source } from './cfg3-data';
-import type { SourceSettings } from '../../protocol/app-server/v78';
+import type { SourceSettings } from '../../protocol/app-server/v79';
 import { workspaceSettingsTarget } from '../src/app/settings/projection';
 let server: Server;
 beforeEach(() => {
@@ -576,7 +576,7 @@ it('classification belongs to exactly the native summary page that requested it'
 // Blocking finding 2 — the whole real path: SessionConfiguration → App owner
 // navigation → the concrete Settings target. Nothing here mocks the callback or
 // inspects a fabricated `source:*` string.
-async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v78').SourceTarget[], host = hostFixture()) {
+async function failedSessionConfiguration(sources: readonly import('../../protocol/app-server/v79').SourceTarget[], host = hostFixture()) {
   server.handlers.set('session/settings', () => (settingsReceipt({ cwd: '/workspace/A' },'0')));
   server.handlers.set('session/configuration', () => ({
     type: 'session_configuration',
@@ -635,7 +635,7 @@ it('S1-10 Session focus changes never retarget an opened owning Settings editor'
 // Settings navigation is linearized by its dedicated actor. A delayed owning
 // Workspace catalog lookup is preparation, never authority to override a newer
 // navigation decision.
-async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v78').SourceTarget[]) {
+async function pendingOwnershipLookup(sources: readonly import('../../protocol/app-server/v79').SourceTarget[]) {
   const host = await failedSessionConfiguration(sources);
   const catalog = await host.listWorkspaces();
   const gate = deferred<WorkspaceCatalog>();
@@ -954,7 +954,7 @@ it.each(['Settings', 'Scheduled Tasks', 'Workflows'])('an admitted initializatio
 
 it.each(['ready', 'failed', 'disconnected'] as const)('shows Send preparation only while the selected Workspace read is pending: %s', async outcome => {
   const host = hostFixture();
-  const source = { ...cfg3Source(), target: { kind: 'workspace' as const, directory: '/workspace/A' }, prospective_approval_mode: 'policy' as const };
+  const source = { ...cfg3Source(), target: { kind: 'workspace' as const, directory: '/workspace/A' }, prospective_approval_mode: 'plan' as const };
   server.handlers.set('configuration/sourcesRead', () => ({ type: 'source_settings', projection: boundedSettings(source) }));
   // Hold the actual native read independently of the Product Host and React.
   host.configureWorkspace = vi.fn<NonNullable<ProductHostWorkspaces['configureWorkspace']>>(async (_id, _endpoint, operation) => {
@@ -1055,7 +1055,7 @@ it.each(['native diagnostic', 'missing diagnostic'] as const)('explains settled 
   const reread = await server.waitFor('configuration/sourcesRead', 2);
   expect(screen.getByRole('button', { name: 'Preparing to send…' })).toHaveProperty('disabled', true);
   expect(screen.queryByText(explanation)).toBeNull();
-  source = { ...source, prospective_approval_mode: 'policy', prospective_diagnostic: null };
+  source = { ...source, prospective_approval_mode: 'plan', prospective_diagnostic: null };
   await act(async () => server.reply(reread));
   await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false));
   expect(screen.queryByRole('button', { name: 'Preparing to send…' })).toBeNull();

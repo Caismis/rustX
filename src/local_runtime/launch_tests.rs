@@ -863,9 +863,30 @@ fn issue464_a_failure_spanning_both_documents_belongs_to_the_composition() {
 fn cfg235_oversized_incomplete_projection_preserves_incomplete_diagnostic() {
     let f = Fixture::new();
     f.user(json!({}));
-    // Policies naming `.agents` MCP servers are composition facts: valid in
-    // the source, unresolved here, and large enough to omit the projection.
-    f.project(json!({"environment": {"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}, "mcp_tool_policies": (0..12000).map(|index| (format!("unresolved_server_identity_{index}"), json!({"execution": "background_only"}))).collect::<serde_json::Map<_,_>>()}));
+    // Incomplete (no root model). The whole `environment` object redacts to one
+    // token, so pad non-secret projected `models` entries past 256 KiB.
+    let models = (0..2_500)
+        .map(|index| {
+            (
+                format!("host/pad{index}"),
+                json!({
+                    "provider": "host",
+                    "id": format!("pad{index}"),
+                    "context_window": 128_000,
+                    "max_output_tokens": 4096,
+                    "capabilities": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                        "json_schema_output": false
+                    }
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    f.project(json!({
+        "models": models,
+        "environment": {"VAR_0": "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"},
+    }));
     let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
     assert_eq!(report.exit_code(), 3);
     assert!(report.partial.is_some());
@@ -1825,10 +1846,6 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     f.role(false, "role", json!({"description":"new"}), "Project body");
     let builtin = f.resolve();
     assert_eq!(builtin.config.agent_id.as_str(), "rustx");
-    assert_eq!(
-        builtin.config.native_tools.to_policies(),
-        crate::tools::NativeToolPolicies::default()
-    );
     assert_eq!(builtin.provenance["agent_id"], Origin::Builtin);
     f.mcp(true, json!({"service":{"command":"old-command","args":["old"]},"retained":{"command":"retained"}}));
     f.user(json!({"agent_id": "user", "environment": {"USER_ENTRY":"one","REPLACED":"old"},  "subagents": {}, "agent": {"model": {"model":"host/one", "profile":"custom"}, "tools": {"builtin": ["read","bash"]}}}));
@@ -2228,23 +2245,32 @@ agents = ["role", "role"]
 }
 
 #[test]
-fn workspace_authors_global_tool_policies_without_granting_root_tools() {
+fn workspace_authors_approval_mode_without_granting_root_tools() {
     let f = Fixture::new();
-    f.user(json!({"approval_mode":"full_access", "native_tools":{"bash":{"approval":"always", "execution":"background_only"}}, "agent":{"model":{"model":"host/one"}}}));
-    f.project(json!({"approval_mode":"policy", "native_tools":{"bash":{"approval":"never"}}}));
+    f.user(json!({"approval_mode":"full_access", "agent":{"model":{"model":"host/one"}}}));
+    f.project(json!({"approval_mode":"plan"}));
     let resolved = f.resolve();
     assert_eq!(
         resolved.config.approval_mode,
-        crate::runtime::ApprovalMode::Policy
+        crate::runtime::ApprovalMode::Plan
     );
     assert!(resolved.config.agent.tools.builtin.is_empty());
-    let value = serde_json::to_value(resolved.config()).unwrap();
-    assert_eq!(value["nativeTools"]["bash"]["approval"], "never");
-    assert_ne!(value["nativeTools"]["bash"]["execution"], "background_only");
     assert!(matches!(
-        resolved.provenance["native_tools.bash"],
+        resolved.provenance["approval_mode"],
         Origin::Workspace { .. }
     ));
+}
+
+#[test]
+fn obsolete_native_tools_execution_overlay_is_rejected() {
+    let f = Fixture::new();
+    f.user(json!({"agent":{"model":{"model":"host/one"}}}));
+    f.project(json!({"native_tools":{"bash":{"execution":"model_selectable"}}}));
+    let error = resolve(&f.request, &f.host).unwrap_err();
+    assert!(
+        error.contains("native_tools") || error.contains("unknown field"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -2983,7 +3009,7 @@ mod session_resolution {
     #[test]
     fn whole_session_model_provenance_covers_every_field_and_catalog_default_choice() {
         use crate::model::catalog::ModelProfileId;
-        use crate::model::session::SummaryModelPolicy;
+        use crate::model::session::AuxiliaryModelPolicy;
         let f = Fixture::new();
         let path = f.host.config_directory.join("rustx.toml");
         let mut catalog: serde_json::Value =
@@ -3000,10 +3026,11 @@ mod session_resolution {
             .request_params
             .insert("custom".into(), json!("secret-model-parameter"));
         model.max_output_tokens = Some(1024);
-        model.summary_model = SummaryModelPolicy::Explicit {
+        model.auxiliary = AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse("host/two").unwrap(),
-            profile: None,
+            profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
             request_params: serde_json::Map::default(),
+            max_output_tokens: None,
         };
         for selected in [
             model,

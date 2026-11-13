@@ -159,6 +159,7 @@ impl AuxiliaryConsumer for ModelConsumer {
     fn settled(&self, _: &Result<ConfirmedExecution, ContextError>) {
         self.lease.lock().expect("model descendant").take();
     }
+    fn retired(&self, _: &Result<ConfirmedExecution, ContextError>) {}
 }
 
 struct CloseScope(Arc<AuxiliaryScope>);

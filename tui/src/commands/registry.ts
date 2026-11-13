@@ -42,8 +42,9 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     name: "/model",
     description:
-      "Select a model while work runs; changing models resets primary overrides and preserves summary policy. Existing attempts stay frozen.",
-    argumentHint: "[show|provider/model|profile set <id>|profile clear]",
+      "Select a model while work runs; changing models resets primary overrides and preserves auxiliary policy. Existing attempts stay frozen.",
+    argumentHint:
+      "[show|provider/model|profile set <id>|profile clear|auxiliary clear|follow|set <provider/model>|profile lowest|model_default|set <id>|clear]",
   },
   { name: "/model-position", description: "Select native catalog defaults from an exact model binding revision and finite model/profile ordinals.", argumentHint: "<binding-revision> <model-position> [profile-position]" },
   { name: "/new", description: "Create a new independent local session." },

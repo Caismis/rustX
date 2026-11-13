@@ -46,7 +46,7 @@ use rustx::model::{
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
-use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus};
+use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 use support::audit::{assert_outcome, assert_single_terminal};
 use support::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
 use support::fake::{
@@ -279,7 +279,6 @@ fn write_tool_definition() -> rustx::tools::types::ToolDefinition {
         "write_file",
         "tool-write",
         ToolExecutionPolicy::ForegroundOnly,
-        ToolConcurrencyPolicy::Sequential,
     )
 }
 

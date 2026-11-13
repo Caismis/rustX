@@ -424,6 +424,8 @@ impl RuntimeInner {
                                     &completed.persisted_event,
                                 );
                             }
+                            // The activated checkpoint starts a new model context.
+                            state.last_permission_reminder_mode = None;
                             Ok(outcome)
                         }
                         (ManualCompactionOutcome::Skipped, None) => self

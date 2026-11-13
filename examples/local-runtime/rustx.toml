@@ -1,4 +1,4 @@
-schema_version = 12
+schema_version = 13
 agent_id = "default-agent"
 
 [model_timeout_policy]
@@ -32,12 +32,11 @@ request_params = '{"top_p":0.9}'
 mode = "limit"
 tokens = 2048
 
-[agent.model.summary_model]
+# Shared Auxiliary Model for Summary, Title, Classification, and BTW.
+# Omitted profile defaults to Lowest for the selected model.
+[agent.model.auxiliary]
 mode = "session"
-
-# Automatic title uses the same follow/explicit policy and freezes at admission.
-[agent.model.title_model]
-mode = "session"
+profile = { mode = "lowest" }
 
 # Each Plugin is one atomic overlay unit. Omitted Plugins are off.
 [agent.plugins]
@@ -88,20 +87,7 @@ request_params = '''
 '''
 
 # Protocol defaults are built in; no compat table is required.
-# These global policies apply to every admitted Agent's native invocation.
-[native_tools.read]
-execution = "foreground_only"
-concurrency = "parallel"
-approval = "never"
-[native_tools.grep]
-execution = "foreground_only"
-concurrency = "parallel"
-approval = "never"
-[native_tools.edit]
-execution = "foreground_only"
-concurrency = "sequential"
-approval = "always"
-[native_tools.bash]
-execution = "model_selectable"
-concurrency = "sequential"
-approval = "always"
+# Native/MCP invocation policies are product defaults (Issue #544): Bash stays
+# ModelSelectable, and MCP bindings stay ForegroundOnly. Permission lives on
+# approval_mode plus resource three-mode overrides, never tool-level execution
+# authoring.

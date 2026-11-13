@@ -1,4 +1,4 @@
-import type { MessageBlock, RuntimeClientSnapshot, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v78';
+import type { MessageBlock, RuntimeClientSnapshot, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v79';
 import type { Server } from '../fixture';
 import { workflowRunsFixture } from './workflow-runs';
 
@@ -10,7 +10,7 @@ export function workflowTurnsFixture(server: Server, current: RuntimeClientSnaps
   for (const [index, reasoning] of [true, false].entries()) {
     const attempt_id = `workflow-turn-${index + 1}`, start = entries.length + 1;
     const user: MessageBlock = { role: 'user', source: 'human', id: `workflow-turn-user-${index}`, content: [{ type: 'text', text: '请再运行一次工作流。' }] };
-    const call: MessageBlock = { role: 'assistant', id: `workflow-turn-call-${index}`, content: [{ type: 'tool_call', id: `workflow-turn-tool-${index}`, tool_id: 'workflow:test_flow', name: 'workflow:test_flow', arguments: {} }] };
+    const call: MessageBlock = { role: 'assistant', id: `workflow-turn-call-${index}`, content: [{ type: 'tool_call', id: `workflow-turn-tool-${index}`, tool_id: 'workflow:test_flow', name: 'workflow:test_flow', arguments: { arguments: {} } }] };
     const answer: MessageBlock = { role: 'assistant', id: `workflow-turn-answer-${index}`, content: [{ type: 'text', text: '工作流已完成。\n\n> 两轮使用相同的工作流卡片。' }] };
     const owner: TurnProcessView = { ...work.turn_process!, attempt_id, control_cursor: String(start + 1), final_message_id: answer.id,
       final_message_locator: { type: 'by_message_id', message_id: answer.id }, tool_call_count: 1, message_count: reasoning ? hiddenReply ? 4 : 3 : 2 };

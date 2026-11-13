@@ -20,8 +20,8 @@ use crate::runtime::inbound::InitialTurnTrigger;
 use crate::scripted_suites::support::model::scripted_session_model;
 use crate::tools::executor::ToolExecutor;
 use crate::tools::types::{
-    ToolCall, ToolCallStart, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
+    ToolCall, ToolCallStart, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
+    ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -215,8 +215,6 @@ impl InstantTool {
             description: String::new(),
             input_schema: serde_json::json!({"type": "object"}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         }
@@ -341,7 +339,7 @@ pub(super) fn tool_call_script(call: &ToolCall) -> Vec<ModelEvent> {
         ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(0),
             call_id: call.id.clone(),
-            arguments_delta: "{}".to_owned(),
+            arguments_delta: serde_json::to_string(&call.arguments).unwrap(),
         },
         ModelEvent::ToolCallCompleted {
             block_index: ContentBlockIndex::new(0),

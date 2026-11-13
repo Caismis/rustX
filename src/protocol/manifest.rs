@@ -27,7 +27,8 @@ use crate::tools::types::ToolOrigin;
 /// Version 4 removes semantic reasoning-enabled metadata.
 /// Version 5 adds application Host Tool provenance.
 /// Version 6 combines Host Tool provenance with model-derived compaction budgets.
-pub const MANIFEST_SCHEMA_VERSION: u16 = 6;
+/// Version 7 also uses shared Auxiliary selection and resource permissions.
+pub const MANIFEST_SCHEMA_VERSION: u16 = 7;
 
 /// The immutable execution description of one attempt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +200,6 @@ mod tests {
     #[test]
     fn manifest_schema_version_is_explicit() {
         let value = serde_json::to_value(example_manifest()).expect("serialize manifest");
-        assert_eq!(value["schema_version"], 6);
+        assert_eq!(value["schema_version"], 7);
     }
 }

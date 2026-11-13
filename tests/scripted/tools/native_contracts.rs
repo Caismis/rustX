@@ -16,8 +16,7 @@ use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::PreflightOutcome;
 use rustx::tools::types::{
-    ToolCall, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus, ToolInvocationMode,
-    ToolInvocationPolicy,
+    ToolCall, ToolExecutionPolicy, ToolExecutionStatus, ToolInvocationMode, ToolInvocationPolicy,
 };
 use std::sync::Arc;
 
@@ -44,28 +43,18 @@ const NATIVE_TOOL_NAMES: [&str; 12] = [
 
 #[test]
 fn product_native_defaults_are_independent_and_bash_keeps_background_admission() {
-    use ToolConcurrencyPolicy::{Parallel, Sequential};
     use ToolExecutionPolicy::{ForegroundOnly, ModelSelectable};
-    use rustx::tools::types::ToolApprovalPolicy::{Always, Never};
     let fixture = common::native_fixture();
-    for (name, execution, concurrency, approval) in [
-        ("read", ForegroundOnly, Parallel, Never),
-        ("write", ForegroundOnly, Sequential, Always),
-        ("edit", ForegroundOnly, Sequential, Always),
-        ("glob", ForegroundOnly, Parallel, Never),
-        ("grep", ForegroundOnly, Parallel, Never),
-        ("bash", ModelSelectable, Sequential, Always),
+    for (name, execution) in [
+        ("read", ForegroundOnly),
+        ("write", ForegroundOnly),
+        ("edit", ForegroundOnly),
+        ("glob", ForegroundOnly),
+        ("grep", ForegroundOnly),
+        ("bash", ModelSelectable),
     ] {
         let actual = definition(&fixture, name);
-        assert_eq!(
-            (
-                actual.execution_policy,
-                actual.concurrency_policy,
-                actual.approval_policy
-            ),
-            (execution, concurrency, approval),
-            "{name}"
-        );
+        assert_eq!(actual.execution_policy, execution, "{name}");
     }
     for (mode, expected) in [
         ("foreground", ToolInvocationMode::Foreground),
@@ -79,7 +68,6 @@ fn product_native_defaults_are_independent_and_bash_keeps_background_admission()
             panic!("Bash admission");
         };
         assert_eq!(prepared.invocation.mode, expected);
-        assert_eq!(prepared.approval, Always);
     }
 }
 
@@ -126,7 +114,7 @@ fn preflight(
             id: ToolCallId::new("call-preflight"),
             tool_id: definition.id,
             name: name.to_owned(),
-            arguments,
+            arguments: common::tool_call_envelope(arguments),
         })
         .expect("identity resolves")
 }
@@ -358,11 +346,7 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_job_control_policy()
                 background: runtime.background().clone(),
                 subagents: None,
             },
-            NativeToolPolicies::uniform(ToolInvocationPolicy::new(
-                execution,
-                ToolConcurrencyPolicy::Sequential,
-                rustx::tools::types::ToolApprovalPolicy::Never,
-            )),
+            NativeToolPolicies::uniform(ToolInvocationPolicy::new(execution)),
         )
         .expect("ordinary native policy registration");
 
@@ -382,7 +366,7 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_job_control_policy()
                 id: ToolCallId::new("policy-call"),
                 tool_id: ToolId::new("tool-read"),
                 name: "read".to_owned(),
-                arguments,
+                arguments: support::fake::scripted_call_envelope("read", &arguments),
             })
             .expect("policy preflight");
         let PreflightOutcome::Ready(prepared) = outcome else {
@@ -406,10 +390,6 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_job_control_policy()
             execution.execution_policy,
             ToolExecutionPolicy::ForegroundOnly
         );
-        assert_eq!(
-            execution.concurrency_policy,
-            ToolConcurrencyPolicy::Sequential
-        );
     }
 }
 
@@ -428,36 +408,12 @@ fn independent_native_execution_policies_coexist_in_one_registry() {
     )
     .expect("runtime");
     let policies = NativeToolPolicies {
-        read: ToolInvocationPolicy::new(
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-            rustx::tools::types::ToolApprovalPolicy::Never,
-        ),
-        write: ToolInvocationPolicy::new(
-            ToolExecutionPolicy::BackgroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-            rustx::tools::types::ToolApprovalPolicy::Never,
-        ),
-        edit: ToolInvocationPolicy::new(
-            ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Sequential,
-            rustx::tools::types::ToolApprovalPolicy::Never,
-        ),
-        glob: ToolInvocationPolicy::new(
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-            rustx::tools::types::ToolApprovalPolicy::Never,
-        ),
-        grep: ToolInvocationPolicy::new(
-            ToolExecutionPolicy::BackgroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-            rustx::tools::types::ToolApprovalPolicy::Never,
-        ),
-        bash: ToolInvocationPolicy::new(
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-            rustx::tools::types::ToolApprovalPolicy::Never,
-        ),
+        read: ToolInvocationPolicy::new(ToolExecutionPolicy::ForegroundOnly),
+        write: ToolInvocationPolicy::new(ToolExecutionPolicy::BackgroundOnly),
+        edit: ToolInvocationPolicy::new(ToolExecutionPolicy::ModelSelectable),
+        glob: ToolInvocationPolicy::new(ToolExecutionPolicy::ForegroundOnly),
+        grep: ToolInvocationPolicy::new(ToolExecutionPolicy::BackgroundOnly),
+        bash: ToolInvocationPolicy::new(ToolExecutionPolicy::ForegroundOnly),
     };
     let mut registry = ToolRegistry::new();
     register_native_tools(
@@ -490,28 +446,8 @@ fn independent_native_execution_policies_coexist_in_one_registry() {
         ToolExecutionPolicy::ModelSelectable
     );
     assert_eq!(
-        policy("read").concurrency_policy,
-        ToolConcurrencyPolicy::Sequential
-    );
-    assert_eq!(
-        policy("write").concurrency_policy,
-        ToolConcurrencyPolicy::Parallel
-    );
-    assert_eq!(
-        policy("edit").concurrency_policy,
-        ToolConcurrencyPolicy::Sequential
-    );
-    assert_eq!(
-        policy("glob").concurrency_policy,
-        ToolConcurrencyPolicy::Parallel
-    );
-    assert_eq!(
         policy("grep").execution_policy,
         ToolExecutionPolicy::BackgroundOnly
-    );
-    assert_eq!(
-        policy("grep").concurrency_policy,
-        ToolConcurrencyPolicy::Sequential
     );
 }
 
@@ -595,6 +531,7 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
             tools: vec![],
             skills: rustx::runtime::agent_profile::AgentSkillSelection::default(),
             inherit_project_instructions: false,
+            permissions: None,
             extensions: rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
             workflows: std::collections::BTreeSet::default(),
         },
@@ -1043,7 +980,6 @@ async fn main_no_direct_tools_coexists_with_independent_workflow_terminal_author
 
 #[tokio::test]
 async fn native_admission_pins_policy_axes_and_exposure_across_candidate_changes() {
-    use rustx::tools::types::ToolApprovalPolicy::{Always, Never};
     let fixture = common::native_fixture_without_extensions();
     let coordinator = selected_capabilities(
         &fixture,
@@ -1064,18 +1000,14 @@ async fn native_admission_pins_policy_axes_and_exposure_across_candidate_changes
         id: ToolCallId::new("frozen"),
         tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
         name: "bash".into(),
-        arguments: serde_json::json!({"command":"true","execution_mode":"foreground"}),
+        arguments: serde_json::json!({"arguments":{"command":"true"},"execution_mode":"foreground"}),
     };
     let PreflightOutcome::Ready(before) = frozen.tool_registry().preflight(&call).unwrap() else {
         panic!("ready");
     };
     let mut replacement = rustx::tools::executor::ToolRegistry::new();
     let policies = rustx::tools::NativeToolPolicies {
-        bash: ToolInvocationPolicy::new(
-            ToolExecutionPolicy::BackgroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-            Never,
-        ),
+        bash: ToolInvocationPolicy::new(ToolExecutionPolicy::BackgroundOnly),
         ..Default::default()
     };
     rustx::tools::native::register_native_tools(
@@ -1113,8 +1045,6 @@ async fn native_admission_pins_policy_axes_and_exposure_across_candidate_changes
         "a leased attempt prevents publication"
     );
     assert_eq!(frozen.tool_registry().names(), ["bash"]);
-    assert_eq!(before.approval, Always);
-    assert_eq!(before.concurrency, ToolConcurrencyPolicy::Sequential);
     assert_eq!(before.invocation.mode, ToolInvocationMode::Foreground);
     drop(lease);
     let candidate = coordinator
@@ -1132,8 +1062,6 @@ async fn native_admission_pins_policy_axes_and_exposure_across_candidate_changes
     let PreflightOutcome::Ready(after) = frozen.tool_registry().preflight(&call).unwrap() else {
         panic!("frozen ready");
     };
-    assert_eq!(after.approval, before.approval);
-    assert_eq!(after.concurrency, before.concurrency);
     assert_eq!(after.invocation, before.invocation);
     assert_eq!(frozen.tool_registry().names(), ["bash"]);
 }
@@ -1573,9 +1501,7 @@ async fn malformed_ask_user_rejects_before_interaction_publication() {
 /// registry preflight path.
 #[test]
 fn ask_user_is_one_plain_questionnaire_schema() {
-    use rustx::tools::{
-        ToolExecutionPolicy, validate_canonical_schema, validate_execution_metadata_contract,
-    };
+    use rustx::tools::validate_canonical_schema;
 
     let fixture = common::native_fixture();
     let ask_user = definition(&fixture, "ask_user").input_schema;
@@ -1586,27 +1512,4 @@ fn ask_user_is_one_plain_questionnaire_schema() {
     assert!(ask_user.get("oneOf").is_none());
     assert_eq!(ask_user["additionalProperties"], false);
     validate_canonical_schema(&ask_user).expect("the questionnaire root is canonical");
-    validate_execution_metadata_contract(ToolExecutionPolicy::ForegroundOnly, &ask_user)
-        .expect("the fixed foreground policy preserves the ordinary root");
-
-    // Every model-selectable native tool matches the decoratable root profile.
-    for name in ["read", "write", "edit", "glob", "grep", "bash"] {
-        let schema = definition(&fixture, name).input_schema;
-        validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &schema)
-            .unwrap_or_else(|error| panic!("{name} must stay ModelSelectable-eligible: {error}"));
-        for keyword in schema.as_object().expect("root object").keys() {
-            assert!(
-                rustx::tools::is_decoratable_root_keyword(keyword),
-                "{name} uses root keyword {keyword:?}, outside the profile"
-            );
-        }
-        // Native contracts are generated with inlined subschemas, so the
-        // reference ban costs them nothing either.
-        for keyword in rustx::tools::REFERENCE_APPLICATOR_KEYWORDS {
-            assert!(
-                !schema.to_string().contains(keyword),
-                "{name} must stay reference-free for ModelSelectable: {keyword}"
-            );
-        }
-    }
 }

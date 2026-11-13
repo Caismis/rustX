@@ -1,11 +1,11 @@
 import { expect, it } from 'vitest';
 import { checkpointSnapshot, contentBindings, observationCheckpoint, foldRuntimeEvent as fold } from '../../protocol/app-server/projection';
-import type { ForegroundToolExecution, RuntimeClientEvent, ToolExecutionResult } from '../../protocol/app-server/v78';
+import type { ForegroundToolExecution, RuntimeClientEvent, ToolExecutionResult } from '../../protocol/app-server/v79';
 import { toolCard } from '../src/bindings/tools';
 import { checkpoint, snapshot } from './fixture';
 
 const occurrence = {locator:{type:'by_ledger_position' as const,position:7},block_index:2};
-const tool: ForegroundToolExecution = {message_id:'message',occurrence,block_index:2,call_id:'call',tool_id:'tool-bash',name:'bash',assembly_complete:true,committed_result_deferred:false,state:{type:'running',arguments:'{"command":"original"}'}};
+const tool: ForegroundToolExecution = {message_id:'message',occurrence,block_index:2,call_id:'call',tool_id:'tool-bash',name:'bash',assembly_complete:true,committed_result_deferred:false,state:{type:'running',arguments:"{\"arguments\":{\"command\":\"original\"}}"}};
 const canonical: ToolExecutionResult = {status:{type:'success'},content:[{type:'text',text:'canonical body'}],duration_ms:"70",exit_code:0};
 const terminal: ToolExecutionResult = {status:{type:'failed',error:'native execution failure'},content:[],duration_ms:"23",exit_code:3};
 const committed: RuntimeClientEvent = {type:'tool_result_committed',attempt_id:'attempt',occurrence,result:canonical,result_metadata_ref:null,result_deferred:false};

@@ -8,17 +8,57 @@ changes.
 
 ## Main integration state (2026-11-13)
 
-PR #531 is being integrated with `origin/main` at `c076354d6` from PR head
-`881d99759`. The integrated contract is App Server v78, Runtime Client v85,
-Child IPC v39, SQLite schema 87, Runtime authoring schema 12 and Runtime
-Manifest v6. The model catalog remains schema 2 and Session catalog schema 19.
+PR #531 integrates `origin/main` at `e1d4b52d0` from prior PR head
+`30382ad8c`. The integrated contract is App Server v79, Runtime Client v86,
+Child IPC v40, SQLite schema 88, Runtime authoring schema 13 and Runtime
+Manifest v7. The model catalog remains schema 2 and Session catalog schema 21.
 The integration retains shared writable Thread clients, instance bearer/JWT
-authentication, Provider-owned protocol, Agent resources and Skills, and
-automatic configuration application. It also retains model-derived sequential
-compaction, removes authored context tuning and Summary output overrides, and
-keeps accepted chunk progress and distinct cancelled/skipped Trace terminals.
+authentication, Provider-owned protocol, Agent resources and Skills, automatic
+configuration application, and Plan/Automatic/Full Access permission semantics.
+Summary, Title, Classification and BTW share one Auxiliary policy with independent
+Lowest/Model Default/Explicit Profile selection. Model-derived sequential
+compaction honors the frozen Auxiliary output limit, removes authored context
+tuning, and keeps accepted chunk progress and distinct cancelled/skipped Trace
+terminals.
 
-Local integration verification passed with Rust 1.98.1 and the locked dependencies:
+Current local verification establishes the following results:
+
+- Library coverage comprises 5,527 distinct passing cases and 22 ignored cases.
+  The initial full discovery ran 5,512 passing cases and exposed 15 fixture
+  failures. A 235-case affected-group rerun and two final permission-reminder
+  case reruns cleared all 15 failures. This is aggregate evidence across those
+  runs, not a claim that one fresh full-library command passed.
+- All nine external Cargo targets passed: 695 cases passed and 10 were ignored.
+  The real-HTTP chunked-compaction case accepted more than twelve fragments,
+  retained its single authorized Native-to-Prompt downgrade, and proved the
+  admitted Model/Profile binding stayed frozen across the Session update.
+- The Python provider-emulator suite passed all 59 cases. The complete Web
+  suite passed 4,848 cases with four skips. The full TUI suite passed 1,362
+  cases with one skip; its corrected standalone external-example smoke also
+  passed on a separate rerun.
+- The pinned-browser run passed all 54 scenarios, with no retries, skips,
+  screenshot edits or latency-budget flag.
+- Protocol, Web and TUI typechecks, the production Web build, audits and strict
+  Clippy passed.
+
+Fixture windows now include the real permission-reminder cost while preserving
+exact request, ordering, source and degradation assertions. Binding-freeze
+fixtures retain enough original facts for one schema-valid Summary to make a
+real reduction. The provider-emulator transformation now applies the same tool
+call envelope and workspace substitution to statically scripted and adaptively
+selected steps, preserving adaptive gates and the final-step flag.
+
+Example tests passed 27 cases with one ignored case. Together with the library
+and external results above, this establishes 6,249 distinct Rust passing cases
+and 33 ignored cases across the documented runs. Regenerated editor schemas and
+protocol artifacts are byte-identical to the checked-in artifacts. Linux
+`rust-contracts` and `rust-boundaries` lane coverage checks passed. A remote FULL
+CI result for the new integrated commit has not yet been established.
+
+### Historical local integration verification
+
+Historical local verification of the earlier integration passed with Rust 1.98.1
+and its locked dependencies (these results do not verify the current integration):
 
 - All-target, all-feature Rust tests: 6,167 passed, 33 ignored, none failed,
   with the required provider emulator and eight test threads. The host's HTTP
@@ -42,7 +82,7 @@ identified there. A fresh FULL CI run must verify the integrated commit,
 including native macOS and the complete browser shards; historical green runs
 do not establish that result.
 
-## Integrated-head CI follow-up (2026-11-13)
+## Historical integrated-head CI follow-up (2026-11-13)
 
 [FULL run 43362630300](https://github.com/Caismis/rustX/actions/runs/43362630300)
 tested `fe632a154`. Linux deterministic contracts, generated protocol, TUI,
@@ -105,11 +145,14 @@ proactive pressure begins at `floor(9H / 10)`. Recent-original retention is
 `min(ceil(15H / 100), 20000)` and never weakens protected fresh input.
 
 Initial total Summary output is
-`min(summary output capability, max(1, floor(Cs / 4)), max(1, floor(H / 4)))`.
+`min(cap, max(1, floor(Cs / 4)), max(1, floor(H / 4)))`, where `cap` is the
+frozen resolved Auxiliary output limit after Profile and shared Auxiliary
+overrides, bounded by the Model hard limit. Follow Session selects the primary
+Model without copying its Profile or Session request-parameter overrides.
 A frozen explicit reasoning budget requires at least that budget plus 1024
 visible JSON tokens. The admitted capability and Summary window must support
 this minimum. The Summary input allowance is `Cs - M(Cs) - Os`.
-Output-exhaustion recovery can grow total output up to the Summary capability
+Output-exhaustion recovery can grow total output up to that frozen Auxiliary cap
 and half its window, with extra headroom for an explicit reasoning budget,
 bounded by `Cs - M(Cs) - 1`. Primary input does not cap this recovery ceiling.
 Each increase reprices the same unaccepted source against the smaller Summary
@@ -122,7 +165,7 @@ operation budget, deadline and accepted source coverage. A larger retry that
 no longer fits is rejected before its physical Call starts.
 
 For a 256000-token primary with 16000 output and a 128000-token thinking
-Summary model with 64000 output capability, `H=227200`, the trigger is
+Summary model with a resolved Auxiliary output limit of 64000, `H=227200`, the trigger is
 `204480`, recent retention is `20000`, initial total Summary output is
 `32000` and Summary input is `89600`. Reasoning and visible JSON share the
 total output allowance; the selected Profile is frozen.

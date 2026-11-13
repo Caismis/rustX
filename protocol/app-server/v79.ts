@@ -427,7 +427,8 @@ export type Request1 =
         target: AttachmentTarget;
         config: SessionModelConfig;
         /**
-         * A primary-model picker can recover unchanged auxiliary model references that were removed.
+         * Explicitly recover an unchanged auxiliary selection whose model is unavailable.
+         * Ordinary primary-model or profile edits must omit this opt-in.
          */
         recover_unavailable_auxiliary?: boolean | null;
       };
@@ -1628,45 +1629,6 @@ export type AttemptId = string;
  */
 export type ModelProfileId = string;
 /**
- * An authored Model identity. Its spelling has no provider or wire semantics.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ModelRef".
- */
-export type ModelRef = string;
-/**
- * A Session auxiliary invocation follows primary or selects a catalog model.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AuxiliaryModelPolicy".
- */
-export type AuxiliaryModelPolicy =
-  | {
-      mode: 'session';
-    }
-  | {
-      /**
-       * An authored Model identity. Its spelling has no provider or wire semantics.
-       */
-      model: string;
-      /**
-       * The selected Model Profile; the model's `default_profile` is used
-       * when absent.
-       */
-      profile?: ModelProfileId | null;
-      /**
-       * The explicit auxiliary request-parameter overrides.
-       */
-      request_params?: {
-        [k: string]: unknown;
-      };
-      /**
-       * The explicit auxiliary output-budget override.
-       */
-      max_output_tokens?: number | null;
-      mode: 'explicit';
-    };
-/**
  * Manual compaction correlation: 1..64 ASCII letters, digits, underscores or hyphens; not an idempotency key.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -2033,6 +1995,13 @@ export type EffectiveFieldName =
   | 'effective_model'
   | 'admitted_attempt';
 /**
+ * An authored Model identity. Its spelling has no provider or wire semantics.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ModelRef".
+ */
+export type ModelRef = string;
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SourceFieldName".
  */
@@ -2320,18 +2289,8 @@ export type ConfigMutation =
       unit: 'capacity';
     }
   | {
-      authored?: ApprovalMode | null;
+      authored?: ExecutionPermissionMode | null;
       unit: 'approval';
-    }
-  | {
-      id: NativeTool;
-      authored?: NativePolicyOverrideDocument | null;
-      unit: 'native_policy';
-    }
-  | {
-      id: McpServerId;
-      authored?: InvocationPolicyDocument | null;
-      unit: 'mcp_policy';
     }
   | {
       name: string;
@@ -2442,31 +2401,35 @@ export type ModelOutput =
     };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SummaryModelAuthoring".
- */
-export type SummaryModelAuthoring =
-  | {
-      mode: 'session';
-    }
-  | {
-      model: ModelRef;
-      profile?: ModelProfileId | null;
-      request_params?: RequestParams;
-      mode: 'explicit';
-    };
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "AuxiliaryModelAuthoring".
  */
 export type AuxiliaryModelAuthoring =
   | {
+      profile?: AuxiliaryProfileAuthoring;
+      request_params?: RequestParams;
+      max_output_tokens?: ModelOutput | null;
       mode: 'session';
     }
   | {
       model: ModelRef;
-      profile?: ModelProfileId | null;
+      profile?: AuxiliaryProfileAuthoring;
       request_params?: RequestParams;
       max_output_tokens?: ModelOutput | null;
+      mode: 'explicit';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliaryProfileAuthoring".
+ */
+export type AuxiliaryProfileAuthoring =
+  | {
+      mode: 'lowest';
+    }
+  | {
+      mode: 'model_default';
+    }
+  | {
+      id: ModelProfileId;
       mode: 'explicit';
     };
 /**
@@ -2526,23 +2489,16 @@ export type IdleLiveness =
       mode: 'window';
     };
 /**
- * The runtime-wide control state for tool approval behavior.
+ * The runtime-wide execution-permission mode.
  *
- * `Policy` consults each resolved Tool's
- * [`ToolApprovalPolicy`](crate::tools::types::ToolApprovalPolicy).
- * `FullAccess` changes only the effective approval result to `Never`; it
- * never changes availability, activation, execution ownership, concurrency,
- * or tool authority.
+ * Modes are built into Rust and are not extensible through TOML presets.
+ * Changing mode never changes Tool Registry membership, model-facing names,
+ * tool Schema, MCP discovery, or capability selection.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ApprovalMode".
+ * via the `definition` "ExecutionPermissionMode".
  */
-export type ApprovalMode = 'policy' | 'full_access';
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "NativeTool".
- */
-export type NativeTool = 'read' | 'write' | 'edit' | 'glob' | 'grep' | 'bash';
+export type ExecutionPermissionMode = 'plan' | 'automatic' | 'full_access';
 /**
  * One whole-file Workflow mutation of the exact file the mutation names.
  *
@@ -3860,7 +3816,8 @@ export type NativeContextContributor =
   | 'agent_status'
   | 'core_system_identity'
   | 'agent_profile'
-  | 'runtime_tool_observation';
+  | 'runtime_tool_observation'
+  | 'permission_reminder';
 /**
  * The stable logical key of one certified extension.
  *
@@ -5251,48 +5208,18 @@ export type SourceInspection =
       status: 'unavailable';
     };
 /**
- * The redacted client-facing projection of an auxiliary policy.
+ * The redacted client-facing projection of the shared auxiliary policy.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "AuxiliaryModelView".
  */
 export type AuxiliaryModelView =
   | {
+      effective: ModelInvocationView1;
       mode: 'session';
     }
   | {
-      /**
-       * An authored Model identity. Its spelling has no provider or wire semantics.
-       */
-      model: string;
-      /**
-       * The model interaction protocol an adapter must speak.
-       */
-      protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
-      /**
-       * The model's context window in tokens.
-       */
-      contextWindow: number;
-      /**
-       * The model's configured maximum output tokens.
-       */
-      modelMaxOutputTokens: number;
-      /**
-       * The effective output budget.
-       */
-      maxOutputTokens: number;
-      /**
-       * The selected Model Profile, when the model declares any.
-       */
-      profile?: ModelProfileId | null;
-      /**
-       * The effective opaque provider request parameters.
-       */
-      requestParams?: {
-        [k: string]: unknown;
-      };
-      capabilities: ModelCapabilities2;
-      declaredCapabilities: ModelCapabilities3;
+      effective: ModelInvocationView2;
       mode: 'explicit';
     };
 /**
@@ -6064,7 +5991,7 @@ export type RuntimeClientEvent =
       plugins?: EffectivePlugins | null;
       model?: SessionModelView | null;
       model_status: RuntimeClientModelStatus;
-      approval_mode: ApprovalMode;
+      approval_mode: ExecutionPermissionMode;
       capabilities: CapabilityView2;
       resources: RuntimeClientResourcesView1;
       type: 'resource_generation_updated';
@@ -7034,6 +6961,10 @@ export type WorkflowNodeDefinition =
        */
       routes?: WorkflowAgentRoute[];
       /**
+       * Effective resource permission for this Agent entry only.
+       */
+      permissions?: ResourcePermissionSet | null;
+      /**
        * As Dify's error handling on its Agent and tool nodes, for a call that
        * failed or timed out once it is proven settled. Cancellation, an unknown
        * outcome, unproven settlement and a refused start still stop the run.
@@ -7368,6 +7299,16 @@ export type WorkflowSchemaStep =
   | {
       kind: 'items';
     };
+/**
+ * One mode entry on a resource permission object.
+ *
+ * Automatic model review is never a resource enum value: it is Automatic
+ * mode's built-in `default` behavior.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ResourcePermissionValue".
+ */
+export type ResourcePermissionValue = 'default' | 'allow' | 'ask' | 'deny';
 /**
  * As Dify's error handling, for a call that failed or timed out after its
  * retries. Cancellation, an unknown outcome and authority errors still stop
@@ -9021,7 +8962,7 @@ export type SubagentWaitReason =
 /**
  * Who owns one execution of a tool.
  *
- * This axis decides ownership and settlement, never scheduling:
+ * This axis decides ownership and settlement, never batch scheduling:
  *
  * - `ForegroundOnly` — every invocation settles before the current agent
  *   attempt may continue past that tool result. The execution is
@@ -9032,41 +8973,13 @@ export type SubagentWaitReason =
  *   execution.
  * - `ModelSelectable` — the model must explicitly choose foreground or
  *   background execution for each invocation through the required
- *   `execution_mode` invocation field. That field is reserved by the
- *   runtime only under this policy; registration rejects a `ModelSelectable`
- *   tool whose canonical schema already defines it.
- *
- * Foreground/background is orthogonal to sequential/parallel scheduling
- * ([`ToolConcurrencyPolicy`]).
+ *   outer `execution_mode` invocation field. Runtime metadata is separate
+ *   from the business object, whose same-named properties stay tool-owned.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ToolExecutionPolicy".
  */
 export type ToolExecutionPolicy = 'foreground_only' | 'background_only' | 'model_selectable';
-/**
- * How calls of one tool within one batch are scheduled.
- *
- * A `Sequential` invocation is an exclusive scheduling barrier; adjacent
- * `Parallel` invocations may execute concurrently as one group. This axis
- * describes concurrency only, never foreground/background ownership
- * ([`ToolExecutionPolicy`]).
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ToolConcurrencyPolicy".
- */
-export type ToolConcurrencyPolicy = 'sequential' | 'parallel';
-/**
- * Whether a resolved tool invocation requires a native approval interaction.
- *
- * Denial is intentionally not part of this policy. A tool that is not
- * eligible belongs to availability/authorization and is rejected before
- * approval; HITL only decides whether an otherwise eligible invocation needs
- * a human decision.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ToolApprovalPolicy".
- */
-export type ToolApprovalPolicy = 'never' | 'always';
 /**
  * Whether the runtime may automatically re-execute a tool after a crash.
  *
@@ -9154,22 +9067,112 @@ export type CapabilitySourceStateView =
       type: 'unavailable';
     };
 /**
- * Compaction follows the Session model or selects an independent model.
- * Summary output is determined by the runtime from model capabilities.
+ * Shared Auxiliary Model policy for Summary, Title, Classification, and BTW.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SummaryModelPolicy".
+ * via the `definition` "AuxiliaryModelPolicy".
  */
-export type SummaryModelPolicy =
+export type AuxiliaryModelPolicy =
   | {
-      mode: 'session';
-    }
-  | {
-      model: ModelRef;
-      profile?: ModelProfileId | null;
+      /**
+       * Profile strategy for the Session primary model.
+       */
+      profile?:
+        | {
+            mode: 'lowest';
+          }
+        | {
+            mode: 'model_default';
+          }
+        | {
+            /**
+             * The identity of one Model Profile declared by a model.
+             *
+             * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+             * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+             * the profile's output default and
+             * `request_params`.
+             */
+            id: string;
+            mode: 'explicit';
+          };
+      /**
+       * Auxiliary request-parameter overrides; never inherit Session overrides.
+       */
       request_params?: {
         [k: string]: unknown;
       };
+      /**
+       * Auxiliary output-budget override.
+       */
+      max_output_tokens?: number | null;
+      mode: 'session';
+    }
+  | {
+      /**
+       * The catalog model reference.
+       */
+      model: string;
+      /**
+       * Profile strategy for that model.
+       */
+      profile?:
+        | {
+            mode: 'lowest';
+          }
+        | {
+            mode: 'model_default';
+          }
+        | {
+            /**
+             * The identity of one Model Profile declared by a model.
+             *
+             * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+             * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+             * the profile's output default and
+             * `request_params`.
+             */
+            id: string;
+            mode: 'explicit';
+          };
+      /**
+       * Explicit auxiliary request-parameter overrides.
+       */
+      request_params?: {
+        [k: string]: unknown;
+      };
+      /**
+       * Explicit auxiliary output-budget override.
+       */
+      max_output_tokens?: number | null;
+      mode: 'explicit';
+    };
+/**
+ * Profile strategy for Auxiliary consumers, typed separately from a Profile ID.
+ *
+ * A real Profile named `lowest` remains addressable through [`Self::Explicit`];
+ * the strategy name never collides with an authored Profile identity.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliaryProfileSelection".
+ */
+export type AuxiliaryProfileSelection =
+  | {
+      mode: 'lowest';
+    }
+  | {
+      mode: 'model_default';
+    }
+  | {
+      /**
+       * The identity of one Model Profile declared by a model.
+       *
+       * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+       * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+       * the profile's output default and
+       * `request_params`.
+       */
+      id: string;
       mode: 'explicit';
     };
 /**
@@ -9236,27 +9239,6 @@ export type InteractionOutcome =
         | 'subagent_execution_deadline_exceeded';
       type: 'cancelled';
     };
-/**
- * The configurable execution-ownership policy of one tool.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ExecutionPolicyDocument".
- */
-export type ExecutionPolicyDocument = 'foreground_only' | 'background_only' | 'model_selectable';
-/**
- * The configurable in-batch scheduling policy of one tool.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ConcurrencyPolicyDocument".
- */
-export type ConcurrencyPolicyDocument = 'sequential' | 'parallel';
-/**
- * The configurable HITL approval policy of one Tool.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ApprovalPolicyDocument".
- */
-export type ApprovalPolicyDocument = 'never' | 'always';
 /**
  * Whether the native compiler admits the candidate's structure.
  *
@@ -9495,51 +9477,83 @@ export interface SessionModelConfig {
    */
   maxOutputTokens?: number | null;
   /**
-   * The compaction summary model policy.
+   * Shared Auxiliary Model policy for every Auxiliary consumer.
    */
-  summaryModel?:
+  auxiliary?:
     | {
-        mode: 'session';
-      }
-    | {
-        model: ModelRef;
-        profile?: ModelProfileId | null;
+        /**
+         * Profile strategy for the Session primary model.
+         */
+        profile?:
+          | {
+              mode: 'lowest';
+            }
+          | {
+              mode: 'model_default';
+            }
+          | {
+              /**
+               * The identity of one Model Profile declared by a model.
+               *
+               * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+               * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+               * the profile's output default and
+               * `request_params`.
+               */
+              id: string;
+              mode: 'explicit';
+            };
+        /**
+         * Auxiliary request-parameter overrides; never inherit Session overrides.
+         */
         request_params?: {
           [k: string]: unknown;
         };
-        mode: 'explicit';
-      };
-  /**
-   * The independent automatic title model policy.
-   */
-  titleModel?:
-    | {
+        /**
+         * Auxiliary output-budget override.
+         */
+        max_output_tokens?: number | null;
         mode: 'session';
       }
     | {
         /**
-         * An authored Model identity. Its spelling has no provider or wire semantics.
+         * The catalog model reference.
          */
         model: string;
         /**
-         * The selected Model Profile; the model's `default_profile` is used
-         * when absent.
+         * Profile strategy for that model.
          */
-        profile?: ModelProfileId | null;
+        profile?:
+          | {
+              mode: 'lowest';
+            }
+          | {
+              mode: 'model_default';
+            }
+          | {
+              /**
+               * The identity of one Model Profile declared by a model.
+               *
+               * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+               * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+               * the profile's output default and
+               * `request_params`.
+               */
+              id: string;
+              mode: 'explicit';
+            };
         /**
-         * The explicit auxiliary request-parameter overrides.
+         * Explicit auxiliary request-parameter overrides.
          */
         request_params?: {
           [k: string]: unknown;
         };
         /**
-         * The explicit auxiliary output-budget override.
+         * Explicit auxiliary output-budget override.
          */
         max_output_tokens?: number | null;
         mode: 'explicit';
       };
-  classificationModel?: AuxiliaryModelPolicy;
-  btwModel?: AuxiliaryModelPolicy;
 }
 /**
  * A native catalog choice at the exact resource generation the client read.
@@ -9662,6 +9676,33 @@ export interface HostToolDefinition {
   name: string;
   description: string;
   inputSchema: unknown;
+  /**
+   * Source-default three-mode permission object (Issue #544).
+   */
+  permissions?: ResourcePermissionSet | null;
+}
+/**
+ * Complete three-mode permission object for one resource or exact tool.
+ *
+ * An authored object must supply all three entries. Omission of the whole
+ * object inherits the winning source default or product defaults.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ResourcePermissionSet".
+ */
+export interface ResourcePermissionSet {
+  /**
+   * Plan-mode override.
+   */
+  plan: 'default' | 'allow' | 'ask' | 'deny';
+  /**
+   * Automatic-mode override.
+   */
+  automatic: 'default' | 'allow' | 'ask' | 'deny';
+  /**
+   * Full Access-mode override.
+   */
+  full_access: 'default' | 'allow' | 'ask' | 'deny';
 }
 /**
  * Deliberate Session-owned intent. Effective configuration is never persisted.
@@ -9940,6 +9981,22 @@ export interface McpAuthoring {
     [k: string]: string;
   };
   cwd?: string | null;
+  permissions?: ResourcePermissionSet | null;
+  tools?: {
+    [k: string]: McpToolPermissionDocument;
+  };
+}
+/**
+ * Exact-tool permission override authored under one MCP server.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "McpToolPermissionDocument".
+ */
+export interface McpToolPermissionDocument {
+  /**
+   * Complete three-mode permission object for this exact tool.
+   */
+  permissions?: ResourcePermissionSet | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -10045,10 +10102,7 @@ export interface ModelLayer {
   profile?: ModelProfileId | null;
   request_params?: RequestParams | null;
   max_output_tokens?: ModelOutput | null;
-  summary_model?: SummaryModelAuthoring | null;
-  title_model?: AuxiliaryModelAuthoring | null;
-  classification_model?: AuxiliaryModelAuthoring | null;
-  btw_model?: AuxiliaryModelAuthoring | null;
+  auxiliary?: AuxiliaryModelAuthoring | null;
 }
 /**
  * The authored Todo extension (Issue #259).
@@ -10168,47 +10222,6 @@ export interface SubagentsLayer {
   max_concurrent?: number | null;
 }
 /**
- * Explicit native policy axes, resolved over that tool's product default.
- * Absence never applies the generic external-tool policy to a native tool.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "NativePolicyOverrideDocument".
- */
-export interface NativePolicyOverrideDocument {
-  /**
-   * Foreground/background ownership override.
-   */
-  execution?: 'foreground_only' | 'background_only' | 'model_selectable';
-  /**
-   * In-batch scheduling override.
-   */
-  concurrency?: 'sequential' | 'parallel';
-  /**
-   * Tool approval override.
-   */
-  approval?: 'never' | 'always';
-}
-/**
- * One tool invocation policy document.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "InvocationPolicyDocument".
- */
-export interface InvocationPolicyDocument {
-  /**
-   * Foreground/background ownership policy.
-   */
-  execution?: 'foreground_only' | 'background_only' | 'model_selectable';
-  /**
-   * In-batch scheduling policy.
-   */
-  concurrency?: 'sequential' | 'parallel';
-  /**
-   * Human approval behavior for otherwise eligible calls.
-   */
-  approval?: 'never' | 'always';
-}
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "AppServerPolicy".
  */
@@ -10260,6 +10273,10 @@ export interface NamedAgentProfileDocument {
   skills?: AgentSkillSelection | null;
   agents_md?: AgentProjectInstructionsDocument1;
   plugins?: NativeAgentExtensionsDocument;
+  /**
+   * Source-default three-mode permission object (Issue #544).
+   */
+  permissions?: ResourcePermissionSet | null;
 }
 /**
  * The exact source-qualified capability selection.
@@ -13728,15 +13745,13 @@ export interface RuntimeClientSnapshot {
    */
   shutting_down: boolean;
   /**
-   * The runtime-wide control state for tool approval behavior.
+   * The runtime-wide execution-permission mode.
    *
-   * `Policy` consults each resolved Tool's
-   * [`ToolApprovalPolicy`](crate::tools::types::ToolApprovalPolicy).
-   * `FullAccess` changes only the effective approval result to `Never`; it
-   * never changes availability, activation, execution ownership, concurrency,
-   * or tool authority.
+   * Modes are built into Rust and are not extensible through TOML presets.
+   * Changing mode never changes Tool Registry membership, model-facing names,
+   * tool Schema, MCP discovery, or capability selection.
    */
-  effective_approval_mode: 'policy' | 'full_access';
+  effective_approval_mode: 'plan' | 'automatic' | 'full_access';
   /**
    * The runtime's durable-authority failure, when it has entered the
    * explicit degraded state. While set, no new durable admission/execution
@@ -14543,41 +14558,11 @@ export interface AttemptModelView {
    */
   summary:
     | {
+        effective: ModelInvocationView1;
         mode: 'session';
       }
     | {
-        /**
-         * An authored Model identity. Its spelling has no provider or wire semantics.
-         */
-        model: string;
-        /**
-         * The model interaction protocol an adapter must speak.
-         */
-        protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
-        /**
-         * The model's context window in tokens.
-         */
-        contextWindow: number;
-        /**
-         * The model's configured maximum output tokens.
-         */
-        modelMaxOutputTokens: number;
-        /**
-         * The effective output budget.
-         */
-        maxOutputTokens: number;
-        /**
-         * The selected Model Profile, when the model declares any.
-         */
-        profile?: ModelProfileId | null;
-        /**
-         * The effective opaque provider request parameters.
-         */
-        requestParams?: {
-          [k: string]: unknown;
-        };
-        capabilities: ModelCapabilities2;
-        declaredCapabilities: ModelCapabilities3;
+        effective: ModelInvocationView2;
         mode: 'explicit';
       };
 }
@@ -14656,41 +14641,78 @@ export interface ModelCapabilities1 {
   jsonSchemaOutput?: boolean;
 }
 /**
- * The effective capabilities.
+ * The concrete auxiliary invocation.
  */
-export interface ModelCapabilities2 {
+export interface ModelInvocationView1 {
   /**
-   * The accepted input modalities.
+   * An authored Model identity. Its spelling has no provider or wire semantics.
    */
-  inputModalities: Modality[];
+  model: string;
   /**
-   * The produced output modalities.
+   * The model interaction protocol an adapter must speak.
    */
-  outputModalities: Modality[];
+  protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
   /**
-   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
-   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   * The model's context window in tokens.
    */
-  jsonSchemaOutput?: boolean;
+  contextWindow: number;
+  /**
+   * The model's configured maximum output tokens.
+   */
+  modelMaxOutputTokens: number;
+  /**
+   * The effective output budget.
+   */
+  maxOutputTokens: number;
+  /**
+   * The selected Model Profile, when the model declares any.
+   */
+  profile?: ModelProfileId | null;
+  /**
+   * The effective opaque provider request parameters.
+   */
+  requestParams?: {
+    [k: string]: unknown;
+  };
+  capabilities: ModelCapabilities;
+  declaredCapabilities: ModelCapabilities1;
 }
 /**
- * The raw capabilities the catalog claims, for clients that want to
- * explain why an effective capability is absent.
+ * The concrete auxiliary invocation.
  */
-export interface ModelCapabilities3 {
+export interface ModelInvocationView2 {
   /**
-   * The accepted input modalities.
+   * An authored Model identity. Its spelling has no provider or wire semantics.
    */
-  inputModalities: Modality[];
+  model: string;
   /**
-   * The produced output modalities.
+   * The model interaction protocol an adapter must speak.
    */
-  outputModalities: Modality[];
+  protocol: 'openai_chat_completions' | 'openai_responses' | 'anthropic_messages';
   /**
-   * Native API-enforced JSON Schema output for this model, endpoint and protocol.
-   * An omitted claim is conservative; ordinary text requests never opt in implicitly.
+   * The model's context window in tokens.
    */
-  jsonSchemaOutput?: boolean;
+  contextWindow: number;
+  /**
+   * The model's configured maximum output tokens.
+   */
+  modelMaxOutputTokens: number;
+  /**
+   * The effective output budget.
+   */
+  maxOutputTokens: number;
+  /**
+   * The selected Model Profile, when the model declares any.
+   */
+  profile?: ModelProfileId | null;
+  /**
+   * The effective opaque provider request parameters.
+   */
+  requestParams?: {
+    [k: string]: unknown;
+  };
+  capabilities: ModelCapabilities;
+  declaredCapabilities: ModelCapabilities1;
 }
 /**
  * Facts frozen together with the attempt model under native admission.
@@ -14705,7 +14727,7 @@ export interface AdmittedSettings {
    */
   read_image_active?: boolean | null;
   resource_revision: RuntimeResourceRevision;
-  approval_mode: ApprovalMode;
+  approval_mode: ExecutionPermissionMode;
 }
 /**
  * The inbound mailbox diagnostics (pending items and the latest
@@ -15722,14 +15744,6 @@ export interface RuntimeClientTool {
    */
   execution_policy: 'foreground_only' | 'background_only' | 'model_selectable';
   /**
-   * How calls within one batch are scheduled.
-   */
-  concurrency_policy: 'sequential' | 'parallel';
-  /**
-   * Whether execution requires a native approval interaction.
-   */
-  approval_policy: 'never' | 'always';
-  /**
    * The replay policy.
    */
   replay_policy: 'never' | 'idempotent';
@@ -15996,21 +16010,15 @@ export interface SessionModelView {
    * Absent only when the Session was loaded with an already unavailable
    * selection.
    */
-  effective?: ModelInvocationView1 | null;
+  effective?: ModelInvocationView3 | null;
   /**
-   * The summary policy last resolved for `configured`, absent exactly
-   * when `effective` is.
+   * The shared auxiliary policy last resolved for `configured`, absent
+   * exactly when `effective` is.
    */
-  summary?: AuxiliaryModelView | null;
-  /**
-   * The independent Title policy last resolved for this configuration.
-   */
-  title?: AuxiliaryModelView | null;
-  classification?: AuxiliaryModelView | null;
-  btw?: AuxiliaryModelView | null;
+  auxiliary?: AuxiliaryModelView | null;
   /**
    * Why the Session's published Model Catalog does not admit
-   * `configured`. While present, `effective` and `summary` are display
+   * `configured`. While present, `effective` and `auxiliary` are display
    * facts only: no new Attempt is admitted until a valid selection is
    * committed, and nothing falls back to a default.
    */
@@ -16046,51 +16054,83 @@ export interface SessionModelConfig1 {
    */
   maxOutputTokens?: number | null;
   /**
-   * The compaction summary model policy.
+   * Shared Auxiliary Model policy for every Auxiliary consumer.
    */
-  summaryModel?:
+  auxiliary?:
     | {
-        mode: 'session';
-      }
-    | {
-        model: ModelRef;
-        profile?: ModelProfileId | null;
+        /**
+         * Profile strategy for the Session primary model.
+         */
+        profile?:
+          | {
+              mode: 'lowest';
+            }
+          | {
+              mode: 'model_default';
+            }
+          | {
+              /**
+               * The identity of one Model Profile declared by a model.
+               *
+               * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+               * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+               * the profile's output default and
+               * `request_params`.
+               */
+              id: string;
+              mode: 'explicit';
+            };
+        /**
+         * Auxiliary request-parameter overrides; never inherit Session overrides.
+         */
         request_params?: {
           [k: string]: unknown;
         };
-        mode: 'explicit';
-      };
-  /**
-   * The independent automatic title model policy.
-   */
-  titleModel?:
-    | {
+        /**
+         * Auxiliary output-budget override.
+         */
+        max_output_tokens?: number | null;
         mode: 'session';
       }
     | {
         /**
-         * An authored Model identity. Its spelling has no provider or wire semantics.
+         * The catalog model reference.
          */
         model: string;
         /**
-         * The selected Model Profile; the model's `default_profile` is used
-         * when absent.
+         * Profile strategy for that model.
          */
-        profile?: ModelProfileId | null;
+        profile?:
+          | {
+              mode: 'lowest';
+            }
+          | {
+              mode: 'model_default';
+            }
+          | {
+              /**
+               * The identity of one Model Profile declared by a model.
+               *
+               * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
+               * `thinking-32k`, and `deep` are all just names whose behaviour is exactly
+               * the profile's output default and
+               * `request_params`.
+               */
+              id: string;
+              mode: 'explicit';
+            };
         /**
-         * The explicit auxiliary request-parameter overrides.
+         * Explicit auxiliary request-parameter overrides.
          */
         request_params?: {
           [k: string]: unknown;
         };
         /**
-         * The explicit auxiliary output-budget override.
+         * Explicit auxiliary output-budget override.
          */
         max_output_tokens?: number | null;
         mode: 'explicit';
       };
-  classificationModel?: AuxiliaryModelPolicy;
-  btwModel?: AuxiliaryModelPolicy;
 }
 /**
  * The redacted client-facing projection of one resolved model invocation.
@@ -16104,7 +16144,7 @@ export interface SessionModelConfig1 {
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ModelInvocationView".
  */
-export interface ModelInvocationView1 {
+export interface ModelInvocationView3 {
   /**
    * An authored Model identity. Its spelling has no provider or wire semantics.
    */
@@ -17037,7 +17077,7 @@ export interface RuntimeClientProtocolEvent {
         plugins?: EffectivePlugins | null;
         model?: SessionModelView | null;
         model_status: RuntimeClientModelStatus;
-        approval_mode: ApprovalMode;
+        approval_mode: ExecutionPermissionMode;
         capabilities: CapabilityView2;
         resources: RuntimeClientResourcesView1;
         type: 'resource_generation_updated';
@@ -18583,7 +18623,7 @@ export interface EffectiveConfiguration {
   model_timeout: ModelTimeoutPolicyDocument;
   tool_deadline: ToolDeadlinePolicyDocument;
   child_capacity: SubagentsDocument;
-  approval_mode: ApprovalMode;
+  approval_mode: ExecutionPermissionMode;
   provenance: {
     [k: string]: Origin;
   };
@@ -18650,15 +18690,11 @@ export interface RuntimeLayer {
   schema_version?: number | null;
   app_server?: AppServerPolicy | null;
   agent_id?: AgentId | null;
-  approval_mode?: ApprovalMode | null;
+  approval_mode?: ExecutionPermissionMode | null;
   agent?: AgentProfileLayer | null;
   model_timeout_policy?: TimeoutLayer | null;
   tool_deadline_policy?: ToolDeadlineLayer | null;
   mcp_startup_policy?: McpStartupPolicyLayer | null;
-  mcp_tool_policies?: {
-    [k: string]: InvocationPolicyDocument;
-  } | null;
-  native_tools?: NativeToolsLayer | null;
   /**
    * Tool environment entries. Native authoring holds the literal values
    * ([`AuthoredEnvironment`]); every projection that leaves native authority
@@ -18722,18 +18758,6 @@ export interface McpStartupPolicyLayer {
   wait_timeout_ms?: string | null;
 }
 /**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "NativeToolsLayer".
- */
-export interface NativeToolsLayer {
-  read?: NativePolicyOverrideDocument | null;
-  write?: NativePolicyOverrideDocument | null;
-  edit?: NativePolicyOverrideDocument | null;
-  glob?: NativePolicyOverrideDocument | null;
-  grep?: NativePolicyOverrideDocument | null;
-  bash?: NativePolicyOverrideDocument | null;
-}
-/**
  * Root Agent profile. Only the root can delegate to named Agents.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -18768,6 +18792,10 @@ export interface AgentProfileDocument {
   skills?: AgentSkillSelection | null;
   agents_md?: AgentProjectInstructionsDocument2;
   plugins?: NativeAgentExtensionsDocument1;
+  /**
+   * Source-default three-mode permission object (Issue #544).
+   */
+  permissions?: ResourcePermissionSet | null;
 }
 /**
  * The exact source-qualified capability selection.
@@ -18861,15 +18889,11 @@ export interface SubagentsDocument {
  * The canonical runtime/tool contract of one registered tool.
  *
  * The definition is owned by the tool plane's registry, which pairs it with
- * an executor. The three policy axes are independent:
- *
- * - [`ToolExecutionPolicy`] decides who owns the execution: foreground work
- *   is attempt-owned and settles before the attempt continues, background
- *   work is conversation-owned and detached after accepted dispatch.
- * - [`ToolConcurrencyPolicy`] decides how calls of one batch are scheduled
- *   relative to each other.
- * - [`ToolApprovalPolicy`] decides whether an eligible invocation needs a
- *   native human approval before the executor starts.
+ * an executor. Execution ownership is tool-declared; permission (whether an
+ * eligible invocation may start) is decided by the built-in mode matrix and
+ * resource overrides, never by a per-tool never/always authoring axis.
+ * Prepared slots in one batch may run concurrently; domain owners keep their
+ * own synchronization.
  *
  * The `input_schema` is the original canonical JSON Schema document owned by
  * the tool. The runtime validates it at registration and never mutates it:
@@ -18906,15 +18930,6 @@ export interface ToolDefinition {
    */
   execution_policy: 'foreground_only' | 'background_only' | 'model_selectable';
   /**
-   * How calls of this tool within one batch are scheduled relative to
-   * each other.
-   */
-  concurrency_policy: 'sequential' | 'parallel';
-  /**
-   * Whether execution requires a native approval interaction.
-   */
-  approval_policy?: 'never' | 'always';
-  /**
    * Replay policy; `Never` is the safe default.
    */
   replay_policy?: 'never' | 'idempotent';
@@ -18945,7 +18960,7 @@ export interface ToolDefinition {
  * via the `definition` "AdmittedConfiguration".
  */
 export interface AdmittedConfiguration {
-  approval_mode: ApprovalMode;
+  approval_mode: ExecutionPermissionMode;
   model_timeout?: ModelTimeoutPolicyDocument | null;
   tool_deadline?: ToolDeadlinePolicyDocument | null;
   attempt: AttemptId;
@@ -19113,7 +19128,7 @@ export interface SourceSettings {
   /**
    * Native current-file approval resolution. None when prospective configuration is invalid.
    */
-  prospective_approval_mode?: ApprovalMode | null;
+  prospective_approval_mode?: ExecutionPermissionMode | null;
   /**
    * Current-file analysis, separate from the published runtime. Never prepares sources.
    */
@@ -19206,8 +19221,8 @@ export interface CatalogModelView {
    * The configured maximum output tokens.
    */
   maxOutputTokens: number;
-  declaredCapabilities: ModelCapabilities4;
-  effectiveCapabilities: ModelCapabilities5;
+  declaredCapabilities: ModelCapabilities2;
+  effectiveCapabilities: ModelCapabilities3;
   /**
    * The declared Model Profiles in deterministic order.
    */
@@ -19242,7 +19257,7 @@ export interface CatalogModelView {
 /**
  * The capabilities the catalog claims.
  */
-export interface ModelCapabilities4 {
+export interface ModelCapabilities2 {
   /**
    * The accepted input modalities.
    */
@@ -19260,7 +19275,7 @@ export interface ModelCapabilities4 {
 /**
  * The capabilities the runtime can actually deliver today.
  */
-export interface ModelCapabilities5 {
+export interface ModelCapabilities3 {
   /**
    * The accepted input modalities.
    */
@@ -19858,6 +19873,10 @@ export interface WorkflowFileDocument {
    * Trusted finite total foreground lifetime, including descendant waits.
    */
   timeout_ms?: string;
+  /**
+   * Source-default three-mode permission object for this workflow Tool.
+   */
+  permissions?: ResourcePermissionSet | null;
   block: WorkflowBlock;
   editor?: WorkflowEditorMetadata | null;
 }
@@ -20951,7 +20970,7 @@ export interface ToolCallOccurrenceRef1 {
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ModelCapabilities".
  */
-export interface ModelCapabilities6 {
+export interface ModelCapabilities4 {
   /**
    * The accepted input modalities.
    */

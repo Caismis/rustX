@@ -123,13 +123,17 @@ limit `H = Cp - Op - M(Cp)` must be positive. Proactive compaction begins at
 `T = floor(0.9 * H)`; input above H requires compaction. The recent-history
 target is `min(ceil(0.15 * H), 20000)` tokens.
 
-For Summary window Cs and output capability cap, initial total Summary output is
+For Summary window Cs, `cap` is the frozen resolved Auxiliary output limit,
+including the selected Profile and shared `auxiliary.max_output_tokens` override
+within the Model hard limit. Follow Session selects the primary Model without
+copying its Profile or Session request overrides. Initial total Summary output is
 `min(cap, max(1, floor(Cs / 4)), max(1, floor(H / 4)))`, raised when necessary
 to cover frozen explicit reasoning plus 1024 visible JSON tokens. An impossible
 reasoning/output combination is rejected. Summary input is independently limited
 to `Cs - M(Cs) - Summary output`; neither the primary nor Summary model borrows
 the other's window. Summary output can grow within the bounded derived ceiling
-when output is exhausted; frozen reasoning settings do not change.
+when output is exhausted; every retry remains within `cap`, and frozen reasoning
+settings do not change. There is no Summary-only authored output limit.
 
 For example, Cp=256000, Op=16000, Cs=128000 and Summary cap=64000 give
 M(Cp)=12800, H=227200, T=204480, recent=20000, Summary output=32000 and

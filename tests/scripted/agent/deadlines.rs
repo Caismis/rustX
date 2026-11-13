@@ -117,10 +117,14 @@ async fn make_execution<'a>(
             model_timeout_policy: policy,
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
+            last_permission_reminder_mode: None,
+            permission_task_message: None,
+            recovered_permission_task_message: None,
+            approval_mode: rustx::runtime::ApprovalMode::FullAccess,
         },
         runtime(),
         tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     execution.install_publication_policy(
@@ -250,7 +254,9 @@ async fn runtime_with_manual_clock(
             explicit_model: true,
             agent_id: AgentId::new("agent-135-shared-clock"),
             model: support::model::scripted_session_model(adapter),
-            approval_mode: rustx::runtime::ApprovalMode::Policy,
+            // No tool execution in these suites; Full Access avoids Plan Ask
+            // stalls if a future script accidentally emits a mutating call.
+            approval_mode: rustx::runtime::ApprovalMode::FullAccess,
             model_timeout_policy: policy,
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
@@ -756,10 +762,14 @@ async fn publication_flush_wins_before_timeout_at_the_same_cut_and_does_not_rese
             model_timeout_policy: timeout_policy(100, 5),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
+            last_permission_reminder_mode: None,
+            permission_task_message: None,
+            recovered_permission_task_message: None,
+            approval_mode: rustx::runtime::ApprovalMode::FullAccess,
         },
         runtime(),
         &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     execution.install_publication_policy(
@@ -855,10 +865,14 @@ async fn provider_progress_wins_when_ready_with_response_timeout() {
             model_timeout_policy: timeout_policy(10, 100),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
+            last_permission_reminder_mode: None,
+            permission_task_message: None,
+            recovered_permission_task_message: None,
+            approval_mode: rustx::runtime::ApprovalMode::FullAccess,
         },
         runtime(),
         &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     execution.install_publication_policy(
@@ -944,10 +958,14 @@ async fn cancellation_wins_same_cut_and_retains_cancellation_provenance() {
             model_timeout_policy: timeout_policy(10, 20),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
+            last_permission_reminder_mode: None,
+            permission_task_message: None,
+            recovered_permission_task_message: None,
+            approval_mode: rustx::runtime::ApprovalMode::FullAccess,
         },
         runtime(),
         &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     execution.install_publication_policy(

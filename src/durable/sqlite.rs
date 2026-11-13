@@ -313,9 +313,9 @@ fn count_conversation_store_open() {
 /// Version 84 requires exact Workflow run/instance indexes for bounded historical reads.
 /// Version 85 records Session configuration commits as Journal facts with
 /// their own transcript positions.
-/// Version 87 combines shared-client configuration and current model protocol
-/// with sequential Summary progress and exact physical Call lineage.
-pub const SQLITE_SCHEMA_VERSION: i64 = 87;
+/// Version 88 combines shared Auxiliary authority, resource permissions, Tool
+/// invocation envelopes and model-derived compaction settlement.
+pub const SQLITE_SCHEMA_VERSION: i64 = 88;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]

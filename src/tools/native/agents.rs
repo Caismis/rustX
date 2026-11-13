@@ -7,8 +7,7 @@ use crate::runtime::subagent::{AgentControlError, MAX_AGENT_LIST_LIMIT, Subagent
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolInvocation,
-    ToolOrigin, ToolReplayPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -45,17 +44,32 @@ pub(super) fn definitions() -> Vec<ToolDefinition> {
         (NAMES[2], "Wait for the reserved or current activation captured by this operation to physically settle. A later resumed activation cannot extend this wait. Inactive returns immediately.", input_schema::<TargetInput>()),
         (NAMES[3], "Interrupt the exact reserved admission or current activation captured by this operation and wait for physical settlement. The durable Agent remains available for later send_message.", input_schema::<TargetInput>()),
     ].into_iter().map(|(name, description, input_schema)| ToolDefinition {
-        id: super::agent_control_tool_id(name), name: name.into(), description: description.into(), input_schema,
-        execution_policy: ToolExecutionPolicy::ForegroundOnly, concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never, replay_policy: ToolReplayPolicy::Never, origin: ToolOrigin::Builtin,
+        id: super::agent_control_tool_id(name),
+        name: name.into(),
+        description: description.into(),
+        input_schema,
+        execution_policy: ToolExecutionPolicy::ForegroundOnly,
+        replay_policy: ToolReplayPolicy::Never,
+        origin: ToolOrigin::Builtin,
     }).collect()
 }
 
-pub(super) fn registrations(registry: &SubagentRegistry) -> Vec<NativeToolRegistration> {
+pub(super) fn registrations(
+    registry: &SubagentRegistry,
+    catalog: &crate::runtime::subagent::AgentCatalog,
+) -> Vec<NativeToolRegistration> {
     definitions()
         .into_iter()
         .map(|definition| {
-            NativeToolRegistration::new(definition, Arc::new(AgentExecutor(registry.clone())))
+            let freeze_permissions = definition.name == NAMES[1]
+                || definition.name == crate::tools::native::subagent::SUBAGENT_TOOL_NAME;
+            let registration =
+                NativeToolRegistration::new(definition, Arc::new(AgentExecutor(registry.clone())));
+            if freeze_permissions {
+                super::freeze_named_agent_permissions(registration, catalog)
+            } else {
+                registration
+            }
         })
         .collect()
 }
@@ -70,6 +84,12 @@ impl ToolExecutor for AgentExecutor {
         context: ToolExecutionContext<'a>,
     ) -> ToolExecutionHandle<'a> {
         let cancellation = context.cancellation.clone();
+        // Resume freezes the caller's Attempt mode; delivery to a running
+        // Activation keeps that Activation's snapshot.
+        let approval_mode = context.subagent_context().map_or(
+            crate::runtime::types::ApprovalMode::Plan,
+            crate::runtime::subagent::NativeExecutionContext::approval_mode,
+        );
         ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
                 if invocation.tool_name == NAMES[0] {
@@ -98,7 +118,13 @@ impl ToolExecutor for AgentExecutor {
                     };
                     return tokio::select! {
                         biased;
-                        result = self.0.send_message(&input.agent_id, &input.message, origin, input_cancellation) => match result {
+                        result = self.0.send_message(
+                            &input.agent_id,
+                            &input.message,
+                            origin,
+                            approval_mode,
+                            input_cancellation,
+                        ) => match result {
                             Ok(accepted) => success_json(serde_json::json!(accepted)),
                             Err(error) => message_error(&error),
                         },

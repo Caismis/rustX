@@ -1030,7 +1030,7 @@ async fn a_repair_refused_by_the_size_bound_reaches_no_application() {
         let baseline = super::configuration::settled(&f, 0).await;
         let before = probe.configuration_preparations.load(Ordering::SeqCst);
         // An exactly at-bound User source whose only eligible repair,
-        // `schema_version = 9` → `12`, adds one byte.
+        // `schema_version = 9` → `13`, adds one byte.
         let mut document: toml_edit::DocumentMut = std::fs::read_to_string(user_path(&f))
             .unwrap()
             .parse()
@@ -1067,7 +1067,7 @@ async fn a_repair_refused_by_the_size_bound_reaches_no_application() {
         assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
         assert_eq!(
             receipt.changes,
-            [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 12 }]
+            [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 13 }]
         );
         assert!(!receipt.backup_available);
         assert!(receipt.after_revision.is_none());
@@ -2043,11 +2043,12 @@ async fn notices_and_reads_carry_the_same_redacted_receipt() {
                 ConfigRepairChange::RemovedField {
                     object_path: String::new()
                 },
+                // Issue #544: obsolete mcp_tool_policies is an unknown top-level table.
                 ConfigRepairChange::RemovedField {
-                    object_path: "agent".into()
+                    object_path: String::new()
                 },
                 ConfigRepairChange::RemovedField {
-                    object_path: "mcp_tool_policies.*".into()
+                    object_path: "agent".into()
                 },
                 ConfigRepairChange::RemovedNativeTool {
                     position: 1,

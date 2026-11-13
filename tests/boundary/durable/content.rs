@@ -293,7 +293,9 @@ fn t08_t15_tool_result_headers_never_deserialize_historical_result_json() {
                 id: call_id.clone(),
                 tool_id: tool_id.clone(),
                 name: "native".into(),
-                arguments: serde_json::json!({"argument":"a".repeat(2_000_000)}),
+                arguments: crate::scripted_suites::common::tool_call_envelope(
+                    serde_json::json!({"argument":"a".repeat(2_000_000)}),
+                ),
             })],
         }),
         MessageBlock::Tool(ToolMessageBlock {
@@ -780,7 +782,9 @@ fn t08_t12_t15_canonical_metadata_components_are_independent_bounded_sources() {
         id: ToolCallId::new("call"),
         tool_id: ToolId::new("native"),
         name: "name".repeat(600_000),
-        arguments: serde_json::json!({"argument":"payload".repeat(500_000)}),
+        arguments: crate::scripted_suites::common::tool_call_envelope(
+            serde_json::json!({"argument":"payload".repeat(500_000)}),
+        ),
     };
     let provider = serde_json::json!({"opaque":"provider".repeat(300_000)});
     let result = MessageBlock::Tool(ToolMessageBlock {
@@ -1085,6 +1089,7 @@ fn timed_request_snapshot(
 ) -> crate::model::RequestSnapshot {
     use crate::model::{ModelInvocationConfig, ModelProtocol, RequestIdentity, RequestSnapshot};
     RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: attempt.clone(),
             turn: crate::runtime::identity::TurnId::new(format!("timing-{index}")),
@@ -1520,7 +1525,9 @@ fn todo_source_messages(description: &str) -> Vec<MessageBlock> {
                 id: call.clone(),
                 tool_id: tool_id.clone(),
                 name: "todo".into(),
-                arguments: serde_json::json!({}),
+                arguments: crate::scripted_suites::common::tool_call_envelope(
+                    serde_json::json!({}),
+                ),
             })],
         }),
         MessageBlock::Tool(ToolMessageBlock {

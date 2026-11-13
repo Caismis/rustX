@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createActor, SimulatedClock } from 'xstate';
-import type { ProviderWrite, SourceMutation } from '../../protocol/app-server/v78';
+import type { ProviderWrite, SourceMutation } from '../../protocol/app-server/v79';
 import { settingsTargetMachine } from '../src/app/settings/machines/settings-target';
 import type { ConfigurationPort, WriteOutcome } from '../src/app/settings/machines/port';
 import { revisionSelector, userSettingsTarget } from '../src/app/settings/projection';

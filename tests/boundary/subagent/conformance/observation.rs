@@ -533,6 +533,7 @@ async fn assert_reactivation(
             &old.agent_id,
             "second activation",
             crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+            rustx::runtime::types::ApprovalMode::FullAccess,
             CancellationSignal::new(),
         )
         .await
@@ -701,11 +702,16 @@ async fn t08_t11_t12_child_pending_body_uses_its_own_unix_source_and_exact_root_
     .await;
     let (tools, calls, executor_started) = child_approval_tools();
     let arguments = serde_json::json!({"target": "é\\\"".repeat(40_000)});
+    let mut call_arguments = arguments.clone();
+    call_arguments.as_object_mut().unwrap().insert(
+        "elevation_reason".into(),
+        serde_json::json!("child approval Ask fixture"),
+    );
     let call = support::fake::ScriptedCall {
         id: "call-child-source",
         tool_id: "tool-approved",
         name: "approved_tool",
-        arguments: arguments.clone(),
+        arguments: call_arguments,
     };
     let mut script = vec![FakeStep::Emit(started())];
     script.extend(
@@ -717,7 +723,7 @@ async fn t08_t11_t12_child_pending_body_uses_its_own_unix_source_and_exact_root_
         finish_reason: ModelFinishReason::ToolCalls,
         usage: None,
     }));
-    let child = child_fixture_with_activation(
+    let child = child_fixture_with_activation_for_approval(
         &directory,
         &ConversationId::new("conv_01900000-0000-7000-8000-000000000482"),
         vec![script, answer_script("declined child source")],
@@ -729,7 +735,9 @@ async fn t08_t11_t12_child_pending_body_uses_its_own_unix_source_and_exact_root_
     let published = parent.plane.registry.interaction_published.notified();
     tokio::pin!(published);
     published.as_mut().enable();
-    let wired = launch_wired_child(&parent.plane, &child, "inspect finite pending header").await;
+    let wired =
+        launch_wired_child_for_approval(&parent.plane, &child, "inspect finite pending header")
+            .await;
     let socket = parent
         .plane
         .registry
@@ -949,11 +957,16 @@ async fn nested_pending_fixture(stop_at_seal: bool) {
     let mut middle_inspection = Some(middle_inspection);
     let (tools, calls, _) = child_approval_tools();
     let arguments = serde_json::json!({"target":"🙂\\\"".repeat(30_000)});
+    let mut call_arguments = arguments.clone();
+    call_arguments.as_object_mut().unwrap().insert(
+        "elevation_reason".into(),
+        serde_json::json!("child approval Ask fixture"),
+    );
     let call = support::fake::ScriptedCall {
         id: "nested-approved",
         tool_id: "tool-approved",
         name: "approved_tool",
-        arguments: arguments.clone(),
+        arguments: call_arguments,
     };
     let mut script = vec![FakeStep::Emit(started())];
     script.extend(
@@ -965,7 +978,7 @@ async fn nested_pending_fixture(stop_at_seal: bool) {
         finish_reason: ModelFinishReason::ToolCalls,
         usage: None,
     }));
-    let leaf = child_fixture_with_activation(
+    let leaf = child_fixture_with_activation_for_approval(
         &leaf_dir,
         &ConversationId::new("conv_01900000-0000-7000-8000-000000000493"),
         vec![script, answer_script("nested denied")],
@@ -977,7 +990,8 @@ async fn nested_pending_fixture(stop_at_seal: bool) {
     let published = root.plane.registry.interaction_published.notified();
     tokio::pin!(published);
     published.as_mut().enable();
-    let nested = launch_wired_child(&middle.plane, &leaf, "request nested approval").await;
+    let nested =
+        launch_wired_child_for_approval(&middle.plane, &leaf, "request nested approval").await;
     let mut leaf_inspection =
         crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
             middle

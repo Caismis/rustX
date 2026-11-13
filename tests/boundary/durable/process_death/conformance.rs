@@ -416,6 +416,22 @@ fn system_prompt(durable: &Durable, index: usize) -> String {
         .clone()
 }
 
+/// Resource-generation comparisons ignore the sparse permission reminder
+/// (Issue #544 §10): it is injected on first/change/compaction request starts
+/// and is not part of the frozen resource generation under test.
+fn system_prompt_without_permission_reminder(prompt: &str) -> &str {
+    const MARKER: &str = "Execution permission mode:";
+    if let Some(index) = prompt.find("\n\nExecution permission mode:") {
+        &prompt[..index]
+    } else if let Some(index) = prompt.find(&format!("\n{MARKER}")) {
+        &prompt[..index]
+    } else if prompt.starts_with(MARKER) {
+        ""
+    } else {
+        prompt
+    }
+}
+
 /// The model-facing tool names of one persisted request.
 fn tool_names(durable: &Durable, index: usize) -> Vec<String> {
     durable
@@ -1548,7 +1564,7 @@ fn known_tool_outcome_is_preserved_into_the_canonical_slot() {
 #[test]
 fn a_pending_interaction_leaves_a_requested_audit_and_nothing_else() {
     let lab = Lab::new();
-    lab.write_runtime_config("always");
+    lab.write_runtime_config(true);
     let mut process = lab.spawn(child::TOOL_APPROVAL_PENDING, None);
     process.wait_note("interaction-pending");
     process.sigkill();
@@ -1599,7 +1615,7 @@ fn a_pending_interaction_leaves_a_requested_audit_and_nothing_else() {
 #[test]
 fn a_settled_approval_never_authorizes_a_later_execution() {
     let lab = Lab::new();
-    lab.write_runtime_config("always");
+    lab.write_runtime_config(true);
     let mut process = lab.spawn(
         child::TOOL_APPROVAL,
         Some("before:event:tool_execution_started"),
@@ -1849,7 +1865,7 @@ fn live_external_edits_never_expose_a_new_generation() {
     process.wait_note("first-attempt-settled");
     lab.write_project_instructions("R2 project instructions.");
     lab.write_skill("alpha", "R2 alpha summary", "R2 alpha body");
-    lab.write_runtime_config("always");
+    lab.write_divergent_full_access_config();
     process.resume();
     process.wait_note("settled");
     process.sigkill();
@@ -1860,10 +1876,17 @@ fn live_external_edits_never_expose_a_new_generation() {
     let first = system_prompt(&durable, 0);
     assert!(first.contains("R1 project instructions."));
     assert!(first.contains("R1 alpha summary"));
+    assert!(
+        first.contains("Execution permission mode:"),
+        "first request carries the sparse permission reminder"
+    );
+    let first_generation = system_prompt_without_permission_reminder(&first);
     for index in 1..snapshots.len() {
+        // Later requests may still carry a reminder when they open a new
+        // Attempt admission; compare only the resource-derived System body.
         assert_eq!(
-            system_prompt(&durable, index),
-            first,
+            system_prompt_without_permission_reminder(&system_prompt(&durable, index)),
+            first_generation,
             "request {index} still sends the R1 generation"
         );
         assert_eq!(
@@ -3074,7 +3097,7 @@ fn the_transcript_pages_every_durable_owner_after_process_death() {
 
     // The interaction audit.
     let interaction = Lab::new();
-    interaction.write_runtime_config("always");
+    interaction.write_runtime_config(true);
     let mut process = interaction.spawn(child::TOOL_APPROVAL, None);
     process.wait_note("settled");
     process.sigkill();
@@ -3263,7 +3286,7 @@ fn settled_tool_result_and_new_inbound_compose_with_an_indeterminate_request() {
 #[test]
 fn approval_settlement_and_the_tool_start_boundary_compose() {
     let lab = Lab::new();
-    lab.write_runtime_config("always");
+    lab.write_runtime_config(true);
     let mut process = lab.spawn(
         child::TOOL_APPROVAL,
         Some("after:event:tool_execution_started"),
@@ -3356,7 +3379,7 @@ fn recovered_adopted_interrupt(initial: &str, resumed: &str, disable_on_reopen: 
     if disable_on_reopen {
         // The ordinary configuration composes no Goal extension. Durable
         // history still proves that this already-adopted turn is Goal work.
-        lab.write_runtime_config("never");
+        lab.write_runtime_config(false);
     }
     let mut process = lab.spawn(resumed, None);
     process.wait_note("recovered-interrupt-proved");

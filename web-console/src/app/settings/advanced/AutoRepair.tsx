@@ -2,7 +2,7 @@ import { SettingsNotice } from '../SettingsFeedback';
 import { useEffect, useRef } from 'react';
 import { useTranslation } from '../../../locale/react';
 import type { Translate } from '../../../locale/translation';
-import type { ConfigRepairChange, ConfigRepairReceipt } from '../../../../../protocol/app-server/v78';
+import type { ConfigRepairChange, ConfigRepairReceipt } from '../../../../../protocol/app-server/v79';
 import css from '../../../presentation/settings/SettingsContent.module.css';
 
 /** One redacted native repair change, worded. Never an authored key, identity

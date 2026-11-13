@@ -101,7 +101,7 @@ impl WorkflowProgram {
 #[derive(Debug, Clone)]
 pub struct ModelPolicyNode<'a> {
     pub path: String,
-    pub policy: &'a crate::model::session::AuxiliaryModelPolicy,
+    pub policy: &'a crate::model::session::DirectModelPolicy,
 }
 
 /// Static program facts. Literals and task text are deliberately not exported.
@@ -374,10 +374,10 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 }
                 .into();
                 view.model = Some(match &model.model {
-                    crate::model::session::AuxiliaryModelPolicy::Session => {
+                    crate::model::session::DirectModelPolicy::Session => {
                         ModelPolicyInspection::Session
                     }
-                    crate::model::session::AuxiliaryModelPolicy::Explicit {
+                    crate::model::session::DirectModelPolicy::Explicit {
                         model,
                         profile,
                         max_output_tokens,

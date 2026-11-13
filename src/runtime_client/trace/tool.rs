@@ -78,7 +78,11 @@ pub(super) fn native_source(call: &ToolCall) -> Option<TraceToolSource> {
     let contract = NATIVE_SOURCE_CONTRACTS
         .iter()
         .find(|contract| contract.tool_id == call.tool_id.as_str())?;
-    let text = call.arguments.get(contract.field)?.as_str()?;
+    let text = call
+        .arguments
+        .get("arguments")?
+        .get(contract.field)?
+        .as_str()?;
     Some(TraceToolSource {
         field: contract.field.to_owned(),
         text: TraceText::detail(text),
@@ -212,7 +216,10 @@ mod tests {
             id: ToolCallId::new("call-1"),
             tool_id: ToolId::new(tool_id),
             name: "any".to_owned(),
-            arguments,
+            arguments: serde_json::Value::Object(serde_json::Map::from_iter([(
+                "arguments".to_owned(),
+                arguments,
+            )])),
         }
     }
 
@@ -261,6 +268,21 @@ mod tests {
     fn a_non_string_contract_field_is_not_source() {
         assert!(native_source(&call("tool-bash", serde_json::json!({ "command": 7 }))).is_none());
         assert!(native_source(&call("tool-bash", serde_json::json!({}))).is_none());
+    }
+
+    #[test]
+    fn source_requires_the_model_envelope_and_ignores_metadata() {
+        let mut model_call = call(
+            "tool-bash",
+            serde_json::json!({ "command": "printf actual" }),
+        );
+        model_call.arguments["command"] = serde_json::json!("not business source");
+        assert_eq!(
+            native_source(&model_call).unwrap().text.text,
+            "printf actual"
+        );
+        model_call.arguments = serde_json::json!({ "command": "flat invocation" });
+        assert!(native_source(&model_call).is_none());
     }
 
     /// Every contract names a stable native Tool identity, never a name.

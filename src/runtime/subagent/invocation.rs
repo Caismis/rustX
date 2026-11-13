@@ -319,6 +319,7 @@ mod tests {
                 tools,
                 skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(skills),
                 inherit_project_instructions: true,
+                permissions: None,
                 extensions,
                 workflows: std::collections::BTreeSet::default(),
             },

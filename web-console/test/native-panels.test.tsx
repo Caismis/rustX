@@ -6,7 +6,7 @@ import { RightPanel } from '../src/presentation/right-panel/RightPanel';
 import { ArtifactPreview } from '../src/presentation/right-panel/ArtifactPreview';
 import { readTheme, applyTheme } from '../src/app/appearance';
 import { goalActivityLabel } from '../src/app/agent/GoalActivity';
-import type { ForegroundToolExecution } from '../../protocol/app-server/v78';
+import type { ForegroundToolExecution } from '../../protocol/app-server/v79';
 import { useState } from 'react';
 import type { PreviewViewState } from '../src/presentation/right-panel/preview-view-state';
 afterEach(() => { cleanup(); localStorage.clear(); document.body.removeAttribute('data-ds-dark-theme'); });
@@ -28,9 +28,9 @@ it('persists only the safe Web appearance preference', () => {
  localStorage.setItem('rustx-appearance-v1', 'unexpected'); expect(readTheme()).toBe('system');
 });
 it('Goal Tool labels describe native outcomes while preserving exact tool identity', () => {
- const tool: ForegroundToolExecution = { call_id: 'goal-call', tool_id: 'native.create_goal', name: 'create_goal', state: { type: 'assembled', arguments: '{}' } } as ForegroundToolExecution;
+ const tool: ForegroundToolExecution = { call_id: 'goal-call', tool_id: 'native.create_goal', name: 'create_goal', state: { type: 'assembled', arguments: "{\"arguments\":{}}" } } as ForegroundToolExecution;
  expect(goalActivityLabel(translator('en'), tool)).toBe('Starting Goal');
- expect(goalActivityLabel(translator('en'), { ...tool, state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, content: [], duration_ms: "1" } } })).toBe('Goal started');
+ expect(goalActivityLabel(translator('en'), { ...tool, state: { type: 'settled', arguments: "{\"arguments\":{}}", result: { status: { type: 'success' }, content: [], duration_ms: "1" } } })).toBe('Goal started');
 });
 
 it('a collapsed shell seat keeps floating content without exposing an empty preview landmark', () => {

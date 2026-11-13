@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import type { SessionModelConfig } from '../../../protocol/app-server/v78';
+import type { SessionModelConfig } from '../../../protocol/app-server/v79';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession } from './shell-actions';
@@ -46,12 +46,9 @@ for (const width of [1440, 390]) {
     const complete: SessionModelConfig = {
       model: 'fixture/integration-model', profile: 'high',
       requestParams: { temperature: 0.2, seed: 17 }, maxOutputTokens: 777,
-      summaryModel: { mode: 'explicit', model: 'fixture/integration-model', profile: 'low',
-        request_params: { temperature: 0.4, seed: 19 } },
-      titleModel: { mode: 'explicit', model: 'fixture/integration-model', profile: 'low',
-        request_params: { temperature: 0.5, seed: 23 }, max_output_tokens: 111 },
-      classificationModel: { mode: 'session' },
-      btwModel: { mode: 'session' },
+      auxiliary: { mode: 'explicit', model: 'fixture/integration-model',
+        profile: { mode: 'explicit', id: 'low' },
+        request_params: { temperature: 0.4, seed: 19 }, max_output_tokens: 333 },
     };
     try {
       // Creation normally persists the default. Only the stopped native fixture
@@ -59,17 +56,12 @@ for (const width of [1440, 390]) {
       const id = await fixture.seedInheritedSession(`profile = "high"
 request_params = '{"temperature":0.2,"seed":17}'
 max_output_tokens = { mode = "limit", tokens = 777 }
-[agent.model.summary_model]
+[agent.model.auxiliary]
 mode = "explicit"
 model = "fixture/integration-model"
-profile = "low"
+profile = { mode = "explicit", id = "low" }
 request_params = '{"temperature":0.4,"seed":19}'
-[agent.model.title_model]
-mode = "explicit"
-model = "fixture/integration-model"
-profile = "low"
-request_params = '{"temperature":0.5,"seed":23}'
-max_output_tokens = { mode = "limit", tokens = 111 }
+max_output_tokens = { mode = "limit", tokens = 333 }
 `);
       remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
       const before = await remote.readSettings(id);
@@ -262,7 +254,7 @@ for (const width of [1440, 390]) for (const deferred of [false, true]) test(`a d
     if (deferred) {
       remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
       existing = (await remote.client.call('thread/start', { settings: { cwd: fixture.workspaceA, model: {
-        model: 'fixture/integration-model', summaryModel: { mode: 'explicit', model: 'fixture/integration-model', request_params: { confirmation_fixture: 'x'.repeat(70_000) } },
+        model: 'fixture/integration-model', auxiliary: { mode: 'explicit', model: 'fixture/integration-model', request_params: { confirmation_fixture: 'x'.repeat(70_000) } },
       } } }, 'session_transition')).session.id;
     }
     await page.setViewportSize({ width, height: 1000 });
@@ -308,21 +300,19 @@ for (const width of [1440, 390]) test(`a different model preserves auxiliary pol
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const wire = await wireProbe(page);
   const mode = width === 1440 ? 'explicit' : 'session';
-  const classificationModel: SessionModelConfig['classificationModel'] = mode === 'session' ? { mode } : {
-    mode, model: 'fixture/integration-model', profile: 'low', request_params: { temperature: 0.1, seed: 41 }, max_output_tokens: 123,
-  };
-  const btwModel: SessionModelConfig['btwModel'] = mode === 'session' ? { mode } : {
-    mode, model: 'fixture/integration-model', profile: 'low', request_params: { temperature: 0.6, seed: 43 }, max_output_tokens: 456,
+  const auxiliary: SessionModelConfig['auxiliary'] = mode === 'session' ? { mode } : {
+    mode, model: 'fixture/integration-model', profile: { mode: 'explicit', id: 'low' }, request_params: { temperature: 0.1, seed: 41 }, max_output_tokens: 123,
   };
   try {
-    const fields = Object.entries({ classification_model: classificationModel, btw_model: btwModel }).map(([name, policy]) => `
-[agent.model.${name}]
-mode = "${policy!.mode}"
-${policy!.mode === 'explicit' ? `model = "${policy!.model}"
-profile = "${policy!.profile}"
-request_params = '${JSON.stringify(policy!.request_params)}'
-max_output_tokens = { mode = "limit", tokens = ${policy!.max_output_tokens} }` : ''}
-`).join('');
+    const fields = mode === 'session' ? `[agent.model.auxiliary]
+mode = "session"
+` : `[agent.model.auxiliary]
+mode = "explicit"
+model = "fixture/integration-model"
+profile = { mode = "explicit", id = "low" }
+request_params = '${JSON.stringify(auxiliary!.request_params)}'
+max_output_tokens = { mode = "limit", tokens = ${auxiliary!.max_output_tokens} }
+`;
     const id = await fixture.seedInheritedSession(fields);
     remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
     await page.setViewportSize({ width, height: 1000 });
@@ -335,10 +325,10 @@ max_output_tokens = { mode = "limit", tokens = ${policy!.max_output_tokens} }` :
     const trigger = page.locator('[data-model-select]');
     await expect(trigger).toContainText('fixture/integration-model');
     const original = (await sessionSnapshot(wire, id)).model!.configured;
-    expect(original).toMatchObject({ classificationModel, btwModel });
+    expect(original).toMatchObject({ auxiliary });
     await chooseCurrentModel(page, 'fixture/second-model');
     await expect(trigger).toContainText('fixture/second-model');
-    const expected = { model: 'fixture/second-model', summaryModel: original.summaryModel, titleModel: original.titleModel, classificationModel, btwModel };
+    const expected = { model: 'fixture/second-model', auxiliary: original.auxiliary };
     expect(wire.requests.filter(request => request.method === 'session/setModel').map(request => request.params.config)).toEqual([expected]);
     expect((await remote.readSettings(id)).settings.model).toEqual({ ...expected, requestParams: {} });
     expect((await sessionSnapshot(wire, id)).model!.configured).toEqual({ ...expected, requestParams: {} });
@@ -375,7 +365,7 @@ for (const width of [1440, 390]) test(`switching A → B → A restores each Ses
     const ids: string[] = [];
     const models = ['fixture/integration-model', 'fixture/second-model'];
     for (const model of models) ids.push((await native.createSession({
-      cwd: fixture.workspaceA, model: { model, summaryModel: { mode: 'explicit', model, request_params: { deferred_switch_fixture: 'x'.repeat(70_000) } } },
+      cwd: fixture.workspaceA, model: { model, auxiliary: { mode: 'explicit', model, request_params: { deferred_switch_fixture: 'x'.repeat(70_000) } } },
     })).session.id);
     await page.setViewportSize({width, height:1000});
     await routeWorkspaceHost(page, fixture); await page.goto('/');

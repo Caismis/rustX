@@ -184,6 +184,7 @@ impl AuxiliaryConsumer for CallbackConsumer {
     fn settled(&self, result: &Result<ConfirmedExecution, ContextError>) {
         *self.accepted.lock().unwrap() = Some(result.as_ref().unwrap().output.clone());
     }
+    fn retired(&self, _: &Result<ConfirmedExecution, ContextError>) {}
 }
 
 #[tokio::test(flavor = "current_thread")]

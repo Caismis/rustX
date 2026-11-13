@@ -1,6 +1,6 @@
 import { threadFor } from '../../protocol/app-server/testing';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Request, ScheduleCommandResult } from '../../protocol/app-server/v78';
+import type { Request, ScheduleCommandResult } from '../../protocol/app-server/v79';
 import { TaskCreation, taskCreation, type TaskCreationDraft } from '../src/app/scheduler/creation';
 import { schedulerModel } from '../src/app/scheduler/model';
 import { Server, snapshot } from './fixture';

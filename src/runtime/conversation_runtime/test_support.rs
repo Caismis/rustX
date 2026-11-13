@@ -91,8 +91,8 @@ pub(super) use crate::scripted_suites::support::fake::{
 pub(super) use crate::scripted_suites::support::model::scripted_session_model;
 pub(super) use crate::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 pub(super) use crate::tools::types::{
-    ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionStatus,
-    ToolInvocation, ToolOrigin, ToolReplayPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionStatus, ToolInvocation, ToolOrigin,
+    ToolReplayPolicy,
 };
 pub(super) use futures_util::future::BoxFuture;
 
@@ -150,7 +150,7 @@ pub(super) async fn within_liveness_guard<F: std::future::Future>(
     label: &str,
     future: F,
 ) -> F::Output {
-    tokio::time::timeout(std::time::Duration::from_mins(1), future)
+    tokio::time::timeout(std::time::Duration::from_secs(20), future)
         .await
         .unwrap_or_else(|_| panic!("liveness guard exceeded while waiting for {label}"))
 }
@@ -171,6 +171,7 @@ impl PreToolPolicy for RuntimeAskPolicy {
     fn evaluate<'a>(
         &'a self,
         _view: &'a PreToolView<'a>,
+        _cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
         Box::pin(async {
             Ok(PreToolDecision::Ask {
@@ -232,6 +233,7 @@ pub(super) async fn headless_runtime(
 }
 
 pub(super) struct HeadlessRuntimeOptions {
+    pub(super) approval_mode: ApprovalMode,
     pub(super) skill_discovery: crate::skills::SkillDiscoveryConfig,
     pub(super) estimator: Arc<dyn TokenEstimator>,
     pub(super) status_engine: AgentStatusEngine,
@@ -250,6 +252,7 @@ pub(super) struct HeadlessRuntimeOptions {
 impl Default for HeadlessRuntimeOptions {
     fn default() -> Self {
         Self {
+            approval_mode: ApprovalMode::FullAccess,
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             estimator: Arc::new(DefaultTokenEstimator),
             status_engine: AgentStatusEngine::default(),
@@ -391,7 +394,10 @@ pub(super) async fn headless_runtime_with_options(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter),
-        approval_mode: ApprovalMode::Policy,
+        // Headless fixtures that are not permission tests use Full Access so
+        // fake Builtin tools are not Plan-elevated into Denied (Issue #544).
+        // Plan/Automatic fixtures must set the mode explicitly.
+        approval_mode: options.approval_mode,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -499,7 +505,7 @@ pub(super) async fn headless_runtime_over_store_with_policy(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter),
-        approval_mode: ApprovalMode::Policy,
+        approval_mode: ApprovalMode::FullAccess,
         model_timeout_policy,
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -602,7 +608,7 @@ pub(super) async fn headless_runtime_over_store_with_subagents(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter),
-        approval_mode: ApprovalMode::Policy,
+        approval_mode: ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -712,7 +718,7 @@ pub(super) async fn subagent_runtime_config_with_registry(
         explicit_model: true,
         agent_id: runtime_agent.clone(),
         model: scripted_session_model(adapter),
-        approval_mode: ApprovalMode::Policy,
+        approval_mode: ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -1186,9 +1192,7 @@ impl crate::tools::executor::ToolExecutor for CauseProbeTool {
 pub(super) fn cause_probe_registry_and_script(
     tool: Arc<dyn ToolExecutor>,
 ) -> (crate::tools::executor::ToolRegistry, Vec<FakeStep>) {
-    use crate::tools::types::{
-        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-    };
+    use crate::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
     let definition = ToolDefinition {
         id: crate::runtime::identity::ToolId::new("tool-cause-probe"),
         name: "cause_probe".to_owned(),
@@ -1199,8 +1203,6 @@ pub(super) fn cause_probe_registry_and_script(
             "additionalProperties": false
         }),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };
@@ -1222,7 +1224,7 @@ pub(super) fn cause_probe_registry_and_script(
         FakeStep::Emit(crate::model::event::ModelEvent::ToolCallArgumentsDelta {
             block_index: crate::message::types::ContentBlockIndex::new(0),
             call_id: call_id.clone(),
-            arguments_delta: "{}".to_owned(),
+            arguments_delta: "{\"arguments\":{}}".to_owned(),
         }),
         FakeStep::Emit(crate::model::event::ModelEvent::ToolCallCompleted {
             block_index: crate::message::types::ContentBlockIndex::new(0),
@@ -1230,7 +1232,9 @@ pub(super) fn cause_probe_registry_and_script(
                 id: call_id,
                 tool_id: definition.id,
                 name: definition.name,
-                arguments: serde_json::json!({}),
+                arguments: crate::scripted_suites::common::tool_call_envelope(
+                    serde_json::json!({}),
+                ),
             },
         }),
         FakeStep::Emit(crate::model::event::ModelEvent::Completed {
@@ -1661,7 +1665,7 @@ pub(super) async fn runtime_with_model_probe_at(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter),
-        approval_mode: ApprovalMode::Policy,
+        approval_mode: ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -1709,7 +1713,9 @@ pub(super) fn assistant_tool_block(id: &str, call: &str) -> MessageBlock {
                 id: crate::runtime::identity::ToolCallId::new(call),
                 tool_id: crate::runtime::identity::ToolId::new("tool-a"),
                 name: "alpha".to_owned(),
-                arguments: serde_json::json!({}),
+                arguments: crate::scripted_suites::common::tool_call_envelope(
+                    serde_json::json!({}),
+                ),
             },
         )],
     })

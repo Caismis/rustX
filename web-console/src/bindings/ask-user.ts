@@ -1,12 +1,12 @@
-import type { ForegroundToolExecution, QuestionSpecification, QuestionnaireSubmission } from '../../../protocol/app-server/v78';
+import { parseModelToolCall } from '../../../protocol/app-server/model-tool-call';
+import type { ForegroundToolExecution, QuestionSpecification, QuestionnaireSubmission } from '../../../protocol/app-server/v79';
 import type { QuestionRowView } from '../presentation/agent/QuestionRow';
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === 'string');
 
 function questions(argumentsText: string): string[] | undefined {
-  let parsed: unknown;
-  try { parsed = JSON.parse(argumentsText); } catch { return undefined; }
+  const parsed = parseModelToolCall(argumentsText)?.arguments;
   if (!record(parsed) || !Array.isArray(parsed.questions) || !parsed.questions.length) return undefined;
   const texts = parsed.questions.map(item => record(item) && typeof item.question === 'string' ? item.question : undefined);
   return texts.every(text => text !== undefined) ? texts as string[] : undefined;
@@ -51,8 +51,7 @@ export function askUserRow(tool: ForegroundToolExecution): QuestionRowView | und
 /** Preserve authored options for Harness's read-only answer panel. No answer channel. */
 export function askUserRecord(tool: ForegroundToolExecution): { questions: QuestionSpecification[]; submission: QuestionnaireSubmission } | undefined {
   if (askUserRow(tool)?.verdict !== 'answered' || tool.state.type !== 'settled') return undefined;
-  let args: unknown;
-  try { args = JSON.parse(tool.state.arguments); } catch { return undefined; }
+  const args = parseModelToolCall(tool.state.arguments)?.arguments;
   if (!record(args) || !Array.isArray(args.questions)) return undefined;
   const questions: QuestionSpecification[] = [];
   for (const question of args.questions) {

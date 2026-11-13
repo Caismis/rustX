@@ -299,7 +299,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
             support::default_execution_policy(),
             context,
             &fixture.runtime,
-            rustx::agent::AttemptLifecycle::inert(),
+            support::full_access_lifecycle(),
         )
         .unwrap();
         let result = tokio::time::timeout(std::time::Duration::from_secs(30), execution.run())

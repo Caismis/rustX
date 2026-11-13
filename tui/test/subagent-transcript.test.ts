@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { SubagentTranscript } from '../src/app-server/subagent-transcript.ts';
 import { emptyPresentationState } from '../src/presentation/projection.ts';
 import { checkpoint, snapshot, subagent, userMessage } from './support/fixtures.ts';
-import type { AgentObservation, AgentObservationCursor, RuntimeClientTranscriptPage } from '../../protocol/app-server/v78.ts';
+import type { AgentObservation, AgentObservationCursor, RuntimeClientTranscriptPage } from '../../protocol/app-server/v79.ts';
 import { harness, nextRequest } from './support/app-server-harness.ts';
 const page = (id: string, next?: string): RuntimeClientTranscriptPage => ({ entries: [{ cursor: id, item: { type: 'message', message: userMessage(id, id) } }], next_cursor: next });
 function controlled(id = 'A') {
@@ -123,7 +123,7 @@ test('T08/T19 Child Tool result reads carry its exact native cut and activation 
  const reader=new SubagentTranscript(h.session,agent.agent_id);await reader.newest();
  const observed=await nextRequest(h,'agent/observe');
  const bytes=Buffer.from('"🙂水"'),reference={sequence:17,path:['event','result'],encoded_bytes:bytes.length};
- const native=checkpoint(snapshot({conversation_id:agent.child_conversation_id,attempt:attemptView({foreground:[{...foreground('call','tool','name',{type:'running',arguments:'{}'}),result_source:reference}]})}));native.read_cut.activation_id=agent.activation_id;
+ const native=checkpoint(snapshot({conversation_id:agent.child_conversation_id,attempt:attemptView({foreground:[{...foreground('call','tool','name',{type:'running',arguments:"{\"arguments\":{}}"}),result_source:reference}]})}));native.read_cut.activation_id=agent.activation_id;
  h.transport.respond(observed.id,{type:'agent_observe',observation:{type:'checkpoint',agent_id:agent.agent_id,conversation_id:agent.child_conversation_id,activation_id:agent.activation_id,source:'live',cursor:{agent_id:agent.agent_id,conversation_id:agent.child_conversation_id,activation_id:agent.activation_id,cursor:'0'},checkpoint:native}});
  await nextRequest(h,'agent/observe',1);
  assert.equal(reader.deferredCount,1);

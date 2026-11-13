@@ -463,6 +463,9 @@ impl AgentExecution<'_> {
         };
         if completed.newly_committed {
             self.record_persisted_event(completed.persisted_event);
+            // Successful activated compaction arms the next request's sparse
+            // permission reminder (Issue #544 §10).
+            self.permission_reminder.mark_after_compaction();
         }
         self.install_committed_carryover(completed.carryover_level)?;
         Ok(CompletedCompaction { input_tokens_after })

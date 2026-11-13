@@ -48,6 +48,7 @@ chat_reasoning_replay = "omit"
 }
 
 const SESSION_TOML: &str = r#"agent_id = "agent-parent"
+approval_mode = "full_access"
 
 
 [subagents]
@@ -69,6 +70,7 @@ model = "fixture/subagent-model"
 "#;
 
 const SHARED_SUBDIRECTORY_SESSION_TOML: &str = r#"agent_id = "agent-parent"
+approval_mode = "full_access"
 
 
 [subagents]

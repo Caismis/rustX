@@ -1,6 +1,6 @@
 import { cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { ForegroundToolExecution, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage } from '../../protocol/app-server/v78';
+import type { ForegroundToolExecution, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage } from '../../protocol/app-server/v79';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { isFinalTurnDescriptor } from '../src/bindings/turn-process';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
@@ -15,7 +15,7 @@ it('a remounted expanded Tool rehydrates its deferred arguments without another 
     const tool: ForegroundToolExecution = { occurrence: { locator: { type: 'by_message_id', message_id: 'm' }, block_index: 0 }, message_id: 'm', block_index: 0, call_id: 'call', tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: '' } };
     server.handlers.set('conversation/checkpointPage', request => {
       if (request.method !== 'conversation/checkpointPage') throw Error('Tool occurrence');
-      return { type: 'checkpoint_page', page: { domain: request.params.domain, read_cut: cut, cursor: cut.revision, total: '1', items: [{ offset: '0', identity: 'tool', value: { ...tool, state: { type: 'running', arguments: '{"path":"deferred.txt"}' } } as never, deferred: false, content: [] }], collections: [], next_offset: null } };
+      return { type: 'checkpoint_page', page: { domain: request.params.domain, read_cut: cut, cursor: cut.revision, total: '1', items: [{ offset: '0', identity: 'tool', value: { ...tool, state: { type: 'running', arguments: "{\"arguments\":{\"path\":\"deferred.txt\"}}" } } as never, deferred: false, content: [] }], collections: [], next_offset: null } };
     });
     const ui = render(<ToolDisclosureContext.Provider value={{ scope: 'native-conversation', open: () => true, toggle: () => {} }}><JournalSourceProvider source={{ client: server.client, target: server.target('A'), cut: () => cut, owned: () => true }}><Tool tool={tool} messageId="m"/></JournalSourceProvider></ToolDisclosureContext.Provider>);
     await ui.findByText('deferred.txt');
@@ -27,11 +27,11 @@ it('T11/T14 a historical deferred Tool row keeps its captured cut even when the 
   const locator = {type:'by_ledger_position' as const,position:7};
   const frozen:ForegroundToolExecution = {occurrence:{locator,block_index:0},message_id:'m',block_index:0,
     call_id:'original',name:'bash',assembly_complete:true,committed_result_deferred:true,
-    state:{type:'running',arguments:'{}'},committed_result:{status:{type:'success'},content:[],duration_ms:'1'}};
+    state:{type:'running',arguments:"{\"arguments\":{}}"},committed_result:{status:{type:'success'},content:[],duration_ms:'1'}};
   const descriptor:RuntimeClientMessageDescriptor = {identity:'m',locator,role:'assistant',kind:'message',
     block_count:'9007199254740993',tool_call_count:'1',tool_calls:[frozen],turn_process:null,completed_response:null,content:[],collections:[]};
   const page:RuntimeClientTranscriptPage = {entries:[],deferred_entries:[{offset:'0',identity:'m',value:descriptor,content:[],deferred:true}]};
-  const terminal:ForegroundToolExecution = {...frozen,state:{type:'settled',arguments:'{}',result:{status:{type:'failed',error:'late native failure'},content:[],duration_ms:'2'}}};
+  const terminal:ForegroundToolExecution = {...frozen,state:{type:'settled',arguments:"{\"arguments\":{}}",result:{status:{type:'failed',error:'late native failure'},content:[],duration_ms:'2'}}};
   const live = {...snapshot(),messages:[{role:'assistant' as const,id:'m',content:[]}],
     attempt:{attempt_id:'a',turn:1,phase:{type:'running' as const},foreground:[terminal]},
     message_descriptors:[{...descriptor,tool_calls:[terminal]}]};

@@ -1,10 +1,10 @@
-import type { ForegroundToolExecution, ToolExecutionResult } from '../../protocol/app-server/v78';
+import type { ForegroundToolExecution, ToolExecutionResult } from '../../protocol/app-server/v79';
 
 const text = (value: string): ToolExecutionResult['content'] => [{ type: 'text', text: value }];
 const json = (value: unknown): ToolExecutionResult['content'] => [{ type: 'json', value: value as never }];
 export function nativeTool(id: string, name: string, args: object, content: ToolExecutionResult['content']): ForegroundToolExecution {
   return { call_id: name, tool_id: id, name, message_id: `message-${name}`, block_index: 0, occurrence: { locator: { type: 'by_message_id', message_id: `message-${name}` }, block_index: 0 }, assembly_complete: true, committed_result_deferred: false,
-    state: { type: 'settled', arguments: JSON.stringify(args), result: { status: { type: 'success' }, duration_ms: '30000', content } } };
+    state: { type: 'settled', arguments: JSON.stringify({ arguments: args }), result: { status: { type: 'success' }, duration_ms: '30000', content } } };
 }
 export const goalResult = { reference: { id: 'goal-native', revision: 3 }, objective: '核对原生工具的显示与交互', phase: 'blocked', blocked_reason: '等待构建环境恢复', autonomous_round_budget: 10, autonomous_rounds_consumed: 3, origin: { kind: 'runtime_control' }, last_round_message_id: null };
 export const jobResult = { job_id: 'exec-native-sleep', tool: 'bash', state: 'succeeded', progress: null, result: { status: { type: 'success' }, duration_ms: 30000, exit_code: 0,

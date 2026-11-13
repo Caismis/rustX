@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { cleanup, render } from '@testing-library/react';
-import type { RuntimeClientCompactionView } from '../../protocol/app-server/v78';
+import type { RuntimeClientCompactionView } from '../../protocol/app-server/v79';
 import { compactionPresentation, ContextSeat } from '../src/app/agent/ContextSeat';
 import { Server, snapshot } from './fixture';
 

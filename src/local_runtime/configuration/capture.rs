@@ -500,17 +500,17 @@ impl UserConfigManager {
                             .binding(&selection.model)
                             .is_ok_and(|(provider, _)| provider.credential().is_ok())
                     }) && crate::model::session::analyze_session_model_config(&models, selection)
-                        .is_ok_and(|(primary, _)| {
+                        .is_ok_and(|(primary, auxiliary)| {
                             crate::model::invocation::reasoning_output_minimum(
-                                primary.protocol,
-                                &primary.request_params,
+                                auxiliary.protocol,
+                                &auxiliary.request_params,
                             )
                             .is_ok_and(|reasoning| {
                                 crate::context::policy::CompactionPolicy::resolve_with_reasoning(
                                     primary.context_window,
                                     primary.max_output_tokens,
-                                    primary.context_window,
-                                    primary.model_max_output_tokens,
+                                    auxiliary.context_window,
+                                    auxiliary.max_output_tokens,
                                     reasoning,
                                 )
                                 .is_ok()
@@ -531,9 +531,6 @@ impl UserConfigManager {
                     authored.resolve()
                 })
                 .transpose()?;
-        }
-        if allow_unselected && let Some(selection) = &mut config.agent.model {
-            selection.use_available_auxiliary_models(&models, None);
         }
         let mcp = super::super::mcp_resources::load(
             &self.sources.home_directory.join("rustx/.agents"),
@@ -854,6 +851,8 @@ impl UserConfigManager {
                     .chain(ResourceDiagnostic::of_managed_python(&managed_python)),
             );
         }
+        #[cfg(test)]
+        self.test_hooks.reach("before_resource_verification");
         for (root, scope) in [
             (host.home_directory.join("rustx/.agents"), SourceScope::User),
             (locations.workspace.join(".agents"), SourceScope::Workspace),
@@ -1078,15 +1077,6 @@ pub(in crate::local_runtime) fn parse_layer(
             super::super::authoring::RuntimeLayerParseFailure::Invalid(error) => {
                 LaunchFailure::parse(path, error)
             }
-            super::super::authoring::RuntimeLayerParseFailure::RemovedSummaryOutput => {
-                LaunchFailure::at(
-                    Some(path.into()),
-                    "agent.model.summary_model.max_output_tokens",
-                    "obsolete summary output override",
-                    super::super::authoring::REMOVED_SUMMARY_OUTPUT_DIAGNOSTIC,
-                    super::super::authoring::REMOVED_SUMMARY_OUTPUT_DIAGNOSTIC.to_owned(),
-                )
-            }
             super::super::authoring::RuntimeLayerParseFailure::RemovedContext => LaunchFailure::at(
                 Some(path.into()),
                 "context",
@@ -1183,8 +1173,10 @@ impl MetadataAdmission {
     ) -> Self {
         let main_subagents =
             subagents.selected_definitions(&config.agent.agents.iter().cloned().collect());
-        let native_metadata =
-            crate::tools::native::definitions(config.native_tools.to_policies(), &main_subagents);
+        let native_metadata = crate::tools::native::definitions(
+            crate::tools::NativeToolPolicies::default(),
+            &main_subagents,
+        );
         let native_leaves = native_metadata
             .iter()
             .filter(|(_, policy)| *policy == crate::tools::deadline::ForegroundPolicy::Leaf)

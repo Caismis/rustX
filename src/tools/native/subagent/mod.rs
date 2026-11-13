@@ -14,8 +14,8 @@ use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::types::{
-    ToolCancellationPhase, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
+    ToolCancellationPhase, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
+    ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 
 use super::input::decode;
@@ -53,9 +53,12 @@ pub(super) fn registration(
     subagents: SubagentRegistry,
     catalog: &AgentCatalog,
 ) -> NativeToolRegistration {
-    NativeToolRegistration::new(
-        definition(catalog),
-        std::sync::Arc::new(SubagentExecutor { subagents }),
+    super::freeze_named_agent_permissions(
+        NativeToolRegistration::new(
+            definition(catalog),
+            std::sync::Arc::new(SubagentExecutor { subagents }),
+        ),
+        catalog,
     )
 }
 
@@ -87,8 +90,6 @@ pub(super) fn definition(catalog: &AgentCatalog) -> ToolDefinition {
         ),
         input_schema: input_schema::<SubagentInput>(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }
@@ -195,7 +196,6 @@ impl ToolExecutor for SubagentExecutor {
                         title: input.title.trim().into(),
                         execution_policy: subagent_context.execution_policy(),
                         resolved,
-                        approval_mode: subagent_context.approval_mode(),
                     },
                     admission: crate::runtime::subagent::ActivationAdmission {
                         attachments: Vec::new(),
@@ -209,6 +209,7 @@ impl ToolExecutor for SubagentExecutor {
                                 .clone(),
                         },
                         terminal: SubagentTerminalMode::Normal,
+                        approval_mode: subagent_context.approval_mode(),
                     },
                 };
                 // One attempt-derived cancellation authority owns the whole
@@ -296,6 +297,7 @@ mod tests {
                     tools: Vec::new(),
                     skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                     inherit_project_instructions: true,
+                    permissions: None,
                     extensions: crate::extensions::NativeAgentExtensionsDocument::default()
                         .resolve(),
                     workflows: std::collections::BTreeSet::default(),
@@ -313,6 +315,7 @@ mod tests {
                     tools: Vec::new(),
                     skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                     inherit_project_instructions: true,
+                    permissions: None,
                     extensions: crate::extensions::NativeAgentExtensionsDocument::default()
                         .resolve(),
                     workflows: std::collections::BTreeSet::default(),
@@ -531,8 +534,7 @@ chat_reasoning_replay = "omit"
         };
         use crate::tools::mcp::McpRuntimeLeaseAuthority;
         use crate::tools::types::{
-            ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
-            ToolOrigin, ToolReplayPolicy,
+            ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
         };
 
         struct NeverRuns;
@@ -555,8 +557,6 @@ chat_reasoning_replay = "omit"
             description: format!("{name} capability"),
             input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         };
@@ -607,6 +607,7 @@ chat_reasoning_replay = "omit"
                 inherit_project_instructions: false,
                 extensions: crate::extensions::NativeAgentExtensions::none(),
                 workflows: std::collections::BTreeSet::default(),
+                permissions: None,
             },
             workspace_root.join("reviewer.md"),
         )
@@ -624,12 +625,11 @@ chat_reasoning_replay = "omit"
         // admitted with read and grep only. `write` is therefore
         // generation-only authority.
         let available = crate::capabilities::AvailableToolCatalog::new(
-            ["read", "grep", "write"]
-                .into_iter()
-                .map(|name| {
-                    ToolRegistration::plain(capability_definition(name), Arc::new(NeverRuns))
-                })
-                .collect(),
+            ToolRegistry::from_registrations(["read", "grep", "write"].into_iter().map(|name| {
+                ToolRegistration::plain(capability_definition(name), Arc::new(NeverRuns))
+            }))
+            .unwrap()
+            .validated_registrations(),
         );
         let mut registry = ToolRegistry::new();
         for name in ["read", "grep"] {
@@ -669,7 +669,7 @@ chat_reasoning_replay = "omit"
                 resources,
                 SessionModelConfig::of(model),
                 models,
-                ApprovalMode::Policy,
+                ApprovalMode::Plan,
             ),
             workspace: crate::tools::workspace::Workspace::new(&workspace_root).expect("workspace"),
             artifacts: crate::tools::artifacts::ArtifactStore::new(

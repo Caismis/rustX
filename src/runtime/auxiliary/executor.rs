@@ -91,6 +91,8 @@ struct RecordState {
     dispatch_gate: Option<DispatchTestGate>,
     #[cfg(test)]
     retirement_gate: Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>,
+    #[cfg(test)]
+    resource_release_gate: Option<(oneshot::Sender<()>, mpsc::Receiver<()>)>,
     submitted: bool,
     dispatched: bool,
     dispatch_ordinal: u32,
@@ -123,6 +125,8 @@ pub(crate) trait AuxiliaryConsumer: Send + Sync {
     fn attempt(&self, request: &RequestId, ordinal: u32);
     fn text(&self, request: &RequestId, text: &str);
     fn settled(&self, result: &Result<ConfirmedExecution, ContextError>);
+    /// Physical ownership and all counted admission have been released.
+    fn retired(&self, result: &Result<ConfirmedExecution, ContextError>);
 }
 
 /// Prepared native ownership; dropping it before submission unwinds admission.
@@ -209,6 +213,24 @@ impl AuxiliaryExecutor {
         assert!(
             lock(&record.state)
                 .retirement_gate
+                .replace((entered, held))
+                .is_none()
+        );
+        (observed, release)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn hold_resource_release_for_test(
+        &self,
+    ) -> (oneshot::Receiver<()>, mpsc::Sender<()>) {
+        let state = lock(&self.0.state);
+        assert_eq!(state.calls.len(), 1);
+        let record = state.calls.values().next().unwrap();
+        let (entered, observed) = oneshot::channel();
+        let (release, held) = mpsc::channel();
+        assert!(
+            lock(&record.state)
+                .resource_release_gate
                 .replace((entered, held))
                 .is_none()
         );
@@ -852,8 +874,17 @@ impl CallRecord {
         // The thread, writer and exact confirmation have exited. Unresolved
         // intent is now under the native failed-durability owner above.
         drop(exit.joined.take());
-        if let Some(consumer) = lock(&self.consumer).take() {
+        let consumer = lock(&self.consumer).take();
+        if let Some(consumer) = &consumer {
             consumer.settled(&exit.result);
+        }
+        #[cfg(test)]
+        {
+            let gate = lock(&self.state).resource_release_gate.take();
+            if let Some((entered, release)) = gate {
+                let _ = entered.send(());
+                let _ = release.recv_timeout(std::time::Duration::from_secs(10));
+            }
         }
         // Releasing admission/registry/result can let the manager publish
         // WriterAbsent. Neither this frame nor a parked record may keep Store.
@@ -862,6 +893,9 @@ impl CallRecord {
         drop(lock(&self.state).permit.take());
         drop(lock(&self.state).admission.take());
         self.retire();
+        if let Some(consumer) = consumer {
+            consumer.retired(&exit.result);
+        }
         if let Some(completion) = lock(&self.completion).take() {
             let _ = completion.send(exit.result);
         }

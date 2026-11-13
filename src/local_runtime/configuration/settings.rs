@@ -240,16 +240,6 @@ pub struct EffectiveConfiguration {
     pub admitted_attempt: Option<crate::runtime::configuration_commit::AdmittedConfiguration>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum NativeTool {
-    Read,
-    Write,
-    Edit,
-    Glob,
-    Grep,
-    Bash,
-}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "unit", rename_all = "snake_case", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)] // A bounded authored model owns its policies together at this mutation boundary.
@@ -316,14 +306,6 @@ pub enum ConfigMutation {
     },
     Approval {
         authored: Option<crate::runtime::ApprovalMode>,
-    },
-    NativePolicy {
-        id: NativeTool,
-        authored: Option<super::super::config::NativePolicyOverrideDocument>,
-    },
-    McpPolicy {
-        id: crate::runtime::identity::McpServerId,
-        authored: Option<super::super::config::InvocationPolicyDocument>,
     },
     Environment {
         name: String,
@@ -450,10 +432,6 @@ fn view(path: PathBuf, bytes: Option<&[u8]>, workspace: bool) -> SourceView<Sour
             // A request_params failure names only its field path, category
             // and locations, so it can say why the source cannot be edited.
             // Other parser messages may quote authored text.
-            Err(super::super::authoring::RuntimeLayerParseFailure::RemovedSummaryOutput) => (
-                None,
-                Some(super::super::authoring::REMOVED_SUMMARY_OUTPUT_DIAGNOSTIC.into()),
-            ),
             Err(super::super::authoring::RuntimeLayerParseFailure::RemovedContext) => (
                 None,
                 Some(super::super::authoring::REMOVED_CONTEXT_DIAGNOSTIC.into()),
@@ -534,12 +512,6 @@ fn agent_views(root: &Path, scope: SourceScope) -> Result<Vec<AgentSourceView>, 
             .map(super::super::agent_resources::parse);
         let diagnostic = match &parsed {
             Some(Ok(_)) => None,
-            Some(Err(error))
-                if error
-                    == super::super::agent_resources::REMOVED_NAMED_SUMMARY_OUTPUT_DIAGNOSTIC =>
-            {
-                Some(error.clone())
-            }
             _ => Some("invalid named Agent definition".into()),
         };
         let parsed = parsed.and_then(Result::ok);
@@ -753,20 +725,6 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
         M::ToolDeadline { authored } => document.tool_deadline_policy = authored,
         M::Capacity { authored } => document.subagents = authored,
         M::Approval { authored } => document.approval_mode = authored,
-        M::NativePolicy { id, authored } => {
-            let policies = document.native_tools.get_or_insert_default();
-            match id {
-                NativeTool::Read => policies.read = authored,
-                NativeTool::Write => policies.write = authored,
-                NativeTool::Edit => policies.edit = authored,
-                NativeTool::Glob => policies.glob = authored,
-                NativeTool::Grep => policies.grep = authored,
-                NativeTool::Bash => policies.bash = authored,
-            }
-        }
-        M::McpPolicy { id, authored } => {
-            identity_unit(&mut document.mcp_tool_policies, id, authored);
-        }
         M::Environment { name, authored } => {
             if !crate::credentials::valid_environment_name(&name) {
                 return Err(SettingsError::Invalid);
@@ -1739,22 +1697,6 @@ mod mcp_write_tests {
             .expect_err("obsolete context is rejected");
         assert_eq!(failure.diagnostic.path, "context");
         assert!(failure.diagnostic.correction.contains("remove"));
-    }
-
-    #[test]
-    fn named_agent_source_reports_removed_summary_output_without_exposing_values() {
-        let root = tempfile::tempdir().unwrap();
-        let canonical_root = root.path().canonicalize().unwrap();
-        let agents = canonical_root.join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        std::fs::write(agents.join("reviewer.toml"), "[model]\nmodel = 'p/m'\nsummary_model = { mode = 'explicit', model = 'p/s', max_output_tokens = { mode = 'limit', tokens = 100 } }\nsecret = 'PRIVATE'\n").unwrap();
-        let sources = agent_views(&canonical_root, SourceScope::User).unwrap();
-        assert!(sources[0].source.authored.is_none());
-        let diagnostic = sources[0].source.diagnostic.as_ref().unwrap();
-        assert!(
-            diagnostic.contains("remove") && diagnostic.contains("summary_model.max_output_tokens")
-        );
-        assert!(!diagnostic.contains("PRIVATE"));
     }
 
     #[test]

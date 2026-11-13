@@ -3,9 +3,9 @@
 The task UI follows DeepSeek Harness
 `22ddee3792402c3e70ec5f86a63c3e3e895a2f60` while retaining rustX's exact
 Session/node binding, Workflow targets, pause/resume, cancellation and recovery.
-App Server v78 provides the bounded task catalog, invalidation hints and
-metadata-only CAS commands. Scheduler uses Runtime Client v85, SQLite 87,
-Session catalog 19, child IPC 39 and Scheduled Workflow compiler contract 3.
+App Server v79 provides the bounded task catalog, invalidation hints and
+metadata-only CAS commands. Scheduler uses Runtime Client v86, SQLite 88,
+Session catalog 21, child IPC 39 and Scheduled Workflow compiler contract 3.
 
 ## Verification
 

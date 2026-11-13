@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { ForegroundToolExecution, QuestionSpecification, QuestionnaireSubmission } from '../../protocol/app-server/v78';
+import type { ForegroundToolExecution, QuestionSpecification, QuestionnaireSubmission } from '../../protocol/app-server/v79';
 import { Questionnaire } from '../src/app/agent/Questionnaire';
 import { QuestionPanels, RecordedQuestionPanel, useQuestionPanels } from '../src/app/agent/QuestionPanels';
 import { QuestionRow } from '../src/presentation/agent/QuestionRow';
@@ -67,9 +67,9 @@ it('keeps the answer-panel action independent of the leading transcript disclosu
 it('builds the option-preserving panel from native ask_user fields and rejects an unpairable selection', () => {
   const tool: ForegroundToolExecution = { call_id: 'ask-1', tool_id: 'tool-ask-user', name: 'ask_user', block_index: 0, assembly_complete: true, committed_result_deferred: false,
     occurrence: { locator: { type: 'by_message_id', message_id: 'ask-message' }, block_index: 0 },
-    state: { type: 'settled', arguments: JSON.stringify({ questions: questions.slice(0, 1).map(question => ({
+    state: { type: 'settled', arguments: JSON.stringify({ arguments: { questions: questions.slice(0, 1).map(question => ({
     header: question.header, question: question.question, options: question.answer.type === 'single_choice' ? question.answer.options : [],
-  })) }), result: { status: { type: 'success' }, duration_ms: '0', content: [{ type: 'json', value: { cancelled: false, answers: [{ question_index: 0, kind: 'option', answer: 'Drop' }] } }] } } };
+  })) } }), result: { status: { type: 'success' }, duration_ms: '0', content: [{ type: 'json', value: { cancelled: false, answers: [{ question_index: 0, kind: 'option', answer: 'Drop' }] } }] } } };
   expect(askUserRecord(tool)?.submission.answers).toEqual([{ question_index: 0, answer: { type: 'option', value: { option_index: 1 } } }]);
   if (tool.state.type === 'settled' && tool.state.result.content?.[0].type === 'json') tool.state.result.content[0].value = { cancelled: false, answers: [{ question_index: 0, kind: 'option', answer: 'Missing' }] };
   expect(askUserRecord(tool)).toBeUndefined();

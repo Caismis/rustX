@@ -173,11 +173,15 @@ async fn failed_summary_attempt_with_feedback(
     let lease = capability_lease(ToolRegistry::new(), &tool_runtime)
         .await
         .into_lease();
+    // Model an existing unchanged-mode context so this fixture isolates exact
+    // admission and feedback boundaries from first-context reminder cost.
+    let mut policy = crate::scripted_suites::support::default_execution_policy();
+    policy.last_permission_reminder_mode = Some(policy.approval_mode);
     let mut execution = AgentExecution::new(
         request,
         lease,
         &cancellation,
-        crate::scripted_suites::support::default_execution_policy(),
+        policy,
         runtime,
         &tool_runtime,
         crate::agent::AttemptLifecycle::inert(),
@@ -722,11 +726,15 @@ async fn overflow_recovery_keeps_request_only_feedback_in_the_compaction_fit() {
     let lease = capability_lease(ToolRegistry::new(), &tool_runtime)
         .await
         .into_lease();
+    // Model an existing unchanged-mode context so this fixture isolates exact
+    // admission and feedback boundaries from first-context reminder cost.
+    let mut policy = crate::scripted_suites::support::default_execution_policy();
+    policy.last_permission_reminder_mode = Some(policy.approval_mode);
     let mut execution = AgentExecution::new(
         request,
         lease,
         &cancellation,
-        crate::scripted_suites::support::default_execution_policy(),
+        policy,
         runtime,
         &tool_runtime,
         crate::agent::AttemptLifecycle::inert(),

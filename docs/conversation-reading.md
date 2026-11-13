@@ -481,7 +481,7 @@ The immutable inherited transcript boundary was introduced in SQLite schema 58 a
 
 ## Request field metadata
 
-SQLite schema 87 stores frozen Request metadata separately from the native
+SQLite schema 88 stores frozen Request metadata separately from the native
 immutable selected-input tree. The Store owns that balanced tree and its canonical
 Original/Derived provenance. Request rows bind its root identity, digest and count;
 explicit historical reconstruction loads the selected input, while publication and

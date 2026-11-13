@@ -10,12 +10,11 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
 // Real native source fixtures: the browser only edits the generated projection.
-for (const auxiliary of ['Summary', 'Title', 'Classification', 'BTW'] as const) test(`${auxiliary} selections round-trip and implicit MCP/optional Agent sources remain editable`, async ({ page }) => {
+test('Auxiliary selections round-trip and implicit MCP/optional Agent sources remain editable', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const fixture = await startDogfood();
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  const outputLimit = auxiliary === 'Summary' ? '' : 'max_output_tokens = { mode = "limit", tokens = 2048 }, ';
-  const summary = `${auxiliary.toLowerCase()}_model = { mode = "explicit", model = "summary-a", profile = "deep", ${outputLimit}request_params = \'{"temperature":0.2}\' }\n`;
+  const summary = `auxiliary = { mode = "explicit", model = "summary-a", profile = { mode = "explicit", id = "deep" }, max_output_tokens = { mode = "limit", tokens = 2048 }, request_params = \'{"temperature":0.2}\' }\n`;
   const model = '[model]\nmodel = "fixture/console-model"\n' + summary;
   try {
     mkdirSync(join(fixture.workspaceA, '.agents/agents'), { recursive: true });
@@ -59,18 +58,18 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
         else await expect(surface.getByRole('button', { name: 'optional', exact: true })).toBeVisible({ timeout: 15_000 });
       };
       if (owner === 'Root') {
-        await expect(form.getByRole('button', { name: new RegExp(`${auxiliary} model$`) })).toBeHidden();
+        await expect(form.getByRole('button', { name: /Auxiliary model$/ })).toBeHidden();
         await choose(form, 'Model', 'summary-b');
         await choose(form, 'Profile', 'quick');
         await save();
         const root = readFileSync(join(fixture.workspaceA, 'rustx.toml'), 'utf8');
         expect(root).toContain('model = "summary-b"');
         expect(root).toContain('profile = "quick"');
-        expect(root).toContain(`${auxiliary.toLowerCase()}_model`);
+        expect(root).toContain('auxiliary');
         expect(root).toMatch(/request_params = '\{"temperature":0\.2\}'/);
         continue;
       }
-      await choose(form, `${auxiliary} model`, 'summary-b');
+      await choose(form, 'Auxiliary model', 'summary-b');
       await expect(form.getByLabel('Description', { exact: true })).toHaveValue('');
       await expect(form.getByLabel('System prompt', { exact: true })).toHaveValue('');
       await form.getByLabel('read', { exact: true }).check();
@@ -79,7 +78,7 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       const preserved = readFileSync(sourceFile, 'utf8');
       expect(preserved).not.toMatch(/^(description|instructions)\s*=/m);
       for (const fact of ['summary-b', 'deep', '0.2']) expect(preserved).toContain(fact);
-      if (auxiliary !== 'Summary') expect(preserved).toContain('2048');
+      expect(preserved).toContain('2048');
       // Native writes keep provider-native parameters as JSON strings.
       expect(preserved).toMatch(/request_params = '\{"temperature":0\.2\}'/);
       // Acknowledge then reread: clean forms follow the native source, not old drafts.
@@ -88,25 +87,28 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
         await expect(form.getByRole('heading', { name: 'Advanced options', exact: true })).toBeVisible();
       };
       await reopen();
-      const nested = form.getByRole('group', { name: `Explicit ${auxiliary} Model settings`, exact: true });
-      await expect(nested.getByRole('button', { name: new RegExp(`Profile \\(${auxiliary}\\)$`) })).toContainText('deep');
-      const limit = nested.getByLabel(`Output limit (${auxiliary})`);
-      if (auxiliary === 'Summary') await expect(limit).toHaveCount(0);
-      else await expect(limit).toHaveValue('2048');
-      await expect(nested.getByLabel(`Request parameter overrides (${auxiliary})`, {exact:true})).toHaveText('{\n  "temperature": 0.2\n}', {useInnerText:true});
-      await choose(nested, `Profile (${auxiliary})`, 'quick');
-      if (auxiliary !== 'Summary') await limit.fill('1024');
-      await nested.getByLabel(`Request parameter overrides (${auxiliary})`, {exact:true}).fill('{"seed": 7, "stop": [null]}');
+      const nested = form.getByRole('group', { name: 'Auxiliary model settings', exact: true });
+      await expect(form.getByRole('button', { name: /Auxiliary reasoning profile$/ })).toContainText('Explicit profile');
+      await expect(nested.getByRole('button', { name: /Auxiliary profile$/ })).toContainText('deep');
+      await expect(nested.getByLabel('Output limit (Auxiliary)')).toHaveValue('2048');
+      await expect(nested.getByLabel('Request parameter overrides (Auxiliary)', {exact:true})).toHaveText('{\n  "temperature": 0.2\n}', {useInnerText:true});
+      await choose(nested, 'Auxiliary profile', 'quick');
+      await nested.getByLabel('Output limit (Auxiliary)').fill('1024');
+      await nested.getByLabel('Request parameter overrides (Auxiliary)', {exact:true}).fill('{"seed": 7, "stop": [null]}');
       await save();
       const authored = readFileSync(sourceFile, 'utf8');
       expect(authored).toContain('summary-b'); expect(authored).toContain('quick');
-      if (auxiliary === 'Summary') expect(authored).not.toMatch(/max_output_tokens\s*=\s*\{/);
-      else expect(authored).toContain('1024');
+      expect(authored).toContain('1024');
       expect(authored).toMatch(/request_params = '\{"seed":7,"stop":\[null\]\}'/);
       await reopen();
-      await choose(form, `${auxiliary} model`, 'Follow selected model'); await save();
+      await choose(form, 'Auxiliary model', 'Follow selected model'); await save();
       await reopen();
-      await expect(nested).toHaveCount(0);
+      await expect(form.getByRole('button', { name: /Auxiliary model$/ })).toContainText('Follow selected model');
+      await expect(form.getByRole('button', { name: /Auxiliary reasoning profile$/ })).toContainText('Lowest');
+      await expect(nested.getByLabel('Output limit (Auxiliary)')).toHaveValue('');
+      await expect(nested.getByLabel('Request parameter overrides (Auxiliary)', {exact:true})).toHaveText('{}', {useInnerText:true});
+      expect(readFileSync(sourceFile, 'utf8')).toMatch(/mode\s*=\s*"session"/);
+      expect(readFileSync(sourceFile, 'utf8')).not.toMatch(/temperature|seed|stop/);
     }
     surface=await openResourceModule(page,'mcp','Workspace A');
     for (const transport of ['http', 'stdio'] as const) {

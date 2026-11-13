@@ -5,7 +5,7 @@ import { Profiler } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Server, snapshot } from './fixture';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
-import type { RuntimeClientEvent, RuntimeClientSnapshot } from '../../protocol/app-server/v78';
+import type { RuntimeClientEvent, RuntimeClientSnapshot } from '../../protocol/app-server/v79';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 it('fixed 420 long response measurement', async () => {
@@ -66,10 +66,10 @@ it('fixed 420 long response measurement', async () => {
   await emit({ type: 'tool_call_started', position: 2, foreground_position: 0, attempt_id, message_id, block_index: 2, call: { id: 'call', tool_id: 'bash', name: 'bash' } });
   let rawPrefix = '';
   for (const arguments_delta of ['{"command":', '"printf test"', '}']) { await emit(contentAdvance({attempt_id,message_id,block_index:2,kind:'tool_call_arguments',delta:arguments_delta}, utf8Length(rawPrefix), utf8Length(rawPrefix) + 1)); rawPrefix += arguments_delta; }
-  await emit({ type: 'tool_call_assembled', position: 2, foreground_position: 0, arguments_json: '{"command":"printf test"}', attempt_id, message_id, block_index: 2, call: { id: 'call', tool_id: 'bash', name: 'bash', arguments: { command: 'printf test' } } });
+  await emit({ type: 'tool_call_assembled', position: 2, foreground_position: 0, arguments_json: '{"command":"printf test"}', attempt_id, message_id, block_index: 2, call: { id: 'call', tool_id: 'bash', name: 'bash', arguments: { arguments: { command: 'printf test' } } } });
   height += 123; await act(async () => { resize(); flush(); });
   next = s.snapshots.get('A')!;
-  const message = { role: 'assistant' as const, id: message_id, content: [{ type: 'text' as const, text: 'Canonical final content.' }, { type: 'reasoning' as const, text: reasoning.text }, { type: 'tool_call' as const, id: 'call', tool_id: 'bash', name: 'bash', arguments: { command: 'printf test' } }] };
+  const message = { role: 'assistant' as const, id: message_id, content: [{ type: 'text' as const, text: 'Canonical final content.' }, { type: 'reasoning' as const, text: reasoning.text }, { type: 'tool_call' as const, id: 'call', tool_id: 'bash', name: 'bash', arguments: { arguments: { command: 'printf test' } } }] };
   await emit({ type: 'message_committed', attempt_id, message, transcript_cursor: '1' }, { ...next, messages: [message], attempt: { ...next.attempt!, in_flight: null }, transcript: { entries: [{ cursor: '1', item: { type: 'message', message }, tool_calls: next.attempt?.foreground }] } });
   if (ui.container.querySelector('[data-chat-anchor-key="message:answer"]') !== seat) replacements++;
   await act(async () => { flush(); });

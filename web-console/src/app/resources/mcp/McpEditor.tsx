@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import type { McpWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v78';
+import type { McpWrite, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v79';
 import { useTranslation } from '../../../locale/react';
 import { mcpTransport } from '../../../bindings/mcp';
 import { Button } from '../../../presentation/primitives/Button';
 import { DefinitionNotice, UnitOutcomeNotice, useUnitEditing } from '../../settings/forms/bridge';
 import { documentAuthoring } from '../../settings/projection';
 import type { McpEditorDraft, McpFieldBuffers, McpFocus } from '../types';
-import { AvailabilityDetail } from '../shared/AvailabilityDetail';
+import { McpPermissionDetail } from '../shared/McpPermissionDetail';
 import { Advanced,ConfirmAction } from '../../settings/primitives/aria';
 import { McpFormFields } from './McpFormFields';
 import { formatMcpJson, parseMcpJson } from './json';
@@ -21,7 +21,7 @@ interface EditorProps {
 export function McpEditor(props: EditorProps) {
   const { source, scope, revision, focus, close } = props;
   const tx = useTranslation();
-  if (focus.mode === 'permissions' && focus.name) return <><Button onClick={close}>{tx('settings:mcp.back')}</Button><AvailabilityDetail source={source} scope={scope} revision={revision} family="mcp" name={focus.name}/></>;
+  if (focus.mode === 'permissions' && focus.name) return <><Button onClick={close}>{tx('settings:mcp.back')}</Button><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/></>;
   const document = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
   if (document.state !== 'structured') return <><Button onClick={close}>{tx('settings:catalog.mcp')}</Button><p role="alert">{document.state === 'malformed' ? document.diagnostic : tx('settings:source.not-loaded')}</p></>;
   return <Editor {...props} document={document}/>;
@@ -207,6 +207,6 @@ function Editor({ source, scope, revision, focus, scopeControl, close, editorDra
         </div>
       </div>
     </form>
-    {focus.name&&<Advanced title={tx('resources:mcp.permissions')}><AvailabilityDetail source={source} scope={scope} revision={revision} family="mcp" name={focus.name}/></Advanced>}
+    {focus.name&&<Advanced title={tx('resources:mcp.permissions')}><McpPermissionDetail source={source} scope={scope} revision={revision} name={focus.name}/></Advanced>}
   </>;
 }

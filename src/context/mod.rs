@@ -160,7 +160,7 @@ impl ContextRuntime {
         }
         let policy = policy::CompactionPolicy::for_models(model)?;
         let engine = ContextEngine::new(policy.primary, estimator)?;
-        let summary = model.summary_invocation().automatic_summary_base();
+        let summary = model.summary_invocation().clone();
         let compaction_budgets = policy.budgets;
         Ok(Self {
             primary_model: model.primary().invocation_config().model,

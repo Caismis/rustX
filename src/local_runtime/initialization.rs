@@ -151,22 +151,19 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
         .into_bytes();
     let config = super::config::CurrentRuntimeConfig::from_toml_slice(&settings_bytes)
         .map_err(|_| "invalid model selection")?;
-    let view = crate::model::invocation::analyze_selection(
-        parsed
-            .model(&config.initial_model().model)
-            .map_err(|_| "invalid model reference")?,
-        &config.initial_model().selection(),
-        crate::model::invocation::RequestParamsLayer::SessionOverrides,
+    let (primary, auxiliary) =
+        crate::model::session::analyze_session_model_config(&parsed, config.initial_model())
+            .map_err(|_| "invalid model selection")?;
+    let reasoning = crate::model::invocation::reasoning_output_minimum(
+        auxiliary.protocol,
+        &auxiliary.request_params,
     )
-    .map_err(|_| "invalid model selection")?;
-    let reasoning =
-        crate::model::invocation::reasoning_output_minimum(view.protocol, &view.request_params)
-            .map_err(|_| "invalid summary reasoning budget")?;
+    .map_err(|_| "invalid summary reasoning budget")?;
     crate::context::policy::CompactionPolicy::resolve_with_reasoning(
-        view.context_window,
-        view.max_output_tokens,
-        view.context_window,
-        view.model_max_output_tokens,
+        primary.context_window,
+        primary.max_output_tokens,
+        auxiliary.context_window,
+        auxiliary.max_output_tokens,
         reasoning,
     )
     .map_err(|_| "declared model limits cannot fit native context budgets")?;

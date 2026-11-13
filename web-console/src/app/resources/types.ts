@@ -1,4 +1,4 @@
-import type { McpWrite } from '../../../../protocol/app-server/v78';
+import type { McpWrite } from '../../../../protocol/app-server/v79';
 
 export type ResourceModule = 'subagents' | 'mcp' | 'skills';
 export interface McpFocus { kind: 'mcp'; name?: string; mode?: 'json' | 'permissions' }

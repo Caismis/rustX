@@ -327,7 +327,9 @@ async fn reasoning_order_writes_are_atomic_revision_fenced_and_whole_model_scope
 #[allow(clippy::too_many_lines)] // one complete authoring round trip
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_inert() {
-    use crate::local_runtime::authoring::{ModelLayer, RuntimeLayer, SummaryModelAuthoring};
+    use crate::local_runtime::authoring::{
+        AuxiliaryModelAuthoring, AuxiliaryProfileAuthoring, ModelLayer, ModelOutput, RuntimeLayer,
+    };
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::catalog::{ModelProfileId, ModelRef};
     use crate::toml_authoring::AuthoredRequestParams;
@@ -379,13 +381,11 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
             profile: Some(ModelProfileId::new("creative")),
             request_params: Some(params(serde_json::json!({"seed": null}))),
             max_output_tokens: None,
-            title_model: None,
-            classification_model: None,
-            btw_model: None,
-            summary_model: Some(SummaryModelAuthoring::Explicit {
+            auxiliary: Some(AuxiliaryModelAuthoring::Explicit {
                 model: ModelRef::parse("local/a").unwrap(),
-                profile: None,
+                profile: AuxiliaryProfileAuthoring::ModelDefault {},
                 request_params: params(serde_json::json!({"summary_tag": [null]})),
+                max_output_tokens: Some(ModelOutput::Limit { tokens: 128 }),
             }),
         };
         write(&fixture, 0, ConfigMutation::RootModel { authored: Some(root) }).await;
@@ -423,7 +423,7 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
         );
         assert_eq!(json(&table["agent"]["model"]["request_params"]), serde_json::json!({"seed": null}));
         assert_eq!(
-            json(&table["agent"]["model"]["summary_model"]["request_params"]),
+            json(&table["agent"]["model"]["auxiliary"]["request_params"]),
             serde_json::json!({"summary_tag": [null]})
         );
         let agent_view = source.agents.iter().find(|view| view.name.as_str() == "profiled").unwrap();
@@ -496,10 +496,10 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
             serde_json::Value::Object(view.effective.as_ref().unwrap().request_params.clone()),
             serde_json::json!({"temperature": 1.3, "seed": null})
         );
-        let Some(crate::model::session::AuxiliaryModelView::Explicit(summary)) = view.summary else {
+        let Some(crate::model::session::AuxiliaryModelView::Explicit { effective: summary }) = view.auxiliary else {
             panic!("explicit summary");
         };
-        assert_eq!(summary.max_output_tokens, 4096);
+        assert_eq!(summary.max_output_tokens, 128);
         assert_eq!(
             serde_json::Value::Object(summary.request_params.clone()),
             serde_json::json!({"top_p": 0.5, "unset": null, "summary_tag": [null]})
@@ -521,7 +521,7 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::authoring::Profile;
     use crate::model::catalog::{ModelProfileId, ModelRef};
-    use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+    use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
     use crate::toml_authoring::AuthoredRequestParams;
     use serde_json::json;
     let params =
@@ -662,11 +662,9 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
         assert_eq!(adopted.configured, explicit);
         assert_eq!(adopted.effective, view.effective);
         assert_eq!(runtime.runtime_resources().revision(), revision);
-        // Moving the default no longer reaches this Session's explicit
-        // selection; a new Session follows the moved default.
-        let resources = runtime.runtime_resources();
-        let invocation = runtime.model_snapshot();
-        let previous = fixture.manager.configuration_application(&id).unwrap();
+        // Moving the default leaves the pinned primary alone, but Lowest
+        // auxiliary follows the new default and must be prepared.
+        let primary_before = runtime.model_view().effective.clone();
         write(
             &fixture,
             0,
@@ -676,9 +674,15 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
             ),
         )
         .await;
-        settled(&fixture, 0).await;
-        unchanged(&resources, &invocation, &previous);
-        assert_eq!(runtime.model_view().effective, view.effective);
+        applied(&fixture, 0).await;
+        assert_eq!(runtime.model_view().effective, primary_before);
+        let Some(crate::model::session::AuxiliaryModelView::Session {
+            effective: auxiliary,
+        }) = runtime.model_view().auxiliary
+        else {
+            panic!("session auxiliary");
+        };
+        assert_eq!(auxiliary.profile, Some(ModelProfileId::new("fast")));
         let created = fixture
             .manager
             .create_session(SessionPersistentState {
@@ -710,11 +714,13 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
         // An explicit Summary is compared on its own: editing the Profile only
         // the Summary resolves through needs preparation and adoption.
         let summarized = SessionModelConfig {
-            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: SummaryModelPolicy::Explicit {
+            auxiliary: AuxiliaryModelPolicy::Explicit {
                 model: ModelRef::parse("local/a").unwrap(),
-                profile: Some(ModelProfileId::new("creative")),
+                profile: crate::model::AuxiliaryProfileSelection::Explicit {
+                    id: ModelProfileId::new("creative"),
+                },
                 request_params: serde_json::Map::new(),
+                max_output_tokens: None,
             },
             ..explicit.clone()
         };
@@ -739,8 +745,8 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
             !Arc::ptr_eq(&resources, &runtime.runtime_resources()),
             "the changed Summary invocation was prepared and committed"
         );
-        let Some(crate::model::session::AuxiliaryModelView::Explicit(summary)) =
-            runtime.model_view().summary
+        let Some(crate::model::session::AuxiliaryModelView::Explicit { effective: summary }) =
+            runtime.model_view().auxiliary
         else {
             panic!("explicit summary");
         };
@@ -753,9 +759,9 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
         let mut settlement = SettlementReceiptWait::capture(&runtime);
         runtime.submit_inbound(input("request-A frozen")).unwrap();
         fixture.gates[0].wait_entered().await;
-        // A metadata-only publication during the real provider gate commits
-        // without waiting for the safe boundary, and keeps the admitted
-        // Attempt and explicit Summary invocation exactly as frozen.
+        // reasoning_profile_order is metadata-only here: auxiliary is Explicit
+        // Profile "creative", so Lowest order does not move the frozen
+        // invocation. Publication commits without the safe boundary.
         let admitted = runtime.model_snapshot();
         let resources = runtime.runtime_resources();
         let mut ordered = model(
@@ -977,10 +983,7 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
                     profile: None,
                     request_params: Some(params(json!({"seed": 9_007_199_254_740_993_u64}))),
                     max_output_tokens: None,
-                    title_model: None,
-            classification_model: None,
-            btw_model: None,
-                    summary_model: None,
+                    auxiliary: None,
                 }),
             },
         ] {
@@ -1071,12 +1074,14 @@ fn raw_request(call: crate::app_server::protocol::Method, literal: &str) -> Stri
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
     use crate::app_server::{connection::AppServerConnection, protocol::*};
-    use crate::local_runtime::authoring::{ModelLayer, SummaryModelAuthoring};
+    use crate::local_runtime::authoring::{
+        AuxiliaryModelAuthoring, AuxiliaryProfileAuthoring, ModelLayer,
+    };
     use crate::local_runtime::config::NamedAgentProfileDocument;
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::authoring::Profile;
     use crate::model::catalog::{ModelProfileId, ModelRef};
-    use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+    use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
     use crate::toml_authoring::AuthoredRequestParams;
     use serde_json::json;
     // Every entry point carries the literal at top level and nested in an
@@ -1119,15 +1124,12 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
             expected_revision: source.user.revision.clone(),
             mutation: SourceMutation::Config { mutation },
         };
-        let layer = |request_params, summary_model| ModelLayer {
+        let layer = |request_params, auxiliary| ModelLayer {
             model: Some(local.clone()),
             profile: None,
             request_params,
             max_output_tokens: None,
-            title_model: None,
-            classification_model: None,
-            btw_model: None,
-            summary_model,
+            auxiliary,
         };
         let selection = SessionModelConfig { request_params: holes(), ..SessionModelConfig::of(local.clone()) };
         let entry_points = [
@@ -1144,10 +1146,11 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
             write(ConfigMutation::RootModel {
                 authored: Some(layer(
                     None,
-                    Some(SummaryModelAuthoring::Explicit {
+                    Some(AuxiliaryModelAuthoring::Explicit {
                         model: local.clone(),
-                        profile: None,
+                        profile: AuxiliaryProfileAuthoring::ModelDefault {},
                         request_params: AuthoredRequestParams(holes()),
+                        max_output_tokens: None,
                     }),
                 )),
             }),
@@ -1169,11 +1172,11 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
                 recover_unavailable_auxiliary: None,
                 target: target.clone(),
                 config: Box::new(SessionModelConfig {
-                    title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-                    summary_model: SummaryModelPolicy::Explicit {
+                    auxiliary: AuxiliaryModelPolicy::Explicit {
                         model: local.clone(),
-                        profile: None,
+                        profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                         request_params: holes(),
+                        max_output_tokens: None,
                     },
                     ..SessionModelConfig::of(local.clone())
                 }),
@@ -1277,12 +1280,14 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
     use crate::app_server::{connection::AppServerConnection, protocol::*};
-    use crate::local_runtime::authoring::{ModelLayer, SummaryModelAuthoring};
+    use crate::local_runtime::authoring::{
+        AuxiliaryModelAuthoring, AuxiliaryProfileAuthoring, ModelLayer,
+    };
     use crate::local_runtime::config::NamedAgentProfileDocument;
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::authoring::Profile;
     use crate::model::catalog::{ModelProfileId, ModelRef};
-    use crate::model::session::{SessionModelConfig, SummaryModelPolicy};
+    use crate::model::session::{AuxiliaryModelPolicy, SessionModelConfig};
     use crate::toml_authoring::AuthoredRequestParams;
     use serde_json::json;
     const MARKER: &str = "SECRET_MARKER";
@@ -1370,25 +1375,15 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
             (selection(json!({"temperature": false})), "session request-parameter overrides"),
             (
                 SessionModelConfig {
-                    title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-                    summary_model: SummaryModelPolicy::Explicit {
+                    auxiliary: AuxiliaryModelPolicy::Explicit {
                         model: local.clone(),
-                        profile: Some(p.clone()),
+                        profile: crate::model::AuxiliaryProfileSelection::Explicit { id: p.clone() },
                         request_params: object(json!({KEY: "x"})),
+                        max_output_tokens: None,
                     },
                     ..SessionModelConfig::of(local.clone())
                 },
-                "explicit summary request-parameter overrides",
-            ),
-            (
-                SessionModelConfig {
-                    title_model: crate::model::session::AuxiliaryModelPolicy::Explicit {
-                        model: local.clone(), profile: Some(p.clone()),
-                        request_params: object(json!({KEY: "title"})), max_output_tokens: Some(128),
-                    },
-                    ..SessionModelConfig::of(local.clone())
-                },
-                "explicit title request-parameter overrides",
+                "auxiliary request-parameter overrides",
             ),
         ] {
             let response = connection
@@ -1437,18 +1432,16 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
             profile: Some(p.clone()),
             request_params: Some(AuthoredRequestParams(object(request_params))),
             max_output_tokens: None,
-            title_model: None,
-            classification_model: None,
-            btw_model: None,
-            summary_model: summary.map(|params| SummaryModelAuthoring::Explicit {
+            auxiliary: summary.map(|params| AuxiliaryModelAuthoring::Explicit {
                 model: local.clone(),
-                profile: Some(p.clone()),
+                profile: AuxiliaryProfileAuthoring::Explicit { id: p.clone() },
                 request_params: AuthoredRequestParams(object(params)),
+                max_output_tokens: None,
             }),
         };
         for (layer, expected) in [
             (root(json!({KEY: 0}), None), "session request-parameter overrides"),
-            (root(json!({}), Some(json!({"temperature": [KEY]}))), "explicit summary request-parameter overrides"),
+            (root(json!({}), Some(json!({"temperature": [KEY]}))), "auxiliary request-parameter overrides"),
         ] {
             write(&f, 0, ConfigMutation::RootModel { authored: Some(layer) }).await;
             let application = settled(&f, 0).await;
@@ -1596,19 +1589,17 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
         let pinned_resources = runtime(&pinned).runtime_resources();
         let pinned_invocation = runtime(&pinned).model_snapshot();
 
-        // The default moves: only the following Session's invocation changes.
+        // The default moves: following rebuilds primary+auxiliary; pinned keeps
+        // its primary Profile but rebuilds Lowest auxiliary to the new default.
         let following_resources = runtime(&following).runtime_resources();
         write(&f, 0, model("fast")).await;
         applied(&f, 0).await;
         applied(&f, 1).await;
-        // The pinned Session only receives the published catalog.
-        let published = runtime(&pinned).runtime_resources();
-        assert_eq!(published.revision(), pinned_resources.revision().next());
-        assert!(Arc::ptr_eq(
-            pinned_resources.capability(),
-            published.capability()
+        assert!(!Arc::ptr_eq(
+            &pinned_resources,
+            &runtime(&pinned).runtime_resources()
         ));
-        assert_eq!(runtime(&pinned).model_snapshot(), pinned_invocation);
+        assert_ne!(runtime(&pinned).model_snapshot(), pinned_invocation);
         assert_eq!(
             runtime(&pinned).model_catalog().models[0]
                 .default_profile
@@ -1617,7 +1608,6 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
                 .as_deref(),
             Some("fast")
         );
-        // The followed default moved: its invocation was prepared and committed.
         assert!(!Arc::ptr_eq(
             &following_resources,
             &runtime(&following).runtime_resources()
@@ -1638,6 +1628,13 @@ async fn issue456_following_and_pinned_default_profiles_diverge_only_when_the_de
             pins.effective.as_ref().unwrap().profile,
             Some(ModelProfileId::new("balanced"))
         );
+        let Some(crate::model::session::AuxiliaryModelView::Session {
+            effective: pinned_aux,
+        }) = pins.auxiliary
+        else {
+            panic!("pinned session auxiliary");
+        };
+        assert_eq!(pinned_aux.profile, Some(ModelProfileId::new("fast")));
         assert_eq!(
             follows.effective.as_ref().unwrap().request_params["temperature"],
             json!(1.0)

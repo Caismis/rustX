@@ -331,7 +331,7 @@ it("live profile selection crosses the real TUI/App Server boundary while the or
   let passed = false;
   try {
     const settings = fixture.settings("live-profile");
-    settings.model = { classificationModel: { mode: "session" }, btwModel: { mode: "session" }, model: "fixture/integration-model", profile: "high", requestParams: { temperature: 0.2 }, maxOutputTokens: 777, summaryModel: { mode: "explicit", model: "fixture/integration-model", profile: "low", request_params: {} }, titleModel: { mode: "explicit", model: "fixture/integration-model", profile: "low", request_params: { title_tag: "preserved" }, max_output_tokens: 222 } };
+    settings.model = { model: "fixture/integration-model", profile: "high", requestParams: { temperature: 0.2 }, maxOutputTokens: 777, auxiliary: { mode: "explicit", model: "fixture/integration-model", profile: { mode: "explicit", id: "low" }, request_params: { title_tag: "preserved" }, max_output_tokens: 333 } };
     const session = await openSession(host, settings);
     await session.submitInbound([{ type: "text", text: "tui multi-session: session A long task" }]);
     await provider.awaitGate("session-a-holding");
@@ -1137,7 +1137,7 @@ for (const carrier of ["stdio", "websocket"] as const) it(`native child transcri
   const provider = await ProviderEmulator.start("tui_subagent_inspection");
   const server = ServerFixture.create("rustx-child-transcript-", provider.url());
   const workspace = server.workspace("parent");
-  writeFileSync(join(workspace, "rustx.toml"), '[agent]\nagents = ["researcher"]\n[agent.tools]\nbuiltin = ["ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n');
+  writeFileSync(join(workspace, "rustx.toml"), 'approval_mode = "full_access"\n[agent]\nagents = ["researcher"]\n[agent.tools]\nbuiltin = ["ask_user", "job_list", "job_status", "job_wait", "job_cancel"]\n');
   mkdirSync(join(workspace, ".agents/agents"), { recursive: true });
   writeFileSync(join(workspace, ".agents/agents/researcher.toml"), 'description = "Research history"\ninstructions = "Inspect canonical child history"\n[tools]\nbuiltin = ["ask_user"]\n');
   const external = carrier === "websocket" ? await ExternalAppServer.start(server) : undefined;
@@ -1309,7 +1309,7 @@ for (const carrier of ["stdio", "websocket"] as const) it(`native Agent interrup
   const provider = await ProviderEmulator.start("tui_agent_interrupt");
   const server = ServerFixture.create("rustx-agent-interrupt-", provider.url());
   const workspace = server.workspace("parent");
-  writeFileSync(join(workspace, "rustx.toml"), '[agent]\nagents = ["reviewer"]\n');
+  writeFileSync(join(workspace, "rustx.toml"), 'approval_mode = "full_access"\n[agent]\nagents = ["reviewer"]\n');
   mkdirSync(join(workspace, ".agents/agents"), { recursive: true });
   writeFileSync(join(workspace, ".agents/agents/reviewer.toml"), 'description = "Review"\ninstructions = "Inspect the workspace"\n[tools]\nbuiltin = ["read"]\n');
   const external = carrier === "websocket" ? await ExternalAppServer.start(server) : undefined;

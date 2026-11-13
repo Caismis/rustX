@@ -18,7 +18,7 @@ import { workflowRunsFixture } from './workflow-runs';
 import { chatSpacingFixture } from './chat-spacing';
 import { workflowReviewHistoryFixture } from './workflow-review-history';
 import { questionHistoryFixture } from './question-history';
-import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v78';
+import type { CatalogModelView, SourceSettings, SessionModelView } from '../../../protocol/app-server/v79';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -42,7 +42,8 @@ if (mode === 'desktop') {
 
 server.handlers.set('session/effectiveConfiguration', () => { throw new RpcFailure({ code: -32000, message: 'Appearance fixture' }); });
 const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
-const model: SessionModelView = { configured: { model: 'native/coder' }, effective: { model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, modelMaxOutputTokens: 8192, maxOutputTokens: 8192, profile: 'deliberate', capabilities, declaredCapabilities: capabilities }, summary: { mode: 'session' } };
+const invocation = { model: 'native/coder', protocol: 'openai_responses' as const, contextWindow: 128000, modelMaxOutputTokens: 8192, maxOutputTokens: 8192, profile: 'deliberate', capabilities, declaredCapabilities: capabilities };
+const model: SessionModelView = { configured: { model: 'native/coder' }, effective: invocation, auxiliary: { mode: 'session', effective: invocation } };
 const catalog: CatalogModelView[] = [{ model: 'native/coder', protocol: 'openai_responses', contextWindow: 128000, maxOutputTokens: 8192, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'deliberate' }, { id: 'brief' }], defaultProfile: 'deliberate', credentialSource: { type: 'literal' } }];
 const source: SourceSettings = { prospective_approval_mode: 'full_access', absent_resource_revision: 'absent', resource_revisions: {}, target: { kind: 'user' }, provenance: {}, process_policy_impacts: {}, user: { path: '/home/rustx.toml', revision: 'user', authored: {} }, workspace: { path: '/workspace/A/rustx.toml', revision: 'workspace', authored: {} }, user_resource_root: '/home/.agents', workspace_resource_root: '/workspace/A/.agents', runtime_root: '/runtime', user_mcp: { path: '/home/.agents/mcp.toml', revision: 'missing' }, workspace_mcp: { path: '/workspace/A/.agents/mcp.toml', revision: 'missing' }, agents: [], repair_sequence: '0' };
 server.handlers.set('session/model', () => (domainReceipt('model',[model])));
@@ -60,13 +61,13 @@ if (mode === 'settled') {
    timing: { model_ms: 20500, tool_ms: 9652000, mean_ttft_ms: 3100, output_tokens_per_second: 49 } };
  s.context = { compaction_count: 0, compaction_in_progress: false, occupancy: { estimated: false, model_deferred:false, model_source:null, input_tokens: "15000", context_window_tokens: "128000", model: 'native/coder', breakdown: { system_tokens: "1900", tool_tokens: "6000", message_tokens: "7100" } } };
 }
-if (mode !== 'settled' && mode !== 'composer') s.attempt = { attempt_id: 'attempt-1', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } };
+if (mode !== 'settled' && mode !== 'composer') s.attempt = { attempt_id: 'attempt-1', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'plan' } };
 if (mode === 'streaming') {
  s.messages.pop(); s.transcript.entries.pop();
  s.attempt!.in_flight = { message_id: 'streaming-1', blocks: [{ type: 'reasoning', block_index: 0, text: 'Checking the native Tool lifecycle…\nThe canonical ledger owns committed output.' }, { type: 'text', block_index: 1, text: 'The browser renders a replaceable projection. It does not reconstruct execution from events.' }] };
 }
 if (mode === 'tools' || mode === 'error') {
- const calls = [{ id: 'read-1', tool_id: 'tool-read', name: 'read', arguments: { path: 'src/runtime_client/snapshot.rs' } }, { id: 'bash-1', tool_id: 'tool-bash', name: 'bash', arguments: { description: 'Run native boundary tests', command: 'cargo test --lib' } }, { id: 'edit-1', tool_id: 'tool-edit', name: 'edit', arguments: { path: 'src/main.rs', edits: [{ oldText: 'legacy_view()', newText: 'native_projection()' }] } }];
+ const calls = [{ id: 'read-1', tool_id: 'tool-read', name: 'read', arguments: { arguments: { path: 'src/runtime_client/snapshot.rs' } } }, { id: 'bash-1', tool_id: 'tool-bash', name: 'bash', arguments: { arguments: { description: 'Run native boundary tests', command: 'cargo test --lib' } } }, { id: 'edit-1', tool_id: 'tool-edit', name: 'edit', arguments: { arguments: { path: 'src/main.rs', edits: [{ oldText: 'legacy_view()', newText: 'native_projection()' }] } } }];
  s.messages[1] = { role: 'assistant', id: 'calls-1', content: [{ type: 'reasoning', text: 'Inspect the projection, then validate the native contract.' }, ...calls.map(call => ({ type: 'tool_call' as const, ...call }))] };
  s.transcript.entries[1] = { cursor: '2', item: { type: 'message', message: s.messages[1] }, tool_calls: calls.map((call, index) => ({committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'calls-1'},block_index:index + 1},assembly_complete:true, message_id: 'calls-1', block_index: index + 1, call_id: call.id, tool_id: call.tool_id, name: call.name, state: index === 1 && mode === 'tools' ? { type: 'running', arguments: JSON.stringify(call.arguments) } : { type: 'settled', arguments: JSON.stringify(call.arguments), result: { status: index === 1 ? { type: 'failed', error: 'Native test failure: assertion failed' } : { type: 'success' }, duration_ms: '12', content: [{ type: 'text', text: index === 0 ? 'pub struct RuntimeClientSnapshot {\n    pub conversation_id: ConversationId,\n}' : index === 2 ? 'Replaced one occurrence.' : 'test native_boundary ... FAILED' }] } } })) };
 }
@@ -76,7 +77,7 @@ if (mode === 'questionnaire') {
  if (pending.body!.kind.type === 'questionnaire') pending.body!.kind.questionnaire.questions.push({ header: 'Coverage', question: 'Which checks should be included?', answer: { type: 'multi_choice', min_selected: 1, max_selected: 2, allow_custom: true, options: [{ label: 'Native contracts', description: 'Verify runtime authority.' }, { label: 'Browser references', description: 'Verify the pinned presentation.' }] } });
  s.pending_interactions = [pending];
  // The pending call's own transcript row reports the wait, never the questions.
- const ask = { id: 'call-ask', tool_id: 'tool-ask-user', name: 'ask_user', arguments: { questions: [{ header: 'Direction', question: 'Which direction?', options: [] }, { header: 'Coverage', question: 'Which checks should be included?', options: [] }] } };
+ const ask = { id: 'call-ask', tool_id: 'tool-ask-user', name: 'ask_user', arguments: { arguments: { questions: [{ header: 'Direction', question: 'Which direction?', options: [] }, { header: 'Coverage', question: 'Which checks should be included?', options: [] }] } } };
  const answer = s.messages[1];
  if (answer.role === 'assistant') answer.content.push({ type: 'tool_call', ...ask });
  s.transcript.entries[1] = { cursor: '2', item: { type: 'message', message: s.messages[1] }, tool_calls: [{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'answer-1'},block_index:2},assembly_complete:true, message_id: 'answer-1', block_index: 2, call_id: ask.id, tool_id: ask.tool_id, name: ask.name, state: { type: 'running', arguments: JSON.stringify(ask.arguments) } }] };
@@ -126,7 +127,7 @@ if (mode === 'retry-active' || mode === 'retry-settled') {
  const recovered = { role: 'assistant' as const, id: retry.request!.assistant_message_id!, content: [{ type: 'text' as const, text: 'Recovered after timeout.' }] };
  if (mode === 'retry-active') {
   s.messages.pop(); s.transcript.entries.pop();
-  s.attempt = { attempt_id: 'attempt-a', phase: { type: 'running' }, turn: 1, in_flight: { message_id: recovered.id, blocks: [] }, execution_settings: { resource_revision: '1', approval_mode: 'policy' } };
+  s.attempt = { attempt_id: 'attempt-a', phase: { type: 'running' }, turn: 1, in_flight: { message_id: recovered.id, blocks: [] }, execution_settings: { resource_revision: '1', approval_mode: 'plan' } };
  } else {
   s.attempt = { attempt_id: 'attempt-a', phase: { type: 'settled', outcome: { type: 'completed', finish_reason: { type: 'stop' } } }, turn: 1 };
   s.messages[1] = recovered; s.transcript.entries[1] = { cursor: '2', item: { type: 'message', message: recovered } };
@@ -158,7 +159,7 @@ if (mode === 'composer') {
       for (const { request, socket } of server.requests.slice(uploadStart)) if (request.method === 'session/uploadStatus') server.reply(request, socket);
     },
     uploads: () => server.requests.filter(row => row.request.method === 'session/uploadPrepare').length,
-    running: async value => { const next = structuredClone(server.snapshots.get('A')!); next.attempt = value ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } } : null; await server.update('A', next); },
+    running: async value => { const next = structuredClone(server.snapshots.get('A')!); next.attempt = value ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'plan' } } : null; await server.update('A', next); },
     docks: async value => {
       const next = structuredClone(server.snapshots.get('A')!);
       next.todos = value ? { next_id: '2', tasks: [{ id: '1', subject: 'Review the composer', status: 'in_progress', active_form: 'Reviewing the composer' }] } : null;
@@ -189,7 +190,7 @@ if (mode === 'composer') {
 }
 declare global {
  interface Window { compactionFixture: { reply(): Promise<void>; compact(): Promise<void> } }
-  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; holdSubmission(): void; acknowledgeSubmission(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v78').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
+  interface Window { composerFixture: { holdUploads(): void; settleUploads(state: 'ready' | 'failed' | 'unresolved'): void; uploads(): number; running(value: boolean): Promise<void>; docks(value: boolean): Promise<void>; holdCancellation(): void; holdSubmission(): void; acknowledgeSubmission(): void; busyEnter(value: 'queue' | 'steer'): void; cancellations(): import('../../../protocol/app-server/v79').AttachmentTarget[]; acknowledgeCancellation(): Promise<void>; submissions(): string[] } }
 }
 
 function RestoredComposerFixture() {

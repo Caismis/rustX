@@ -13,7 +13,7 @@ import { prependTrace, beginTraceDetail, completeTraceDetail, fillTraceGap, refr
 import { completeHistoryThrough, ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v78';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v79';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -1160,7 +1160,7 @@ it('421: fold retains System, first main semantic content and actionable compact
 
 it('421: Tool input and result render bounded summary facts without detail reads', () => {
   const tool = traceTool(1, { preview: { text: 'bounded result', truncated: true } });
-  tool.tool!.arguments = { text: '{"command":"bounded input', truncated: true };
+  tool.tool!.arguments = { text: '{"arguments":{"command":"bounded input', truncated: true };
   const load = vi.fn(); show(cacheOf([tool]), load);
   expect(row('RecordRow', tool.id).textContent).toContain('bounded input');
   expect(row('RecordRow', tool.id).textContent).toContain('→bounded result');
@@ -1600,7 +1600,7 @@ it('tool result attachments remain available in summary and result without an ex
 
 it('summarizes a successful image read by attachment count and retains its arguments', () => {
   const record = traceTool(1, { preview: { text: 'Read static PNG image', truncated: false }, attachments: [{ artifact_id: 'shot', image: true }] });
-  Object.assign(record.tool!, { name: 'read_image', tool_id: 'tool-read-image', outcome: 'success', arguments: { text: '{"path":"sample.png"}', truncated: false } });
+  Object.assign(record.tool!, { name: 'read_image', tool_id: 'tool-read-image', outcome: 'success', arguments: { text: '{"arguments":{"path":"sample.png"}}', truncated: false } });
   show(cacheOf([record]));
   const imageRow = row('RecordRow', record.id);
   expect(imageRow.textContent).toContain('Images ×1');
@@ -1617,7 +1617,7 @@ it('Request markers retain canonical native state independently of error decorat
 
 it('keeps question Tool records but excludes interaction audits from every trajectory surface', () => {
   const tx = translator('en');
-  const question = traceTool(1, { tool: { ...traceTool(1).tool!, tool_id: 'tool-ask-user', name: 'ask_user', arguments: { text: '{"questions":[{"question":"What should I do?"}]}', truncated: false } } });
+  const question = traceTool(1, { tool: { ...traceTool(1).tool!, tool_id: 'tool-ask-user', name: 'ask_user', arguments: { text: '{"arguments":{"questions":[{"question":"What should I do?"}]}}', truncated: false } } });
   const audits = ['running', 'completed', 'cancelled'].map((state, n) => traceRecord(n + 2, {
     kind: 'interaction', request: null, state: state as TraceRecord['state'],
     preview: { text: 'internal-question-audit', truncated: false },

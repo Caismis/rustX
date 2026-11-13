@@ -5,12 +5,12 @@ import { parseJson } from '../src/presentation/primitives/json';
 import { readTraceBlocks, readTraceCollection, readTraceValue } from '../src/client/trace-content';
 import { nativeTraceFixture } from './native-trace-fixture';
 import { traceRecord, traceTool, requestDetail, toolDetail } from './trace-fixture';
-import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v78';
+import type { TraceDetail, TraceRecord } from '../../protocol/app-server/v79';
 afterEach(cleanup);
 const props = (record: TraceRecord): TrajectoryInspectorProps => ({ item: { type: 'RecordRow', record, display_key: record.id, owner_record_id: record.id, facet: 'overview', label: '', preview: '' }, facet: 'overview', onFacet: vi.fn(), onLoadDetail: vi.fn(), onClose: vi.fn(), records: [record], executions: new Map(), requestNumbers: new Map(), completeHistory: true, onOpen: vi.fn() });
 const assistant = () => {
   const record = traceRecord(4, { kind: 'assistant', request: null, message_id: 'assistant-4', preview: { text: 'Inspect the **workspace**.', truncated: true } });
-  const call = { type: 'tool_call' as const, call_id: 'original-call', tool_id: 'tool-bash', name: 'bash', arguments: { value: { command: 'git status' }, truncated: false } };
+  const call = { type: 'tool_call' as const, call_id: 'original-call', tool_id: 'tool-bash', name: 'bash', arguments: { value: { arguments: { command: 'git status' }, execution_mode: 'foreground' }, truncated: false } };
   record.calls = [{ occurrence: { locator: { type: 'by_message_id', message_id: 'assistant-4' }, block_index: 2 }, fields: [], call_id: call.call_id, tool_id: call.tool_id, name: call.name }];
   const detail: TraceDetail = { id: record.id, kind: record.kind, projected_messages: [], messages: [{ message_id: 'assistant-4', role: 'assistant', truncated: false, blocks: [{ type: 'reasoning', text: { text: 'Plan **the review** carefully.', truncated: false } }, { type: 'text', text: { text: 'Inspect the **workspace**.', truncated: false } }, call] }], truncated: false };
   return { record, detail };
@@ -33,7 +33,7 @@ it.each(['overview', 'rendered', 'raw'] as const)('native assistant %s uses the 
 it.each(['input', 'output', 'schema'] as const)('native Tool %s reuses the styled source, result and Schema presentations', async facet => {
   const record = traceTool(5), detail = toolDetail(5), native = nativeTraceFixture(record, detail), base = { ...props(record), facet };
   // The source contract, arguments and program agree, as they do on the native wire.
-  detail.tool!.source!.text.text = (detail.tool!.arguments!.value as { command: string }).command;
+  detail.tool!.source!.text.text = (detail.tool!.arguments!.value as { arguments: { command: string } }).arguments.command;
   const ui = render(<TrajectoryInspector {...base} detail={detail}/>); const reference = normalize(screen.getByRole('tabpanel')); ui.unmount();
   render(<TrajectoryInspector {...base} detailPage={native.page} detailReader={native.reader}/>);
   await waitFor(() => expect(normalize(screen.getByRole('tabpanel'))).toBe(reference)); expect(screen.queryByRole('combobox')).toBeNull();

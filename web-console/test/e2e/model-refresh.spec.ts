@@ -326,15 +326,6 @@ for (const replaceLastProvider of [false, true]) test(replaceLastProvider
   const wire = await wireProbe(page);
   const native = await AppServerHost.connectRemote({endpoint:fixture.endpoint, token:fixture.token});
   try {
-    appendFileSync(fixture.settings, `
-[agent.model.summary_model]
-mode = "explicit"
-model = "fixture/console-model"
-
-[agent.model.title_model]
-mode = "explicit"
-model = "fixture/second-model"
-`);
     if (!replaceLastProvider) appendFileSync(fixture.settings, `
 [providers.alternative]
 protocol = "openai_chat_completions"
@@ -362,6 +353,12 @@ compat = { chat_reasoning_replay = "omit" }
     await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     const oldId = await openEmptySession(page, fixture, 'Workspace A');
+    // The source default follows the primary for future Sessions. Only this
+    // existing Session carries an explicit auxiliary selection to recover.
+    const oldSession = await native.attach(oldId);
+    const model = await oldSession.modelGet();
+    await oldSession.modelSet({ ...model.configured, auxiliary: { mode: 'explicit', model: 'fixture/console-model' } });
+
     const input = page.getByRole('textbox', {name:'Message', exact:true});
     const send = page.getByRole('button', {name:'Send', exact:true});
     const trigger = page.locator('[data-model-select]');
@@ -421,6 +418,8 @@ compat = { chat_reasoning_replay = "omit" }
       await expect(unavailable).toBeVisible();
       await expect(trigger).toBeEnabled();
       await trigger.click();
+      const modelMenu = page.getByRole('menuitem', {name:'Model', exact:true});
+      if (await modelMenu.isVisible()) await modelMenu.click();
       await expect(page.getByRole('menuitemradio', {name:replacementModel, exact:true})).toBeEnabled();
       await page.keyboard.press('Escape');
     } else {
@@ -451,13 +450,52 @@ compat = { chat_reasoning_replay = "omit" }
     await expect(page.getByRole('menuitemradio', {name:'workspace-alias', exact:true})).toHaveCount(0);
     const replacement = page.getByRole('menuitemradio', {name:replacementModel, exact:true});
     await expect(replacement).toBeEnabled();
+    const beforeSelection = await oldSession.modelGet();
+    const beforeSettings = await native.readSettings(oldId);
+    expect(beforeSelection.configured).toMatchObject({
+      model: 'fixture/console-model', auxiliary: {mode:'explicit', model:'fixture/console-model'},
+    });
+    const primaryRequests = () => wire.requests.filter(request => request.method === 'session/setModel' && request.params.target.session_id === oldId);
+    const beforeRequests = primaryRequests().length;
     await replacement.click();
+    await expect.poll(() => primaryRequests().length).toBe(beforeRequests + 1);
+    const primaryRequest = primaryRequests()[beforeRequests];
+    expect(primaryRequest.params.config).toMatchObject({model:replacementModel, auxiliary:beforeSelection.configured.auxiliary});
+    expect(primaryRequest.params).not.toHaveProperty('recover_unavailable_auxiliary');
+    // Observe this exact native refusal before checking that no model state
+    // changed. A primary gesture cannot clear an unavailable Explicit auxiliary.
+    await expect.poll(() => wire.responses.some(response => response.id === primaryRequest.id)).toBe(true);
+    expect(wire.responses.find(response => response.id === primaryRequest.id)).toEqual({
+      id: primaryRequest.id, method:'session/setModel', result:undefined,
+    });
+    await expect(trigger).toHaveAttribute('aria-busy', 'false');
+    await expect(page.locator('[data-toast]').filter({hasText:'model_unavailable'})).toContainText('fixture/console-model');
+    await expect(trigger).toContainText('fixture/console-model');
+    await expect(unavailable).toBeVisible();
+    await expect(send).toBeDisabled();
+    const refused = await oldSession.modelGet();
+    expect(refused.configured).toEqual(beforeSelection.configured);
+    const refusedSettings = await native.readSettings(oldId);
+    expect(refusedSettings.settings.model).toEqual(beforeSettings.settings.model);
+    expect(refusedSettings.revision).toBe(beforeSettings.revision);
+
+    // Recovery is a separate explicit native request, with the unchanged
+    // auxiliary carried from authoritative readback and deliberate opt-in.
+    await page.keyboard.press('Escape');
+    const recovered = await oldSession.modelSet({...refused.configured, model:replacementModel}, true);
+    expect(recovered.configured).toMatchObject({
+      model: replacementModel, auxiliary: {mode:'session', profile:{mode:'lowest'}},
+    });
     await expect(trigger).toContainText(replacementModel);
+    await expect(unavailable).toHaveCount(0);
     await input.fill('Continue the old conversation');
+    await expect(send).toBeEnabled();
     await send.click();
     await expect(page.getByText('Old conversation continues after reselecting.', {exact:true})).toBeVisible();
+    await expect(history).toBeVisible();
     const selection = (await native.readSettings(oldId)).settings.model;
-    expect(selection).toMatchObject({summaryModel:{mode:'session'}, titleModel:{mode:'session'}});
+    expect(selection).toMatchObject({model:replacementModel, auxiliary:{mode:'session', profile:{mode:'lowest'}}});
+    expect(primaryRequests()).toHaveLength(beforeRequests + 1);
     expect(wire.requests.filter(request => request.method === 'initialize')).toHaveLength(1);
   } catch (error) {
     await test.info().attach('native-diagnostics', {body:JSON.stringify(fixture.diagnostics()),contentType:'application/json'});

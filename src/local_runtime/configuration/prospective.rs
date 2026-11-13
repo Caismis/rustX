@@ -49,10 +49,13 @@ fn missing_agent_model_field(
     if models.model(&selection.model).is_err() {
         Some("model.model")
     } else {
-        selection
-            .summary_selection()
-            .filter(|summary| models.model(&summary.model).is_err())
-            .map(|_| "model.summary_model")
+        // Resolve against this catalog: an explicit auxiliary naming a missing
+        // model returns Err from auxiliary_selection (it looks the model up).
+        // Do not require Ok-then-filter — that dead path never sees the miss.
+        match crate::model::session::auxiliary_selection(models, selection) {
+            Ok(_) => None,
+            Err(_) => Some("model.auxiliary"),
+        }
     }
 }
 
@@ -67,9 +70,8 @@ fn agent_model_can_bind(
             .is_ok_and(|definition| analyze_selection(definition, &selection, layer).is_ok())
     };
     valid(model.selection(), RequestParamsLayer::SessionOverrides)
-        && model
-            .summary_selection()
-            .is_none_or(|summary| valid(summary, RequestParamsLayer::SummaryOverrides))
+        && crate::model::session::auxiliary_selection(models, model)
+            .is_ok_and(|selection| valid(selection, RequestParamsLayer::AuxiliaryOverrides))
 }
 
 impl ProspectiveSessionConfig {
@@ -304,9 +306,8 @@ impl ProspectiveSessionConfig {
                 .and_then(|definition| definition.model())
                 .is_none_or(|model| {
                     allows_unbound(&model.model)
-                        || model
-                            .summary_selection()
-                            .is_some_and(|summary| allows_unbound(&summary.model))
+                        || crate::model::session::auxiliary_selection(&adopted.models, model)
+                            .is_ok_and(|auxiliary| allows_unbound(&auxiliary.model))
                         || adopted.same_named_model(model, self, model)
                 })
         }) && adopted
@@ -369,13 +370,15 @@ impl ProspectiveSessionConfig {
             &other.models,
             &right.selection(),
             RequestParamsLayer::SessionOverrides,
-        ) && match (left.summary_selection(), right.summary_selection()) {
-            (None, None) => true,
-            (Some(left), Some(right)) => self.models.same_invocation(
+        ) && match (
+            crate::model::session::auxiliary_selection(&self.models, left),
+            crate::model::session::auxiliary_selection(&other.models, right),
+        ) {
+            (Ok(left), Ok(right)) => self.models.same_invocation(
                 &left,
                 &other.models,
                 &right,
-                RequestParamsLayer::SummaryOverrides,
+                RequestParamsLayer::AuxiliaryOverrides,
             ),
             _ => false,
         }
