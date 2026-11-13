@@ -758,11 +758,9 @@ impl Owner {
         }
         let flights = self.flights.lock().expect("workspace python flights");
         let victims: Vec<PathBuf> = records
-            .iter()
-            .filter(|(path, record)| {
-                !flights.contains_key(*path) && !matches!(record, Record::Ready { .. })
-            })
-            .map(|(path, _)| path.clone())
+            .keys()
+            .filter(|path| !flights.contains_key(*path))
+            .cloned()
             .collect();
         drop(flights);
         for victim in victims {
@@ -2049,6 +2047,48 @@ pub(crate) mod tests {
         assert!(selection.virtual_env.is_some());
         assert!(selection.path_prefix[0].ends_with("bin"));
         let _ = generation_of(&root_path);
+    }
+
+    #[tokio::test]
+    async fn ready_cache_eviction_revalidates_without_rebuilding_environment() {
+        let probe = Arc::new(Scripted::new("0.10.2"));
+        let owner = Owner::for_test(probe.clone(), None, None, None);
+        let mut roots = Vec::new();
+        for _ in 0..129 {
+            let root = workspace();
+            write_venv(&root.path().join(".venv"));
+            std::fs::write(root.path().join(".venv/keep"), "installed dependency")
+                .expect("sentinel");
+            let root_path = std::fs::canonicalize(root.path()).expect("canonical");
+            owner.prepare(root_path.clone()).await;
+            roots.push((root, root_path));
+        }
+        let evicted = {
+            let records = owner.records.lock().expect("records");
+            assert_eq!(records.len(), 128);
+            roots
+                .iter()
+                .find(|(_, path)| !records.contains_key(path))
+                .expect("one readiness record was evicted")
+                .1
+                .clone()
+        };
+        assert!(owner.observe(&evicted).virtual_env.is_none());
+        let before = probe.calls.lock().expect("calls").len();
+        owner.prepare(evicted.clone()).await;
+        assert!(owner.observe(&evicted).virtual_env.is_some());
+        let calls = probe.calls.lock().expect("calls");
+        assert_eq!(calls[before..].len(), 2);
+        assert!(
+            calls[before..]
+                .iter()
+                .all(|argv| argv.iter().any(|arg| arg == "-I"))
+        );
+        assert_eq!(
+            std::fs::read_to_string(evicted.join(".venv/keep")).expect("preserved sentinel"),
+            "installed dependency"
+        );
+        assert_eq!(owner.records.lock().expect("records").len(), 128);
     }
 
     #[tokio::test]

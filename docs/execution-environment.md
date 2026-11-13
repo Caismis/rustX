@@ -108,7 +108,9 @@ tracked metadata can remain cached until another input changes.
 One process admits at most two uv or interpreter probes at a time; that cap
 does not span processes. One Workspace keeps a single preparation task until
 it finishes, and a process retains a bounded number of finished tasks, probe
-cancellation signals, and non-ready records. A launcher that starts rustX
+cancellation signals, and Workspace records, including Ready records. Evicting
+a record only drops cached readiness; later use revalidates the existing
+environment without rebuilding it. A launcher that starts rustX
 with a short `PATH` is a launcher configuration problem: a running host does
 not observe later changes made in a parent terminal. `uv` is optional and is
 installed separately; creation requires 0.10.0 or newer. The environment is
