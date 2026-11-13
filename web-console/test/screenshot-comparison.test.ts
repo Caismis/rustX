@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { readdirSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { brotliDecompressSync } from 'node:zlib';
 import { expect, it } from 'vitest';
 import {
   compareScreenshot,
@@ -76,6 +77,65 @@ const cells = (region: NoiseRegion): [number, number][] => {
     for (let x = region.x; x < region.x + region.width; x++) found.push([x, y]);
   return found;
 };
+
+it('the Chinese profile focus corner accepts only its two measured sites with identical geometry', () => {
+  const name = 'model-profiles-zh-dark-linux.png';
+  const entry = manifest.find(row => row.reference === name)! as unknown as {
+    capture: string; referenceSha256: string; captureSha256: string;
+    geometry: Record<'baseline' | 'variant', { file: string; sha256: string }>;
+    regions: NoiseRegion[];
+  };
+  const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+  const proof = (kind: 'baseline' | 'variant') => {
+    const metadata = entry.geometry[kind], bytes = readFileSync(new URL(metadata.file, frozen));
+    expect(hash(bytes)).toBe(metadata.sha256);
+    return JSON.parse(brotliDecompressSync(bytes).toString('utf8')) as Record<string, unknown>;
+  };
+  const { pngSha256: baselinePng, ...baselineState } = proof('baseline');
+  const { pngSha256: variantPng, ...variantState } = proof('variant');
+  expect(baselinePng).toBe(entry.referenceSha256);
+  expect(variantPng).toBe(entry.captureSha256);
+  expect(variantState).toEqual(baselineState);
+  expect(baselineState.viewport).toEqual([1440, 1000, 1]);
+  expect(baselineState.fonts).toMatchObject({ status: 'loaded', monospace: true, sans: true });
+  expect(baselineState.focus).toMatchObject({ tag: 'DIV', class: 'cm-content cm-lineWrapping', role: 'textbox' });
+  const nodes = baselineState.nodes as { name: string; value: { rect: Record<string, number>; styles: Record<string, string> } }[];
+  expect(nodes).toHaveLength(19); expect(nodes.every(node => node.value)).toBe(true);
+  const editor = nodes.find(node => node.name === 'editor')!.value;
+  expect(editor.rect).toMatchObject({ x: 409, y: 474, width: 618, height: 144 });
+  expect(editor.styles).toMatchObject({
+    'outline-color': 'rgb(103, 158, 254)', 'outline-width': '2px', 'outline-style': 'solid',
+    'outline-offset': '-1px',
+    'border-top-left-radius': '8px', 'border-top-right-radius': '8px',
+    'border-bottom-left-radius': '8px', 'border-bottom-right-radius': '8px',
+  });
+  const expected = reference(name), actual = fixture(entry.capture);
+  const directory = new URL('./e2e/settings-model-editor.spec.ts-snapshots/', import.meta.url);
+  expect(hash(readFileSync(new URL(name, directory)))).toBe(entry.referenceSha256);
+  expect(hash(readFileSync(new URL(entry.capture, frozen)))).toBe(entry.captureSha256);
+  const measured = noisePolicy.find(row => row.reference === name)!.pixels!;
+  expect(measured).toHaveLength(2);
+  for (const [x, y, before, after] of measured) {
+    expect(pixel(expected, x, y)).toEqual(before); expect(pixel(actual, x, y)).toEqual(after);
+  }
+  expect(entry.regions.map(({ x, y, width, height, maxChangedPixels, maxChannelDelta }) =>
+    [x, y, width, height, maxChangedPixels, maxChannelDelta])).toEqual([
+    [642, 499, 1, 1, 1, 8], [642, 500, 1, 1, 1, 25],
+  ]);
+  expect(compare(actual, name, expected, []).ok).toBe(false);
+  const accepted = compare(actual, name, expected, noisePolicy);
+  expect(accepted.ok).toBe(true); expect(accepted.totalChanged).toBe(2);
+  expect(compare(actual, 'model-advanced-zh-dark-linux.png', expected, noisePolicy).ok).toBe(false);
+  for (const [x, y, limit] of [[642, 499, 8], [642, 500, 25]]) {
+    const excessive = copy(expected); nudge(excessive, x, y, limit + 1);
+    expect(compare(excessive, name, expected, noisePolicy).ok).toBe(false);
+  }
+  for (const [x, y] of [[641, 499], [643, 499], [642, 498], [642, 501], [641, 500], [643, 500]]) {
+    const adjacent = copy(expected); nudge(adjacent, x, y, 1);
+    const rejected = compare(adjacent, name, expected, noisePolicy);
+    expect(rejected.ok).toBe(false); expect(rejected.changedOutsideRegions).toBe(1);
+  }
+});
 
 it.each(['light', 'dark'])('the narrow %s Model input corner admits its two measured raster variants and rejects adjacent or larger changes', theme => {
   const name = `settings-model-advanced-${theme}-390-baseline-linux.png`;
