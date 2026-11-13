@@ -374,6 +374,7 @@ impl Owner {
             return;
         }
         if let (Some(pin), Some(requires)) = (pin.as_deref(), requires)
+            && !path_request(pin)
             && exact_pin_conflicts(pin, requires)
         {
             self.conflict(
@@ -899,6 +900,43 @@ pub(crate) fn schedule(root: PathBuf) {
     global().schedule_on(root);
 }
 
+/// Prepares one Workspace and waits. Registration and native Bash do not call
+/// this. A caller that has already chosen to wait, including a test that needs
+/// the selection before the first command, can.
+pub async fn prepare_now(root: &Path) {
+    let Ok(canonical) = std::fs::canonicalize(root) else {
+        return;
+    };
+    global().prepare(canonical).await;
+}
+
+#[cfg(test)]
+pub(crate) fn publish_ready_for_test(root: &Path) {
+    let root = std::fs::canonicalize(root).expect("workspace");
+    let target = root.join(".venv");
+    let bin = target.join("bin");
+    assert!(
+        bin.join("python3").exists(),
+        "a test-ready environment needs python3"
+    );
+    let guard = ensure_guard("Workspace Python is no longer available")
+        .or_else(fallback_guard)
+        .expect("python guard");
+    global()
+        .records
+        .lock()
+        .expect("workspace python records")
+        .insert(
+            root.clone(),
+            Record::Ready {
+                generation: generation_of(&root),
+                bin,
+                virtual_env: target,
+                guard,
+            },
+        );
+}
+
 /// Watches the registration handoff directory until `shutdown` fires.
 pub(crate) fn start_admit_watcher(shutdown: tokio_util::sync::CancellationToken) {
     tokio::spawn(async move {
@@ -1232,6 +1270,7 @@ fn request_satisfied(
     }
 }
 
+#[cfg(test)]
 fn pin_matches(pin: &str, actual: &Version) -> bool {
     request_satisfied(pin, actual, "cpython").is_ok()
 }
@@ -1393,7 +1432,8 @@ async fn acquire_lock(
 mod tests {
     use super::{
         Owner, ProgramOutput, ProgramProbe, ProgramRequest, Record, ensure_guard,
-        exact_pin_conflicts, generation_of, lock_file, pin_matches, scan_admit, uv_can_create,
+        exact_pin_conflicts, generation_of, lock_file, path_request, pin_matches, scan_admit,
+        uv_can_create,
     };
     use crate::tools::execution_environment::{ExecutionHost, host_from_entries};
     use pep440_rs::Version;
@@ -1581,6 +1621,11 @@ mod tests {
         assert!(!pin_matches("3.12.4", &actual));
         assert!(exact_pin_conflicts("3.11.0", ">=3.12"));
         assert!(!exact_pin_conflicts("3.12", ">=3.12.1"));
+        assert!(!exact_pin_conflicts(
+            "/opt/python-3.11.0/bin/python",
+            ">=3.12"
+        ));
+        assert!(path_request("/opt/python-3.11.0/bin/python"));
     }
 
     #[tokio::test]
