@@ -881,6 +881,7 @@ jobs:
           test/document-integration.test.ts
           test/workbench-host.test.ts
           test/terminal-lifecycle.test.ts
+          test/terminal-process.test.ts
           test/office-macos-lifecycle.test.ts
           test/office-macos.test.ts
       - name: macOS sandbox diagnostics on failure
