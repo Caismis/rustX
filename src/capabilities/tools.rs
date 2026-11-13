@@ -594,6 +594,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Frozen contracts are checked through both available and active owners.
     fn available_catalog_retains_captured_mcp_contract_for_workflow_fixed_calls() {
         use crate::runtime::identity::ToolCallId;
         use crate::tools::executor::PreflightOutcome;
@@ -622,10 +623,6 @@ mod tests {
                     server_id: server_id.clone(),
                 },
             );
-            definition.input_schema = serde_json::json!({
-                "type": "object", "$ref": format!("file://{}", path.display()),
-            });
-            let registration = ToolRegistration::plain(definition.clone(), Arc::new(NoopTool));
             let mut intent = profile(&[]);
             if selected {
                 intent.profile.tools.sources.insert(
@@ -633,31 +630,65 @@ mod tests {
                     crate::capabilities::selection::SourceToolSelection::All,
                 );
             }
-            let (available, active) = select_tools(&[registration], &[], &intent).unwrap();
+            let uri = url::Url::from_file_path(&path).unwrap().to_string();
+            definition.input_schema = serde_json::json!({
+                "type": "object", "$ref": uri,
+            });
+            // An available declaration is compiled before active projection.
+            // Neither selected nor unselected tools can grant host-file access.
+            let error = select_tools(
+                &[ToolRegistration::plain(
+                    definition.clone(),
+                    Arc::new(NoopTool),
+                )],
+                &[],
+                &intent,
+            )
+            .expect_err("a reference URI does not authorize resource retrieval");
+            assert!(error.contains("does not fetch resources"));
+
+            // Resource bytes are captured by the owner, outside compilation,
+            // and delivered with their original identity in a closed document.
+            let mut captured: serde_json::Value =
+                serde_json::from_reader(std::fs::File::open(&path).unwrap()).unwrap();
+            captured["$id"] = serde_json::json!(uri);
+            definition.input_schema = serde_json::json!({
+                "type": "object", "$ref": uri, "$defs": {"captured": captured},
+            });
+            let registration = ToolRegistration::plain(definition.clone(), Arc::new(NoopTool));
             std::fs::remove_file(path).unwrap();
+            let (available, active) = select_tools(&[registration], &[], &intent).unwrap();
             let business = serde_json::json!({
                 "elevation_reason": 1, "execution_mode": "authored business value",
             });
+            let invocation_id = ToolInvocationId::Workflow {
+                node: Box::new(crate::runtime::workflow::test_instance("review", "search")),
+                retry: 0,
+            };
             let prepared = available
                 .registration(&definition)
                 .unwrap()
-                .prepare_fixed(
-                    ToolInvocationId::Workflow {
-                        node: Box::new(crate::runtime::workflow::test_instance("review", "search")),
-                        retry: 0,
-                    },
-                    &definition,
-                    &business,
-                )
+                .prepare_fixed(invocation_id.clone(), &definition, &business)
                 .unwrap();
             let PreflightOutcome::Ready(prepared) = prepared else {
                 panic!("available Workflow leaf must retain its captured contract");
             };
             assert_eq!(prepared.invocation.arguments, business);
             assert_eq!(prepared.elevation_reason, None);
+            let invalid = serde_json::json!({
+                "elevation_reason": "not an integer", "execution_mode": "authored business value",
+            });
+            assert!(matches!(
+                available
+                    .registration(&definition)
+                    .unwrap()
+                    .prepare_fixed(invocation_id, &definition, &invalid)
+                    .unwrap(),
+                PreflightOutcome::Rejected { .. }
+            ));
             if selected {
                 // Reprojection and model observation must reuse the same frozen
-                // resource capture after the external document disappears.
+                // owner-supplied resource capture without host retrieval.
                 let active = ToolRegistry::from_registrations(active.registrations()).unwrap();
                 assert_eq!(active.model_definitions().len(), 1);
                 assert!(matches!(
@@ -670,6 +701,17 @@ mod tests {
                         })
                         .unwrap(),
                     PreflightOutcome::Ready(_)
+                ));
+                assert!(matches!(
+                    active
+                        .preflight(&ToolCall {
+                            id: ToolCallId::new("invalid-model-call"),
+                            tool_id: definition.id.clone(),
+                            name: definition.name.clone(),
+                            arguments: serde_json::json!({"arguments": invalid}),
+                        })
+                        .unwrap(),
+                    PreflightOutcome::Rejected { .. }
                 ));
             } else {
                 assert!(active.is_empty());

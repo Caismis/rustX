@@ -456,6 +456,7 @@ impl AuxiliaryConsumer for ReviewConsumer {
     fn attempt(&self, _: &crate::runtime::identity::RequestId, _: u32) {}
     fn text(&self, _: &crate::runtime::identity::RequestId, _: &str) {}
     fn settled(&self, _: &Result<ConfirmedExecution, ContextError>) {}
+    fn retired(&self, _: &Result<ConfirmedExecution, ContextError>) {}
 }
 
 /// Maps a review verdict into Allow / Deny / Ask using `elevation_reason`.

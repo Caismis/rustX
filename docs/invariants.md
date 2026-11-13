@@ -8167,6 +8167,11 @@ when required by lineage/dependency closure; no stronger global audit is implied
 
 Original admission scope, current controller and result reservation precede native transfer. Closure and registration share a fence. Exact local correlation never authorizes replay; negative confirmation requires closed original admission, joined physical writes and authoritative absence. Read/discard/expiry cannot release an executing Call permit or a response copy before physical disposition. Observation loss is independent of native cancellation. Domain acceptance, durable settlement and displayed completion are separate facts. [All enforced component limits and ownership points](auxiliary-consumers.md) are part of this contract.
 
+A failed preparation returns its public admission error only after the native
+owner has released its result reservation, active generation entry, physical
+Call capacity and lifecycle admission. Successful admission still returns at
+confirmed `CallStarted`, without waiting for inference or retirement.
+
 ## Workflow Model invariants (Issue #496)
 
 - Each concrete Model visit owns one logical, tool-free Auxiliary Call through
