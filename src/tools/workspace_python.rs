@@ -534,6 +534,11 @@ impl Owner {
         // ancestors of the private directory. uv still owns discovery, policy,
         // downloads and version selection; the PEP 440 conjunction includes
         // every root requirement before uv can write the final target.
+        // A fixed launcher has already been probed. Dispatch that validated
+        // executable so mutable launcher configuration cannot change selection.
+        let request = fixed
+            .as_ref()
+            .map_or(request, |fixed| fixed.executable.display().to_string());
         argv.extend(["--python".to_owned(), request]);
         argv.push(target.display().to_string());
         #[cfg(test)]
@@ -541,10 +546,9 @@ impl Owner {
         let Ok(permit) = self.acquire_permit().await else {
             return;
         };
-        if !self.inputs_match(root, expected) {
-            return;
-        }
-        if fixed.as_ref().is_some_and(|fixed| !fixed.is_current()) {
+        if !self.inputs_match(root, expected)
+            || fixed.as_ref().is_some_and(|fixed| !fixed.is_current())
+        {
             return;
         }
         // This is the last classification before native creation dispatch.
@@ -562,12 +566,8 @@ impl Owner {
                 return;
             }
         }
-        let result = self
-            .dispatch(
-                self.program_request(root, argv, host.as_ref(), CREATE_TIMEOUT, expected),
-                &permit,
-            )
-            .await;
+        let program = self.program_request(root, argv, host.as_ref(), CREATE_TIMEOUT, expected);
+        let result = self.dispatch(program, &permit).await;
         drop(permit);
         let failure = match result {
             Ok(output) if output.status == 0 => None,
@@ -708,12 +708,37 @@ impl Owner {
         } else {
             root.join(pin)
         };
-        let stamp = stamp(&path).ok_or("the Python interpreter cannot be inspected")?;
+        let path_stamp = stamp(&path).ok_or("the Python interpreter cannot be inspected")?;
         let interpreter = self
             .probe_interpreter(root, Path::new(request), host, expected)
             .await?;
-        interpreter.check_requirements(root, Path::new(request), Some(pin), requires)?;
-        Ok(Some(FixedInterpreter { path, stamp }))
+        interpreter.check_requirements(Some(pin), requires)?;
+        let executable = std::fs::canonicalize(&interpreter.executable)
+            .map_err(|_| "the Python interpreter cannot be inspected")?;
+        let executable_stamp =
+            stamp(&executable).ok_or("the Python interpreter cannot be inspected")?;
+        if std::fs::canonicalize(&path).ok().as_ref() != Some(&executable) {
+            // The launcher probe authorized metadata, not the later contents
+            // of its reported executable path. Validate that actual file
+            // within its own before/after stamp witness.
+            let actual = self
+                .probe_interpreter(root, &executable, host, expected)
+                .await?;
+            actual.check_requirements(Some(pin), requires)?;
+            if std::fs::canonicalize(&actual.executable).ok().as_ref() != Some(&executable) {
+                return Err("the Python interpreter changed during validation");
+            }
+        }
+        let fixed = FixedInterpreter {
+            path,
+            stamp: path_stamp,
+            executable,
+            executable_stamp,
+        };
+        if !fixed.is_current() {
+            return Err("the Python interpreter changed during validation");
+        }
+        Ok(Some(fixed))
     }
 
     async fn check_interpreter(
@@ -740,7 +765,24 @@ impl Owner {
                 return Err("Workspace .venv is not a valid virtual environment");
             }
         }
-        interpreter.check_requirements(root, program, pin, requires)
+        interpreter.check_requirements(pin, requires)?;
+        if let Some(pin) = pin.filter(|pin| path_request(pin)) {
+            let requested = absolute_pin(root, pin);
+            let fixed = self
+                .check_fixed_interpreter(root, &requested, host, Some(pin), requires, expected)
+                .await?
+                .expect("path request");
+            // A launcher (notably /usr/bin/python3 on macOS) may exec a
+            // different binary. Compare the interpreters' reported base
+            // executables, rather than the launcher and venv symlink paths.
+            if !fixed.is_current()
+                || std::fs::canonicalize(&interpreter.executable).ok().as_ref()
+                    != Some(&fixed.executable)
+            {
+                return Err("Workspace Python does not satisfy .python-version");
+            }
+        }
+        Ok(())
     }
 
     async fn probe_interpreter(
@@ -757,7 +799,7 @@ impl Owner {
                     program.display().to_string(),
                     "-I".to_owned(),
                     "-c".to_owned(),
-                    "import platform, sys; print(sys.prefix); print(sys.base_prefix); print(platform.python_version()); print(sys.implementation.name)".to_owned(),
+                    "import platform, sys; print(sys.prefix); print(sys.base_prefix); print(platform.python_version()); print(sys.implementation.name); print(getattr(sys, '_base_executable', sys.executable))".to_owned(),
                 ],
                 host,
                 PROBE_TIMEOUT,
@@ -773,12 +815,14 @@ impl Owner {
         let base = lines.next().unwrap_or("").trim().to_owned();
         let version_text = lines.next().unwrap_or("").trim();
         let implementation = lines.next().unwrap_or("").trim().to_owned();
+        let executable = PathBuf::from(lines.next().unwrap_or("").trim());
         Ok(Interpreter {
             prefix,
             base,
             version: Version::from_str(version_text)
                 .map_err(|_| "the Python version could not be verified")?,
             implementation,
+            executable,
         })
     }
 
@@ -916,11 +960,14 @@ impl Owner {
 struct FixedInterpreter {
     path: PathBuf,
     stamp: PathStamp,
+    executable: PathBuf,
+    executable_stamp: PathStamp,
 }
 
 impl FixedInterpreter {
     fn is_current(&self) -> bool {
         stamp(&self.path).as_ref() == Some(&self.stamp)
+            && stamp(&self.executable).as_ref() == Some(&self.executable_stamp)
     }
 }
 
@@ -929,13 +976,12 @@ struct Interpreter {
     base: String,
     version: Version,
     implementation: String,
+    executable: PathBuf,
 }
 
 impl Interpreter {
     fn check_requirements(
         &self,
-        root: &Path,
-        program: &Path,
         pin: Option<&str>,
         requires: Option<&str>,
     ) -> Result<(), &'static str> {
@@ -946,25 +992,8 @@ impl Interpreter {
                 return Err("Workspace Python does not satisfy requires-python");
             }
         }
-        if let Some(pin) = pin {
-            if path_request(pin) {
-                let requested = if Path::new(pin).is_absolute() {
-                    PathBuf::from(pin)
-                } else {
-                    root.join(pin)
-                };
-                let Ok(actual) = std::fs::canonicalize(program) else {
-                    return Err("Workspace Python does not satisfy .python-version");
-                };
-                let Ok(expected) = std::fs::canonicalize(&requested) else {
-                    return Err("Workspace Python does not satisfy .python-version");
-                };
-                if actual != expected {
-                    return Err("Workspace Python does not satisfy .python-version");
-                }
-            } else {
-                request_satisfied(pin, &self.version, &self.implementation)?;
-            }
+        if let Some(pin) = pin.filter(|pin| !path_request(pin)) {
+            request_satisfied(pin, &self.version, &self.implementation)?;
         }
         Ok(())
     }
@@ -1988,16 +2017,21 @@ pub(crate) mod tests {
                         return Ok(ProgramOutput {
                             status: 0,
                             stdout: format!(
-                                "{}\n/usr\n3.12.3\n{}\n",
+                                "{}\n/usr\n3.12.3\n{}\n{}\n",
                                 venv.display(),
-                                self.implementation
+                                self.implementation,
+                                std::fs::canonicalize(program).unwrap().display()
                             ),
                             stderr: String::new(),
                         });
                     }
                     return Ok(ProgramOutput {
                         status: 0,
-                        stdout: format!("/usr\n/usr\n3.12.3\n{}\n", self.implementation),
+                        stdout: format!(
+                            "/usr\n/usr\n3.12.3\n{}\n{}\n",
+                            self.implementation,
+                            std::fs::canonicalize(program).unwrap().display()
+                        ),
                         stderr: String::new(),
                     });
                 }
@@ -2036,7 +2070,10 @@ pub(crate) mod tests {
     }
 
     fn workspace() -> tempfile::TempDir {
-        tempfile::tempdir().expect("workspace")
+        // Owner records are keyed by physical roots. macOS's default TMPDIR
+        // may spell the same directory through the /var -> /private/var alias.
+        let parent = std::fs::canonicalize(std::env::temp_dir()).expect("temporary root");
+        tempfile::tempdir_in(parent).expect("workspace")
     }
 
     fn host_for(bin: &Path) -> Arc<ExecutionHost> {
@@ -2542,6 +2579,35 @@ pub(crate) mod tests {
             Some(Record::Ready { .. }) => {}
             other => panic!("expected ready, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn adopting_a_path_pin_rejects_a_different_base_executable_with_the_same_version() {
+        let root = workspace();
+        let pinned = root.path().join("pinned-python");
+        let other = root.path().join("other-python");
+        write_executable(&pinned, "#!/bin/sh\nexit 0\n");
+        write_executable(&other, "#!/bin/sh\nexit 0\n");
+        write_linked_venv(&root.path().join(".venv"), &other);
+        std::fs::write(root.path().join(".python-version"), "./pinned-python").unwrap();
+        let original = generation_of(root.path());
+        let probe = Arc::new(Scripted::new("0.10.2"));
+        let owner = Owner::for_test(probe.clone(), None, None, None);
+        owner.prepare(root.path().to_path_buf()).await;
+        assert!(matches!(
+            owner.records.lock().unwrap().get(root.path()),
+            Some(Record::Conflict { diagnostic, .. }) if diagnostic.contains(".python-version")
+        ));
+        assert_eq!(generation_of(root.path()), original);
+        assert!(
+            probe
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|argv| argv.iter().any(|arg| arg == "-I"))
+        );
+        owner.stop().await;
     }
 
     #[tokio::test]
@@ -3356,50 +3422,59 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn relative_interpreter_pin_is_bound_to_the_workspace() {
-        let root = workspace();
-        let interpreter = PathBuf::from("/usr/bin/python3");
-        assert!(
-            interpreter.is_file(),
-            "system Python required by boundary suite"
-        );
-        std::os::unix::fs::symlink(&interpreter, root.path().join("pinned-python")).unwrap();
-        std::fs::write(root.path().join(".python-version"), "./pinned-python").unwrap();
-        let version = python_version(&interpreter);
-        std::fs::write(
-            root.path().join("pyproject.toml"),
-            format!(
-                "[project]\nrequires-python = \">={}.{}\"\n",
-                version.release()[0],
-                version.release()[1]
-            ),
-        )
-        .unwrap();
-        let path = installed_uv_path();
-        let host = host_from_entries(vec![
-            ("PATH", &path),
-            ("UV_OFFLINE", "1"),
-            ("UV_PYTHON_DOWNLOADS", "never"),
-        ]);
-        let owner = Owner::for_test(
-            Arc::new(super::SupervisedProbe),
-            Some(Arc::new(host)),
-            None,
-            None,
-        );
-        owner.prepare(root.path().to_path_buf()).await;
-        assert!(
-            matches!(
-                owner.records.lock().unwrap().get(root.path()),
-                Some(Record::Ready { .. })
-            ),
-            "{:?}",
-            owner.records.lock().unwrap()
-        );
-        assert_eq!(
-            std::fs::canonicalize(root.path().join(".venv/bin/python")).unwrap(),
-            std::fs::canonicalize(interpreter).unwrap()
-        );
-        owner.stop().await;
+        for launcher in [false, true] {
+            let root = workspace();
+            let interpreter = PathBuf::from("/usr/bin/python3");
+            assert!(
+                interpreter.is_file(),
+                "system Python required by boundary suite"
+            );
+            let requested = if launcher {
+                let wrapper = root.path().join("python-launcher");
+                write_executable(&wrapper, "#!/bin/sh\nexec /usr/bin/python3 \"$@\"\n");
+                wrapper
+            } else {
+                interpreter.clone()
+            };
+            std::os::unix::fs::symlink(&requested, root.path().join("pinned-python")).unwrap();
+            std::fs::write(root.path().join(".python-version"), "./pinned-python").unwrap();
+            let version = python_version(&interpreter);
+            std::fs::write(
+                root.path().join("pyproject.toml"),
+                format!(
+                    "[project]\nrequires-python = \">={}.{}\"\n",
+                    version.release()[0],
+                    version.release()[1]
+                ),
+            )
+            .unwrap();
+            let path = installed_uv_path();
+            let host = host_from_entries(vec![
+                ("PATH", &path),
+                ("UV_OFFLINE", "1"),
+                ("UV_PYTHON_DOWNLOADS", "never"),
+            ]);
+            let owner = Owner::for_test(
+                Arc::new(super::SupervisedProbe),
+                Some(Arc::new(host)),
+                None,
+                None,
+            );
+            owner.prepare(root.path().to_path_buf()).await;
+            assert!(
+                matches!(
+                    owner.records.lock().unwrap().get(root.path()),
+                    Some(Record::Ready { .. })
+                ),
+                "{:?}",
+                owner.records.lock().unwrap()
+            );
+            assert_eq!(
+                python_base_executable(&root.path().join(".venv/bin/python")),
+                python_base_executable(&interpreter)
+            );
+            owner.stop().await;
+        }
     }
 
     #[tokio::test]
@@ -3970,6 +4045,21 @@ pub(crate) mod tests {
         Version::from_str(String::from_utf8(output.stdout).unwrap().trim()).unwrap()
     }
 
+    fn python_base_executable(program: &Path) -> PathBuf {
+        let output = std::process::Command::new(program)
+            .args([
+                "-I",
+                "-c",
+                "import os, sys; print(os.path.realpath(sys._base_executable))",
+            ])
+            .env_remove("PYTHONEXECUTABLE")
+            .env_remove("__PYVENV_LAUNCHER__")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+    }
+
     fn installed_python_interpreters() -> Vec<(Version, PathBuf)> {
         // Enumeration supplies fixture executables only. The selection under
         // test goes through Owner::prepare and the production supervisor.
@@ -4104,6 +4194,91 @@ pub(crate) mod tests {
             owner.stop().await;
         }
     }
+    #[tokio::test]
+    async fn replaced_launcher_base_is_validated_before_creation() {
+        struct LauncherProbe {
+            scripted: Scripted,
+            launcher: PathBuf,
+            executable: PathBuf,
+            gate: Mutex<Option<super::TestGate>>,
+        }
+        impl ProgramProbe for LauncherProbe {
+            fn run(&self, request: ProgramRequest) -> BoxFuture<'_, Result<ProgramOutput, String>> {
+                Box::pin(async move {
+                    let program = Path::new(&request.argv[0]);
+                    if program == self.launcher || program == self.executable {
+                        let version = std::fs::read_to_string(&self.executable).unwrap();
+                        // Capture the old launcher's metadata before the gate;
+                        // the executable pathname is replaced while it waits.
+                        let stdout = format!(
+                            "/usr\n/usr\n{}\ncpython\n{}\n",
+                            version.trim(),
+                            self.executable.display()
+                        );
+                        if program == self.launcher {
+                            super::pass_gate(&self.gate).await;
+                        }
+                        return Ok(ProgramOutput {
+                            status: 0,
+                            stdout,
+                            stderr: String::new(),
+                        });
+                    }
+                    self.scripted.run(request).await
+                })
+            }
+        }
+        let root = workspace();
+        let launcher = root.path().join("launcher");
+        let executable = root.path().join("base-python");
+        write_executable(&launcher, "#!/bin/sh\nexit 0\n");
+        write_executable(&executable, "3.12.3");
+        std::fs::write(root.path().join(".python-version"), "./launcher").unwrap();
+        std::fs::write(
+            root.path().join("pyproject.toml"),
+            "[project]\nrequires-python = \">=3.12\"\n",
+        )
+        .unwrap();
+        let bin = workspace();
+        write_executable(&bin.path().join("uv"), "#!/bin/sh\nexit 0\n");
+        let probe = Arc::new(LauncherProbe {
+            scripted: Scripted::new("0.10.2"),
+            launcher,
+            executable: executable.clone(),
+            gate: Mutex::new(None),
+        });
+        let (entered, release) = arm_gate(&probe.gate);
+        let owner = Arc::new(Owner::for_test(
+            probe.clone(),
+            Some(host_for(bin.path())),
+            None,
+            None,
+        ));
+        let preparing = owner.clone();
+        let path = root.path().to_path_buf();
+        let task = tokio::spawn(async move { preparing.prepare(path).await });
+        entered.await.unwrap();
+        std::fs::rename(&executable, root.path().join("old-base")).unwrap();
+        write_executable(&executable, "3.11.0");
+        release.send(()).unwrap();
+        task.await.unwrap();
+        assert!(matches!(
+            owner.records.lock().unwrap().get(root.path()),
+            Some(Record::Conflict { .. })
+        ));
+        assert!(!root.path().join(".venv").exists());
+        assert!(
+            !probe
+                .scripted
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|argv| argv.iter().any(|arg| arg == "venv"))
+        );
+        owner.stop().await;
+    }
+
     #[tokio::test]
     async fn changed_fixed_interpreter_during_capacity_wait_does_not_create_a_target() {
         for change in ["entry", "target"] {

@@ -62,7 +62,12 @@ ordinary meaning.
   specify versions, pep440_rs constructs their conjunction, preserving
   implementation and partial/exact-version semantics, and uv selects over
   that joint request. A fixed path interpreter must satisfy both inputs before
-  creation and retain its identity across the capacity wait. The selected
+  creation and retain its identity across the capacity wait. Both the authored
+  path and the probed base executable are stamped. Creation passes that
+  validated executable to uv; adoption compares the requested invocation's
+  base executable with the environment's, so macOS launchers can resolve to
+  their actual interpreter without accepting a different Python binary.
+  The selected
   interpreter is
   checked against both inputs before it is ready. The readiness identity is
   snapshotted after the environment exists and before those probes. That same

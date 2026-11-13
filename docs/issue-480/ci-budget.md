@@ -19,3 +19,19 @@ Tests were making progress: the indexed occupancy scale case passed at 22:03:03 
 The only CI behavior change is `rust-platform-boundaries.timeout-minutes: 70 → 100`. About 60 minutes had elapsed before test execution. The historical successful run [39015122730](https://github.com/Caismis/rustX/actions/runs/39015122730), referenced by the former workflow comment, spent 12m03s on unit/in-crate execution, 2m55s on external targets and 15s on coverage. Those are a budgeting reference, not a matched performance baseline: source, runner/cache conditions and workload can differ. Combining the current observed setup/build span with that approximately 15-minute execution tail requires about 75 minutes; 100 minutes leaves roughly 25 minutes for execution/build variance and finalization. The new cap remains finite and must be validated by a complete run.
 
 No individual deadline, assertion, selector, suite, concurrency, durability guarantee, benchmark harness, raw benchmark sample or derived accounting is changed. No benchmark rerun is needed. Focused validation parses both workflow versions and proves that only this job timeout differs semantically, runs the existing verification-policy tests, and checks whitespace. Final-head FULL plus Merge verification and independent re-review are still required; the cancelled run cannot satisfy them.
+
+## Workspace Python revision measurement
+
+FULL run [43460497372](https://github.com/Caismis/rustX/actions/runs/43460497372), HEAD `62063a1280c8ae2537d97a6116c310d2b909d79f`, again exhausted the macOS job allowance. The [job timeline and log](https://github.com/Caismis/rustX/actions/runs/43460497372/job/132006043904) show:
+
+| Phase | Observed wall | Outcome |
+|---|---:|---|
+| Setup | 1m33s | Completed |
+| External targets and real executables | 26m21s | Completed |
+| Unit/in-crate harnesses | 52m51s | Completed |
+| Unit/in-crate execution | 19m27s | Cancelled at the job cap |
+| External execution and lane coverage | — | Skipped |
+
+This run also exposed real assertion failures: macOS temporary-path aliases in Workspace Python fixtures, a fixed Python path resolving through a macOS launcher, and the containment fixture invoking a Python name now protected by the Workspace Python guard. Those failures require separate source/test repairs; the timeout change does not establish their success. Fourteen other selected jobs passed, including Linux boundaries and the macOS Desktop/Host lane.
+
+The job budget is now 150 minutes, leaving approximately 70 minutes after the measured build span for complete unit, external, coverage and finalization work plus runner variance. Compilation stays serialized and all assertions, individual deadlines, test selectors, external targets and lane-coverage checks remain unchanged. A final-head successful FULL run is still required; this cancelled run is not validation of the repairs.
