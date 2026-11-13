@@ -1875,7 +1875,7 @@ async fn app_server_retired_persisted_model_attaches_unavailable_without_rewriti
             before,
             "loading an unavailable selection persisted a replacement"
         );
-        let Response::Success(success) = rpc(
+        let model_set = rpc(
             &client,
             5,
             Method::ModelSet {
@@ -1886,9 +1886,9 @@ async fn app_server_retired_persisted_model_attaches_unavailable_without_rewriti
                 )),
             },
         )
-        .await
-        else {
-            panic!("model")
+        .await;
+        let Response::Success(success) = model_set else {
+            panic!("model set failed: {model_set:?}")
         };
         assert!(matches!(success.result, MethodResult::ModelSet { .. }));
         let MethodResult::DomainPage { page } = result(
