@@ -277,8 +277,6 @@ chat_reasoning_replay = "omit"
         Arc::new(registry),
         Arc::new(available),
         Arc::new(skills),
-        None,
-        None,
         ToolEnvironment::new(),
         Arc::new(McpRuntimeLeaseAuthority::empty()),
         Arc::new(BTreeMap::new()),

@@ -1,5 +1,5 @@
-//! The internal supervised command runner shared by native Bash and Skill
-//! environment materialization and workspace-change Git snapshots.
+//! The internal supervised command runner shared by native Bash, Managed
+//! Python, and workspace-change Git snapshots.
 //!
 //! This module owns the rustX-side lifecycle of one **owned supervised
 //! command**: the spawn of the per-invocation supervisor unit (the
@@ -8,8 +8,8 @@
 //! `TERM` -> grace -> `KILL` cancellation/timeout settlement, the
 //! catastrophic supervisor-loss containment, and the reaping of the direct
 //! supervisor child. It is the same proven M5 Bash process-group lifecycle
-//! extracted so a second production subprocess hierarchy (Skill environment
-//! package managers) does not need a second, independent ownership domain.
+//! extracted so Managed Python and other supervised commands do not need a
+//! second, independent ownership domain.
 //!
 //! # Ownership contract
 //!
@@ -184,10 +184,9 @@ pub(crate) struct CapturedProcessResult {
 
 /// The internal non-model-facing supervised process runner boundary.
 ///
-/// This is a real current boundary: native Bash and Skill environment
-/// materialization consume the same owned process lifecycle, and
-/// deterministic materialization tests inject scripted fakes instead of
-/// invoking real package managers.
+/// This is a real current boundary: native Bash and Managed Python consume
+/// the same owned process lifecycle, and deterministic Managed Python tests
+/// inject scripted fakes instead of invoking real package managers.
 pub(crate) trait SupervisedProcessRunner: Send + Sync {
     /// Waits for one rustX-owned supervised command to reach terminal state.
     ///
@@ -207,23 +206,7 @@ pub(crate) trait SupervisedProcessRunner: Send + Sync {
 
 /// The production supervised process runner backed by the shared runner.
 #[derive(Clone, Default)]
-pub(crate) struct RunnerBackedProcessRunner {
-    #[cfg(test)]
-    control: Option<RunnerTestControl>,
-}
-
-#[cfg(test)]
-impl RunnerBackedProcessRunner {
-    /// Creates a production runner with a test-only lifecycle control seam.
-    /// The production backend still passes `None` at every probe/materializer
-    /// call site; the runner supplies this control at the shared boundary so
-    /// those paths are tested without a probe-specific executor.
-    pub(crate) fn with_test_control(control: RunnerTestControl) -> Self {
-        Self {
-            control: Some(control),
-        }
-    }
-}
+pub(crate) struct RunnerBackedProcessRunner;
 
 impl SupervisedProcessRunner for RunnerBackedProcessRunner {
     fn run(
@@ -231,8 +214,6 @@ impl SupervisedProcessRunner for RunnerBackedProcessRunner {
         spec: SupervisedCommandSpec,
         control: Option<RunnerTestControl>,
     ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
-        #[cfg(test)]
-        let control = control.or_else(|| self.control.clone());
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         // The driver is the physical invocation owner. Dropping the JoinHandle
         // detaches this task; dropping `result_rx` later therefore only loses
@@ -1842,8 +1823,8 @@ mod tests {
     //
     // These regressions prove the generic mechanism once, at its real
     // boundary — the shared supervised-command runner every production
-    // consumer (native Bash, Python uv/tool execution, Skill environment
-    // materialization) goes through. Each consumer then only has to be shown
+    // consumer (native Bash and Managed Python uv/tool execution) goes
+    // through. Each consumer then only has to be shown
     // to enter this path, rather than re-running the whole race matrix.
 
     /// A recording nested anchor authority whose acknowledgement the test
@@ -1950,7 +1931,7 @@ mod tests {
         let mut harness = gated_authority(true);
         let dir = tempfile::tempdir().expect("lab");
         let marker = dir.path().join("started");
-        let runner = RunnerBackedProcessRunner::default();
+        let runner = RunnerBackedProcessRunner;
         let cancellation = CancellationSignal::new();
         let control = harness.control.clone();
         let invocation = tokio::spawn({
@@ -2017,7 +1998,7 @@ mod tests {
         let mut harness = gated_authority(false);
         let dir = tempfile::tempdir().expect("lab");
         let marker = dir.path().join("started");
-        let runner = RunnerBackedProcessRunner::default();
+        let runner = RunnerBackedProcessRunner;
         let control = harness.control.clone();
         let invocation = tokio::spawn({
             let marker = marker.clone();
@@ -2083,7 +2064,7 @@ mod tests {
         command.cwd = directory.path().to_path_buf();
         let control = harness.control.clone();
         let invocation = tokio::spawn(async move {
-            RunnerBackedProcessRunner::default()
+            RunnerBackedProcessRunner
                 .run(command, Some(control))
                 .await
         });
@@ -2186,7 +2167,7 @@ mod tests {
             let lifecycle = control.lifecycle.clone();
             let result = tokio::time::timeout(
                 Duration::from_secs(15),
-                RunnerBackedProcessRunner::default().run(command, Some(control)),
+                RunnerBackedProcessRunner.run(command, Some(control)),
             )
             .await
             .expect("a failed START must retain physical settlement")
@@ -2250,7 +2231,7 @@ mod tests {
     async fn the_top_level_runtime_runs_units_without_any_anchor_handshake() {
         let dir = tempfile::tempdir().expect("lab");
         let marker = dir.path().join("started");
-        let result = RunnerBackedProcessRunner::default()
+        let result = RunnerBackedProcessRunner
             .run(
                 SupervisedCommandSpec {
                     command: format!("touch {}", marker.display()),
@@ -2280,7 +2261,7 @@ mod tests {
         let cancellation = CancellationSignal::new();
         let control = RunnerTestControl::new();
         let hook = control.lifecycle.clone();
-        let runner = std::sync::Arc::new(RunnerBackedProcessRunner::default());
+        let runner = std::sync::Arc::new(RunnerBackedProcessRunner);
         let waiter_runner = runner.clone();
         let waiter_control = control.clone();
         let waiter_cancellation = cancellation.clone();
@@ -2314,7 +2295,7 @@ mod tests {
         let cancellation = CancellationSignal::new();
         let control = RunnerTestControl::new();
         let hook = control.lifecycle.clone();
-        let runner = std::sync::Arc::new(RunnerBackedProcessRunner::default());
+        let runner = std::sync::Arc::new(RunnerBackedProcessRunner);
         let waiter_runner = runner.clone();
         let waiter_control = control.clone();
         let waiter_cancellation = cancellation.clone();
@@ -2342,7 +2323,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn live_runner_waiter_receives_the_terminal_captured_result() {
-        let runner = RunnerBackedProcessRunner::default();
+        let runner = RunnerBackedProcessRunner;
         let result = runner
             .run(
                 SupervisedCommandSpec {

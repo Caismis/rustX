@@ -366,7 +366,7 @@ impl RuntimeClientFixtureBuilder {
                 .entry(rustx::capabilities::ToolSourceId::Mcp(id.clone()))
                 .or_insert(rustx::capabilities::selection::SourceToolSelection::All);
         }
-        let coordinator = rustx::capabilities::CapabilityCoordinator::with_backend(
+        let coordinator = rustx::capabilities::CapabilityCoordinator::new(
             rustx::capabilities::CapabilityCoordinatorConfig {
                 source_demand: rustx::capabilities::source::ToolSourceDemand::new(
                     agent_activation.profile.tools.sources.iter()
@@ -386,7 +386,6 @@ impl RuntimeClientFixtureBuilder {
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: workspace.path().join("skill-env"),
             },
-            Arc::new(crate::scripted_suites::common::FakeSkillEnvironmentBackend::new()),
         )
         .expect("capability coordinator");
         let candidate = coordinator.prepare_candidate().await.expect("prepare");

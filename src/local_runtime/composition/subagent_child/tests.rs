@@ -1039,7 +1039,6 @@ async fn frozen_skill_definitions_keep_live_locations_without_copying_assets() {
                 skill_id: package.id().clone(),
                 version_id: package.version_id().clone(),
             },
-            dependencies: package.dependencies().clone(),
             catalog_entry: crate::skills::SkillCatalogEntry {
                 name: "selected".into(),
                 description: "Frozen summary".into(),

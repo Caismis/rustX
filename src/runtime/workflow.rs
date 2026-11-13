@@ -5100,8 +5100,6 @@ chat_reasoning_replay = "omit"
             Arc::new(ToolRegistry::new()),
             Arc::new(crate::capabilities::AvailableToolCatalog::default()),
             Arc::new(SkillSnapshot::new(Vec::new())),
-            None,
-            None,
             ToolEnvironment::new(),
             Arc::new(McpRuntimeLeaseAuthority::empty()),
             Arc::new(std::collections::BTreeMap::new()),

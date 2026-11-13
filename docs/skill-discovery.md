@@ -21,11 +21,14 @@ read-ahead and stops at the closing YAML delimiter. Two matching prefix reads ve
 definition using content equality. Discovery requires parseable YAML and a
 nonempty string description. It uses the parent directory name when the
 frontmatter supplies no string name. Nonstandard names and descriptions over
-1024 characters produce warnings. Optional fields do not gate discovery.
-Invalid rustX dependency declarations are ignored with a warning.
+1024 characters produce warnings. Optional fields, including generic
+`metadata`, do not gate discovery and do not install anything.
 
-`SkillPackage` stores one normalized definition, its dependency manifest, version
-and effective binding. It has no resource file list or materialization root.
+`SkillPackage` stores one normalized definition, its version and effective
+binding. It has no dependency manifest, resource file list, or
+materialization root. `rustx.python-dependencies` and
+`rustx.node-dependencies`, when present inside otherwise valid metadata, are
+uninterpreted text.
 `SkillSnapshot` publishes immutable catalog metadata, bindings, provenance and
 diagnostics. `all`, `exact` and `none` remain visibility choices, never filesystem
 ACLs. Bodies and resource files are read or executed only by normal Tools, at the
@@ -37,10 +40,9 @@ actual host paths and under their existing authorization rules.
 `rustx-skill-definition-v1\n` and stable JSON serialization of normalized validated
 frontmatter. Struct field order and sorted metadata keys are deterministic.
 Absent optional fields and default false are normalized. Recognized standard
-fields and metadata, including dependency declarations, participate. Recognized dependency
-metadata uses the existing parsed normalized pins and canonical sorted JSON, so
-embedded JSON formatting and equivalent normalized package names stay inert. YAML key order,
-comments, quote style and line endings do not. Absolute paths, provenance, body
+fields and metadata participate as preserved values. Dependency-looking
+metadata is not parsed, normalized, or solved. YAML key order, comments,
+quote style and line endings do not. Absolute paths, provenance, body
 bytes, scripts, assets, timestamps and filesystem enumeration order do not.
 
 Effective source and actual location remain independent binding facts. Equal
@@ -69,11 +71,9 @@ fenced safe boundary, so future invocation overrides observe additions, edits,
 disabling and removal. This metadata publication shares existing Tool/environment
 owners, preserves CapabilityRevision and records no effective configuration fact;
 admitted Attempts retain their original catalog. The capability coordinator retains
-that published catalog for subsequent live-source recovery. Root dependency
-preparation merges only Root-selected
-Skills; a child prepares only its frozen selected declarations through the
-existing supervised EnvironmentStore. Unselected conflicting declarations cannot
-start package managers or fail an unrelated Agent's environment.
+that published catalog for subsequent live-source recovery. Selecting, hiding,
+or removing Skills does not change the effective tool environment and does
+not start an interpreter or package manager.
 
 Existing capture freshness checks, stale-preparation fences and safe publication
 boundaries remain authoritative. An Attempt owns its admitted immutable definition
@@ -84,24 +84,21 @@ by a configuration fact.
 
 ## Local child execution
 
-IPC **v38** carries selected Skill bindings, catalog metadata, dependency
-manifests and effective provenance. The child installs those values directly and
-retains the actual instruction file location and source roots. It never rediscovers Skills,
-receives a package file list, copies assets or verifies a full-content digest.
-Profile digest **v8** frames the definition, frozen dependencies and live
-source/location binding. No compatibility branch remains.
+IPC **v39** carries selected Skill bindings, catalog metadata and effective
+provenance. The child installs those values directly and retains the actual
+instruction file location. It never rediscovers Skills, receives a package
+file list, copies assets, verifies a full-content digest, or materializes a
+dependency environment. Profile digest **v9** frames the definition and the
+live source/location binding. No compatibility branch remains.
 
 The child's model-visible definition and authorization cannot expand when another
 Skill appears or frontmatter changes on disk. Ordinary Read/Bash operations can
 observe the current body or script at execution time. Deleted/moved runtime files
 fail through the ordinary Tool operation, rather than child initialization.
-The environment store uses the ordinary product/Conversation identity, so a
-resumed child reuses immutable prepared dependency environments across activations.
-Dependency preparation is explicit selected execution work; it does not inspect
-Skill bodies/assets. Existing child cancellation, parent-loss, ownership commit
-and terminal semantics remain the physical lifecycle authority. The child's
-environment backend receives the preparation owner's cancellation signal, and
-the guard awaits physical process settlement before reporting preparation failure.
+Existing child cancellation, parent-loss, ownership commit and terminal
+semantics remain the physical lifecycle authority. Managed Python keeps its
+own package store and supervised uv lifecycle; that owner is not a Skill
+environment.
 
 ## Structural proof and regression map
 
@@ -109,8 +106,8 @@ the guard awaits physical process settlement before reporting preparation failur
 | --- | --- | --- |
 | Discovery | `skills/package.rs`, `frontmatter.rs`, `identity.rs` | Collection traversal and instruction-file prefix only. Tests use 10 GiB assets, a 4 GiB body, 4,200 nested files and an internal resource symlink; actual file-open/read counters admit only SKILL.md, with no package directory listing. |
 | Revision / rescan | `local_runtime/resource_directory.rs`, `resource_directory/evidence.rs` | Skill discovery owns its revision separately from generic resource traversal. Revision tests assert only two SKILL.md opens and zero resource-directory listings. |
-| Configuration preparation | `configuration/capture.rs`, `prospective.rs`, `capabilities/coordinator.rs` | Captured definitions are passed by value. Selected-only dependency merging; no body/asset inputs. Tests cover inert body edits, unused conflicts, safe Attempt snapshots, stale successors, source replacement and Journal differences. |
-| Child initialization | `runtime/subagent/resolver.rs`, `ipc.rs`, `composition/subagent_child.rs` | Metadata/manifest installation, explicit selected environment preparation, no Skill file I/O. `skills/materialization.rs`, recursive package walking and package-content identity APIs are deleted. Composition tests retain original host locations and versions across rewritten definitions/new ambient Skills; no private Skill copy exists. |
+| Configuration preparation | `configuration/capture.rs`, `prospective.rs`, `capabilities/coordinator.rs` | Captured definitions are passed by value. No dependency merge and no environment writes. Tests cover inert body edits, conflicting metadata, safe Attempt snapshots, stale successors, source replacement and Journal differences. |
+| Child initialization | `runtime/subagent/resolver.rs`, `ipc.rs`, `composition/subagent_child.rs` | Frozen metadata and location only. IPC v39 and profile digest v9 carry no dependency manifest. Composition tests retain original host locations across rewritten definitions; no private Skill copy or Skill environment exists. |
 
 Native Tool, lifecycle, automatic watch (atomic replacement/recreation, overflow,
 merging and repeated-rescan no-op), source precedence and client protocol suites
@@ -144,3 +141,27 @@ of hardware timing. Configuration revision and child-copy boundaries are proved
 by their dedicated tests and deleted call paths, rather than extrapolated from
 this discovery-only benchmark. See the [validation report](skill-discovery/validation.md) for completed commands,
 counts, comparison data and CI status.
+
+## Pi parity and removal map
+
+Reference pin: `earendil-works/pi` `473515f9c297c75cf2c3ebb3ba027049ed836d27`
+(`packages/coding-agent/src/core/skills.ts`, `resource-loader.ts`,
+`docs/skills.md`, and regression `2781-skill-collision-precedence`).
+
+Pi is the feature boundary for instruction discovery, not a product to copy.
+rustX keeps its own User and Workspace directories and does not adopt Pi's
+package distribution, `~/.pi` layout, slash commands, or plugin host.
+
+| Pi behavior | rustX |
+| --- | --- |
+| Discover `SKILL.md` and publish a compact name/description/location catalog | Preserved. Bodies and assets stay on demand. |
+| Project sources win over user sources; the same real file is one Skill | Preserved as Workspace over User, with same-file deduplication. |
+| Malformed YAML or a missing description skips that Skill and leaves the others usable | Preserved. Name and description-length warnings do not hide a valid definition. |
+| `disable-model-invocation` hides a Skill from the model catalog | Preserved. |
+| Standard `metadata`, `compatibility`, and `allowed-tools` are descriptive | Preserved, including uninterpreted `rustx.python-dependencies` and `rustx.node-dependencies`. They grant no install and no permission. |
+| No Skill-owned virtualenv, `PATH` prefix, or package-manager probe | Removed from rustX. `skills/dependencies.rs`, `skills/environments.rs`, `ToolEnvironmentOverlay`, and the Skill fields on snapshots, IPC, and profile digests are deleted. |
+| Managed executable packages keep their own environment | Preserved on Managed Python (`src/tools/python.rs`), which is not a Skill. |
+
+The following Pi product surfaces are intentionally absent: slash commands,
+skill installers, package registries, and a second watcher. Native refresh
+and configuration publication remain the only application path.

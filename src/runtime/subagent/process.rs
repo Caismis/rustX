@@ -873,8 +873,8 @@ pub(crate) struct StagedChild {
     /// The nested supervised process units this child has anchored in this
     /// process (Issue #145).
     ///
-    /// External capability preparation — MCP stdio startup, a uv
-    /// environment build, a Skill environment subprocess — happens while
+    /// External capability preparation — MCP stdio startup and a uv
+    /// environment build — happens while
     /// the child is still *staged*, so anchors can exist long before any
     /// durable ownership commit. The staged owner therefore owns them, and
     /// the one ownership commit moves the whole set into the driver task.

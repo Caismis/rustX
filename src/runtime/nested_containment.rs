@@ -573,7 +573,7 @@ mod global_authority_tests {
         let dir = tempfile::tempdir().expect("lab");
         let marker = dir.path().join("started");
         let result = crate::runtime::process_runner::SupervisedProcessRunner::run(
-            &crate::runtime::process_runner::RunnerBackedProcessRunner::default(),
+            &crate::runtime::process_runner::RunnerBackedProcessRunner,
             crate::runtime::process_runner::SupervisedCommandSpec {
                 command: format!("touch {}", marker.display()),
                 cwd: std::env::temp_dir(),

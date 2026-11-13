@@ -143,8 +143,6 @@ fn native_snapshot() -> std::sync::Arc<crate::capabilities::CapabilitySnapshot> 
             Vec::new(),
             Vec::new(),
         )),
-        None,
-        None,
         crate::tools::environment::ToolEnvironment::default(),
         std::sync::Arc::new(crate::tools::mcp::McpRuntimeLeaseAuthority::empty()),
         std::sync::Arc::default(),

@@ -169,8 +169,6 @@ fn context_with_environment(
             registration,
         ])),
         Arc::new(SkillSnapshot::new(Vec::new())),
-        None,
-        None,
         environment,
         Arc::new(McpRuntimeLeaseAuthority::empty()),
         Arc::new(BTreeMap::new()),

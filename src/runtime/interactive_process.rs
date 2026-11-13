@@ -703,7 +703,7 @@ async fn run_interactive_unit(
     // top-level runtime it resolves immediately; inside a subagent child it
     // holds START closed until the top-level parent has acknowledged
     // retention of this exact anchor. MCP stdio therefore uses exactly the
-    // same generic mechanism as Bash, Python, and Skill environments.
+    // same generic mechanism as Bash and Managed Python.
     let mut anchor_gate = crate::runtime::nested_containment::AnchorGate::Idle;
     loop {
         tokio::select! {

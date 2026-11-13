@@ -5,7 +5,7 @@ use super::ToolSourceId;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::capabilities::availability::{CapabilityAvailability, CapabilitySourceState};
@@ -13,15 +13,9 @@ use crate::capabilities::error::{CapabilityCommitError, CapabilityPreparationErr
 use crate::capabilities::snapshot::CapabilitySnapshot;
 use crate::capabilities::tools::{AgentActivation, AvailableToolCatalog, select_tools};
 use crate::runtime::identity::{CapabilityRevision, ConversationId, McpServerId};
-use crate::runtime::process_runner::RunnerBackedProcessRunner;
 use crate::runtime::types::ConversationLifecycle;
-use crate::skills::environments::{
-    EnvironmentStore, RunnerBackedSkillEnvironmentBackend, SkillEnvironmentBackend,
-};
-use crate::skills::{
-    SkillDiscovery, SkillDiscoveryConfig, SkillSnapshot, merge_dependency_manifests,
-};
-use crate::tools::environment::{ToolEnvironment, ToolEnvironmentOverlay};
+use crate::skills::{SkillDiscovery, SkillDiscoveryConfig, SkillSnapshot};
+use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::{ToolRegistration, ToolRegistry};
 #[cfg(test)]
 use crate::tools::mcp::{McpInvalidationState, McpServerRuntime};
@@ -136,8 +130,6 @@ struct CoordinatorState {
     mcp_epochs: BTreeMap<McpServerId, u64>,
     /// The number of active attempt capability leases.
     active_attempts: u64,
-    /// The next environment staging sequence (never enters any digest).
-    _next_staging: AtomicU64,
     /// The shared activation lifecycle of the claiming conversation
     /// runtime (Issue #61).
     ///
@@ -197,7 +189,6 @@ struct CoordinatorInner {
     /// configuration publication can change that selection at the safe publication
     /// boundary without replacing Todo/Goal current state.
     extension_tools: crate::extensions::ExtensionToolPlane,
-    environment_store: EnvironmentStore,
     state: Mutex<CoordinatorState>,
     condvar: Condvar,
     /// Keep retirement supervision alive while published generations in
@@ -408,8 +399,6 @@ pub struct PreparedCapabilityCandidate {
     resolved_profile: Option<Arc<crate::runtime::agent_profile::ResolvedAgentProfile>>,
     base_revision: CapabilityRevision,
     skills: Arc<SkillSnapshot>,
-    python: Option<crate::skills::environments::PythonEnvironment>,
-    node: Option<crate::skills::environments::NodeEnvironment>,
     effective_environment: ToolEnvironment,
     candidate_registry: Arc<ToolRegistry>,
     available_tools: Arc<AvailableToolCatalog>,
@@ -468,8 +457,6 @@ impl PreparedCapabilityCandidate {
                 Arc::clone(&self.candidate_registry),
                 Arc::clone(&self.available_tools),
                 Arc::clone(&self.skills),
-                self.python.clone(),
-                self.node.clone(),
                 self.effective_environment.clone(),
                 Arc::new(McpRuntimeLeaseAuthority::from_generations_and_bindings(
                     &self.mcp_runtimes,
@@ -615,18 +602,6 @@ impl PreparedCapabilityCandidate {
     pub fn skill_packages(&self) -> &[Arc<crate::skills::SkillPackage>] {
         self.skills.packages()
     }
-
-    /// The prepared immutable Python environment identity, when present.
-    #[must_use]
-    pub fn python_environment(&self) -> Option<&crate::skills::environments::PythonEnvironment> {
-        self.python.as_ref()
-    }
-
-    /// The prepared immutable Node environment identity, when present.
-    #[must_use]
-    pub fn node_environment(&self) -> Option<&crate::skills::environments::NodeEnvironment> {
-        self.node.as_ref()
-    }
 }
 
 impl CapabilityCoordinator {
@@ -645,7 +620,9 @@ impl CapabilityCoordinator {
     /// revision zero.
     ///
     /// The environment store root must be disjoint from the model
-    /// Workspace (neither may nest inside or alias the other).
+    /// Workspace (neither may nest inside or alias the other). Managed
+    /// Python uses `<store>/python-tools`. Skills do not create environments
+    /// under this root.
     ///
     /// # Errors
     ///
@@ -655,65 +632,12 @@ impl CapabilityCoordinator {
         Self::new_with_mcp_preparation(config, None)
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn new_with_mcp_preparation(
         config: CapabilityCoordinatorConfig,
         preparation: Option<McpPreparation>,
     ) -> Result<Self, CapabilityPreparationError> {
-        Self::with_backend_and_preparation(
-            config,
-            Arc::new(RunnerBackedSkillEnvironmentBackend::new(
-                Arc::new(RunnerBackedProcessRunner::default()),
-                crate::runtime::CancellationSignal::new(),
-            )),
-            preparation,
-        )
-    }
-
-    /// The coordinator constructor with an explicit materialization
-    /// backend (child lifetime ownership and deterministic testing seam).
-    ///
-    /// # Errors
-    ///
-    /// See [`CapabilityCoordinator::new`].
-    #[allow(clippy::too_many_lines)] // one constructor initializes the existing owners and immutable inputs
-    pub fn with_backend(
-        config: CapabilityCoordinatorConfig,
-        backend: Arc<dyn SkillEnvironmentBackend>,
-    ) -> Result<Self, CapabilityPreparationError> {
-        Self::with_backend_and_preparation(config, backend, None)
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn with_backend_and_preparation(
-        config: CapabilityCoordinatorConfig,
-        backend: Arc<dyn SkillEnvironmentBackend>,
-        preparation: Option<McpPreparation>,
-    ) -> Result<Self, CapabilityPreparationError> {
-        let prospective_store_root = prospective_canonical_path(&config.environment_store_root)
-            .map_err(|detail| {
-                CapabilityPreparationError::Environment(
-                    crate::skills::EnvironmentPreparationError::StagingFailed { detail },
-                )
-            })?;
-        if paths_overlap(config.workspace.root(), &prospective_store_root) {
-            return Err(
-                CapabilityPreparationError::EnvironmentStoreOverlapsWorkspace {
-                    store_root: config.environment_store_root.display().to_string(),
-                },
-            );
-        }
-        // Create through the prospective canonical target, not through the
-        // unresolved configured spelling. This prevents a symlink-prefix
-        // path from redirecting creation into the model Workspace after the
-        // overlap check has completed.
-        let environment_store = EnvironmentStore::new(prospective_store_root, backend)?;
-        if paths_overlap(config.workspace.root(), environment_store.root()) {
-            return Err(
-                CapabilityPreparationError::EnvironmentStoreOverlapsWorkspace {
-                    store_root: environment_store.root().display().to_string(),
-                },
-            );
-        }
+        let store_root = establish_environment_store_root(&config)?;
         // Uniqueness and ordering are structural: `McpServerBindings` is a
         // `BTreeMap` keyed by identity. Only emptiness stays checkable.
         if config
@@ -750,7 +674,7 @@ impl CapabilityCoordinator {
         // Only the Python store *location* is computed here; the store
         // itself is opened inside the optional managed-package preparation
         // boundary (Issue #81), never in core construction.
-        let python_store_root = environment_store.root().join("python-tools");
+        let python_store_root = store_root.join("python-tools");
         let initial_skills = Arc::new(SkillSnapshot::new(Vec::new()));
         let initial_snapshot = Arc::new(CapabilitySnapshot::new(
             config.conversation_id.clone(),
@@ -764,8 +688,6 @@ impl CapabilityCoordinator {
                 config.base_tool_registry.registrations(),
             )),
             initial_skills,
-            None,
-            None,
             config.base_environment.clone(),
             Arc::new(McpRuntimeLeaseAuthority::empty()),
             Arc::new(mcp_servers.clone()),
@@ -800,7 +722,6 @@ impl CapabilityCoordinator {
                 python_store_root,
                 python_store: Mutex::new(None),
                 extension_tools,
-                environment_store,
                 state: Mutex::new(CoordinatorState {
                     revision: CapabilityRevision::default(),
                     runtime_source_authorities,
@@ -809,7 +730,6 @@ impl CapabilityCoordinator {
                     mcp_runtimes: Vec::new(),
                     mcp_epochs: BTreeMap::new(),
                     active_attempts: 0,
-                    _next_staging: AtomicU64::new(0),
                     conversation_lifecycle: None,
                     claim_installed_preparation_lifecycle: false,
                 }),
@@ -1241,31 +1161,7 @@ impl CapabilityCoordinator {
             }
             discovered
         };
-        let environment_packages: Vec<_> = discovered
-            .packages
-            .iter()
-            .filter(|package| inputs.agent_activation.selects_root_skill(package))
-            .cloned()
-            .collect();
-        let merged = merge_dependency_manifests(&environment_packages)?;
-        let python = self
-            .inner
-            .environment_store
-            .ensure_python_environment(&merged.python)
-            .await?;
-        let node = self
-            .inner
-            .environment_store
-            .ensure_node_environment(&merged.node)
-            .await?;
-        let mut overlay = ToolEnvironmentOverlay::default();
-        if let Some(python) = &python {
-            overlay = overlay.merge(ToolEnvironmentOverlay::python(&python.root));
-        }
-        if let Some(node) = &node {
-            overlay = overlay.merge(ToolEnvironmentOverlay::node(&node.root));
-        }
-        let effective_environment = inputs.base_environment.with_overlay(&overlay);
+        let effective_environment = inputs.base_environment.clone();
         let skills = Arc::new(SkillSnapshot::from_discovery(discovered));
         // ---- Optional capability sources (Issue #81) ----
         //
@@ -1486,8 +1382,6 @@ impl CapabilityCoordinator {
             resolved_profile: Some(Arc::new(resolved_profile)),
             base_revision,
             skills,
-            python,
-            node,
             effective_environment,
             candidate_registry,
             available_tools: Arc::new(available_tools),
@@ -1702,34 +1596,6 @@ impl CapabilityCoordinator {
             .collect()
     }
 
-    /// Prepare only the frozen child selection's declared dependencies. This
-    /// uses the same environment owner as ordinary preparation, without discovery.
-    pub(crate) async fn prepare_frozen_skill_dependencies(
-        &self,
-        candidate: &mut PreparedCapabilityCandidate,
-        manifest: &crate::skills::DependencyManifest,
-    ) -> Result<(), CapabilityPreparationError> {
-        candidate.python = self
-            .inner
-            .environment_store
-            .ensure_python_environment(&manifest.python)
-            .await?;
-        candidate.node = self
-            .inner
-            .environment_store
-            .ensure_node_environment(&manifest.node)
-            .await?;
-        let mut overlay = ToolEnvironmentOverlay::default();
-        if let Some(python) = &candidate.python {
-            overlay = overlay.merge(ToolEnvironmentOverlay::python(&python.root));
-        }
-        if let Some(node) = &candidate.node {
-            overlay = overlay.merge(ToolEnvironmentOverlay::node(&node.root));
-        }
-        candidate.effective_environment = candidate.effective_environment.with_overlay(&overlay);
-        Ok(())
-    }
-
     /// Prepares the **base-only** candidate of a subagent child runtime
     /// (Issue #60).
     ///
@@ -1790,8 +1656,6 @@ impl CapabilityCoordinator {
             resolved_profile: Some(Arc::new(resolved_profile)),
             base_revision,
             skills: Arc::new(SkillSnapshot::new(Vec::new())),
-            python: None,
-            node: None,
             effective_environment: inputs.base_environment.clone(),
             candidate_registry,
             available_tools: Arc::new(available_tools),
@@ -2005,8 +1869,6 @@ impl CapabilityCoordinator {
             resolved_profile: None,
             base_revision,
             skills: Arc::new(SkillSnapshot::new(Vec::new())),
-            python: None,
-            node: None,
             effective_environment: inputs.base_environment.clone(),
             candidate_registry: Arc::new(candidate_registry),
             available_tools: Arc::new(available_tools),
@@ -2447,8 +2309,6 @@ impl CapabilityCoordinator {
                     candidate.candidate_registry,
                     candidate.available_tools,
                     candidate.skills,
-                    candidate.python,
-                    candidate.node,
                     candidate.effective_environment,
                     mcp_lease_authority,
                     Arc::new(candidate.effective_mcp_servers.clone()),
@@ -2732,6 +2592,48 @@ impl CapabilityCoordinator {
 /// any missing component. Existing ancestors are canonicalized (therefore
 /// symlinks are resolved), and the non-existent suffix is appended only after
 /// that resolution.
+fn establish_environment_store_root(
+    config: &CapabilityCoordinatorConfig,
+) -> Result<PathBuf, CapabilityPreparationError> {
+    let prospective = prospective_canonical_path(&config.environment_store_root)
+        .map_err(|detail| CapabilityPreparationError::EnvironmentStoreUnavailable { detail })?;
+    if paths_overlap(config.workspace.root(), &prospective) {
+        return Err(
+            CapabilityPreparationError::EnvironmentStoreOverlapsWorkspace {
+                store_root: config.environment_store_root.display().to_string(),
+            },
+        );
+    }
+    // Create through the prospective canonical target, not through the
+    // unresolved configured spelling. This prevents a symlink-prefix path
+    // from redirecting creation into the model Workspace after the overlap
+    // check has completed.
+    std::fs::create_dir_all(&prospective).map_err(|error| {
+        CapabilityPreparationError::EnvironmentStoreUnavailable {
+            detail: format!(
+                "cannot create the environment store root {}: {error}",
+                prospective.display()
+            ),
+        }
+    })?;
+    let root = std::fs::canonicalize(&prospective).map_err(|error| {
+        CapabilityPreparationError::EnvironmentStoreUnavailable {
+            detail: format!(
+                "cannot canonicalize the environment store root {}: {error}",
+                prospective.display()
+            ),
+        }
+    })?;
+    if paths_overlap(config.workspace.root(), &root) {
+        return Err(
+            CapabilityPreparationError::EnvironmentStoreOverlapsWorkspace {
+                store_root: root.display().to_string(),
+            },
+        );
+    }
+    Ok(root)
+}
+
 fn prospective_canonical_path(path: &Path) -> Result<PathBuf, String> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
@@ -2808,8 +2710,7 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
 /// generation:
 ///
 /// - the model-visible capability contract: the tool definitions, the
-///   available catalog, the Skills, and the shared Python/Node environment
-///   digests;
+///   available catalog, and the Skills;
 /// - the effective executable/runtime binding identity: the frozen MCP
 ///   server bindings (transport command/args/env/cwd/endpoint/headers and
 ///   invocation policy).
@@ -2846,10 +2747,6 @@ fn candidate_is_noop(
             .iter()
             .flat_map(|profile| &profile.resource_sources)
             .eq(current.resolved_profile().into_iter().flat_map(|profile| &profile.resource_sources))
-        && candidate.python.as_ref().map(|env| env.digest.clone())
-            == current.python_environment().map(|env| env.digest.clone())
-        && candidate.node.as_ref().map(|env| env.digest.clone())
-            == current.node_environment().map(|env| env.digest.clone())
         // The effective frozen server bindings are part of the no-op
         // equivalence (`McpServerBinding` derives deterministic equality).
         // The snapshot freezes exactly the bindings the candidate would
@@ -3318,9 +3215,12 @@ body
             std::fs::write(collection.join(name).join("SKILL.md"), format!("---\nname: {name}\ndescription: {name}\nmetadata:\n  rustx.python-dependencies: '{{\"example\":\"{version}\"}}'\n---\n")).unwrap();
         }
         let candidate = prepare(&coordinator).await;
+        let environment = candidate
+            .effective_environment
+            .child_environment(dir.path());
         assert_eq!(candidate.skill_packages().len(), 2);
-        assert!(candidate.python_environment().is_none() && candidate.node_environment().is_none());
         assert!(!dir.path().join("skill-env/python").exists());
+        assert!(!dir.path().join("skill-env/node").exists());
         coordinator
             .inner
             .resource_inputs
@@ -3329,10 +3229,13 @@ body
             .agent_activation
             .profile
             .skills = Some(crate::runtime::agent_profile::AgentSkillSelection::All);
-        assert!(matches!(
-            coordinator.prepare_candidate().await,
-            Err(crate::capabilities::CapabilityPreparationError::DependencyConflict(_))
-        ));
+        let selected = prepare(&coordinator).await;
+        assert_eq!(
+            selected.effective_environment.child_environment(dir.path()),
+            environment,
+            "selecting conflicting dependency metadata does not change Bash's environment"
+        );
+        assert!(coordinator.commit(selected).is_ok());
     }
 
     /// A runtime claim closes the ordinary coordinator publication path, but

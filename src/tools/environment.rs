@@ -14,29 +14,21 @@
 //!
 //! # Reserved runtime-owned keys
 //!
-//! The runtime owns the baseline keys (`PATH`, `HOME`, `LANG`, `LC_ALL`)
-//! and the Skill environment overlay keys (`VIRTUAL_ENV`, `NODE_PATH`).
+//! The runtime owns the baseline keys (`PATH`, `HOME`, `LANG`, `LC_ALL`).
 //! These cannot be supplied as conflicting ordinary authorized entries:
 //! [`ToolEnvironment::from_authorized`] rejects them with
 //! [`ToolEnvironmentError::RuntimeOwnedKey`]. There is no ambiguous
 //! "silently ignore the authorized override" behavior.
 //!
-//! # Skill environment overlay
-//!
-//! The attempt-level effective environment is the base authorized
-//! environment plus the deterministic runtime-owned Skill environment
-//! layer ([`ToolEnvironmentOverlay`]): Python and Node bin prefixes are
-//! inserted before the baseline `PATH`, and `VIRTUAL_ENV` / `NODE_PATH`
-//! are set when the corresponding environment exists. An ecosystem with no
-//! dependencies adds no overlay.
+//! Skills do not contribute to this environment. Discovery, selection, and
+//! catalog publication leave the child environment unchanged.
 
 use std::collections::BTreeMap;
 
 /// The runtime-owned baseline keys: they are composed by
 /// [`ToolEnvironment::child_environment`] and cannot be supplied as
 /// conflicting authorized entries.
-pub const RUNTIME_OWNED_KEYS: [&str; 6] =
-    ["PATH", "HOME", "LANG", "LC_ALL", "VIRTUAL_ENV", "NODE_PATH"];
+pub const RUNTIME_OWNED_KEYS: [&str; 4] = ["PATH", "HOME", "LANG", "LC_ALL"];
 
 /// An environment configuration failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,76 +62,20 @@ impl core::fmt::Display for ToolEnvironmentError {
 
 impl std::error::Error for ToolEnvironmentError {}
 
-/// The deterministic runtime-owned Skill environment layer.
-///
-/// `path_prefixes` are inserted before the baseline `PATH` in order
-/// (Python bin first, then Node `.bin`); `entries` are appended as
-/// runtime-owned environment entries (`VIRTUAL_ENV`, `NODE_PATH`). An
-/// ecosystem with no dependencies adds nothing.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ToolEnvironmentOverlay {
-    path_prefixes: Vec<String>,
-    entries: Vec<(String, String)>,
-}
-
-impl ToolEnvironmentOverlay {
-    /// The Python environment overlay: `<root>/bin` on `PATH` and
-    /// `VIRTUAL_ENV=<root>`.
-    #[must_use]
-    pub fn python(python_root: &std::path::Path) -> Self {
-        Self {
-            path_prefixes: vec![python_root.join("bin").display().to_string()],
-            entries: vec![("VIRTUAL_ENV".to_owned(), python_root.display().to_string())],
-        }
-    }
-
-    /// The Node environment overlay: `<root>/node_modules/.bin` on `PATH`
-    /// and `NODE_PATH=<root>/node_modules`.
-    #[must_use]
-    pub fn node(node_root: &std::path::Path) -> Self {
-        Self {
-            path_prefixes: vec![
-                node_root
-                    .join("node_modules")
-                    .join(".bin")
-                    .display()
-                    .to_string(),
-            ],
-            entries: vec![(
-                "NODE_PATH".to_owned(),
-                node_root.join("node_modules").display().to_string(),
-            )],
-        }
-    }
-
-    /// Merges two overlays deterministically (Python overlay first when
-    /// both exist).
-    #[must_use]
-    pub fn merge(mut self, other: Self) -> Self {
-        self.path_prefixes.extend(other.path_prefixes);
-        self.entries.extend(other.entries);
-        self
-    }
-
-    /// Whether the overlay contributes anything.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.path_prefixes.is_empty() && self.entries.is_empty()
-    }
-}
-
 /// The explicit tool execution environment of one conversation runtime.
 ///
 /// The environment is deterministic: entries are stored sorted by key, so a
 /// constructed child environment is reproducible. The Bash executor composes
 /// the runtime-approved basics (`PATH`, `HOME`, `LANG`, `LC_ALL`) plus the
-/// runtime-owned Skill environment overlay plus the explicitly authorized
-/// entries; nothing from the parent process environment is inherited
-/// wholesale.
+/// explicitly authorized entries; nothing from the parent process environment
+/// is inherited wholesale. Skill discovery never adds entries.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ToolEnvironment {
     authorized: Vec<(String, String)>,
-    overlay: ToolEnvironmentOverlay,
+    /// Test-only interpreter locations outside the baseline `PATH`.
+    /// Production Skill and capability preparation never populate this.
+    #[cfg(test)]
+    path_prefixes: Vec<String>,
 }
 
 impl ToolEnvironment {
@@ -149,7 +85,8 @@ impl ToolEnvironment {
     pub fn new() -> Self {
         Self {
             authorized: Vec::new(),
-            overlay: ToolEnvironmentOverlay::default(),
+            #[cfg(test)]
+            path_prefixes: Vec::new(),
         }
     }
 
@@ -186,7 +123,8 @@ impl ToolEnvironment {
         }
         Ok(Self {
             authorized: sorted.into_iter().collect(),
-            overlay: ToolEnvironmentOverlay::default(),
+            #[cfg(test)]
+            path_prefixes: Vec::new(),
         })
     }
 
@@ -196,49 +134,38 @@ impl ToolEnvironment {
         &self.authorized
     }
 
-    /// The deterministic runtime-owned Skill environment overlay.
+    /// Prepends one executable directory for a crate test whose interpreter
+    /// is installed outside the baseline `PATH`.
+    #[cfg(test)]
     #[must_use]
-    pub fn overlay(&self) -> &ToolEnvironmentOverlay {
-        &self.overlay
-    }
-
-    /// Composes the attempt-level effective environment: this base
-    /// environment plus the deterministic runtime-owned Skill environment
-    /// overlay.
-    #[must_use]
-    pub fn with_overlay(&self, overlay: &ToolEnvironmentOverlay) -> Self {
+    pub fn with_path_prefix(&self, prefix: &std::path::Path) -> Self {
         let mut combined = self.clone();
-        combined
-            .overlay
-            .path_prefixes
-            .extend(overlay.path_prefixes.clone());
-        combined.overlay.entries.extend(overlay.entries.clone());
+        combined.path_prefixes.push(prefix.display().to_string());
         combined
     }
 
     /// The complete deterministic child environment for a workspace-rooted
-    /// subprocess: the runtime-approved basics, the Skill environment
-    /// overlay, and the authorized entries.
+    /// subprocess: the runtime-approved basics and the authorized entries.
     ///
     /// ```text
-    /// PATH=<python>/bin:<node>/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
+    /// PATH=/usr/local/bin:/usr/bin:/bin
     /// HOME=<workspace root>
     /// LANG=C.UTF-8
     /// LC_ALL=C.UTF-8
-    /// VIRTUAL_ENV=<python root>          (when a Python overlay exists)
-    /// NODE_PATH=<node root>/node_modules (when a Node overlay exists)
     /// ```
     ///
     /// plus every explicitly authorized entry.
     #[must_use]
     pub fn child_environment(&self, workspace_root: &std::path::Path) -> Vec<(String, String)> {
         let mut path = String::new();
-        for prefix in &self.overlay.path_prefixes {
+        #[cfg(test)]
+        for prefix in &self.path_prefixes {
             if !path.is_empty() {
                 path.push(':');
             }
             path.push_str(prefix);
         }
+        #[cfg(test)]
         if !path.is_empty() {
             path.push(':');
         }
@@ -249,7 +176,6 @@ impl ToolEnvironment {
             ("LANG".to_owned(), String::from("C.UTF-8")),
             ("LC_ALL".to_owned(), String::from("C.UTF-8")),
         ];
-        entries.extend(self.overlay.entries.clone());
         for (key, value) in &self.authorized {
             if !entries.iter().any(|(existing, _)| existing == key) {
                 entries.push((key.clone(), value.clone()));
@@ -261,7 +187,7 @@ impl ToolEnvironment {
 
 #[cfg(test)]
 mod tests {
-    use super::{ToolEnvironment, ToolEnvironmentError, ToolEnvironmentOverlay};
+    use super::{ToolEnvironment, ToolEnvironmentError};
 
     #[test]
     fn empty_environment_composes_only_approved_basics() {
@@ -318,8 +244,8 @@ mod tests {
         );
     }
 
-    /// Runtime-owned baseline/overlay keys cannot be supplied as
-    /// conflicting ordinary authorized entries.
+    /// Runtime-owned baseline keys cannot be supplied as conflicting
+    /// ordinary authorized entries.
     #[test]
     fn runtime_owned_keys_are_rejected_as_authorized_entries() {
         for key in super::RUNTIME_OWNED_KEYS {
@@ -332,61 +258,20 @@ mod tests {
         }
     }
 
-    /// The overlay composes deterministically: Python bin first, then Node
-    /// .bin, then the baseline; `VIRTUAL_ENV` and `NODE_PATH` are set; no
-    /// ecosystem dependencies add no overlay.
+    /// Authorized entries are visible, and Skills have no path into `PATH`.
     #[test]
-    fn overlay_composes_deterministically() {
-        let base = ToolEnvironment::from_authorized([("MY_VAR".to_owned(), "1".to_owned())])
+    fn authorized_entries_compose_without_a_skill_overlay() {
+        let environment = ToolEnvironment::from_authorized([("MY_VAR".to_owned(), "1".to_owned())])
             .expect("authorized");
-        let python = ToolEnvironmentOverlay::python(std::path::Path::new("/env/python/abc"));
-        let node = ToolEnvironmentOverlay::node(std::path::Path::new("/env/node/def"));
-        let effective = base.with_overlay(&python.merge(node));
-        let entries = effective.child_environment(std::path::Path::new("/ws"));
         assert_eq!(
-            entries,
-            vec![
-                (
-                    "PATH".to_owned(),
-                    "/env/python/abc/bin:/env/node/def/node_modules/.bin:/usr/local/bin:/usr/bin:/bin"
-                        .to_owned()
-                ),
-                ("HOME".to_owned(), "/ws".to_owned()),
-                ("LANG".to_owned(), "C.UTF-8".to_owned()),
-                ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
-                ("VIRTUAL_ENV".to_owned(), "/env/python/abc".to_owned()),
-                ("NODE_PATH".to_owned(), "/env/node/def/node_modules".to_owned()),
-                ("MY_VAR".to_owned(), "1".to_owned()),
-            ]
-        );
-        assert_eq!(
-            base.child_environment(std::path::Path::new("/ws")),
+            environment.child_environment(std::path::Path::new("/ws")),
             vec![
                 ("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned()),
                 ("HOME".to_owned(), "/ws".to_owned()),
                 ("LANG".to_owned(), "C.UTF-8".to_owned()),
                 ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
                 ("MY_VAR".to_owned(), "1".to_owned()),
-            ],
-            "no ecosystem dependencies means no unnecessary overlay"
-        );
-    }
-
-    /// Equivalent capability snapshots construct identical child
-    /// environments.
-    #[test]
-    fn equivalent_overlays_construct_identical_child_environments() {
-        let base = ToolEnvironment::new();
-        let first = base.with_overlay(&ToolEnvironmentOverlay::python(std::path::Path::new(
-            "/e/p",
-        )));
-        let second = base.with_overlay(&ToolEnvironmentOverlay::python(std::path::Path::new(
-            "/e/p",
-        )));
-        assert_eq!(first, second);
-        assert_eq!(
-            first.child_environment(std::path::Path::new("/ws")),
-            second.child_environment(std::path::Path::new("/ws"))
+            ]
         );
     }
 }

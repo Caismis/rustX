@@ -759,7 +759,7 @@ ordinary capability preparation: cancellation root, inactive lifecycle admission
 source slots, immutable transport bindings, invalidation epochs and retirement
 supervision travel together. Draft preparation resolves only selected configured
 MCP demand from Root and enabled Workflows. It creates no durable Session, Python
-or Skill environment, provider request, upload receipt or executable capability.
+build, provider request, upload receipt or executable capability.
 
 An actual Web Send carries its draft target in `thread/start`. Synchronous
 native connection admission records the monotonic receipt and seals one exact
@@ -959,9 +959,10 @@ Foreground tool results retain one slot per model call and canonical model
 call order. A committed background execution survives attempt cancellation
 but not conversation drain. The process runner's existing physical proof is
 composed transitively; no global process registry is introduced. Capability
-preparation is counted until its owner returns, so shared `EnvironmentStore`
-materialization is not cancelled globally by one conversation but cannot
-create a late runtime callback or revision. Retained conversation-owned MCP
+preparation is counted until its owner returns and cannot create a late
+runtime callback or revision. Managed Python uv builds stay under the
+environment-store `python-tools` root and are not cancelled globally by one
+conversation. Retained conversation-owned MCP
 stdio runtimes are explicitly closed and physically settled before
 quiescence; an unproven process or notification-task settlement is reported
 as a runtime failure, not as successful shutdown. All runtime capability
@@ -4795,10 +4796,8 @@ generic runtime supervisor:
 - **Immutable attempt capability snapshot.** One `CapabilitySnapshot`
   holds the monotonic `CapabilityRevision`, the immutable `ToolRegistry`
   handle, the immutable Skill snapshot/catalog with its
-  `SkillId` + `SkillVersionId` bindings, the Python/Node environment
-  identity and path when present, and the effective `ToolEnvironment`
-  (base authorized environment plus the deterministic Skill environment
-  overlay).
+  `SkillId` + `SkillVersionId` bindings, and the effective `ToolEnvironment`
+  (the base authorized environment; Skills add nothing).
 - **Capability owner identity.** A `CapabilityCoordinator` is explicitly
   conversation-owned and records the canonical Workspace root with its
   `ConversationId`. An attempt lease can only be passed to a
@@ -4827,8 +4826,8 @@ generic runtime supervisor:
   acquisition that reconnects after physical stdio spawn, settle before
   retirement completes. See [the deterministic regressions and controlled
   timing fixture](issue-498/README.md).
-- **Quiescent commit.** Candidate preparation (discovery, dependency
-  merge, environment materialization) runs independently; activation is a
+- **Quiescent commit.** Candidate preparation (Skill discovery and optional
+  source preparation) runs independently; activation is a
   quiescent atomic commit legal only when zero attempt leases are active
   for the conversation. Acquisition and commit serialize through one
   synchronization boundary; an identical candidate is a no-op that never

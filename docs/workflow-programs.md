@@ -681,8 +681,7 @@ because the presentation preview is shorter than the result.
 
 The node lowers to one ordinary admitted builtin Bash invocation in the
 calling Session's workspace. `python3` or `node` must be available in that
-Bash tool's approved environment, including any configured Skill environment
-overlay. It does not install interpreters, load arbitrary shell startup files
+Bash tool's approved environment. It does not install interpreters, load arbitrary shell startup files
 or inherit the launching process's PATH. Workspace Python imports and Node
 require calls use the calling workspace. Source and typed inputs arrive as
 quoted JSON stdin data, never shell interpolation or command-line arguments.

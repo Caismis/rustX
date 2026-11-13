@@ -1,17 +1,14 @@
-//! M6 deterministic tests: Skill discovery, parsing, version identity,
-//! dependency declarations, and the compact model-visible catalog.
+//! Deterministic tests: Skill discovery, parsing, version identity, and the
+//! compact model-visible catalog.
 //!
-//! Every test is local: no public package registry, no network, no
-//! package-manager subprocess.
+//! Every test is local: no public package registry, no network, and no
+//! package-manager subprocess. Dependency-looking metadata is ordinary text.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use rustx::runtime::identity::SkillVersionId;
 use rustx::skills::{
-    SkillDiagnostic, SkillDiscovery, SkillDiscoveryConfig, SkillPackageError,
-    merge_dependency_manifests, node_environment_digest, python_environment_digest,
-    render_skill_catalog,
+    SkillDiagnostic, SkillDiscovery, SkillDiscoveryConfig, SkillPackageError, render_skill_catalog,
 };
 use rustx::tools::workspace::Workspace;
 /// Writes one valid Skill package into the workspace.
@@ -733,11 +730,10 @@ fn description_change_changes_the_version_identity() {
     assert_ne!(before, version_id(&workspace, "pdf"));
 }
 
-/// A dependency-only change changes the version identity but a
-/// description-only change leaves the environment identity unchanged when
-/// dependency inputs are unchanged.
+/// Literal dependency metadata participates in the definition identity and is
+/// not normalized into pins.
 #[test]
-fn dependency_change_changes_the_version_identity() {
+fn dependency_metadata_text_changes_the_version_identity() {
     let (dir, workspace) = fixture();
     write_skill(
         dir.path(),
@@ -755,96 +751,20 @@ fn dependency_change_changes_the_version_identity() {
         "body\n",
     );
     assert_ne!(before, version_id(&workspace, "pdf"));
-
-    let description_version = version_id(&workspace, "pdf");
-    let deps: BTreeMap<String, String> = [("pypdf".to_owned(), "5.10.0".to_owned())]
-        .into_iter()
-        .collect();
-    let env_digest =
-        python_environment_digest("linux", "x86_64", "Python 3.12.3", "pip 24.0", &deps);
-    write_skill(
-        dir.path(),
-        "pdf",
-        "Changed description only.",
-        &[("rustx.python-dependencies", r#"{"pypdf":"5.10.0"}"#)],
-        "body\n",
-    );
-    let description_version_after = version_id(&workspace, "pdf");
-    assert_ne!(description_version, description_version_after);
+    let packages = discover(&workspace);
     assert_eq!(
-        env_digest,
-        python_environment_digest("linux", "x86_64", "Python 3.12.3", "pip 24.0", &deps),
-        "a description-only change does not change the Python environment identity"
+        packages[0].metadata()["rustx.python-dependencies"].as_str(),
+        Some(r#"{"pypdf":"5.10.0"}"#)
     );
 }
 
 // ---------------------------------------------------------------------------
-// Dependency declarations
+// Uninterpreted dependency metadata
 // ---------------------------------------------------------------------------
 
-/// An absent metadata key means an empty dependency map.
+/// Malformed dependency-looking metadata does not hide the Skill or warn.
 #[test]
-fn absent_metadata_key_is_an_empty_dependency_map() {
-    let (dir, workspace) = fixture();
-    write_skill(dir.path(), "pdf", "PDF skill.", &[], "body\n");
-    let packages = discover(&workspace);
-    assert!(packages[0].dependencies().python.is_empty());
-    assert!(packages[0].dependencies().node.is_empty());
-}
-
-/// Duplicate compatible declarations coalesce across Skills; incompatible
-/// direct versions report every responsible Skill.
-#[test]
-fn merge_coalesces_and_conflicts_report_every_skill() {
-    let (dir, workspace) = fixture();
-    write_skill(
-        dir.path(),
-        "a",
-        "Skill A.",
-        &[("rustx.python-dependencies", r#"{"pypdf":"5.9.0"}"#)],
-        "body\n",
-    );
-    write_skill(
-        dir.path(),
-        "b",
-        "Skill B.",
-        &[("rustx.python-dependencies", r#"{"PyPDF":"5.9.0"}"#)],
-        "body\n",
-    );
-    let packages = discover(&workspace);
-    let merged = merge_dependency_manifests(&packages).expect("coalesce");
-    assert_eq!(merged.python.len(), 1);
-    assert_eq!(merged.python.get("pypdf").expect("coalesced"), "5.9.0");
-
-    write_skill(
-        dir.path(),
-        "b",
-        "Skill B.",
-        &[("rustx.python-dependencies", r#"{"PyPDF":"5.10.0"}"#)],
-        "body\n",
-    );
-    let packages = discover(&workspace);
-    let conflict = merge_dependency_manifests(&packages).expect_err("conflict");
-    assert_eq!(conflict.ecosystem, rustx::skills::Ecosystem::Python);
-    assert_eq!(conflict.package, "pypdf");
-    assert_eq!(conflict.declarations.len(), 2);
-    let skills: Vec<&str> = conflict
-        .declarations
-        .iter()
-        .map(|(skill, _)| skill.as_str())
-        .collect();
-    let versions: Vec<&str> = conflict
-        .declarations
-        .iter()
-        .map(|(_, version)| version.as_str())
-        .collect();
-    assert_eq!(skills, ["a", "b"]);
-    assert_eq!(versions, ["5.9.0", "5.10.0"]);
-}
-
-/// Invalid rustX dependency pins do not hide a skill or its valid pins.
-#[test]
-fn malformed_dependency_declaration_warns_and_keeps_the_skill() {
+fn malformed_dependency_metadata_stays_on_the_skill() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "good", "Good skill.", &[], "body\n");
     write_skill(
@@ -866,15 +786,22 @@ fn malformed_dependency_declaration_warns_and_keeps_the_skill() {
             .collect::<Vec<_>>(),
         ["bad", "good"]
     );
-    assert!(outcome.packages[0].dependencies().python.is_empty());
     assert_eq!(
-        outcome.packages[0].dependencies().node["typescript"],
-        "5.8.0"
+        outcome.packages[0].metadata()["rustx.python-dependencies"].as_str(),
+        Some(r#"{"pypdf":"not a version"}"#)
     );
-    assert!(matches!(
-        outcome.diagnostics.as_slice(),
-        [SkillDiagnostic::PackageWarning { .. }]
-    ));
+    assert_eq!(
+        outcome.packages[0].metadata()["rustx.node-dependencies"].as_str(),
+        Some(r#"{"typescript":"5.8.0"}"#)
+    );
+    assert!(
+        outcome
+            .diagnostics
+            .iter()
+            .all(|fact| !matches!(fact, SkillDiagnostic::PackageWarning { .. })),
+        "{:?}",
+        outcome.diagnostics
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -930,55 +857,4 @@ fn catalog_rendering_is_exact_and_publishes_host_skill_locations() {
     // omits the entire system section.
     let empty = rustx::skills::SkillSnapshot::new(Vec::new());
     assert!(empty.catalog_entries().is_empty());
-}
-
-// ---------------------------------------------------------------------------
-// Environment identity (pure digest semantics)
-// ---------------------------------------------------------------------------
-
-/// Same canonical input → same digest; dependency order does not matter;
-/// the store path is not an input.
-#[test]
-fn environment_digests_are_deterministic() {
-    let deps: BTreeMap<String, String> = [
-        ("pypdf".to_owned(), "5.9.0".to_owned()),
-        ("pillow".to_owned(), "11.3.0".to_owned()),
-    ]
-    .into_iter()
-    .collect();
-    let mut reversed: BTreeMap<String, String> = BTreeMap::new();
-    reversed.insert("pillow".to_owned(), "11.3.0".to_owned());
-    reversed.insert("pypdf".to_owned(), "5.9.0".to_owned());
-    assert_eq!(
-        python_environment_digest("linux", "x86_64", "Python 3.12.3", "pip 24.0", &deps),
-        python_environment_digest("linux", "x86_64", "Python 3.12.3", "pip 24.0", &reversed)
-    );
-    let digest = python_environment_digest("linux", "x86_64", "Python 3.12.3", "pip 24.0", &deps);
-    assert_eq!(digest.as_str().len(), 7 + 64);
-
-    // Different dependency input → different digest.
-    let other: BTreeMap<String, String> = [("pypdf".to_owned(), "5.10.0".to_owned())]
-        .into_iter()
-        .collect();
-    assert_ne!(
-        digest,
-        python_environment_digest("linux", "x86_64", "Python 3.12.3", "pip 24.0", &other)
-    );
-
-    // A relevant runtime-version change → different digest.
-    assert_ne!(
-        digest,
-        python_environment_digest("linux", "x86_64", "Python 3.13.0", "pip 24.0", &deps)
-    );
-
-    // Python and Node digests are distinct identities.
-    let node_deps: BTreeMap<String, String> = [("pdf-lib".to_owned(), "1.17.1".to_owned())]
-        .into_iter()
-        .collect();
-    let node_digest = node_environment_digest("linux", "x86_64", "v22.1.0", "10.2.3", &node_deps);
-    assert_ne!(
-        node_digest.as_str(),
-        digest.as_str(),
-        "python and node identities remain distinct"
-    );
 }
