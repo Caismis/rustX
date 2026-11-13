@@ -1702,7 +1702,7 @@ async fn acquire_lock(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{
         Owner, ParsedRequest, ProgramOutput, ProgramProbe, ProgramRequest, PythonSelection, Record,
         ensure_guard, exact_pin_conflicts, generation_of, lock_file, parse_request, path_request,
@@ -2457,7 +2457,7 @@ mod tests {
                     std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o644))
                         .expect("interpreter permissions");
                 }
-                "pin-target" => std::fs::write(&version, "3.11\n").expect("changed pin target"),
+                "pin-target" => std::fs::write(&version, "3.11.0\n").expect("changed pin target"),
                 _ => unreachable!(),
             }
             assert!(
@@ -2802,8 +2802,7 @@ mod tests {
         assert_eq!(owner.records.lock().expect("records").len(), 1);
     }
 
-    #[test]
-    fn ancestor_python_version_does_not_bind_workspace_discovery() {
+    pub(crate) fn ancestor_python_version_does_not_bind_workspace_discovery() {
         let uv = std::env::var_os("PATH").and_then(|path| {
             std::env::split_paths(&path).find_map(|directory| {
                 let candidate = directory.join("uv");
@@ -3167,8 +3166,7 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&listed.stdout), "ok");
     }
 
-    #[test]
-    fn relative_interpreter_pin_is_bound_to_the_workspace() {
+    pub(crate) fn relative_interpreter_pin_is_bound_to_the_workspace() {
         let uv = std::env::var_os("PATH").and_then(|path| {
             std::env::split_paths(&path).find_map(|directory| {
                 let candidate = directory.join("uv");
