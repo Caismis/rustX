@@ -259,7 +259,7 @@ pub(crate) fn compose(
     base: &ToolEnvironment,
     selection: &PythonSelection,
 ) -> Result<Vec<(String, String)>, ()> {
-    if host.closed.is_some() || selection.guard_unavailable {
+    if host.closed.is_some() {
         return Err(());
     }
     let mut entries = host.entries.clone();
@@ -285,6 +285,11 @@ pub(crate) fn compose(
         push_path(&mut path, &inherited);
     }
     entries.insert("PATH".to_owned(), path);
+    if selection.guard_unavailable {
+        for (key, value) in workspace_python::shell_guard_functions(&selection.diagnostic) {
+            entries.insert(key, value);
+        }
+    }
     if let Some(virtual_env) = &selection.virtual_env {
         entries.insert("VIRTUAL_ENV".to_owned(), virtual_env.display().to_string());
     }

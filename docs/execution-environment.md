@@ -47,17 +47,23 @@ ordinary meaning.
   such as `cpython-` or `pypy-` must match `sys.implementation.name`; an
   unknown or trailing qualifier is rejected. With no pin, the root
   `pyproject.toml` `[project].requires-python` specifier is passed to
-  `uv python find --no-project --directory <outside the Workspace>`. The selected interpreter is
+  `uv python find --no-project --directory <outside the Workspace>`. A relative
+  path request is made absolute from the Workspace root before that command
+  sees it. The selected interpreter is
   checked against both inputs before it is ready. The readiness identity is
   snapshotted after the environment exists and before those probes. A pin,
   project, or interpreter change during a probe does not publish Ready.
   Neither root file is edited.
 - When the environment is not ready, `python` and `python3` resolve to a
-  guard that exits 127. If the Workspace state directory cannot be written,
-  a private process-lifetime fallback guard is created. If neither directory
-  can be created, that command fails closed instead of using the host
-  interpreter. `git`, `ls`, `cargo`, and other commands keep the host `PATH`
-  when a guard directory exists.
+  guard that exits 127. The guard is a private directory ahead of the host
+  `PATH`, so `/usr/bin/env python3` uses it and `git`, `ls`, and `cargo` do
+  not. If the Workspace state directory cannot be written, that directory is
+  claimed in the temporary directory, `XDG_RUNTIME_DIR`, `/dev/shm`, or the
+  directory containing the rustX executable. If every one of those is
+  unwritable, composition still succeeds: Bash rejects the `python` and
+  `python3` command names with the guard diagnostic, and other commands keep
+  the host `PATH`. The failure is not reported as a non-Unicode `PATH` or
+  `HOME`.
 - Registration queues the authorized directory only when the Product Host
   attests a shared filesystem. The location id is not a path. Waiting for
   the cross-process lock observes runtime shutdown and does not stay blocked

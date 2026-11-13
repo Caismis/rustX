@@ -611,7 +611,9 @@ impl Owner {
         // The root pin is the request. With no pin, requires-python constrains
         // uv's selection. Ancestor version files are not a request.
         if let Some(pin) = pin {
-            argv.push(pin.to_owned());
+            // `--directory` would resolve `./pinned-python` outside the
+            // Workspace. Path requests are absolute before uv sees them.
+            argv.push(absolute_pin(root, pin));
         } else if let Some(requires) = requires {
             argv.push(requires.to_owned());
         }
@@ -1198,6 +1200,24 @@ fn path_request(pin: &str) -> bool {
     pin.contains('/') || pin.contains('\\')
 }
 
+/// A path request is bound to the Workspace root. uv's `--directory` must not
+/// reinterpret `./pinned-python` against the private discovery directory.
+fn absolute_pin(root: &Path, pin: &str) -> String {
+    if !path_request(pin) {
+        return pin.to_owned();
+    }
+    let requested = Path::new(pin);
+    let absolute = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    };
+    std::fs::canonicalize(&absolute)
+        .unwrap_or(absolute)
+        .display()
+        .to_string()
+}
+
 const IMPLEMENTATIONS: &[&str] = &["cpython", "pypy", "pyston", "graalpy", "graalpython"];
 
 enum ParsedRequest {
@@ -1369,21 +1389,65 @@ fn fallback_guard() -> Option<PathBuf> {
 }
 
 fn install_fallback_guard() -> Option<PathBuf> {
-    let parent = std::env::temp_dir();
-    for _ in 0..4 {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let directory = parent.join(format!("rustx-python-guard-{}-{nanos}", std::process::id()));
-        if claim_fresh_directory(&directory).is_none() {
+    install_process_guard(&fallback_parents(), "Workspace Python is not ready")
+}
+
+fn fallback_parents() -> Vec<PathBuf> {
+    let mut parents = vec![std::env::temp_dir()];
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let path = PathBuf::from(runtime);
+        if path.is_absolute() {
+            parents.push(path);
+        }
+    }
+    let shm = PathBuf::from("/dev/shm");
+    if shm.is_dir() {
+        parents.push(shm);
+    }
+    if let Some(parent) = std::env::current_exe()
+        .ok()
+        .as_deref()
+        .and_then(Path::parent)
+    {
+        parents.push(parent.to_path_buf());
+    }
+    parents
+}
+
+fn install_process_guard(parents: &[PathBuf], diagnostic: &str) -> Option<PathBuf> {
+    for parent in parents {
+        if !parent.is_dir() {
             continue;
         }
-        if let Some(directory) = install_guard(&directory, "Workspace Python is not ready") {
-            return Some(directory);
+        for _ in 0..4 {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            let directory =
+                parent.join(format!("rustx-python-guard-{}-{nanos}", std::process::id()));
+            if claim_fresh_directory(&directory).is_none() {
+                continue;
+            }
+            if let Some(directory) = install_guard(&directory, diagnostic) {
+                return Some(directory);
+            }
         }
     }
     None
+}
+
+/// Bash rejects these command names when no guard directory can be created.
+/// A directory guard remains the lookup path for `/usr/bin/env python3`.
+pub(crate) fn shell_guard_functions(diagnostic: &str) -> [(String, String); 2] {
+    let body = format!(
+        "() {{ printf '%s\\n' '{}' >&2\n return 127\n}}",
+        shell_line(diagnostic)
+    );
+    [
+        ("BASH_FUNC_python%%".to_owned(), body.clone()),
+        ("BASH_FUNC_python3%%".to_owned(), body),
+    ]
 }
 
 fn claim_fresh_directory(directory: &Path) -> Option<PathBuf> {
@@ -2145,6 +2209,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn relative_pin_is_absolute_in_the_find_request() {
+        let root = workspace();
+        let pinned = root.path().join("pinned-python");
+        write_executable(&pinned, "#!/bin/sh\nexit 0\n");
+        std::fs::write(root.path().join(".python-version"), "./pinned-python\n").expect("pin");
+        let root_path = std::fs::canonicalize(root.path()).expect("canonical");
+        let bin = tempfile::tempdir().expect("bin");
+        write_executable(&bin.path().join("uv"), "#!/bin/sh\nexit 0\n");
+        let probe = Arc::new(Scripted::new("0.10.2"));
+        let owner = Owner::for_test(probe.clone(), Some(host_for(bin.path())), None, None);
+        owner.prepare(root_path.clone()).await;
+        let calls = probe.calls.lock().expect("calls");
+        let find = calls
+            .iter()
+            .find(|argv| argv.iter().any(|arg| arg == "find"))
+            .expect("find");
+        let requested = find.last().expect("pin");
+        assert_eq!(
+            requested,
+            &super::absolute_pin(&root_path, "./pinned-python")
+        );
+        assert!(Path::new(requested).is_absolute());
+        assert!(!requested.ends_with("./pinned-python"));
+    }
+
+    #[tokio::test]
     async fn issue_u11_one_flight_creates_the_environment_once() {
         let root = workspace();
         let root_path = std::fs::canonicalize(root.path()).expect("canonical");
@@ -2581,34 +2671,146 @@ mod tests {
         assert!(super::claim_fresh_directory(&planted).is_none());
     }
 
-    #[test]
-    fn missing_guard_directories_do_not_restore_host_python() {
-        let selection = super::selection_from_guard(None, "disk full");
-        if selection.guard_unavailable {
-            let host = host_from_entries(vec![("PATH", "/usr/bin"), ("HOME", "/home/ada")]);
-            assert!(
-                crate::tools::execution_environment::compose(
-                    &host,
-                    &crate::tools::environment::ToolEnvironment::new(),
-                    &selection,
-                )
-                .is_err()
-            );
+    fn run_bash(entries: &[(String, String)], program: &str) -> std::process::Output {
+        let mut bash = std::process::Command::new("/bin/bash");
+        bash.arg("-c").arg(program).env_clear();
+        for (key, value) in entries {
+            bash.env(key, value);
         }
-        let closed = PythonSelection {
+        bash.output().expect("bash")
+    }
+
+    #[test]
+    fn failed_guard_directories_reject_python_and_run_other_commands() {
+        let blocked = tempfile::tempdir().expect("blocked");
+        let file = blocked.path().join("not-a-directory");
+        std::fs::write(&file, "x").expect("file");
+        let good = tempfile::tempdir().expect("good");
+        assert!(super::install_process_guard(std::slice::from_ref(&file), "disk full").is_none());
+        let guard = super::install_process_guard(&[file, good.path().to_path_buf()], "disk full")
+            .expect("a later private directory holds the guard");
+        let selection = PythonSelection {
+            path_prefix: vec![guard],
+            virtual_env: None,
+            diagnostic: "disk full".to_owned(),
+            guard_unavailable: false,
+        };
+        let host = host_from_entries(vec![("PATH", "/usr/bin:/bin"), ("HOME", "/home/ada")]);
+        let entries = crate::tools::execution_environment::compose(
+            &host,
+            &crate::tools::environment::ToolEnvironment::new(),
+            &selection,
+        )
+        .expect("non-python execution stays available");
+        let python = run_bash(&entries, "python3 -c 'print(99)'");
+        assert_eq!(python.status.code(), Some(127));
+        assert!(String::from_utf8_lossy(&python.stderr).contains("disk full"));
+        assert!(!String::from_utf8_lossy(&python.stdout).contains("99"));
+        let via_env = run_bash(&entries, "/usr/bin/env python3 -c 'print(99)'");
+        assert_eq!(via_env.status.code(), Some(127));
+        let listed = run_bash(&entries, "ls /bin/sh >/dev/null && printf ok");
+        assert!(listed.status.success());
+        assert_eq!(String::from_utf8_lossy(&listed.stdout), "ok");
+    }
+
+    #[test]
+    fn no_guard_directory_rejects_python_names_and_keeps_other_commands() {
+        let selection = PythonSelection {
             path_prefix: Vec::new(),
             virtual_env: None,
             diagnostic: "disk full".to_owned(),
             guard_unavailable: true,
         };
         let host = host_from_entries(vec![("PATH", "/usr/bin:/bin"), ("HOME", "/home/ada")]);
+        let entries = crate::tools::execution_environment::compose(
+            &host,
+            &crate::tools::environment::ToolEnvironment::new(),
+            &selection,
+        )
+        .expect("composition stays available");
         assert!(
-            crate::tools::execution_environment::compose(
-                &host,
-                &crate::tools::environment::ToolEnvironment::new(),
-                &closed,
-            )
-            .is_err()
+            entries
+                .iter()
+                .any(|(key, value)| key == "PATH" && value.contains("/usr/bin"))
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|(_, value)| !value.contains("not Unicode"))
+        );
+        let python = run_bash(&entries, "python3 -c 'print(99)'");
+        assert_eq!(python.status.code(), Some(127));
+        assert!(String::from_utf8_lossy(&python.stderr).contains("disk full"));
+        let listed = run_bash(&entries, "ls /bin/sh >/dev/null && printf ok");
+        assert!(listed.status.success());
+        assert_eq!(String::from_utf8_lossy(&listed.stdout), "ok");
+    }
+
+    #[test]
+    fn relative_interpreter_pin_is_bound_to_the_workspace() {
+        let uv = std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path).find_map(|directory| {
+                let candidate = directory.join("uv");
+                candidate.is_file().then_some(candidate)
+            })
+        });
+        let Some(uv) = uv else {
+            panic!("uv is required to prove a relative interpreter pin stays in the Workspace");
+        };
+        let root = tempfile::tempdir().expect("root");
+        let root_path = std::fs::canonicalize(root.path()).expect("canonical");
+        let interpreter = PathBuf::from("/usr/bin/python3");
+        assert!(interpreter.is_file(), "python3 is required");
+        std::os::unix::fs::symlink(&interpreter, root_path.join("pinned-python")).expect("link");
+        let private = tempfile::tempdir().expect("private");
+        let private = private.path().to_str().expect("utf8");
+        let relative = std::process::Command::new(&uv)
+            .args([
+                "python",
+                "find",
+                "--no-project",
+                "--directory",
+                private,
+                "--offline",
+                "--no-python-downloads",
+                "./pinned-python",
+            ])
+            .current_dir(&root_path)
+            .env("UV_OFFLINE", "1")
+            .output()
+            .expect("uv");
+        assert!(
+            !relative.status.success(),
+            "the fixture must show that --directory drops a relative pin: {}",
+            String::from_utf8_lossy(&relative.stderr)
+        );
+        let requested = super::absolute_pin(&root_path, "./pinned-python");
+        assert!(Path::new(&requested).is_absolute());
+        let found = std::process::Command::new(&uv)
+            .args([
+                "python",
+                "find",
+                "--no-project",
+                "--directory",
+                private,
+                "--offline",
+                "--no-python-downloads",
+                &requested,
+            ])
+            .current_dir(&root_path)
+            .env("UV_OFFLINE", "1")
+            .output()
+            .expect("uv");
+        assert!(
+            found.status.success(),
+            "{}",
+            String::from_utf8_lossy(&found.stderr)
+        );
+        let reported = String::from_utf8_lossy(&found.stdout);
+        let reported = reported.lines().next().unwrap_or("").trim();
+        assert_eq!(
+            std::fs::canonicalize(reported).expect("reported"),
+            std::fs::canonicalize(&interpreter).expect("python3")
         );
     }
 
