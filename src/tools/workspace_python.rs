@@ -93,6 +93,7 @@ enum Record {
     Conflict {
         generation: Generation,
         diagnostic: String,
+        directory_candidate: Option<PathBuf>,
     },
 }
 
@@ -297,7 +298,12 @@ impl Owner {
             Some(Record::Conflict {
                 generation: stored,
                 diagnostic,
-            }) if stored == &generation => {
+                directory_candidate,
+            }) if stored == &generation
+                && directory_candidate
+                    .as_ref()
+                    .is_none_or(|path| !path.is_dir()) =>
+            {
                 return guarded(diagnostic);
             }
             _ => {}
@@ -444,10 +450,11 @@ impl Owner {
             && !path_request(pin)
             && parse_request(pin).is_err()
         {
-            self.conflict(
+            self.conflict_with_directory_candidate(
                 root,
                 ".python-version cannot be verified",
                 generation.clone(),
+                Some(root.join(pin)),
             );
             drop(lock);
             return;
@@ -533,7 +540,7 @@ impl Owner {
             }
         };
         let fixed = match self
-            .check_fixed_interpreter(root, &request, host.as_ref(), pin, requires, expected)
+            .check_fixed_interpreter(root, host.as_ref(), pin, requires, expected)
             .await
         {
             Ok(fixed) => fixed,
@@ -741,13 +748,12 @@ impl Owner {
             .ok_or_else(|| "uv --version could not be parsed".to_owned())
     }
 
-    /// Path requests cannot select a different interpreter to satisfy the
-    /// project requirement. Validate the fixed executable before target writes
-    /// and retain its stamp across the later capacity wait.
+    /// Resolve file/launcher and installation-directory requests identically
+    /// for creation and adoption, without requiring uv. Validate the selected
+    /// entry before target writes and retain its identity across capacity waits.
     async fn check_fixed_interpreter(
         &self,
         root: &Path,
-        request: &str,
         host: &ExecutionHost,
         pin: Option<&str>,
         requires: Option<&str>,
@@ -762,15 +768,15 @@ impl Owner {
             root.join(pin)
         };
         let path_stamp = stamp(&path).ok_or("the Python interpreter cannot be inspected")?;
-        let interpreter = self
-            .probe_interpreter(root, Path::new(request), host, expected)
-            .await?;
+        let entry = fixed_interpreter_entry(&path)?;
+        let entry_stamp = stamp(&entry).ok_or("the Python interpreter cannot be inspected")?;
+        let interpreter = self.probe_interpreter(root, &entry, host, expected).await?;
         interpreter.check_requirements(Some(pin), requires)?;
         let executable = std::fs::canonicalize(&interpreter.executable)
             .map_err(|_| "the Python interpreter cannot be inspected")?;
         let executable_stamp =
             stamp(&executable).ok_or("the Python interpreter cannot be inspected")?;
-        if std::fs::canonicalize(&path).ok().as_ref() != Some(&executable) {
+        if std::fs::canonicalize(&entry).ok().as_ref() != Some(&executable) {
             // The launcher probe authorized metadata, not the later contents
             // of its reported executable path. Validate that actual file
             // within its own before/after stamp witness.
@@ -785,6 +791,8 @@ impl Owner {
         let fixed = FixedInterpreter {
             path,
             stamp: path_stamp,
+            entry,
+            entry_stamp,
             executable,
             executable_stamp,
         };
@@ -830,9 +838,8 @@ impl Owner {
             .check_requirements(pin, requires)
             .map_err(Conflict)?;
         let fixed = if let Some(pin) = pin.filter(|pin| path_request(pin)) {
-            let requested = absolute_pin(root, pin);
             let fixed = self
-                .check_fixed_interpreter(root, &requested, host, Some(pin), requires, expected)
+                .check_fixed_interpreter(root, host, Some(pin), requires, expected)
                 .await
                 .map_err(Unavailable)?
                 .expect("path request");
@@ -1001,6 +1008,16 @@ impl Owner {
     }
 
     fn conflict(&self, root: &Path, diagnostic: &str, generation: Generation) {
+        self.conflict_with_directory_candidate(root, diagnostic, generation, None);
+    }
+
+    fn conflict_with_directory_candidate(
+        &self,
+        root: &Path,
+        diagnostic: &str,
+        generation: Generation,
+        directory_candidate: Option<PathBuf>,
+    ) {
         self.records
             .lock()
             .expect("workspace python records")
@@ -1009,6 +1026,7 @@ impl Owner {
                 Record::Conflict {
                     generation,
                     diagnostic: diagnostic.to_owned(),
+                    directory_candidate,
                 },
             );
         self.bound_records();
@@ -1035,6 +1053,8 @@ enum InterpreterError {
 struct FixedInterpreter {
     path: PathBuf,
     stamp: PathStamp,
+    entry: PathBuf,
+    entry_stamp: PathStamp,
     executable: PathBuf,
     executable_stamp: PathStamp,
 }
@@ -1042,8 +1062,34 @@ struct FixedInterpreter {
 impl FixedInterpreter {
     fn is_current(&self) -> bool {
         stamp(&self.path).as_ref() == Some(&self.stamp)
+            && fixed_interpreter_entry(&self.path).ok().as_ref() == Some(&self.entry)
+            && stamp(&self.entry).as_ref() == Some(&self.entry_stamp)
             && stamp(&self.executable).as_ref() == Some(&self.executable_stamp)
     }
+}
+
+/// Resolve Unix installations in bin/python, then bin/python3 order, independent
+/// of the installed uv version (or its absence during adoption). Re-resolve:
+/// adding bin/python must invalidate a prior bin/python3 selection too.
+fn fixed_interpreter_entry(path: &Path) -> Result<PathBuf, &'static str> {
+    let metadata =
+        std::fs::metadata(path).map_err(|_| "the Python interpreter cannot be inspected")?;
+    if metadata.is_dir() {
+        let python = path.join("bin/python");
+        let entry = if python.exists() {
+            python
+        } else {
+            path.join("bin/python3")
+        };
+        if std::fs::metadata(&entry).is_ok_and(|meta| meta.is_file() && meta.mode() & 0o111 != 0) {
+            return Ok(entry);
+        }
+        return Err("the selected bin/python or bin/python3 is missing or not an executable file");
+    }
+    if !metadata.is_file() || metadata.mode() & 0o111 == 0 {
+        return Err("the Python interpreter is not an executable file");
+    }
+    Ok(path.to_path_buf())
 }
 
 struct Interpreter {
@@ -1379,6 +1425,12 @@ fn read_pin(root: &Path) -> Result<Option<String>, &'static str> {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
+        }
+        // uv can write a bare relative directory name (without ./). Versions
+        // keep their meaning even when a same-named directory exists.
+        if !path_request(line) && parse_request(line).is_err() && root.join(line).is_dir() {
+            // Preserve authored directory links for the fixed witness.
+            return Ok(Some(root.join(line).display().to_string()));
         }
         return Ok(Some(line.to_owned()));
     }
@@ -2731,6 +2783,155 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn bare_pin_parsing_keeps_versions_and_rejects_non_directory_requests_without_probes() {
+        for pin in ["named-python", "cpython-3.12-unsupported"] {
+            let root = workspace();
+            write_executable(&root.path().join(pin), "#!/bin/sh\nexit 0\n");
+            std::fs::write(root.path().join(".python-version"), pin).unwrap();
+            let probe = Arc::new(Scripted::new("0.10.2"));
+            let owner = Owner::for_test(probe.clone(), None, None, None);
+            owner.prepare(root.path().to_path_buf()).await;
+            assert!(matches!(
+                owner.records.lock().unwrap().get(root.path()),
+                Some(Record::Conflict { .. })
+            ));
+            assert!(probe.calls.lock().unwrap().is_empty());
+            owner.stop().await;
+        }
+        let root = workspace();
+        std::fs::create_dir(root.path().join("3.12")).unwrap();
+        std::fs::write(root.path().join(".python-version"), "3.12").unwrap();
+        let pin = super::read_pin(root.path()).unwrap();
+        assert_eq!(pin.as_deref(), Some("3.12"));
+        assert_eq!(
+            super::creation_request(root.path(), pin.as_deref(), None).unwrap(),
+            "3.12"
+        );
+    }
+
+    #[tokio::test]
+    async fn bare_directory_pin_recovers_after_disappearing_without_root_input_changes() {
+        let root = workspace();
+        let source = root.path().join("source-env");
+        let base = root.path().join("base-python");
+        write_executable(&base, "#!/bin/sh\nexit 0\n");
+        std::fs::create_dir_all(source.join("bin")).unwrap();
+        std::os::unix::fs::symlink(&base, source.join("bin/python")).unwrap();
+        write_linked_venv(&root.path().join(".venv"), &base);
+        std::fs::write(root.path().join(".python-version"), "source-env").unwrap();
+        let original = generation_of(root.path());
+        let owner = Owner::for_test(Arc::new(Scripted::new("0.10.2")), None, None, None);
+        owner.prepare(root.path().to_path_buf()).await;
+        assert!(owner.observe(root.path()).virtual_env.is_some());
+        let saved = root.path().join("saved-env");
+        std::fs::rename(&source, &saved).unwrap();
+        assert!(owner.observe(root.path()).virtual_env.is_none());
+        owner.prepare(root.path().to_path_buf()).await;
+        assert!(matches!(
+            owner.records.lock().unwrap().get(root.path()),
+            Some(Record::Conflict { .. })
+        ));
+        let (miss, mut arrival) = tokio::sync::oneshot::channel();
+        *owner.cache_miss.lock().unwrap() = Some(miss);
+        assert!(owner.observe(root.path()).virtual_env.is_none());
+        assert!(matches!(
+            arrival.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        std::fs::rename(saved, source).unwrap();
+        owner.observe(root.path());
+        arrival
+            .try_recv()
+            .expect("the directory's return invalidates the malformed-request cache");
+        owner.prepare(root.path().to_path_buf()).await;
+        assert!(owner.observe(root.path()).virtual_env.is_some());
+        assert_eq!(generation_of(root.path()), original);
+        owner.stop().await;
+    }
+
+    #[tokio::test]
+    async fn directory_pin_entry_changes_invalidate_ready_without_new_probes() {
+        for change in ["redirect", "replace", "preferred", "directory-alias"] {
+            let root = workspace();
+            let source = root.path().join("source-env");
+            std::fs::create_dir_all(source.join("bin")).unwrap();
+            let base = root.path().join("base-python");
+            let other = root.path().join("other-python");
+            write_executable(&base, "#!/bin/sh\nexit 0\n");
+            write_executable(&other, "#!/bin/sh\nexit 0\n");
+            let entry = source.join(if change == "preferred" {
+                "bin/python3"
+            } else {
+                "bin/python"
+            });
+            std::os::unix::fs::symlink(&base, &entry).unwrap();
+            write_linked_venv(&root.path().join(".venv"), &base);
+            let directory_alias = root.path().join("source-alias");
+            let pin = if change == "directory-alias" {
+                std::os::unix::fs::symlink(&source, &directory_alias).unwrap();
+                "source-alias"
+            } else {
+                "./source-env"
+            };
+            std::fs::write(root.path().join(".python-version"), pin).unwrap();
+            let original = generation_of(root.path());
+            let source_stamp = super::stamp(&source);
+            let base_stamp = super::stamp(&base);
+            let probe = Arc::new(Scripted::new("0.10.2"));
+            let owner = Owner::for_test(probe.clone(), None, None, None);
+            owner.prepare(root.path().to_path_buf()).await;
+            assert!(owner.observe(root.path()).virtual_env.is_some());
+            let fixed = match owner.records.lock().unwrap().get(root.path()) {
+                Some(Record::Ready {
+                    fixed: Some(fixed), ..
+                }) => fixed.clone(),
+                other => panic!("expected a retained directory witness, got {other:?}"),
+            };
+            let calls = probe.calls.lock().unwrap().len();
+            if change == "directory-alias" {
+                let other_source = root.path().join("other-env");
+                std::fs::create_dir_all(other_source.join("bin")).unwrap();
+                std::os::unix::fs::symlink(&base, other_source.join("bin/python")).unwrap();
+                std::fs::rename(&directory_alias, root.path().join("previous-alias")).unwrap();
+                std::os::unix::fs::symlink(other_source, directory_alias).unwrap();
+            } else if change == "preferred" {
+                std::os::unix::fs::symlink(&base, source.join("bin/python")).unwrap();
+            } else {
+                std::fs::rename(&entry, source.join("bin/previous")).unwrap();
+                std::os::unix::fs::symlink(
+                    if change == "redirect" { &other } else { &base },
+                    &entry,
+                )
+                .unwrap();
+            }
+            assert_eq!(generation_of(root.path()), original);
+            assert_eq!(
+                super::stamp(&source),
+                source_stamp,
+                "root directory stamp is unchanged"
+            );
+            assert_eq!(
+                super::stamp(&base),
+                base_stamp,
+                "old base executable is unchanged"
+            );
+            assert!(!fixed.is_current(), "{change}");
+            let (miss, mut arrival) = tokio::sync::oneshot::channel();
+            *owner.cache_miss.lock().unwrap() = Some(miss);
+            assert!(owner.observe(root.path()).virtual_env.is_none());
+            arrival
+                .try_recv()
+                .expect("the entry change invalidates Ready");
+            assert_eq!(
+                probe.calls.lock().unwrap().len(),
+                calls,
+                "observation only inspects metadata"
+            );
+            owner.stop().await;
+        }
+    }
+
+    #[tokio::test]
     async fn alias_change_between_interpreter_probes_cannot_replace_the_first_witness() {
         struct SecondProbeGate {
             scripted: Scripted,
@@ -3644,6 +3845,165 @@ pub(crate) mod tests {
                 python_base_executable(&interpreter)
             );
             owner.stop().await;
+        }
+    }
+
+    pub(crate) async fn directory_pins_create_and_reuse_without_uv() {
+        for spelling in ["absolute", "relative", "bare"] {
+            let root = workspace();
+            let source = root.path().join("source-env");
+            let path = installed_uv_path();
+            for args in [
+                vec!["venv", "--no-project", "--python", "/usr/bin/python3"],
+                vec!["python", "pin", "--no-project"],
+            ] {
+                let request = if spelling == "bare" && args[0] == "python" {
+                    Path::new("source-env")
+                } else {
+                    &source
+                };
+                let output = std::process::Command::new("uv")
+                    .args(args)
+                    .arg(request)
+                    .arg("--no-config")
+                    .current_dir(root.path())
+                    .env_clear()
+                    .env("PATH", &path)
+                    .env("HOME", root.path())
+                    .env("UV_OFFLINE", "1")
+                    .env("UV_PYTHON_DOWNLOADS", "never")
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{output:?}");
+            }
+            assert_eq!(
+                std::fs::read_to_string(root.path().join(".python-version"))
+                    .unwrap()
+                    .trim(),
+                if spelling == "bare" {
+                    "source-env"
+                } else {
+                    source.to_str().unwrap()
+                },
+                "uv itself emits the absolute and bare directory pins"
+            );
+            if spelling == "relative" {
+                std::fs::write(root.path().join(".python-version"), "./source-env").unwrap();
+                // Exercise the python3-only layout as well as the usual pair.
+                let base = python_base_executable(&source.join("bin/python3"));
+                std::fs::remove_file(source.join("bin/python")).unwrap();
+                std::fs::remove_file(source.join("bin/python3")).unwrap();
+                std::os::unix::fs::symlink(base, source.join("bin/python3")).unwrap();
+            }
+            std::fs::write(
+                root.path().join("pyproject.toml"),
+                "[project]\nrequires-python = \">=3\"\n",
+            )
+            .unwrap();
+            let host = host_from_entries(vec![
+                ("PATH", &path),
+                ("UV_OFFLINE", "1"),
+                ("UV_PYTHON_DOWNLOADS", "never"),
+            ]);
+            let owner = Owner::for_test(
+                Arc::new(super::SupervisedProbe),
+                Some(Arc::new(host)),
+                None,
+                None,
+            );
+            owner.prepare(root.path().to_path_buf()).await;
+            assert_eq!(
+                owner.observe(root.path()).virtual_env,
+                Some(root.path().join(".venv")),
+                "spelling={spelling}: {:?}",
+                owner.records.lock().unwrap()
+            );
+            assert_eq!(
+                python_base_executable(&root.path().join(".venv/bin/python")),
+                python_base_executable(&source.join("bin/python3"))
+            );
+            owner.stop().await;
+
+            let no_uv = workspace();
+            let host = host_for(no_uv.path());
+            assert!(super::find_uv(&host, root.path()).is_none());
+            let original = generation_of(root.path());
+            let owner = Owner::for_test(Arc::new(super::SupervisedProbe), Some(host), None, None);
+            owner.prepare(root.path().to_path_buf()).await;
+            assert_eq!(
+                owner.observe(root.path()).virtual_env,
+                Some(root.path().join(".venv")),
+                "reuse without uv, spelling={spelling}: {:?}",
+                owner.records.lock().unwrap()
+            );
+            assert_eq!(
+                generation_of(root.path()),
+                original,
+                "adoption never rebuilds"
+            );
+            owner.stop().await;
+        }
+    }
+
+    pub(crate) async fn invalid_directory_pins_fail_without_changing_the_target() {
+        for kind in ["empty", "nonexecutable", "not-python"] {
+            for reuse in [false, true] {
+                let root = workspace();
+                let source = root.path().join("source-env");
+                std::fs::create_dir_all(source.join("bin")).unwrap();
+                if kind != "empty" {
+                    write_executable(&source.join("bin/python"), "#!/bin/sh\nexit 0\n");
+                    if kind == "nonexecutable" {
+                        std::fs::set_permissions(
+                            source.join("bin/python"),
+                            std::fs::Permissions::from_mode(0o600),
+                        )
+                        .unwrap();
+                        std::os::unix::fs::symlink("/usr/bin/python3", source.join("bin/python3"))
+                            .unwrap();
+                    }
+                }
+                std::fs::write(root.path().join(".python-version"), "./source-env").unwrap();
+                if reuse {
+                    let output = std::process::Command::new("/usr/bin/python3")
+                        .args(["-m", "venv", "--without-pip"])
+                        .arg(root.path().join(".venv"))
+                        .env_remove("PYTHONEXECUTABLE")
+                        .env_remove("__PYVENV_LAUNCHER__")
+                        .output()
+                        .unwrap();
+                    assert!(output.status.success(), "{output:?}");
+                }
+                let original = generation_of(root.path());
+                let path = installed_uv_path();
+                let host = host_from_entries(vec![
+                    ("PATH", &path),
+                    ("UV_OFFLINE", "1"),
+                    ("UV_PYTHON_DOWNLOADS", "never"),
+                ]);
+                let owner = Owner::for_test(
+                    Arc::new(super::SupervisedProbe),
+                    Some(Arc::new(host)),
+                    None,
+                    None,
+                );
+                tokio::time::timeout(
+                    super::PROBE_TIMEOUT * 4,
+                    owner.prepare(root.path().to_path_buf()),
+                )
+                .await
+                .unwrap();
+                {
+                    let records = owner.records.lock().unwrap();
+                    assert!(
+                        matches!(records.get(root.path()), Some(Record::Unavailable { .. })),
+                        "{kind}, reuse={reuse}: {records:?}"
+                    );
+                }
+                assert_eq!(generation_of(root.path()), original);
+                assert!(owner.observe(root.path()).virtual_env.is_none());
+                owner.stop().await;
+            }
         }
     }
 
@@ -4603,13 +4963,29 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn changed_fixed_interpreter_during_capacity_wait_does_not_create_a_target() {
-        for change in ["entry", "target"] {
+        for (directory, change) in [
+            (false, "entry"),
+            (false, "target"),
+            (true, "entry"),
+            (true, "target"),
+            (true, "preferred"),
+        ] {
             let root = workspace();
             let base = root.path().join("base-python");
             let other = root.path().join("other-python");
             write_executable(&base, "#!/bin/sh\nexit 0\n");
             write_executable(&other, "#!/bin/sh\nexit 0\n");
-            let alias = root.path().join("pinned-python");
+            let pin = root.path().join("pinned-python");
+            let alias = if directory {
+                std::fs::create_dir_all(pin.join("bin")).unwrap();
+                pin.join(if change == "preferred" {
+                    "bin/python3"
+                } else {
+                    "bin/python"
+                })
+            } else {
+                pin
+            };
             std::os::unix::fs::symlink(&base, &alias).unwrap();
             std::fs::write(root.path().join(".python-version"), "./pinned-python").unwrap();
             let bin = workspace();
@@ -4631,7 +5007,10 @@ pub(crate) mod tests {
             *owner.waiting_permit.lock().unwrap() = Some(waiting);
             release.send(()).unwrap();
             blocked.await.unwrap();
-            if change == "entry" {
+            if change == "preferred" {
+                std::os::unix::fs::symlink(&base, root.path().join("pinned-python/bin/python"))
+                    .unwrap();
+            } else if change == "entry" {
                 std::fs::rename(&alias, root.path().join("old-alias")).unwrap();
                 std::os::unix::fs::symlink(&other, &alias).unwrap();
             } else {

@@ -12,6 +12,18 @@ async fn relative_interpreter_pin_is_bound_to_the_workspace() {
 }
 
 #[tokio::test]
+async fn directory_pins_create_and_reuse_without_uv() {
+    crate::tools::workspace_python::tests::directory_pins_create_and_reuse_without_uv().await;
+}
+
+#[tokio::test]
+async fn invalid_directory_pins_fail_without_changing_the_target() {
+    crate::tools::workspace_python::tests::invalid_directory_pins_fail_without_changing_the_target(
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn repaired_path_pin_recovers_without_rewriting_root_inputs() {
     crate::tools::workspace_python::tests::repaired_path_pin_recovers_without_rewriting_root_inputs().await;
 }

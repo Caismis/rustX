@@ -62,8 +62,15 @@ ordinary meaning.
   specify versions, pep440_rs constructs their conjunction, preserving
   implementation and partial/exact-version semantics, and uv selects over
   that joint request. A fixed path interpreter must satisfy both inputs before
-  creation and retain its identity across the capacity wait. Both the authored
-  path and the probed base executable are stamped. Creation passes that
+  creation and retain its identity across the capacity wait. A fixed path can
+  name an executable/launcher or a Python installation/virtual-environment
+  directory. Directory requests select `bin/python` when present, otherwise
+  `bin/python3`; a selected invalid entry is diagnosed rather than skipped.
+  This order is fixed across uv versions and also applies to reuse without uv.
+  Bare relative directory names emitted by `uv python pin` also resolve from
+  the Workspace root; restoring such a directory invalidates an earlier
+  unresolved-request conflict without requiring a root version-file edit.
+  The authored path, selected entry, and probed base executable are stamped. Creation passes that
   validated executable to uv; adoption compares the requested invocation's
   base executable with the environment's, so macOS launchers can resolve to
   their actual interpreter without accepting a different Python binary.
@@ -75,8 +82,10 @@ ordinary meaning.
   Ready retains the first fixed-interpreter witness across both probes and
   publication, and both probes must report the same actual executable even
   when launcher configuration changes without altering tracked metadata.
-  Its authored path and actual executable stamps are checked on
-  cache hits, so an external pin alias change invalidates Ready immediately.
+  Its authored path, selected entry, and actual executable stamps are checked on
+  cache hits, together with the directory-entry selection. Replacing or
+  redirecting an entry, or adding a preferred entry, invalidates Ready even
+  when the installation-directory and old base-executable stamps are unchanged.
   The selected
   interpreter is
   checked against both inputs before it is ready. The readiness identity is
