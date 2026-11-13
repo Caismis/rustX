@@ -2,7 +2,7 @@ import { test, expect, type Page, type TestInfo } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, closeSessionView } from './shell-actions';
-import { supersededHistoryReads, type RequestTiming } from '../session-latency';
+import { recoveredThreadStatusReads, supersededHistoryReads, type RequestTiming } from '../session-latency';
 
 type HttpTiming = { path: string; start: number; end?: number };
 type Mark = { kind: 'click' | 'selected' | 'phase'; name: string; time: number };
@@ -17,6 +17,8 @@ async function observeLatency(page: Page) {
     const evidence: SessionLatency = { marks: [], rpc: [], http: [] };
     window.__sessionLatency = evidence;
     const NativeSocket = window.WebSocket;
+    const lineage = new Map<string, { sessionId: string; nodeId: string }>();
+    let connectionSequence = 0;
     const attachmentIdentity = (target?: Record<string, unknown>) => {
       if (!target) return undefined;
       const identity = [target.session_id, target.conversation_id, target.runtime_incarnation, target.attachment_id];
@@ -24,25 +26,43 @@ async function observeLatency(page: Page) {
     };
     window.WebSocket = class extends NativeSocket {
       private calls = new Map<unknown, RequestTiming>();
+      private readonly connection = ++connectionSequence;
       constructor(url: string | URL, protocols?: string | string[]) {
         super(url, protocols);
         this.addEventListener('message', event => {
-          const reply = JSON.parse(event.data) as { id?: unknown; error?: { data?: { kind?: string } }; result?: { type?: string; target?: Record<string, unknown> } };
+          const reply = JSON.parse(event.data) as { id?: unknown; error?: { data?: { kind?: string } }; result?: {
+            type?: string; target?: Record<string, unknown>; thread?: { id?: string };
+            session?: { id: string; active_node: string; active_conversation_id: string };
+            node?: { id: string; conversation_id: string };
+          } };
           const row = this.calls.get(reply.id);
+          if (reply.result?.type === 'session' || reply.result?.type === 'session_transition') {
+            const session = reply.result.session;
+            if (session?.id && session.active_node && session.active_conversation_id) lineage.set(session.active_conversation_id, { sessionId: session.id, nodeId: session.active_node });
+          }
+          if (row?.method === 'session/node' && row.sessionId && reply.result?.type === 'node' && reply.result.node) {
+            lineage.set(reply.result.node.conversation_id, { sessionId: row.sessionId, nodeId: reply.result.node.id });
+          }
           if (row) {
             row.end = performance.now(); row.bytes = event.data.length;
             row.error = reply.error ? reply.error.data?.kind || 'untyped_rpc_error' : undefined;
             row.resultType = reply.result?.type;
-            if (row.method === 'session/attach' && !row.error) row.target = attachmentIdentity(reply.result?.target);
+            if (row.method === 'thread/resume' && !row.error) {
+              const target = reply.result?.target;
+              const observed = typeof target?.conversation_id === 'string' ? lineage.get(target.conversation_id) : undefined;
+              row.target = attachmentIdentity(target);
+              if (observed && observed.sessionId === target?.session_id) { row.sessionId = observed.sessionId; row.nodeId = observed.nodeId; }
+            }
+            if (row.method === 'thread/read' && !row.error) row.resultThreadId = reply.result?.thread?.id;
             this.calls.delete(reply.id);
           }
         });
       }
       send(data: Parameters<WebSocket['send']>[0]) {
         if (typeof data === 'string') {
-          const call = JSON.parse(data) as { id?: unknown; method?: string; params?: { session_id?: string; node_id?: string; target?: Record<string, unknown>; at?: { type?: string } } };
+          const call = JSON.parse(data) as { id?: unknown; method?: string; params?: { session_id?: string; node_id?: string; threadId?: string; target?: Record<string, unknown>; at?: { type?: string } } };
           if (call.id !== undefined && call.method) {
-            const row: RequestTiming = { method: call.method, start: performance.now(), historyAt: call.method === 'session/history' ? call.params?.at?.type : undefined, sessionId: call.params?.session_id, nodeId: call.params?.node_id, target: attachmentIdentity(call.params?.target) };
+            const row: RequestTiming = { method: call.method, start: performance.now(), connection: this.connection, threadId: call.params?.threadId, historyAt: call.method === 'session/history' ? call.params?.at?.type : undefined, sessionId: call.params?.session_id, nodeId: call.params?.node_id, target: attachmentIdentity(call.params?.target) };
             evidence.rpc.push(row); this.calls.set(call.id, row);
           }
         }
@@ -72,11 +92,14 @@ async function report(page: Page, info: TestInfo) {
   const evidence = await page.evaluate(() => window.__sessionLatency);
   await info.attach('session-latency.json', { body: JSON.stringify(evidence, null, 2), contentType: 'application/json' });
   console.log('SESSION_LATENCY', JSON.stringify(evidence));
-  // Native rejects optional cold history while attach owns a Loading runtime.
-  // Keep the rejection in the evidence and require its exact successful live
-  // handoff; unrelated reads and every required operation must still succeed.
-  const superseded = new Set(supersededHistoryReads(evidence.rpc));
-  expect(evidence.rpc.filter(row => row.error !== undefined && !superseded.has(row))).toEqual([]);
+  for (const attach of evidence.rpc.filter(row => row.method === 'thread/resume' && row.error === undefined && row.resultType === 'attached')) {
+    expect(attach).toMatchObject({ sessionId: expect.any(String), nodeId: expect.any(String), target: expect.any(String) });
+  }
+  // Preserve every rejection. A cold preview needs its exact live handoff;
+  // unavailable status capture needs a new strong read proving recovery.
+  // Unrelated reads and every required operation must still succeed.
+  const recovered = new Set([...supersededHistoryReads(evidence.rpc), ...recoveredThreadStatusReads(evidence.rpc)]);
+  expect(evidence.rpc.filter(row => row.error !== undefined && !recovered.has(row))).toEqual([]);
   return evidence;
 }
 
@@ -112,13 +135,13 @@ test('measure native Fork, warm navigation and resident reattachment', async ({ 
     await expect(page.getByText('Completed fork answer.', { exact: true })).toBeVisible();
     await expect(page.getByRole('alert')).toHaveCount(0);
     const evidence = await report(page, info);
-    expect(evidence.rpc.filter(row => row.method === 'session/fork')).toHaveLength(1);
-    expect(evidence.rpc.filter(row => row.method === 'session/attach')).toHaveLength(3);
+    expect(evidence.rpc.filter(row => row.method === 'thread/fork')).toHaveLength(1);
+    expect(evidence.rpc.filter(row => row.method === 'thread/resume')).toHaveLength(3);
     expect(evidence.rpc.filter(row => row.method === 'session/detach')).toHaveLength(1);
-    expect(evidence.rpc.filter(row => row.method === 'turn/start')).toHaveLength(1);
+    expect(evidence.rpc.filter(row => row.method === 'inbound/queue')).toHaveLength(1);
     const start = evidence.marks.find(row => row.kind === 'phase' && row.name === 'warm')!.time;
     const end = evidence.marks.find(row => row.kind === 'phase' && row.name === 'close-view')!.time;
-    expect(evidence.rpc.filter(row => row.method === 'session/attach' && row.start > start && row.start < end)).toHaveLength(0);
+    expect(evidence.rpc.filter(row => row.method === 'thread/resume' && row.start > start && row.start < end)).toHaveLength(0);
     passed = true;
   } finally { await page.close(); await fixture.stop(passed); }
 });
@@ -153,8 +176,8 @@ test('measure Retry preparation separately from model generation', async ({ page
     const evidence = await report(page, info);
     const branch = evidence.rpc.filter(row => row.method === 'session/branch');
     const switching = evidence.rpc.filter(row => row.method === 'session/switchNode');
-    const attach = evidence.rpc.filter(row => row.method === 'session/attach').at(-1)!;
-    const input = evidence.rpc.filter(row => row.method === 'turn/start');
+    const attach = evidence.rpc.filter(row => row.method === 'thread/resume').at(-1)!;
+    const input = evidence.rpc.filter(row => row.method === 'inbound/queue');
     expect(branch).toHaveLength(1); expect(switching).toHaveLength(1); expect(input).toHaveLength(3);
     expect(switching[0].start).toBeGreaterThanOrEqual(branch[0].end!);
     expect(attach.start).toBeGreaterThanOrEqual(switching[0].end!);

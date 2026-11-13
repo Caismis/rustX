@@ -53,7 +53,7 @@ import {
 } from "./support/fixtures.ts";
 
 const SESSION_SETTINGS = { cwd: "/work/project" };
-function observedChild(child:ReturnType<typeof subagent>):import('../../protocol/app-server/v73.ts').AgentObservation {
+function observedChild(child:ReturnType<typeof subagent>):import('../../protocol/app-server/v78.ts').AgentObservation {
   return {type:'checkpoint',agent_id:child.agent_id,conversation_id:child.child_conversation_id,activation_id:child.activation_id,source:'durable_only',cursor:null,checkpoint:checkpoint(snapshot({conversation_id:child.child_conversation_id}))};
 }
 
@@ -177,6 +177,11 @@ function fakeHost(options: FakeHostOptions = {}): AppServerHost {
     attached: [],
     retryInitialization: async () => {},
     inheritModelSelectionUncertainty: options.inheritModelSelectionUncertainty ?? (() => {}),
+    inheritInputUncertainty: () => {},
+    threadStatus:()=>undefined,
+    threadStatusLabel:()=>'Status unavailable',
+    sessionStatusLabel:()=>'Status unavailable',
+    onThreadStatus:()=>()=>{},
     describe: () => (ownership === "owned_child" ? "owned child" : "external"),
     stderrTail: () => ({ text: "", truncatedBytes: 0 }),
     childExit: undefined,
@@ -469,10 +474,10 @@ describe("RustxTuiApp lifecycle", () => {
           createSession: async () => ({ session: sessionView({ id: "ses_5d906140-8048-712d-8539-25aed45333a1" }) }),
         },
         attach: async () => {
-          throw new AppServerRequestError("session/attach", {
+          throw new AppServerRequestError("thread/resume", {
             code: -32000,
-            message: "another client already controls this Session",
-            data: { kind: "controller_in_use" },
+            message: "Thread is not admissible",
+            data: { kind: "invalid_state" },
           });
         },
       }),
@@ -2316,7 +2321,7 @@ it("remote recovery installs a fresh attachment and fences old callbacks without
   Object.defineProperty(first.client, "closed", { value: error });
   close(error);
   await waitForApplicationContinuation();
-  pending.reject(new UncertainOutcomeError("turn/start", error));
+  pending.reject(new UncertainOutcomeError("inbound/queue", error));
   await waitForApplicationContinuation();
   assert.equal(connects, 1);
   assert.equal(attachments, 1);
@@ -2933,7 +2938,7 @@ it("remote recovery reconstructs selected child from replacement authority witho
   const child = subagent("researcher", "sha256:child");
   const old = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), agents: [child] });
   const next = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), agents: [child] });
-  const late = deferred<import('../../protocol/app-server/v73.ts').AgentObservation>();
+  const late = deferred<import('../../protocol/app-server/v78.ts').AgentObservation>();
   const reads: string[] = [];
   Object.assign(old, { observeAgent: (id: string) => { reads.push(`old:${id}`); return late.promise; } });
   Object.assign(next, { observeAgent: async (id: string) => { reads.push(`new:${id}`); return observedChild(child); } });
@@ -2960,7 +2965,7 @@ it("switching parent Session fences a child page while the old parent remains at
   const child = subagent("researcher", "sha256:child");
   const old = fakeSession({ ...emptyPresentationState(sessionModel("alpha/model-a")), agents: [child] });
   const next = fakeSession(emptyPresentationState(sessionModel("beta/model-b")), "ses_e8de016f-bd70-782f-ad23-25e81df82550");
-  const late = deferred<import('../../protocol/app-server/v73.ts').AgentObservation>();
+  const late = deferred<import('../../protocol/app-server/v78.ts').AgentObservation>();
   const read = deferred<void>(); const attached = deferred<void>();
   let detached = 0;
   Object.assign(old, { observeAgent: () => { read.resolve(); return late.promise; }, detach: async () => { detached++; } });

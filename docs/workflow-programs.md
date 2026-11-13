@@ -638,7 +638,7 @@ completed. Native analysis exposes possible ancestors for these selectors.
 The compiler still requires matching types and proves at least one source on
 every activation, preserving rustX's definite-reference contract; ordinary
 nodes do not gain access to optional branch producers. The old flat named
-group output format is removed; App Server v73 requires the grouping flag.
+group output format is removed; App Server v78 requires the grouping flag.
 
 ### Code Execution and Variable Assigner
 

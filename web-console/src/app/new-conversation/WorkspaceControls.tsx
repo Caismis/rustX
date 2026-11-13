@@ -2,7 +2,7 @@ import { message } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import type { ReactNode } from 'react';
 import { useSelector } from '@xstate/react';
-import type { ApprovalMode, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v73';
+import type { ApprovalMode, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v78';
 import type { AppServerClient } from '../../client/app-server';
 import type { ProductHostWorkspaces } from '../../workspaces/host';
 import { PermissionSelect } from '../../presentation/agent/PermissionSelect';
@@ -15,18 +15,23 @@ import { catalogAdmits } from '../../bindings/model-catalog';
 import { approvalMutation, workspaceApprovalBlock } from './approval';
 
 /** Shared bounded configuration actor, independent of the Settings page tree. */
-export function WorkspaceControls({ client, host, workspaceId, children }: { client: AppServerClient; host: ProductHostWorkspaces; workspaceId?: string; children: (source: SourceSettings | undefined, approval: WorkspaceApproval) => ReactNode }) {
+export function WorkspaceControls({ client, host, workspaceId, visible, presentationKey, children }: { visible: boolean; presentationKey: string; client: AppServerClient; host: ProductHostWorkspaces; workspaceId?: string; children: (source: SourceSettings | undefined, approval: WorkspaceApproval) => ReactNode }) {
   const tx = useTranslation();
-  const { actor } = useSettingsTarget(client, workspaceId ? workspaceSettingsTarget(workspaceId) : userSettingsTarget, host, !!workspaceId);
+  const { actor } = useSettingsTarget(client, workspaceId ? workspaceSettingsTarget(workspaceId) : userSettingsTarget, host, visible && !!workspaceId, presentationKey);
   const source = useSelector(actor, s => s.context.observation);
   const error = useSelector(actor, s => s.context.readError);
-  return <SettingsActorContext value={actor}><SourceContext value={source}>{<ApprovalScope source={source}>{children}</ApprovalScope>}{error && <span role="alert">{error}<Button size="sm" onClick={() => actor.send({ type: 'REFRESH' })}>{tx('workspace:workspace-controls.reread-workspace')}</Button></span>}</SourceContext></SettingsActorContext>;
+  const settled = useSelector(actor, s => s.matches({ authority: { attached: 'idle' } }));
+  const diagnostic = settled && source?.target.kind === 'workspace' && !source.prospective_approval_mode
+    ? source.prospective_diagnostic ?? tx('workspace:workspace-controls.permissions-unavailable') : undefined;
+  return <SettingsActorContext value={actor}><SourceContext value={source}>{<ApprovalScope source={source}>{children}</ApprovalScope>}{(error || diagnostic) && <span role="alert">{error || diagnostic}<Button size="sm" onClick={() => actor.send({ type: 'REFRESH' })}>{tx('workspace:workspace-controls.reread-workspace')}</Button></span>}</SourceContext></SettingsActorContext>;
 }
 function useWorkspaceApproval(source?: SourceSettings) {
   const actor = useSettingsActor();
+  const readError = useSelector(actor, s => s.context.readError);
+  const reading = useSelector(actor, state => state.matches({ authority: { attached: 'reading' } }));
   const revision = source?.workspace?.revision ?? '';
   const unit = useUnitEditing<ApprovalMode>({ authored: source?.workspace?.authored?.approval_mode ?? undefined, blank: 'policy', revision, mutation: approvalMutation });
-  return { actor, revision, unit, block: () => { const reason = workspaceApprovalBlock(actor); return reason && message(reason); } };
+  return { actor, revision, unit, reading, loading: !source && !readError, block: () => { const reason = workspaceApprovalBlock(actor); return reason && message(reason); } };
 }
 type WorkspaceApproval = ReturnType<typeof useWorkspaceApproval>;
 function ApprovalScope({ source, children }: { source?: SourceSettings; children: (source: SourceSettings | undefined, approval: WorkspaceApproval) => ReactNode }) {

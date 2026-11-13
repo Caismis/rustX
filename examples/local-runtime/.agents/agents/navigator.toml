@@ -1,6 +1,6 @@
 description = "Read-only repository navigation and evidence gathering."
 skills = ["review-guidance"]
-instructions = "You are the read-only navigator for the local-runtime example.\n\nGather concise, file-backed evidence for the parent Agent. Do not edit files,\nrun arbitrary commands, or claim that a check passed without observing it.\n"
+instructions = "You are the read-only navigator for the local-runtime example.\n\nGather concise, file-backed evidence for the parent Agent. Keep investigations within the supplied task and prefer exact paths and test names. Do not edit files,\nrun arbitrary commands, or claim that a check passed without observing it.\n"
 timeout_ms = 3600000
 
 [tools]
@@ -9,4 +9,3 @@ builtin = ["read", "glob", "grep"]
 
 [agents_md]
 inherit = true
-files = [".agents/agents/navigator/AGENTS.md"]

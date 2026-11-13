@@ -16,10 +16,7 @@ async fn t03_mixed_application_and_true_process_binding_restart() {
         .unwrap();
     let mut document: toml::Value =
         toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
-    document["agent"]
-        .as_table_mut()
-        .unwrap()
-        .insert("instructions".into(), "pending context".into());
+    set_file_guidance(&fixture, "pending context");
     document
         .as_table_mut()
         .unwrap()
@@ -66,13 +63,7 @@ async fn t03_mixed_application_and_true_process_binding_restart() {
         crate::runtime::ApprovalMode::FullAccess
     );
     assert_eq!(
-        runtime
-            .runtime_resources()
-            .configuration()
-            .unwrap()
-            .config
-            .agent
-            .instructions,
+        guidance(runtime.runtime_resources().project_context_files()),
         "pending context"
     );
     fixture.close().await;
@@ -85,14 +76,7 @@ async fn t05_complete_policy_registry_publishes_independently_of_instructions() 
     fixture.manager.load(id, None).await.unwrap();
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     let old = runtime.runtime_resources();
-    write(
-        &fixture,
-        0,
-        ConfigMutation::Instructions {
-            authored: Some("pending instructions".into()),
-        },
-    )
-    .await;
+    write_guidance(&fixture, "pending instructions".into()).await;
     applied(&fixture, 0).await;
     let instructions = runtime.runtime_resources();
     write(
@@ -114,17 +98,12 @@ async fn t05_complete_policy_registry_publishes_independently_of_instructions() 
     );
     let current = runtime.runtime_resources();
     assert_eq!(
-        current.configuration().unwrap().config.agent.instructions,
+        guidance(current.project_context_files()),
         "pending instructions"
     );
     assert_eq!(
-        instructions
-            .configuration()
-            .unwrap()
-            .config
-            .agent
-            .instructions,
-        current.configuration().unwrap().config.agent.instructions
+        guidance(instructions.project_context_files()),
+        guidance(current.project_context_files())
     );
     let read = |resources: &crate::runtime::RuntimeResourceSnapshot| {
         resources
@@ -165,14 +144,7 @@ async fn t08_model_baseline_change_recaptures_prepared_context() {
             .manager
             .probe(&fixture.sessions[0].active_conversation_id);
         probe.before_configuration_publish.arm();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("prepared for old model".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "prepared for old model".into()).await;
         probe.before_configuration_publish.entered().await;
         let candidate_id = fixture
             .manager
@@ -201,13 +173,7 @@ async fn t08_model_baseline_change_recaptures_prepared_context() {
         );
         assert_eq!(runtime.model_view().configured.model.to_string(), "local/b");
         assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
+            guidance(runtime.runtime_resources().project_context_files()),
             "prepared for old model"
         );
         assert_eq!(configuration_changes(&runtime).len(), 1);
@@ -251,11 +217,9 @@ async fn t12_lost_source_write_response_does_not_cancel_native_application() {
             manager
                 .write_source_settings(
                     &target,
-                    source.user.revision,
-                    SourceMutation::Config {
-                        mutation: ConfigMutation::Instructions {
-                            authored: Some("survives disconnect".into()),
-                        },
+                    source.global_guidance.unwrap().revision,
+                    SourceMutation::GlobalGuidance {
+                        document: "survives disconnect".into(),
                     },
                 )
                 .await
@@ -454,14 +418,7 @@ async fn t13_failed_preparation_retries_same_input_and_t14_latest_pending_is_bou
             .manager
             .probe(&fixture.sessions[0].active_conversation_id);
         probe.fail_configuration_once.store(true, Ordering::SeqCst);
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("retry this input".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "retry this input".into()).await;
         let failed = settled(&fixture, 0).await;
         assert!(matches!(
             failed.units[&ApplyUnit::Instructions],
@@ -488,24 +445,10 @@ async fn t13_failed_preparation_retries_same_input_and_t14_latest_pending_is_bou
         );
         let before = probe.configuration_preparations.load(Ordering::SeqCst);
         probe.before_configuration_prepare.arm();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("superseded".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "superseded".into()).await;
         probe.before_configuration_prepare.entered().await;
         for n in 0..12 {
-            write(
-                &fixture,
-                0,
-                ConfigMutation::Instructions {
-                    authored: Some(format!("latest {n}")),
-                },
-            )
-            .await;
+            write_guidance(&fixture, format!("latest {n}")).await;
         }
         assert_eq!(
             probe.configuration_preparations.load(Ordering::SeqCst),
@@ -526,16 +469,14 @@ async fn t13_failed_preparation_retries_same_input_and_t14_latest_pending_is_bou
             "only the latest pending input is prepared after old work settles"
         );
         assert_eq!(
-            fixture
-                .manager
-                .configuration_runtime(id)
-                .unwrap()
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
+            guidance(
+                fixture
+                    .manager
+                    .configuration_runtime(id)
+                    .unwrap()
+                    .runtime_resources()
+                    .project_context_files()
+            ),
             "latest 11"
         );
         fixture.close().await;
@@ -574,98 +515,6 @@ async fn t08_model_capture_ignores_unrelated_resource_directories_t09_same_selec
     fixture.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn t03_t05_mixed_instructions_publication_rejects_rebound_project_path() {
-    bounded(async {
-        let fixture = Fixture::with_session_count(None, 1).await;
-        let id = &fixture.sessions[0].id;
-        let workspace = &fixture.workspaces[0];
-        let old_path = workspace.join("old.md");
-        let new_path = workspace.join("new.md");
-        std::fs::write(&old_path, "I1 project content").unwrap();
-        std::fs::write(&new_path, "I2 project content").unwrap();
-        let skill = workspace.join(".agents/skills/retained");
-        std::fs::create_dir_all(&skill).unwrap();
-        std::fs::write(
-            skill.join("SKILL.md"),
-            "---\nname: retained\ndescription: Retained guidance\n---\nC1 skill guidance\n",
-        )
-        .unwrap();
-        std::fs::write(
-            workspace.join("rustx.toml"),
-            "[agent]\ninstructions='I1'\n[agent.agents_md]\nfiles=['old.md']\n",
-        )
-        .unwrap();
-        fixture.manager.load(id, None).await.unwrap();
-        let runtime = fixture.manager.configuration_runtime(id).unwrap();
-        let before = runtime.runtime_resources();
-        let old = before.configuration().unwrap();
-        assert_eq!(old.config.agent.agents_md.files, vec![old_path.clone()]);
-        assert!(!before.capability().skills().packages().is_empty());
-
-        std::fs::write(
-            workspace.join("rustx.toml"),
-            "[agent]\ninstructions='I2'\n[agent.agents_md]\nfiles=['new.md']\n[agent.tools]\nbuiltin=['read']\n",
-        )
-        .unwrap();
-        let probe = fixture.manager.probe(&fixture.sessions[0].active_conversation_id);
-        probe.fail_configuration_once.store(true, Ordering::SeqCst);
-        probe.before_configuration_publish.arm();
-        fixture.manager.reconcile_configuration(&crate::local_runtime::configuration::settings::SourceTarget::Workspace { directory: fixture.workspaces[0].clone() }).await.unwrap();
-        // This gate is after C2 construction/failure and independent I2
-        // preparation, but before make_available's physical-authority fence.
-        probe.before_configuration_publish.entered().await;
-        let preparing = fixture.manager.configuration_application(id).unwrap();
-        assert!(matches!(
-            &preparing.units[&ApplyUnit::Capabilities],
-            UnitApplication::Failed { diagnostic }
-                if diagnostic.contains("after resource construction")
-        ), "{preparing:?}");
-        assert!(matches!(preparing.units[&ApplyUnit::Instructions], UnitApplication::Preparing));
-        let outside = fixture.workspaces[1].join("outside.md");
-        std::fs::write(&outside, "outside Workspace").unwrap();
-        std::fs::remove_file(&new_path).unwrap();
-        std::os::unix::fs::symlink(&outside, &new_path).unwrap();
-        probe.before_configuration_publish.release();
-        let rejected = settled(&fixture, 0).await;
-        assert!(matches!(
-            &rejected.units[&ApplyUnit::Instructions],
-            UnitApplication::Failed { diagnostic }
-                if diagnostic.contains("new.md") && diagnostic.contains("outside workspace boundary")
-        ), "{rejected:?}");
-        assert!(rejected.units.values().all(|unit| *unit != UnitApplication::Ready));
-        assert!(Arc::ptr_eq(&before, &runtime.runtime_resources()));
-
-        // Keep the escaping link in place: admission can succeed only using
-        // the previous available C1+I1, including old.md's physical authority.
-        let second = fixture.manager.create_session(SessionPersistentState {
-            cwd: workspace.clone(),
-            model: None,
-        }).await.unwrap().session.id;
-        let retained = fixture.manager.sessions.configuration_bindings.lock().unwrap()[&second].clone();
-        assert_eq!(retained.config.agent.instructions, "I1");
-        assert_eq!(retained.config.agent.agents_md.files, vec![old_path]);
-        assert_eq!(retained.effective.agent, old.authored.effective.agent);
-        assert_eq!(retained.root_agent_project_files, before.root_profile().unwrap().project_instructions.files);
-        assert_eq!(retained.component_revisions, old.authored.component_revisions);
-        assert_eq!(retained.source_revisions, old.authored.source_revisions);
-        retained.validate_resource_authority().unwrap();
-        fixture.manager.load(&second, None).await.unwrap();
-        let loaded = fixture.manager.configuration_runtime(&second).unwrap().runtime_resources();
-        assert_eq!(loaded.root_profile().unwrap().project_instructions.files,
-            before.root_profile().unwrap().project_instructions.files);
-        assert_eq!(loaded.configuration().unwrap().config.agent.instructions, "I1");
-        assert_eq!(loaded.capability().tool_registry().model_definitions(),
-            before.capability().tool_registry().model_definitions());
-        assert_eq!(loaded.capability().skills().packages(), before.capability().skills().packages());
-        let after = runtime.runtime_resources();
-        assert!(Arc::ptr_eq(before.capability().tool_registry(), after.capability().tool_registry()));
-        assert!(Arc::ptr_eq(before.capability().skills(), after.capability().skills()));
-        assert_eq!(before.capability().revision(), after.capability().revision());
-        fixture.close().await;
-    }).await;
-}
-
 #[tokio::test]
 async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit() {
     let fixture = Fixture::with_session_count(None, 1).await;
@@ -684,23 +533,19 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         .unwrap();
     let mut initial: toml::Value =
         toml::from_str(&std::fs::read_to_string(&initial_source.user.path).unwrap()).unwrap();
-    initial["agent"]
-        .as_table_mut()
-        .unwrap()
-        .insert("instructions".into(), "User I1".into());
+    initial["agent"].as_table_mut().unwrap().insert(
+        "agents_md".into(),
+        toml::Value::try_from(serde_json::json!({"inherit": false})).unwrap(),
+    );
+    set_file_guidance(&fixture, "User I1");
     std::fs::write(
         &initial_source.user.path,
         toml::to_string(&initial).unwrap(),
     )
     .unwrap();
     std::fs::write(
-        fixture.workspaces[0].join("old.md"),
+        fixture.workspaces[0].join("AGENTS.md"),
         "Workspace I1 project input",
-    )
-    .unwrap();
-    std::fs::write(
-        fixture.workspaces[0].join("rustx.toml"),
-        "[agent.agents_md]\nfiles=['old.md']\n",
     )
     .unwrap();
     fixture.manager.load(id, None).await.unwrap();
@@ -713,11 +558,12 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         .unwrap();
     let mut document: toml::Value =
         toml::from_str(&std::fs::read_to_string(&source.user.path).unwrap()).unwrap();
-    let project_file = fixture.workspaces[0].join("new.md");
+    let project_file = fixture.workspaces[0].join("AGENTS.md");
     std::fs::write(&project_file, "Workspace I2 project input").unwrap();
+    set_file_guidance(&fixture, "independent instructions P2");
     std::fs::write(
         fixture.workspaces[0].join("rustx.toml"),
-        "approval_mode='full_access'\n[subagents]\nmax_concurrent=3\n[agent]\ninstructions='independent instructions P2'\n[agent.agents_md]\nfiles=['new.md']\n",
+        "approval_mode='full_access'\n[subagents]\nmax_concurrent=3\n[agent.agents_md]\ninherit=true\n",
     )
     .unwrap();
     document["agent"]["tools"]["builtin"] = toml::Value::try_from(vec!["read"]).unwrap();
@@ -753,7 +599,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
     );
     let after = runtime.runtime_resources();
     assert_eq!(
-        after.configuration().unwrap().config.agent.instructions,
+        guidance(after.project_context_files()),
         "independent instructions P2"
     );
     assert_eq!(
@@ -797,21 +643,15 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
             .clone()
     };
     let c1i2 = retained(&second);
-    assert_eq!(
-        c1i2.config.agent.agents_md.files,
-        vec![project_file.clone()]
-    );
-    assert_eq!(
-        c1i2.root_agent_project_files,
-        after.root_profile().unwrap().project_instructions.files
-    );
+    assert!(c1i2.config.agent.agents_md.inherit);
+    assert_eq!(c1i2.project_context_files, after.project_context_files());
     assert!(matches!(
         c1i2.provenance["agent.agents_md"],
         crate::local_runtime::configuration::Origin::Workspace { .. }
     ));
     c1i2.validate_resource_authority().unwrap();
     assert!(
-        c1i2.root_agent_project_files
+        c1i2.project_context_files
             .iter()
             .any(|file| file.path == project_file && file.content == "Workspace I2 project input")
     );
@@ -850,26 +690,17 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
 
     assert!(fixture.manager.applications.is_deferred(second.as_str()));
     assert!(matches!(
-        before.configuration().unwrap().authored.provenance["agent.instructions"],
+        before.configuration().unwrap().authored.provenance["agent.agents_md"],
         crate::local_runtime::configuration::Origin::User { .. }
     ));
     assert!(matches!(
-        c1i2.provenance["agent.instructions"],
+        c1i2.provenance["agent.agents_md"],
         crate::local_runtime::configuration::Origin::Workspace { .. }
     ));
     assert!(matches!(
-        after.configuration().unwrap().authored.provenance["agent.instructions"],
+        after.configuration().unwrap().authored.provenance["agent.agents_md"],
         crate::local_runtime::configuration::Origin::Workspace { .. }
     ));
-    assert_eq!(
-        c1i2.effective
-            .agent
-            .as_ref()
-            .unwrap()
-            .instructions
-            .as_deref(),
-        Some("independent instructions P2")
-    );
     assert_eq!(
         c1i2.component_revisions[&ApplyUnit::Instructions],
         after.configuration().unwrap().authored.component_revisions[&ApplyUnit::Instructions]
@@ -883,7 +714,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         before.configuration().unwrap().authored.source_revisions
     );
     assert_eq!(
-        c1i2.config.agent.instructions,
+        guidance(&c1i2.project_context_files),
         "independent instructions P2"
     );
     assert_eq!(
@@ -962,7 +793,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
     let third = create().await.unwrap().session.id;
     let c2i2 = retained(&third);
     assert_eq!(
-        c2i2.config.agent.instructions,
+        guidance(&c2i2.project_context_files),
         "independent instructions P2"
     );
     assert_ne!(
@@ -987,13 +818,7 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         c2i2.component_revisions[&ApplyUnit::Capabilities]
     );
     assert_eq!(
-        runtime
-            .runtime_resources()
-            .configuration()
-            .unwrap()
-            .config
-            .agent
-            .instructions,
+        guidance(runtime.runtime_resources().project_context_files()),
         "independent instructions P2"
     );
     assert_ne!(

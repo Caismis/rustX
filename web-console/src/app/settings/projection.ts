@@ -2,7 +2,7 @@ import type { Translate } from '../../locale/translation';
 import type {
   ConfigurationApplication, McpView, McpWrite, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
-} from '../../../../protocol/app-server/v73';
+} from '../../../../protocol/app-server/v78';
 import type { ConnectionState } from '../../client/contracts';
 
 /** Each Settings target names one exact configuration owner. The catalog scope
@@ -23,18 +23,8 @@ export function settingsTargetLabel(tx: Translate, target: SettingsTarget): stri
   return target.kind === 'user' ? tx('settings:copy.user-settings') : tx('settings:copy.workspace-settings-value', { p0: target.displayName });
 }
 
-/** Every resource kind the one Extensions surface manages. `native` is the
- * closed set of native extensions configured through `rustx.toml` semantic
- * units rather than through a resource document of their own. */
+/** Resource kinds managed by the app, including built-in extensions. */
 export type ExtensionFamily = ResourceFamily | 'native';
-export const extensionFamilies: readonly ExtensionFamily[] = ['mcp', 'skill', 'agent', 'workflow', 'managed_python', 'native'];
-export function extensionFamilyLabel(tx: Translate, family: ExtensionFamily): string {
-  return family === 'mcp' ? 'MCP'
-    : family === 'skill' ? tx('settings:copy.skill')
-      : family === 'agent' ? tx('settings:agent-page.agent')
-        : family === 'workflow' ? tx('settings:extension-detail.workflow')
-          : family === 'managed_python' ? tx('settings:copy.managed-python') : tx('settings:copy.native');
-}
 
 /** The native application scope this source target publishes under, exactly as
  * `SourceTarget::application_scope` names it. Application versions are u64
@@ -54,7 +44,7 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
   if (!document || mutation.kind !== 'config') return undefined;
   const unit = mutation.mutation;
   switch (unit.unit) {
-    case 'provider': return document.providers?.[unit.id];
+    case 'provider': case 'restore_provider': return document.providers?.[unit.id];
     case 'model': return document.models?.[unit.id];
     case 'root_model': return document.agent?.model;
     case 'native_tools': return document.agent?.tools?.builtin;
@@ -67,7 +57,6 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
     case 'workflow_enabled': return document.agent?.workflows?.includes(unit.id);
     case 'agent_identity': return document.agent_id;
     case 'description': return document.agent?.description;
-    case 'instructions': return document.agent?.instructions;
     case 'project_guidance': return document.agent?.agents_md;
     case 'approval': return document.approval_mode;
     case 'model_timeout': return document.model_timeout_policy;
@@ -97,10 +86,10 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
  * definitions carry a `mcp_servers.<id>` default origin. */
 export function unitProvenancePath(mutation: SourceMutation): string | undefined {
   if (mutation.kind === 'mcp') return `mcp_servers.${mutation.id}`;
-  if (mutation.kind === 'agent' || mutation.kind === 'repair_config' || mutation.kind === 'workflow') return undefined;
+  if (mutation.kind !== 'config') return undefined;
   const unit = mutation.mutation;
   switch (unit.unit) {
-    case 'provider': return `providers.${unit.id}`;
+    case 'provider': case 'restore_provider': return `providers.${unit.id}`;
     case 'model': return `models.${unit.id}`;
     case 'root_model': return 'agent.model';
     case 'native_tools': return 'agent.tools.builtin';
@@ -113,7 +102,6 @@ export function unitProvenancePath(mutation: SourceMutation): string | undefined
     case 'workflow_enabled': return 'agent.workflows';
     case 'agent_identity': return 'agent_id';
     case 'description': return 'agent.description';
-    case 'instructions': return 'agent.instructions';
     case 'project_guidance': return 'agent.agents_md';
     case 'approval': return 'approval_mode';
     case 'model_timeout': return 'model_timeout_policy';
@@ -223,6 +211,12 @@ export function configAuthoring(source: SourceSettings | undefined, scope: Sourc
 /** Native authored membership for exactly this scope. A parse failure means the
  * document was not loaded, so membership is unknown, never absent. */
 export function authoredFacts(source: SourceSettings | undefined, scope: SourceScope, mutation: SourceMutation): AuthoredFacts {
+  if (mutation.kind === 'global_guidance') {
+    const view = source?.global_guidance;
+    if (!view) return { state: 'unavailable' };
+    if (view.diagnostic) return { state: 'invalid', diagnostic: view.diagnostic };
+    return view.authored == null ? { state: 'absent' } : { state: 'present', value: view.authored };
+  }
   const view = sourceView(source, scope);
   if (!source || !view) return { state: 'unavailable' };
   if (view.diagnostic) return { state: 'invalid', diagnostic: view.diagnostic };
@@ -236,7 +230,7 @@ export function authoredFacts(source: SourceSettings | undefined, scope: SourceS
  * a merged configuration that parsed but does not resolve. Neither is an empty
  * value, an unset unit or a native default. */
 export function effectiveFacts(source: SourceSettings | undefined, mutation: SourceMutation): EffectiveFacts {
-  if (!source) return { state: 'unavailable' };
+  if (!source || mutation.kind === 'global_guidance') return { state: 'unavailable' };
   const diagnostic = source.prospective_diagnostic ?? undefined;
   if (!source.resolved) return diagnostic ? { state: 'invalid', diagnostic } : { state: 'unavailable' };
   if (diagnostic) return { state: 'invalid', diagnostic };
@@ -267,18 +261,34 @@ export function effectiveStateLabel(tx: Translate, effective: EffectiveFacts): s
  * one submitted mutation.
  *
  * A mutation's authored payload may carry Provider credentials, MCP literal
- * environment values or literal headers. Settlement never needs any of them: it
- * needs only which native document the commit landed in, which is the mutation
- * *family* plus, for a named Agent resource, its identity. Deriving the selector
- * at submission time is what lets the transaction owner keep a submitted
- * mutation settleable without retaining its secret-bearing payload. */
+ * environment values or literal headers. The selector retains only the
+ * document and unit address, enough to settle a write and identify drafts
+ * of different units in the same document. */
 export type RevisionSelector =
-  | { kind: 'config' }
-  | { kind: 'mcp' }
+  | { kind: 'config'; unit?: Extract<SourceMutation, { kind: 'config' }>['mutation']['unit']; entry?: string; removesModels?: boolean }
+  | { kind: 'global_guidance' }
+  | { kind: 'mcp'; entry: string }
   | { kind: 'agent'; name: string };
 export function revisionSelector(mutation: SourceMutation): RevisionSelector {
+  if (mutation.kind === 'global_guidance') return { kind: 'global_guidance' };
+  if (mutation.kind === 'config') {
+    const config = mutation.mutation;
+    if (config.unit === 'restore_provider') return { kind: 'config', unit: 'provider', entry: config.id };
+    if (config.unit === 'provider' && config.authored === null) return { kind: 'config', unit: 'provider', entry: config.id, removesModels: true };
+    return { kind: 'config', unit: config.unit, entry: 'id' in config ? config.id : 'name' in config ? config.name : undefined };
+  }
   return mutation.kind === 'agent' ? { kind: 'agent', name: mutation.name }
-    : mutation.kind === 'mcp' ? { kind: 'mcp' } : { kind: 'config' };
+    : mutation.kind === 'mcp' ? { kind: 'mcp', entry: mutation.id } : { kind: 'config' };
+}
+
+/** These mutations share a document revision but write different native units.
+ * A document repair or a new entry with no chosen identity proves no such
+ * separation within its own catalog. */
+export function separateUnitsInDocument(draft: RevisionSelector, written: RevisionSelector): boolean {
+  if (draft.kind === 'config' && written.kind === 'config' && draft.unit && written.unit) {
+    return draft.unit !== written.unit || (!!draft.entry && !!written.entry && draft.entry !== written.entry);
+  }
+  return draft.kind === 'mcp' && written.kind === 'mcp' && !!draft.entry && !!written.entry && draft.entry !== written.entry;
 }
 
 /** The exact revision this projection carries for the selected native document
@@ -286,6 +296,7 @@ export function revisionSelector(mutation: SourceMutation): RevisionSelector {
  * the native absent-resource revision, never a fabricated one. */
 export function selectedRevision(source: SourceSettings, selector: RevisionSelector): string {
   const scope = source.target.kind;
+  if (selector.kind === 'global_guidance') return source.global_guidance?.revision ?? source.absent_resource_revision;
   if (selector.kind === 'config') return source[scope]!.revision;
   if (selector.kind === 'mcp') return (scope === 'user' ? source.user_mcp : source.workspace_mcp)!.revision;
   return source.agents.find(agent => agent.scope === scope && agent.name === selector.name)?.source.revision ?? source.absent_resource_revision;

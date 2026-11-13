@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -25,7 +25,7 @@ for (const width of [1440, 390]) test(`catalog Tool constants keep unsafe drafts
     await page.setViewportSize({ width: 1440, height: 1000 });
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'constant_drafts', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/);
     await page.setViewportSize({ width, height: 1000 });
@@ -52,7 +52,7 @@ for (const width of [1440, 390]) test(`catalog Tool constants keep unsafe drafts
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 for (const kind of ['object', 'literal'] as const) test(`catalog JSON payloads use their own draft base in ${kind} arguments`, async ({ page }) => {
@@ -76,7 +76,7 @@ for (const kind of ['object', 'literal'] as const) test(`catalog JSON payloads u
     } }));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'json_payload', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/);
     const tool = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Tool node payload', { exact: true });
@@ -99,7 +99,7 @@ for (const kind of ['object', 'literal'] as const) test(`catalog JSON payloads u
     }).toEqual(wrapper);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('a resolved catalog preserves constructed object and array parameters with references', async ({ page }) => {
@@ -122,7 +122,7 @@ test('a resolved catalog preserves constructed object and array parameters with 
     } }));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'constructed_params', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/);
     const tool = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Tool node payload', { exact: true });
@@ -148,5 +148,5 @@ test('a resolved catalog preserves constructed object and array parameters with 
       .toEqual({ ...metadata, fields: { ...metadata.fields, x: { type: 'literal', value: 'replacement' } } });
     await page.screenshot({ path: '/tmp/rustx-workflow-constructed-parameters.png' });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });

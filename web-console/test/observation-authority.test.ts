@@ -1,7 +1,7 @@
 import{traceReceipt}from'./fixture';
 import { checkpoint } from "./fixture";
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Request, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v73';
+import type { Request, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v78';
 import { Server, snapshot } from './fixture';
 import { tracePage, traceRecord, requestDetail } from './trace-fixture';
 const servers: Server[] = [];
@@ -40,9 +40,9 @@ it.each(['release', 'switch'] as const)('%s revokes Runtime event publication be
   expect(count(s, 'session/checkpoint')).toBe(0); expect(count(s, 'session/trace')).toBe(0);
   expect(view(s).target).toBe(before.target); expect(s.client.isAttachmentObservationCurrent('A', proof)).toBe(false);
   s.reply(closing.request); await closing.work;
-  expect(s.claims()).toHaveLength(0); expect(count(s, 'session/attach')).toBe(1);
+  expect(s.claims()).toHaveLength(0); expect(count(s, 'thread/resume')).toBe(1);
   expect(count(s, 'session/detach')).toBe(kind === 'release' ? 1 : 0); expect(count(s, 'session/switchNode')).toBe(kind === 'switch' ? 1 : 0);
-  expect(count(s, 'turn/start')).toBe(0);
+  expect(count(s, 'inbound/queue')).toBe(0);
   if (kind === 'switch') { expect(view(s).nodeId).toBe('right'); expect(s.residentConversations.get('A')).toBe('conversation-right'); expect(view(s).snapshot).toBeUndefined(); }
 });
 it('a held Snapshot cannot publish or reconcile after Release, and cleanup retains the exact claim', async () => {
@@ -95,7 +95,7 @@ it('resync keeps observation proof while controls wait for Snapshot and subscrip
   s.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target,cursor:'21',event:{type:'message_committed',attempt_id:'attempt',transcript_cursor:'21',message:{id:'current',role:'user',source:'human',content:[]}}}});expect(view(s).cursor).toBe('21');
   expect(s.client.isAttachmentControlCurrent('A', proof)).toBe(true); expect(s.client.target('A')).toEqual(target);
   expect(count(s, 'session/checkpoint')).toBe(1); expect(count(s, 'session/subscribe')).toBe(1);
-  expect(count(s, 'session/attach')).toBe(1); expect(count(s, 'session/detach')).toBe(0); expect(s.claims()).toHaveLength(1);
+  expect(count(s, 'thread/resume')).toBe(1); expect(count(s, 'session/detach')).toBe(0); expect(s.claims()).toHaveLength(1);
 });
 it.each(['release', 'switch', 'delete'] as const)('held Turn outline and History navigation retire on %s', async kind => {
   const s = await setup();
@@ -137,7 +137,7 @@ it('old Snapshot completion cannot remove a fresh Attachment refresh worker', as
   const third = await s.waitFor('session/checkpoint', 4); s.socket.success(third, {type:'checkpoint', checkpoint:checkpoint({ ...snapshot(), messages: [{ id: 'new', role: 'assistant', content: [] }] },'3')});
   await fresh; expect(view(s).cursor).toBe('3'); expect(view(s).snapshot?.messages[0].id).toBe('new');
   expect(s.client.isAttachmentObservationCurrent('A', oldProof)).toBe(false); expect(s.client.isAttachmentObservationCurrent('A', proof)).toBe(true);
-  expect(count(s, 'session/checkpoint')).toBe(4); expect(count(s, 'session/attach')).toBe(2); expect(count(s, 'session/detach')).toBe(1); expect(s.claims()).toHaveLength(1); expect(s.maxClaims).toBe(1);
+  expect(count(s, 'session/checkpoint')).toBe(4); expect(count(s, 'thread/resume')).toBe(2); expect(count(s, 'session/detach')).toBe(1); expect(s.claims()).toHaveLength(1); expect(s.maxClaims).toBe(1);
 });
 it.each([false, true])('late Snapshot cannot enter restored generation (authority replacement=%s)', async replacement => {
   const s = await setup(), oldProof = view(s).attachmentObservation, socket = s.socket;
@@ -147,7 +147,7 @@ it.each([false, true])('late Snapshot cannot enter restored generation (authorit
   s.held.delete('session/checkpoint'); await s.connect(); if (!view(s)?.target) await s.client.attach('A');
   const current = view(s); socket.success(read, {type:'checkpoint', checkpoint:checkpoint(snapshot(),'900')});
   expect(view(s)).toBe(current); expect(s.client.isAttachmentObservationCurrent('A', oldProof)).toBe(false); expect(s.claims()).toHaveLength(1);
-  expect(count(s, 'session/attach')).toBe(2); expect(count(s,'session/checkpoint')).toBe(replacement?2:1);
+  expect(count(s, 'thread/resume')).toBe(2); expect(count(s,'session/checkpoint')).toBe(replacement?2:1);
 });
 it('RPC capacity cannot dispatch a Snapshot after its observation proof is revoked', async () => {
   const s = await setup(); s.held.add('session/summary');
@@ -163,7 +163,7 @@ it('RPC capacity cannot dispatch a Snapshot after its observation proof is revok
   s.reply(detach); await release;
   expect(view(s).attachment).toBe('detached'); expect(s.claims()).toHaveLength(0);
   s.held.delete('session/summary'); await s.client.attach('A'); await s.client.refresh('A');
-  expect(count(s, 'session/attach')).toBe(2); expect(count(s, 'session/checkpoint')).toBe(2); expect(s.claims()).toHaveLength(1);
+  expect(count(s, 'thread/resume')).toBe(2); expect(count(s, 'session/checkpoint')).toBe(2); expect(s.claims()).toHaveLength(1);
 });
 it('failed detach retains only cleanup ownership, and old notifications cannot trigger observation repair', async () => {
   const s = await setup(), before = view(s), closing = await revoke(s, 'release');
@@ -175,7 +175,7 @@ it('failed detach retains only cleanup ownership, and old notifications cannot t
   expect(view(s).snapshot).toBe(before.snapshot); expect(view(s).cursor).toBe(before.cursor); expect(view(s).target).toBe(before.target);
   expect(() => s.client.target('A')).toThrow(); expect(s.claims()).toHaveLength(1);
   expect(count(s, 'session/checkpoint')).toBe(0); expect(count(s, 'session/trace')).toBe(0); expect(count(s, 'session/traceDetail')).toBe(0); expect(count(s, 'session/turns')).toBe(0);
-  expect(count(s, 'session/attach')).toBe(1); expect(count(s, 'session/detach')).toBe(1);
+  expect(count(s, 'thread/resume')).toBe(1); expect(count(s, 'session/detach')).toBe(1);
   const release = s.client.release('A'); s.reply(await s.waitFor('session/detach', 2)); await release; expect(s.claims()).toHaveLength(0);
 });
 it('final async validation cannot dispatch a revoked Snapshot or retain its reservation', async () => {
@@ -224,7 +224,7 @@ it.each([true, false])('pending inbound invalidation rechecks after synchronous 
     expect(reconcile).toHaveBeenCalledTimes(1); expect(submissions).toHaveBeenCalledTimes(1);
   }
   s.socket.success(read, { type: 'transcript_window', window: { cut, page: { entries: [entry(1)] } } }); await page;
-  expect(count(s, 'session/checkpoint')).toBe(0); expect(count(s, 'turn/start')).toBe(0);
+  expect(count(s, 'session/checkpoint')).toBe(0); expect(count(s, 'inbound/queue')).toBe(0);
   if (release) { s.reply(await s.waitFor('session/detach', 1)); await release; expect(s.claims()).toHaveLength(0); }
   else expect(s.claims()).toHaveLength(1);
 });

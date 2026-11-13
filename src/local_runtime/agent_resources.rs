@@ -1,9 +1,6 @@
 //! Bounded canonical named Agent discovery. Project overrides user as a whole resource.
-use super::config::AgentProfileDocument;
-use crate::runtime::resources::{
-    ProjectContextFile, RuntimeResourceLoadError, strip_instruction_bom,
-    validate_project_resource_path,
-};
+use super::config::NamedAgentProfileDocument;
+use crate::runtime::resources::RuntimeResourceLoadError;
 use crate::runtime::subagent::{AgentCatalog, NamedAgentDefinition, SubagentName};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -21,7 +18,7 @@ pub struct AgentSource {
 
 pub(super) const REMOVED_NAMED_SUMMARY_OUTPUT_DIAGNOSTIC: &str = "remove model.summary_model.max_output_tokens; compaction determines its summary output allowance automatically";
 
-pub(crate) fn parse(text: &str) -> Result<AgentProfileDocument, String> {
+pub(crate) fn parse(text: &str) -> Result<NamedAgentProfileDocument, String> {
     if text.len() > 1024 * 1024 {
         return Err("Agent resource exceeds 1 MiB".into());
     }
@@ -30,39 +27,9 @@ pub(crate) fn parse(text: &str) -> Result<AgentProfileDocument, String> {
     {
         return Err(REMOVED_NAMED_SUMMARY_OUTPUT_DIAGNOSTIC.into());
     }
-    let document: AgentProfileDocument = crate::toml_authoring::parse(text.as_bytes())?;
-    crate::runtime::agent_profile::AgentProfile::from_document(
-        &document,
-        crate::runtime::agent_profile::AgentProfileKind::Named,
-        Vec::new(),
-    )?;
-    document.execution_deadline()?;
+    let document: NamedAgentProfileDocument = crate::toml_authoring::parse(text.as_bytes())?;
+    document.lower()?;
     Ok(document)
-}
-
-pub(crate) fn load_profile_files(
-    paths: &[PathBuf],
-) -> Result<Vec<ProjectContextFile>, RuntimeResourceLoadError> {
-    if paths.len() > crate::runtime::subagent::catalog::MAX_SUBAGENT_PROJECT_FILES {
-        return Err(RuntimeResourceLoadError::new(
-            "Agent project file count exceeds native bound",
-        ));
-    }
-    paths
-        .iter()
-        .map(|path| {
-            let bytes = crate::bounded_file::read_bounded(path).map_err(|error| {
-                RuntimeResourceLoadError::new(error).at(path, "agent.agents_md.files")
-            })?;
-            let content = String::from_utf8(bytes).map_err(|error| {
-                RuntimeResourceLoadError::new(error.to_string()).at(path, "agent.agents_md.files")
-            })?;
-            Ok(ProjectContextFile {
-                path: path.clone(),
-                content: strip_instruction_bom(&content).to_owned(),
-            })
-        })
-        .collect()
 }
 
 fn candidates(
@@ -167,31 +134,7 @@ pub(crate) fn load_authorized(
                 };
                 error(e).because(reason)
             })?;
-            if agent.agents_md.files.len()
-                > crate::runtime::subagent::catalog::MAX_SUBAGENT_PROJECT_FILES
-            {
-                return Err(error(
-                    "agents_md.files exceeds the native file-count bound".into(),
-                ));
-            }
-            let mut files = Vec::new();
-            for file in &agent.agents_md.files {
-                let resolved = boundary.join(file);
-                validate_project_resource_path(boundary, &resolved)
-                    .map_err(|e| e.at(path, format!("{field}.agents_md.files")))?;
-                let bytes = crate::bounded_file::read_bounded(&resolved).map_err(error)?;
-                let content = String::from_utf8(bytes).map_err(|e| error(e.to_string()))?;
-                files.push(ProjectContextFile {
-                    path: resolved,
-                    content: strip_instruction_bom(&content).to_owned(),
-                });
-            }
-            let profile = crate::runtime::agent_profile::AgentProfile::from_document(
-                &agent,
-                crate::runtime::agent_profile::AgentProfileKind::Named,
-                files,
-            )
-            .map_err(error)?;
+            let profile = agent.lower().map_err(error)?;
             NamedAgentDefinition::new(name.clone(), profile, path.clone())
                 .map_err(|e| error(e.to_string()))
         })();
@@ -431,22 +374,19 @@ mod tests {
         );
     }
     #[test]
-    fn agent_profile_file_diagnostics_use_current_toml_field_names() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = dir.path().canonicalize().unwrap();
-        let root = workspace.join(".agents/agents");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(
-            root.join("alpha.toml"),
-            "description = 'Alpha'\ninstructions = 'Inspect'\n[agents_md]\nfiles = ['../outside.md']\n",
-        ).unwrap();
-        let catalog = load_authorized(Some(&workspace), &workspace.join("user"))
-            .unwrap()
-            .0;
-        let error = catalog.invalid().values().next().unwrap();
-        assert_eq!(
-            error.field_path.as_deref(),
-            Some("agents.alpha.agents_md.files")
+    fn named_profile_rejects_root_only_delegation_and_supplemental_files() {
+        for (text, field) in [
+            ("agents = ['reviewer']", "agents"),
+            ("[agents_md]\nfiles = ['notes.md']", "files"),
+        ] {
+            let error = parse(text).unwrap_err();
+            assert!(error.contains(field), "{error}");
+        }
+        assert!(
+            !parse("[agents_md]\ninherit = false")
+                .unwrap()
+                .agents_md
+                .inherit
         );
     }
 

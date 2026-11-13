@@ -9,7 +9,7 @@ use std::path::Path;
 
 use rustx::runtime::identity::SkillVersionId;
 use rustx::skills::{
-    DependencyError, SkillDiagnostic, SkillDiscovery, SkillDiscoveryConfig, SkillPackageError,
+    SkillDiagnostic, SkillDiscovery, SkillDiscoveryConfig, SkillPackageError,
     merge_dependency_manifests, node_environment_digest, python_environment_digest,
     render_skill_catalog,
 };
@@ -74,10 +74,9 @@ fn invalid_cause(workspace: &Workspace) -> SkillPackageError {
 
 /// Isolates the project-root tests from the developer's User Skill roots.
 fn project_discovery(workspace: &Workspace) -> SkillDiscovery {
-    SkillDiscovery::with_config(
-        workspace,
-        SkillDiscoveryConfig::workspace_root(workspace.root().join(".agents/skills")),
-    )
+    SkillDiscovery::with_config(SkillDiscoveryConfig::workspace_root(
+        workspace.root().join(".agents/skills"),
+    ))
 }
 
 /// A missing `.agents/skills/` directory means an empty Skill set, not an
@@ -127,10 +126,9 @@ fn hidden_entries_and_unrelated_files_are_ignored() {
     assert_eq!(names, ["visible"]);
 }
 
-/// A frontmatter `name` that does not match the parent directory is
-/// rejected.
+/// The declared name is authoritative even if its folder has another name.
 #[test]
-fn name_must_match_the_parent_directory() {
+fn declared_name_can_differ_from_the_parent_directory() {
     let (dir, workspace) = fixture();
     let root = dir.path().join(".agents/skills/pdf");
     std::fs::create_dir_all(&root).expect("dir");
@@ -139,16 +137,12 @@ fn name_must_match_the_parent_directory() {
         "---\nname: documents\ndescription: A skill.\n---\nbody\n",
     )
     .expect("SKILL.md");
-    assert!(matches!(
-        invalid_cause(&workspace),
-        SkillPackageError::NameDirectoryMismatch { .. }
-    ));
+    assert_eq!(discover(&workspace)[0].name(), "documents");
 }
 
-/// Invalid standard names are rejected: uppercase, leading hyphen,
-/// consecutive hyphens, and names exceeding 64 characters.
+/// Nonstandard names load with a warning, as in Pi.
 #[test]
-fn invalid_standard_names_are_rejected() {
+fn invalid_standard_names_warn_without_hiding_the_skill() {
     for bad in ["PDF", "-pdf", "pdf--x", "pdf-", &"p".repeat(65)] {
         let (dir, workspace) = fixture();
         let root = dir.path().join(".agents/skills").join(bad);
@@ -158,17 +152,18 @@ fn invalid_standard_names_are_rejected() {
             format!("---\nname: {bad}\ndescription: A skill.\n---\nbody\n"),
         )
         .expect("SKILL.md");
-        let cause = invalid_cause(&workspace);
-        assert!(
-            matches!(cause, SkillPackageError::InvalidName { .. }),
-            "name {bad:?} must be rejected, got {cause:?}"
-        );
+        let outcome = project_discovery(&workspace).discover();
+        assert_eq!(outcome.packages[0].name(), bad);
+        assert!(matches!(
+            outcome.diagnostics.as_slice(),
+            [SkillDiagnostic::PackageWarning { .. }]
+        ));
     }
 }
 
-/// An empty or oversized description is rejected.
+/// A description is required. The length recommendation only produces a warning.
 #[test]
-fn empty_and_oversized_descriptions_are_rejected() {
+fn empty_descriptions_are_rejected_and_oversized_ones_warn() {
     let (dir, workspace) = fixture();
     let root = dir.path().join(".agents/skills/skill");
     std::fs::create_dir_all(&root).expect("dir");
@@ -189,9 +184,11 @@ fn empty_and_oversized_descriptions_are_rejected() {
         ),
     )
     .expect("SKILL.md");
+    let outcome = project_discovery(&workspace).discover();
+    assert_eq!(outcome.packages[0].description().len(), 1025);
     assert!(matches!(
-        invalid_cause(&workspace),
-        SkillPackageError::InvalidDescription { .. }
+        outcome.diagnostics.as_slice(),
+        [SkillDiagnostic::PackageWarning { .. }]
     ));
 }
 
@@ -221,34 +218,31 @@ fn malformed_yaml_is_rejected() {
     ));
 }
 
-/// A non-string `metadata` value is rejected (the standard requires a
-/// string-to-string map).
+/// Optional fields are accepted without strict shape validation.
 #[test]
-fn malformed_metadata_is_rejected() {
+fn optional_frontmatter_fields_do_not_gate_discovery() {
     let (dir, workspace) = fixture();
     let root = dir.path().join(".agents/skills/skill");
     std::fs::create_dir_all(&root).expect("dir");
     std::fs::write(
         root.join("SKILL.md"),
-        "---\nname: skill\ndescription: A skill.\nmetadata:\n  version: 1.0\n---\nbody\n",
+        format!("---\nname: skill\ndescription: A skill.\ncompatibility: {}\nallowed-tools: [Read]\nmetadata:\n  version: 1.0\n---\nbody\n", "x".repeat(501)),
     )
     .expect("SKILL.md");
-    assert!(matches!(
-        invalid_cause(&workspace),
-        SkillPackageError::MalformedMetadata { .. }
-    ));
+    let outcome = project_discovery(&workspace).discover();
+    assert!(outcome.diagnostics.is_empty());
+    assert_eq!(outcome.packages[0].compatibility().unwrap().len(), 501);
+    assert_eq!(outcome.packages[0].metadata()["version"], 1.0);
 }
 
-/// A direct candidate without `SKILL.md` is rejected by the discovery
-/// contract.
+/// A grouping directory without any definitions is an empty branch.
 #[test]
-fn candidate_without_skill_markdown_is_rejected() {
+fn empty_grouping_directory_is_ignored() {
     let (dir, workspace) = fixture();
     std::fs::create_dir_all(dir.path().join(".agents/skills/empty")).expect("dir");
-    assert!(matches!(
-        invalid_cause(&workspace),
-        SkillPackageError::MissingSkillMarkdown { .. }
-    ));
+    let outcome = project_discovery(&workspace).discover();
+    assert!(outcome.packages.is_empty());
+    assert!(outcome.diagnostics.is_empty());
 }
 
 /// Nested packages are never discovered recursively: a subdirectory of a
@@ -274,10 +268,9 @@ fn nested_packages_are_not_recursively_discovered() {
     assert_eq!(names, ["outer"], "nested packages are never discovered");
 }
 
-/// Package symlink roots and package-internal symlinks are rejected for
-/// M6, while ordinary Workspace symlink semantics for tools are unchanged.
+/// Contained package aliases are deduplicated; internal resources belong to Tools.
 #[test]
-fn package_symlinks_are_rejected() {
+fn package_symlinks_are_deduplicated() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "real", "Real skill.", &[], "body\n");
     std::os::unix::fs::symlink(
@@ -286,7 +279,7 @@ fn package_symlinks_are_rejected() {
     )
     .expect("symlink root");
     let outcome = project_discovery(&workspace).discover();
-    // The valid sibling still publishes; only the symlinked root is excluded.
+    // Both spellings name the same physical file.
     assert_eq!(
         outcome
             .packages
@@ -295,13 +288,7 @@ fn package_symlinks_are_rejected() {
             .collect::<Vec<_>>(),
         ["real"]
     );
-    assert!(matches!(
-        outcome.diagnostics.as_slice(),
-        [SkillDiagnostic::PackageInvalid {
-            cause: SkillPackageError::UnsupportedSymlink { .. },
-            ..
-        }]
-    ));
+    assert!(outcome.diagnostics.is_empty());
 
     let (dir2, workspace2) = fixture();
     write_skill(dir2.path(), "skill", "A skill.", &[], "body\n");
@@ -311,14 +298,11 @@ fn package_symlinks_are_rejected() {
     )
     .expect("internal symlink");
     let internal = project_discovery(&workspace2).discover();
-    assert!(internal.packages.is_empty());
-    assert!(matches!(
-        internal.diagnostics.as_slice(),
-        [SkillDiagnostic::PackageInvalid {
-            cause: SkillPackageError::UnsupportedSymlink { .. },
-            ..
-        }]
-    ));
+    assert_eq!(internal.packages.len(), 1);
+    assert!(
+        internal.diagnostics.is_empty(),
+        "runtime resource links are not discovery inputs"
+    );
 }
 
 /// Discovery accepts a non-canonical package root but publishes a canonical
@@ -349,10 +333,9 @@ fn a_non_canonical_package_root_is_published_canonically() {
         // spelling of the same package.
         workspace_root.join("../work/.agents/skills/deck"),
     ] {
-        let outcome = SkillDiscovery::with_config(
-            &workspace,
-            SkillDiscoveryConfig::workspace_root(explicit.parent().unwrap().to_path_buf()),
-        )
+        let outcome = SkillDiscovery::with_config(SkillDiscoveryConfig::workspace_root(
+            explicit.parent().unwrap().to_path_buf(),
+        ))
         .discover();
         let snapshot = rustx::skills::SkillSnapshot::from_discovery(outcome);
         let location = snapshot.catalog_entries()[0].location.clone();
@@ -389,7 +372,7 @@ fn a_non_canonical_package_root_is_published_canonically() {
 fn a_non_utf8_package_root_is_rejected_rather_than_published_lossily() {
     use std::os::unix::ffi::OsStrExt as _;
 
-    let (dir, workspace) = fixture();
+    let (dir, _) = fixture();
     // A lone 0xFF byte is never valid UTF-8. Linux filesystems store it
     // verbatim, which is what makes the discovery-level rejection reachable
     // and worth asserting.
@@ -414,10 +397,9 @@ fn a_non_utf8_package_root_is_rejected_rather_than_published_lossily() {
     )
     .expect("SKILL.md");
 
-    let outcome = SkillDiscovery::with_config(
-        &workspace,
-        SkillDiscoveryConfig::workspace_root(package.parent().unwrap().to_path_buf()),
-    )
+    let outcome = SkillDiscovery::with_config(SkillDiscoveryConfig::workspace_root(
+        package.parent().unwrap().to_path_buf(),
+    ))
     .discover();
     assert!(outcome.packages.is_empty());
     assert!(
@@ -705,19 +687,19 @@ fn file_mtime_does_not_affect_the_digest() {
     assert_eq!(before, after);
 }
 
-/// A body change changes the version identity.
+/// Runtime body edits preserve the definition version.
 #[test]
-fn body_change_changes_the_version_identity() {
+fn body_change_preserves_the_version_identity() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "pdf", "PDF skill.", &[], "body one\n");
     let before = version_id(&workspace, "pdf");
     write_skill(dir.path(), "pdf", "PDF skill.", &[], "body two\n");
-    assert_ne!(before, version_id(&workspace, "pdf"));
+    assert_eq!(before, version_id(&workspace, "pdf"));
 }
 
-/// A script change changes the version identity.
+/// Runtime script edits preserve the definition version.
 #[test]
-fn script_change_changes_the_version_identity() {
+fn script_change_preserves_the_version_identity() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "pdf", "PDF skill.", &[], "body\n");
     let scripts = dir.path().join(".agents/skills/pdf/scripts");
@@ -725,12 +707,12 @@ fn script_change_changes_the_version_identity() {
     std::fs::write(scripts.join("extract.py"), "print('one')\n").expect("script");
     let before = version_id(&workspace, "pdf");
     std::fs::write(scripts.join("extract.py"), "print('two')\n").expect("script");
-    assert_ne!(before, version_id(&workspace, "pdf"));
+    assert_eq!(before, version_id(&workspace, "pdf"));
 }
 
-/// A binary asset change changes the version identity (raw bytes).
+/// Binary assets do not participate in discovery identity.
 #[test]
-fn binary_asset_change_changes_the_version_identity() {
+fn binary_asset_change_preserves_the_version_identity() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "pdf", "PDF skill.", &[], "body\n");
     let assets = dir.path().join(".agents/skills/pdf/assets");
@@ -738,7 +720,7 @@ fn binary_asset_change_changes_the_version_identity() {
     std::fs::write(assets.join("sample.bin"), [0u8, 1, 2, 3]).expect("asset");
     let before = version_id(&workspace, "pdf");
     std::fs::write(assets.join("sample.bin"), [0u8, 9, 8, 7]).expect("asset");
-    assert_ne!(before, version_id(&workspace, "pdf"));
+    assert_eq!(before, version_id(&workspace, "pdf"));
 }
 
 /// A description-only change changes the version identity.
@@ -800,14 +782,6 @@ fn dependency_change_changes_the_version_identity() {
 // Dependency declarations
 // ---------------------------------------------------------------------------
 
-fn parse_python(value: &str) -> BTreeMap<String, String> {
-    rustx::skills::parse_python_dependencies(value).expect("parse")
-}
-
-fn parse_node(value: &str) -> BTreeMap<String, String> {
-    rustx::skills::parse_node_dependencies(value).expect("parse")
-}
-
 /// An absent metadata key means an empty dependency map.
 #[test]
 fn absent_metadata_key_is_an_empty_dependency_map() {
@@ -816,71 +790,6 @@ fn absent_metadata_key_is_an_empty_dependency_map() {
     let packages = discover(&workspace);
     assert!(packages[0].dependencies().python.is_empty());
     assert!(packages[0].dependencies().node.is_empty());
-}
-
-/// Exact dependency JSON objects parse deterministically; different JSON
-/// key ordering produces the same canonical set.
-#[test]
-fn exact_dependency_objects_parse_deterministically() {
-    let first = parse_python(r#"{"pypdf":"5.9.0","Pillow":"11.3.0"}"#);
-    let second = parse_python(r#"{"Pillow":"11.3.0","pypdf":"5.9.0"}"#);
-    assert_eq!(first, second);
-    assert_eq!(
-        first,
-        [
-            ("pillow".to_owned(), "11.3.0".to_owned()),
-            ("pypdf".to_owned(), "5.9.0".to_owned()),
-        ]
-        .into_iter()
-        .collect(),
-        "python names normalize deterministically"
-    );
-    let node = parse_node(r#"{"pdf-lib":"1.17.1","@scope/pkg":"2.0.0"}"#);
-    assert_eq!(node.get("@scope/pkg").expect("scoped"), "2.0.0");
-}
-
-/// Ranges, URLs, local paths, tags, and other unsupported declarations are
-/// rejected for both ecosystems.
-#[test]
-fn unsupported_declarations_are_rejected() {
-    for bad in [
-        ">=1.0",
-        "~=1.0",
-        "==1.0",
-        "1.0.*",
-        "1.0[extra]",
-        "1.0; python_version<'3.9'",
-        "https://example.com/pkg.tar.gz",
-        "git+https://example.com/repo.git",
-        "../local",
-    ] {
-        let result = rustx::skills::parse_python_dependencies(&format!(r#"{{"pkg":"{bad}"}}"#));
-        assert!(
-            matches!(result, Err(DependencyError::InvalidVersion { .. })),
-            "python {bad:?} must be rejected"
-        );
-    }
-    for bad in [
-        "^1.0.0",
-        "~1.0.0",
-        ">=1.0.0",
-        "1.0.x",
-        "*",
-        "latest",
-        "1.0.0 || 2.0.0",
-        "git+https://example.com/repo.git",
-        "workspace:*",
-        "file:../pkg",
-    ] {
-        let result = rustx::skills::parse_node_dependencies(&format!(r#"{{"pkg":"{bad}"}}"#));
-        assert!(
-            matches!(result, Err(DependencyError::InvalidVersion { .. })),
-            "node {bad:?} must be rejected"
-        );
-    }
-    // A valid prerelease exact version is accepted.
-    assert!(rustx::skills::parse_node_dependencies(r#"{"pkg":"1.0.0-beta.1"}"#).is_ok());
-    assert!(rustx::skills::parse_python_dependencies(r#"{"pkg":"1.0rc1"}"#).is_ok());
 }
 
 /// Duplicate compatible declarations coalesce across Skills; incompatible
@@ -933,17 +842,19 @@ fn merge_coalesces_and_conflicts_report_every_skill() {
     assert_eq!(versions, ["5.9.0", "5.10.0"]);
 }
 
-/// A malformed rustX dependency declaration excludes exactly that package
-/// (#280): one malformed Skill must never suppress an unrelated valid one.
+/// Invalid rustX dependency pins do not hide a skill or its valid pins.
 #[test]
-fn malformed_dependency_declaration_excludes_only_its_own_package() {
+fn malformed_dependency_declaration_warns_and_keeps_the_skill() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "good", "Good skill.", &[], "body\n");
     write_skill(
         dir.path(),
         "bad",
         "Bad skill.",
-        &[("rustx.python-dependencies", r#"{"pypdf":"not a version"}"#)],
+        &[
+            ("rustx.python-dependencies", r#"{"pypdf":"not a version"}"#),
+            ("rustx.node-dependencies", r#"{"typescript":"5.8.0"}"#),
+        ],
         "body\n",
     );
     let outcome = project_discovery(&workspace).discover();
@@ -953,14 +864,16 @@ fn malformed_dependency_declaration_excludes_only_its_own_package() {
             .iter()
             .map(rustx::skills::SkillPackage::name)
             .collect::<Vec<_>>(),
-        ["good"]
+        ["bad", "good"]
+    );
+    assert!(outcome.packages[0].dependencies().python.is_empty());
+    assert_eq!(
+        outcome.packages[0].dependencies().node["typescript"],
+        "5.8.0"
     );
     assert!(matches!(
         outcome.diagnostics.as_slice(),
-        [SkillDiagnostic::PackageInvalid {
-            cause: SkillPackageError::InvalidDependencyDeclaration { .. },
-            ..
-        }]
+        [SkillDiagnostic::PackageWarning { .. }]
     ));
 }
 
@@ -993,17 +906,17 @@ fn catalog_rendering_is_exact_and_publishes_host_skill_locations() {
         rustx::skills::SkillSnapshot::new(packages.into_iter().map(std::sync::Arc::new).collect());
     let rendered = render_skill_catalog(
         snapshot.catalog_entries(),
-        &rustx::skills::automatic_skill_roots(None, workspace.root()),
+        rustx::skills::SkillReadTool::Read,
     );
     let skills_root = workspace.root().join(".agents/skills");
     let pdf = skills_root.join("pdf/SKILL.md").display().to_string();
     let slides = skills_root.join("slides/SKILL.md").display().to_string();
     assert!(rendered.contains(&skills_root.display().to_string()));
     assert!(rendered.contains("<name>pdf</name>") && rendered.contains("<name>slides</name>"));
-    assert!(rendered.contains("prompt visibility, not filesystem access"));
+    assert!(rendered.contains("Use the read tool to load"));
     assert!(
-        !rendered.contains(&pdf) && !rendered.contains(&slides),
-        "only root paths enter the prompt"
+        rendered.contains(&pdf) && rendered.contains(&slides),
+        "each instruction path enters the prompt"
     );
     assert!(!rendered.contains("body"), "SKILL.md bodies never appear");
     assert!(

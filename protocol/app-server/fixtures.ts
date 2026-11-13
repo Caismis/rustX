@@ -1,6 +1,42 @@
 // Generated from serialized Rust DTOs.
-import type {ProtocolMessage} from './v73.js';
+import type {ProtocolMessage} from './v78.js';
 export const fixtures = [
+  {
+    "jsonrpc": "2.0",
+    "id": "server-incarnation:host-1",
+    "method": "item/tool/call",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "turnId": "native-attempt",
+      "callId": "native-call",
+      "namespace": "business",
+      "tool": "lookup",
+      "arguments": {
+        "key": "invoice"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "server-incarnation:host-1",
+    "result": {
+      "success": true,
+      "contentItems": [
+        {
+          "type": "inputText",
+          "text": "invoice found"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "serverRequest/resolved",
+    "params": {
+      "requestId": "server-incarnation:host-1",
+      "threadId": "conv_00000000-0000-7000-8000-000000000001"
+    }
+  },
   {
     "jsonrpc": "2.0",
     "id": "exact-node",
@@ -43,8 +79,9 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "create-with-initial-model",
-    "method": "session/create",
+    "method": "thread/start",
     "params": {
+      "dynamicTools": [],
       "settings": {
         "cwd": "/workspace",
         "model": {
@@ -69,8 +106,9 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "create-with-native-default",
-    "method": "session/create",
+    "method": "thread/start",
     "params": {
+      "dynamicTools": [],
       "settings": {
         "cwd": "/workspace"
       }
@@ -104,8 +142,9 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "submit-workspace-draft",
-    "method": "session/create",
+    "method": "thread/start",
     "params": {
+      "dynamicTools": [],
       "settings": {
         "cwd": "/workspace"
       },
@@ -178,7 +217,16 @@ export const fixtures = [
         "generated_title": null,
         "preview": "Native first user message",
         "updated_at": "1970-01-01T00:00:00Z",
-        "active_node": "node_00000000-0000-7000-8000-000000000001"
+        "active_node": "node_00000000-0000-7000-8000-000000000001",
+        "thread_id": "conv_00000000-0000-7000-8000-000000000001",
+        "thread_status": {
+          "threadId": "conv_00000000-0000-7000-8000-000000000001",
+          "status": {
+            "type": "idle"
+          },
+          "revision": "0",
+          "runtimeIncarnation": "9007199254740993"
+        }
       }
     }
   },
@@ -199,6 +247,7 @@ export const fixtures = [
         },
         "lifecycle": "Accepting",
         "policy": {
+          "environment_roots": [],
           "max_resident_runtimes": 8,
           "max_connections": 32,
           "max_external_attachments": 64,
@@ -240,7 +289,7 @@ export const fixtures = [
     "id": "initialize-fixture",
     "method": "initialize",
     "params": {
-      "protocol_version": 73,
+      "protocol_version": 78,
       "client": {
         "name": "fixture-client",
         "version": "1"
@@ -258,16 +307,16 @@ export const fixtures = [
     "result": {
       "type": "initialized",
       "authority_id": "fixture-app-server-authority",
-      "protocol_version": 73,
+      "protocol_version": 78,
       "capabilities": {
         "upload_policy": {
           "max_concurrent_transfers": 2,
           "max_chunk_bytes": 65536
         },
         "multi_session": true,
-        "single_writable_controller": true,
+        "shared_writable_clients": true,
         "headless_interactions": true,
-        "delivery_access": false,
+        "delivery_access": true,
         "experimental_methods": []
       }
     }
@@ -290,45 +339,32 @@ export const fixtures = [
   },
   {
     "jsonrpc": "2.0",
-    "id": -3,
-    "method": "interaction/respond",
-    "params": {
-      "target": {
-        "session_id": "ses_00000000-0000-7000-8000-000000000001",
-        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-        "runtime_incarnation": "9007199254740993",
-        "attachment_id": "attachment-fixture"
-      },
-      "interaction": {
-        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
-        "interaction_id": "interaction-fixture"
-      },
+    "id": "server-incarnation:3",
+    "result": {
+      "type": "questionnaire",
       "response": {
-        "type": "questionnaire",
-        "response": {
-          "type": "submitted",
-          "value": {
-            "answers": [
-              {
-                "question_index": 0,
-                "answer": {
-                  "type": "integer",
-                  "value": {
-                    "value": "9007199254740993"
-                  }
-                }
-              },
-              {
-                "question_index": 1,
-                "answer": {
-                  "type": "number",
-                  "value": {
-                    "value": "3ff4000000000000"
-                  }
+        "type": "submitted",
+        "value": {
+          "answers": [
+            {
+              "question_index": 0,
+              "answer": {
+                "type": "integer",
+                "value": {
+                  "value": "9007199254740993"
                 }
               }
-            ]
-          }
+            },
+            {
+              "question_index": 1,
+              "answer": {
+                "type": "number",
+                "value": {
+                  "value": "3ff4000000000000"
+                }
+              }
+            }
+          ]
         }
       }
     }
@@ -630,6 +666,36 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "exact-u64",
+    "method": "session/setModel",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "config": {
+        "model": "local/replacement",
+        "requestParams": {},
+        "summaryModel": {
+          "mode": "session"
+        },
+        "titleModel": {
+          "mode": "session"
+        },
+        "classificationModel": {
+          "mode": "session"
+        },
+        "btwModel": {
+          "mode": "session"
+        }
+      },
+      "recover_unavailable_auxiliary": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
     "method": "session/selectModel",
     "params": {
       "target": {
@@ -692,7 +758,7 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "exact-u64",
-    "method": "session/fork",
+    "method": "thread/fork",
     "params": {
       "session_id": "ses_00000000-0000-7000-8000-000000000001",
       "node_id": null,
@@ -1247,6 +1313,90 @@ export const fixtures = [
   },
   {
     "jsonrpc": "2.0",
+    "method": "thread/status/changed",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "status": {
+        "type": "notLoaded"
+      },
+      "revision": "9007199254740993",
+      "runtimeIncarnation": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "thread/status/changed",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "status": {
+        "type": "idle"
+      },
+      "revision": "9007199254740993",
+      "runtimeIncarnation": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "thread/status/changed",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "status": {
+        "type": "systemError"
+      },
+      "revision": "9007199254740993",
+      "runtimeIncarnation": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "thread/status/changed",
+    "params": {
+      "threadId": "conv_00000000-0000-7000-8000-000000000001",
+      "status": {
+        "type": "active",
+        "activeFlags": [
+          "waitingOnApproval",
+          "waitingOnUserInput"
+        ]
+      },
+      "revision": "9007199254740993",
+      "runtimeIncarnation": "9007199254740993"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "thread/status/resyncRequired",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "loaded-threads",
+    "method": "thread/loaded/list",
+    "params": {
+      "offset": 0,
+      "limit": 64
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "loaded-threads",
+    "result": {
+      "type": "loaded_threads",
+      "data": [
+        {
+          "threadId": "conv_00000000-0000-7000-8000-000000000001",
+          "status": {
+            "type": "idle"
+          },
+          "revision": "9007199254740993",
+          "runtimeIncarnation": "9007199254740993"
+        }
+      ],
+      "next_offset": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "id": "workflow-list",
     "method": "workflow/list",
     "params": {
@@ -1297,7 +1447,8 @@ export const fixtures = [
         "directory": "/workspace/fixture"
       },
       "source": "github",
-      "cursor": null
+      "cursor": null,
+      "expected_scope": "user"
     }
   },
   {
@@ -1740,7 +1891,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1752,7 +1903,7 @@ export const fixtures = [
                   },
                   "description": {
                     "type": "string",
-                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
                     "minLength": 1,
                     "maxLength": 160
                   },
@@ -2086,7 +2237,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2098,7 +2249,7 @@ export const fixtures = [
                   },
                   "description": {
                     "type": "string",
-                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
                     "minLength": 1,
                     "maxLength": 160
                   },
@@ -2432,7 +2583,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2444,7 +2595,7 @@ export const fixtures = [
                   },
                   "description": {
                     "type": "string",
-                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
                     "minLength": 1,
                     "maxLength": 160
                   },
@@ -2778,7 +2929,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2790,7 +2941,7 @@ export const fixtures = [
                   },
                   "description": {
                     "type": "string",
-                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
                     "minLength": 1,
                     "maxLength": 160
                   },
@@ -3124,7 +3275,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3136,7 +3287,7 @@ export const fixtures = [
                   },
                   "description": {
                     "type": "string",
-                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
                     "minLength": 1,
                     "maxLength": 160
                   },
@@ -3470,7 +3621,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3482,7 +3633,7 @@ export const fixtures = [
                   },
                   "description": {
                     "type": "string",
-                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
                     "minLength": 1,
                     "maxLength": 160
                   },
@@ -3816,7 +3967,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3828,7 +3979,7 @@ export const fixtures = [
                   },
                   "description": {
                     "type": "string",
-                    "description": "Optional presentation intent, never execution or approval authority.\nOne to 160 Unicode scalar values; whitespace-only values are rejected.",
+                    "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
                     "minLength": 1,
                     "maxLength": 160
                   },
@@ -4338,7 +4489,6 @@ export const fixtures = [
           "authored": {
             "provider": "fixture",
             "id": "wire-model",
-            "protocol": "openai_responses",
             "context_window": "128000",
             "max_output_tokens": 4096,
             "capabilities": {
@@ -4381,7 +4531,6 @@ export const fixtures = [
           "authored": {
             "provider": "fixture",
             "id": "wire-model",
-            "protocol": "openai_responses",
             "context_window": "128000",
             "max_output_tokens": 4096,
             "capabilities": {
@@ -4409,6 +4558,225 @@ export const fixtures = [
           }
         }
       }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-0",
+    "method": "command/exec",
+    "params": {
+      "command": [
+        "/usr/bin/printf",
+        "%s",
+        "literal"
+      ],
+      "cwd": "/workspace",
+      "env": {},
+      "processId": "process-fixture",
+      "tty": false,
+      "streamStdin": true,
+      "streamStdoutStderr": true,
+      "outputBytesCap": 65536,
+      "timeoutMs": 60000,
+      "size": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-1",
+    "method": "command/exec/write",
+    "params": {
+      "processId": "process-fixture",
+      "deltaBase64": "AP8=",
+      "closeStdin": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-2",
+    "method": "command/exec/resize",
+    "params": {
+      "processId": "process-fixture",
+      "size": {
+        "rows": 24,
+        "cols": 80
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-3",
+    "method": "command/exec/terminate",
+    "params": {
+      "processId": "process-fixture"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-4",
+    "method": "fs/readFile",
+    "params": {
+      "path": "/workspace/file",
+      "offset": "0",
+      "maxBytes": 65536,
+      "expectedRevision": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-5",
+    "method": "fs/writeFile",
+    "params": {
+      "path": "/workspace/file",
+      "dataBase64": "aGk=",
+      "expectedRevision": "native-revision"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-6",
+    "method": "fs/getMetadata",
+    "params": {
+      "path": "/workspace/file"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-7",
+    "method": "fs/readDirectory",
+    "params": {
+      "path": "/workspace",
+      "offset": 0,
+      "limit": 32,
+      "expectedRevision": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-8",
+    "method": "fs/createDirectory",
+    "params": {
+      "path": "/workspace/new",
+      "recursive": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-9",
+    "method": "fs/copy",
+    "params": {
+      "sourcePath": "/workspace/file",
+      "destinationPath": "/workspace/copy",
+      "recursive": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-10",
+    "method": "fs/remove",
+    "params": {
+      "path": "/workspace/file",
+      "recursive": false,
+      "force": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-11",
+    "method": "fs/watch",
+    "params": {
+      "watchId": "watch-fixture",
+      "path": "/workspace"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-12",
+    "method": "fs/unwatch",
+    "params": {
+      "watchId": "watch-fixture"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-13",
+    "method": "skills/list",
+    "params": {
+      "target": {
+        "kind": "workspace",
+        "directory": "/workspace"
+      },
+      "offset": 0,
+      "limit": 32,
+      "expected_revision": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-14",
+    "method": "skills/read",
+    "params": {
+      "target": {
+        "kind": "workspace",
+        "directory": "/workspace"
+      },
+      "name": "example",
+      "kind": "instructions",
+      "offset": "0",
+      "max_bytes": 65536,
+      "expected_revision": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "environment-15",
+    "method": "mcp/catalog",
+    "params": {
+      "target": {
+        "kind": "workspace",
+        "directory": "/workspace"
+      },
+      "id": "example",
+      "expected_revision": "source-revision",
+      "kind": "resources"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "command-final",
+    "result": {
+      "type": "command_exec",
+      "result": {
+        "exitCode": 0,
+        "status": "completed",
+        "stdoutBase64": "",
+        "stderrBase64": "",
+        "stdoutTruncated": false,
+        "stderrTruncated": false
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "command/exec/outputDelta",
+    "params": {
+      "processId": "process-fixture",
+      "sequence": "9007199254740993",
+      "stream": "stdout",
+      "deltaBase64": "AP8=",
+      "capReached": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "fs/changed",
+    "params": {
+      "watchId": "watch-fixture",
+      "changedPaths": [
+        "/workspace/file"
+      ],
+      "resyncRequired": true,
+      "retired": false
     }
   }
 ] satisfies ProtocolMessage[];

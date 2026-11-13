@@ -3,8 +3,6 @@
 #[cfg(all(test, feature = "mcp-fixture"))]
 mod http_tests;
 
-#[cfg(all(test, feature = "mcp-fixture"))]
-use super::ToolSourceId;
 use super::{
     CapabilityCoordinator, CapabilityPreparationError, ConversationLifecycle,
     McpPreparationOutcome, PreparedCapabilityCandidate,
@@ -298,7 +296,7 @@ mod deadline_tests {
 #[cfg(all(test, feature = "mcp-fixture"))]
 mod tests {
     use super::*;
-    use crate::capabilities::{CapabilityCommitError, CapabilitySourceState};
+    use crate::capabilities::{CapabilityCommitError, CapabilitySourceState, ToolSourceId};
     use crate::skills::{SkillDiscovery, SkillDiscoveryConfig};
     use crate::tools::mcp::fixture::{FixtureServer, serve_if_fixture_mode};
     use crate::tools::mcp::test_sync::ConnectOwnershipPause;
@@ -310,12 +308,8 @@ mod tests {
     ) -> (CapabilityCoordinator, crate::runtime::identity::McpServerId) {
         super::super::mcp_race_tests::coordinator_with_fixture(dir, "startup", name)
     }
-    fn discovery(coordinator: &CapabilityCoordinator) -> crate::skills::SkillDiscoveryOutcome {
-        SkillDiscovery::with_config(
-            &coordinator.inner.workspace,
-            SkillDiscoveryConfig::default(),
-        )
-        .discover()
+    fn discovery() -> crate::skills::SkillDiscoveryOutcome {
+        SkillDiscovery::with_config(SkillDiscoveryConfig::default()).discover()
     }
 
     #[tokio::test(start_paused = true)]
@@ -336,11 +330,7 @@ mod tests {
         let deadline = McpStartupDeadline::default();
         let before = tokio::time::Instant::now();
         let candidate = coordinator
-            .prepare_startup_candidate(
-                discovery(&coordinator),
-                deadline.clone(),
-                &CancellationSignal::new(),
-            )
+            .prepare_startup_candidate(discovery(), deadline.clone(), &CancellationSignal::new())
             .await
             .unwrap();
         assert_eq!(tokio::time::Instant::now(), before);
@@ -385,11 +375,7 @@ mod tests {
         let worker = coordinator.clone();
         let mut preparing = tokio::spawn(async move {
             worker
-                .prepare_startup_candidate(
-                    discovery(&worker),
-                    worker_deadline,
-                    &CancellationSignal::new(),
-                )
+                .prepare_startup_candidate(discovery(), worker_deadline, &CancellationSignal::new())
                 .await
         });
         queued.recv().await.unwrap();
@@ -443,7 +429,7 @@ mod tests {
         let mut preparing = tokio::spawn(async move {
             worker
                 .prepare_startup_candidate(
-                    discovery(&worker),
+                    discovery(),
                     McpStartupDeadline::default(),
                     &CancellationSignal::new(),
                 )
@@ -479,11 +465,7 @@ mod tests {
         let worker = coordinator.clone();
         let mut preparing = tokio::spawn(async move {
             worker
-                .prepare_startup_candidate(
-                    discovery(&worker),
-                    worker_deadline,
-                    &CancellationSignal::new(),
-                )
+                .prepare_startup_candidate(discovery(), worker_deadline, &CancellationSignal::new())
                 .await
         });
         pause.wait_entered().await;
@@ -545,7 +527,7 @@ mod tests {
         let preparing = tokio::spawn(async move {
             worker
                 .prepare_startup_candidate(
-                    discovery(&worker),
+                    discovery(),
                     McpStartupDeadline::default(),
                     &CancellationSignal::new(),
                 )
@@ -579,7 +561,7 @@ mod tests {
         );
         let candidate = coordinator
             .prepare_startup_candidate(
-                discovery(&coordinator),
+                discovery(),
                 McpStartupDeadline::default(),
                 &CancellationSignal::new(),
             )
@@ -656,7 +638,7 @@ mod tests {
         }
         let candidate = coordinator
             .prepare_startup_candidate(
-                discovery(&coordinator),
+                discovery(),
                 McpStartupDeadline::default(),
                 &CancellationSignal::new(),
             )
@@ -687,7 +669,7 @@ mod tests {
         candidate.retire_uncommitted().await;
         let retry = coordinator
             .prepare_startup_candidate(
-                discovery(&coordinator),
+                discovery(),
                 McpStartupDeadline::default(),
                 &CancellationSignal::new(),
             )
@@ -716,11 +698,7 @@ mod tests {
         let first = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
         assert!(deadline.arm(first));
         let candidate = coordinator
-            .prepare_startup_candidate(
-                discovery(&coordinator),
-                deadline.clone(),
-                &CancellationSignal::new(),
-            )
+            .prepare_startup_candidate(discovery(), deadline.clone(), &CancellationSignal::new())
             .await
             .unwrap();
         coordinator.inner.mcp_invalidation.lock().advance(&id);
@@ -736,11 +714,7 @@ mod tests {
         tokio::time::pause();
         tokio::time::advance(std::time::Duration::from_secs(15)).await;
         let retry = coordinator
-            .prepare_startup_candidate(
-                discovery(&coordinator),
-                deadline.clone(),
-                &CancellationSignal::new(),
-            )
+            .prepare_startup_candidate(discovery(), deadline.clone(), &CancellationSignal::new())
             .await
             .unwrap();
         assert_eq!(deadline.deadline(), Some(first));

@@ -152,9 +152,17 @@ pub(super) async fn dispatch_runtime(
         Method::ModelCatalog { target: _ } => {
             read_domain(authority, "model_catalog.models".into()).await
         }
-        Method::ModelSet { target, config } => {
+        Method::ModelSet {
+            target,
+            config,
+            recover_unavailable_auxiliary,
+        } => {
             let (_, settings_revision) = manager
-                .set_model(&target.session_id, *config)
+                .set_model_with_recovery(
+                    &target.session_id,
+                    *config,
+                    recover_unavailable_auxiliary.unwrap_or_default(),
+                )
                 .await
                 .map_err(model_selection_error)?;
             Ok(MethodResult::ModelSet { settings_revision })
@@ -444,7 +452,28 @@ pub(super) async fn dispatch_runtime(
                 after_cursor,
             })
         }
-        Method::TurnStart { target, content } | Method::TurnSteer { target, content } => {
+        method @ (Method::TurnStart { .. }
+        | Method::TurnSteer { .. }
+        | Method::InboundQueue { .. }) => {
+            let (target, content, expected, queued, input_id) = match method {
+                Method::TurnStart {
+                    target,
+                    content,
+                    input_id,
+                } => (target, content, None, false, input_id),
+                Method::TurnSteer {
+                    target,
+                    content,
+                    expected_turn_id,
+                    input_id,
+                } => (target, content, Some(expected_turn_id), false, input_id),
+                Method::InboundQueue {
+                    target,
+                    content,
+                    input_id,
+                } => (target, content, None, true, input_id),
+                _ => unreachable!("input methods"),
+            };
             let receipts: Vec<_> = content
                 .iter()
                 .filter_map(|block| match block {
@@ -468,8 +497,38 @@ pub(super) async fn dispatch_runtime(
                     }
                 }
             }
-            native_result(authority.submit_session_inbound(canonical))
+            if queued {
+                return native_result(
+                    route
+                        .attachment
+                        .with_control_authority(|owner| owner.queue_inbound(canonical, &input_id)),
+                );
+            }
+            let admission = route
+                .attachment
+                .with_control_authority(|owner| {
+                    owner.admit_turn(canonical, expected.as_ref(), &input_id)
+                })
+                .map_err(client_error)?;
+            let turn_id =
+                tokio::time::timeout(std::time::Duration::from_secs(30), admission.attempt)
+                    .await
+                    .map_err(|_| domain(ErrorData::OutcomeUnknown))?
+                    .map_err(|_| domain(ErrorData::OutcomeUnknown))?;
+            Ok(MethodResult::TurnInputAccepted {
+                turn_id,
+                disposition: if admission.started {
+                    crate::app_server::protocol::TurnInputDisposition::Started
+                } else {
+                    crate::app_server::protocol::TurnInputDisposition::Steered
+                },
+                message_id: admission.accepted.message_id,
+                inbound_sequence: admission.accepted.inbound_sequence,
+            })
         }
+        Method::InboundSubmissionLookup { input_id, .. } => Ok(MethodResult::InboundSubmission {
+            acceptance: authority.lookup_input(&input_id).map_err(client_error)?,
+        }),
         Method::InboundEdit {
             target: _,
             expected,
@@ -485,17 +544,11 @@ pub(super) async fn dispatch_runtime(
         } => Ok(MethodResult::InboundMutation {
             outcome: authority.remove_pending(&expected).map_err(client_error)?,
         }),
-        Method::TurnCancel { target: _ } => native_result(authority.cancel_current_attempt()),
-        Method::InteractionRespond {
-            target: _,
-            interaction,
-            response,
-        } => native_result(authority.respond_interaction(&interaction, response).await),
-        Method::InteractionCancel {
-            target: _,
-            interaction,
-        } => native_result(authority.cancel_interaction(&interaction).await),
-
+        Method::TurnCancel { turn_id, .. } => native_result(
+            route
+                .attachment
+                .with_control_authority(|owner| owner.interrupt_turn(&turn_id)),
+        ),
         // `Family::of` routes only runtime operations here.
         _ => Err(domain(ErrorData::OperationFailed)),
     }

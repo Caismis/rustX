@@ -1,5 +1,9 @@
 # Architecture
 
+## App Server environment services (#533)
+
+The v78 App Server routes independent argv/PTY execution to the existing native Bash supervision kernel, filesystem operations to instance-granted descriptor-relative native roots, and management to the existing source/catalog/Skills/MCP owners. Connection-owned processes and watches are separate from server-owned Agent work. No Agent Attempt, canonical journal, configuration database or second supervisor is introduced. See [the environment and management contract](app-server/environment-services.md) and [whole-plan delivery evidence](issue-533/README.md).
+
 The current Web conversation/composer lifecycle and subscription boundaries are
 specified in [WEB-16 resident conversation ownership](issue-406/conversation-surface.md).
 Terminal Attempt journal facts have ordered native transcript references;
@@ -236,7 +240,7 @@ to another owner. The default estimator caches exact model-visible JSON byte
 lengths and rounds the complete aggregate once. Arbitrary estimators retain their
 complete-input contract; additivity is never assumed.
 
-The current SQLite development schema is 86, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Version 83 added original Workflow node input/output Journal facts and their data-node kinds; version 84 requires exact Workflow run/instance indexes so terminal and missing-I/O reads do not scan unrelated history. Version 85 adds indexed compaction progress and chunk causality for Summary execution dependencies. Older schemas are refused without migration.
+The current SQLite development schema is 87, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Version 83 added original Workflow node input/output Journal facts and their data-node kinds; version 84 requires exact Workflow run/instance indexes so terminal and missing-I/O reads do not scan unrelated history. Version 85 adds indexed compaction progress and chunk causality for Summary execution dependencies. Older schemas are refused without migration.
 
 Version 78 adds the `WorkflowNodeWaiting` Journal vocabulary: native node identity,
 wait reason and an optional reserved Auxiliary Call identity. A confirmed append
@@ -757,7 +761,7 @@ supervision travel together. Draft preparation resolves only selected configured
 MCP demand from Root and enabled Workflows. It creates no durable Session, Python
 or Skill environment, provider request, upload receipt or executable capability.
 
-An actual Web Send carries its draft target in `session/create`. Synchronous
+An actual Web Send carries its draft target in `thread/start`. Synchronous
 native connection admission records the monotonic receipt and seals one exact
 selection before any asynchronous configuration, capacity, create or attach wait.
 Creation acknowledges the durable identity independently of runtime readiness.
@@ -835,7 +839,7 @@ does not reconcile history or move bootstrap/replay ownership.
 
 Fresh submission authorization must itself remain reachable while cold
 attachments wait. Native and shared Web/TUI method policy give `session/read`,
-`session/settings` and `session/create` a two-position metadata lane. Reads are
+`session/settings` and `thread/start` a two-position metadata lane. Reads are
 inert catalog operations; creation authors durable identity without preparing
 MCP. Attachment lifecycle waits have 32 positions, matching the existing external
 attachment bound. A thirty-third local attach is refused before ID allocation or
@@ -859,13 +863,17 @@ Failure or cancellation leaves those local files with that draft for explicit
 handling. Ordinary explicit editor replacement still uses the existing single
 editor/binding rule; returning to a former Session does not restore discarded text.
 
-Once that local Session target is selected, dismissing its sidebar or opening
-Settings retires only that gesture's viewport-close interest. Its exact pending
-preparation still owns promotion to the executable route after Attach; otherwise
-a narrow-screen user could send successfully and remain trapped in a draft.
+Once that local Session target is selected, dismissing its sidebar retires only
+that gesture's viewport-close interest. Its exact pending preparation still owns
+promotion to the executable Home route after Attach.
 The dismissed Pending identity prevents that completion from closing a newly
-reopened drawer. A newer target, explicit cancellation or authority replacement
-still retires the old publication. History/Fork preparation that has not selected
+reopened drawer. Opening another primary page retires disposable preparation,
+while retaining Home's local Session target, editor/input binding and native
+flight. A late Attach cannot replace that primary page. Returning Home validates
+fresh authorization and adopts current attachment evidence, or observes the
+original lifecycle flight without another Open. A newer conversation target,
+explicit cancellation or authority replacement still retires old publication.
+History/Fork preparation that has not selected
 its target retains its independent cancellation rules. Promotion alone sends no
 input, adopts no authored configuration and invokes no model.
 
@@ -2422,11 +2430,10 @@ Tool batch, child and Workflow retain their captured immutable configuration.
 Session bindings survive runtime unload/load within the process. See
 [configuration application](configuration.md#save-and-automatic-application).
 
-The two Skill roots are `~/rustx/.agents/skills` and
-`<workspace>/.agents/skills`. Whole-package shadowing occurs before validation.
-Selection is prompt visibility (`"all"`, exact names, or `[]`), not filesystem
-access control. Guidance prints absolute root paths and selected names and
-descriptions, never every absolute package path. Bodies remain progressively read.
+Skills use the ordered rustX collections described in
+[Skill discovery](skill-discovery.md). The first valid name wins. The prompt
+advertises selected names, descriptions, and instruction paths. Instructions
+are read through an available file-reading tool when a task matches.
 
 MCP and Python discovery is inert. Root-selected demand prepares at composition;
 child demand prepares at child admission. Workflow demand is owned by Workflow
@@ -3284,7 +3291,7 @@ M3 Agent Loop
 #### Provider, Model and selection ownership
 
 Provider and Model are independently named atomic domains in `rustx.toml`.
-A Model names its Provider and declares protocol, limits, capabilities,
+A Provider declares its shared protocol. A Model names its Provider and declares limits, capabilities,
 compatibility and opaque native request defaults. Identity spelling infers none
 of those semantics. A Workspace replacement discards the entire lower object,
 including credentials. Root model selection is another atomic semantic unit.
@@ -3809,8 +3816,13 @@ adapter-local terminal buffering exists for Anthropic text or thinking.
   items including opaque encrypted reasoning). Anthropic thinking signatures
   and `redacted_thinking.data` are preserved as rustX-owned opaque JSON on
   the reasoning block and replayed verbatim; canonical reasoning text alone
-  is never sufficient to reconstruct a provider reasoning item (OpenAI
-  Responses fails with `Unsupported` instead of fabricating one).
+  is never sufficient to reconstruct a provider reasoning item. For Responses
+  history without a native replay unit (such as a prior Chat Completions turn
+  or a stored response summary), readable reasoning is ordinary assistant
+  `output_text`, following pi's cross-model conversion. Opaque foreign state
+  and inactive stored-response pointers are omitted from the wire. Complete
+  native stateless output is still validated and replayed verbatim; malformed
+  or edited native replay units remain `Unsupported`.
 - Usage is normalized without inventing counts: Anthropic effective input is
   `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`
   from the latest cumulative snapshot (never summed over time), reported
@@ -4739,14 +4751,18 @@ unknown outcome rather than pretending otherwise.
 ### Layer 5: Agent resources
 
 `.agents` defines Skills, named Agents, Workflows, Managed Python packages and
-MCP servers at exactly User and Workspace roots. Each same-name Workspace
-identity replaces one whole User resource before validation. Invalid winners
-stay invalid; they cannot expose lower definitions through fallback.
+MCP servers at exactly User and Workspace roots. For resources other than
+Skills, each same-name Workspace identity replaces one whole User resource
+before validation. Invalid winners stay invalid; they cannot expose lower
+definitions through fallback. Skills select the first valid definition in
+Workspace-then-User discovery order and deduplicate instruction-file aliases;
+their file and directory symlinks may resolve outside either collection.
 
 [CFG3 configuration](configuration.md) specifies paths, selection, bounded
 ordered diagnostics, native authoring, semantic overlay and demand. Resource
-existence is independent of Root authority. Skill prompts expose metadata and
-absolute roots for progressive disclosure. Python and MCP lifecycle owners
+existence is independent of Root authority. Skill prompts expose names,
+descriptions and concrete absolute instruction locations for progressive
+disclosure. Python and MCP lifecycle owners
 materialize only admitted finite demand.
 
 
@@ -4896,7 +4912,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v73
+       App Server protocol v78
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4912,19 +4928,19 @@ JSONL and WebSocket in #36 bind App Server, including its standalone process ent
 point. Neither binding owns domain semantics. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
-The current internal envelope is Runtime Client v84. Full Model catalog views
+The current internal envelope is Runtime Client v85. Full Model catalog views
 carry optional Model-owned reasoning Profile order; selection ordinals and frozen
 invocation snapshots are unchanged. It also distinguishes incomplete historical
 Workflow nodes from proven current activity. It retains Workflow
 data-node observation kinds and the removal of speculative cached-Connecting
-source state; App Server v73 records first-submission intent
+source state; App Server v78 records first-submission intent
 before MCP-dependent loading and attachment. Successful adopted-source runtime
 readiness publishes under native admission ownership, independently of authored
 configuration adoption.
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v73, the only external product control protocol, and
+console speak App Server v78, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never
@@ -7297,6 +7313,13 @@ includes connection generation, exact Session/attachment target, Agent and child
 Conversation, activation, state and observation revision. Both the transport's
 existing pre-send admission proof and response publication verify this identity.
 
+A visible Workflow-child sidebar registers an independent observation lease
+with this same meter inventory after validating its finite native header. It
+does not open or select a main-chat child view, and the child stays one-shot and
+read-only. Hiding or unmounting the sidebar releases the lease; attachment or
+scope replacement invalidates it. This uses the existing meter concurrency and
+retirement accounting, including for late replies.
+
 At most two current-scope reads run. A round-robin cursor serves all valid
 inventory demands; selected unread demand can take at most every other admission,
 so selection and a busy Agent cannot starve independent Agents. Presentation-only
@@ -7462,7 +7485,7 @@ See [Model contracts and examples](workflow-programs.md#direct-model-nodes-issue
 
 ## Scheduler product projection
 
-App Server v73 provides a bounded, read-only task catalog over the existing
+App Server v78 provides a bounded, read-only task catalog over the existing
 Session catalog and exact-node schedule readers. Keyset traversal, instruction
 search and unavailable-source reporting stay native; the browser does not walk
 Session trees or load runtimes to discover tasks. A coalesced native watch hint
@@ -7525,16 +7548,15 @@ and pending authority. No deletion or successful cleanup follows failed proof.
 
 ## Local resource byte policies (Issue #527)
 
-Skill discovery streams complete package bytes, retaining only `SKILL.md`
-frontmatter for standard metadata/dependency validation. Supporting assets and
-Markdown bodies have no fixed byte admission ceiling. Native Read remains the
-progressive-disclosure path. The v2 Skill digest length-frames raw relative OS
-path bytes, lengths and verified full-file SHA-256 digests, preserving binary
-and non-UTF-8 filename identity without timestamps or host locations. Two
-matching complete reads, metadata on the opened regular descriptor and the
-reopened anchored name detect changed reads.
-This is content evidence for those reads, not an atomic snapshot of a mutable
-external directory.
+Skill discovery recursively scans the Workspace and User collections, following
+directory and instruction file symlinks. It reads only instruction frontmatter
+with cancellable 4 KiB read-ahead and two matching anchored prefix reads. Bodies
+and supporting assets are read on demand. The definition digest hashes normalized frontmatter under
+`rustx-skill-definition-v1`; source/location bindings are compared separately.
+Native Read remains the progressive-disclosure path for current runtime bytes.
+Revision/rescan reuse definition discovery, while children inherit frozen
+metadata and actual host locations without copying resources. See
+[Skill discovery](skill-discovery.md) for the four-path structural evidence.
 
 Managed Python captures use an anonymous file with per-file offsets rather than
 retaining package bodies. The source object is immutable outside its owner;
@@ -7544,8 +7566,8 @@ verifies the whole staged state again and atomically renames it into the existin
 Python store. The build owner awaits copying, subprocesses, verification and
 cleanup before publishing its terminal result. The store retains failed staging
 cleanup and retries it at its next preparation; anonymous capture has kernel
-cleanup ownership. Child Skill copies likewise remain private until their frozen
-digest is verified, with the existing child runtime lifecycle owning any residue.
+cleanup ownership. Skill resources retain ordinary live-file Tool semantics;
+the child lifecycle owns selected dependency preparation and physical settlement.
 
 The Workflow owner admits serialized source bytes and normalized JSON document
 bytes independently at 16 MiB, inclusive. Its executable definition no longer has
@@ -7553,7 +7575,7 @@ a smaller 512 KiB byte ceiling. Graph, value, presentation and run protections
 remain separate. Counting/bounded serialization stops before oversized encoded
 buffers grow; an expanded-JSON-footprint preflight protects typed YAML allocation.
 
-App Server v73 carries Workflow document references, not inline documents.
+App Server v78 carries Workflow document references, not inline documents.
 Connection-owned anonymous scratch receives/serves 64 KiB chunks and verifies
 length, SHA-256 and the native document before use. Content uses the same
 lossless numeric/unique-field codec; a 32 MiB encoded allowance preserves the
@@ -7588,3 +7610,60 @@ rescanning unrelated package bytes. Process drain cancels the shared native
 resource-I/O authority; child and Python preparation retain their existing
 physical settlement authorities. See [the limit inventory](resource-limits.md)
 for exact ownership, costs and recovery paths.
+
+### Web primary navigation shell
+
+The Web ShellNavigationMachine owns the only committed primary route: Home
+(conversation/draft), Workflows, Scheduled Tasks or Settings. It also retains the
+last Home destination and validates Product Host authorization and Session
+lifecycle evidence before returning, without another native Open or model request.
+A permanent presentation rail reflects only that committed route. The Home
+sidebar and preview/workbench occupy conditional shell regions and retain their
+presentation state across primary pages.
+
+SettingsNavigationMachine owns only Settings-internal target, permitted section,
+detail, owner lookup and receipt inspection. Settings is a page, with no separate
+modal-open authority. Configuration transaction actors remain under their existing
+native-authority-scoped ConfigurationSystem. Workflow external navigation is
+correlated by Shell and guarded by workflowSurfaceMachine's dirty/unsettled edit
+confirmation. Replaced or cancelled leave intents cannot publish. These are Web
+presentation boundaries; Session lifecycle, native execution, authorization,
+configuration CAS, settlement and transport ownership remain unchanged. See
+[`web-console/SHELL-ARCHITECTURE.md`](../web-console/SHELL-ARCHITECTURE.md).
+
+## Shared App Server control and application Host Tools
+
+The [shared-control contract and pinned owner/test matrix](app-server/shared-control.md)
+map Thread directly to native Conversation lineage plus Session/node metadata,
+Turn to native Attempt, and Items to existing transcript/publication facts. Native
+SessionController, SessionRuntimeManager, coordinator, mailbox and Tool Runtime
+retain durable identity, retirement, admission, cancellation and settlement.
+
+Transport admission owns startup-loaded capability or HS256 bearer validation.
+Every ordinary authenticated client has equal API eligibility; there is no
+controller lease, provider lease, client role, method scope or Thread ACL.
+Connection-owned attachment/subscription and resource fences remain independent.
+The private Product Host surface keeps its existing registered-root authority.
+
+An App Server callback broker holds at most 128 ephemeral pending requests and a
+256-message queue per client. Native Interaction lifecycle facts and Tool Runtime
+Host dispatch feed it. A native-valid first correlated reply/error atomically
+claims a request; physical outbound acceptance rechecks cancellation, subscription
+and connection fences. Native owners validate domain replies, bound/spill outputs,
+commit canonical results and settle execution. No wire, HTTP, JWT or database type
+enters a kernel contract. No alternate execution/history store is introduced.
+
+Host declarations belong to native node metadata and freeze with effective root
+capabilities. Effective identities include namespace/name, with collision checks
+against native Builtin/MCP/Python bindings. Explicit forks preserve declarations;
+children do not implicitly inherit Host capabilities. Restart recovers uncertain
+external work through native recovery without automatically replaying it.
+
+Thread runtime status is a disposable App Server projection of the native
+SessionRuntimeManager residency slots, ConversationRuntime execution/physical
+tails, native human Interaction coordinators and fault/recovery owners. Catalog
+metadata and journals gain no execution flags. Status watches retain scalars and
+weak owners; addressed reads capture bounded native facts outside the residency
+registry lock, then validate the exact resident allocation before publication.
+A per-process revision orders snapshots and lightweight notifications without
+transcript attachment. See [status derivation and publication](app-server/shared-control.md#thread-runtime-status-v78-amendment).

@@ -70,13 +70,12 @@ test('T1-13 details resize handle drags, steps by key, resets on double-click an
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test('T1-08/09/15 folded calls, independent background, search and truncated failed Request Diff', async ({ page }) => {
+test('T1-08/09/15 folded calls, search and truncated failed Request Diff', async ({ page }) => {
   await page.goto(`${fixtureOrigin}/test/fixtures/trajectory.html`);
   const ledger = page.getByRole('table', { name: 'Trace ledger' });
   await page.getByRole('toolbar', { name: 'Trajectory toolbar' }).getByRole('button', { name: 'Collapse calls' }).click();
   await expect(ledger.locator('[data-display-type="CallsSummary"]')).toHaveText('…1 tool call · bash');
   await expect(ledger.locator('[data-display-type="RecordRow"][data-owner="trace:5"]')).toHaveCount(0);
-  await expect(ledger.locator('[data-owner="trace:6"]')).toBeVisible();
   await expectStableScreenshot(page, 'trajectory-calls.png');
   await page.getByRole('searchbox', { name: 'Search trajectory' }).fill('Missing field');
   await expect(ledger.locator('[data-display-type="RecordRow"][data-owner="trace:5"]')).toBeVisible();

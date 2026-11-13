@@ -16,6 +16,7 @@ use super::settings::{EffectiveConfiguration, SourceDocumentView, redact};
 use super::units::copy_unit_provenance;
 use super::{IndependentPolicy, Origin, ProspectiveSessionConfig};
 use crate::model::invocation::ModelBindingRegistry;
+use crate::runtime::capability_inspection::{ResourceDiagnosticSubject, ResourceFamily};
 use crate::runtime::conversation_runtime::ConversationRuntime;
 use crate::runtime::resources::{ContextBinding, RuntimeConfiguration};
 
@@ -64,7 +65,9 @@ impl ProspectiveSessionConfig {
         ContextBinding {
             configuration: self.runtime_configuration(models),
             project_context_files: self.project_context_files.clone(),
-            root_agent_project_files: self.root_agent_project_files.clone(),
+            skills: Arc::new(crate::skills::SkillSnapshot::from_discovery(
+                self.skill_discovery.clone(),
+            )),
         }
     }
 
@@ -80,10 +83,6 @@ impl ProspectiveSessionConfig {
     ) -> ContextBinding {
         let mut configuration = base.clone();
         let config = Arc::make_mut(&mut configuration.config);
-        config
-            .agent
-            .instructions
-            .clone_from(&self.config.agent.instructions);
         config
             .agent
             .agents_md
@@ -102,16 +101,51 @@ impl ProspectiveSessionConfig {
             .effective
             .agent
             .get_or_insert_with(Default::default);
-        context.instructions = agent.and_then(|agent| agent.instructions.clone());
         context.agents_md = agent.and_then(|agent| agent.agents_md.clone());
         context.model = agent.and_then(|agent| agent.model.clone());
         authored.effective.models.clone_from(&self.effective.models);
         authored.effective.providers = redact(self.effective.clone()).providers;
         authored.source_revisions.clone_from(&self.source_revisions);
+        // The inert Skill inventory follows the same safe, no-preparation
+        // publication as context. Other resource families retain their owners.
+        configuration
+            .resource_definitions
+            .retain(|entry| entry.family != ResourceFamily::Skill);
+        configuration.resource_definitions.extend(
+            self.inspection
+                .definitions
+                .iter()
+                .filter(|entry| entry.family == ResourceFamily::Skill)
+                .cloned(),
+        );
+        let skill_diagnostic =
+            |entry: &crate::runtime::capability_inspection::ResourceDiagnostic| {
+                matches!(
+                    entry.subject,
+                    ResourceDiagnosticSubject::Resource {
+                        family: ResourceFamily::Skill,
+                        ..
+                    } | ResourceDiagnosticSubject::Collection {
+                        family: ResourceFamily::Skill
+                    }
+                )
+            };
+        configuration
+            .resource_diagnostics
+            .retain(|entry| !skill_diagnostic(entry));
+        configuration.resource_diagnostics.extend(
+            self.inspection
+                .resource_diagnostics
+                .iter()
+                .filter(|entry| skill_diagnostic(entry))
+                .cloned(),
+        );
         ContextBinding {
             configuration,
             project_context_files: self.project_context_files.clone(),
-            root_agent_project_files: self.root_agent_project_files.clone(),
+            skills: Arc::new(crate::skills::SkillSnapshot::from_discovery(
+                self.skill_discovery.clone(),
+            )),
         }
     }
 

@@ -20,7 +20,7 @@ async function fixture() {
     return { type: 'node', node: { id: request.params.node_id, ordinal: '1', conversation_id: request.params.node_id === origin.source_node ? source.conversation_id : server.snapshots.get(request.params.session_id)!.conversation_id, origin: request.params.session_id === 'A' ? origin : { type: 'new' } } };
   });
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   const ui = await act(async () => render(<App client={server.client} workspaceHost={server.workspaceHost}/>));
   await waitFor(() => expect((ui.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).disabled).toBe(false));
   const editor = () => ui.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
@@ -30,7 +30,7 @@ async function fixture() {
   const intake = server.client.attachmentIntakes.lookup(key)!;
   return { ui, editor, intake, key, origin, target: server.client.target('A'), text: editor().value };
 }
-const mutations = (from: number) => server.requests.slice(from).filter(({ request }) => ['session/attach', 'session/detach', 'session/switchNode', 'turn/start', 'turn/steer', 'session/uploadPrepare', 'session/checkpoint'].includes(request.method));
+const mutations = (from: number) => server.requests.slice(from).filter(({ request }) => ['thread/resume', 'session/detach', 'session/switchNode', 'inbound/queue', 'turn/steer', 'session/uploadPrepare', 'session/checkpoint'].includes(request.method));
 it('restored native upload blocks survive temporary unmount only under their original receipt authority', () => {
   const draftOwner = new ComposerDraft();
   const props = { draftOwner, binding: 'same-editor', disabled: false, busy: false, active: false, onSend: async () => false, onUpload: async () => [], onCancel: () => {} };
@@ -55,19 +55,19 @@ it('draft identity survives retirement of a completed submission while a differe
 });
 
 it('late native acknowledgement from A cannot change a deliberately replaced new Conversation editor', async () => {
-  const f = await fixture(); server.held.add('turn/start');
-  await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' })); const sent = await server.waitFor('turn/start', 1);
+  const f = await fixture(); server.held.add('inbound/queue');
+  await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' })); const sent = await server.waitFor('inbound/queue', 1);
   await act(async () => fireEvent.click(f.ui.getAllByRole('button', { name: 'New Conversation' })[0]));
   fireEvent.change(f.editor(), { target: { value: 'Independent new Conversation' } });
   await act(async () => server.reply(sent));
-  expect(f.editor().value).toBe('Independent new Conversation'); expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  expect(f.editor().value).toBe('Independent new Conversation'); expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
 });
 
 it('a late native reply after terminal uncertain First Submission Discard cannot alter its replacement editor', async () => {
   const f = await fixture(), file = new File(['first'], 'first.txt');
   await act(async () => f.intake.add([{ file }], server.client.getSnapshot().capabilities!.upload_policy));
-  server.held.add('turn/start'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
-  const sent = await server.waitFor('turn/start', 1);
+  server.held.add('inbound/queue'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
+  const sent = await server.waitFor('inbound/queue', 1);
   expect(firstSubmissions(server.client).draft('0')?.phase).toBe('admitting');
   // A settled uncertain response permits Discard; the in-flight phase did not.
   expect(f.ui.queryByRole('button', { name: /Discard/i })).toBeNull();
@@ -81,7 +81,7 @@ it('a late native reply after terminal uncertain First Submission Discard cannot
   expect(firstSubmissions(server.client).draft('0')).toBe(discarded);
   expect(f.editor().value).toBe('Replacement E2'); expect(f.intake.snapshot()).toEqual([]);
   expect(f.ui.container.querySelector('[data-editor-incarnation]')!.getAttribute('data-editor-incarnation')).toBe(incarnation);
-  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
   expect(server.requests.filter(row => row.request.method === 'session/uploadPrepare')).toHaveLength(1);
   expect(server.client.target('A')).toBe(f.target);
 });
@@ -102,8 +102,8 @@ it('reselecting the already committed Session and unrelated publication preserve
 });
 it.each(['reattach', 'switch'] as const)('known C1 acceptance after explicit lifecycle %s records the fact under exact canonical identity', async kind => {
   const f = await fixture(), submit = vi.spyOn(ComposerDraft.prototype, 'submit');
-  server.held.add('turn/start'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
-  const sent = await server.waitFor('turn/start', 1), reply = server.commit(sent), ticket = submit.mock.results[0].value!;
+  server.held.add('inbound/queue'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
+  const sent = await server.waitFor('inbound/queue', 1), reply = server.commit(sent), ticket = submit.mock.results[0].value!;
   const card = f.editor().closest('[data-editor-incarnation]')!, incarnation = card.getAttribute('data-editor-incarnation'), revision = card.getAttribute('data-editor-revision');
   await act(async () => {
     if (kind === 'switch') { server.nodeSnapshots.set('C2-node', snapshot('C2')); await server.client.switchNode('A', 'C2-node'); await server.client.attach('A', 'C2-node'); }
@@ -114,13 +114,13 @@ it.each(['reattach', 'switch'] as const)('known C1 acceptance after explicit lif
   await act(async () => { server.socket.deliver(reply); await server.client.request({ method: 'server/info', params: {} }, 'server_info'); });
   expect(ticket.outcome).toBe('accepted'); expect(ticket.conversation?.conversation_id).toBe(f.target.conversation_id);
   expect(f.editor().value).toBe(kind === 'switch' ? f.text : ''); expect(server.client.target('A')).toBe(target); expect(mutations(before)).toEqual([]);
-  expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
 });
 
 it('connection authority replacement leaves a transmitted input uncertain and ignores its old acknowledgement', async () => {
   const f = await fixture(), submit = vi.spyOn(ComposerDraft.prototype, 'submit');
-  server.held.add('turn/start'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
-  const sent = await server.waitFor('turn/start', 1), oldSocket = server.socket, reply = server.commit(sent), ticket = submit.mock.results[0].value!;
+  server.held.add('inbound/queue'); await act(async () => fireEvent.keyDown(f.editor(), { key: 'Enter' }));
+  const sent = await server.waitFor('inbound/queue', 1), oldSocket = server.socket, reply = server.commit(sent), ticket = submit.mock.results[0].value!;
   await act(async () => { await server.client.disconnect(); server.authorityId = 'replacement-native-authority'; await server.connect(); await server.client.attach('A'); });
   await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Open Session A' })));
   fireEvent.change(f.editor(), { target: { value: 'Replacement authority draft' } });
@@ -129,5 +129,43 @@ it('connection authority replacement leaves a transmitted input uncertain and ig
   await act(async () => { oldSocket.deliver(reply); await server.client.request({ method: 'server/info', params: {} }, 'server_info'); });
   expect(ticket.outcome).toBe('uncertain'); expect(ticket.acceptance).toBeUndefined();
   expect(f.editor().value).toBe('Replacement authority draft'); expect(server.client.target('A')).toBe(target);
-  expect(mutations(before)).toEqual([]); expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  expect(mutations(before)).toEqual([]); expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
+});
+
+it.each([false,true])('repaired acceptance settles the original Composer and First Submission (attachment=%s)',async attachment=>{
+  const f=await fixture(),submit=vi.spyOn(ComposerDraft.prototype,'submit');
+  if(attachment)await act(async()=>f.intake.add([{file:new File(['original'],'original.txt')}],server.client.getSnapshot().capabilities!.upload_policy));
+  server.held.add('inbound/queue');
+  await act(async()=>fireEvent.keyDown(f.editor(),{key:'Enter'}));
+  const sent=await server.waitFor('inbound/queue',1),ticket=submit.mock.results[0].value!;
+  server.commit(sent);
+  await act(async()=>{await server.client.disconnect();await server.connect();await server.client.attach('A');});
+  await waitFor(()=>expect(ticket.outcome).toBe('accepted'));
+  expect(ticket.acceptance?.message_id).toBe('accepted-user');
+  expect(server.client.getSnapshot().uncertain).toEqual([]);
+  expect(f.editor().value).toBe('');
+  if(attachment)expect(firstSubmissions(server.client).draft('0')?.phase).toBe('admitted');
+  expect(server.requests.filter(row=>row.request.method==='inbound/queue')).toHaveLength(1);
+  expect(server.requests.filter(row=>row.request.method==='inbound/submissionLookup')).toHaveLength(1);
+});
+
+it('a repaired receipt preserves a later draft revision',async()=>{
+  const f=await fixture(),submit=vi.spyOn(ComposerDraft.prototype,'submit');
+  server.held.add('inbound/queue');await act(async()=>fireEvent.keyDown(f.editor(),{key:'Enter'}));
+  const sent=await server.waitFor('inbound/queue',1),ticket=submit.mock.results[0].value!;server.commit(sent);
+  fireEvent.change(f.editor(),{target:{value:'Later independent text'}});
+  await act(async()=>{await server.client.disconnect();await server.connect();await server.client.attach('A');});
+  await waitFor(()=>expect(ticket.outcome).toBe('accepted'));
+  expect(f.editor().value).toBe('Later independent text');
+});
+
+it('an explicit native unknown acceptance retains the original input and acknowledgement owner',async()=>{
+ const f=await fixture(),submit=vi.spyOn(ComposerDraft.prototype,'submit');
+ server.held.add('inbound/queue');await act(async()=>fireEvent.keyDown(f.editor(),{key:'Enter'}));
+ const sent=await server.waitFor('inbound/queue',1),ticket=submit.mock.results[0].value!;server.commit(sent);
+ await act(async()=>server.socket.deliver({jsonrpc:'2.0',id:sent.id,error:{code:-32000,message:'Acceptance unknown',data:{kind:'outcome_unknown'}}}));
+ expect(ticket.outcome).toBe('uncertain');expect(server.client.getSnapshot().uncertain).toHaveLength(1);
+ await act(async()=>{await server.client.disconnect();await server.connect();await server.client.attach('A');});
+ await waitFor(()=>expect(ticket.outcome).toBe('accepted'));expect(f.editor().value).toBe('');
+ expect(server.requests.filter(row=>row.request.method==='inbound/queue')).toHaveLength(1);
 });

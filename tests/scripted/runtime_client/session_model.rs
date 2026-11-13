@@ -1017,7 +1017,7 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
 /// profile.
 #[test]
 fn model_profiles_resolve_to_their_exact_complete_presets() {
-    let reasoner = FixtureModel::text("p/reasoner", ModelProtocol::AnthropicMessages)
+    let reasoner = FixtureModel::text("anthropic/reasoner", ModelProtocol::AnthropicMessages)
         .with_max_output_tokens(64_000)
         .with_profiles(
             "on",
@@ -1063,7 +1063,7 @@ fn model_profiles_resolve_to_their_exact_complete_presets() {
     // The declared default is selected when the selection names none; without
     // a profile budget the Model hard maximum is the default.
     let default = registry
-        .resolve(&selection("p/reasoner", None))
+        .resolve(&selection("anthropic/reasoner", None))
         .expect("default profile resolves");
     assert_eq!(default.profile(), Some(&ModelProfileId::new("on")));
     assert_eq!(default.max_output_tokens(), 64_000);
@@ -1079,7 +1079,7 @@ fn model_profiles_resolve_to_their_exact_complete_presets() {
     // Selecting `off` yields exactly the off preset — a completely different
     // provider shape, not a remapped enum value — and its budget default.
     let off = registry
-        .resolve(&selection("p/reasoner", Some("off")))
+        .resolve(&selection("anthropic/reasoner", Some("off")))
         .expect("off profile resolves");
     assert_eq!(off.max_output_tokens(), 4_096);
     assert_eq!(
@@ -1090,13 +1090,13 @@ fn model_profiles_resolve_to_their_exact_complete_presets() {
     // A model-specific profile name carries no runtime meaning, and a profile
     // never inherits a key another profile declares.
     let named = registry
-        .resolve(&selection("p/reasoner", Some("thinking-32k")))
+        .resolve(&selection("anthropic/reasoner", Some("thinking-32k")))
         .expect("named profile resolves");
     assert_eq!(named.max_output_tokens(), 48_000);
     assert!(!named.request_params().contains_key("temperature"));
 
     // An explicit budget replaces the profile default but never the hard cap.
-    let mut explicit = selection("p/reasoner", Some("off"));
+    let mut explicit = selection("anthropic/reasoner", Some("off"));
     explicit.max_output_tokens = Some(60_000);
     assert_eq!(
         registry
@@ -1141,7 +1141,7 @@ fn model_profiles_resolve_to_their_exact_complete_presets() {
     // and no profile is ever synthesized.
     assert!(
         matches!(
-            registry.resolve(&selection("p/reasoner", Some("medium"))),
+            registry.resolve(&selection("anthropic/reasoner", Some("medium"))),
             Err(rustx::model::ModelInvocationError::UnknownProfile { .. })
         ),
         "off/low/medium/high are never synthesized"

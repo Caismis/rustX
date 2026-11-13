@@ -45,6 +45,7 @@ fn complete_turn(store: &SqliteConversationStore, conversation: &ConversationId,
         Vec::new(),
         crate::runtime::RuntimeResourceRevision::new(1),
         ModelInvocationConfig {
+            replay_binding: Some("test-binding".into()),
             model: "historical/model".into(),
             protocol: ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 128,

@@ -369,11 +369,11 @@ fn deletion_live_inspection_blocks_and_stale_marker_is_reusable() {
 }
 
 #[test]
+#[ignore = "fixture subprocess, invoked by its parent test"]
 fn deletion_process_writer_gate() {
     use std::io::{Read, Write};
-    let Some(root) = std::env::var_os("RUSTX_254_OWNERSHIP_ROOT") else {
-        return;
-    };
+    let root = std::env::var_os("RUSTX_254_OWNERSHIP_ROOT")
+        .expect("fixture parent must provide its environment");
     let root = std::path::Path::new(&root);
     let _authority = crate::runtime::local_storage::ProductController::acquire(root).unwrap();
     let catalog = SessionCatalog::create(root, &state()).unwrap();
@@ -421,6 +421,7 @@ fn deletion_cross_process_parent_death_preserves_nested_ownership() {
         .args([
             "--exact",
             "local_runtime::session::tests::deletion_tests::deletion_process_writer_gate",
+            "--ignored",
             "--nocapture",
             "--format=terse",
         ])
@@ -523,6 +524,7 @@ fn deletion_hot_journal_reads_are_nonmutating_and_startup_recovers_owned_stores(
         .args([
             "--exact",
             "local_runtime::session::tests::deletion_tests::deletion_process_writer_gate",
+            "--ignored",
             "--nocapture",
             "--format=terse",
         ])
@@ -935,12 +937,12 @@ fn deletion_detached_private_stores_and_writers_retain_target_access() {
 }
 
 #[test]
+#[ignore = "fixture subprocess, invoked by its parent test"]
 fn deletion_target_process_gate() {
     use crate::runtime::local_storage::{ConversationAccess, ProductRoot};
     use std::io::{Read, Write};
-    let Some(root) = std::env::var_os("RUSTX_260_TARGET_ROOT") else {
-        return;
-    };
+    let root = std::env::var_os("RUSTX_260_TARGET_ROOT")
+        .expect("fixture parent must provide its environment");
     let root = ProductRoot::existing(std::path::Path::new(&root)).unwrap();
     let _owner: Box<dyn std::any::Any> = if let Ok(id) = std::env::var("RUSTX_260_TARGET_CHILD") {
         let database = crate::runtime::subagent::child_conversation_store_path(
@@ -996,6 +998,7 @@ fn deletion_cross_process_target_child_unrelated_child_and_destructive_conflict(
             .args([
                 "--exact",
                 "local_runtime::session::tests::deletion_tests::deletion_target_process_gate",
+                "--ignored",
                 "--nocapture",
                 "--format=terse",
             ])

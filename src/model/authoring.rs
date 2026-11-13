@@ -25,6 +25,17 @@ fn version() -> u32 {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {
+    /// Display label. The Provider's map key remains its identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 100))]
+    pub display_name: Option<String>,
+    /// Hide this entry from new model choices. Existing selections stay resolvable.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+    /// Presentation-only `LobeHub` icon slug. Never participates in model resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    pub protocol: ModelProtocol,
     pub base_url: String,
     /// A literal credential or an explicit $`ENV_VAR` reference. Never inferred.
     pub api_key: CredentialSource,
@@ -34,9 +45,11 @@ pub struct Provider {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
+    /// Hide this entry from new model choices. Existing selections stay resolvable.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     pub provider: String,
     pub id: String,
-    pub protocol: ModelProtocol,
     pub context_window: u64,
     /// The hard maximum output budget of every invocation of this Model.
     pub max_output_tokens: u32,
@@ -105,6 +118,7 @@ impl From<Catalog> for ModelCatalogDocument {
                     (
                         id,
                         ProviderDocument {
+                            protocol: p.protocol,
                             base_url: p.base_url,
                             api_key: p.api_key,
                         },
@@ -124,7 +138,6 @@ impl From<Model> for ModelDocument {
         Self {
             provider: value.provider,
             id: value.id,
-            protocol: value.protocol,
             context_window: value.context_window,
             max_output_tokens: value.max_output_tokens,
             capabilities: ModelCapabilities {
@@ -167,15 +180,15 @@ mod tests {
     use serde_json::json;
 
     const CATALOG: &str = r#"
-schema_version = 1
+schema_version = 2
 [providers.p]
+protocol = "openai_chat_completions"
 base_url = "https://example.invalid/v1"
 api_key = "$NOT_CAPTURED"
 
 [models."p/plain"]
 provider = "p"
 id = "plain"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 request_params = '{"future":{"nested":[1,"text",{"new":true},null]},"temperature":0.1}'
@@ -186,7 +199,6 @@ output_modalities = ["text"]
 [models."p/m"]
 provider = "p"
 id = "m"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 default_profile = "balanced"

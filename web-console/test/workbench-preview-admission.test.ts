@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 const boundary = vi.hoisted(() => ({ read: vi.fn(), derive: vi.fn() }));
 vi.mock('../host/workspace-preview.ts', () => ({ readWorkspacePreview: boundary.read }));
-vi.mock('../host/documents/operation.ts', () => ({ deriveWorkspaceOffice: boundary.derive, deriveDocument: vi.fn() }));
+vi.mock('../host/documents/operation.ts', () => ({ OfficeDocuments: class { deriveWorkspaceOffice = boundary.derive; deriveDocument = vi.fn(); dispose = async () => {}; } }));
 import { LocalWorkspaceHost } from '../host/workspaces';
 import { OfficeSettlementError } from '../host/documents/office-cgroup';
 const roots: string[] = [];

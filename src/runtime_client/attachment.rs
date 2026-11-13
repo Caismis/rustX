@@ -1,14 +1,11 @@
 //! The Runtime Client attachment: one active client session of the protocol.
 //!
-//! An attachment is the semantic session of one client. A host admits one
-//! control-capable attachment and any number of explicitly read-only
-//! observation attachments:
+//! An attachment is the semantic session of one client. A host admits
+//! independent writable attachments sharing one Conversation execution owner.
+//! Native historical observation handles may still be read-only:
 //!
-//! - the first attachment succeeds;
-//! - a second simultaneous control attachment fails deterministically
-//!   (`attachment_in_use`) and never evicts the first;
-//! - read-only observation attachments do not compete with the control
-//!   attachment or with one another;
+//! - writable attachments never evict or exclude one another;
+//! - subscriptions belong to each attachment independently;
 //! - explicit detach (or drop) releases attachment ownership;
 //! - reconnecting always receives a new attachment identity;
 //! - request ids are scoped to one attachment and never carry across;
@@ -64,6 +61,27 @@ pub struct RuntimeAttachment {
 }
 
 impl RuntimeAttachment {
+    /// Linearize a synchronous native mutation against this attachment's close.
+    /// The closure must not await or detach the attachment.
+    pub(crate) fn with_control_authority<T>(
+        &self,
+        commit: impl FnOnce(&Arc<ClientInner>) -> Result<T, RuntimeClientError>,
+    ) -> Result<T, RuntimeClientError> {
+        let live = self.authority.lock().expect("attachment authority");
+        if !*live {
+            return Err(RuntimeClientError::NotAttached);
+        }
+        let inner = self
+            .inner
+            .upgrade()
+            .ok_or(RuntimeClientError::NotAttached)?;
+        if self.read_only {
+            return Err(RuntimeClientError::InvalidState {
+                message: "historical attachment cannot mutate".into(),
+            });
+        }
+        commit(&inner)
+    }
     /// Read the first bounded page for one exact Job identity.
     /// # Errors
     /// Closed attachments, unavailable jobs, and expired native cuts are explicit.

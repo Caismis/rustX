@@ -194,6 +194,25 @@ async fn write(fixture: &Fixture, _index: usize, mutation: ConfigMutation) {
         .unwrap();
 }
 
+async fn write_guidance(fixture: &Fixture, document: String) {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    let target = SourceTarget::User;
+    let source = fixture.manager.source_settings(&target).await.unwrap();
+    fixture
+        .manager
+        .write_source_settings(
+            &target,
+            source.global_guidance.unwrap().revision,
+            SourceMutation::GlobalGuidance { document },
+        )
+        .await
+        .unwrap();
+}
+
+pub(super) fn guidance(files: &[crate::runtime::resources::ProjectContextFile]) -> &str {
+    files.first().map_or("", |file| file.content.as_str())
+}
+
 async fn session_settled(
     fixture: &Fixture,
     id: &crate::local_runtime::session::SessionId,
@@ -295,11 +314,14 @@ async fn issue459_edit(fixture: &Fixture, edit: impl FnOnce(&mut toml::Value)) {
         .unwrap();
 }
 
-fn issue459_set_instructions(document: &mut toml::Value, text: &str) {
-    document["agent"]
-        .as_table_mut()
-        .unwrap()
-        .insert("instructions".into(), text.into());
+pub(super) fn set_file_guidance(fixture: &Fixture, text: &str) {
+    use crate::local_runtime::configuration::settings::SourceTarget;
+    let root = fixture
+        .manager
+        .configuration
+        .resource_root(&SourceTarget::User);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("AGENTS.md"), text).unwrap();
 }
 
 /// Remove `local/a`; add `local/c` (wire id `c`, Profile `steady` with
@@ -324,14 +346,7 @@ fn issue459_replace_a_with_c(document: &mut toml::Value) {
 
 /// Commit `text` as the root instructions and wait for the runtime commit.
 async fn issue459_apply_instructions(fixture: &Fixture, text: &str) {
-    write(
-        fixture,
-        0,
-        ConfigMutation::Instructions {
-            authored: Some(text.into()),
-        },
-    )
-    .await;
+    write_guidance(fixture, text.into()).await;
     applied(fixture, 0).await;
 }
 

@@ -32,17 +32,21 @@ pub(crate) struct AppServerArgs {
     /// Dedicated WebSocket credential file; forbidden for stdio
     #[arg(long)]
     token_file: Option<PathBuf>,
+    /// Alternative capability source: hexadecimal SHA-256 digest
+    #[arg(long, conflicts_with_all = ["token_file", "shared_secret_file"])]
+    token_sha256: Option<String>,
+    /// Trusted host's HS256 signing secret; alternative to capability mode
+    #[arg(long, conflicts_with = "token_file")]
+    shared_secret_file: Option<PathBuf>,
+    #[arg(long, requires = "shared_secret_file")]
+    issuer: Option<String>,
+    #[arg(long, requires = "shared_secret_file")]
+    audience: Option<String>,
+    #[arg(long, requires = "shared_secret_file")]
+    max_clock_skew_seconds: Option<u64>,
     /// Separate Product Host-only file-read credential; never the browser token.
     #[arg(long)]
     product_host_token_file: Option<PathBuf>,
-    /// Separate owner-only credential that grants committed-delivery access
-    /// to WebSocket clients offering it beside the transport token
-    #[arg(long)]
-    delivery_access_token_file: Option<PathBuf>,
-    /// Delegate committed-delivery access to the stdio owner (the process
-    /// that spawned this server and owns its pipes); forbidden for WebSocket
-    #[arg(long)]
-    stdio_delivery_access: bool,
 }
 impl AppServerArgs {
     pub(crate) fn into_request(self) -> Request {
@@ -51,9 +55,12 @@ impl AppServerArgs {
             root: self.runtime_root,
             listen: self.listen,
             token: self.token_file,
+            token_sha256: self.token_sha256,
+            shared_secret: self.shared_secret_file,
+            issuer: self.issuer,
+            audience: self.audience,
+            max_clock_skew_seconds: self.max_clock_skew_seconds,
             product_host_token: self.product_host_token_file,
-            delivery_access_token: self.delivery_access_token_file,
-            stdio_delivery_access: self.stdio_delivery_access,
         }
     }
 }
@@ -65,9 +72,12 @@ pub struct Request {
     root: Option<PathBuf>,
     listen: String,
     token: Option<PathBuf>,
+    token_sha256: Option<String>,
+    shared_secret: Option<PathBuf>,
+    issuer: Option<String>,
+    audience: Option<String>,
+    max_clock_skew_seconds: Option<u64>,
     product_host_token: Option<PathBuf>,
-    delivery_access_token: Option<PathBuf>,
-    stdio_delivery_access: bool,
 }
 
 // These roots are exposed by SourceSettings in the JSON protocol. This is
@@ -163,7 +173,51 @@ fn private_credential(path: &std::path::Path, lane: &str) -> io::Result<websocke
     }
     let mut token = String::new();
     file.take(130).read_to_string(&mut token)?;
-    websocket::Credential::new(token.strip_suffix('\n').unwrap_or(&token).to_owned())
+    let token = token.strip_suffix('\n').unwrap_or(&token);
+    if !(43..=128).contains(&token.len())
+        || !token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Product Host credential must contain 43..128 base64url characters",
+        ));
+    }
+    websocket::Credential::new(token.to_owned())
+}
+
+fn connection_credential(options: &Request) -> io::Result<websocket::Credential> {
+    fn read(path: &std::path::Path) -> io::Result<String> {
+        if !path.is_absolute() {
+            return Err(io::Error::other("authentication paths must be absolute"));
+        }
+        let mut value = String::new();
+        std::fs::File::open(path)?
+            .take(4098)
+            .read_to_string(&mut value)?;
+        if value.len() > 4097 {
+            return Err(io::Error::other("authentication file exceeds limit"));
+        }
+        Ok(value.strip_suffix('\n').unwrap_or(&value).to_owned())
+    }
+    match (
+        &options.token,
+        &options.token_sha256,
+        &options.shared_secret,
+    ) {
+        (Some(path), None, None) => websocket::Credential::new(read(path)?),
+        (None, Some(digest), None) => websocket::Credential::from_sha256(digest),
+        (None, None, Some(path)) => websocket::Credential::signed(
+            read(path)?.as_bytes(),
+            options.issuer.clone(),
+            options.audience.clone(),
+            options.max_clock_skew_seconds.unwrap_or(30),
+        ),
+        _ => Err(io::Error::other(
+            "WebSocket requires exactly one of --token-file, --token-sha256 or --shared-secret-file",
+        )),
+    }
 }
 
 async fn serve_transport(
@@ -181,13 +235,7 @@ async fn serve_transport(
         let output = std::io::stdout().as_fd().try_clone_to_owned()?;
         let reader = inherited_reader(input)?;
         let writer = inherited_writer(output)?;
-        // The stdio peer is whoever spawned this process and owns its pipes.
-        // Delegation is that owner's explicit composition choice, never JSON.
-        let connection = if options.stdio_delivery_access {
-            AppServerConnection::with_delivery_access(host, CancellationToken::new())
-        } else {
-            AppServerConnection::new(host)
-        };
+        let connection = AppServerConnection::new(host);
         stdio::serve(Arc::new(connection), reader, writer, shutdown.clone()).await
     } else {
         let address: std::net::SocketAddr = options
@@ -196,40 +244,15 @@ async fn serve_transport(
             .ok_or_else(|| io::Error::other("listen must be stdio or ws://IP:PORT"))?
             .parse()
             .map_err(io::Error::other)?;
-        let path = options
-            .token
-            .ok_or_else(|| io::Error::other("WebSocket requires --token-file"))?;
-        let mut token = String::new();
-        std::fs::File::open(path)?
-            .take(130)
-            .read_to_string(&mut token)?;
-        if token.len() > 129 {
-            return Err(io::Error::other("transport token file exceeds limit"));
-        }
-        let credential =
-            websocket::Credential::new(token.strip_suffix('\n').unwrap_or(&token).to_owned())?;
-        let mut private = Vec::new();
+        let credential = connection_credential(&options)?;
         if let Some(path) = &options.product_host_token {
             let product_host = private_credential(path, "Product Host")?;
-            private.push(product_host.clone());
-            host.bind_product_host(Some(product_host));
-        }
-        if let Some(path) = &options.delivery_access_token {
-            let delivery = private_credential(path, "delivery access")?;
-            private.push(delivery.clone());
-            host.bind_delivery_access(Some(delivery));
-        }
-        // Each lane's secret authenticates that lane alone.
-        for (index, secret) in private.iter().enumerate() {
-            if credential.same_secret(secret)
-                || private[..index]
-                    .iter()
-                    .any(|other| other.same_secret(secret))
-            {
+            if credential.same_secret(&product_host) {
                 return Err(io::Error::other(
-                    "transport, Product Host and delivery access credentials must differ",
+                    "transport and Product Host credentials must differ",
                 ));
             }
+            host.bind_product_host(Some(product_host));
         }
         let listener = tokio::net::TcpListener::bind(address).await?;
         eprintln!(
@@ -299,13 +322,11 @@ async fn run(options: Request) -> Result<(), String> {
     // Transport selection is native process policy, checked before composition.
     if options.listen == "stdio" {
         if options.token.is_some()
+            || options.token_sha256.is_some()
+            || options.shared_secret.is_some()
             || options.product_host_token.is_some()
-            || options.delivery_access_token.is_some()
         {
-            return Err(
-                "stdio does not accept --token-file, --product-host-token-file or --delivery-access-token-file"
-                    .into(),
-            );
+            return Err("stdio does not accept network authentication flags".into());
         }
     } else {
         options
@@ -314,12 +335,9 @@ async fn run(options: Request) -> Result<(), String> {
             .ok_or("listen must be stdio or ws://IP:PORT")?
             .parse::<std::net::SocketAddr>()
             .map_err(|error| error.to_string())?;
-        if options.token.is_none() {
-            return Err("WebSocket requires --token-file".into());
-        }
-        if options.stdio_delivery_access {
-            return Err("--stdio-delivery-access requires --listen stdio".into());
-        }
+        // Validate before composition/listening; including loopback, there is
+        // no unauthenticated network configuration.
+        connection_credential(&options).map_err(|error| error.to_string())?;
     }
     // All user-scoped owners and signal listeners exist before readiness.
     let host = compose(&options)?;
@@ -398,6 +416,7 @@ async fn run(options: Request) -> Result<(), String> {
                 Err(error) => transport_failure = Some(error.to_string()),
             }
         }
+        host.settle_file_observers().await;
         if !failures.is_empty() {
             return Err(format!(
                 "runtime settlement failed: {}",
@@ -447,6 +466,30 @@ pub async fn run_process(options: Request) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn private_product_host_credential_rejects_weak_or_truncated_values() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        for length in [43, 128] {
+            for suffix in ["", "\n"] {
+                std::fs::write(file.path(), format!("{}{suffix}", "a".repeat(length))).unwrap();
+                assert!(super::private_credential(file.path(), "Product Host").is_ok());
+            }
+        }
+        for token in [
+            String::new(),
+            "a".to_owned(),
+            "a".repeat(42),
+            "a".repeat(129),
+            "a".repeat(4096),
+            format!("{}+", "a".repeat(43)),
+            format!("{}=", "a".repeat(43)),
+            format!("{}\nextra", "a".repeat(128)),
+        ] {
+            std::fs::write(file.path(), token).unwrap();
+            assert!(super::private_credential(file.path(), "Product Host").is_err());
+        }
+    }
+
     #[test]
     fn cli04_app_server_omitted_bindings_stay_absent() {
         let crate::local_runtime::cli::Command::AppServer(request) =

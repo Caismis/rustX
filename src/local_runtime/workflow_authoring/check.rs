@@ -162,7 +162,7 @@ impl UserConfigManager {
             reason: bounded(reason, MAX_WORKFLOW_DIAGNOSTIC_BYTES),
         };
         let prospective = match self
-            .capture_application(&SessionConfigInput::new(workspace.clone()))
+            .capture_application(&SessionConfigInput::new(workspace.clone()), None)
             .and_then(|captured| captured.context)
         {
             Ok(prospective) => prospective,

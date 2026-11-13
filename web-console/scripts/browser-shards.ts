@@ -24,7 +24,7 @@ const repository = resolve(web, '..');
 export interface RunIdentity { commit: string; prepared: string }
 export interface ShardIdentity extends RunIdentity { shard: number; total: number }
 /**
- * The tests a run must execute. `full` is every discovered test in two
+ * The tests a run must execute. `full` is every discovered test in three
  * shards; `fast` is the smoke tests and every test of a changed spec in one
  * shard and, when Web presentation changed, also the presentation contracts
  * (every spec holding screenshot references and every @presentation test) in
@@ -256,7 +256,7 @@ if (import.meta.main) {
   if (command === 'inventory' && rest.length === 2) {
     // The inventory and each shard's --test-list for the plan's selection.
     const [manifest, directory] = [resolve(rest[0]), resolve(rest[1])];
-    const selection = JSON.parse(process.env.BROWSER_SELECTION ?? '{"selection":"full","shards":[1,2],"specs":[],"presentation":false}') as Selection;
+    const selection = JSON.parse(process.env.BROWSER_SELECTION ?? '{"selection":"full","shards":[1,2,3],"specs":[],"presentation":false}') as Selection;
     const discovered = cases(playwrightList());
     if (discovered.length === 0) throw new Error('Playwright discovered no browser tests');
     const screenshotSpecs = readdirSync(join(web, 'test/e2e')).filter(name => name.endsWith('.spec.ts-snapshots')).map(name => name.slice(0, -'-snapshots'.length));

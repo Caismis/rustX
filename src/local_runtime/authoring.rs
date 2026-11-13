@@ -239,7 +239,7 @@ pub struct McpStartupPolicyLayer {
     pub wait_timeout_ms: Option<u64>,
 }
 partial!(AgentProfileLayer {
-    description: String, instructions: String, model: ModelLayer,
+    description: String, model: ModelLayer,
     tools: ToolsLayer,
     skills: crate::runtime::agent_profile::AgentSkillSelection,
     plugins: PluginsLayer,
@@ -464,7 +464,7 @@ macro_rules! replace_units {
 impl AgentProfileLayer {
     fn overlay(&mut self, layer: Self, origin: &Origin, origins: &mut Origins) {
         replace_units!(self, layer, "agent.", origin, origins;
-            description, instructions, model, skills,
+            description, model, skills,
             agents, agents_md
         );
         // Enabled Workflows accumulate: a Global one is enabled in every
@@ -798,15 +798,7 @@ impl RuntimeLayer {
         );
         if let Some(layer) = self.agent {
             let mut profile = config.agent;
-            apply!(
-                layer,
-                profile,
-                description,
-                instructions,
-                agents,
-                workflows,
-                agents_md
-            );
+            apply!(layer, profile, description, agents, workflows, agents_md);
             if let Some(tools) = layer.tools {
                 profile.tools = tools.resolve();
             }
@@ -1166,7 +1158,7 @@ tokens = 128
                 // Named Agent authoring consumes the same ModelLayer adapter.
                 let named = text.replace("agent.model", "model");
                 let error = crate::toml_authoring::parse::<
-                    super::super::config::AgentProfileDocument,
+                    super::super::config::NamedAgentProfileDocument,
                 >(named.as_bytes())
                 .unwrap_err();
                 assert!(

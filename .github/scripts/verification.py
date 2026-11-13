@@ -71,7 +71,7 @@ SURFACES = {
     "rust": ("src/**", "tests/**", "examples/**", "benches/**", "build.rs", "Cargo.toml",
              "Cargo.lock", "rust-toolchain.toml", "schemas/**", "test-support/**"),
     "protocol": ("protocol/**",),
-    "web": ("web-console/**",),
+    "web": ("web-console/**", "src/runtime/interactive_supervisor.rs", "src/runtime/supervised_unit.rs"),
     "tui": ("tui/**",),
     "dev": ("dev/**",),
 }
@@ -178,20 +178,20 @@ ALWAYS = ("notifications",)
 FULL_JOBS = tuple(job for job, selected in selected_jobs("full", SURFACES).items() if selected)
 
 
-# Browser acceptance in two selections over one discovered inventory
-# (web-console/scripts/browser-shards.ts). FULL runs every discovered test in
-# two shards. FAST runs one shard: the tests tagged @smoke, every test of a
-# changed spec (or of a spec whose screenshot references changed), and, when
-# Web presentation changed, the presentation contracts: every spec that holds
-# screenshot references and every test tagged @presentation, the fixture
-# matrices that stand in for native workflows run in one locale, theme and
-# width only (tests/README.md, the replacement ledger).
+# Browser acceptance uses two selections over one discovered inventory
+# (web-console/scripts/browser-shards.ts). FULL runs every discovered test in three
+# shards. FAST runs smoke tests and every test of a changed spec, including specs
+# whose screenshot references changed, in one shard. Web presentation changes add
+# the presentation contracts and use two shards: every spec holding screenshot
+# references and every test tagged @presentation. These fixture matrices cover
+# native workflows run in one locale, theme and width only (tests/README.md,
+# the replacement ledger).
 BROWSER_SPEC = "web-console/test/e2e/"
 
 
 def browser_selection(profile, changes):
     if profile == "full":
-        return {"selection": "full", "shards": [1, 2], "specs": [], "presentation": False}
+        return {"selection": "full", "shards": [1, 2, 3], "specs": [], "presentation": False}
     specs = set()
     # A spec's current name; a removed spec has none to run (and its removal
     # is high risk, so FAST cannot verify it).

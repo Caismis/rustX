@@ -3,7 +3,7 @@
 //! [`ProspectiveSessionConfig`] or captured application input.
 #[cfg(test)]
 use super::ConfigurationHooks;
-use super::semantics::{SemanticFailure, catalog_document, composition_semantics};
+use super::semantics::{SemanticFailure, composition_semantics};
 use super::{
     AdmittedSource, BTreeMap, Digest, IndependentPolicy, LaunchFailure, LayerCapture, ModelCatalog,
     Origin, OsStrExt, Path, PathBuf, ProspectiveSessionConfig, ResourceDefinition, ResourceFamily,
@@ -145,8 +145,9 @@ impl UserConfigManager {
     pub(crate) fn capture_application(
         &self,
         request: &SessionConfigInput,
+        credentials: Option<&crate::credentials::CredentialSnapshot>,
     ) -> Result<application::CapturedApplication, String> {
-        self.capture_application_at_boundary(request, || {})
+        self.capture_application_at_boundary(request, credentials, || {})
     }
 
     /// A Session scope's capture: its source generation, resolved and
@@ -157,8 +158,12 @@ impl UserConfigManager {
     pub(crate) fn capture_session_application(
         &self,
         input: &SessionConfigInput,
+        credentials: &crate::credentials::CredentialSnapshot,
     ) -> Result<application::CapturedApplication, String> {
-        let mut captured = self.capture_application(&SessionConfigInput::new(input.cwd.clone()))?;
+        let mut captured = self.capture_application(
+            &SessionConfigInput::new(input.cwd.clone()),
+            Some(credentials),
+        )?;
         if let Ok(context) = &mut captured.context {
             context.input.model.clone_from(&input.model);
         }
@@ -168,6 +173,7 @@ impl UserConfigManager {
     pub(in crate::local_runtime) fn capture_application_at_boundary(
         &self,
         request: &SessionConfigInput,
+        credentials: Option<&crate::credentials::CredentialSnapshot>,
         after_layers: impl FnOnce(),
     ) -> Result<application::CapturedApplication, String> {
         let (layers, documents) = self
@@ -190,8 +196,14 @@ impl UserConfigManager {
         let process = layers.merged.app_server.clone().unwrap_or_default();
         process.validate()?;
         let (context, read) = crate::bounded_file::recording_reads(|| {
-            self.resolve_captured_layers(layers)
-                .and_then(Self::resolve_runtime_configuration)
+            self.resolve_captured_layers(layers, true, credentials)
+                .and_then(|capture| {
+                    capture
+                        .config
+                        .validate_resources()
+                        .map_err(|e| e.to_string())?;
+                    Ok(capture)
+                })
                 .and_then(|capture| self.resolve_resources(request, capture))
                 .map_err(|error| error.diagnostic.reason)
         });
@@ -238,7 +250,7 @@ impl UserConfigManager {
         request: &SessionConfigInput,
         layers: LayerCapture,
     ) -> Result<SourceCapture, LaunchFailure> {
-        let capture = self.resolve_captured_layers(layers)?;
+        let capture = self.resolve_captured_layers(layers, false, None)?;
         let config = &capture.config;
         crate::model::session::analyze_session_model_config(
             &capture.models,
@@ -297,7 +309,6 @@ impl UserConfigManager {
             ..RuntimeLayer::default()
         };
         let mut provenance = BTreeMap::new();
-        let mut project_resources = Vec::new();
         let scoped_workflows = [&user, &project].map(|layer| {
             layer
                 .agent
@@ -305,7 +316,7 @@ impl UserConfigManager {
                 .and_then(|agent| agent.workflows.clone())
                 .unwrap_or_default()
         });
-        for (mut layer, origin) in [
+        for (layer, origin) in [
             (
                 user,
                 Origin::User {
@@ -321,12 +332,6 @@ impl UserConfigManager {
                 },
             ),
         ] {
-            project_resources.extend(rebase_paths(
-                &mut layer,
-                &origin,
-                &locations.workspace,
-                false,
-            )?);
             merged.overlay(layer, &origin, &mut provenance);
         }
         Ok((
@@ -336,7 +341,6 @@ impl UserConfigManager {
                 identity,
                 merged,
                 provenance,
-                project_resources,
                 scoped_workflows,
             },
             documents,
@@ -375,6 +379,8 @@ impl UserConfigManager {
     fn resolve_captured_layers(
         &self,
         capture: LayerCapture,
+        allow_unselected: bool,
+        credentials: Option<&crate::credentials::CredentialSnapshot>,
     ) -> Result<SourceCapture, LaunchFailure> {
         let LayerCapture {
             mut revisions,
@@ -382,7 +388,6 @@ impl UserConfigManager {
             identity,
             merged,
             mut provenance,
-            project_resources,
             scoped_workflows,
         } = capture;
         for (root, scope) in [
@@ -402,7 +407,20 @@ impl UserConfigManager {
             );
         }
         let user_path = self.sources.config_path.clone();
-        let model_result = ModelCatalog::from_document(catalog_document(&merged));
+        let catalog = if allow_unselected {
+            // A Global provider deletion cannot edit Workspace files. A
+            // missing provider of a User model is still invalid, since the
+            // User mutation owns and removes both entries together.
+            super::semantics::available_catalog(&merged, |name| {
+                matches!(
+                    provenance.get(&format!("models.{name}")),
+                    Some(Origin::Workspace { .. })
+                )
+            })
+        } else {
+            super::semantics::authored_catalog(&merged)
+        };
+        let model_result = ModelCatalog::from_authoring(catalog);
         // A semantic failure names the document that authored its field.
         let owner = |failure: &SemanticFailure| {
             // Process policy stays outside the overlay; its source contract
@@ -422,11 +440,12 @@ impl UserConfigManager {
                 e.to_string(),
             )
         };
-        if merged
-            .agent
-            .as_ref()
-            .and_then(|agent| agent.model.as_ref())
-            .is_none_or(|model| model.model.is_none())
+        if !allow_unselected
+            && merged
+                .agent
+                .as_ref()
+                .and_then(|agent| agent.model.as_ref())
+                .is_none_or(|model| model.model.is_none())
         {
             // Incomplete only when everything the composition decides holds;
             // an independently invalid value is invalid with or without a
@@ -450,8 +469,72 @@ impl UserConfigManager {
             return Err(error);
         }
         let models = model_result.map_err(model_failure)?;
+        if !allow_unselected && models.model_refs().next().is_none() {
+            return Err(model_failure(
+                crate::model::catalog::ModelCatalogError::EmptyCatalog,
+            ));
+        }
         let effective = merged.clone();
         let mut config = merged.resolve()?;
+        if allow_unselected
+            && config.agent.model.as_ref().is_none_or(|selection| {
+                !models
+                    .selectable_model_refs()
+                    .any(|reference| reference == &selection.model)
+            })
+        {
+            // An authored preference can outlive its model's eligibility for
+            // new choices. Project a visible default without rewriting that
+            // preference or the selection carried by an existing Session.
+            let resolved = credentials
+                .map(|credentials| models.resolve(credentials))
+                .transpose()
+                .map_err(model_failure)?;
+            let replacement = models
+                .selectable_model_refs()
+                .cloned()
+                .map(crate::model::session::SessionModelConfig::of)
+                .find(|selection| {
+                    resolved.as_ref().is_none_or(|catalog| {
+                        catalog
+                            .binding(&selection.model)
+                            .is_ok_and(|(provider, _)| provider.credential().is_ok())
+                    }) && crate::model::session::analyze_session_model_config(&models, selection)
+                        .is_ok_and(|(primary, _)| {
+                            crate::model::invocation::reasoning_output_minimum(
+                                primary.protocol,
+                                &primary.request_params,
+                            )
+                            .is_ok_and(|reasoning| {
+                                crate::context::policy::CompactionPolicy::resolve_with_reasoning(
+                                    primary.context_window,
+                                    primary.max_output_tokens,
+                                    primary.context_window,
+                                    primary.model_max_output_tokens,
+                                    reasoning,
+                                )
+                                .is_ok()
+                            })
+                        })
+                });
+            config.agent.model = replacement
+                .map(|selection| {
+                    let mut authored = effective
+                        .agent
+                        .as_ref()
+                        .and_then(|agent| agent.model.clone())
+                        .unwrap_or_default();
+                    authored.model = Some(selection.model);
+                    authored.profile = None;
+                    authored.request_params = None;
+                    authored.max_output_tokens = None;
+                    authored.resolve()
+                })
+                .transpose()?;
+        }
+        if allow_unselected && let Some(selection) = &mut config.agent.model {
+            selection.use_available_auxiliary_models(&models, None);
+        }
         let mcp = super::super::mcp_resources::load(
             &self.sources.home_directory.join("rustx/.agents"),
             Some(&locations.workspace),
@@ -541,7 +624,6 @@ impl UserConfigManager {
             config,
             models,
             provenance,
-            project_resources,
             scoped_workflows,
         })
     }
@@ -563,19 +645,9 @@ impl UserConfigManager {
             mut config,
             models,
             provenance,
-            project_resources,
             scoped_workflows,
         } = resolved;
         let host = &self.sources;
-        for path in &project_resources {
-            crate::runtime::resources::validate_project_resource_path(&locations.workspace, path)
-                .map_err(LaunchFailure::resource)?;
-        }
-        // Both resource roots are fixed process/Workspace bindings; profiles select visibility.
-        let skill_sources = crate::skills::automatic_skill_roots(
-            Some(host.home_directory.as_path()),
-            &locations.workspace,
-        );
         // Capture authority once, including host path aliases and missing leaves.
         // Configuration preparation retains this physical identity; validators must not rebind it.
         let user_resource_root = normalize_missing(&host.home_directory.join("rustx/.agents"))?;
@@ -614,18 +686,13 @@ impl UserConfigManager {
                 scoped_workflows[usize::from(location.scope == SourceScope::Workspace)].contains(id)
             })
         });
-        let workspace = crate::tools::workspace::Workspace::new(&locations.workspace)
-            .map_err(|e| e.to_string())?;
-        let skill_discovery = {
-            crate::skills::SkillDiscovery::with_config(
-                &workspace,
-                crate::skills::SkillDiscoveryConfig {
-                    automatic: skill_sources.clone(),
-                },
-            )
-            .with_cancellation(self.resource_io.clone())
-            .discover()
+        let discover_skills = || {
+            self.discover_skills(Some(&locations.workspace))
+                .ok_or_else(|| LaunchFailure::from("cannot open Workspace for Skill discovery"))
         };
+        let skill_discovery = discover_skills()?;
+        let skill_sources =
+            crate::skills::automatic_skill_roots(Some(&host.home_directory), &locations.workspace);
         if let Some(crate::runtime::agent_profile::AgentSkillSelection::Exact(names)) =
             &config.agent.skills
         {
@@ -651,6 +718,12 @@ impl UserConfigManager {
                 return Err(LaunchFailure::resource(error.clone()));
             }
         }
+        let root_agent_grants = config.agent.agents.clone();
+        diagnostics.extend(super::prospective::omit_agents_without_models(
+            &mut config,
+            &subagents,
+            &models,
+        ));
         let managed_python = super::super::managed_python_resources::discover_controlled(
             Some(&locations.workspace),
             &host.home_directory.join("rustx/.agents"),
@@ -670,14 +743,13 @@ impl UserConfigManager {
             &subagents,
             &native_leaves,
         );
-        let root_agent_project_files =
-            super::super::agent_resources::load_profile_files(&config.agent.agents_md.files)
-                .map_err(LaunchFailure::resource)?;
         let policy = crate::capabilities::AgentActivation {
             profile: config.agent.clone(),
             admitted_agents: subagents.names().into_iter().cloned().collect(),
             admitted_workflows: workflows.enabled_ids().clone(),
-            project_files: root_agent_project_files.clone(),
+            delegated_skills: super::super::composition::delegated_skill_selections(
+                &config, &subagents, &workflows,
+            ),
         };
         let main = crate::capabilities::inspect_profile(
             &definitions.iter().collect::<Vec<_>>(),
@@ -685,13 +757,11 @@ impl UserConfigManager {
             &skills,
             &availability,
         )?;
-        let names = subagents.names().into_iter().cloned().collect();
         let admitted_workflows = workflows.enabled_ids();
         let authority = crate::runtime::agent_profile::AgentProfileAuthority {
             tools: &available_catalog,
             availability: &availability,
             skills: &skills,
-            agents: &names,
             workflows: &admitted_workflows,
             scope: crate::runtime::agent_profile::AgentScope::OneShotChild,
         };
@@ -805,15 +875,7 @@ impl UserConfigManager {
                 ));
             }
         }
-        for file in project_context_files
-            .iter()
-            .chain(root_agent_project_files.iter())
-            .chain(
-                subagents
-                    .definitions()
-                    .flat_map(|definition| definition.profile().project_instructions.files.iter()),
-            )
-        {
+        for file in &project_context_files {
             let bytes = read_bounded(&file.path)?;
             let text = std::str::from_utf8(&bytes)
                 .map_err(|_| LaunchFailure::from("instruction text is not UTF-8"))?;
@@ -854,6 +916,15 @@ impl UserConfigManager {
                 "project instruction discovery changed during capture; rescan to retry".into(),
             );
         }
+        if discover_skills()? != skill_discovery {
+            return Err("Skill definitions changed during capture; rescan to retry".into());
+        }
+        // The project Skill collection is the revision key of the complete
+        // User and Workspace inventory.
+        revisions.insert(
+            crate::skills::AutomaticSkillRoot::workspace(&locations.workspace).root,
+            skill_discovery.revision(),
+        );
         diagnostics.sort();
         diagnostics.dedup();
         diagnostics.truncate(256);
@@ -872,7 +943,6 @@ impl UserConfigManager {
             .collect(),
             source_revisions: revisions,
             effective,
-            root_agent_project_files,
             skill_discovery,
             project_context_files,
             inspection,
@@ -881,6 +951,7 @@ impl UserConfigManager {
             managed_python,
             workflows: std::sync::Arc::new(workflows),
             subagents,
+            root_agent_grants,
             agent_root,
             role_sources,
             locations,
@@ -889,7 +960,6 @@ impl UserConfigManager {
             provenance,
             identity,
             skill_sources,
-            project_resources,
         })
     }
 }
@@ -1060,44 +1130,6 @@ pub(in crate::local_runtime) fn source_restrictions(
         ));
     }
     Ok(())
-}
-
-fn rebase_paths(
-    layer: &mut RuntimeLayer,
-    origin: &Origin,
-    workspace: &Path,
-    validate_resources: bool,
-) -> Result<Vec<PathBuf>, String> {
-    let mut resources = Vec::new();
-    let base = match origin {
-        Origin::User { base, .. } | Origin::Workspace { base, .. } | Origin::Process { base } => {
-            base
-        }
-        Origin::Builtin => return Ok(resources),
-    };
-    let mut path = |value: &mut PathBuf| -> Result<(), String> {
-        if value.as_os_str().is_empty() {
-            return Err("path must be non-empty".into());
-        }
-        let resolved = absolute(base, value);
-        if matches!(origin, Origin::Workspace { .. }) {
-            if validate_resources {
-                crate::runtime::resources::validate_project_resource_path(workspace, &resolved)
-                    .map_err(|e| e.to_string())?;
-            }
-            resources.push(resolved.clone());
-        }
-        *value = resolved;
-        Ok(())
-    };
-    if let Some(agent) = &mut layer.agent
-        && let Some(policy) = &mut agent.agents_md
-    {
-        for file in &mut policy.files {
-            path(file)?;
-        }
-    }
-    Ok(resources)
 }
 
 pub(in crate::local_runtime) fn present_on_disk(path: &Path) -> Result<bool, String> {

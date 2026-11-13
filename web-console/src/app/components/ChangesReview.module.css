@@ -3,4 +3,21 @@
 .selector select { width: 100%; min-width: 0; border: 1px solid var(--dsw-alias-border-l3); border-radius: 8px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); padding: 8px; }
 .body { flex: 1; min-height: 0; overflow: auto; padding: 0 12px 12px; }
 .comparison { min-width: 0; color: var(--dsw-alias-label-secondary); font-size: 12px; }
-.path { overflow-wrap: anywhere; }
+.preview { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+.previewHeader { display: flex; align-items: center; min-height: 38px; gap: 8px; flex: none; padding: 0 8px; border-bottom: 0.5px solid var(--dsw-alias-border-l3); }
+.path { flex: 1; min-width: 0; overflow: auto hidden; color: var(--dsw-alias-label-tertiary); font: 12px/20px var(--ds-font-family-code); white-space: nowrap; }
+.preview > p { margin: 0; padding: 12px 16px; color: var(--dsw-alias-label-secondary); font-size: 13px; }
+.previewRows { display: grid; grid-template-columns: minmax(max-content, 100%); align-content: start; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 8px 0 16px; font: var(--dsw-font-markdown-code-block); }
+.previewHunk + .previewHunk { margin-top: 8px; }
+.previewLine { display: grid; grid-template-columns: 3.5em 3.5em 1.2em minmax(0, 1fr); min-height: 22px; line-height: 22px; white-space: pre; }
+.number { padding-right: 8px; color: var(--dsw-alias-label-tertiary); text-align: right; user-select: none; }
+.sign { text-align: center; user-select: none; }
+.code { padding-right: 16px; }
+.previewLine[data-diff-line='add'] { --change-color: var(--dsw-alias-state-success-primary); }
+.previewLine[data-diff-line='del'] { --change-color: var(--dsw-alias-state-error-primary); }
+.previewLine:is([data-diff-line='add'], [data-diff-line='del']) { background: color-mix(in srgb, var(--change-color) 12%, transparent); }
+.previewLine:is([data-diff-line='add'], [data-diff-line='del']) :is(.number, .sign) { color: var(--change-color); }
+.previewLine:is([data-diff-line='add'], [data-diff-line='del']) .number { background: color-mix(in srgb, var(--change-color) 12%, transparent); }
+.previewLine:is([data-diff-line='add'], [data-diff-line='del']) .number:first-child { box-shadow: inset 3px 0 var(--change-color); }
+
+.copy { flex: none; min-width: 64px; }

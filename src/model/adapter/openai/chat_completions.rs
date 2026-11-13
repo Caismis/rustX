@@ -1595,8 +1595,8 @@ fn construct_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
     value["stream"] = serde_json::Value::Bool(true);
     value[request.invocation.compat.chat_max_tokens_field.wire_name()] =
         request.max_output_tokens().into();
-    crate::model::adapter::correlation::encode(&mut value, ModelProtocol::OpenAiChatCompletions)
-        .map_err(invalid_request)?;
+    crate::model::adapter::correlation::encode(&mut value, request)
+        .map_err(|error| invalid_request(&error))?;
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
@@ -1673,8 +1673,17 @@ fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessag
                 None,
             ),
             ModelMessageView::Assistant(assistant) => {
-                let (message, reasoning) =
-                    translate_assistant_message(assistant, reasoning_replay)?;
+                let (message, reasoning) = translate_assistant_message(
+                    assistant,
+                    reasoning_replay,
+                    request.invocation.replay_origin().as_ref(),
+                )?;
+                if matches!(&message.content, Some(ChatCompletionRequestAssistantMessageContent::Array(parts)) if parts.is_empty())
+                    && message.tool_calls.is_none()
+                    && reasoning.is_none()
+                {
+                    continue;
+                }
                 (
                     ChatMessage::Standard(ChatCompletionRequestMessage::Assistant(message)),
                     reasoning,
@@ -1787,6 +1796,7 @@ fn translate_user_message(
 fn translate_assistant_message(
     assistant: &[crate::message::types::AssistantContentBlock],
     reasoning_replay: Option<ChatReasoningReplay>,
+    origin: Option<&crate::model::replay::ReplayOrigin>,
 ) -> Result<
     (
         async_openai::types::chat::ChatCompletionRequestAssistantMessage,
@@ -1832,6 +1842,14 @@ fn translate_assistant_message(
                 ));
             }
             AssistantContentBlock::Reasoning(block) => {
+                if !block.belongs_to(origin) {
+                    if let Some(text) = block.text.as_ref().filter(|text| !text.trim().is_empty()) {
+                        parts.push(ChatCompletionRequestAssistantMessageContentPart::Text(
+                            ChatCompletionRequestMessageContentPartText { text: text.clone() },
+                        ));
+                    }
+                    continue;
+                }
                 // Omit is a translation policy, not a serialized-JSON
                 // cleanup step: this branch deliberately does nothing for
                 // that policy, without inspecting text or provider state.

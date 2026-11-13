@@ -1,3 +1,4 @@
+import { settledSave } from './shell-actions';
 import { selectedSessionId, selectedTarget, selectedCheckpoint } from './shell-actions';
 import { openQuestionnaire } from './source-reading';
 import { expandModelAuthoring } from './shell-actions';
@@ -5,16 +6,16 @@ import { openEmptySession } from './shell-actions';
 import { connectRemote } from './shell-actions';
 import { closeSessionView } from './shell-actions';
 import {
-  choose, closeSettings, confirmSettingsAction, connectionAction, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
+  choose, returnHome, confirmSettingsAction, connectionAction, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
 } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { expect, test } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host.ts';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { wireProbe } from './wire-probe';
 
-test('two real rustX Sessions, browser loss, native interactions, raw wire, and cold configuration resolution', async ({ page }) => {
+test('two real rustX Sessions, browser loss, native interactions, raw wire, and cold configuration resolution', async ({ page }, testInfo) => {
   const fixture = await startDogfood();
   const wire = await wireProbe(page);
   const closeView = async (id: string) => {
@@ -26,7 +27,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const connect = async () => {
     await connectRemote(page, `${fixture.endpoint}/`, fixture.token);
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Access token')).toBeHidden();
   };
   const openSession = async (id: string) => {
     await page.locator(`button[data-session-id="${id}"]`).click();
@@ -55,30 +56,29 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     // Configuration source commits cannot rewrite a running admitted attempt.
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
     expect(await selectedSettingsPage(page)).toBe('General');
-    await closeSettings(page);
+    await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     const defaultModel = settings.getByRole('form', { name: 'Default model', exact: true });
     await choose(defaultModel, 'Model', 'fixture/second-model');
     await defaultModel.getByRole('button', { name: 'Save Default model', exact: true }).click();
-    await expect(settings.getByText('Default model saved.')).toBeVisible();
+    await expect(settledSave(settings, 'Default model')).toBeVisible();
     await openSettingsPage(page, 'Advanced');
-    await expect(settings.getByText(/Revision:/)).toBeVisible();
+    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
     await expect(settings.getByRole('button', { name: /Adopt/ })).toHaveCount(0);
     await openSettingsPage(page, 'Models'); await expandModelAuthoring(page);
     await confirmSettingsAction(page, 'Use global default Default model');
-    await expect(settings.getByText('Default model saved.')).toBeVisible();
-    await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await expect(settledSave(settings, 'Default model')).toBeVisible();
+    await returnHome(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
 
     await openSession(idB); await send('Use B while A runs');
     await expect(page.getByText('B stayed responsive.', { exact: true })).toBeVisible();
-    // The actual TUI client joins the browser's server. Handoff is explicit;
-    // neither client needs a private API or a second writable controller.
+    // The actual TUI client joins the same native Session while the browser stays writable.
     remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
-    await expect(remote.attach(idB)).rejects.toMatchObject({ kind: 'controller_in_use' });
-    await closeView(idB);
     const terminalB = await remote.attach(idB);
+    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEnabled();
+    await closeView(idB);
     expect(JSON.stringify(terminalB.state.transcript)).toContain('B stayed responsive.');
     expect((await remote.readSession(idA)).id).toBe(idA);
     await terminalB.resync();
@@ -91,7 +91,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await connectionAction(page, 'Disconnect');
     await expect(page.locator('button[data-phase=disconnected]')).toBeVisible();
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     await reload(); await expect(page.getByText('A is running.', { exact: true })).toBeVisible();
     await expect.poll(() => selectedTarget(page, wire)).toMatchObject({
@@ -101,7 +101,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await closeView(idA);
     await expect(page.locator(`button[data-session-id="${idA}"]`)).toBeVisible();
     await expect(page.locator(`button[data-session-id="${idA}"]`)).toHaveAttribute('title', '');
-    // The only controller has been released before the provider finishes A.
+    // All clients have detached before the provider finishes A.
     await fixture.release('finish-a');
     await fixture.control('observations/await?kind=response_completed&count=2&timeoutMs=30000');
     await openSession(idA);
@@ -145,7 +145,7 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await fixture.control('observations/await?kind=response_completed&count=7&timeoutMs=30000');
     await remote.shutdown(); remote = undefined;
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await openQuestionnaire(page);
     await page.getByRole('radio', { name: 'Keep native', exact: true }).click(); await page.getByRole('button', { name: 'Submit', exact: true }).click();
     await expect(page.getByText('Detached question completed.', { exact: true })).toBeVisible();
@@ -154,11 +154,12 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await openSession(idA);
     await expect.poll(async () => (await selectedCheckpoint(page, wire)).snapshot.model?.configured.model).toBe('fixture/console-model');
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    expect(await selectedSettingsPage(page)).toBe('General');
+    expect(await selectedSettingsPage(page)).toBe('Advanced');
+    await settings.getByRole('button', { name: 'Back to Advanced', exact: true }).click();
     await openSettingsPage(page, 'Advanced');
     await settings.getByRole('button', { name: 'Rescan configuration files', exact: true }).click();
-    await expect(settings.getByText(/Revision:/)).toBeVisible();
-    await closeSettings(page);
+    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
+    await returnHome(page);
     await expect.poll(async () => (await selectedCheckpoint(page, wire)).snapshot.model?.configured.model).toBe('fixture/console-model');
     // The fixed 32-row native tail excludes A's earliest response after the
     // intervening interaction audits. Load its advancing historical page.
@@ -167,9 +168,9 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     await expect(page.getByText('A is running. A finished.', { exact: true })).toBeVisible();
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);
     expect(readFileSync(fixture.settings, 'utf8')).toContain('second-model');
-    expect(wire.requests.some(request => request.method === 'session/attach')).toBe(true);
-    await page.screenshot({ path: 'test-results/console-desktop.png', fullPage: true });
-    await page.setViewportSize({ width: 390, height: 844 }); await page.screenshot({ path: 'test-results/console-mobile.png', fullPage: true });
+    expect(wire.requests.some(request => request.method === 'thread/resume')).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('console-desktop.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 }); await page.screenshot({ path: testInfo.outputPath('console-mobile.png'), fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(fixture.token);
     expect(await page.locator('body').innerText()).not.toContain('fake-provider-only');
@@ -189,5 +190,35 @@ test('two real rustX Sessions, browser loss, native interactions, raw wire, and 
     expect((await fixture.control('requests')).requests).toHaveLength(8);
     expect(errors).toEqual([]); passed = true;
   } catch (error) { console.error(fixture.diagnostics(), await page.locator('.notice').allTextContents(), wire.responses); throw error; }
-  finally { await remote?.shutdown(); await page.close(); await fixture.stop(passed); }
+  finally { try { await remote?.shutdown(); } finally { await stopDogfoodPage(page, fixture, passed); } }
+});
+
+for (const destination of ['Workflows', 'Scheduled Tasks', 'Settings']) test(`committed Session survives repeated offline ${destination}/Home returns and a page reload`, async ({ page }) => {
+  const fixture = await startDogfood();
+  let native: AppServerHost | undefined;
+  try {
+    native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+    const session = (await native.createSession({ cwd: fixture.workspaceA })).session;
+    await native.renameSession(session.id, 'Retained offline Session');
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/'); await connectRemote(page, fixture.endpoint, fixture.token);
+    await page.locator(`button[data-session-id="${session.id}"]`).click();
+    await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
+    const route = () => page.evaluate(() => JSON.parse(localStorage.getItem('rustx-console-view-v3')!).route);
+    for (let round = 0; round < 2; round++) {
+      await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: destination, exact: true }).click();
+      if (round === 0) await connectionAction(page, 'Disconnect');
+      await returnHome(page);
+      await expect(page.getByLabel('Session title')).toHaveText('Retained offline Session');
+      await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session-draft');
+      await expect.poll(route).toEqual({ kind: 'session', sessionId: session.id });
+    }
+    await page.reload(); await connectRemote(page, fixture.endpoint, fixture.token);
+    await expect(page.getByLabel('Session title')).toHaveText('Retained offline Session');
+    await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
+    expect(await selectedSessionId(page)).toBe(session.id);
+    expect((await fixture.control('requests')).requests).toEqual([]);
+  } finally {
+    try { await native?.shutdown(); } finally { await stopDogfoodPage(page, fixture, false); }
+  }
 });

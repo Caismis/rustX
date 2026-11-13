@@ -2,11 +2,11 @@ import { message, type DisplayText } from '../../../locale/translation';
 import { assign, fromPromise, setup, type ActorRefFrom } from 'xstate';
 import type { AppServerClient } from '../../../client/app-server';
 import type { ProductHostWorkspaces } from '../../../workspaces/host';
-import type { SourceTarget } from '../../../../../protocol/app-server/v73';
+import type { SourceTarget } from '../../../../../protocol/app-server/v78';
 import type { RepairIdentity } from '../../repair-notices';
 import {
   settingsTargetKey, userSettingsTarget, workspaceSettingsTarget,
-  type ExtensionFamily, type SettingsTarget,
+  type SettingsTarget,
 } from '../projection';
 
 /** The product pages Settings is organized around.
@@ -16,8 +16,8 @@ import {
  * inspects an extension without ever meeting `root_model`, `native_tools` or
  * `source_tools`. Native identities, exact CAS writes and application facts are
  * unchanged underneath — only what the browser groups them into is new. */
-export type SettingsPage = 'general' | 'models' | 'agent' | 'tools' | 'mcp' | 'extensions' | 'advanced';
-const globalSettingsPages: readonly SettingsPage[] = ['general', 'models', 'agent', 'tools', 'mcp', 'extensions', 'advanced'];
+export type SettingsPage = 'general' | 'models' | 'agent' | 'tools' | 'extensions' | 'advanced';
+const globalSettingsPages: readonly SettingsPage[] = ['general', 'models', 'agent', 'tools', 'extensions', 'advanced'];
 
 /** The secondary focus of each primary page, by page.
  *
@@ -34,8 +34,7 @@ export interface PageFocus {
   models: { kind: 'provider'; id: string } | { kind: 'model'; id: string; provider?: string };
   agent: never;
   tools: never;
-  mcp: { kind: 'mcp'; name?: string; mode?: 'json' | 'permissions' };
-  extensions: { kind: 'extension'; family: ExtensionFamily; name: string };
+  extensions: { kind: 'extension'; family: 'managed_python'; name: string };
   /** Connection is the client-owned sub-surface of Advanced; Auto Repair is
    * the owner's own automatic `rustx.toml` repair section (Issue #464). */
   advanced: { kind: 'connection' } | { kind: 'auto_repair' };
@@ -76,8 +75,7 @@ export function admitsFocus(target: SettingsTarget, page: SettingsPage, focus: S
   if (!admitsPage(target, page)) return false;
   switch (focus.kind) {
     case 'provider': case 'model': return page === 'models';
-    case 'mcp': return page === 'mcp';
-    case 'extension': return page === 'extensions' && focus.family !== 'mcp';
+    case 'extension': return page === 'extensions' && focus.family === 'managed_python';
     case 'connection': return page === 'advanced' && target.kind === 'user';
     case 'auto_repair': return page === 'advanced';
   }
@@ -132,9 +130,8 @@ export interface SettingsNavigationContext {
    * otherwise. Acknowledgement is the caller's; this machine only decides
    * when an inspection happened. */
   inspected?: (inspection: RepairInspection) => void;
-  /** The open primary product page, or `undefined` while Settings is closed.
-   * Always a page `target` authorizes. */
-  page?: SettingsPage;
+  /** Internal section, always authorized by `target`. Shell owns visibility. */
+  page: SettingsPage;
   /** The secondary focus of each primary page — a Provider, a Model, an
    * extension resource, or the Advanced Connection sub-surface.
    *
@@ -147,6 +144,8 @@ export interface SettingsNavigationContext {
   focus: FocusMap;
   /** The owner an opened Settings instance is permanently bound to. */
   target: SettingsTarget;
+  /** An unresolved owner never borrows the previous target's authoring UI. */
+  targetReady: boolean;
   /** Where an owner lookup in flight lands once it resolves: the landing page
    * by default, or Advanced → Auto Repair for `OPEN.REPAIRS`. */
   landing?: 'auto_repair';
@@ -171,17 +170,18 @@ export type SettingsNavigationEvent =
    * current authoritative read. Completes the landed inspection it matches
    * exactly, and nothing else. */
   | { type: 'INSPECTED'; receiptId: string; source: SourceTarget }
-  /** Select another primary page of the open dialog, keeping its target and
+  /** Select another Settings section, keeping its target and
    * every page's own focus. A page the target does not authorize is refused. */
   | { type: 'SELECT'; page: SettingsPage }
   /** Focus a detail of the currently displayed page, or leave it for the list.
    * A focus the displayed page and target do not admit is refused. */
   | { type: 'FOCUS'; focus?: SettingsFocus }
-  | { type: 'CLOSE' }
+  /** Retire disposable lookup/inspection interest when Shell leaves Settings. */
+  | { type: 'SUSPEND' }
   | { type: 'RETIRE' }
   | { type: 'DISMISS' };
 
-/** Top-level Settings navigation.
+/** Settings-internal navigation. Shell alone owns the application route.
  *
  * The invariant this machine exists to make structural is:
  *
@@ -190,10 +190,10 @@ export type SettingsNavigationEvent =
  *
  * Every navigation-affecting decision — open User Settings, open a Workspace's
  * Settings, open the owning Workspace's Settings, open Connection, select a
- * page of the open dialog, focus a detail, close, or authority replacement —
+ * section, focus a detail, suspend, or authority replacement —
  * re-enters `idle`, which *stops* the lookup actor. A stale lookup then has no
  * completion path at all, so neither its success nor its failure can overwrite
- * a newer decision, reopen a closed dialog or publish an obsolete error. Both
+ * a newer decision or publish an obsolete error. Both
  * are silent because neither runs.
  *
  * It is also the one owner of *which* surface is displayed, and of whether that
@@ -221,13 +221,11 @@ export const settingsNavigationMachine = setup({
     ownerResolved: ({ event }) => (event as unknown as { output: OwnerResolution }).output.kind === 'resolved',
     ownerUnregistered: ({ event }) => (event as unknown as { output: OwnerResolution }).output.kind === 'unregistered',
     ownerFailed: ({ event }) => (event as unknown as { output: OwnerResolution }).output.kind === 'failed',
-    /** A page can be selected only inside an open Settings dialog, and only if
-     * the dialog's owner authorizes it. */
-    pageAdmitted: ({ context, event }) => context.page !== undefined
-      && event.type === 'SELECT' && admitsPage(context.target, event.page),
+    /** Only sections authorized by the exact owner may be selected. */
+    pageAdmitted: ({ context, event }) => event.type === 'SELECT' && admitsPage(context.target, event.page),
     /** A detail can be focused only on the open page that owns it, and only if
-     * the dialog's owner authorizes it there. Leaving a detail is always legal. */
-    focusAdmitted: ({ context, event }) => context.page !== undefined && event.type === 'FOCUS'
+     * the target authorizes it there. Leaving a detail is always legal. */
+    focusAdmitted: ({ context, event }) => event.type === 'FOCUS'
       && (event.focus === undefined || admitsFocus(context.target, context.page, event.focus)),
     /** The presented details are exactly those the landed inspection asked
      * for: the same receipt of the same source, still displayed at Advanced →
@@ -240,6 +238,7 @@ export const settingsNavigationMachine = setup({
     discardInspection: assign({ inspection: () => undefined, pendingInspection: () => undefined }),
     completeInspection: ({ context }) => { if (context.inspection) context.inspected?.(context.inspection); },
     openTarget: assign({
+      targetReady: () => true,
       target: ({ context, event }) => event.type === 'OPEN' ? event.target : context.target,
       // The landing page is derived from the pages that owner authorizes, so a
       // constrained Workspace surface never lands on a page it does not have.
@@ -254,6 +253,7 @@ export const settingsNavigationMachine = setup({
     // constrained Workspace surface never exposes it, so deciding to open it
     // is also a decision to author globally.
     openConnection: assign({
+      targetReady: () => true,
       target: () => userSettingsTarget,
       page: () => 'advanced' as const,
       // The global client's other page focus survives; a Workspace's does not
@@ -277,9 +277,9 @@ export const settingsNavigationMachine = setup({
         return next as FocusMap;
       },
     }),
-    close: assign({ page: () => undefined, error: () => '' }),
     clearError: assign({ error: () => '' }),
     openRepairs: assign({
+      targetReady: () => true,
       target: () => userSettingsTarget,
       page: () => 'advanced' as const,
       focus: ({ context }) => ({
@@ -292,13 +292,15 @@ export const settingsNavigationMachine = setup({
       error: () => '',
     }),
     landOnRepairs: assign({
+      targetReady: () => false,
       landing: () => 'auto_repair' as const,
       inspection: () => undefined,
       pendingInspection: ({ event }) => event.type === 'OPEN.REPAIRS' && event.inspection ? { ...event.inspection, source: event.source } : undefined,
       error: () => '',
     }),
-    landOnOwner: assign({ landing: () => undefined }),
+    landOnOwner: assign({ landing: () => undefined, targetReady: () => false }),
     openResolvedOwner: assign({
+      targetReady: () => true,
       target: ({ context, event }) => {
         const output = (event as unknown as { output: OwnerResolution }).output;
         return output.kind === 'resolved' ? workspaceSettingsTarget(output.id, output.displayName) : context.target;
@@ -327,7 +329,7 @@ export const settingsNavigationMachine = setup({
   },
 }).createMachine({
   id: 'settingsNavigation',
-  context: ({ input }) => ({ lookup: input.lookup, inspected: input.inspected, target: userSettingsTarget, focus: {}, error: '' }),
+  context: ({ input }) => ({ lookup: input.lookup, inspected: input.inspected, target: userSettingsTarget, targetReady: true, page: 'general', focus: {}, error: '' }),
   initial: 'idle',
   states: {
     idle: {},
@@ -364,7 +366,7 @@ export const settingsNavigationMachine = setup({
     ],
     SELECT: { guard: 'pageAdmitted', target: '.idle', reenter: true, actions: ['discardInspection', 'select'] },
     FOCUS: { guard: 'focusAdmitted', target: '.idle', reenter: true, actions: ['discardInspection', 'focus'] },
-    CLOSE: { target: '.idle', reenter: true, actions: ['discardInspection', 'close'] },
+    SUSPEND: { target: '.idle', reenter: true, actions: ['discardInspection', 'clearError', assign({ targetReady: true })] },
     // Authority replacement retires the lookup without reinterpreting the
     // presentation decision the user already made; an inspection of the old
     // authority's receipt cannot complete under the new one.

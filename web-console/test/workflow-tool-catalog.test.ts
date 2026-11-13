@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
-import type { WorkflowToolCatalogCursor, WorkflowToolSource } from '../../protocol/app-server/v73';
-import { readToolCatalog } from '../src/app/workflows/ui/editor/toolCatalog';
+import type { WorkflowToolCatalogCursor, WorkflowToolSource } from '../../protocol/app-server/v78';
+import { readToolCatalog } from '../src/app/workflows/port';
 
 it('collects every page of one source before exposing the complete catalog', async () => {
   const source: WorkflowToolSource = { source_id: 'large', kind: 'mcp', scope: 'user', state: 'listed', tools: Array.from({ length: 128 }, (_, index) => ({ name: `tool_${index}`, description: '', input_schema: { type: 'object' }, result: { type: 'text' } })) };
@@ -19,4 +19,14 @@ it('rejects a changed or non-advancing continuation without exposing partial cho
     await expect(readToolCatalog({ toolCatalog: async () => ({ sources: [], next: calls++ === 0 ? { offset: 17, digest: 'a'.repeat(64) } : next }) }, 'large')).rejects.toThrow('Invalid Tool catalog continuation');
     expect(calls).toBe(2);
   }
+});
+
+it('does not request another MCP catalog page after the discovery owner is retired', async () => {
+  let active = true;
+  const toolCatalog = vi.fn(async () => {
+    active = false;
+    return { sources: [], next: { offset: 17, digest: 'a'.repeat(64) } };
+  });
+  await expect(readToolCatalog({ toolCatalog }, 'shared', 'workspace', () => active)).rejects.toThrow('Tool catalog request superseded');
+  expect(toolCatalog).toHaveBeenCalledTimes(1);
 });

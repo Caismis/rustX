@@ -52,7 +52,7 @@
 .names input { flex: 1; }
 @media (max-width: 680px) { .grid, .settings dl { grid-template-columns: minmax(0, 1fr); } .actions { align-items: stretch; } .settings th, .settings td { padding: 4px; } }
 
-/* ---- The Settings dialog's page vocabulary (#393) ----------------------
+/* ---- The Settings surface's page vocabulary (#393) ----------------------
    Scoped to `.page` (the Settings section) so the Inspector, which shares
    the `.settings` field vocabulary, keeps its own density. One hierarchy on
    every page: page title and description, group headings, setting-row cards
@@ -145,5 +145,4 @@
 .unitResource button[aria-haspopup=listbox] { background: transparent; }
 .settings .unit.unitResource .actions { position: static; justify-content: flex-end; margin: 12px 0 0; padding: 0; background: none; box-shadow: none; gap: 6px; }
 .unitResource .actions button { font-size: 12px; border-radius: 8px; }
-.unitRemoval { margin-top: 12px; }
 .unitDialog .actions > button[type=submit] { margin-left: 0; }

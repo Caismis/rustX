@@ -4,6 +4,7 @@ import { AppFrame } from '../../src/presentation/layout/AppFrame';
 import { Button } from '../../src/presentation/primitives/Button';
 import { Input } from '../../src/presentation/primitives/Input';
 import { Menu } from '../../src/presentation/primitives/Menu';
+import { useTranslation } from '../../src/locale/react';
 import { HoverCard } from '../../src/presentation/primitives/HoverCard';
 import { Modal } from '../../src/presentation/primitives/Modal';
 import { DisclosureRow } from '../../src/presentation/primitives/DisclosureRow';
@@ -25,6 +26,8 @@ const nestedItems = [
 ];
 
 function Fixture() {
+  const tx = useTranslation();
+  const previewPath = 'src/非常长的文件夹/' + 'nested-component-directory/'.repeat(8) + 'configuration.json';
   const [menu, setMenu] = useState(false);
   const [nested, setNested] = useState(false);
   const [nestedSelected, setNestedSelected] = useState('None');
@@ -35,7 +38,7 @@ function Fixture() {
   const [expanded, setExpanded] = useState(false);
   const [selected, setSelected] = useState('None');
   const [submitted, setSubmitted] = useState(0);
-  return <AppFrame dismissSidebarLabel="Close navigation" sidebar={() => <div>Navigation fixture</div>}>
+  return <AppFrame primary={() => <nav aria-label="Primary navigation fixture" />} dismissSidebarLabel="Close navigation" sidebar={() => <div>Navigation fixture</div>}>
     <h1>Foundation contracts</h1>
     <form onSubmit={event => { event.preventDefault(); setSubmitted(value => value + 1); }}>
       <Input aria-label="Form value" /><Button>Ordinary button</Button><Button type="submit">Submit form</Button><Button disabled>Disabled button</Button>
@@ -46,6 +49,9 @@ function Fixture() {
     <Menu open={nested} onClose={() => setNested(false)} autoFocus anchor={<Button onClick={() => setNested(!nested)}>Nested actions</Button>} items={nestedItems} onSelect={id => { setNestedSelected(id); setNested(false); }} />
     <output aria-label="Nested choice">{nestedSelected}</output>
     <HoverCard anchor={<Button>Details</Button>} content={<p>Hover details</p>} copyLabel="Copy" copiedLabel="Copied" />
+    <div data-copy-hover-fixture>
+      <HoverCard anchor={<Button>Copy details</Button>} content={<p style={{ overflowWrap: 'anywhere' }}>{previewPath}</p>} copyText={previewPath} copyLabel={tx('artifacts:changes.copy')} copiedLabel={tx('artifacts:changes.copied')} />
+    </div>
     <Button onClick={() => setModal(true)}>Open dialog</Button>
     <Modal closeLabel="Close dialog" open={modal} onClose={() => setModal(false)} title="Example dialog" footer={<Button onClick={() => setModal(false)}>Done</Button>}><Input aria-label="Dialog value" /></Modal>
     <DisclosureRow icon={null} title="Expand details" expandable open={expanded} expandOnRowClick onToggle={() => setExpanded(value => !value)}><p>Expanded content</p></DisclosureRow>

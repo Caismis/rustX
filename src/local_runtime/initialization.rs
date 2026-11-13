@@ -14,6 +14,7 @@ use crate::model::catalog::ModelCatalog;
 #[derive(Debug)]
 pub struct InitializationRequest {
     pub template: Template,
+    pub protocol: Option<crate::model::ModelProtocol>,
     pub provider: String,
     pub endpoint: String,
     pub credential_env: String,
@@ -52,6 +53,17 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
             "--credential-env requires an environment variable name, never a key value".into(),
         );
     }
+    let protocol = match request.template {
+        Template::OpenaiChat => crate::model::ModelProtocol::OpenAiChatCompletions,
+        Template::OpenaiResponses => crate::model::ModelProtocol::OpenAiResponses,
+        Template::Anthropic => crate::model::ModelProtocol::AnthropicMessages,
+        Template::Custom => request
+            .protocol
+            .ok_or("custom requires --protocol for the provider")?,
+    };
+    if request.template != Template::Custom && request.protocol.is_some() {
+        return Err("--protocol requires --template custom".into());
+    }
     let model: Model = if request.template == Template::Custom {
         if request.model_id.is_some()
             || request.context_window.is_some()
@@ -70,12 +82,6 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
         if request.model_document.is_some() {
             return Err("--model-document requires --template custom".into());
         }
-        let protocol = match request.template {
-            Template::OpenaiChat => crate::model::ModelProtocol::OpenAiChatCompletions,
-            Template::OpenaiResponses => crate::model::ModelProtocol::OpenAiResponses,
-            Template::Anthropic => crate::model::ModelProtocol::AnthropicMessages,
-            Template::Custom => unreachable!(),
-        };
         let compat = request.compat.as_ref().map_or_else(
             || Ok(Compat::default()),
             |compat| {
@@ -84,9 +90,9 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
             },
         )?;
         Model {
+            hidden: false,
             provider: provider.into(),
             id: request.model_id.clone().ok_or("init requires --model-id")?,
-            protocol,
             context_window: request
                 .context_window
                 .ok_or("init requires --context-window")?,
@@ -111,6 +117,10 @@ pub(super) fn documents(request: &InitializationRequest) -> Result<[Vec<u8>; 1],
         providers: BTreeMap::from([(
             provider.into(),
             Provider {
+                display_name: None,
+                hidden: false,
+                icon: None,
+                protocol,
                 base_url: request.endpoint.clone(),
                 api_key: crate::model::catalog::CredentialSource::parse(
                     &format!("${credential}"),
@@ -387,6 +397,7 @@ mod tests {
         let path = root.path().join("thinking.toml");
         let custom = InitializationRequest {
             template: Template::Custom,
+            protocol: Some(crate::model::ModelProtocol::AnthropicMessages),
             model_id: None,
             context_window: None,
             max_output: None,
@@ -411,6 +422,7 @@ mod tests {
     fn declarations() -> InitializationRequest {
         InitializationRequest {
             template: Template::OpenaiChat,
+            protocol: None,
             provider: "local".into(),
             endpoint: "http://127.0.0.1:9/v1".into(),
             credential_env: "RUSTX_TEST_KEY".into(),
@@ -434,6 +446,7 @@ mod tests {
         std::fs::write(&path, crate::toml_authoring::write(&model).unwrap()).unwrap();
         let mut custom = InitializationRequest {
             template: Template::Custom,
+            protocol: Some(crate::model::ModelProtocol::OpenAiChatCompletions),
             model_id: None,
             context_window: None,
             max_output: None,

@@ -1,5 +1,9 @@
 # CFG3 configuration
 
+## App Server environment roots (#533)
+
+User/Host `[app_server].environment_roots` grants absolute directories for the ordinary command and filesystem API families. The default empty list grants no roots. Workspace authorship cannot widen process authority. Root removal applies through the existing automatic process-policy application boundary; a replacement inode requires explicit retirement and a new grant. See [environment authority and management](app-server/environment-services.md).
+
 `rustx.toml` owns authored configuration. `.agents` owns resource definitions.
 Defining a resource does not grant the Root Agent permission to use it. Rust
 parses, validates, overlays and resolves these sources; clients present native
@@ -46,9 +50,8 @@ facts and keep unsaved drafts.
 ```
 
 There are exactly two ordinary scopes: User and Workspace. The Workspace is the
-selected directory; ancestor configuration and resource directories do not
-accumulate. Runtime files can also contain ownership locks, SQLite sidecars and
-physical execution scratch beneath their native owner directories.
+selected directory. Runtime files can also contain ownership locks, SQLite
+sidecars and physical execution scratch beneath their native owner directories.
 
 `--config /absolute/file.toml` replaces the User document binding for this
 process (`rustx app-server` and the offline configuration commands). Any file
@@ -100,7 +103,7 @@ before parsing, together with a few other exactly recognizable constructs. The
 obsolete `[context]` table requires manual removal and is never repaired silently
 (see [Automatic source repair](#automatic-source-repair-464)). TOML tables and arrays
 preserve authored omission versus explicit empty values. The current document
-version is `schema_version = 10`.
+version is `schema_version = 12`.
 
 | Top-level field | Owner and meaning |
 | --- | --- |
@@ -129,14 +132,15 @@ Ownership is layered, and each layer owns only its own facts:
 
 | Owner | Owns |
 | --- | --- |
-| Provider | `base_url` and the credential source |
-| Model | provider binding, provider-native `id`, `protocol`, `context_window`, the hard maximum `max_output_tokens`, declared `capabilities`, `compat`, and either native `request_params` or named `profiles` |
+| Provider | `protocol`, `base_url` and the credential source |
+| Model | provider binding, provider-native `id`, `context_window`, the hard maximum `max_output_tokens`, declared `capabilities`, `compat`, and either native `request_params` or named `profiles` |
 | Model Profile | one complete, independent invocation preset: an optional default `max_output_tokens` and its own native `request_params` |
 | Model selection | the chosen `model`, optional `profile`, explicit `request_params` overrides and an optional output limit |
 | Provider adapter | protocol structure, the output-token field spelling, and final protected-key validation |
 
 ```toml
 [providers.service]
+protocol = "openai_chat_completions"
 base_url = "https://api.example.invalid/v1"
 api_key = "$SERVICE_API_KEY"
 
@@ -144,7 +148,6 @@ api_key = "$SERVICE_API_KEY"
 [models.fast]
 provider = "service"
 id = "provider-wire-model-id"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 request_params = '{"temperature":0.2,"vendor":{"nested_option":true,"unset":null}}'
@@ -158,7 +161,6 @@ output_modalities = ["text"]
 [models.thinker]
 provider = "service"
 id = "provider-reasoning-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 8192
 default_profile = "balanced"
@@ -186,15 +188,17 @@ profile = "fast"
 request_params = '{"seed":7}'
 ```
 
-Each Provider requires `base_url` and `api_key`. Credentials are literal values
+Each Provider requires `protocol`, `base_url` and `api_key`. Its API protocol is
+shared by all Models that name it. Credentials are literal values
 or explicit `$ENV_VAR` references. The environment is resolved by the credential
 owner after admitted demand. Projections never return resolved secret values.
 A Workspace Provider must supply its own complete definition, including its
 credential source; no member is recovered from the shadowed User Provider.
 
-Each Model requires `provider`, provider-native `id`, explicit `protocol`,
+Each Model requires `provider`, provider-native `id`,
 `context_window`, `max_output_tokens`, and the complete `capabilities` object.
-Supported protocols and modality values are enumerated by the generated schema.
+A Model inherits its Provider’s protocol and cannot override it. Supported
+protocols and modality values are enumerated by the generated schema.
 rustX treats every configured model as supporting tool calls; there is no per-model capability switch.
 Agent tool selection and runtime permissions determine which tools are available.
 The obsolete `capabilities.tool_calls` field and `rustx init --tool-calls` flag are
@@ -207,6 +211,27 @@ either `reasoning_content` or `reasoning`; replay concatenates plaintext thinkin
 in order and skips opaque blocks that have no Chat representation. These rules
 do not enable thinking or synthesize reasoning request parameters. Profiles
 continue to own the exact provider parameters that control generation.
+
+Switching from Chat Completions back to Responses keeps the conversation's
+answers and tool calls/results. Readable reasoning without a native Responses
+replay unit is sent as ordinary assistant history (`output_text`), following
+pi's cross-model conversion. Foreign opaque state and inactive stored-response
+pointers are not sent. Complete stateless Responses output, including encrypted
+reasoning, remains a validated native replay unit. These wire conversions
+never rewrite the saved conversation.
+
+History can switch in either direction among Chat Completions, Responses and
+Anthropic Messages. Native reasoning is scoped to the producing provider
+binding (provider identity and endpoint), protocol and wire model. Profiles
+do not change that identity. Other models receive the readable reasoning as
+ordinary assistant history; opaque foreign thinking is not sent. Anthropic
+receives historical refusals as text. All protocols use bounded, valid tool
+IDs with the same ID on the matching result; Responses native bundles keep
+their original IDs. Stateless continuation resends the entire input history
+and each native output bundle once. Canonical tool IDs and reasoning stay
+unchanged. The replay owner is frozen with each actual request and retained
+on accepted reasoning, so retries, reconstruction and later model switches
+make the same translation decision.
 
 The bounded endpoint/model rules in `src/model/compat.rs` use `max_tokens` for
 the OpenCode Go API models listed there, following ZCode's built-in catalog.
@@ -233,10 +258,11 @@ is an explicit failure and never triggers an extra prompt-mode request.
 Optional `compat` declares the adapter behavior: `chat_max_tokens_field`,
 `chat_stream_usage`, `chat_reasoning_replay`, `chat_tool_protocol`, and
 `responses_storage` (Responses defaults to `stored`). Explicit overrides win
-over built-in rules. The model settings UI exposes API format, limits,
-capabilities, profiles and request parameters; protocol overrides belong to
-source configuration. Changing API format in the UI clears overrides belonging
-to the previous protocol. Protocol validation rejects foreign members.
+over built-in rules. The Provider editor exposes its shared API format. The
+Model dialog exposes limits, capabilities, profiles and request parameters;
+compatibility overrides belong to source configuration. When changing a
+Provider's protocol, remove incompatible model `compat` members and request
+parameters in the source first. Native validation rejects foreign members.
 
 #### Provider-native request parameters
 
@@ -371,16 +397,16 @@ explicit auxiliary choices.
 
 ### Root Agent
 
-`agent` supports `description`, `instructions`, `model`, `tools`, `skills`,
+`agent` supports `description`, `model`, `tools`, `skills`,
 `plugins`, `agents`, `workflows`, and `agents_md`.
 
 Every primary Agent request includes rustX's built-in coding-assistant guidance
-and execution working directory, even when `instructions` is omitted.
-Agent instructions extend that baseline; they do not replace it.
-The effective System Prompt is ordered as built-in
-guidance, Agent instructions, project instructions selected by `agents_md`,
-certified-extension sections, and visible Skill guidance. Root and named Agents
-use the same baseline with their own admitted instructions and capabilities.
+and execution working directory. The effective System Prompt starts with that
+guidance, then includes any named Agent profile instructions, project instructions
+selected by `agents_md`, certified-extension sections, and visible Skill guidance.
+In WebUI User Settings, Agent → Global instructions edits
+`~/rustx/.agents/AGENTS.md` directly. The Workspace root's `AGENTS.md` holds
+project-specific rules.
 Auxiliary summary requests retain their separate task-specific input.
 
 ```toml
@@ -388,7 +414,6 @@ Auxiliary summary requests retain their separate task-specific input.
 skills = ["review"]
 agents = ["reviewer"]
 workflows = []
-instructions = "Explain the evidence for each proposed change."
 
 [agent.tools]
 builtin = ["read", "glob", "grep"]
@@ -448,17 +473,11 @@ Workspace that does not shadow it, and a Workspace enables its own files. The Wo
 file at a time (`workflow_enabled`). Dispatcher capabilities follow admission
 of those selections. Definition existence never selects a resource.
 
-`agents_md.inherit` defaults true and `files` defaults empty inside its winning
-object. Automatic instruction discovery loads one global file from
-`~/rustx/.agents/`, then one file from the resolved Workspace root. In each
-directory the first regular file wins in this order: `AGENTS.override.md`,
-`AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`. The global resource directory
-stays bound to the User home even with an explicit `--config`. Workspace
-ancestors are not searched, and coincident global and Workspace paths contribute
-only once.
-
-Explicit `files` are appended in authored order. Setting `inherit = false`
-excludes both automatically discovered scopes while retaining explicit files.
+`agents_md.inherit` defaults to true. Automatic instruction discovery reads
+`AGENTS.md` from `~/rustx/.agents/`, then from the resolved Workspace root.
+The global directory stays bound to the User home even with an explicit
+`--config`. Coincident global and Workspace paths contribute only once.
+Setting `inherit = false` excludes both scopes from the prompt.
 All instruction files must be UTF-8; one optional leading BOM is removed.
 Each nonempty file is rendered in the System Prompt as
 `<project_instructions path="/absolute/source/path">` followed by its content
@@ -574,7 +593,7 @@ units; there is no recursive TOML merge.
 
 | Domain | Atomic replacement unit | Explicit empty behavior |
 | --- | --- | --- |
-| Independent scalars | `agent_id`, `approval_mode`, Root `description`, Root `instructions` individually | Empty strings undergo the field's validation |
+| Independent scalars | `agent_id`, `approval_mode`, Root `description` individually | Empty strings undergo the field's validation |
 | Providers | Complete `providers.<name>` | An incomplete Provider fails; `{}` map replaces no identities |
 | Models | Complete `models.<name>` | An incomplete Model fails; `{}` map replaces no identities |
 | Root model | Complete `agent.model` | Missing required model fails; optional members use domain defaults |
@@ -585,7 +604,7 @@ units; there is no recursive TOML merge.
 | Plugins | Complete `agent.plugins.<plugin>` object | Empty object defaults off; omitted contributors use that Plugin's defaults |
 | Agent delegation | Complete `agent.agents` array | `[]` permits no named Agents and composes no Agent controls |
 | Workflow enablement | `agent.workflows` array, merged across User and Workspace | `[]` adds none; it never disables a Global Workflow |
-| Project guidance | Complete `agent.agents_md` object | `{}` uses inherit=true, files=[] |
+| Project guidance | Complete `agent.agents_md` object | `{}` uses inherit=true |
 | Native invocation policy | Complete `native_tools.<tool>` object | `{}` restores that Tool's product defaults |
 | MCP invocation policy | Complete `mcp_tool_policies.<server>` object | `{}` restores domain defaults |
 | Model timeouts | Complete `model_timeout_policy` object | `{}` restores product defaults |
@@ -605,19 +624,22 @@ explicitly supplied members.
 
 ## Resources and admission
 
-For every Skill, Agent, Workflow, Python package and MCP identity, the Workspace
+For every Agent, Workflow, Python package and MCP identity, the Workspace
 definition shadows the complete User definition. Shadow selection occurs before
 validation. An invalid Workspace duplicate never restores a valid User duplicate.
 Unused invalid resources yield bounded ordered diagnostics; selecting an invalid
 resource fails the typed resolution or admission operation. A malformed collection
 whose identities cannot be read cannot expose lower definitions through fallback.
 
-Skills use standard Agent Skills packages at `skills/<name>/SKILL.md`. `skills`
-selection is prompt visibility, not a filesystem ACL. The system prompt provides
-the resolved absolute User and Workspace Skill collection roots without listing
-every absolute Skill path. Metadata supports progressive disclosure; bodies are
-read through ordinary model-independent Tool behavior. A child receives captured
-package bytes and resolved roots; it does not rediscover current files.
+Skills are discovered from `<workspace>/.agents/skills` and
+`~/rustx/.agents/skills`, in that order. Collection and instruction symlinks
+may resolve outside these directories. The first valid definition of a name wins. The root Agent advertises eligible Skills
+by default, with exact selections and `[]` available in `agent.skills`.
+The system prompt includes names, descriptions, and real instruction paths
+when Read or Bash is available. Skill bodies and supporting files are read on
+demand. `disable-model-invocation: true` keeps a Skill in the management catalog
+and out of the automatic prompt. Child Agents receive frozen Skill metadata.
+See [Skill discovery](skill-discovery.md).
 
 Named Agents use complete TOML profiles at `agents/<name>.toml` with description,
 instructions, optional model selection, Native/source Tools, Skills, Plugins,
@@ -892,7 +914,10 @@ committed named Agent's explicit selection resolves to — the catalog arrives w
 that change's commit,
 together with any capability or context change of the same generation. A cold
 Session receives the catalog when it next becomes resident. New Sessions start
-from the Workspace's published creation catalog.
+from the Workspace's published creation catalog. A typed settings edit can
+publish a validated catalog and default for new Sessions at the source commit,
+including when no Session is resident. Other source units still go through their
+ordinary preparation and adoption.
 
 A configured selection the published catalog does not admit is **unavailable**.
 The Session keeps it configured — nothing switches it to the catalog default or
@@ -905,8 +930,10 @@ are refused with `model_unavailable`, and inbound accepted before the publicatio
 is held, never run on the removed selection and never dropped. Held work does not
 make the Session busy for the correction. The correction is an ordinary
 `session/setModel` with a complete selection the
-catalog admits, primary and explicit auxiliary selections alike; it commits through the usual
-fence and admits held work with exactly the new selection.
+catalog admits, primary and explicit auxiliary selections alike. The primary-model
+picker can explicitly request that a carried auxiliary policy whose model was removed
+follow the primary model. Both corrections commit through the usual fence and admit
+held work with the resulting selection.
 
 The committed generation's `source_revisions` stay the source manifest its context
 was resolved from. Independently published units — execution policy, shared
@@ -1009,12 +1036,12 @@ generation or rebuild resources.
 A bounded native watcher (the `notify` crate) feeds external edits into the same
 path as a native write. Coverage is the User document's directory, for that one
 file; the User resource root `~/rustx/.agents` for `mcp.toml`, with its
-`agents`, `skills`, `tools` and `workflows` directories recursively (its parent
-until it exists); each Workspace that holds source authority or a Session's
-configuration, for `rustx.toml`, root `*.md` and the guidance files; and that
-Workspace's `.agents` in the same way. The guidance files are exactly the
-loader's (`AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`,
-`CLAUDE.MD`), at a Workspace root and at the User resource root. Anything else
+`agents`, `tools` and `workflows` directories recursively (its parent
+until it exists), plus Skill collections and grouping directories non-recursively
+for discovery changes and instruction replacement; each Workspace that holds source authority or a Session's
+configuration, for `rustx.toml` and `AGENTS.md`; and that Workspace's
+`.agents` in the same way. The User resource root also watches its
+`AGENTS.md`. Anything else
 under `.agents`, such as Session uploads, is neither watched nor routed. A
 notification for a watched directory or its ancestor may mean it was replaced at
 the same path, so those watches are registered again, and only a watch that
@@ -1093,7 +1120,7 @@ resolution and source inspection share:
   without a default model is incomplete, not invalid, once everything else holds.
 
 Every candidate is also bounded in bytes: its complete serialization must fit the
-1 MiB limit every authored file reader enforces (`bounded_file`), checked before
+1 MiB limit the authored document reader enforces (`bounded_file`), checked before
 any lock or backup. A repair that would grow a source past it — `schema_version
 = 9` becoming `10` in a document already at the limit — is `unresolved` with no
 backup, and the source is unchanged. The source publication primitive fences the
@@ -1398,13 +1425,13 @@ with those of an image-capable deployment:
 
 ```toml
 [providers.vision]
+protocol = "anthropic_messages"
 base_url = "https://api.example.invalid"
 api_key = "$VISION_API_KEY"
 
 [models.vision]
 provider = "vision"
 id = "image-capable-wire-model-id"
-protocol = "anthropic_messages"
 context_window = 128000
 max_output_tokens = 4096
 

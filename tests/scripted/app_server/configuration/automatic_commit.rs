@@ -28,14 +28,7 @@ async fn select_all_skills(fixture: &Fixture) {
 }
 
 fn instructions(runtime: &crate::runtime::ConversationRuntime) -> String {
-    runtime
-        .runtime_resources()
-        .configuration()
-        .unwrap()
-        .config
-        .agent
-        .instructions
-        .clone()
+    guidance(runtime.runtime_resources().project_context_files()).to_owned()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -138,14 +131,7 @@ async fn t04_every_resident_session_commits_and_t09_policy_and_healthy_rescan_ar
     for session in &fixture.sessions {
         fixture.manager.load(&session.id, None).await.unwrap();
     }
-    write(
-        &fixture,
-        0,
-        ConfigMutation::Instructions {
-            authored: Some("P2".into()),
-        },
-    )
-    .await;
+    write_guidance(&fixture, "P2".into()).await;
     let runtimes: Vec<_> = fixture
         .sessions
         .iter()
@@ -231,14 +217,7 @@ async fn t11_newer_desire_supersedes_a_staged_candidate_and_rescan_does_not_repr
         let runtime = fixture.manager.configuration_runtime(id).unwrap();
         runtime.submit_inbound(input("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("candidate one".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "candidate one".into()).await;
         let staged = settled(&fixture, 0).await;
         assert_eq!(
             staged.units[&ApplyUnit::Instructions],
@@ -262,14 +241,7 @@ async fn t11_newer_desire_supersedes_a_staged_candidate_and_rescan_does_not_repr
             probe.configuration_preparations.load(Ordering::SeqCst),
             preparations
         );
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("candidate two".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "candidate two".into()).await;
         let newer = settled(&fixture, 0).await;
         assert_ne!(newer.desired, staged.desired);
         assert_eq!(
@@ -297,14 +269,7 @@ async fn t15_unload_load_retains_the_committed_configuration_without_replay() {
     let fixture = Fixture::with_session_count(None, 1).await;
     let id = &fixture.sessions[0].id;
     let loaded = fixture.manager.load(id, None).await.unwrap();
-    write(
-        &fixture,
-        0,
-        ConfigMutation::Instructions {
-            authored: Some("committed before unload".into()),
-        },
-    )
-    .await;
+    write_guidance(&fixture, "committed before unload".into()).await;
     applied(&fixture, 0).await;
     let runtime = fixture.manager.configuration_runtime(id).unwrap();
     assert_eq!(instructions(&runtime), "committed before unload");
@@ -493,14 +458,7 @@ async fn t06_offside_preparation_allows_admission_and_t07_new_failure_supersedes
             .manager
             .probe(&fixture.sessions[0].active_conversation_id);
         probe.before_configuration_prepare.arm();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("superseded candidate".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "superseded candidate".into()).await;
         probe.before_configuration_prepare.entered().await;
         let old = fixture
             .manager
@@ -574,14 +532,7 @@ async fn t11_ready_candidate_commits_before_racing_independent_admission() {
         tokio::task::spawn_blocking(move || gate.wait_entered())
             .await
             .unwrap();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("committed before admission".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "committed before admission".into()).await;
         applied(&fixture, 0).await;
         drop(release);
         fixture.gates[0].wait_entered().await;
@@ -706,14 +657,7 @@ async fn a_runtime_closed_in_place_defers_its_application_and_others_still_commi
             closed.lifecycle_state(),
             crate::runtime::ConversationLifecycleState::Running
         );
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("after close".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "after close".into()).await;
         applied(&fixture, 1).await;
         assert_eq!(instructions(&live), "after close");
         let mut changed = fixture.manager.configuration_changes();
@@ -768,14 +712,7 @@ async fn reattaching_the_same_runtime_keeps_its_ready_candidate() {
             .probe(&fixture.sessions[0].active_conversation_id);
         runtime.submit_inbound(input("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("kept across attach".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "kept across attach".into()).await;
         let staged = settled(&fixture, 0).await;
         assert_eq!(
             staged.units[&ApplyUnit::Instructions],
@@ -831,14 +768,7 @@ async fn a_reallocation_consumes_its_deferral_and_a_later_attach_keeps_the_candi
             .probe(&fixture.sessions[0].active_conversation_id);
         runtime.submit_inbound(input("request-A")).unwrap();
         fixture.gates[0].wait_entered().await;
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("after reallocation".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "after reallocation".into()).await;
         let first = settled(&fixture, 0).await;
         fixture
             .manager
@@ -997,14 +927,7 @@ async fn live_model_selection_supersedes_a_candidate_blocked_by_background_owner
         let (execution_id, mut started, release) =
             start_background(&runtime, "live-selection-background");
         started.wait_for(|entered| *entered).await.unwrap();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("commits after background settles".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "commits after background settles".into()).await;
         let staged = settled(&fixture, 0).await;
         assert_eq!(
             staged.units[&ApplyUnit::Instructions],
@@ -1087,14 +1010,7 @@ async fn a_catalog_rebase_never_rewinds_a_binding_a_commit_retained() {
         let (execution_id, mut started, release) =
             start_background(&runtime, "call-rebase-background");
         started.wait_for(|entered| *entered).await.unwrap();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("committed between the cut and the write".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "committed between the cut and the write".into()).await;
         let staged = settled(&fixture, 0).await;
         assert_eq!(
             staged.units[&ApplyUnit::Instructions],
@@ -1200,14 +1116,7 @@ async fn t11_background_ownership_defers_commit_until_it_settles() {
             runtime.idle_epoch(),
             Err(crate::runtime::conversation_runtime::IdleBusyReason::Background)
         );
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("commit after background settles".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "commit after background settles".into()).await;
         let staged = settled(&fixture, 0).await;
         assert_eq!(
             staged.units[&ApplyUnit::Instructions],
@@ -1273,17 +1182,11 @@ async fn external_workspace_edit_commits_through_the_bounded_source_watch() {
         let edit = async {
             let mut changed = fixture.manager.configuration_changes();
             std::fs::write(fixture.workspaces[0].join("notes.txt"), "not a source").unwrap();
-            let path = fixture.workspaces[0].join("rustx.toml");
-            let mut config: toml::Value =
-                toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            config.as_table_mut().unwrap().insert(
-                "agent".into(),
-                toml::Value::try_from(
-                    serde_json::json!({"instructions": "from an external editor"}),
-                )
-                .unwrap(),
-            );
-            std::fs::write(&path, toml::to_string(&config).unwrap()).unwrap();
+            std::fs::write(
+                fixture.workspaces[0].join("AGENTS.md"),
+                "from an external editor",
+            )
+            .unwrap();
             while instructions(&runtime) != "from an external editor" {
                 changed.changed().await.unwrap();
             }
@@ -1303,10 +1206,9 @@ async fn external_workspace_edit_commits_through_the_bounded_source_watch() {
     .await;
 }
 
-/// Editing only a selected Skill's body keeps its catalog entry byte-identical
-/// but replaces its content version: the commit records it as `changed`.
+/// Body edits stay inert; frontmatter edits publish exactly one definition change.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn body_only_skill_edit_records_one_changed_fact() {
+async fn skill_resources_stay_inert_and_frontmatter_changes_are_recorded() {
     bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
         let id = fixture.sessions[0].id.clone();
@@ -1318,6 +1220,7 @@ async fn body_only_skill_edit_records_one_changed_fact() {
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         select_all_skills(&fixture).await;
         let before = configuration_changes(&runtime).len();
+        let revision = runtime.runtime_resources().capability().revision();
         let entries = runtime
             .runtime_resources()
             .capability()
@@ -1349,12 +1252,32 @@ async fn body_only_skill_edit_records_one_changed_fact() {
                 .model_skill_entries(),
             entries.as_slice()
         );
+        assert_eq!(configuration_changes(&runtime).len(), before);
+        assert_eq!(
+            runtime.runtime_resources().capability().revision(),
+            revision
+        );
+        // Only a changed definition, including a preserved metadata field,
+        // starts configuration preparation and publishes a new version.
+        let frontmatter = "---\nname: guide\ndescription: Project guide\nlicense: MIT\n---\n";
+        std::fs::write(skill.join("SKILL.md"), frontmatter).unwrap();
+        fixture
+            .manager
+            .reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: fixture.workspaces[0].clone(),
+                },
+            )
+            .await
+            .unwrap();
+        applied(&fixture, 0).await;
         let changes = configuration_changes(&runtime);
         assert_eq!(changes.len(), before + 1, "{changes:?}");
         assert_eq!(changes[before].skills.changed.names, ["guide"]);
         assert!(
             changes[before].skills.added.is_empty() && changes[before].skills.removed.is_empty()
         );
+        let frontmatter = frontmatter.replace("license: MIT", "license: Apache-2.0");
         // A third version with no request between them: each fact keeps the
         // version it installed, readable after the file moved on and the
         // runtime that recorded them is gone.
@@ -1595,7 +1518,9 @@ async fn a_child_only_skill_version_changes_the_tool_that_runs_it() {
             std::fs::create_dir_all(skills.join(name)).unwrap();
             std::fs::write(
                 skills.join(name).join("SKILL.md"),
-                format!("---\nname: {name}\ndescription: Guide {name}\n---\n{body}\n"),
+                format!(
+                    "---\nname: {name}\ndescription: Guide {name}\nlicense: {body}\n---\nbody\n"
+                ),
             )
             .unwrap();
         };
@@ -1682,6 +1607,128 @@ async fn a_child_only_skill_version_changes_the_tool_that_runs_it() {
     .await;
 }
 
+/// Invocation overrides read the current inert catalog, even when no profile
+/// selects the changed Skill. Existing Attempt captures keep the old catalog;
+/// publication neither prepares dependencies nor records an effective change.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unselected_skill_catalog_updates_future_overrides_without_preparation_or_facts() {
+    bounded(async {
+        use crate::runtime::subagent::{
+            SubagentInvocationOverride, SubagentName, SubagentResolution,
+            SubagentResolutionError, SubagentResolver,
+        };
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let id = fixture.sessions[0].id.clone();
+        let workspace = fixture.workspaces[0].clone();
+        let agents = workspace.join(".agents/agents");
+        let skills = workspace.join(".agents/skills");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("reviewer.toml"),
+            "description='Review'\ninstructions='Review the task'\nskills=[]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("rustx.toml"),
+            "[agent]\nagents=['reviewer']\nskills=[]\n",
+        )
+        .unwrap();
+        let skill = |name: &str, description: &str, disabled: bool, pin: &str| {
+            std::fs::create_dir_all(skills.join(name)).unwrap();
+            std::fs::write(skills.join(name).join("SKILL.md"), format!(
+                "---\nname: {name}\ndescription: {description}\ndisable-model-invocation: {disabled}\nmetadata:\n  rustx.python-dependencies: '{{\"rustx-review-must-not-install\":\"{pin}\"}}'\n---\nbody\n"
+            )).unwrap();
+        };
+        skill("idle", "Original", false, "1.0");
+        fixture.manager.load(&id, None).await.unwrap();
+        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
+        let old = runtime.runtime_resources();
+        let capability_revision = old.capability().revision();
+        let facts = configuration_changes(&runtime).len();
+        let resolve = |resources: &crate::runtime::RuntimeResourceSnapshot, name: &str| {
+            let agent = SubagentName::parse("reviewer").unwrap();
+            let invocation = SubagentInvocationOverride {
+                skills: Some(vec![name.into()]),
+                ..Default::default()
+            };
+            let model = runtime.model_state_for_test();
+            SubagentResolver::resolve(&SubagentResolution {
+                resources,
+                agent: &agent,
+                attempt_model: model.config(),
+                models: &resources.configuration().unwrap().models,
+                invocation: Some(&invocation),
+            })
+        };
+        let reconcile = || async {
+            fixture.manager.reconcile_configuration(
+                &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                    directory: workspace.clone(),
+                },
+            ).await.unwrap();
+            settled(&fixture, 0).await
+        };
+        assert_eq!(resolve(&old, "idle").unwrap().skills[0].catalog_entry.description, "Original");
+        runtime.submit_inbound(input("request-A")).unwrap();
+        fixture.gates[0].wait_entered().await;
+        skill("idle", "Updated", false, "2.0");
+        skill("new-skill", "New", false, "1.0");
+        let staged = reconcile().await;
+        assert_eq!(staged.units[&ApplyUnit::Instructions], UnitApplication::Ready);
+        assert!(Arc::ptr_eq(&old, &runtime.runtime_resources()));
+        assert_eq!(runtime.capability().current_snapshot().skills(), old.capability().skills());
+        skill("idle", "Latest", false, "3.0");
+        let latest = reconcile().await;
+        assert_ne!(latest.desired, staged.desired);
+        assert!(Arc::ptr_eq(&old, &runtime.runtime_resources()));
+        let mut settlement = SettlementReceiptWait::capture(&runtime);
+        fixture.gates[0].release();
+        settlement.wait().await;
+        applied(&fixture, 0).await;
+        let updated = runtime.runtime_resources();
+        let idle = resolve(&updated, "idle").unwrap();
+        assert_eq!(idle.skills[0].catalog_entry.description, "Latest");
+        assert_eq!(idle.skills[0].dependencies.python["rustx-review-must-not-install"], "3.0");
+        assert_eq!(resolve(&updated, "new-skill").unwrap().skills[0].catalog_entry.description, "New");
+        assert_eq!(resolve(&old, "idle").unwrap().skills[0].catalog_entry.description, "Original");
+        assert!(matches!(resolve(&old, "new-skill"), Err(SubagentResolutionError::UnknownSkill { .. })));
+        assert_eq!(runtime.capability().current_snapshot().skills(), updated.capability().skills());
+        runtime.refresh_runtime_catalogs().await.unwrap();
+        assert_eq!(resolve(&runtime.runtime_resources(), "idle").unwrap().skills, idle.skills);
+        skill("idle", "Disabled", true, "3.0");
+        std::fs::remove_dir_all(skills.join("new-skill")).unwrap();
+        reconcile().await;
+        applied(&fixture, 0).await;
+        let removed = runtime.runtime_resources();
+        assert!(matches!(resolve(&removed, "idle"), Err(SubagentResolutionError::SkillNotModelVisible { .. })));
+        assert!(matches!(resolve(&removed, "new-skill"), Err(SubagentResolutionError::UnknownSkill { .. })));
+        assert_eq!(removed.capability().revision(), capability_revision);
+        assert_eq!(configuration_changes(&runtime).len(), facts);
+        assert!(removed.capability().python_environment().is_none());
+        fixture.manager.unload(&fixture.sessions[0].active_conversation_id).await.unwrap();
+        skill("cold-skill", "Added while cold", false, "1.0");
+        let mut changes = fixture.manager.configuration_changes();
+        fixture.manager.reconcile_configuration(
+            &crate::local_runtime::configuration::settings::SourceTarget::Workspace {
+                directory: workspace.clone(),
+            },
+        ).await.unwrap();
+        while !fixture.manager.applications.is_deferred(id.as_ref()) {
+            changes.changed().await.unwrap();
+        }
+        assert!(fixture.manager.configuration_runtime(&id).is_none());
+        fixture.manager.load(&id, None).await.unwrap();
+        applied(&fixture, 0).await;
+        let reloaded = fixture.manager.configuration_runtime(&id).unwrap();
+        let cold = reloaded.runtime_resources();
+        assert_eq!(resolve(&cold, "cold-skill").unwrap().skills[0].catalog_entry.description, "Added while cold");
+        assert!(matches!(resolve(&cold, "idle"), Err(SubagentResolutionError::SkillNotModelVisible { .. })));
+        assert_eq!(configuration_changes(&reloaded).len(), facts);
+        assert!(cold.capability().python_environment().is_none());
+        fixture.close().await;
+    }).await;
+}
+
 /// The Model domain compares the invocations that run, not the Session's
 /// client view: a parameter change of the model only a delegated Agent
 /// selects and a provider endpoint move under unchanged selections are each
@@ -1760,6 +1807,10 @@ async fn model_facts_follow_the_invocations_that_run() {
                 id: "local".into(),
                 authored: Some(
                     crate::local_runtime::configuration::settings::ProviderWrite {
+                        display_name: None,
+                        hidden: false,
+                        icon: None,
+                        protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
                         base_url: fixture.provider.url("/v2"),
                         credential:
                             crate::local_runtime::configuration::settings::CredentialEdit::Retain,
@@ -2162,7 +2213,7 @@ async fn a_removal_retains_every_removed_definition() {
 }
 
 /// Every guidance file the loader reads is watched: an external edit of the
-/// User `AGENTS.md` and of a Workspace `AGENTS.MD` each commits on its own,
+/// User `AGENTS.md` and of a Workspace `AGENTS.md` each commits on its own,
 /// with no save, rescan or second edit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn external_guidance_edits_commit_through_the_source_watch() {
@@ -2186,7 +2237,7 @@ async fn external_guidance_edits_commit_through_the_source_watch() {
                 changed.changed().await.unwrap();
             }
             std::fs::write(
-                fixture.workspaces[0].join("AGENTS.MD"),
+                fixture.workspaces[0].join("AGENTS.md"),
                 "workspace guidance from an editor",
             )
             .unwrap();
@@ -2198,6 +2249,69 @@ async fn external_guidance_edits_commit_through_the_source_watch() {
         let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), edit);
         watched.unwrap();
         assert_eq!(configuration_changes(&runtime).len(), 2);
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// A standalone root Markdown skill is discovered and updated from its own
+/// file notifications, without a collection event or an explicit rescan.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn standalone_skill_file_notifications_publish_the_live_catalog() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let collection = fixture.workspaces[0].join(".agents/skills");
+        std::fs::create_dir_all(&collection).unwrap();
+        let id = &fixture.sessions[0].id;
+        fixture.manager.load(id, None).await.unwrap();
+        select_all_skills(&fixture).await;
+        let runtime = fixture.manager.configuration_runtime(id).unwrap();
+        let descriptions = || {
+            runtime
+                .runtime_resources()
+                .capability()
+                .model_skill_entries()
+                .iter()
+                .map(|entry| entry.description.clone())
+                .collect::<Vec<_>>()
+        };
+        assert!(descriptions().is_empty());
+        let facts = configuration_changes(&runtime).len();
+        injected_only(&fixture);
+        let stop = tokio_util::sync::CancellationToken::new();
+        let edit = async {
+            watch_settled(&fixture).await;
+            let mut changed = fixture.manager.configuration_changes();
+            let file = collection.join("guide.md");
+            for (kind, description) in [
+                (
+                    notify::EventKind::Create(notify::event::CreateKind::File),
+                    "First version",
+                ),
+                (
+                    notify::EventKind::Modify(notify::event::ModifyKind::Any),
+                    "Second version",
+                ),
+            ] {
+                std::fs::write(
+                    &file,
+                    format!("---\nname: guide\ndescription: {description}\n---\nbody\n"),
+                )
+                .unwrap();
+                assert!(
+                    fixture
+                        .manager
+                        .notify_source_watch(notify::Event::new(kind).add_path(file.clone()))
+                );
+                while descriptions() != [description] {
+                    changed.changed().await.unwrap();
+                }
+            }
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), edit);
+        watched.unwrap();
+        assert_eq!(configuration_changes(&runtime).len(), facts + 2);
         fixture.close().await;
     })
     .await;
@@ -2522,74 +2636,6 @@ async fn a_user_skill_inside_a_workspace_refreshes_every_consumer() {
     .await;
 }
 
-/// A selected instruction file outside the fixed sources is a captured
-/// input: its edit, the only notification, reaches the resident runtime.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_edited_selected_instruction_file_reaches_the_resident_runtime() {
-    bounded(async {
-        let fixture = Fixture::with_session_count(None, 1).await;
-        let id = fixture.sessions[0].id.clone();
-        let policy = fixture.workspaces[0].join("docs/policy.md");
-        std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
-        std::fs::write(&policy, "Policy version A").unwrap();
-        let config = fixture.workspaces[0].join("rustx.toml");
-        let mut document = std::fs::read_to_string(&config).unwrap();
-        document.push_str("\n[agent.agents_md]\nfiles = [\"docs/policy.md\"]\n");
-        std::fs::write(&config, document).unwrap();
-        fixture.manager.load(&id, None).await.unwrap();
-        let runtime = fixture.manager.configuration_runtime(&id).unwrap();
-        let policy_text = |runtime: &crate::runtime::ConversationRuntime| {
-            runtime
-                .runtime_resources()
-                .project_instructions()
-                .unwrap_or_default()
-                .to_owned()
-        };
-        assert!(policy_text(&runtime).contains("Policy version A"));
-        while !fixture.manager.applications.lock().worker_idle() {
-            tokio::task::yield_now().await;
-        }
-        injected_only(&fixture);
-        let captured = fixture
-            .manager
-            .registry
-            .0
-            .lock()
-            .unwrap()
-            .source_watch_captured
-            .clone();
-        captured.arm();
-        let stop = tokio_util::sync::CancellationToken::new();
-        let observe = async {
-            watch_settled(&fixture).await;
-            // Edited before the watch starts: the injected event is the only one.
-            std::fs::write(&policy, "Policy version B").unwrap();
-            let edit =
-                notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
-                    .add_path(policy.clone());
-            while !fixture.manager.notify_source_watch(edit.clone()) {
-                tokio::task::yield_now().await;
-            }
-            captured.entered().await;
-            applied(&fixture, 0).await;
-            while !fixture.manager.applications.lock().worker_idle() {
-                tokio::task::yield_now().await;
-            }
-            assert!(
-                policy_text(&runtime).contains("Policy version B"),
-                "the edit was not routed: {}",
-                policy_text(&runtime)
-            );
-            captured.release();
-            stop.cancel();
-        };
-        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
-        watched.unwrap();
-        fixture.close().await;
-    })
-    .await;
-}
-
 fn pending_notifications(fixture: &Fixture) -> std::sync::Arc<super::super::source_watch::Pending> {
     fixture
         .manager
@@ -2635,9 +2681,7 @@ async fn a_notification_flood_stays_bounded_and_rescans_into_the_edit() {
             // The pass is parked after its capture: everything below arrives
             // while the watch is busy.
             captured.entered().await;
-            let mut document = std::fs::read_to_string(&config).unwrap();
-            document.push_str("\n[agent]\ninstructions = \"reached by the rescan\"\n");
-            std::fs::write(&config, document).unwrap();
+            std::fs::write(workspace.join("AGENTS.md"), "reached by the rescan").unwrap();
             let pending = pending_notifications(&fixture);
             let bound = super::super::source_watch::PENDING_PATHS;
             for index in 0..4 * bound {
@@ -2733,21 +2777,120 @@ fn project_text(runtime: &crate::runtime::ConversationRuntime) -> String {
         .to_owned()
 }
 
-/// Select `file` (relative to the first Workspace) as a root instruction file.
-fn select_instruction_file(fixture: &Fixture, file: &str) {
-    let config = fixture.workspaces[0].join("rustx.toml");
-    let mut document = std::fs::read_to_string(&config).unwrap();
-    std::fmt::Write::write_fmt(
-        &mut document,
-        format_args!("\n[agent.agents_md]\nfiles = [{file:?}]\n"),
-    )
-    .unwrap();
-    std::fs::write(&config, document).unwrap();
+/// Exercise captured symlink dependencies through the canonical guidance file.
+fn link_workspace_guidance(fixture: &Fixture, target: &str) {
+    std::os::unix::fs::symlink(target, fixture.workspaces[0].join("AGENTS.md")).unwrap();
 }
 
 fn modified(path: &std::path::Path) -> notify::Event {
     notify::Event::new(notify::EventKind::Modify(notify::event::ModifyKind::Any))
         .add_path(path.to_path_buf())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn removing_a_hidden_skill_entry_recovers_collection_admission() {
+    hidden_skill_budget_change(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn creating_a_hidden_skill_entry_invalidates_collection_admission() {
+    hidden_skill_budget_change(true).await;
+}
+
+/// Only the concrete hidden child notification reaches the watch loop. The
+/// capture gate proves routing completed before checking retained source truth
+/// and the catalog published into the resident runtime.
+async fn hidden_skill_budget_change(create: bool) {
+    bounded(async {
+        let fixture = Fixture::with_session_count(None, 1).await;
+        let collection = fixture.workspaces[0].join(".agents/skills");
+        let package = collection.join("guide");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("SKILL.md"),
+            "---\nname: guide\ndescription: Guide\n---\n",
+        )
+        .unwrap();
+        for index in 0..if create { 2047 } else { 2048 } {
+            std::fs::write(collection.join(format!(".hidden-{index}")), "").unwrap();
+        }
+        let id = &fixture.sessions[0].id;
+        fixture.manager.load(id, None).await.unwrap();
+        select_all_skills(&fixture).await;
+        let runtime = fixture.manager.configuration_runtime(id).unwrap();
+        let captured_skills = || {
+            let applications = fixture.manager.applications.lock();
+            let discovery = &applications
+                .test_desired_source(&fixture.workspaces[0])
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .context
+                .as_ref()
+                .unwrap()
+                .skill_discovery;
+            (discovery.revision(), discovery.packages.len())
+        };
+        let catalog_size = || {
+            runtime
+                .runtime_resources()
+                .capability()
+                .model_skill_entries()
+                .len()
+        };
+        assert_eq!(catalog_size(), usize::from(create));
+        injected_only(&fixture);
+        let captured = fixture
+            .manager
+            .registry
+            .0
+            .lock()
+            .unwrap()
+            .source_watch_captured
+            .clone();
+        captured.arm();
+        let stop = tokio_util::sync::CancellationToken::new();
+        let observe = async {
+            watch_settled(&fixture).await;
+            let before = captured_skills();
+            assert_eq!(before.1, usize::from(create));
+            let changed = collection.join(".hidden-2047");
+            let kind = if create {
+                std::fs::write(&changed, "").unwrap();
+                notify::EventKind::Create(notify::event::CreateKind::File)
+            } else {
+                std::fs::remove_file(&changed).unwrap();
+                notify::EventKind::Remove(notify::event::RemoveKind::File)
+            };
+            assert!(
+                fixture
+                    .manager
+                    .notify_source_watch(notify::Event::new(kind).add_path(changed))
+            );
+            captured.entered().await;
+            applied(&fixture, 0).await;
+            while !fixture.manager.applications.lock().worker_idle() {
+                tokio::task::yield_now().await;
+            }
+            let after = captured_skills();
+            assert_ne!(
+                after.0, before.0,
+                "hidden entry did not invalidate retained source discovery"
+            );
+            assert_eq!(after.1, usize::from(!create));
+            assert_eq!(
+                catalog_size(),
+                usize::from(!create),
+                "resident skill catalog was not published"
+            );
+            captured.release();
+            stop.cancel();
+        };
+        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
+        watched.unwrap();
+        fixture.close().await;
+    })
+    .await;
 }
 
 /// A newly selected instruction file whose first capture fails stays an
@@ -2779,7 +2922,7 @@ async fn a_newly_selected_file_that_fails_its_first_capture_recovers_from_its_ow
             let policy = fixture.workspaces[0].join("docs/new-policy.md");
             std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
             std::fs::write(&policy, b"\xff\xfe not UTF-8").unwrap();
-            select_instruction_file(&fixture, "docs/new-policy.md");
+            link_workspace_guidance(&fixture, "docs/new-policy.md");
             let config = modified(&fixture.workspaces[0].join("rustx.toml"));
             while !fixture.manager.notify_source_watch(config.clone()) {
                 tokio::task::yield_now().await;
@@ -2796,7 +2939,7 @@ async fn a_newly_selected_file_that_fails_its_first_capture_recovers_from_its_ow
                     .lock()
                     .source_inputs()
                     .iter()
-                    .any(|(_, file)| file == &policy),
+                    .any(|(_, file)| file == &fixture.workspaces[0].join("AGENTS.md")),
                 "the failed input is not observed"
             );
             // The pass after this capture watches the failed input and captures
@@ -2850,7 +2993,7 @@ async fn an_edited_absolute_link_target_reaches_the_resident_runtime() {
         std::fs::create_dir_all(workspace.join("docs")).unwrap();
         std::fs::write(&target, "Policy version A").unwrap();
         std::os::unix::fs::symlink(&target, workspace.join("docs/policy.md")).unwrap();
-        select_instruction_file(&fixture, "docs/policy.md");
+        link_workspace_guidance(&fixture, "docs/policy.md");
         fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         assert!(project_text(&runtime).contains("Policy version A"));
@@ -2965,7 +3108,7 @@ async fn a_repointed_intermediate_link_reaches_the_resident_runtime() {
         std::os::unix::fs::symlink("../v1", workspace.join("links/current")).unwrap();
         std::os::unix::fs::symlink(workspace.join("links/current"), workspace.join("docs"))
             .unwrap();
-        select_instruction_file(&fixture, "docs/policy.md");
+        link_workspace_guidance(&fixture, "docs/policy.md");
         fixture
             .manager
             .load(&fixture.sessions[0].id, None)
@@ -2982,28 +3125,20 @@ async fn a_repointed_intermediate_link_reaches_the_resident_runtime() {
     .await;
 }
 
-/// A User instruction file outside every Workspace keeps a link among its
-/// parents observed: re-pointing only that link reaches the resident runtime.
+/// Global AGENTS.md can use a target beneath its own resource root.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_repointed_parent_link_of_an_external_user_input_reaches_the_resident_runtime() {
+async fn a_repointed_parent_link_of_global_guidance_reaches_the_resident_runtime() {
     bounded(async {
         let fixture = Fixture::with_session_count(None, 1).await;
-        let shared = std::fs::canonicalize(fixture.workspaces[0].parent().unwrap())
-            .unwrap()
-            .join("shared");
-        versioned_policies(&shared);
-        std::os::unix::fs::symlink("v1", shared.join("current")).unwrap();
-        let config = fixture.manager.configuration.sources.config_path.clone();
-        let mut document = std::fs::read_to_string(&config).unwrap();
-        std::fmt::Write::write_fmt(
-            &mut document,
-            format_args!(
-                "\n[agent.agents_md]\nfiles = [{:?}]\n",
-                shared.join("current/policy.md")
-            ),
-        )
-        .unwrap();
-        std::fs::write(&config, document).unwrap();
+        let root = fixture
+            .manager
+            .configuration
+            .sources
+            .home_directory
+            .join("rustx/.agents");
+        versioned_policies(&root);
+        std::os::unix::fs::symlink("v1", root.join("current")).unwrap();
+        std::os::unix::fs::symlink("current/policy.md", root.join("AGENTS.md")).unwrap();
         fixture
             .manager
             .load(&fixture.sessions[0].id, None)
@@ -3011,7 +3146,7 @@ async fn a_repointed_parent_link_of_an_external_user_input_reaches_the_resident_
             .unwrap();
         a_repointed_link_reaches_the_resident_runtime(
             &fixture,
-            &shared.join("current"),
+            &root.join("current"),
             std::path::Path::new("v2"),
         )
         .await;
@@ -3050,7 +3185,7 @@ async fn a_selected_file_beneath_a_non_directory_recovers_when_the_directory_is_
             let docs = fixture.workspaces[0].join("docs");
             let policy = docs.join("policy.md");
             std::fs::write(&docs, "not a directory").unwrap();
-            select_instruction_file(&fixture, "docs/policy.md");
+            link_workspace_guidance(&fixture, "docs/policy.md");
             let config = modified(&fixture.workspaces[0].join("rustx.toml"));
             while !fixture.manager.notify_source_watch(config.clone()) {
                 tokio::task::yield_now().await;
@@ -3067,7 +3202,7 @@ async fn a_selected_file_beneath_a_non_directory_recovers_when_the_directory_is_
                     .lock()
                     .source_inputs()
                     .iter()
-                    .any(|(_, file)| file == &policy),
+                    .any(|(_, file)| file == &fixture.workspaces[0].join("AGENTS.md")),
                 "the unauthorized input is not observed"
             );
             // Let the failed capture's handling finish entirely, including
@@ -3137,7 +3272,7 @@ async fn an_edit_before_a_new_input_is_watched_is_captured_once_it_is() {
             let policy = fixture.workspaces[0].join("docs/policy.md");
             std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
             std::fs::write(&policy, "Policy version A").unwrap();
-            select_instruction_file(&fixture, "docs/policy.md");
+            link_workspace_guidance(&fixture, "docs/policy.md");
             let config = modified(&fixture.workspaces[0].join("rustx.toml"));
             while !fixture.manager.notify_source_watch(config.clone()) {
                 tokio::task::yield_now().await;
@@ -3178,7 +3313,7 @@ async fn a_replaced_input_directory_recaptures_its_readers() {
         let docs = fixture.workspaces[0].join("docs");
         std::fs::create_dir_all(&docs).unwrap();
         std::fs::write(docs.join("policy.md"), "Policy version A").unwrap();
-        select_instruction_file(&fixture, "docs/policy.md");
+        link_workspace_guidance(&fixture, "docs/policy.md");
         fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         assert!(project_text(&runtime).contains("Policy version A"));
@@ -3243,92 +3378,6 @@ fn context_failed(fixture: &Fixture) -> bool {
         })
 }
 
-/// A Named Agent's newly selected instruction file that fails its first
-/// capture is an input although the diagnostic names the Agent's TOML: fixing
-/// only that file, through its own notification, recovers the capture.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_named_agent_file_that_fails_its_first_capture_recovers_from_its_own_edit() {
-    bounded(async {
-        let fixture = Fixture::with_session_count(None, 1).await;
-        let id = fixture.sessions[0].id.clone();
-        let helper = fixture.workspaces[0].join(".agents/agents/helper.toml");
-        std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
-        std::fs::write(&helper, "description = 'Help'\ninstructions = 'Assist'\n").unwrap();
-        let config = fixture.workspaces[0].join("rustx.toml");
-        let mut document = std::fs::read_to_string(&config).unwrap();
-        document.push_str("\n[agent]\nagents = [\"helper\"]\n");
-        std::fs::write(&config, document).unwrap();
-        fixture.manager.load(&id, None).await.unwrap();
-        while !fixture.manager.applications.lock().worker_idle() {
-            tokio::task::yield_now().await;
-        }
-        assert!(!context_failed(&fixture));
-        let file = fixture.workspaces[0].join("docs/helper.md");
-        injected_only(&fixture);
-        let captured = fixture
-            .manager
-            .registry
-            .0
-            .lock()
-            .unwrap()
-            .source_watch_captured
-            .clone();
-        captured.arm();
-        let stop = tokio_util::sync::CancellationToken::new();
-        let observe = async {
-            watch_settled(&fixture).await;
-            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-            std::fs::write(&file, b"\xff\xfe not UTF-8").unwrap();
-            std::fs::write(
-                &helper,
-                "description = 'Help'\ninstructions = 'Assist'\n[agents_md]\nfiles = ['docs/helper.md']\n",
-            )
-            .unwrap();
-            assert!(fixture.manager.notify_source_watch(modified(&helper)));
-            captured.entered().await;
-            while !fixture.manager.applications.lock().worker_idle() {
-                tokio::task::yield_now().await;
-            }
-            assert!(context_failed(&fixture), "the invalid file did not fail the capture");
-            assert!(
-                fixture
-                    .manager
-                    .applications
-                    .lock()
-                    .source_inputs()
-                    .iter()
-                    .any(|(_, input)| input == &file),
-                "the file the capture failed at is not an input"
-            );
-            let passes = *settled_passes(&fixture).borrow();
-            captured.release();
-            captured.parked(0).await;
-            settled_passes(&fixture)
-                .wait_for(|settled| *settled > passes)
-                .await
-                .unwrap();
-            while !fixture.manager.applications.lock().worker_idle() {
-                tokio::task::yield_now().await;
-            }
-            assert!(context_failed(&fixture));
-            captured.arm();
-            std::fs::write(&file, "Helper policy").unwrap();
-            assert!(fixture.manager.notify_source_watch(modified(&file)));
-            captured.entered().await;
-            while !fixture.manager.applications.lock().worker_idle() {
-                tokio::task::yield_now().await;
-            }
-            assert!(!context_failed(&fixture), "the fixed file did not recover");
-            captured.release();
-            stop.cancel();
-        };
-        let (watched, ()) = tokio::join!(fixture.manager.run_source_watch(stop.clone()), observe);
-        watched.unwrap();
-        fixture.close().await;
-    })
-    .await;
-}
-
 /// The first pass treats every input it finds as new: an edit after the
 /// capture that read it and before the watch started, with no notification
 /// at all, reaches the resident runtime.
@@ -3340,7 +3389,7 @@ async fn an_edit_before_the_watch_starts_is_captured_by_its_first_pass() {
         let policy = fixture.workspaces[0].join("docs/policy.md");
         std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
         std::fs::write(&policy, "Policy version A").unwrap();
-        select_instruction_file(&fixture, "docs/policy.md");
+        link_workspace_guidance(&fixture, "docs/policy.md");
         fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         assert!(project_text(&runtime).contains("Policy version A"));
@@ -3376,14 +3425,7 @@ async fn a_published_policy_after_an_unrecorded_commit_survives_reload() {
         let loaded = fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         runtime.fail_next_configuration_record();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("published, not recorded".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "published, not recorded".into()).await;
         let view = applied(&fixture, 0).await;
         assert!(matches!(
             view.units[&ApplyUnit::Instructions],
@@ -3452,14 +3494,7 @@ async fn a_load_returns_only_after_its_runtime_owns_the_application() {
         let loaded = fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         runtime.fail_next_configuration_record();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("published, not recorded".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "published, not recorded".into()).await;
         let uncertain = |fixture: &Fixture| {
             fixture
                 .manager
@@ -3559,14 +3594,7 @@ async fn a_replaced_allocation_never_reattaches_late() {
         fixture.manager.load(&id, None).await.unwrap();
         let b = fixture.manager.configuration_runtime(&id).unwrap();
         b.fail_next_configuration_record();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("published by B, not recorded".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "published by B, not recorded".into()).await;
         let uncertain = |fixture: &Fixture| {
             fixture
                 .manager
@@ -3620,14 +3648,7 @@ async fn a_preparation_never_attaches_the_allocation_it_outlived() {
         let loaded = fixture.manager.load(&id, None).await.unwrap();
         let a = fixture.manager.configuration_runtime(&id).unwrap();
         a.fail_next_configuration_record();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("published by A, not recorded".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "published by A, not recorded".into()).await;
         let uncertain = |fixture: &Fixture| {
             fixture
                 .manager
@@ -3717,14 +3738,7 @@ async fn a_late_unrecorded_settlement_is_never_reported_applied() {
             .clone();
         settlement.arm();
         runtime.fail_next_configuration_record();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("published, not recorded".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "published, not recorded".into()).await;
         // Native published B and failed to record it; its report is parked.
         settlement.entered().await;
         assert_eq!(instructions(&runtime), "published, not recorded");
@@ -3850,14 +3864,7 @@ async fn an_unrecorded_live_commit_is_uncertain_and_fences_admission() {
         fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         runtime.fail_next_configuration_record();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("published, not recorded".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "published, not recorded".into()).await;
         let view = applied(&fixture, 0).await;
         assert!(
             matches!(

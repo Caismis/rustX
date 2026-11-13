@@ -34,6 +34,7 @@ pub(crate) struct AuxiliaryWriteTestGates {
 }
 
 pub(super) struct ExecutorInner {
+    activity: tokio::sync::watch::Sender<()>,
     resources: Arc<ExecutionResources>,
     capacity: ConversationCapacity,
     state: Mutex<RegistryState>,
@@ -261,6 +262,7 @@ impl AuxiliaryExecutor {
             ContextError::new(ContextErrorKind::AuxiliaryNotStarted, error.to_string())
         })?;
         Ok(Self(Arc::new(ExecutorInner {
+            activity: tokio::sync::watch::channel(()).0,
             resources: Arc::new(ExecutionResources {
                 store,
                 clock,
@@ -305,6 +307,19 @@ impl AuxiliaryExecutor {
             state: Mutex::default(),
             changed: Notify::new(),
         })
+    }
+
+    pub(crate) fn wait_activity_ready(&self) {
+        drop(lock(&self.0.state));
+    }
+    pub(crate) fn with_activity<T>(&self, read: impl FnOnce(bool) -> T) -> Option<T> {
+        let state = self.0.state.try_lock().ok()?;
+        let result = read(!state.calls.is_empty());
+        drop(state);
+        Some(result)
+    }
+    pub(crate) fn activity_changes(&self) -> tokio::sync::watch::Receiver<()> {
+        self.0.activity.subscribe()
     }
 
     pub(crate) fn capacity_changes(&self) -> tokio::sync::watch::Receiver<u64> {
@@ -412,6 +427,7 @@ impl AuxiliaryExecutor {
                                 });
                                 parent.children.insert(call_id.clone());
                                 registry.calls.insert(call_id, record.clone());
+                                self.0.activity.send_replace(());
                                 Ok(AuxiliaryReservation { record })
                             })
                             .ok_or_else(closed)?
@@ -774,6 +790,7 @@ impl CallRecord {
         drop(lock(&self.resources).take());
         if let Some(registry) = self.registry.upgrade() {
             lock(&registry.state).calls.remove(&self.call_id);
+            registry.activity.send_replace(());
             registry.changed.notify_waiters();
         }
         lock(&self.scope.state).children.remove(&self.call_id);

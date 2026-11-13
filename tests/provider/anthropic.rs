@@ -1256,6 +1256,7 @@ async fn previous_thinking_replays_from_opaque_state() {
                 id: rustx::runtime::identity::MessageId::new("msg-prev"),
                 content: vec![rustx::message::types::AssistantContentBlock::Reasoning(
                     rustx::message::types::ReasoningBlock {
+                        origin: request.invocation.replay_origin(),
                         text: Some("Previous chain.".to_owned()),
                         provider_state: Some(ProviderContinuationState::Anthropic(
                             AnthropicContinuation {
@@ -1295,6 +1296,7 @@ async fn stateless_previous_thinking_fails_explicitly() {
                 id: rustx::runtime::identity::MessageId::new("msg-prev"),
                 content: vec![rustx::message::types::AssistantContentBlock::Reasoning(
                     rustx::message::types::ReasoningBlock {
+                        origin: request.invocation.replay_origin(),
                         text: Some("Unsigned chain.".to_owned()),
                         provider_state: None,
                     },
@@ -1386,6 +1388,7 @@ async fn continuation_contradiction_with_boundary_is_rejected() {
                 id: rustx::runtime::identity::MessageId::new("msg-prev"),
                 content: vec![rustx::message::types::AssistantContentBlock::Reasoning(
                     rustx::message::types::ReasoningBlock {
+                        origin: request.invocation.replay_origin(),
                         text: None,
                         provider_state: Some(ProviderContinuationState::Anthropic(
                             AnthropicContinuation {
@@ -1429,6 +1432,7 @@ async fn incomplete_or_changed_native_thinking_never_dispatches() {
                 AssistantMessageBlock {
                     id: MessageId::new("accepted-thinking"),
                     content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                        origin: request.invocation.replay_origin(),
                         text: Some("edited plaintext".into()),
                         provider_state: Some(ProviderContinuationState::Anthropic(
                             AnthropicContinuation { opaque },
@@ -1525,6 +1529,7 @@ async fn redacted_thinking_replays_losslessly() {
                 id: rustx::runtime::identity::MessageId::new("msg-redacted"),
                 content: vec![rustx::message::types::AssistantContentBlock::Reasoning(
                     rustx::message::types::ReasoningBlock {
+                        origin: request.invocation.replay_origin(),
                         text: None,
                         provider_state: Some(ProviderContinuationState::Anthropic(
                             AnthropicContinuation {

@@ -281,10 +281,9 @@ async fn bounded_loop_exhaustion_keeps_one_outer_result_and_no_internal_provider
 
 fn models_json_for_base_url(base_url: &str) -> String {
     toml::to_string_pretty(&serde_json::json!({
-        "providers": { "emulator": {"base_url": base_url, "api_key": "issue83-secret"} },
+        "providers": { "emulator": {"protocol":"openai_chat_completions","base_url": base_url, "api_key": "issue83-secret"} },
         "models": {format!("emulator/{MODEL}"): {
-            "provider": "emulator", "id": MODEL, "protocol": "openai_chat_completions",
-            "context_window": 128_000, "max_output_tokens": 1024,
+            "provider": "emulator", "id": MODEL, "context_window": 128_000, "max_output_tokens": 1024,
             "capabilities": {"input_modalities": ["text"], "output_modalities": ["text"]},
             "compat": {"chat_reasoning_replay": "omit"}
         }}
@@ -296,7 +295,7 @@ fn models_json(emulator: &ProviderEmulator) -> String {
     models_json_for_base_url(&emulator.openai_base_url())
 }
 
-const CONFIG: &str = r#"schema_version = 10
+const CONFIG: &str = r#"schema_version = 12
 agent_id = "agent-issue83"
 
 

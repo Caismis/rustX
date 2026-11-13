@@ -22,8 +22,64 @@ impl AppServerConnection {
 
     /// Serve one admitted configuration request.
     #[allow(clippy::too_many_lines)] // One arm per configuration method.
-    pub(super) async fn configuration(&self, method: Method) -> Result<MethodResult, RpcError> {
+    pub(super) async fn configuration(
+        &self,
+        method: Method,
+        request_owner: crate::app_server::host::ServerOperation,
+    ) -> Result<MethodResult, RpcError> {
         match method {
+            Method::McpCatalog {
+                target,
+                id,
+                expected_revision,
+                kind,
+            } => {
+                let result = self
+                    .host
+                    .manager()
+                    .mcp_catalog(target, id, expected_revision, kind, request_owner)
+                    .await
+                    .map_err(source_error)?;
+                Ok(MethodResult::McpProbe { result })
+            }
+            Method::SkillsList {
+                target,
+                offset,
+                limit,
+                expected_revision,
+            } => {
+                let page = self
+                    .host
+                    .manager()
+                    .skill_page(target, offset, limit, expected_revision, request_owner)
+                    .await
+                    .map_err(source_error)?;
+                Ok(MethodResult::Skills { page })
+            }
+            Method::SkillsRead {
+                target,
+                name,
+                kind,
+                offset,
+                max_bytes,
+                expected_revision,
+            } => {
+                let content = self
+                    .host
+                    .manager()
+                    .skill_read(
+                        target,
+                        name,
+                        kind,
+                        offset,
+                        max_bytes,
+                        expected_revision,
+                        request_owner,
+                    )
+                    .await
+                    .map_err(source_error)?;
+                Ok(MethodResult::SkillContent { content })
+            }
             Method::ConfigurationReconcile { target } => {
                 let application = self
                     .host
@@ -147,6 +203,14 @@ impl AppServerConnection {
                 .map_err(|error| source_read_error(&error))?;
                 Ok(MethodResult::SourceValueChunk { chunk })
             }
+            Method::ModelProbe {
+                target,
+                model,
+                source,
+            } => {
+                let outcome = self.host.manager().probe_model(target, model, source).await;
+                Ok(MethodResult::ModelProbe { outcome })
+            }
             Method::McpProbe {
                 target,
                 id,
@@ -155,7 +219,7 @@ impl AppServerConnection {
                 let result = self
                     .host
                     .manager()
-                    .probe_mcp(target, id, expected_revision)
+                    .probe_mcp(target, id, expected_revision, request_owner)
                     .await
                     .map_err(source_error)?;
                 Ok(MethodResult::McpProbe { result })
@@ -276,11 +340,12 @@ impl AppServerConnection {
                 target,
                 source,
                 cursor,
+                expected_scope,
             } => {
                 let catalog = self
                     .host
                     .manager()
-                    .workflow_tool_catalog(target, source, cursor)
+                    .workflow_tool_catalog(target, source, cursor, expected_scope)
                     .await
                     .map_err(source_error)?;
                 Ok(MethodResult::WorkflowToolCatalog { catalog })
@@ -353,6 +418,9 @@ impl AppServerConnection {
                 use crate::local_runtime::configuration::settings::SourceMutation;
                 use crate::local_runtime::workflow_authoring::WorkflowEdit;
                 let mutation = match mutation {
+                    SourceMutation::GlobalGuidance { document } => {
+                        SourceMutation::GlobalGuidance { document }
+                    }
                     SourceMutation::RepairConfig { document } => {
                         SourceMutation::RepairConfig { document }
                     }

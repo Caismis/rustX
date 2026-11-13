@@ -14,13 +14,13 @@ it('boots the source-derived shell with no Host backend and exposes only support
   expect(screen.getAllByText('rustX').length).toBeGreaterThan(0);
   expect(screen.getByRole('button', { name: 'Reconnect now' })).toBeTruthy();
   expect(screen.queryByLabelText('WebSocket endpoint')).toBeNull();
-  expect(screen.queryByLabelText('Transport token')).toBeNull();
+  expect(screen.queryByLabelText('Access token')).toBeNull();
   expect(screen.queryByText(/Workspace manager|Provider settings|Install plugin|Retry turn|Queue prompt|Open file/)).toBeNull();
   expect(server.requests).toEqual([]);
 });
 it('switching and unmounting open Session views remains presentation-only', async () => {
   await server.attached('A', 'B');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
   let ui!: ReturnType<typeof render>;
   await act(async () => { ui = render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   const baseline = server.requests.length;
@@ -37,7 +37,7 @@ it('switching and unmounting open Session views remains presentation-only', asyn
 });
 it('renders streaming then one committed response, and an authoritative Approval removes obsolete controls', async () => {
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   const live = { ...snapshot(), attempt: { attempt_id: 'attempt-A', phase: { type: 'running' as const }, turn: 1,
     in_flight: { message_id: 'assistant-1', blocks: [{ type: 'text' as const, block_index: 0, text: 'Streaming response' }] } } };
@@ -46,14 +46,14 @@ it('renders streaming then one committed response, and an authoritative Approval
   await act(() => server.update('A', { ...snapshot(), messages: [{ role: 'assistant', id: 'assistant-1', content: [{ type: 'text', text: 'Committed response' }] }], transcript: { entries: [{ cursor: '1', item: { type: 'message', message: { role: 'assistant', id: 'assistant-1', content: [{ type: 'text', text: 'Committed response' }] } } }] }, pending_interactions: [interaction('approval')] }));
   expect(screen.queryByLabelText('Streaming response')).toBeNull();
   expect(screen.getAllByText('Committed response')).toHaveLength(1);
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Allow once' })); await server.waitFor('interaction/respond', 1); await server.client.refresh('A'); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Allow once' })); await server.waitForReply(); await server.client.refresh('A'); });
   expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
   expect(conversation(server.client.getSnapshot().views.A.snapshot!).messages).toHaveLength(1);
 });
 it('pending interaction remains visible but disabled across transport loss and recovers after connect', async () => {
   server.snapshots.get('A')!.pending_interactions = [interaction('questionnaire')];
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   act(() => server.socket.close());
   expect(screen.getByRole('region', { name: 'Questionnaire' })).toBeTruthy();
@@ -76,19 +76,19 @@ it('native Review preserves instance and subject digest and waits for authoritat
   const instance = { block: { run: { conversation_id: 'conversation-A', origin: {type:'tool' as const,attempt_id:'attempt-A'}, invocation: '1' }, definition: { workflow_id: 'workflow', blocks: [] }, invocations: [0] }, node: 'review', visit: 1 };
   review.kind = 'review'; review.body!.kind = { type: 'review', subject_digest: 'native-subject-digest', review: { instance, questionnaire: { questions: [{ question: 'Review this plan', header: 'review', answer: { type: 'single_choice', options: [{ label: 'Approve', description: '' }, { label: 'Revise', description: '' }], allow_custom: false } }] } } };
   server.snapshots.get('A')!.pending_interactions = [review]; await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   fireEvent.click(screen.getByRole('radio', { name: 'Approve' }));
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Submit' })); await server.waitFor('interaction/respond', 1); await server.client.refresh('A'); });
-  const request = server.requests.find(item => item.request.method === 'interaction/respond')!.request;
-  expect(request.params).toMatchObject({ interaction: review.interaction, response: { type: 'review', response: { instance, subject_digest: 'native-subject-digest', submission: { answers: [{ question_index: 0, answer: { type: 'option', value: { option_index: 0 } } }] } } } });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Submit' })); await server.waitForReply(); await server.client.refresh('A'); });
+  const request = server.replies[0]!;
+  expect('result' in request ? request.result : undefined).toMatchObject( { type: 'review', response: { instance, subject_digest: 'native-subject-digest', submission: { answers: [{ question_index: 0, answer: { type: 'option', value: { option_index: 0 } } }] } } });
   expect(screen.queryByRole('region', { name: 'Questionnaire' })).toBeNull();
 });
 
 it('closing A immediately emits exactly its detach, preserving B, runtime work and pending facts', async () => {
   server.snapshots.set('A', { ...snapshot(), attempt: { attempt_id: 'active-A', phase: { type: 'running' }, turn: 1 }, pending_interactions: [interaction('approval')] });
   await server.attached('A', 'B'); server.held.add('session/detach');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   const target = server.client.target('A'), beforeA = server.client.getSnapshot().views.A.snapshot, beforeB = server.client.getSnapshot().views.B;
   const baseline = server.requests.length;
@@ -108,15 +108,15 @@ it('closing A immediately emits exactly its detach, preserving B, runtime work a
   expect(server.loaded.has('A')).toBe(true);
   expect(server.snapshots.get('A')?.attempt?.phase.type).toBe('running');
   await act(() => server.connect());
-  expect(server.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach').map(({ request }) => request.params)).toEqual([{ session_id: 'B', node_id: 'node-B' }]);
+  expect(server.requests.slice(baseline).filter(({ request }) => request.method === 'thread/resume').map(({ request }) => request.params)).toEqual([{ threadId: 'conversation-B' }]);
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })); await server.client.attach('A'); });
   expect(screen.getByRole('button', { name: 'Allow once' })).toBeTruthy();
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('wanted');
-  expect(server.requests.slice(baseline).filter(({ request }) => request.method === 'session/attach' && request.params.session_id === 'A')).toHaveLength(1);
+  expect(server.requests.slice(baseline).filter(({ request }) => request.method === 'thread/resume' && server.sessionForThread(request.params.threadId) === 'A')).toHaveLength(1);
 });
 it('lost close-view acknowledgement leaves intent released across reconnect and marks the affected Sidebar row', async () => {
   await server.attached('A', 'B'); server.held.add('session/detach');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   fireEvent.click(screen.getByRole('button', { name: 'View options' }));
   fireEvent.mouseEnter(screen.getByRole('menuitem', { name: 'Close view' }));
@@ -128,6 +128,6 @@ it('lost close-view acknowledgement leaves intent released across reconnect and 
   expect(server.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   expect(server.claims().map(item => item.session_id)).toEqual(['B']);
   expect(server.requests.filter(({ request }) => request.method === 'session/detach')).toHaveLength(1);
-  expect(server.requests.filter(({ request }) => request.method === 'session/attach' && request.params.session_id === 'A')).toHaveLength(1);
-  expect(JSON.parse(localStorage.getItem('rustx-console-view-v2')!).openViews).toEqual(['B']);
+  expect(server.requests.filter(({ request }) => request.method === 'thread/resume' && server.sessionForThread(request.params.threadId) === 'A')).toHaveLength(1);
+  expect(JSON.parse(localStorage.getItem('rustx-console-view-v3')!).openViews).toEqual(['B']);
 });

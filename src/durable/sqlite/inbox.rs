@@ -34,6 +34,28 @@ use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use std::sync::Arc;
 
 impl InboxStore for SqliteConversationStore {
+    fn lookup_inbound(
+        &self,
+        correlation: &str,
+    ) -> Result<Option<crate::durable::inbox::InboundAcceptance>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let row: Option<(i64, String)> = connection
+            .query_row(
+                "SELECT sequence, message_id FROM inbound_correlation WHERE correlation=?1",
+                [correlation],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| storage(e.to_string()))?;
+        row.map(|(sequence, id)| {
+            Ok(crate::durable::inbox::InboundAcceptance {
+                message_id: MessageId::new(id),
+                inbound_sequence: InboundSequence::new(sequence_from_i64(sequence)?),
+            })
+        })
+        .transpose()
+    }
+
     fn load_goal(&self) -> Result<Option<crate::goal::GoalSnapshot>, ConversationStoreError> {
         read_goal(&*self.lock()?)
     }
@@ -373,6 +395,7 @@ impl InboxStore for SqliteConversationStore {
             items,
         }))
     }
+    #[allow(clippy::too_many_lines)] // One atomic native adoption transaction.
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
@@ -394,9 +417,12 @@ impl InboxStore for SqliteConversationStore {
         }
         ensure_surface_head(&transaction)?;
 
-        let items = load_pending_until(&transaction, watermark)?;
+        let mut items = load_pending_until(&transaction, watermark)?;
+        if attempt_id.is_some() {
+            items.retain(|item| item.message.kind != InboundKind::QueuedMessage);
+        }
         for item in &items {
-            let block = MessageBlock::User(item.message.clone());
+            let block = crate::durable::inbox::canonical_block(&item.message);
             let cursor = validation.append(&transaction, &block, Some(&item.message_id))?;
             if cursor != item.transcript_cursor {
                 return Err(ConversationStoreError::InvalidReference(format!(
@@ -405,12 +431,14 @@ impl InboxStore for SqliteConversationStore {
                 )));
             }
         }
-        transaction
-            .execute(
-                "DELETE FROM pending_inbound WHERE sequence <= ?1",
-                [seq_to_i64(watermark.get())?],
-            )
-            .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
+        for item in &items {
+            transaction
+                .execute(
+                    "DELETE FROM pending_inbound WHERE sequence = ?1",
+                    [seq_to_i64(item.sequence.get())?],
+                )
+                .map_err(|error| storage(format!("adopt pending delete: {error}")))?;
+        }
         for item in &items {
             // The removed native pending row fences these derived bytes even
             // if cleanup fails; their deletion cannot refuse adoption.
@@ -982,8 +1010,14 @@ impl SqliteConversationStore {
         };
         // Producer-correlated runtime work is not user-authored queue content.
         if item.message.source != UserSource::Human
-            || item.message.kind != InboundKind::Message
-            || item.correlation.is_some()
+            || !matches!(
+                item.message.kind,
+                InboundKind::Message | InboundKind::QueuedMessage
+            )
+            || item
+                .correlation
+                .as_deref()
+                .is_some_and(|id| !id.starts_with("app-server:"))
         {
             return Ok(Outcome::InvalidItem);
         }

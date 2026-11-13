@@ -2,7 +2,7 @@
  * Committed `present` deliveries through a real App Server child and socket.
  *
  * ```text
- * local   AppServerHost.spawnLocal -> owned stdio child (--stdio-delivery-access)
+ * local   AppServerHost.spawnLocal -> owned stdio child
  *         read/save original bytes, locate + identity-verified local open
  * remote  AppServerHost.connectRemote -> WebSocket
  *         without the delivery credential: metadata only, reads fail closed
@@ -56,7 +56,6 @@ if (SKIP !== undefined && process.env.RUSTX_REQUIRE_PROVIDER_EMULATOR) throw new
 
 const CREDENTIAL_VARIABLE = "RUSTX_TUI_DELIVERY_KEY";
 const TRANSPORT_TOKEN = "tui-delivery-transport-token-000000000000000";
-const DELIVERY_TOKEN = "tui-delivery-access-token-00000000000000000000";
 const REPORT = "报告 final file.md";
 const REPORT_BYTES = Buffer.from("# 报告\r\n\r\nOriginal CRLF bytes\r\n\u0000tail", "utf8");
 const DATA_BYTES = Buffer.from("a,b\r\n1,2\r\n");
@@ -81,8 +80,6 @@ class Fixture {
     ], { env: this.env, encoding: "utf8" });
     assert.equal(initialized.status, 0, initialized.stderr);
     writeFileSync(this.temp.path("token"), `${TRANSPORT_TOKEN}\n`);
-    writeFileSync(this.temp.path("delivery"), `${DELIVERY_TOKEN}\n`);
-    chmodSync(this.temp.path("delivery"), 0o600);
   }
 
   workspace(name: string): string {
@@ -105,7 +102,7 @@ class Fixture {
   }
 }
 
-function cutDiagnostic(cut: import('../../protocol/app-server/v73.ts').CheckpointReadCut | undefined) {
+function cutDiagnostic(cut: import('../../protocol/app-server/v78.ts').CheckpointReadCut | undefined) {
   if (!cut) return undefined;
   const source = cut.source_cut;
   return { conversation_id: cut.conversation_id, activation_id: cut.activation_id,
@@ -115,7 +112,7 @@ function cutDiagnostic(cut: import('../../protocol/app-server/v73.ts').Checkpoin
       pending: source.read.pending_through } : null };
 }
 
-function eventDiagnostic(event: import('../../protocol/app-server/v73.ts').RuntimeClientEvent) {
+function eventDiagnostic(event: import('../../protocol/app-server/v78.ts').RuntimeClientEvent) {
   if (event.type === 'checkpoint_advanced') return { type: event.type, cursor: event.checkpoint.cursor,
     conversation_id: event.checkpoint.snapshot.conversation_id, cut: cutDiagnostic(event.checkpoint.read_cut),
     attempt: event.checkpoint.snapshot.attempt?.phase.type };
@@ -376,7 +373,6 @@ class ExternalAppServer {
     const child = spawn(BINARY, [
       "app-server", "--runtime-root", fixture.runtimeRoot, "--listen", "ws://127.0.0.1:0",
       "--token-file", fixture.temp.path("token"),
-      "--delivery-access-token-file", fixture.temp.path("delivery"),
     ], { env: fixture.env, stdio: ["pipe", "pipe", "pipe"] }) as ChildProcessWithoutNullStreams;
     const lines = createInterface({ input: child.stderr });
     const endpoint = await new Promise<string>((resolve, reject) => {
@@ -410,7 +406,7 @@ describe("committed deliveries through a remote WebSocket App Server", { skip: S
     await provider?.finish();
   });
 
-  it("shows metadata without the delivery credential and saves client-side with it", { timeout: 120_000 }, async () => {
+  it("ordinary authenticated clients can read deliveries and resume their history", { timeout: 120_000 }, async () => {
     const ordinary = await AppServerHost.connectRemote({ endpoint: server.endpoint, token: TRANSPORT_TOKEN });
     let sessionId: string;
     try {
@@ -418,26 +414,24 @@ describe("committed deliveries through a remote WebSocket App Server", { skip: S
       const session = await deliver(ordinary, workspace, fixture, provider);
       await inspectPresentDefinition(ordinary,session,workspace,provider);
       sessionId = session.sessionId;
-      assert.equal(session.deliveryAccess, false);
+      assert.equal(session.deliveryAccess, true);
       const [report] = (await session.deliveryPage()).records;
       assert.equal(report?.file?.name, REPORT, "metadata is visible to an ordinary client");
-      await assert.rejects(session.readDelivery(report), rejectedWith("unauthorized"));
-      await assert.rejects(session.locateDelivery(report), rejectedWith("unauthorized"));
+      assert.deepEqual(Buffer.from((await session.readDelivery(report)).data, "base64"), REPORT_BYTES);
+      assert.ok((await session.locateDelivery(report)).path);
       await session.detach();
     } finally {
       await ordinary.shutdown();
     }
     await assert.rejects(AppServerHost.connectRemote({
       endpoint: server.endpoint,
-      token: TRANSPORT_TOKEN,
-      deliveryAccessToken: "wrong-delivery-token-00000000000000000000000",
+      token: "wrong-transport-token",
     }), (error: unknown) => error instanceof TransportClosedError && error.reason === "handshake_failed");
     const requests = (await provider.requests()).length;
     // A reconnecting authorized client resumes the same committed history.
     const trusted = await AppServerHost.connectRemote({
       endpoint: server.endpoint,
       token: TRANSPORT_TOKEN,
-      deliveryAccessToken: DELIVERY_TOKEN,
     });
     try {
       const session = await trusted.attach(sessionId!);

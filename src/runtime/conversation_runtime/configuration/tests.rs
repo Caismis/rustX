@@ -9,20 +9,9 @@ use crate::runtime::conversation_runtime::test_support::*;
 /// under `desired`, reporting its single outcome on the returned receiver.
 fn stage(
     runtime: &ConversationRuntime,
-    baseline: u64,
+    prepared: PreparedConfiguration,
     desired: DesiredApplication,
 ) -> tokio::sync::oneshot::Receiver<StagedOutcome> {
-    let prepared = {
-        let state = runtime.inner.lock_state();
-        PreparedConfiguration {
-            owner: runtime.inner.configuration_owner.clone(),
-            baseline,
-            preview: state.resources.clone(),
-            model: state.model.clone(),
-            capability: None,
-            resources: None,
-        }
-    };
     let (sender, receiver) = tokio::sync::oneshot::channel();
     runtime.stage_configuration(StagedConfiguration {
         prepared,
@@ -36,6 +25,19 @@ fn stage(
         }),
     });
     receiver
+}
+
+/// Use the current preparation owner so the fixture carries exactly the
+/// configuration/context contract a production staged candidate must satisfy.
+fn prepare_context(runtime: &ConversationRuntime) -> PreparedConfiguration {
+    let resources = runtime.runtime_resources();
+    runtime
+        .prepare_context_configuration(|configuration| crate::runtime::resources::ContextBinding {
+            configuration: configuration.clone(),
+            project_context_files: resources.project_context_files().to_vec(),
+            skills: resources.capability().skills().clone(),
+        })
+        .expect("prepare bound context")
 }
 
 /// Issue #518: a running subagent genuinely owns the committed generation,
@@ -54,15 +56,42 @@ async fn subagent_settlement_commits_the_current_staged_configuration() {
         ))
         .expect("in-memory store"),
     );
-    let (runtime, model, subagents) = headless_runtime_over_store_with_subagents(
+    let conversation = ConversationId::new("conv_385a385a-3850-7385-8385-385385385385");
+    let agent = AgentId::new("agent-a");
+    let (subagents, mut runtime_config) = subagent_runtime_config_with_registry(
         &dir,
-        "conv_385a385a-3850-7385-8385-385385385385",
+        conversation.as_str(),
         store.clone(),
-        None,
+        &conversation,
+        &agent,
+        &agent,
     )
     .await;
+    let model = Arc::new(FakeModel::new(Vec::new()));
+    let adapter: Arc<dyn ModelAdapter> = model.clone();
+    runtime_config.model = scripted_session_model(adapter);
+    let config = crate::local_runtime::config::CurrentRuntimeConfig::from_toml_slice(
+        b"agent_id='agent-a'\n[agent]\nskills='all'\n[agent.model]\nmodel='scripted/scripted'\n",
+    )
+    .expect("valid root configuration");
+    runtime_config.resources = Arc::new(runtime_config.resources.as_ref().clone().with_configuration(
+        crate::runtime::resources::RuntimeConfiguration {
+            config: Arc::new(config),
+            models: runtime_config.model.registry().unwrap().clone(),
+            resource_definitions: Vec::new(),
+            resource_diagnostics: Vec::new(),
+            authored: crate::local_runtime::configuration::generation::AuthoredConfiguration {
+                component_revisions: std::collections::BTreeMap::new(),
+                source_revisions: std::collections::BTreeMap::new(),
+                effective: crate::local_runtime::configuration::settings::SourceDocumentView::default(),
+                provenance: std::collections::BTreeMap::new(),
+            },
+        }
+    ));
+    let runtime = ConversationRuntime::new(runtime_config).expect("bound runtime");
     runtime.activate();
     let baseline = runtime.inner.lock_state().binding_revision;
+    let stale_candidate = prepare_context(&runtime);
     let desire = Arc::new(std::sync::atomic::AtomicU64::new(1));
 
     // The busy owner is a real Running child record: committed through
@@ -123,7 +152,7 @@ async fn subagent_settlement_commits_the_current_staged_configuration() {
     // Staged behind the child: nothing commits while it owns the generation.
     let superseded = stage(
         &runtime,
-        baseline,
+        prepare_context(&runtime),
         DesiredApplication::new(desire.clone(), 1),
     );
     assert!(runtime.has_staged_configuration());
@@ -132,7 +161,7 @@ async fn subagent_settlement_commits_the_current_staged_configuration() {
     desire.store(2, std::sync::atomic::Ordering::SeqCst);
     let current = stage(
         &runtime,
-        baseline,
+        prepare_context(&runtime),
         DesiredApplication::new(desire.clone(), 2),
     );
     assert_eq!(
@@ -199,7 +228,11 @@ async fn subagent_settlement_commits_the_current_staged_configuration() {
     );
     assert!(runtime.inner.durability_failure_diagnostic().is_none());
     // A candidate prepared against the replaced binding is superseded.
-    let stale = stage(&runtime, baseline, DesiredApplication::new(desire, 2));
+    let stale = stage(
+        &runtime,
+        stale_candidate,
+        DesiredApplication::new(desire, 2),
+    );
     assert_eq!(
         stale.await.expect("stale outcome"),
         StagedOutcome::Superseded

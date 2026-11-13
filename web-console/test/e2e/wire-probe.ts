@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, TraceDetail } from '../../../protocol/app-server/v73';
+import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, TraceDetail } from '../../../protocol/app-server/v78';
 import { domainOriginalValue } from '../../../protocol/app-server/domain-observation';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { METHOD_POLICY, requestLane, type MethodName } from '../../../protocol/app-server/method-policy';
@@ -12,9 +12,12 @@ type NativeReadResult<M extends NativeRead> = Extract<MethodResult, { type: M ex
  * No snapshots, notifications, or semantic results are manufactured here. */
 export async function wireProbe(page: Page) {
   const requests: { id: string | number; method: string; params: any }[] = [];
-  const responses: { method: string; result: any }[] = [];
+  const responses: { id: string | number; method: string; result: any }[] = [];
   const requestTimes = new Map<string | number, number>();
   const notifications: { method: string; params: any }[] = [];
+  // Immutable lineage metadata from real native reads, never a guessed ID or
+  // attachment authority. It remains valid across physical reconnections.
+  const threadSessions = new Map<string, string>();
   let lose: string | undefined;
   let lost = 0;
   let nextRead = 0;
@@ -33,6 +36,7 @@ export async function wireProbe(page: Page) {
     };
     const attachments = new Map<string, AttachmentObservation>();
     const attaching = new Map<string | number, string>();
+    const nodeReads = new Map<string | number, string>();
     const reads = new Map<string, { message: string; resolve: (result: MethodResult) => void; reject: (error: Error) => void }>();
     // The test is a second writer on the browser's physical connection. Share
     // its real six ordinary slots without throttling the browser's own traffic.
@@ -58,7 +62,7 @@ export async function wireProbe(page: Page) {
       for (const read of reads.values()) read.reject(new Error('Native read transport retired.'));
       reads.clear();
       waitingReads.length = 0; activeRead = undefined; ordinary.clear();
-      methods.clear(); attaching.clear();
+      methods.clear(); attaching.clear(); nodeReads.clear();
       for (const observation of attachments.values()) for (const waiter of observation.waiters) waiter.reject(new Error('Attached-target transport retired.'));
       attachments.clear();
     };
@@ -87,9 +91,11 @@ export async function wireProbe(page: Page) {
       if (request.method && request.id !== undefined) {
         requestTimes.set(request.id, performance.now());
         requests.push(request); methods.set(request.id, request.method);
+        if (request.method === 'session/node') nodeReads.set(request.id, request.params.session_id);
         // A replacement claim must publish its own real ACK before direct reads.
-        if (request.method === 'session/attach') {
-          const sessionId: string = request.params.session_id;
+        if (request.method === 'thread/resume') {
+          const sessionId = threadSessions.get(request.params.threadId);
+          if (!sessionId) throw new Error('Thread resume requires observed native Session/Node metadata.');
           const previous = attachments.get(sessionId);
           attachments.set(sessionId, { requestId: request.id, waiters: previous?.waiters ?? [] });
           attaching.set(request.id, sessionId);
@@ -108,6 +114,13 @@ export async function wireProbe(page: Page) {
     server.onMessage(message => {
       if (retired) return;
       const response = JSON.parse(String(message));
+      if (response.result?.type === 'session' || response.result?.type === 'session_transition') {
+        const session = response.result.session;
+        threadSessions.set(session.active_conversation_id, session.id);
+      }
+      const nodeSession = nodeReads.get(response.id); nodeReads.delete(response.id);
+      if (nodeSession && response.result?.type === 'node') threadSessions.set(response.result.node.conversation_id, nodeSession);
+      if (response.result?.type === 'attached') threadSessions.set(response.result.target.conversation_id, response.result.target.session_id);
       const read = activeRead === response.id ? reads.get(response.id) : undefined;
       if (read) {
         reads.delete(response.id); activeRead = undefined;
@@ -150,7 +163,7 @@ export async function wireProbe(page: Page) {
       };
       if (method) {
         methods.delete(response.id);
-        responses.push({ method, result: response.result });
+        responses.push({ id: response.id, method, result: response.result });
         if (hold.delete(method)) {
           held.push({ method, send: deliver });
           pump();
@@ -183,7 +196,7 @@ export async function wireProbe(page: Page) {
       const index = method === undefined ? 0 : held.findIndex(reply => reply.method === method);
       if (index >= 0) held.splice(index, 1)[0]?.send();
     },
-    /** Existing native read RPCs use the browser's one controller connection.
+    /** Existing native read RPCs use the browser's physical connection.
      * Probe IDs never enter its client; no authority or result is manufactured. */
     async read<M extends NativeRead>(method: M, target: AttachmentTarget): Promise<NativeReadResult<M>> {
       if (!nativeRead) throw new Error('Native read requires a browser transport.');

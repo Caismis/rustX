@@ -7,7 +7,8 @@ import { materializeSource } from '../../protocol/app-server/source-observation'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActor } from 'xstate';
-import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v73';
+import { useState } from 'react';
+import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v78';
 import { RepairNotice, repairNoticeText } from '../src/app/RepairNotice';
 import { repairChangeLabel } from '../src/app/settings/advanced/AutoRepair';
 import { inspectionAcknowledger, RepairAcknowledgements } from '../src/app/repair-notices';
@@ -126,11 +127,19 @@ async function inspectionShell(native: NativeSources = {}) {
     inspected: inspectionAcknowledger(s.client, acknowledgements),
   } });
   navigation.start();
-  const viewDetails = vi.fn(({ source, authorityId, receiptId }: RepairInspection) => navigation.send({ type: 'OPEN.REPAIRS', source, inspection: { authorityId, receiptId } }));
-  render(<>
-    <RepairNotice client={s.client} acknowledgements={acknowledgements} viewDetails={viewDetails} />
-    <SettingsSurface client={s.client} host={host} target={userSettingsTarget} navigation={navigation} />
-  </>);
+  let reveal!: () => void;
+  const viewDetails = vi.fn(({ source, authorityId, receiptId }: RepairInspection) => {
+    reveal(); navigation.send({ type: 'OPEN.REPAIRS', source, inspection: { authorityId, receiptId } });
+  });
+  function Surface() {
+    const [visible, setVisible] = useState(false);
+    reveal = () => setVisible(true);
+    return <>
+      <RepairNotice client={s.client} acknowledgements={acknowledgements} viewDetails={viewDetails}/>
+      <div hidden={!visible}><SettingsSurface visible={visible} client={s.client} host={host} target={userSettingsTarget} navigation={navigation}/></div>
+    </>;
+  }
+  render(<Surface/>);
   if (native.user) await announce(s, { kind: 'user' }, native.user);
   if (native.workspace) await announce(s, workspace, native.workspace);
   /** Answer the owner lookup in flight for `directory`. */
@@ -205,7 +214,7 @@ describe('View details acknowledges a receipt only once its exact details are pr
     shell.s.held.delete('configuration/sourcesRead');
     await act(async () => shell.s.reply(read));
     const details = await shell.details();
-    expect(within(details).getByRole('alert').textContent).toBe('Automatic repair could not fix this source. It is unchanged.');
+    expect(within(details).getByText('Automatic repair could not fix this source. It is unchanged.')).toBeTruthy();
     await waitFor(() => expect(shell.acknowledged('w')).toBe(true));
     expect(shell.acknowledged('receipt-user-1')).toBe(false);
     expect(screen.getByRole('status', { name: 'Configuration repair' }).textContent).toMatch(/^Configuration automatically repaired · 3 changes in User configuration/);
@@ -230,7 +239,7 @@ describe('View details acknowledges a receipt only once its exact details are pr
   }
 
   for (const [name, abandon] of [
-    ['Settings closed', (shell: Awaited<ReturnType<typeof inspectionShell>>) => shell.navigation.send({ type: 'CLOSE' })],
+    ['Settings left', (shell: Awaited<ReturnType<typeof inspectionShell>>) => shell.navigation.send({ type: 'SUSPEND' })],
     ['another Settings target opened', (shell: Awaited<ReturnType<typeof inspectionShell>>) => shell.navigation.send({ type: 'OPEN', target: workspaceSettingsTarget('wB', 'Workspace B') })],
     ['the lookup superseded by another owner lookup', (shell: Awaited<ReturnType<typeof inspectionShell>>) => shell.navigation.send({ type: 'OPEN.OWNER', directory: '/workspace/A' })],
     ['the App Server authority retired', (shell: Awaited<ReturnType<typeof inspectionShell>>) => shell.navigation.send({ type: 'RETIRE' })],
@@ -250,14 +259,14 @@ describe('View details acknowledges a receipt only once its exact details are pr
     });
   }
 
-  it('Settings closed after the owner landed, before the details were presented, acknowledges nothing', async () => {
+  it('Settings left after the owner landed, before the details were presented, acknowledges nothing', async () => {
     const shell = await inspectionShell({ workspace: workspaceReceipt() });
     shell.s.held.add('configuration/sourcesRead');
     const reading = shell.s.waitFor('configuration/sourcesRead');
     viewDetails();
     await shell.resolve({ kind: 'resolved', id: 'wA', displayName: 'Workspace A' });
     const read = await reading;
-    act(() => shell.navigation.send({ type: 'CLOSE' }));
+    act(() => shell.navigation.send({ type: 'SUSPEND' }));
     shell.s.held.delete('configuration/sourcesRead');
     await act(async () => shell.s.reply(read));
     expect(shell.acknowledged('w')).toBe(false);
@@ -595,8 +604,9 @@ it('opens the exact source owner at Advanced → Auto Repair', async () => {
   expect(navigation.getSnapshot().context.focus).toEqual({});
 });
 
-/** One User source whose native revision, receipt and description advance
- * independently, as the App Server owns them. */
+const automaticGuidance = () => screen.getByRole('switch', { name: 'Automatically load project guidance' });
+
+/** One User source whose native revision and repair receipt advance independently. */
 class Native {
   revision = 'user-1';
   repair: ConfigRepairReceipt | undefined;
@@ -620,11 +630,10 @@ it('renders Auto Repair from the authoritative read and keeps an unsaved draft f
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
   await settingsReady();
   await openSettingsPage('Advanced');
-  const section = await screen.findByRole('region', { name: 'Auto Repair' });
-  expect(within(section).getByText('No automatic repair is currently reported for this source in this App Server process.')).toBeTruthy();
+  expect(screen.queryByRole('region', { name: 'Auto Repair' })).toBeNull();
   // An unsaved draft on another page.
   await openSettingsPage('Agent');
-  fireEvent.change(screen.getByRole('textbox', { name: 'Root description' }), { target: { value: 'unsaved draft' } });
+  fireEvent.click(automaticGuidance());
   // Native repairs the source: a new revision, a receipt, its notice, and the
   // separate application publication of the committed bytes.
   native.revision = 'user-2'; native.repair = receipt({ after_revision: 'user-2' }); native.version = 2;
@@ -633,8 +642,8 @@ it('renders Auto Repair from the authoritative read and keeps an unsaved draft f
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBeGreaterThan(1));
   // The draft is neither erased, submitted nor silently rebased: the moved
   // source requires the explicit review gesture.
-  expect((screen.getByRole('textbox', { name: 'Root description' }) as HTMLInputElement).value).toBe('unsaved draft');
-  expect(await screen.findByRole('button', { name: 'Use reviewed revision' })).toBeTruthy();
+  expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
+  expect(await screen.findByRole('button', { name: 'Use latest setting' })).toBeTruthy();
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
   await openSettingsPage('Advanced');
   const repaired = await screen.findByRole('region', { name: 'Auto Repair' });
@@ -642,9 +651,9 @@ it('renders Auto Repair from the authoritative read and keeps an unsaved draft f
   for (const line of ['Updated schema_version 8 → 10', 'Removed an unknown field from agent.plugins.todo', 'Removed agent.tools.builtin[1]: no such Native Tool'])
     expect(within(repaired).getByText(line)).toBeTruthy();
   expect(within(repaired).getByText('An exact private copy of the original file is kept in rustX storage.')).toBeTruthy();
-  expect(within(repaired).getByText('Revision sha256:before → user-2')).toBeTruthy();
+  expect(within(repaired).queryByText(/sha256:/)).toBeNull();
   await openSettingsPage('Agent');
-  expect((screen.getByRole('textbox', { name: 'Root description' }) as HTMLInputElement).value).toBe('unsaved draft');
+  expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
   s.client.disconnect();
 });
@@ -659,8 +668,8 @@ it('shows an unresolved repair as a failure next to the manual repair', async ()
   await s.connect();
   render(<SettingsSurface client={s.client} target={userSettingsTarget} initialPage="advanced" />);
   const section = await screen.findByRole('region', { name: 'Auto Repair' });
-  expect(within(section).getByRole('alert').textContent).toBe('Automatic repair could not fix this source. It is unchanged.');
-  expect(within(section).getByText(/malformed TOML at line 3, column 1/)).toBeTruthy();
+  expect(within(section).getByText('Automatic repair could not fix this source. It is unchanged.')).toBeTruthy();
+  expect(await screen.findByText(/malformed TOML at line 3, column 1/)).toBeTruthy();
   expect(within(section).getByText('No backup copy was made.')).toBeTruthy();
   expect(within(section).getByText('Use Repair invalid source below to correct the document by hand.')).toBeTruthy();
   expect(screen.getByRole('button', { name: /Save Repair invalid source/ })).toBeTruthy();
@@ -860,12 +869,12 @@ it('WEB-BOUND-08 repair observations never touch a Settings draft, its CAS base,
   render(<SettingsSurface client={s.client} target={userSettingsTarget} />);
   await settingsReady();
   await openSettingsPage('Agent');
-  fireEvent.change(screen.getByRole('textbox', { name: 'Root description' }), { target: { value: 'unsaved draft' } });
+  fireEvent.click(automaticGuidance());
   // An in-flight Save of another unit, held at native.
   await openSettingsPage('Advanced');
   s.held.add('configuration/sourceWrite');
-  fireEvent.change(screen.getByLabelText('max_connections'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save App Server policy' }));
+  fireEvent.change(screen.getByLabelText('Response start timeout (ms)'), { target: { value: '19000' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model timeout' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   expect(write.params).toMatchObject({ expected_revision: 'user-1' });
   const before = s.client.getSnapshot();
@@ -881,9 +890,9 @@ it('WEB-BOUND-08 repair observations never touch a Settings draft, its CAS base,
   expect(sent(s, 'configuration/sourceWrite')).toEqual([write]);
   expect(sent(s, 'configuration/sourcesRead')).toHaveLength(reads);
   expect(sent(s, 'configuration/reconcile')).toHaveLength(0);
-  expect((screen.getByLabelText('max_connections') as HTMLInputElement).value).toBe('19');
+  expect((screen.getByLabelText('Response start timeout (ms)') as HTMLInputElement).value).toBe('19000');
   await openSettingsPage('Agent');
-  expect((screen.getByRole('textbox', { name: 'Root description' }) as HTMLInputElement).value).toBe('unsaved draft');
+  expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   s.client.disconnect();
 });
 
@@ -1072,7 +1081,7 @@ it('LEDGER-EVICT-08 a warning whose receipt native forgets retires while W0 stay
   </>);
   await settingsReady();
   await openSettingsPage('Agent');
-  fireEvent.change(screen.getByRole('textbox', { name: 'Root description' }), { target: { value: 'unsaved draft' } });
+  fireEvent.click(automaticGuidance());
   // 1. W0's unresolved receipt R0, delivered at 1, warns.
   await deliverAt(s, w0, unresolvedAt(w0, 'w0-1'), 1);
   expect(shownNotice()!.textContent).toMatch(/Workspace configuration could not be repaired automatically/);
@@ -1106,10 +1115,10 @@ it('LEDGER-EVICT-08 a warning whose receipt native forgets retires while W0 stay
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
   expect(sent(s, 'configuration/reconcile')).toHaveLength(0);
   // The Settings draft and its CAS base are untouched.
-  expect((screen.getByRole('textbox', { name: 'Root description' }) as HTMLInputElement).value).toBe('unsaved draft');
+  expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   await openSettingsPage('Advanced');
-  fireEvent.change(screen.getByLabelText('max_connections'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save App Server policy' }));
+  fireEvent.change(screen.getByLabelText('Response start timeout (ms)'), { target: { value: '19000' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model timeout' }));
   await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   expect(sent(s, 'configuration/sourceWrite')[0].params).toMatchObject({ expected_revision: 'user-1' });
   s.client.disconnect();
@@ -1137,7 +1146,7 @@ it('CONVERGE-WEB a stale warning retires when native re-admits its forgotten Wor
   </>);
   await settingsReady();
   await openSettingsPage('Agent');
-  fireEvent.change(screen.getByRole('textbox', { name: 'Root description' }), { target: { value: 'unsaved draft' } });
+  fireEvent.click(automaticGuidance());
   // 1. W0 is unresolved, and the notice warns.
   w0Receipt = unresolvedAt(w0, 'w0-1');
   await deliverAt(s, w0, w0Receipt, ++sequence);
@@ -1182,10 +1191,10 @@ it('CONVERGE-WEB a stale warning retires when native re-admits its forgotten Wor
   expect(sent(s, 'configuration/sourceWrite')).toHaveLength(0);
   expect(sent(s, 'configuration/reconcile')).toHaveLength(0);
   // The Settings draft and its CAS base are untouched.
-  expect((screen.getByRole('textbox', { name: 'Root description' }) as HTMLInputElement).value).toBe('unsaved draft');
+  expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   await openSettingsPage('Advanced');
-  fireEvent.change(screen.getByLabelText('max_connections'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save App Server policy' }));
+  fireEvent.change(screen.getByLabelText('Response start timeout (ms)'), { target: { value: '19000' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model timeout' }));
   await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   expect(sent(s, 'configuration/sourceWrite')[0].params).toMatchObject({ expected_revision: 'user-1' });
   s.client.disconnect();

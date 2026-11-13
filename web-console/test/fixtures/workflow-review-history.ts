@@ -1,4 +1,4 @@
-import type { ReviewSpecification, RuntimeClientSnapshot, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v73';
+import type { ReviewSpecification, RuntimeClientSnapshot, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v78';
 import type { Server } from '../fixture';
 import { workflowRunsFixture } from './workflow-runs';
 

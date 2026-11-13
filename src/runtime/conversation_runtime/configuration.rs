@@ -396,6 +396,39 @@ impl RuntimeInner {
                 committed.availability,
             )
         } else {
+            match self.capability.try_publish_context(
+                &self.capability_publication,
+                prepared.preview.capability(),
+                &prepared
+                    .preview
+                    .configuration()
+                    .expect("context configuration")
+                    .config
+                    .agent,
+            ) {
+                Ok(()) => {}
+                Err(crate::capabilities::CapabilityCommitError::Busy) => {
+                    state.configuration_commit_waiting = true;
+                    state.staged_configuration = Some(StagedConfiguration {
+                        prepared,
+                        desired,
+                        reason,
+                        retain,
+                        settled,
+                    });
+                    return;
+                }
+                Err(error) => {
+                    self.report_staged_outcome(
+                        None,
+                        settled,
+                        StagedOutcome::Failed {
+                            diagnostic: error.to_string(),
+                        },
+                    );
+                    return;
+                }
+            }
             (
                 Arc::new(prepared.preview.as_ref().clone().with_revision(revision)),
                 prepared.preview.capability_availability().clone(),
@@ -712,7 +745,7 @@ impl ConversationRuntime {
             .configuration
             .as_ref()
             .ok_or("candidate has no configuration")?;
-        let model = SessionModelState::new(generation.models.clone(), selection)
+        let model = SessionModelState::restore(generation.models.clone(), selection)
             .map_err(|error| error.to_string())?;
         validate_model_context(&model).map_err(|error| error.message)?;
         let preview = Arc::new(RuntimeResourceSnapshot::from_prepared(
@@ -745,10 +778,7 @@ impl ConversationRuntime {
             .map_err(|error| error.to_string())?;
         validate_model_context(&model).map_err(|error| error.message)?;
         if let Some(capability) = &mut candidate.capability {
-            capability.set_context_profile(
-                &binding.configuration.config.agent,
-                &binding.root_agent_project_files,
-            );
+            capability.set_context_profile(&binding.configuration.config.agent);
         }
         if let Some(resources) = &mut candidate.resources {
             resources.set_context_binding(binding);

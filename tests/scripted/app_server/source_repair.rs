@@ -276,7 +276,7 @@ async fn session_creation_repairs_both_sources_before_resolution() {
         let MethodResult::SessionTransition { .. } = call(
             &creator,
             1,
-            Method::SessionCreate { submission: None,
+            Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
                 settings: SessionPersistentState::from_input(&SessionConfigInput::new(
                     f.workspaces[0].clone(),
                 )),
@@ -360,8 +360,9 @@ async fn reconcile_repairs_an_external_edit_once_and_reads_stay_read_only() {
         .await;
         assert!(f.manager.source_repairs().latest(&target).is_none());
         let workspace_file = f.workspaces[0].join("rustx.toml");
+        std::fs::write(f.workspaces[0].join("AGENTS.md"), "Reconciled instructions").unwrap();
         let edited = format!(
-            "{}[agent]\ninstructions = \"Reconciled instructions\"\nfuture_trust = true\n",
+            "{}[agent]\nagents_md = {{ inherit = true }}\nfuture_trust = true\n",
             std::fs::read_to_string(&workspace_file).unwrap()
         );
         std::fs::write(&workspace_file, &edited).unwrap();
@@ -461,6 +462,7 @@ async fn an_unrepairable_workspace_is_announced_and_manual_repair_clears_it() {
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(1),
                 call: Method::SessionCreate {
+                    dynamic_tools: Vec::new(),
                     submission: None,
                     settings: SessionPersistentState::from_input(&SessionConfigInput::new(
                         f.workspaces[1].clone(),
@@ -731,7 +733,7 @@ fn edit_user(f: &Fixture, secret: &str) -> String {
         .unwrap()
         .parse()
         .unwrap();
-    document["agent"]["instructions"] = toml_edit::value("User instructions");
+    document["agent"]["agents_md"]["inherit"] = toml_edit::value(false);
     document["agent"]["legacy_trust"] = toml_edit::value(secret);
     let user = document.to_string();
     std::fs::write(user_path(f), &user).unwrap();
@@ -792,6 +794,7 @@ async fn session_creation_admits_the_selected_workspace_before_any_repair() {
                     jsonrpc: JsonRpcVersion::V2,
                     id: RequestId::Integer(2),
                     call: Method::SessionCreate {
+                        dynamic_tools: Vec::new(),
                         submission: None,
                         settings: SessionPersistentState::from_input(&SessionConfigInput::new(
                             selected.clone(),
@@ -897,6 +900,7 @@ async fn a_valid_selected_workspace_repairs_both_sources_independently() {
             &connection,
             2,
             Method::SessionCreate {
+                dynamic_tools: Vec::new(),
                 submission: None,
                 settings: SessionPersistentState::from_input(&SessionConfigInput::new(
                     f.workspaces[1].clone(),
@@ -979,6 +983,7 @@ async fn an_unresolvable_session_workspace_repairs_no_source() {
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(1),
                 call: Method::SessionCreate {
+                    dynamic_tools: Vec::new(),
                     submission: None,
                     settings: SessionPersistentState::from_input(&SessionConfigInput::new(missing)),
                 },
@@ -1025,13 +1030,13 @@ async fn a_repair_refused_by_the_size_bound_reaches_no_application() {
         let baseline = super::configuration::settled(&f, 0).await;
         let before = probe.configuration_preparations.load(Ordering::SeqCst);
         // An exactly at-bound User source whose only eligible repair,
-        // `schema_version = 9` → `10`, adds one byte.
+        // `schema_version = 9` → `12`, adds one byte.
         let mut document: toml_edit::DocumentMut = std::fs::read_to_string(user_path(&f))
             .unwrap()
             .parse()
             .unwrap();
         document["schema_version"] = toml_edit::value(9);
-        document["agent"]["instructions"] = toml_edit::value("User instructions");
+        document["agent"]["agents_md"]["inherit"] = toml_edit::value(false);
         let prefix = document.to_string();
         let bound = usize::try_from(crate::bounded_file::MAX_RESOURCE_BYTES).unwrap();
         let user = format!("{prefix}#{}\n", "x".repeat(bound - prefix.len() - 2));
@@ -1044,6 +1049,7 @@ async fn a_repair_refused_by_the_size_bound_reaches_no_application() {
                 jsonrpc: JsonRpcVersion::V2,
                 id: RequestId::Integer(2),
                 call: Method::SessionCreate {
+                    dynamic_tools: Vec::new(),
                     submission: None,
                     settings: SessionPersistentState::from_input(&SessionConfigInput::new(
                         f.workspaces[1].clone(),
@@ -1061,7 +1067,7 @@ async fn a_repair_refused_by_the_size_bound_reaches_no_application() {
         assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
         assert_eq!(
             receipt.changes,
-            [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 10 }]
+            [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 12 }]
         );
         assert!(!receipt.backup_available);
         assert!(receipt.after_revision.is_none());
@@ -1916,7 +1922,7 @@ async fn a_restored_original_repaired_again_is_announced_as_a_new_occurrence() {
         let baseline = super::configuration::settled(&f, 0).await;
         let workspace_file = f.workspaces[0].join("rustx.toml");
         let original = format!(
-            "{}[agent]\ninstructions = \"Occurrence instructions\"\nfuture_trust = true\n",
+            "{}[agent]\nagents_md = {{ inherit = false }}\nfuture_trust = true\n",
             std::fs::read_to_string(&workspace_file).unwrap()
         );
         std::fs::write(&workspace_file, &original).unwrap();

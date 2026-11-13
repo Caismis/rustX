@@ -11,7 +11,7 @@ ConversationRuntime owns canonical adoption and Workflow execution.
 `SessionRuntimeManager::schedule_command`, `schedule_get`, and `schedule_list`
 address an explicit Session and node. Commands have stable caller-generated
 identities and revisioned mutations. These are trusted native product controls;
-App Server v73 exposes `schedule/list`, `schedule/get`, `schedule/command` and
+App Server v78 exposes `schedule/list`, `schedule/get`, `schedule/command` and
 `schedule/recoverStorage`. The manager derives the conversation binding from
 catalog authority. Root model Tools expose `get_schedule`, `list_schedules` and
 `schedule_command` with native current-Human authorization described below.
@@ -51,8 +51,24 @@ enabled task directly, or a task picker when several are enabled. The sidebar
 marks Sessions with enabled tasks and includes their upcoming times in its hover
 card. Details share one Rules/Task runs surface in the task page and Workbench.
 Opening its associated conversation selects the task's original Session/node.
-New task opens a conversation for a scheduling request to the Agent, matching
-the Harness creation flow.
+New task opens a centered configuration dialog. It accepts the instruction and
+native run-time rule directly, with registered Workspace, optional task name,
+and native Model/Profile choices in Advanced. Creating explicitly allocates one
+dedicated Session and writes its native Message schedule without attaching a
+runtime, sending a message or asking a model to author the rule. Later occurrences
+continue that same conversation. When no Model/Profile is explicitly selected,
+the UI omits `settings.model`; Native captures the initial model in
+`initial_binding` and persists it when creating the Session. Later changes to the
+Workspace default do not replace that Session's selected model. This does not
+freeze the rest of the model configuration.
+Cancel performs no mutation. Failed scheduling retains the acknowledged Session;
+retry reuses the exact command identity and payload rather than creating another
+Session. An uncertain Session creation is not automatically replayed.
+
+The root Agent must explicitly select `get_schedule`, `list_schedules`, and
+`schedule_command` in `[agent.tools] builtin` to use conversational Scheduler
+tools. These capabilities are unavailable to named subagents. Direct task creation
+does not require or automatically enable these model-facing capabilities.
 
 Task edits use the native command ID and expected revision. Name/instruction-only
 edits retain the saved timing and interval anchor. Workflow name/timing edits use

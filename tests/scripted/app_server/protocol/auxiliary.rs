@@ -12,7 +12,7 @@ fn submission(correlation: &str) -> BtwSubmission {
 async fn auxiliary_original_scope_closes_while_manager_handoff_is_parked() {
     bounded(async {
         let f = Fixture::with_session_count(None, 1).await;
-        let connection = std::sync::Arc::new(AppServerConnection::with_delivery_access(
+        let connection = std::sync::Arc::new(AppServerConnection::with_connection_lifetime(
             f.host.clone(),
             tokio_util::sync::CancellationToken::new(),
         ));
@@ -64,7 +64,7 @@ async fn auxiliary_original_scope_closes_while_manager_handoff_is_parked() {
 async fn auxiliary_receipt_returns_before_provider_and_result_is_repeatable_after_detach() {
     bounded(async {
         let f = Fixture::with_session_count(None, 1).await;
-        let connection = AppServerConnection::with_delivery_access(
+        let connection = AppServerConnection::with_connection_lifetime(
             f.host.clone(),
             tokio_util::sync::CancellationToken::new(),
         );
@@ -153,7 +153,7 @@ async fn auxiliary_receipt_returns_before_provider_and_result_is_repeatable_afte
 async fn auxiliary_cancel_runs_while_a_real_store_read_holds_the_connection_on_one_async_worker() {
     bounded(async {
         let f = Fixture::with_session_count(None, 1).await;
-        let connection = std::sync::Arc::new(AppServerConnection::with_delivery_access(
+        let connection = std::sync::Arc::new(AppServerConnection::with_connection_lifetime(
             f.host.clone(),
             tokio_util::sync::CancellationToken::new(),
         ));
@@ -233,7 +233,7 @@ async fn admitted_auxiliary_receipt_revocation_before_writer_acceptance_is_unkno
         ] {
             for writer in [false, true] {
                 let f = Fixture::with_session_count(None, 1).await;
-                let connection = AppServerConnection::with_delivery_access(
+                let connection = AppServerConnection::with_connection_lifetime(
                     f.host.clone(),
                     tokio_util::sync::CancellationToken::new(),
                 );
@@ -307,7 +307,7 @@ async fn admitted_auxiliary_receipt_revocation_before_writer_acceptance_is_unkno
                 };
                 assert_eq!(failure.error.data, Some(ErrorData::OutcomeUnknown));
                 connection.close();
-                let successor = AppServerConnection::with_delivery_access(
+                let successor = AppServerConnection::with_connection_lifetime(
                     f.host.clone(),
                     tokio_util::sync::CancellationToken::new(),
                 );

@@ -1,6 +1,6 @@
 import{traceReceipt}from'./fixture';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult } from '../../protocol/app-server/v73';
+import type { MethodResult } from '../../protocol/app-server/v78';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
 import { checkpoint, Server, snapshot } from './fixture';
 import { traceRecord, requestDetail } from './trace-fixture';
@@ -12,7 +12,7 @@ async function setup() {
   for (const node of ['left', 'right']) s.nodeSnapshots.set(node, { ...snapshot(), conversation_id: `conversation-${node}`, trace: { records: [traceRecord(1)] } });
   await s.connect(); return s;
 }
-const requests = (s: Server) => s.requests.map(row => row.request).filter(row => ['session/attach', 'session/detach', 'session/switchNode'].includes(row.method));
+const requests = (s: Server) => s.requests.map(row => row.request).filter(row => ['thread/resume', 'session/detach', 'session/switchNode'].includes(row.method));
 function published(s: Server, predicate: () => boolean) {
   if (predicate()) return Promise.resolve();
   return new Promise<void>(resolve => { const stop = s.client.subscribe(() => { if (predicate()) { stop(); resolve(); } }); });
@@ -27,10 +27,10 @@ function readBarrier(s: Server, method: string) {
 
 it('a transmitted Attach establishes its exact bounded observation after Shell navigation retires', async () => {
   const s = await setup();
-  s.held.add('session/attach'); s.held.add('session/checkpoint'); s.held.add('session/subscribe');
+  s.held.add('thread/resume'); s.held.add('session/checkpoint'); s.held.add('session/subscribe');
   let selected = true, navigated = false;
   const open = s.client.attach('A', 'left', () => selected, () => { navigated = true; });
-  const attach = await s.waitFor('session/attach', 1);
+  const attach = await s.waitFor('thread/resume', 1);
   selected = false; s.reply(attach);
   const read = await s.waitFor('session/checkpoint', 1);
   expect(read.params).toEqual({ target: s.target('A'), trace_records: [] });
@@ -42,13 +42,13 @@ it('a transmitted Attach establishes its exact bounded observation after Shell n
   expect(checkpoint.snapshot.conversation_id).toBe('conversation-left');
   expect(s.client.isAttachmentControlCurrent('A', s.client.getSnapshot().views.A.attachmentObservation)).toBe(false);
   await expect(s.client.send('A', 'held subscription cannot admit input')).rejects.toThrow('revoked');
-  expect(s.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(0);
   s.reply(subscribe); await open;
   const view = s.client.getSnapshot().views.A;
   expect(view.observationState).toBe('following');
   expect(s.client.isAttachmentControlCurrent('A', view.attachmentObservation)).toBe(true);
   expect(navigated).toBe(false);
-  expect(s.claims()).toEqual([view.target]); expect(requests(s).map(request => request.method)).toEqual(['session/attach']);
+  expect(s.claims()).toEqual([view.target]); expect(requests(s).map(request => request.method)).toEqual(['thread/resume']);
 });
 
 it.each(['host', 'validation', 'ack'] as const)('conflicting Node Open is rejected without mutating or acquiring: %s', async phase => {
@@ -57,13 +57,13 @@ it.each(['host', 'validation', 'ack'] as const)('conflicting Node Open is reject
     if (phase === 'host') { entered.resolve(); await gate.promise; }
     return { current: () => true, validate: async () => { if (phase === 'validation') { entered.resolve(); await gate.promise; } return true; } };
   });
-  s.held.add('session/attach'); const first = s.client.attach('A', 'left'); void first.catch(() => {});
-  if (phase === 'ack') await s.waitFor('session/attach', 1); else await entered.promise;
+  s.held.add('thread/resume'); const first = s.client.attach('A', 'left'); void first.catch(() => {});
+  if (phase === 'ack') await s.waitFor('thread/resume', 1); else await entered.promise;
   const conflict = s.client.attach('A', 'right').then(() => 'accepted', error => String(error));
   expect(s.client.getSnapshot().views.A.nodeId).toBe('left');
   expect(await conflict).toContain('branch switching');
-  gate.resolve(); const attach = await s.waitFor('session/attach', 1);
-  expect(attach.params).toEqual({ session_id: 'A', node_id: 'left' });
+  gate.resolve(); const attach = await s.waitFor('thread/resume', 1);
+  expect(attach.params).toEqual({ threadId:'conversation-left' });
   s.reply(attach); await first;
   const view = s.client.getSnapshot().views.A;
   expect(view.snapshot?.conversation_id).toBe('conversation-left');
@@ -72,19 +72,19 @@ it.each(['host', 'validation', 'ack'] as const)('conflicting Node Open is reject
 });
 
 it('Release then Open another Node retains the obsolete claim only until its exact detach ACK', async () => {
-  const s = await setup(); s.held.add('session/attach'); s.held.add('session/detach');
-  const left = s.client.attach('A', 'left'), a = await s.waitFor('session/attach', 1);
+  const s = await setup(); s.held.add('thread/resume'); s.held.add('session/detach');
+  const left = s.client.attach('A', 'left'), a = await s.waitFor('thread/resume', 1);
   const release = s.client.release('A'), right = s.client.attach('A', 'right');
   const refused = expect(right).rejects.toThrow('already resident');
   s.reply(a); await left; const target = s.target('A'), detach = await s.waitFor('session/detach', 1);
   expect(target.conversation_id).toBe('conversation-left'); expect(detach.params).toEqual({ target });
   expect(s.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
   expect(s.client.getSnapshot().views.A.snapshot).toBeUndefined();
-  expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/detach']); expect(s.claims()).toEqual([target]);
-  s.reply(detach); await release; const b = await s.waitFor('session/attach', 2);
-  expect(b.params).toEqual({ session_id: 'A', node_id: 'right' }); s.reply(b); await refused;
+  expect(requests(s).map(row => row.method)).toEqual(['thread/resume', 'session/detach']); expect(s.claims()).toEqual([target]);
+  s.reply(detach); await release; const b = await s.waitFor('thread/resume', 2);
+  expect(b.params).toEqual({ threadId:'conversation-right' }); s.reply(b); await refused;
   expect(s.claims()).toHaveLength(0); expect(s.residentConversations.get('A')).toBe('conversation-left');
-  s.held.delete('session/attach'); await s.client.attach('A', 'left'); await s.client.switchNode('A', 'right'); await s.client.attach('A', 'right');
+  s.held.delete('thread/resume'); await s.client.attach('A', 'left'); await s.client.switchNode('A', 'right'); await s.client.attach('A', 'right');
   const view = s.client.getSnapshot().views.A; expect(view.snapshot?.conversation_id).toBe('conversation-right');
   expect(s.client.isAttachmentObservationCurrent('A', view.attachmentObservation)).toBe(true);
   s.reply(a); expect(s.client.getSnapshot().views.A.target).toEqual(view.target);
@@ -102,18 +102,18 @@ it('an unsuccessful detach cannot satisfy a queued different-Node Open by refres
   expect(s.claims()).toEqual([target]); expect(requests(s)).toHaveLength(2);
   s.handlers.delete('session/detach'); s.held.delete('session/detach'); await s.client.release('A'); await s.client.attach('A', 'left'); await s.client.switchNode('A', 'right'); await s.client.attach('A', 'right');
   expect(s.client.target('A').conversation_id).toBe('conversation-right'); expect(s.claims()).toHaveLength(1);
-  expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/detach', 'session/detach', 'session/attach', 'session/switchNode', 'session/attach']);
+  expect(requests(s).map(row => row.method)).toEqual(['thread/resume', 'session/detach', 'session/detach', 'thread/resume', 'session/switchNode', 'thread/resume']);
 });
 
 it('unknown transmitted Node acquisition cannot bypass existing native residency', async () => {
-  const s = await setup(); s.held.add('session/attach');
+  const s = await setup(); s.held.add('thread/resume');
   const left = s.client.attach('A', 'left'), uncertain = expect(left).rejects.toBeInstanceOf(OutcomeUncertain);
-  const a = await s.waitFor('session/attach', 1); s.commit(a); const release = s.client.release('A'); s.socket.close();
+  const a = await s.waitFor('thread/resume', 1); s.commit(a); const release = s.client.release('A'); s.socket.close();
   await Promise.all([uncertain, release]); expect(s.client.getSnapshot().views.A.attachment).toBe('stale');
-  await s.connect(); expect(requests(s)).toHaveLength(1); s.held.delete('session/attach'); await expect(s.client.attach('A', 'right')).rejects.toThrow('already resident');
+  await s.connect(); expect(requests(s)).toHaveLength(1); s.held.delete('thread/resume'); await expect(s.client.attach('A', 'right')).rejects.toThrow('already resident');
   await s.client.attach('A', 'left'); await s.client.switchNode('A', 'right'); await s.client.attach('A', 'right');
   expect(s.client.target('A').conversation_id).toBe('conversation-right'); expect(s.client.getSnapshot().uncertain).toHaveLength(1);
-  expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/attach', 'session/attach', 'session/switchNode', 'session/attach']);
+  expect(requests(s).map(row => row.method)).toEqual(['thread/resume', 'thread/resume', 'thread/resume', 'session/switchNode', 'thread/resume']);
   expect(s.claims()).toHaveLength(1);
   await s.client.release('A'); await s.client.release('A');
   expect(s.client.getSnapshot().views.A.attachment).toBe('detached');
@@ -123,26 +123,28 @@ it('unknown transmitted Node acquisition cannot bypass existing native residency
 });
 
 it('equivalent queued Opens share one exact Node claim', async () => {
-  const s = await setup(); s.held.add('session/attach'); const first = s.client.attach('A', 'left');
-  const request = await s.waitFor('session/attach', 1), repeats = Array.from({ length: 6 }, () => s.client.attach('A', 'left'));
+  const s = await setup(); s.held.add('thread/resume'); const first = s.client.attach('A', 'left');
+  const request = await s.waitFor('thread/resume', 1), repeats = Array.from({ length: 6 }, () => s.client.attach('A', 'left'));
   s.reply(request); await Promise.all([first, ...repeats]);
   expect(requests(s)).toHaveLength(1); expect(s.claims()).toHaveLength(1); expect(s.client.getSnapshot().views.A.nodeId).toBe('left');
 });
 
-it('a mismatched native Conversation cannot become Node observation authority but its claim remains releasable', async () => {
-  const s = await setup(); s.held.add('session/attach'); const open = s.client.attach('A', 'left'), rejected = expect(open).rejects.toThrow('Mismatched');
-  const request = await s.waitFor('session/attach', 1);
+it('a mismatched native Conversation cannot gain observation authority or retarget cleanup', async () => {
+  const s = await setup(); s.held.add('thread/resume'); const open = s.client.attach('A', 'left'), rejected = expect(open).rejects.toThrow('Mismatched');
+  const request = await s.waitFor('thread/resume', 1);
   // Native fault: target and snapshot agree with each other but not the admitted Node.
-  s.nodeSnapshots.set('left', s.nodeSnapshots.get('right')!); const response = s.commit(request);
+  const response=s.commit(request);if(!('result' in response)||response.result.type!=='attached')throw Error('Expected attachment');response.result.target={...response.result.target,conversation_id:'conversation-right'};
   s.socket.deliver(response); await rejected;
   expect(s.claims()).toHaveLength(1); expect(s.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
-  await s.client.release('A'); expect(s.claims()).toHaveLength(0); expect(requests(s)).toHaveLength(2);
+  await s.client.release('A'); expect(s.claims()).toHaveLength(1); expect(requests(s)).toHaveLength(2);
+  // A contradictory receipt cannot prove another target's cleanup identity.
+  await s.client.disconnect();expect(s.claims()).toHaveLength(0);
 });
 
 it.each(['session/statistics', 'session/history', 'session/traceHistory'] as const)('cold scope rejects another Conversation from %s', async method => {
-  const s = await setup(); s.held.add('session/attach'); s.held.add(method); const finished = readBarrier(s, method);
+  const s = await setup(); s.held.add('thread/resume'); s.held.add(method); const finished = readBarrier(s, method);
   const open = s.client.attach('A', 'left'); const request = await s.waitFor(method, 1);
-  expect(request.params).toMatchObject({ session_id: 'A', node_id: 'left' });
+  expect(request.params).toMatchObject({session_id:'A',node_id:'left'});
   const result: MethodResult = method === 'session/statistics' ? { type: 'session_statistics', conversation_id: 'wrong', read_cut: checkpoint({...snapshot(),conversation_id:'wrong'}).read_cut, statistics: { turns: '99', steps: '0', completed_responses: '0', model_requests: '0', requests_with_usage: '0' } }
     : method === 'session/traceHistory' ? { type: 'session_trace_history', conversation_id: 'wrong', page: { records: [traceRecord(99)] } }
     : { type: 'session_history', conversation_id: 'wrong', window: { cut: { conversation_id: 'wrong', journal: '1', transcript: '1', mutation_revision: '0' ,ledger_through:'0',surface_revision:'0',transcript_total:'0',pending_through:'0',pending_total:'0'}, page: { entries: [] } } };
@@ -151,18 +153,18 @@ it.each(['session/statistics', 'session/history', 'session/traceHistory'] as con
   if (method === 'session/statistics') expect(view.statisticsPreview).toBeUndefined();
   if (method === 'session/history') expect(view.preview).toBeUndefined();
   if (method === 'session/traceHistory') expect(view.tracePreview?.cache.page.records).toEqual([]);
-  expect(s.claims()).toHaveLength(0); s.reply(await s.waitFor('session/attach', 1)); await open;
+  expect(s.claims()).toHaveLength(0); s.reply(await s.waitFor('thread/resume', 1)); await open;
 });
 
 it('late cold A statistics and Trace detail cannot overwrite B evidence', async () => {
-  const s = await setup(); s.held.add('session/attach'); s.held.add('session/statistics'); s.held.add('session/traceHistoryDetail');
+  const s = await setup(); s.held.add('thread/resume'); s.held.add('session/statistics'); s.held.add('session/traceHistoryDetail');
   const finished = readBarrier(s, 'session/statistics'), a = s.client.attach('A', 'left');
   const oldStatistics = await s.waitFor('session/statistics', 1);
   await published(s, () => !!s.client.getSnapshot().views.A.tracePreview);
   const detail = s.client.loadTraceDetail('A', 'trace:1'), oldDetail = await s.waitFor('session/traceHistoryDetail', 1);
   const release = s.client.release('A'), b = s.client.attach('A', 'right');
   const refused = expect(b).rejects.toThrow('already resident');
-  s.reply(await s.waitFor('session/attach', 1)); await Promise.all([a, release]);
+  s.reply(await s.waitFor('thread/resume', 1)); await Promise.all([a, release]);
   const newStatistics = await s.waitFor('session/statistics', 2); s.reply(newStatistics);
   await published(s, () => s.client.getSnapshot().views.A.statisticsPreview?.conversationId === 'conversation-right');
   const expected = s.client.getSnapshot().views.A.statisticsPreview;
@@ -170,7 +172,7 @@ it('late cold A statistics and Trace detail cannot overwrite B evidence', async 
   s.socket.success(oldDetail, { type: 'session_trace_history_detail', conversation_id: 'conversation-left', page:traceReceipt(requestDetail(1)).page }); await detail;
   expect(s.client.getSnapshot().views.A.statisticsPreview).toBe(expected);
   expect(s.client.getSnapshot().views.A.tracePreview?.cache.details['trace:1']?.detail).toBeUndefined();
-  s.reply(await s.waitFor('session/attach', 2)); await refused; expect(s.claims()).toHaveLength(0); expect(requests(s)).toHaveLength(3);
+  s.reply(await s.waitFor('thread/resume', 2)); await refused; expect(s.claims()).toHaveLength(0); expect(requests(s)).toHaveLength(3);
 });
 
 it('Release during final validation retires A before send and admits only the explicitly queued B', async () => {
@@ -179,13 +181,13 @@ it('Release during final validation retires A before send and admits only the ex
   const a = s.client.attach('A', 'left'), rejected = expect(a).rejects.toThrow('before dispatch'); await entered.promise;
   const release = s.client.release('A'), b = s.client.attach('A', 'right'); gate.resolve(true);
   await Promise.all([rejected, release, b]);
-  expect(requests(s).map(row => row.params)).toEqual([{ session_id: 'A', node_id: 'right' }]);
+  expect(requests(s).map(row => row.params)).toEqual([{threadId:'conversation-right'}]);
   expect(s.client.getSnapshot().views.A.snapshot?.conversation_id).toBe('conversation-right');
   expect(s.claims()).toEqual([s.client.target('A')]);
 });
 
 it.each(['wrong-conversation', 'released'] as const)('cold History pagination cannot publish across its scope: %s', async invalidation => {
-  const s = await setup(); s.held.add('session/attach');
+  const s = await setup(); s.held.add('thread/resume');
   const first = s.nodeSnapshots.get('left')!; first.transcript = { entries: [], next_cursor: '5' };
   const opening = s.client.attach('A', 'left');
   await published(s, () => !!s.client.getSnapshot().views.A.preview);
@@ -198,9 +200,9 @@ it.each(['wrong-conversation', 'released'] as const)('cold History pagination ca
   expect(s.client.getSnapshot().views.A.preview?.history.page.entries).toEqual([]);
   if (invalidation === 'wrong-conversation') expect(s.client.getSnapshot().views.A.preview?.history.error).toContain('Invalid history');
   expect(requests(s)).toHaveLength(1); expect(s.claims()).toHaveLength(0);
-  s.reply(await s.waitFor('session/attach', 1)); await opening; await release;
+  s.reply(await s.waitFor('thread/resume', 1)); await opening; await release;
   expect(requests(s)).toHaveLength(invalidation === 'released' ? 2 : 1);
-  expect(s.requests.some(({ request }) => ['turn/start', 'turn/steer', 'session/setModel'].includes(request.method))).toBe(false);
+  expect(s.requests.some(({ request }) => ['inbound/queue', 'turn/steer', 'session/setModel'].includes(request.method))).toBe(false);
 });
 
 
@@ -216,7 +218,7 @@ it('a transmitted switch excludes Opens through queued Release and settles nativ
   s.socket.deliver({ jsonrpc: '2.0', method: 'session/closed', params: { target: s.target('A') } });
   s.reply(request); await Promise.all([switching, release]);
   const view = s.client.getSnapshot().views.A;
-  expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/switchNode']);
+  expect(requests(s).map(row => row.method)).toEqual(['thread/resume', 'session/switchNode']);
   expect(view.nodeId).toBe('right'); expect(view.attachmentIntent).toBe('released');
   expect(view.attachment).toBe('detached'); expect(view.target).toBeUndefined();
   expect(s.claims()).toHaveLength(0);
@@ -230,9 +232,9 @@ it.each(['release', 'switch'] as const)('%s synchronously revokes controls but r
   const method = transition === 'release' ? 'session/detach' : 'session/switchNode'; s.held.add(method);
   const work = transition === 'release' ? s.client.release('A') : s.client.switchNode('A', 'right');
   await expect(s.client.send('A', 'must not execute')).rejects.toThrow('not authoritatively attached');
-  await expect(s.client.request({ method: 'turn/start', params: { target, content: [] } }, 'inbound_accepted')).rejects.toThrow('authority was revoked');
+  await expect(s.client.request({ method: 'inbound/queue', params: { inputId:crypto.randomUUID(), target, content: [] } }, 'inbound_accepted')).rejects.toThrow('authority was revoked');
   expect(s.client.getSnapshot().views.A.target).toEqual(target); expect(s.claims()).toEqual([target]);
-  expect(s.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(0);
   s.reply(await s.waitFor(method, 1)); await work; expect(s.claims()).toHaveLength(0);
 });
 
@@ -242,18 +244,18 @@ it.each(['capacity', 'validation'] as const)('a revoked unsent control cannot cr
   s.held.add('server/info');
   const reads = phase === 'capacity' ? Array.from({ length: 6 }, () => s.client.request({ method: 'server/info', params: {} }, 'server_info')) : [];
   if (reads.length) await s.waitFor('server/info', 6);
-  const control = s.client.request({ method: 'turn/start', params: { target, content: [] } }, 'inbound_accepted', undefined,
+  const control = s.client.request({ method: 'inbound/queue', params: { inputId:crypto.randomUUID(), target, content: [] } }, 'inbound_accepted', undefined,
     phase === 'validation' ? { current: () => true, validate: async controller => { signal = controller; entered.resolve(); return gate.promise; } } : undefined);
   const rejected = expect(control).rejects.toThrow('before dispatch');
   if (phase === 'validation') await entered.promise;
   const release = s.client.release('A'), reopen = s.client.attach('A', 'left');
   s.requests.filter(row => row.request.method === 'server/info').forEach(row => s.reply(row.request));
   gate.resolve(true); await Promise.all([rejected, release, reopen, ...reads]);
-  expect(s.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(0);
   expect(s.claims()).toEqual([s.client.target('A')]); expect(s.client.target('A')).not.toEqual(target);
   if (signal) expect(signal.aborted).toBe(true);
   await s.client.send('A', 'fresh authority');
-  expect(s.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
   const before = s.requests.filter(row => row.request.method === 'server/info').length;
   const reused = Array.from({ length: 6 }, () => s.client.request({ method: 'server/info', params: {} }, 'server_info'));
   const sentReads = s.requests.filter(row => row.request.method === 'server/info').slice(before);
@@ -262,8 +264,8 @@ it.each(['capacity', 'validation'] as const)('a revoked unsent control cannot cr
 });
 
 it('a transmitted control keeps its correlated acknowledgement after Release', async () => {
-  const s = await setup(); await s.client.attach('A', 'left'); s.held.add('turn/start'); s.held.add('session/detach');
-  const sent = s.client.send('A', 'already sent'), request = await s.waitFor('turn/start', 1);
+  const s = await setup(); await s.client.attach('A', 'left'); s.held.add('inbound/queue'); s.held.add('session/detach');
+  const sent = s.client.send('A', 'already sent'), request = await s.waitFor('inbound/queue', 1);
   s.commit(request); const release = s.client.release('A');
   s.reply(request); await expect(sent).resolves.toMatchObject({ type: 'inbound_accepted' });
   s.reply(await s.waitFor('session/detach', 1)); await release;
@@ -293,7 +295,7 @@ it.each(['before-transition', 'after-unload'] as const)('switch failure preserve
   await s.client.release('A'); expect(s.claims()).toHaveLength(0);
   await s.client.attach('A');
   expect(s.client.target('A').conversation_id).toBe(phase === 'after-unload' ? 'conversation-right' : 'conversation-left');
-  expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/switchNode', 'session/detach', 'session/attach']);
+  expect(requests(s).map(row => row.method)).toEqual(['thread/resume', 'session/switchNode', 'session/detach', 'thread/resume']);
   expect(s.claims()).toHaveLength(1); expect(s.maxClaims).toBe(1);
 });
 
@@ -304,7 +306,7 @@ it('a lost switch response never replays or restores old authority on reconnect'
   await expectSwitchExcludesDeletion(s, await deletionPreview(s));
   s.commit(switchRequest); s.socket.close(); await unknown;
   await s.connect();
-  expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/switchNode']);
+  expect(requests(s).map(row => row.method)).toEqual(['thread/resume', 'session/switchNode']);
   expect(s.client.getSnapshot().views.A.attachment).toBe('stale'); expect(s.client.getSnapshot().views.A.nodeId).toBeUndefined();
   expect(s.client.getSnapshot().uncertain.map(row => row.method)).toEqual(['session/switchNode']);
   expect(s.claims()).toHaveLength(0);
@@ -313,7 +315,7 @@ it('a lost switch response never replays or restores old authority on reconnect'
   expect(s.requests.filter(row => row.request.method === 'session/delete').map(row => row.request.params)).toEqual([{ session_id: 'A', expected_target_revision: revision }]);
   await s.client.attach('A');
   expect(s.client.target('A').conversation_id).toBe('conversation-right');
-  expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/switchNode', 'session/attach']);
+  expect(requests(s).map(row => row.method)).toEqual(['thread/resume', 'session/switchNode', 'thread/resume']);
   expect(s.claims()).toHaveLength(1);
 });
 
@@ -329,7 +331,7 @@ it('Release retires a switch blocked by RPC capacity before any native transitio
   expect(s.claims()).toEqual([]);
   s.requests.filter(row => row.request.method === 'session/summary').forEach(row => s.reply(row.request));
   await Promise.all([refused, release, ...reads]);
-  expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/detach']);
+  expect(requests(s).map(row => row.method)).toEqual(['thread/resume', 'session/detach']);
   expect(s.client.getSnapshot().views.A).toMatchObject({ attachment: 'detached', attachmentIntent: 'released', nodeId: 'left' });
   expect(s.claims()).toHaveLength(0); expect(s.residentConversations.get('A')).toBe('conversation-left');
 });
@@ -346,7 +348,7 @@ it('deletion rejection cannot restore an older control proof', async () => {
   expect(s.claims()).toHaveLength(1);
   await s.client.release('A'); await s.client.attach('A', 'left');
   await s.client.send('A', 'fresh proof');
-  expect(s.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
 });
 
 it('disconnect between switch ACK decoding and lifecycle continuation cannot reopen the old Node', async () => {
@@ -355,7 +357,7 @@ it('disconnect between switch ACK decoding and lifecycle continuation cannot reo
   const request = await s.waitFor('session/switchNode', 1);
   s.reply(request); s.socket.close(); await retired;
   await s.connect();
-  expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/switchNode']);
+  expect(requests(s).map(row => row.method)).toEqual(['thread/resume', 'session/switchNode']);
   expect(s.client.getSnapshot().uncertain).toHaveLength(0); // ACK was actually decoded.
   expect(s.client.getSnapshot().views.A.attachmentIntent).toBe('released');
   await s.client.attach('A'); expect(s.client.target('A').conversation_id).toBe('conversation-right');
@@ -409,7 +411,7 @@ it.each(['ack', 'release', 'closed', 'decoded'] as const)('unsettled switch excl
   expect(s.client.getSnapshot().views.A).toMatchObject({ nodeId: 'right', nodeConversationId: 'conversation-right', attachment: 'detached', attachmentIntent: phase === 'release' ? 'released' : 'wanted' });
   expect(s.client.getSnapshot().views.A.attachmentObservation).toBeUndefined();
   expect(s.requests.filter(row => row.request.method === 'session/delete')).toHaveLength(0);
-  expect(requests(s).map(row => row.method)).toEqual(['session/attach', 'session/switchNode']);
+  expect(requests(s).map(row => row.method)).toEqual(['thread/resume', 'session/switchNode']);
   expect(s.claims()).toHaveLength(0);
   await s.client.attach('A');
   expect(s.client.target('A').conversation_id).toBe('conversation-right'); expect(s.claims()).toHaveLength(1); expect(s.maxClaims).toBe(1);
@@ -453,7 +455,7 @@ it.each(['proceed', 'release'] as const)('switch owns deletion exclusion behind 
   s.requests.filter(row => row.request.method === 'session/summary').forEach(row => s.reply(row.request));
   await Promise.all([outcome, release, ...reads]);
   expect(await outcome).toContain(action === 'release' ? 'before dispatch' : 'switched');
-  expect(requests(s).map(row => row.method)).toEqual(['session/attach', action === 'release' ? 'session/detach' : 'session/switchNode']);
+  expect(requests(s).map(row => row.method)).toEqual(['thread/resume', action === 'release' ? 'session/detach' : 'session/switchNode']);
   expect(s.client.getSnapshot().views.A.nodeId).toBe(action === 'release' ? 'left' : 'right');
   expect(s.claims()).toHaveLength(0);
   const before = s.requests.filter(row => row.request.method === 'session/summary').length;
@@ -482,7 +484,7 @@ it.each(['proceed', 'release'] as const)('switch retains deletion exclusion thro
   gate.resolve(true); await Promise.all([outcome, release]);
   expect(await outcome).toContain(action === 'release' ? 'before dispatch' : 'switched');
   expect(signal?.aborted).toBe(action === 'release');
-  expect(requests(s).map(row => row.method)).toEqual(['session/attach', action === 'release' ? 'session/detach' : 'session/switchNode']);
+  expect(requests(s).map(row => row.method)).toEqual(['thread/resume', action === 'release' ? 'session/detach' : 'session/switchNode']);
   expect(s.client.getSnapshot().views.A.nodeId).toBe(action === 'release' ? 'left' : 'right');
   expect(s.claims()).toHaveLength(0);
 });
@@ -503,10 +505,10 @@ it('switch deletion exclusion is Session scoped', async () => {
 });
 
 it('generic request cannot bypass the actor to acquire, switch, detach or delete a Session', async () => {
-  const s = await setup(); s.held.add('session/settings');
+  const s = await setup(); s.held.add('session/settings');s.held.add('thread/read');s.held.add('session/summary');
   await s.client.attach('A', 'left'); const target = s.client.target('A'), before = s.client.getSnapshot(), count = s.requests.length;
   const operations = [
-    { method: 'session/attach', params: { session_id: 'A', node_id: 'right' } },
+    { method: 'thread/resume', params: {threadId:('A').replace(/^ses_/, 'conv_')} },
     { method: 'session/switchNode', params: { target, node_id: 'right' } },
     { method: 'session/detach', params: { target } },
     { method: 'session/delete', params: { session_id: 'A', expected_target_revision: 'preview' } },
@@ -529,13 +531,13 @@ it('equivalent Open joins observation resynchronization without reviving revoked
   const opening = s.client.attach('A', 'left');
   s.held.delete('session/checkpoint'); s.reply(read); await opening;
   expect(s.client.isAttachmentObservationCurrent('A', proof)).toBe(true);
-  expect(requests(s).map(row => row.method)).toEqual(['session/attach']);
+  expect(requests(s).map(row => row.method)).toEqual(['thread/resume']);
   expect(s.claims()).toHaveLength(1);
   await s.client.release('A');
   expect(s.client.isAttachmentObservationCurrent('A', proof)).toBe(false);
   expect(s.client.isAttachmentControlCurrent('A', proof)).toBe(false);
   await expect(s.client.send('A', 'retired input')).rejects.toThrow('not authoritatively attached');
-  expect(s.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(0);
 });
 
 it('a lost initial subscription receipt cannot enable input from its retained checkpoint', async () => {
@@ -549,18 +551,18 @@ it('a lost initial subscription receipt cannot enable input from its retained ch
   s.socket.close(); await opening;
   expect(s.client.isAttachmentControlCurrent('A', proof)).toBe(false);
   await expect(s.client.send('A', 'disconnected input')).rejects.toThrow();
-  expect(s.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(0);
-  expect(s.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(1);
+  expect(s.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(0);
+  expect(s.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(1);
   expect(s.requests.filter(row => row.request.method === 'session/subscribe')).toHaveLength(1);
 });
 
 
 it('equivalent Open after navigation replacement observes the original exact native result without a second claim', async () => {
-  const s = await setup(); s.held.add('session/attach');
+  const s = await setup(); s.held.add('thread/resume');
   let navigation = true;
   const obsoleteNavigation = vi.fn(), latestNavigation = vi.fn();
   const first = s.client.attach('A', 'left', () => navigation, obsoleteNavigation);
-  const attach = await s.waitFor('session/attach', 1);
+  const attach = await s.waitFor('thread/resume', 1);
   navigation = false;
   const equivalent = s.client.attach('A', 'left', () => true, latestNavigation);
   s.reply(attach); await Promise.all([first, equivalent]);
@@ -568,6 +570,6 @@ it('equivalent Open after navigation replacement observes the original exact nat
   expect(obsoleteNavigation).not.toHaveBeenCalled(); expect(latestNavigation).toHaveBeenCalledOnce();
   expect(s.client.isAttachmentObservationCurrent('A', view.attachmentObservation)).toBe(true);
   expect(s.client.target('A').conversation_id).toBe('conversation-left');
-  expect(requests(s).map(row => row.method)).toEqual(['session/attach']);
+  expect(requests(s).map(row => row.method)).toEqual(['thread/resume']);
   expect(s.claims()).toEqual([view.target]);
 });

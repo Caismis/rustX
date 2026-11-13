@@ -1,5 +1,8 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "workbench.navigator-show": "Show workspace files",
+  "workbench.navigator-hide": "Hide workspace files",
+  "workbench.navigator-resize": "Resize workspace files",
   "changes.unchanged": "Both sides have the same content.",
   "changes.truncated": "Only the first part of this comparison is shown.",
   "changes.title": "Edited {count} files",
@@ -32,6 +35,7 @@ export const en = {
   "workbench.pdf": "PDF",
   "workbench.office": "Office",
   "workbench.excel": "Spreadsheet",
+  "workbench.geometry": "3D model",
   "workbench.zoom-in": "Zoom in",
   "workbench.zoom-out": "Zoom out",
   "workbench.fit-width": "Fit width",
@@ -41,6 +45,9 @@ export const en = {
   "workbench.code": "Code",
   "workbench.text": "Text",
   "workbench.viewer": "View as",
+  "workbench.open-file-location": "Open file location",
+  "workbench.choose-application": "Choose application",
+  "workbench.open-with": "Open with {p0}",
   "workbench.start": "Start",
   "workbench.tabs": "Workspace tabs",
   "workbench.add-tab": "New tab",
@@ -159,10 +166,14 @@ export const en = {
   "artifact-preview.this-artifact-has-no-supported-inline-viewer": "This artifact has no supported inline viewer.",
   "artifact-preview.download-artifact": "Download artifact",
   "copy.image-could-not-be-decoded": "Image could not be decoded",
+  "copy.image-unavailable": "Image preview unavailable",
   "preview.close": "Close Artifact preview"
 } as const;
 export type ArtifactsKey = keyof typeof en;
 export const zh = {
+  "workbench.navigator-show": "显示工作区文件",
+  "workbench.navigator-hide": "隐藏工作区文件",
+  "workbench.navigator-resize": "调整工作区文件宽度",
   "changes.unchanged": "两侧内容相同。",
   "changes.truncated": "仅展示部分改动内容。",
   "changes.title": "已编辑 {count} 个文件",
@@ -195,6 +206,7 @@ export const zh = {
   "workbench.pdf": "PDF",
   "workbench.office": "Office",
   "workbench.excel": "表格",
+  "workbench.geometry": "三维模型",
   "workbench.zoom-in": "放大",
   "workbench.zoom-out": "缩小",
   "workbench.fit-width": "适合宽度",
@@ -204,6 +216,9 @@ export const zh = {
   "workbench.code": "代码",
   "workbench.text": "文本",
   "workbench.viewer": "查看方式",
+  "workbench.open-file-location": "打开文件位置",
+  "workbench.choose-application": "选择应用",
+  "workbench.open-with": "使用 {p0} 打开",
   "workbench.start": "开始",
   "workbench.tabs": "工作区标签页",
   "workbench.add-tab": "新标签页",
@@ -322,5 +337,6 @@ export const zh = {
   "artifact-preview.this-artifact-has-no-supported-inline-viewer": "此制品没有受支持的内嵌查看器。",
   "artifact-preview.download-artifact": "下载制品",
   "copy.image-could-not-be-decoded": "无法解码图片",
+  "copy.image-unavailable": "无法预览图片",
   "preview.close": "关闭产物预览"
 } satisfies Record<ArtifactsKey, string>;

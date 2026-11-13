@@ -57,6 +57,9 @@ fn seed_published_sessions(catalog: &mut SessionCatalog, count: usize) {
     for lineage in prepared {
         let now = chrono::Utc::now();
         let node = SessionNode {
+            name: None,
+            archived: false,
+            dynamic_tools: Vec::new(),
             ordinal: next.next_node_ordinal,
             id: lineage.node_id.clone(),
             parent: None,
@@ -490,10 +493,10 @@ fn r13_list_and_search_open_zero_stores_and_clone_keeps_preview() {
 /// the resulting identities, and park so the parent can SIGKILL a process at a
 /// proven boundary.
 #[test]
+#[ignore = "fixture subprocess, invoked by its parent test"]
 fn reservation_create_process_gate() {
-    let Some(root) = std::env::var_os("RUSTX_387_CREATE_ROOT") else {
-        return;
-    };
+    let root = std::env::var_os("RUSTX_387_CREATE_ROOT")
+        .expect("fixture parent must provide its environment");
     let mode = std::env::var("RUSTX_387_CREATE_MODE").unwrap();
     let controller = ProductController::acquire(Path::new(&root)).unwrap();
     let mut catalog = SessionCatalog::empty(&controller)
@@ -528,6 +531,7 @@ fn spawn_create_child(root: &Path, mode: &str) -> (std::process::Child, SessionI
         .args([
             "--exact",
             "local_runtime::session::tests::cfg3_reservation::reservation_create_process_gate",
+            "--ignored",
             "--nocapture",
             "--format=terse",
         ])

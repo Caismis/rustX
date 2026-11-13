@@ -1,3 +1,339 @@
+## Provider brand icons (2026-11-08)
+
+Provider list, detail and searchable icon picker use the exact pinned
+`@lobehub/icons-static-svg` 1.102.0 package from LobeHub lobe-icons
+(`989535d6c13da2dec5a2937fe2789d4af4fdd8e0`, MIT). The upstream license is
+retained under licenses and in the production notices. The generated catalog
+selects 357 standalone brand symbols, preferring their color variants; wordmarks
+and alternate marks are excluded. SVG assets are bundled locally, with no CDN
+or Iconify API requests. Monochrome marks use the current theme's text color.
+The default Package glyph comes from the pinned Lucide/Iconify set (ISC).
+
+As in ZCode's ProviderLogo, an explicit provider field selects an asset; provider
+identity and protocol do not infer a logo. The optional native `icon` slug is
+carried through source read/write, redaction and TOML serialization, and omitted
+at the inference catalog boundary. App Server v78 is the mandatory contract;
+no old protocol path is retained. The picker uses existing Base UI modal and
+React Aria grid/search controls. Browser plugin is unavailable in this session;
+validation uses the repository's pinned Playwright/Chromium runner.
+
+## Settings information density (2026-11-08)
+
+Compared ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e` SettingsPage,
+ProviderCardSections, SettingsFormActions and SkillsSection presentation. Removed
+per-form configuration metadata, raw projections, process internals and duplicate
+resource inspection facts. Common fields remain visible; credential source is
+under Connection options. Errors, conflicts, deletion confirmations and repair
+receipts retain their native lifecycle with shorter product wording. No ZCode
+implementation was copied. Coordination tests inspect the existing authority
+actor directly instead of exposing hashes and projections as product UI.
+
+Pinned Chromium references were recaptured for desktop, narrow, light, dark and
+Chinese settings. Two independent strict runs reproduced one RGB-level variant
+at the same single pixel on the narrow light Model input corner. Both raw PNG
+variants are frozen with the comparator; only that measured 1×1 site and delta
+are admitted. Larger deltas, adjacent pixels and other references remain strict.
+
+## Provider-first model authoring (2026-11-08)
+
+Reviewed ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e` provider split
+layout, credential draft handling and Model dialog commit/cancel behavior.
+The existing rustX controls now use a wider provider detail, an explicit empty
+Model list, and one Model creation dialog. Its pending name and complete value
+stay in the Settings transaction actor until the explicit native write; the
+dialog closes only after the committed source is observed. As in ZCode, API
+format is authored on the Provider; every Model inherits it during native
+resolution. Model-level protocol authoring is removed. No ZCode runtime or implementation is
+imported, and no unsupported smart-configuration toggle is presented.
+
+Model-dialog inputs use full CSS-pixel borders. Typed forms submit through TanStack validation. Credential-mode changes replace
+the discriminated credential rather than retaining another mode's fields.
+Native source inspection treats a missing default Model as valid work in
+progress; Session creation still enforces readiness. Relevant visual references
+are recaptured in pinned Chromium. The earlier CAS screenshot/noise evidence is
+frozen with the comparator tests; the new live reference has no tolerance.
+
+## Primary navigation selection (2026-11-08)
+
+Selected primary navigation buttons use the existing active background token
+and rounded shape, without the inset leading marker. Hover and keyboard-focus
+styles remain separate. Affected shell references are recaptured in the pinned
+browser. Earlier deletion-dialog and narrow Model-dialog references and their
+measured raster noise move to the frozen comparator fixtures; the new live
+references are strict.
+No upstream code, assets, dependencies or native behavior change.
+
+## Combined-shell reference verification (2026-11-07)
+
+The UI-experience branch incorporates main's dual-sidebar shell. Nineteen
+references are recaptured under the pinned browser to retain the branch's quiet
+empty/loading surfaces, single confirmed queue row and Bash execution description
+within that layout. Existing screenshot comparison and timeout settings remain.
+
+The unchanged main deletion-confirmation reference has a separately measured
+63-pixel difference on its blurred background Delete icon, with maximum channel
+delta 1. Two stable local observations agree byte-for-byte; relevant rendering
+sources match main, and every foreground/geometry pixel matches the reference.
+The internal browser cause is unestablished. The raw captured PNG, its hash, the
+unchanged reference hash and every RGBA pair are retained by the existing
+reference-local noise mechanism. Exactly 63 disjoint 1x1 sites allow a one-level
+delta. Contract tests reject neighboring pixels, larger deltas, foreground edits
+and reuse under another reference; no rectangle or global threshold is added.
+
+The unchanged main CAS-conflict reference has a separate two-pixel observation
+on the provider panel edge, bounded individually at channel deltas 5 and 10.
+Its raw capture and hashes are retained too. The prior ten Disclosure-triangle
+sites remain a separate observation with their original bounds; the policy is
+their disjoint union, not a claimed twelve-pixel capture. Negative contracts
+continue to reject triangle neighbors and excess delta, and additionally reject
+panel neighbors, delta 6/11, foreground edits and foreign-reference reuse.
+
+The unchanged Workflow reference has a third measured FULL CI observation
+(run 42313212047): 608 changed pixels, adding 19 sites and exceeding 63 previous
+per-site maxima. The raw PNG, complete RGBA pairs, reference/capture/trace hashes
+and current graph/CSS hashes are retained. Its three screenshot checkpoints have
+the same serialized graph. Compared with main, only invisible insertion-button
+portal sibling order differs; their coordinate/content sets match, and sorting
+only those siblings produces exactly the main graph. SVG paths and their paint
+order, node DOM, transforms, selection and visible content remain exact. The
+Workflow stylesheet and three shared stylesheets match byte-for-byte; index CSS
+changes belong to unrelated preview, Files, empty-home, streaming and composer
+modules.
+
+The browser's internal cause remains unestablished. The policy retains both prior
+captures and allows only the three-capture measured union: 658 separate 1x1 sites,
+each at its largest observed delta (maximum 32). Contract tests bind the new raw PNG to its
+unchanged reference, preserve both older observations, and reject excess delta,
+neighbors, foreground changes and use with another reference.
+
+## PDF reference geometry and cancellable page rendering (2026-11-07)
+
+Document zoom now reads one cached, finite first-page geometry from the existing
+PDF.js metadata API, independently of viewport-owned bitmap rendering. Scrolling
+away while page 1 renders leaves Zoom, its percentage menu and Fit width usable
+on later pages. The document page count still appears immediately; no all-page
+geometry scan or extra offscreen bitmap work is introduced. The load watchdog
+covers reference metadata, and document retirement fences late geometry results.
+Tests exercise the real preview, zoom viewport and resource owner through first
+bitmap cancellation and page 20 rendering, metadata limits/timeouts and teardown.
+
+## Independent review: floating navigator replacement (2026-11-06)
+
+The pane navigator now replaces content through a single DockKit intent built
+from its existing reversible operations. A floating preview keeps its pane ID,
+rectangle, navigator state and focus when selecting another file, including a
+file already open elsewhere. Other copies remain independent. The replaced
+tab receives a new identity so the existing preview owner disposes its readers,
+document worker and observation rather than retaining the closed file. No new
+layout operation or persisted schema is introduced. Controller undo/redo,
+actual Workbench ownership tests and the pinned-browser floating navigator
+regression cover this rustX adaptation to the retained Harness docking port.
+
+## Remember an unsent Workspace choice (2026-11-06)
+
+Harness `ce7073d51254c26cd63b22a60835b8f948deb447` persists the current
+blank Session before sending (`ui-workspace/src/client/navigation.ts`,
+`MainSelection` and `replaceMain`). rustX retains its native draft ownership and
+records an explicit Workspace registration preference at the picker/sidebar
+gesture. Browser preference keys use normalized endpoint identity for immediate
+reload. The scoped Product Host selection write persists a selected flag in its
+registration metadata; ordered per-page intents prevent delayed older choices
+from replacing a newer one, and the small HTTP write uses keepalive during unload.
+The local launcher retains registration metadata outside secret scratch, with
+stable canonical-root handles and a profile keyed by the root set and opaque
+native arguments. A full restart restores the preference through a fresh Host
+catalog even when native/Web ports or browser origins change. Removed
+registrations fall through to the ordinary default.
+The remembered choice precedes native activity recency. The unsent route is
+persisted too, so an older open Session cannot replace it during restoration.
+Current Session navigation remains independent. Preference writes start
+at the accepted gesture, before a possible refresh; no source bytes, paths,
+credentials, draft contents or authorization are persisted by this preference.
+
+## Startup and New Conversation Workspace selection (2026-11-06)
+
+Read-only reference: Harness `ce7073d51254c26cd63b22a60835b8f948deb447`,
+`ui-workspace/src/client/navigation.ts` (`startSession`, `restoreSelection`,
+`recentWorkspace`). Explicit Workspace choices win; unscoped New inherits the
+current Session's confirmed Workspace before selecting the most recent native
+Session activity. Startup preserves restored Session navigation. Native transport
+connection already waits for the initial Session catalog; automatic selection
+also waits for the matching Host catalog and classification. Equal/no known
+activity uses stable Host order (the rustX registration contract has no creation
+timestamp). The existing 128-entry association cache retains activity metadata
+across list searches, without new reads or persisted selection authority.
+The resident draft keeps its editor/binding while its default is filled. A
+pending origin remains navigation-owned until classification settles; newer
+manual choices or navigation supersede it. Native Send admission and the
+existing draft/MCP preparation lifecycle remain the owners; no eager upstream
+Session creation or default-directory initialization is introduced.
+
+## Shared sidebar preview and reusable Office converter (2026-11-06)
+
+Read-only reference: Harness `ce7073d51254c26cd63b22a60835b8f948deb447`.
+`PreviewFrame`, `LoadingIndicator`, plain source lines, image layout/panning and
+`ui-sidebar-files` pane navigator geometry/presentation are ported or adapted
+under MIT, with exact paths, hashes and import closures in source-inventory.json.
+Native React owners supply source bytes and pane state; Cordis/Remote authority,
+plugin slots and filesystem APIs are not introduced into presentation.
+The Files page and adjacent preview navigator share pane-owned directory state;
+wide/overlay/fill layouts, resize, Escape, selection and file replacement follow
+the inspected implementation. Markdown, HTML, code, Excel and zoom retain their
+existing source ports. Supported-format admission remains native.
+
+Office conversion follows `document/office-to-pdf/src/index.ts` converter-slot
+ownership: initialize once and render multiple private files. Linux retains a
+sandboxed UNO Desktop through a private named pipe; macOS retains the existing
+kit's createConverter instance in a Seatbelt worker. A framed PDF response ends
+with an explicit document-close/output-cleanup trailer. Per-job manager timers,
+physical cancellation, Host disposal and bounded ready-PDF reuse retain native
+resource and authorization boundaries. No per-file CLI converter path remains.
+
+## Office preview latency and Harness alignment (2026-11-06)
+
+Read-only reference: Harness `ce7073d51254c26cd63b22a60835b8f948deb447`,
+`ui-sidebar-documentpreview/src/client/office/{cache.ts,OfficeBody.tsx}`,
+`pdf/{pdf.tsx,document.ts,PdfBody.module.css}` and
+`document/office-to-pdf/src/{index,queue}.ts`.
+The Office preview uses the same Office-to-PDF/continuous-page presentation:
+opening the PDF exposes its page count immediately; viewport-local pages render
+without a preliminary all-page geometry scan. Quiet 3:4 placeholders become
+actual page geometry after rendering. Existing rustX zoom, native worker and
+bitmap budgets, cancellation, and tab reading metadata remain the owners.
+Successful conversions use a Host-owned bounded LRU keyed by extension and
+source SHA-256, following Harness's content-addressed PDF reuse. Each caller
+still reads its authorized current source and rechecks it before publication;
+retained bytes confer no path, Session or delivery authority. Host close clears
+the cache. The existing platform converter isolation and physical settlement
+remain in place; the Harness Cordis/Remote stack is not introduced.
+
+## Trace location and live continuation (2026-11-06)
+
+Read-only study of Harness `ce7073d51254c26cd63b22a60835b8f948deb447`
+uses `ui-trajectory/src/client/TrajectoryTable.tsx`: location and reading position
+remain independent of live appends. Root and child rustX Trace caches keep
+updating throughout historical navigation, retaining loaded records, selection,
+detail readers and the navigation epoch. Disjoint native intervals retain their
+own bounded history continuation between the ranges; loading a middle boundary
+never replaces the latest tail. Lifecycle-only interest pages repair existing
+rows without extending the ledger. The ledger follows appends only at the tail;
+reading elsewhere, including loading a middle boundary, retains the visible
+row and its viewport offset. Live row refreshes never scroll to an unchanged
+selection; replacement DOM nodes recover keyboard focus with preventScroll,
+including when appends enable virtualization.
+
+## Bash execution-reason summaries (2026-11-06)
+
+Read-only study of Harness `ce7073d51254c26cd63b22a60835b8f948deb447`
+uses `ui-tool/.../tool-call-model.ts`, `terminal-card-model.ts`,
+`toolviews/bash-sample.tsx` and `shell/tool-bash/src/index.ts`.
+Bash rows show the first line of the authored `description`, including after
+failure; commands remain in the expanded terminal. Missing descriptions leave
+the summary empty. Native tool instructions request the execution reason before
+the command; the native invocation contract and execution authority are unchanged.
+
+## Quiet conversation loading (2026-11-06)
+
+Read-only study of sibling Harness `ce7073d51254c26cd63b22a60835b8f948deb447`
+uses `ui-conversation/src/client/skeleton/ConversationContent.tsx`,
+`ConversationSession.tsx` and `ConversationPanel.tsx`: retain the resident
+composer and scroll body, and resolve labels from already observed state.
+Existing rustX components keep those patterns. Initial configuration controls
+reserve their seats while loading; background reads avoid temporary copy.
+Accepted input keeps its dispatch-time presentation until native observation
+names its exact MessageId. This changes presentation only, with no protocol,
+native message, submission replay or read-authority change.
+
+## Issue #536 — dual-sidebar navigation shell
+
+The approved Codex-style navigation hierarchy informs original rustX composition;
+no Codex branding, assets, routing framework or runtime is imported. The existing
+Harness pin and all immutable upstream hashes below remain unchanged.
+Earlier issue records describe their historical presentation; the #536 contract
+supersedes their collapsed-sidebar and modal-Settings geometry.
+
+- `presentation/sidebar/HomeSidebar` replaces `SidebarRoot`: retained Harness
+  brand/new-conversation/workspace geometry, without the obsolete collapsed rail
+  or duplicate global destinations. Its moved inventory records preserve lineage.
+- `presentation/sidebar/PrimaryNavigationRail` is original rustX composition over
+  existing tokens, icons and Tooltip; Shell supplies the selected destination.
+- The right-panel fullscreen bounds leave the primary rail accessible, including
+  narrow windows and platform titlebar insets. Preview chips retain shared
+  dockkit dimensions within their available strip width, keeping keyboard focus
+  fully visible when rail and header controls reduce that space.
+- `presentation/layout/AppFrame` and `columns` adapt the measured Harness shell to
+  a permanent rail plus conditional Home sidebar and right-panel tracks.
+- `presentation/settings/SettingsRoot` and `app/settings/Settings` retain internal
+  section navigation and configuration editors as a page, removing top-level
+  modal geometry, focus containment and dismissal. Transient dialogs stay shared.
+- The workspace browser removes its unused collapsed-icon variant. Local source
+  hashes and retained import closures are updated for every changed derived file.
+- The full-width Workflow canvas moves the former Start-icon rasterizer site.
+  Its obsolete one-pixel allowance is removed; that site and its neighbors remain
+  exact. Frozen comparator fixtures retain their measured historical evidence.
+- Follow-up review separates retained local Home editors from attachment intent,
+  resumes first-submission publication by its existing binding, keeps selected
+  workbench iframe bodies within the existing budget, and scopes Settings-owned
+  portals/focus to its primary-page activation. Native operation owners are unchanged.
+  Resumed creation publication observes native readiness as well as first-submit
+  progress, so a settled same-claim resync wakes an already-admitted owner's route.
+  Once creation identifies a Session, recoverable first-input failure or pause
+  retains publication interest; native attachment proof still gates its route.
+  Discard clears the first input rather than the known Session. A fresh editor
+  gesture still fences the old publication and cannot be overridden by resync.
+  Creation that settles during Home authorization is re-read and validated with
+  fresh Session lifecycle evidence, so an already-deleted target is not restored.
+- FULL CI run `42179185106`, job `127766440468`, artifact `13485828418` measured
+  exactly four rounded input-border rasterizer pixels in
+  `model-advanced-light-390-linux.png`. The live manifest records their raw RGBA
+  pairs and four one-pixel regions with individual channel bounds `1, 3, 1, 1`.
+  No global threshold or neighboring-pixel allowance is added; the original
+  reference is unchanged and comparator regressions reject excess or outside noise.
+  The strict local `Dark 390` recheck after the portal repair independently measured
+  the same four corner sites and bounds in the dark reference. Its separate manifest
+  entry records that capture's own RGBA pairs; the dark reference is also unchanged.
+- FULL CI run `42193746361`, job `127814031930`, evidence artifact `13494105808`
+  measured 547 curved-edge coverage pixels in `workflow-editor-linux.png`.
+  Independent reconstruction of the failed CI and passing strict local capture
+  found byte-identical SVG viewport DOM, path coordinates, paint order, selected
+  state, z-index, transforms and CSS resources. The canonical viewport SHA256 is
+  `4dd88f424c85838ec552a68dd847042bea37c16301ef972160d4935636929e25`.
+  The observed variation is raster coverage; Chromium's internal cause is not
+  established. The manifest records raw RGBA pairs and PNG hashes, with a separate
+  one-pixel region and actual observed channel bound for each of the 547 sites
+  (maximum 26). No surrounding rectangle inherits a bound. Comparator regressions
+  reject neighboring sites, foreign references, excess deltas and the retired
+  Start-icon allowance. The PNG reference and comparator implementation are unchanged.
+- FULL CI run `42229926383`, job `127936183721`, evidence artifact `13513095611`
+  measured a second stable capture with 602 changed pixels (maximum delta 31).
+  Its three actual graph capture checkpoints `36286`, `36291` and `36295` have
+  the same canonical viewport hash above; all five CSS resources also match.
+  It adds 92 measured sites and exceeds 192 previous per-site channel bounds.
+  The live manifest records the exact 639-site union as separate one-pixel
+  regions, each bounded by its largest actually observed delta. Each top-level
+  RGBA tuple is an actual maximum-delta exemplar from one capture; `captures`
+  preserves both complete raw observations and their PNG hashes. Tests replay
+  both, prove that the regions and bounds equal that observed union, and reject
+  unmeasured neighbors, excessive deltas and foreign-reference use. There is no
+  enclosing rectangle or global allowance; internal Chromium causes remain unproven.
+- FULL CI run `42239006386`, job `127967664835`, artifact `13516078875` measured
+  ten light conflict-state disclosure glyph-edge pixels: x=243 at y=841–845
+  and 896–900, each `[255,255,251,255]` to `[255,255,255,255]` (delta 4).
+  A strict local reproduction produced the byte-identical actual PNG. CI/local
+  Settings DOM matches after normalizing generated React Aria ID prefixes;
+  form values and selected-state annotations remain, and all 132 stylesheet
+  text blocks match. The markers are React Aria Disclosure `▸` spans. The strict
+  local observation independently reproduced the same reference mismatch.
+  Ten separate one-pixel regions retain the raw measurements and image hashes;
+  regressions reject neighboring sites, excessive deltas and foreign references.
+  The reference and comparator remain unchanged; no internal browser cause is inferred.
+- Workflow browser acceptance waits for a reopened Model's measured card to be
+  visible, dispatches its keyboard action there and checks its Inspector.
+  Each multi-MiB Global/Workspace authoring case has its own normal
+  test budget while retaining native save/reread and bounded-frame assertions.
+
+Navigation, authoring, authorization and native lifecycle remain rustX-owned.
+
 ## Issue #518 — automatic Session configuration commit
 
 Read-only references, inspected outside rustX and never vendored:
@@ -540,7 +876,7 @@ sidebar still predated main's Workflows entry; dialog geometry is unchanged.
 The branch also merges main at `d730966ce54ba330529bffb0279d6e0c4a44fd17`
 (PR #494). Native temporary questions and classification retain their execution,
 publication and cancellation owners. The combined vocabulary is App Server v54,
-Runtime Client v74, SQLite v77 and archive v10; request inspection retains schema 5
+Runtime Client v75, SQLite v78 and archive v10; request inspection retains schema 5
 without declared reasoning metadata. Generated artifacts contain both workspace
 change inspection and auxiliary delivery. The existing simplified header, Fork
 presentation, model editor and right-sidebar interactions are preserved.
@@ -1314,8 +1650,8 @@ locally. Full paths and hashes are in the JSON; no compatibility export tree exi
 | `ui-theme/src/styles/design-platform.css` | `presentation/theme/design-platform.css` | A |
 | `ui-theme/src/styles/corner-shape.css` | `presentation/theme/corner-shape.css` | A |
 | `ui-layout/src/client/columns.ts` | `presentation/layout/columns.ts` | A |
-| `ui-sidebar/src/client/SidebarRoot.tsx` | `presentation/sidebar/SidebarRoot.tsx` | B |
-| `ui-sidebar/src/client/SidebarRoot.module.css` | `presentation/sidebar/SidebarRoot.module.css` | B |
+| `ui-sidebar/src/client/SidebarRoot.tsx` | `presentation/sidebar/HomeSidebar.tsx` | B |
+| `ui-sidebar/src/client/SidebarRoot.module.css` | `presentation/sidebar/HomeSidebar.module.css` | B |
 | `ui-workspace/src/client/rows/Rows.tsx` | `presentation/workspace/Rows.tsx` | B |
 | `ui-workspace/src/client/rows/Rows.module.css` | `presentation/workspace/Rows.module.css` | B |
 | `ui-workspace/src/client/rows/WorkspaceBrowser.module.css` | `presentation/workspace/WorkspaceBrowser.module.css` | B |
@@ -1332,22 +1668,22 @@ locally. Full paths and hashes are in the JSON; no compatibility export tree exi
   come from the current upstream sheets. `reset.css` supplies rustX's browser root
   sizing and accessible focus outline. The old token file and accent overrides
   were deleted. `data-ds-dark-theme` is a styling marker, not product branding.
-- AppFrame retains the measured three-column grid and pointer-captured drag
-  handle. The pure upstream column solver retains 280px default / 264–420px
-  Sidebar, 56px rail, 1024px auto-collapse, 400px protected center and 300px minimum
-  right panel. Explicit React render seats replace Cordis slots/layout stores.
-  Local widths and expansion are disposable, not persisted preferences.
-- SidebarRoot retains brand/new/global/region/footer DOM, 150ms fade/unmount,
-  frozen expanded width during collapse, rail glyphs and scrollbar linger.
-  rustX `rX`/wordmark replaces upstream product artwork. Global Connection and
-  Settings callbacks are supplied by the product composition root.
+- AppFrame adapts the measured grid and pointer-captured drag handle to four
+  tracks: permanent 56px primary rail, optional 280px default / 264–420px Home
+  sidebar, 400px protected center and optional 300px minimum right panel.
+  Explicit React render seats replace Cordis slots/layout stores. Browser
+  width/collapse preferences are owned by `app/`, with a 1024px overlay breakpoint.
+- HomeSidebar retains the brand/new/Workspace geometry and scrollbar linger.
+  rustX `rX`/wordmark replaces upstream product artwork. The separate original
+  primary rail owns global destinations supplied by product composition.
 - WorkspaceBrowser and Rows retain tree/header/search/hover/menu geometry.
   Native metadata search uses upstream contextual search rows; it does not claim
   conversation-content search. Project hover cards omit unavailable creation time.
   Schedule, provisional Session, archive and browser reorder paths are removed.
   Session Delete opens native revision-checked preview, never a local archive.
   Additional labelled buttons expose row gestures to keyboard users.
-- Settings retains the mask/panel/navigation/content frame. Sections and bodies
+- Settings retains the navigation/content vocabulary as an independent page,
+  removing the mask, modal focus containment and close lifecycle. Sections and bodies
   are adapter seats for existing CFG3 editors. A narrow Settings panel replaces
   the rail with a section menu (#393; the earlier horizontal section strip is
   deleted). No Settings Controller, mirror, source cache or publication
@@ -3040,7 +3376,7 @@ icons remain stable on failure, summaries use native failure/stopped tones and
 lifecycle announcements are visually hidden. Keyboard expansion and running copy
 visibility follow the upstream flow.
 
-The Inspect pill is pure presentation. App Server v50 / Runtime Client v72 native
+The Inspect pill is pure presentation. App Server v50 / Runtime Client v78 native
 readers locate the canonical occurrence across the complete indexed Journal,
 including historical and exited child stores. RustX supplies bounded continuous
 windows, exact record IDs and lifecycle repairs, replacing Harness runtime/store
@@ -3179,7 +3515,7 @@ The integration keeps PR #461's native child conversation, Trace, attachment
 and file-delivery presentation. Agent workspace values now carry the frozen
 Session path, and retired worktree disposal and Candidate controls are absent.
 The historical entries above retain the versions reviewed at those snapshots.
-The combined current contracts are App Server v50, Runtime Client v72, SQLite 61,
+The combined current contracts are App Server v50, Runtime Client v78, SQLite 61,
 Session catalog16, Runtime Event1, Child IPC33 and Product Host file-read4; see the [format inventory](../docs/agent-workflow-shared-workspace.md#format-and-version-inventory)
 for owners and rejection behavior. Imports and generated client contracts use
 App Server v50. The source inventory
@@ -3260,7 +3596,7 @@ Session Lifecycle retains every dispatched Switch transaction. Fresh Host author
 
 Four dark shell references deliberately retained the enabled Stop control in the preceding repair: settings-shell-dark, desktop-expanded-dark, mobile-rail-dark and mobile-expanded-dark. Their reference/actual/diff inspection showed 952 changed pixels per reference confined to Stop, with identical dimensions and surrounding pixels. This refactor retains that control contract. Screenshot comparator, noise, stabilization, timeout and retry policies remain unchanged.
 
-Session tree metadata uses App Server v50 `session/node`, which reuses the native Session catalog's exact node map lookup. Immutable source identity and inherited transcript placement remain native facts. The matching Runtime Client v72 and SQLite v58 contracts reject prior peers/stores before dependent work. Current generated imports and local provenance hashes are synchronized.
+Session tree metadata uses App Server v50 `session/node`, which reuses the native Session catalog's exact node map lookup. Immutable source identity and inherited transcript placement remain native facts. The matching Runtime Client v78 and SQLite v58 contracts reject prior peers/stores before dependent work. Current generated imports and local provenance hashes are synchronized.
 
 The intentional `mobile-settings-dark-linux.png` reference change removes the obsolete sidebar backdrop beneath the Settings modal after successful Settings navigation. The reference, actual and diff were inspected: modal content and geometry are identical, and the changed pixels are the surrounding backdrop. The pinned browser generator updates this one changed reference; screenshot thresholds, noise policy and stabilization are unchanged.
 
@@ -3456,7 +3792,7 @@ exercise workspace bytes, source/fork ownership and more than the old file limit
 The upload capability change is mandatory App Server v54. All current Web/TUI
 DTO imports and the binary carrier's control negotiation use v54; v50 artifacts
 are removed and old peers are rejected. This is a native protocol update only
-for other derived presentation files. Runtime Client v72 and TUI interactions
+for other derived presentation files. Runtime Client v78 and TUI interactions
 remain unchanged. The two old narrow attachment-card rasterizer-noise entries
 were removed along with that card. All four new attachment references compare
 exactly; no screenshot tolerance was expanded.
@@ -5164,7 +5500,7 @@ conditions, reuse exact numeric comparison, preserve prompt editor DOM during
 bounded expansion, correct inline variable spacing and narrow Loop/Assigner
 rows, and avoid automatic Output-name collisions. Dify's stores, component
 source and assets are not copied. No dependencies are added. Vision and AI
-generation controls are omitted. App Server v72 is the sole wire contract;
+generation controls are omitted. App Server v78 is the sole wire contract;
 v67 artifacts are removed. Runtime Client v81 is unchanged.
 
 Actual desktop and touch browser checks use the repository's exact pinned
@@ -5293,7 +5629,7 @@ configure/clear controls and keyboard-operable moves, inspired by ZCode's ordere
 reasoning control. No upstream mapping code or dependencies are imported. Profile
 identities remain stable keys, and the existing JSON editor and native whole-Model
 transaction retain parameter validation, scope and revision ownership. The mandatory
-App Server v72 imports are regenerated from Rust; Runtime Client is v83. Updated
+App Server v78 imports are regenerated from Rust; Runtime Client is v83. Updated
 local hashes and import inventories record these adaptations against the unchanged
 upstream baselines. Browser plugin is unavailable; validation uses the repository's
 pinned Playwright container and production native API path.
@@ -5302,3 +5638,63 @@ Explicit Model-dialog Cancel discards the whole unsaved Model unit through its
 existing transaction actor, including Profile membership and reasoning order.
 Close and navigation retain that draft for later editing; no transaction state
 or native configuration action is added.
+
+## Session model control scope (2026-11-08)
+
+Model catalog/configuration reads now follow the full existing attachment scope,
+including Session and Conversation identities, rather than just a runtime-local
+attachment counter and revisions. This prevents A → B → A navigation from
+clearing a deferred model label without issuing its authoritative reread. A
+component regression reproduces identical local counters and binding revisions;
+real-process browser coverage switches two native Sessions repeatedly without
+opening the picker or sending a model mutation.
+
+The narrow dark Model context input reproduced the light theme's previously
+measured one-level corner variance at (34,237). Independent stable captures
+reproduce both complete PNG variants with every other RGBA byte identical. The
+original dark reference is retained; both raw variants and their hashes are
+frozen with the comparator. Only that one dark-reference pixel now admits the
+measured delta of 1. Regression tests reject adjacent pixels, larger changes and
+other references; no global screenshot threshold changed.
+
+## Independent resource modules (2026-11-08)
+
+Reference inspected: ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e`,
+`packages/ui/src/settings/{SubagentsSection,McpSettingsSection,SkillsSection}.tsx`
+and the app shell's resource navigation. The local implementation adopts separate
+resource destinations, explicit Global / Workspace scope, searchable installed
+resources, per-resource availability and compact MCP authoring. No ZCode source
+code or dependency is copied into this change.
+
+Subagents, MCP servers and Skills now have independent primary routes. Their
+source reads, drafts, exact revisions and writes reuse the existing native
+configuration actors; scope changes never copy configuration between owners.
+Workspace MCP and Agent definitions inherit read-only until explicitly overridden.
+Removing such an override restores Global configuration. Availability controls
+author the native scope's root selections, independently of definition saves.
+Unlike ZCode's current user-only subagent enablement, rustX supports Workspace
+selection through its existing native delegation allowlist.
+
+Skills use native revision-fenced, paginated discovery and chunked instruction
+reads. They have a read-only Markdown viewer and no file editor, Save or Delete.
+Settings no longer duplicates these resource inventories or their root selection
+controls. Runtime extensions and native Tool policies remain in Settings. Existing
+Harness-derived MCP and catalog materials are moved into `src/app/resources`;
+the inventory retains their upstream attribution and records their new paths.
+
+Validation uses the repository's pinned Chromium container (the Browser plugin
+is unavailable), real native global/workspace files and existing component and
+transaction regressions. Native browser cases cover desktop and narrow layouts,
+paginated skills, separate scopes, explicit MCP override/removal, read-only Skill
+instructions and preserving the Home draft without allocating a hidden Session.
+
+The large Skill catalog regression also exposed a bounded-source read racing
+native application settlement. The shared source reader now restarts a whole
+expired read cut, within three attempts, in both the Web client and Product Host.
+It publishes no partial projection and never resubmits a write. Exhaustion,
+authority replacement and other native failures remain explicit failures.
+
+Current UI references are refreshed for the added primary navigation. The former
+Workflow reference is frozen byte-for-byte in the comparator fixtures so its
+historical CI observations remain independently verifiable. Existing comparison
+policies, regions and deltas are unchanged.

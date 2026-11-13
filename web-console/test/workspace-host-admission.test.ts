@@ -1,3 +1,4 @@
+import { threadFor } from '../../protocol/app-server/testing.ts';
 import { settingsReceipt } from './fixture';
 // @vitest-environment node
 /** Final operation admission against a real Product Host process (Node only). */
@@ -12,7 +13,7 @@ import { RequestNotDispatched } from '../src/client/errors';
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { WorkspaceSessionAdmission } from '../src/workspaces/session-admission';
 import type { ProductHostWorkspaces, SessionLocation } from '../src/workspaces/host';
-import type { MethodResult } from '../../protocol/app-server/v73';
+import type { MethodResult } from '../../protocol/app-server/v78';
 import { Server, endpoint, snapshot } from './fixture';
 
 function deferred<T>() {
@@ -44,11 +45,11 @@ function realHost(server: Server) {
     classifyLocations: async (cwds, target, authorityId) => {
       const locations = await local.classifyLocations(cwds, target, authorityId); classified.push({ authorityId, locations }); return locations;
     },
-    adoptWorkspace: unused, renameWorkspace: unused, reorderWorkspace: unused, removeWorkspace: unused,
+    adoptWorkspace: unused, renameWorkspace: unused, selectWorkspace: async () => {}, reorderWorkspace: unused, removeWorkspace: unused,
     resolveWorkspace: (id, endpoint) => local.resolveWorkspace(id, endpoint),
   };
   server.handlers.set('session/settings', () => (settingsReceipt({ cwd },'0')));
-  server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
+  server.handlers.set('thread/start', () => ({  thread: threadFor({ id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' }), type: 'session_transition', session: { id: 'A', active_node: 'node-A', active_conversation_id: 'conversation-A', node_count: 1, created_at: '0', updated_at: '0' } }));
   const authority = new WorkspaceAuthority(host);
   const accepted = vi.fn(); authority.subscribe(accepted);
   server.client.setSessionAdmission(new WorkspaceSessionAdmission(authority, server.client).admit);
@@ -66,16 +67,16 @@ type RealHost = ReturnType<typeof realHost>;
 
 /** Hold six real attachment lifetimes, after their native/Host admission. */
 async function holdSixAttachments(server: Server) {
-  server.held.add('session/attach');
+  server.held.add('thread/resume');
   const openings: Promise<void>[] = [];
   for (const [index, id] of ['A', 'B', 'C', 'D', 'E', 'F'].entries()) {
     server.snapshots.set(id, snapshot(id));
     const opening = server.client.attach(id, `node-${id}`);
     void opening.catch(() => {}); // Cleanup disconnect settles every still-owned actor.
     openings.push(opening);
-    await server.waitFor('session/attach', index + 1);
+    await server.waitFor('thread/resume', index + 1);
   }
-  const requests = server.requests.filter(row => row.request.method === 'session/attach');
+  const requests = server.requests.filter(row => row.request.method === 'thread/resume');
   expect(requests).toHaveLength(6);
   const settings = server.requests.filter(row => row.request.method === 'session/settings');
   expect(new Set(settings.map(row => 'session_id' in row.request.params ? row.request.params.session_id : undefined))).toEqual(new Set(['A', 'B', 'C', 'D', 'E', 'F']));
@@ -102,7 +103,7 @@ it.each(['known', 'unknown'] as const)('bounded metadata admission for a %s node
     void submitting.catch(() => {});
     const intent = await server.waitFor('session/submissionIntent', 1);
     expect(intent.params).toEqual({ session_id: id, node_id: `node-${id}` });
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toEqual(held.requests);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toEqual(held.requests);
     expect(server.loaded.size).toBe(0); // No attachment response released to free a slot.
     expect(requests.mock.calls.filter(([request]) => request.method === 'session/settings')).toHaveLength(1);
     expect(server.requests.filter(row => row.request.method === 'session/settings')).toHaveLength(held.settingsCount + 1);
@@ -120,7 +121,7 @@ it.each(['known', 'unknown'] as const)('bounded metadata admission for a %s node
       void opening.catch(() => {});
       held.openings.push(opening);
     }
-    server.held.delete('session/attach');
+    server.held.delete('thread/resume');
     for (const { request, socket } of held.requests) server.reply(request, socket);
     await Promise.all(held.openings);
     await expect(submitting).resolves.toEqual({ id, node: `node-${id}`, conversation: `conversation-${id}` });
@@ -141,8 +142,8 @@ it.each([false, true])('first-submit create and attachment remain reachable with
   try {
     held = await holdSixAttachments(server);
     server.snapshots.set('G', snapshot('G'));
-    server.handlers.set('session/create', () => ({ type: 'session_transition', session: { id: 'G', active_node: 'node-G', active_conversation_id: 'conversation-G', node_count: 1, created_at: '0', updated_at: '0' } }));
-    server.held.add('session/create');
+    server.handlers.set('thread/start', () => ({  thread: threadFor({ id: 'G', active_node: 'node-G', active_conversation_id: 'conversation-G', node_count: 1, created_at: '0', updated_at: '0' }), type: 'session_transition', session: { id: 'G', active_node: 'node-G', active_conversation_id: 'conversation-G', node_count: 1, created_at: '0', updated_at: '0' } }));
+    server.held.add('thread/start');
     const port = firstSubmitPort(server.client, f.host, () => true, () => () => {});
     const acknowledged = vi.fn();
     const draft = { workspaceId: await f.workspaceId(), text: 'new authorized input', files: [] };
@@ -150,34 +151,34 @@ it.each([false, true])('first-submit create and attachment remain reachable with
     creating = port.create(draft, acknowledged);
     const outcome = creating.catch(error => error);
     await final.entered;
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toEqual(held.requests);
-    expect(server.requests.filter(row => row.request.method === 'session/create')).toEqual([]);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toEqual(held.requests);
+    expect(server.requests.filter(row => row.request.method === 'thread/start')).toEqual([]);
     if (replaced) rootChanges['replaced by a symlink'].apply(f);
     final.release();
     if (replaced) {
       expect(await outcome).toMatchObject({ message: expect.stringContaining('no longer authorized by this Product Host (denied)') });
       expect(acknowledged).not.toHaveBeenCalled();
-      expect(server.requests.filter(row => ['session/create', 'session/submissionIntent', 'turn/start'].includes(row.request.method))).toEqual([]);
+      expect(server.requests.filter(row => ['thread/start', 'session/submissionIntent', 'inbound/queue'].includes(row.request.method))).toEqual([]);
       expect(server.loaded.size).toBe(0);
     } else {
-      const create = await server.waitFor('session/create', 1);
+      const create = await server.waitFor('thread/start', 1);
       expect(create.params).toMatchObject({ settings: { cwd: f.root }, submission: { host_authority: f.lists.at(-1) } });
       server.reply(create);
       const session = await creating;
       expect(acknowledged).toHaveBeenCalledTimes(1);
       expect(session).toMatchObject({ id: 'G', node: 'node-G' });
       attaching = port.attach(session); void attaching.catch(() => {});
-      const attached = await server.waitFor('session/attach', 7);
-      expect(attached.params).toEqual({ session_id: 'G', node_id: 'node-G' });
-      expect(server.requests.filter(row => row.request.method === 'turn/start')).toEqual([]);
+      const attached = await server.waitFor('thread/resume', 7);
+      expect(attached.params).toEqual({threadId:'conversation-G'});
+      expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toEqual([]);
       server.reply(attached);
       await attaching;
       await port.send(session, draft, [], () => {});
-      expect(server.requests.filter(row => row.request.method === 'turn/start')).toHaveLength(1);
+      expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
       expect(server.requests.filter(row => row.request.method === 'session/submissionIntent')).toEqual([]);
       expect([...server.loaded]).toEqual(['G']);
       expect(server.claims().map(target => target.session_id)).toEqual(['G']);
-      expect(server.requests.filter(row => row.request.method === 'session/create')).toHaveLength(1);
+      expect(server.requests.filter(row => row.request.method === 'thread/start')).toHaveLength(1);
     }
     expect(server.client.getSnapshot().uncertain).toEqual([]);
   } finally {
@@ -190,15 +191,15 @@ it('Workspace revocation after create receipt preserves its acknowledgement and 
   const server = new Server(); await server.connect();
   const f = realHost(server); const acknowledged = vi.fn();
   try {
-    server.held.add('session/create');
+    server.held.add('thread/start');
     const port = firstSubmitPort(server.client, f.host, () => true, () => () => {});
     const creating = port.create({ workspaceId: await f.workspaceId(), text: 'task', files: [] }, acknowledged);
-    const request = await server.waitFor('session/create', 1);
+    const request = await server.waitFor('thread/start', 1);
     rmSync(f.root, { recursive: true }); server.reply(request);
     const session = await creating;
     expect(acknowledged).toHaveBeenCalledTimes(1);
     await expect(port.attach(session)).rejects.toThrow('not authorized by this Product Host');
-    expect(server.requests.filter(row => ['session/submissionIntent', 'session/attach', 'turn/start'].includes(row.request.method))).toHaveLength(0);
+    expect(server.requests.filter(row => ['session/submissionIntent', 'thread/resume', 'inbound/queue'].includes(row.request.method))).toHaveLength(0);
   } finally { server.client.disconnect(); }
 });
 
@@ -218,7 +219,7 @@ it.each(['new', 'existing'] as const)('%s Session submission intent rechecks Hos
     rootChanges['replaced by a symlink'].apply(f);
     final.release();
     await refused;
-    expect(server.requests.filter(row => ['session/submissionIntent', 'session/attach', 'turn/start'].includes(row.request.method))).toHaveLength(0);
+    expect(server.requests.filter(row => ['session/submissionIntent', 'thread/resume', 'inbound/queue'].includes(row.request.method))).toHaveLength(0);
     expect(server.client.getSnapshot().uncertain).toEqual([]);
   } finally { server.client.disconnect(); }
 });
@@ -253,8 +254,8 @@ it.each(Object.keys(rootChanges) as (keyof typeof rootChanges)[])('with six held
     expect(await refused).toMatchObject({ message: expect.stringContaining(`no longer authorized by this Product Host (${rootChanges[change].reason})`) });
     expect(requests.mock.calls.filter(([request]) => request.method === 'session/settings')).toHaveLength(1);
     expect(server.requests.filter(row => row.request.method === 'session/settings')).toHaveLength(held.settingsCount + 1);
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toEqual(held.requests);
-    expect(server.requests.filter(row => ['session/submissionIntent', 'turn/start'].includes(row.request.method))).toHaveLength(0);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toEqual(held.requests);
+    expect(server.requests.filter(row => ['session/submissionIntent', 'inbound/queue'].includes(row.request.method))).toHaveLength(0);
     expect(server.loaded.size).toBe(0);
     expect(server.client.getSnapshot().uncertain).toEqual([]);
   } finally {
@@ -287,8 +288,8 @@ it('with six held attachments, Host authority replacement retires final submissi
     expect(f.accepted).toHaveBeenCalledTimes(2);
     expect(requests.mock.calls.filter(([request]) => request.method === 'session/settings')).toHaveLength(1);
     expect(server.requests.filter(row => row.request.method === 'session/settings')).toHaveLength(held.settingsCount + 1);
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toEqual(held.requests);
-    expect(server.requests.filter(row => ['session/submissionIntent', 'turn/start'].includes(row.request.method))).toHaveLength(0);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toEqual(held.requests);
+    expect(server.requests.filter(row => ['session/submissionIntent', 'inbound/queue'].includes(row.request.method))).toHaveLength(0);
     expect(server.loaded.size).toBe(0);
     expect(server.client.getSnapshot().uncertain).toEqual([]);
   } finally {
@@ -307,7 +308,7 @@ it.each(Object.keys(rootChanges) as (keyof typeof rootChanges)[])('same Host pro
     const attach = server.client.attach('A');
     await final.entered;
     expect(f.classified).toEqual([{ authorityId: f.lists[0], locations: [expect.objectContaining({ authorized: true })] }]);
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(0);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(0);
     rootChanges[change].apply(f);
     final.release();
     await expect(attach).rejects.toThrow(`no longer authorized by this Product Host (${rootChanges[change].reason})`);
@@ -315,7 +316,7 @@ it.each(Object.keys(rootChanges) as (keyof typeof rootChanges)[])('same Host pro
     expect(f.lists).toEqual([f.lists[0], f.lists[0]]);
     expect(f.accepted).toHaveBeenCalledTimes(1);
     expect(f.classified[1]).toEqual({ authorityId: f.lists[0], locations: [{ authorized: false, reason: rootChanges[change].reason }] });
-    expect(server.requests.filter(row => row.request.method === 'session/attach')).toHaveLength(0);
+    expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(0);
     expect(server.client.getSnapshot().uncertain).toEqual([]);
   } finally { server.client.disconnect(); }
 });
@@ -340,7 +341,7 @@ it.each(Object.keys(rootChanges) as (keyof typeof rootChanges)[])('Fork uses the
     await expect(fork).rejects.toThrow(`no longer authorized by this Product Host (${rootChanges[change].reason})`);
     expect(new Set(f.lists).size).toBe(1);
     expect(f.classified.at(-1)?.locations).toEqual([{ authorized: false, reason: rootChanges[change].reason }]);
-    expect(server.requests.filter(row => row.request.method === 'session/fork')).toHaveLength(0);
+    expect(server.requests.filter(row => row.request.method === 'thread/fork')).toHaveLength(0);
     expect(server.client.getSnapshot().uncertain).toEqual([]);
   } finally { server.client.disconnect(); }
 });

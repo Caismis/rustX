@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
 import { Server, snapshot, checkpoint, projectionHead, readingWindow } from './fixture';
-import type { ContentRef } from '../../protocol/app-server/v73';
+import type { ContentRef } from '../../protocol/app-server/v78';
 let frames: Map<number, FrameRequestCallback>, serial = 0;
 beforeEach(() => {
   frames = new Map(); vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++serial, callback); return serial; });
@@ -106,7 +106,7 @@ it.each(['node', 'authority'] as const)('retains compaction-separated process DO
   } finally { server.client.dispose(); }
 });
 it('continues paging a cold preview while the first attachment is held', async () => {
-  const server = new Server(); await server.connect(); server.held.add('session/attach');
+  const server = new Server(); await server.connect(); server.held.add('thread/resume');
   const entry = (cursor: string) => ({ cursor, item: { type: 'message' as const, message: { id: `message-${cursor}`, role: 'user' as const, source: 'human' as const, content: [{ type: 'text' as const, text: `History ${cursor}` }] } } });
   server.handlers.set('session/history', request => ({ type: 'session_history', conversation_id: 'conversation-A', window: { cut: { conversation_id: 'conversation-A', journal: '1000', transcript: '1000', mutation_revision: '0', ledger_through: '0', surface_revision: '0', transcript_total: '0', pending_through: '0', pending_total: '0' }, page: request.method === 'session/history' && request.params.at.type === 'latest' ? { entries: [entry('2')], next_cursor: '2' } : { entries: [entry('1')], next_cursor: null } } }));
   try {
@@ -123,7 +123,7 @@ it('continues paging a cold preview while the first attachment is held', async (
     server.held.delete('session/history'); await act(async () => server.reply(earlier));
     await waitFor(() => expect(ui.getByText('History 1')).toBeTruthy());
     expect(server.client.getSnapshot().views.A.attachment).toBe('attaching');
-    await act(async () => server.reply(await server.waitFor('session/attach', 1)));
+    await act(async () => server.reply(await server.waitFor('thread/resume', 1)));
     await act(async () => attaching);
   } finally { server.client.dispose(); }
 });
@@ -138,7 +138,7 @@ it.each([false, true])('hands history to the bounded live checkpoint without rem
   server.handlers.set('session/checkpoint', () => ({ type: 'checkpoint', checkpoint: checkpoint({ ...value, transcript: { entries: [...entries.slice(-8, -1), latest], next_cursor: '13' } }) }));
   // A returning reader can have more rows than the new passive preview.
   if (reconnected) server.handlers.set('session/history', () => ({ type: 'session_history', conversation_id: value.conversation_id, window: readingWindow({ entries: entries.slice(-12), next_cursor: '9' }) }));
-  for (const method of ['session/attach', 'session/checkpoint', 'session/transcript'] as const) server.held.add(method);
+  for (const method of ['thread/resume', 'session/checkpoint', 'session/transcript'] as const) server.held.add(method);
   try {
     const ui = render(<div data-conversation-scroll><ConversationLive client={server.client} sessionId="A" mode="chat" disabled={false} onHistorical={() => {}}/></div>);
     if (reconnected) await act(async () => { server.socket.close(); server.loaded.delete('A'); await server.connect(); });
@@ -148,7 +148,7 @@ it.each([false, true])('hands history to the bounded live checkpoint without rem
     const first = await ui.findByText('Saved message 0');
     const last = ui.getByText('Saved message 19');
     const viewport = ui.container.querySelector('.chat-reading-surface');
-    await act(async () => server.reply(await server.waitFor('session/attach', reconnected ? 2 : 1)));
+    await act(async () => server.reply(await server.waitFor('thread/resume', reconnected ? 2 : 1)));
     const held = await server.waitFor('session/checkpoint', reconnected ? 2 : 1);
     expect(ui.getByText('Saved message 0')).toBe(first);
     await act(async () => { server.reply(held); await attaching; });

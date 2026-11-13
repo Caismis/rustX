@@ -502,7 +502,7 @@ describe("local self-hosted mode: one owned App Server child over stdio", { skip
       assert.equal(host.childExit, undefined, "one child served both Sessions");
       assert.equal(host.describe(), processIdentity, "focus preserves the exact child PID");
       assert.equal((await provider.requests()).length, 2);
-      assert.equal(sent.some(method => ["turn/cancel", "session/unload"].includes(method)), false);
+      assert.equal(sent.some(method => ["turn/interrupt", "session/unload"].includes(method)), false);
       assert.equal(JSON.stringify(a.state.transcript).includes("B answered while A was still working"), false);
       assert.equal(JSON.stringify(b.state.transcript).includes("A is working"), false);
       const page = await a.boundaries();
@@ -568,13 +568,13 @@ describe("local self-hosted mode: one owned App Server child over stdio", { skip
     const client = await AppServerClient.initialize({ transport });
 
     const created = await client.call(
-      "session/create",
+      "thread/start",
       { settings: server.settings("death-session") },
       "session_transition",
     );
     const pending = client.call(
-      "session/attach",
-      { session_id: created.session.id, node_id: null },
+      "thread/resume",
+      {threadId:(created.session.id).replace(/^ses_/, 'conv_')},
       "attached",
     );
     // The process dies with a request in flight.
@@ -646,8 +646,11 @@ describe("existing/remote mode: WebSocket to an externally managed App Server", 
       assert.equal(browser.attached.length, 0);
       assert.ok(focus.resumePage?.sessions.some((s) => s.id === a.sessionId));
       assert.ok(focus.resumePage?.sessions.some((s) => s.id === b.session.id));
-      await assert.rejects(browser.attach(a.sessionId), (error: unknown) =>
-        error instanceof Error && "kind" in error && error.kind === "controller_in_use");
+      const shared=await browser.attach(a.sessionId);
+      assert.equal(shared.target.conversation_id,a.target.conversation_id);
+      assert.equal(shared.target.runtime_incarnation,a.target.runtime_incarnation);
+      assert.notEqual(shared.target.attachment_id,a.target.attachment_id);
+      await browser.detach(a.sessionId);
       const selected = await browser.attach(b.session.id);
       assert.equal(selected.sessionId, b.session.id);
       assert.deepEqual(attachments, [a.sessionId, b.session.id]);
@@ -1142,6 +1145,8 @@ for (const carrier of ["stdio", "websocket"] as const) it(`native child transcri
   const sent: string[] = [];
   const call = host.client.call.bind(host.client);
   t.mock.method(host.client, "call", (...args: Parameters<typeof call>) => { sent.push(args[0]); return call(...args); });
+  const answer=host.client.callbacks.answer.bind(host.client.callbacks);
+  t.mock.method(host.client.callbacks,"answer",(...args:Parameters<typeof answer>)=>{sent.push('server-reply');return answer(...args);});
   try {
     let session = await openSession(host, { cwd: workspace });
     const stateWhen = (predicate: () => boolean) => new Promise<void>(resolve => {
@@ -1274,6 +1279,8 @@ for (const carrier of ["stdio", "websocket"] as const) it(`native child transcri
       host = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
       const replacementCall = host.client.call.bind(host.client);
       t.mock.method(host.client, "call", (...args: Parameters<typeof replacementCall>) => { sent.push(args[0]); return replacementCall(...args); });
+    const replacementAnswer=host.client.callbacks.answer.bind(host.client.callbacks);
+    t.mock.method(host.client.callbacks,"answer",(...args:Parameters<typeof replacementAnswer>)=>{sent.push('server-reply');return replacementAnswer(...args);});
     }
     session = await host.attach(id, node);
     const restored = await session.agentTranscriptPage(child.agent_id);
@@ -1286,8 +1293,8 @@ for (const carrier of ["stdio", "websocket"] as const) it(`native child transcri
       await assert.rejects(session.agentTranscriptPage(child.agent_id), error => error instanceof Error && "kind" in error && error.kind === "agent_history_unavailable");
       assert.equal(existsSync(database), false, "inspection never creates an empty history");
     } finally { renameSync(`${database}.held`, database); }
-    assert.equal(sent.filter(method => method === "turn/start").length, 1);
-    assert.equal(sent.filter(method => method === "interaction/respond").length, 2);
+    assert.equal(sent.filter(method => method === "inbound/queue").length, 1);
+    assert.equal(sent.filter(method => method === "server-reply").length, 2);
     for (const method of ["turn/steer", "agent/interrupt"]) assert.equal(sent.includes(method), false);
   } catch (error) {
     t.diagnostic(`${error instanceof Error ? error.stack : String(error)}\n${JSON.stringify(error)}\n${host.stderrTail().text}\n${external?.diagnostics ?? ""}`);

@@ -79,7 +79,7 @@ impl ProtocolViolationRecorder {
 
     /// Records the first confirmed violation. Later violations are
     /// irrelevant: the stream ended at the first one.
-    fn record(&self, reason: &str, line: &[u8]) {
+    fn record(&self, error: &serde_json::Error, line: &[u8]) {
         let mut first = self
             .first
             .lock()
@@ -90,8 +90,14 @@ impl ProtocolViolationRecorder {
         // Redact the original evidence before either preview is truncated:
         // a clipped credential can no longer be recognized as its full value.
         // The tee still delivers the unmodified bytes to rmcp's decoder.
-        let reason = self.credentials.redact(reason);
-        let line = self.credentials.redact(&String::from_utf8_lossy(line));
+        let reason = super::diagnostics::decode_error(error);
+        let line = match serde_json::from_slice::<serde_json::Value>(line) {
+            Ok(mut value) => {
+                super::diagnostics::peer_json(&mut value, &self.credentials);
+                value.to_string()
+            }
+            Err(_) => "<invalid JSON preview omitted>".into(),
+        };
         let (reason, _) = bounded_text_preview(reason.as_bytes(), VIOLATION_REASON_BYTES);
         let (preview, _) = bounded_text_preview(line.as_bytes(), VIOLATION_LINE_PREVIEW_BYTES);
         *first = Some(format!(
@@ -120,7 +126,7 @@ enum LineVerdict {
     Noise,
     /// Well-formed JSON that is not a valid MCP/JSON-RPC message (serde
     /// `Data`/`Io`): a confirmed protocol violation.
-    Violation(String),
+    Violation(serde_json::Error),
 }
 
 /// Classifies one completed line with rmcp's own codec, so the accept set —
@@ -134,7 +140,7 @@ fn classify_line(line: &[u8]) -> LineVerdict {
         Ok(_) => LineVerdict::Healthy,
         Err(JsonRpcMessageCodecError::Serde(error)) => match error.classify() {
             Category::Syntax | Category::Eof => LineVerdict::Noise,
-            Category::Data | Category::Io => LineVerdict::Violation(error.to_string()),
+            Category::Data | Category::Io => LineVerdict::Violation(error),
         },
         // `MaxLineLengthExceeded` needs an explicit bound the default codec
         // never installs, and an `Io` error cannot come from a slice decode.
@@ -299,7 +305,7 @@ mod tests {
         else {
             panic!("a numeric `method` is a confirmed protocol violation");
         };
-        assert!(!reason.is_empty());
+        assert_eq!(reason.classify(), Category::Data);
     }
 
     #[test]
@@ -314,16 +320,26 @@ mod tests {
             secret.clone(),
         )]));
         credentials.resolve().unwrap();
+        credentials.literal_redactions = ["1", "e"]
+            .into_iter()
+            .map(crate::model::catalog::ResolvedCredential::new)
+            .collect();
         let recorder = ProtocolViolationRecorder::new(credentials);
-        recorder.record(
-            &format!("invalid method {secret}; {}", "reason".repeat(100)),
-            format!(
-                "{{\"method\":123,\"token\":\"{secret}\",\"padding\":\"{}\"}}",
-                "line".repeat(100)
-            )
-            .as_bytes(),
-        );
+        let frame = serde_json::json!({
+            "jsonrpc":"2.0", "id":1, "method":123,
+            "aToken":secret, "padding":"line".repeat(100)
+        })
+        .to_string();
+        let LineVerdict::Violation(reason) = classify_line(frame.as_bytes()) else {
+            panic!("invalid numeric method");
+        };
+        recorder.record(&reason, frame.as_bytes());
         let diagnostic = recorder.violation().unwrap();
+        let native_location = format!("Data at line {} column {}", reason.line(), reason.column());
+        assert!(
+            diagnostic.contains(&native_location),
+            "native location must remain accurate: {diagnostic}"
+        );
         assert!(diagnostic.contains("<redacted>"));
         assert!(!diagnostic.contains("PR503_LONG_CREDENTIAL_"));
         assert!(!diagnostic.contains("aaaa_END"));

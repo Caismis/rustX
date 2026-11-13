@@ -1,7 +1,7 @@
 //! The compact model-visible Skill catalog (M6).
 //!
 //! The catalog is rendered deterministically from the attempt's immutable
-//! Skill snapshot. Each entry contains only the validated standard `name`,
+//! Skill snapshot. Each entry contains only the discovered `name`,
 //! `description`, and the host path of the package's `SKILL.md`. `SKILL.md`
 //! bodies, supporting resources, and dependency metadata never appear in the
 //! catalog.
@@ -15,10 +15,8 @@
 //! every Bash-executed Skill resource unreachable.
 //!
 //! The catalog never derives that path: [`crate::skills::SkillPackage`]
-//! establishes one canonical absolute UTF-8 location at discovery time (see
-//! its package root invariant), and the catalog is only a projection of it.
-//! Deriving it here instead would let a non-canonical package root reach the
-//! model as a path that resolves differently per tool.
+//! provides one absolute UTF-8 location at discovery time. Links inside the
+//! collection keep their offered spelling for package-relative references.
 //!
 //! The catalog is an immutable capability snapshot. Its rendered guidance
 //! enters the request-time Effective System Prompt through Context Assembly;
@@ -33,13 +31,15 @@ use crate::skills::package::{SkillDiscoveryOutcome, SkillPackage};
 
 /// One model-visible Skill catalog entry: standard metadata plus the host
 /// location of the primary instructions file.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct SkillCatalogEntry {
     /// The validated standard Skill name.
     pub name: String,
     /// The validated standard Skill description.
     pub description: String,
-    /// The canonical absolute host path of the package's `SKILL.md`. The
+    /// The canonical absolute host path of the Skill instruction file. The
     /// model passes it to Read, and resolves the Skill's own relative
     /// references against its parent directory.
     pub location: String,
@@ -73,8 +73,8 @@ pub struct SkillSnapshot {
 
 impl SkillSnapshot {
     /// Install the selected metadata and proven bindings of a one-shot child.
-    /// Packages were validated by the parent and physically verified by the
-    /// materializer. No discovery, parsing, or body loading occurs here.
+    /// Definitions and source bindings were validated and frozen by the parent.
+    /// No discovery, parsing, file validation, or resource copying occurs here.
     pub(crate) fn from_frozen(
         mut entries: Vec<(SkillCatalogEntry, SkillBinding, SkillProvenance)>,
         roots: Vec<crate::skills::AutomaticSkillRoot>,
@@ -306,41 +306,35 @@ fn roots_from_entries<'a>(
     roots.into_iter().collect()
 }
 
-/// Compact metadata and collection roots enable progressive disclosure without
-/// enumerating absolute package paths. Selection controls prompt visibility only.
+/// The native tool that can open a Skill's instructions on demand.
+#[derive(Debug, Clone, Copy)]
+pub enum SkillReadTool {
+    Read,
+    Bash,
+}
+
+/// Progressive disclosure: advertise metadata and the exact instruction path.
 #[must_use]
-pub fn render_skill_catalog(
-    entries: &[SkillCatalogEntry],
-    roots: &[crate::skills::AutomaticSkillRoot],
-) -> String {
+pub fn render_skill_catalog(entries: &[SkillCatalogEntry], reader: SkillReadTool) -> String {
     use std::fmt::Write as _;
-    let mut out = String::from(
-        "## Skills\n\nSkill selection controls prompt visibility, not filesystem access. Use an available file-reading Tool to load <root>/<name>/SKILL.md when a description matches the task. Resolve package-relative references against that package directory. Workspace identities completely shadow User identities.\n\n",
-    );
-    for (index, root) in roots.iter().enumerate() {
-        let label = match root.source {
-            crate::skills::SkillSource::User => "User Skill root",
-            crate::skills::SkillSource::Workspace => "Workspace Skill root",
-        };
-        let _ = writeln!(
-            out,
-            "{label} (root{index}): {}",
-            escape_catalog_text(&root.root.display().to_string())
-        );
+    if entries.is_empty() {
+        return String::new();
     }
-    out.push_str("\n<available_skills>\n");
+    let tool = match reader {
+        SkillReadTool::Read => "the read tool",
+        SkillReadTool::Bash => "bash",
+    };
+    let mut out = format!(
+        "## Skills\n\nThe following skills provide specialized instructions for specific tasks.\nUse {tool} to load a skill's file when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill file's parent directory and use that absolute path in tool commands.\n\n<available_skills>\n"
+    );
     for entry in entries {
         let name = escape_catalog_text(&entry.name);
         let description = escape_catalog_text(&entry.description);
-        let root_index = roots.iter().position(|root| {
-            root.root.join(&entry.name).join("SKILL.md") == std::path::Path::new(&entry.location)
-        });
-        if let Some(index) = root_index {
-            let _ = writeln!(
-                out,
-                "  <skill><name>{name}</name><description>{description}</description><root>root{index}</root></skill>"
-            );
-        }
+        let location = escape_catalog_text(&entry.location);
+        let _ = writeln!(
+            out,
+            "  <skill>\n    <name>{name}</name>\n    <description>{description}</description>\n    <location>{location}</location>\n  </skill>"
+        );
     }
     out.push_str("</available_skills>");
     out
@@ -411,8 +405,9 @@ mod tests {
             vec![SkillDiagnostic::PackageInvalid {
                 source: SkillSource::Workspace,
                 package: "/w/.agents/skills/broken".to_owned(),
-                cause: SkillPackageError::MissingSkillMarkdown {
+                cause: SkillPackageError::MalformedFrontmatter {
                     directory: "broken".to_owned(),
+                    detail: "invalid YAML".to_owned(),
                 },
             }],
         );

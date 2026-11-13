@@ -1,5 +1,6 @@
+import type { Page } from '@playwright/test';
 import { appServerEndpoint } from '../../../dev/src/app-server-readiness.ts';
-import { startWorkspaceHost } from './workspace-host.ts';
+import { drainWorkspaceHostRoutes, startWorkspaceHost } from './workspace-host.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, opendirSync } from 'node:fs';
@@ -107,8 +108,8 @@ export async function startDogfood(scenario = 'web_console_dogfood', measurement
     });
     const primaryModel = ['tui_multi_session', 'mcp_startup'].includes(scenario) ? 'integration-model' : 'console-model';
     const profiles = scenario === 'tui_multi_session' ? '\ndefault_profile = "high"\n[models."fixture/integration-model".profiles.high]\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nmax_output_tokens = 1024\n' : '';
-    const catalog = `[providers.fixture]\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
-      [primaryModel, 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\nprotocol = "openai_chat_completions"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"] }\ncompat = { chat_reasoning_replay = "omit" }\n${id === primaryModel ? profiles : ''}`).join('');
+    const catalog = `[providers.fixture]\nprotocol = "openai_chat_completions"\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
+      [primaryModel, 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"] }\ncompat = { chat_reasoning_replay = "omit" }\n${id === primaryModel ? profiles : ''}`).join('');
     if (['web_chat_history', 'web_child_capabilities'].includes(scenario)) {
       const agents = join(fixtureHome, 'rustx/.agents');
       mkdirSync(agents, { recursive: true });
@@ -157,11 +158,9 @@ timezone = "UTC"
     const tokenFile = join(directory, 'socket-token'); writeFileSync(tokenFile, token, { mode: 0o600 });
     const productHostToken = randomBytes(32).toString('base64url');
     const productHostTokenFile = join(directory, 'product-host-token'); writeFileSync(productHostTokenFile, productHostToken, { mode: 0o600 });
-    const deliveryToken = randomBytes(32).toString('base64url');
-    const deliveryTokenFile = join(directory, 'delivery-token'); writeFileSync(deliveryTokenFile, deliveryToken, { mode: 0o600 });
     let appErrors = '';
     const startApp = async (listen = 'ws://127.0.0.1:0') => {
-      app = spawn(binary, ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', listen, '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile, '--delivery-access-token-file', deliveryTokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+      app = spawn(binary, ['app-server', '--config', settings, '--runtime-root', join(directory, 'runtime'), '--listen', listen, '--token-file', tokenFile, '--product-host-token-file', productHostTokenFile], { env, stdio: ['pipe', 'pipe', 'pipe'] });
       appIdentity = nativeIdentity(app.pid);
       if (app.pid !== undefined) measurement?.process?.({ role: 'native', pid: app.pid });
       if (measurement) observeMeasurementLines(app, measurement.line);
@@ -180,10 +179,19 @@ timezone = "UTC"
     const workspaceHost = await startWorkspaceHost(hostConfig);
     const hostConfigFile = join(directory, 'host-config.json');
     writeFileSync(hostConfigFile, JSON.stringify(hostConfig), { mode: 0o600 });
-    return { automaticTitles: scenario.startsWith('web_session_title_'), hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, deliveryToken, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
+    const startOnSameEndpoint = async () => {
+      const restarted = await startApp(endpoint);
+      if (new URL(restarted).href !== new URL(endpoint).href) throw new Error('Fixture restart changed the native endpoint.');
+    };
+    return { automaticTitles: scenario.startsWith('web_session_title_'), hostConfigFile, workspaceHost, workspaceHostUrl: workspaceHost.url, directory, endpoint, token, tokenFile, workspaceA, workspaceB, providerUrl, settings, writeSettings, control,
       gate: (name: string) => control(`observations/await?kind=gate_reached&name=${name}&timeoutMs=30000`),
       release: (name: string) => control(`gates/${name}/release`, 'POST'),
       diagnostics: () => ({ providerErrors, appErrors, native: nativeDiagnostics(appIdentity) }),
+      async restartApp() {
+        app!.kill('SIGTERM');
+        await exited(app!);
+        await startOnSameEndpoint();
+      },
       /** Public creation materializes defaults. Seed inherited intent only
        * before the browser connects, with the native owner physically stopped. */
       async seedInheritedSession(modelFields: string) {
@@ -200,24 +208,38 @@ timezone = "UTC"
         delete catalog.sessions[id].state.model;
         writeFileSync(catalogPath, JSON.stringify(catalog));
         writeSettings(primaryModel, modelFields);
-        const restarted = await startApp(endpoint);
-        if (new URL(restarted).href !== new URL(endpoint).href) throw new Error('Fixture restart changed the native endpoint.');
+        await startOnSameEndpoint();
         return id;
       },
       async stop(check = true) {
         try {
           const report = await control('shutdown', 'POST');
+          // Product Host observers and terminals settle through the live native
+          // connection; retire that ownership before terminating its server.
+          await workspaceHost.stop();
           app!.kill('SIGTERM'); provider.stdin.end();
           const [providerCode] = await Promise.all([exited(provider), exited(app!)]);
           await measurement?.afterExit?.();
           if (check && (!report.ok || providerCode !== 0)) throw new Error(`Provider scenario not satisfied (exit ${providerCode}): ${JSON.stringify(report)}`);
           return report;
         } finally {
-          await workspaceHost.stop();
-          app?.kill('SIGTERM'); provider.kill('SIGTERM');
-          rmSync(directory, { recursive: true, force: true });
+          try { await workspaceHost.stop(); }
+          finally {
+            app?.kill('SIGTERM'); provider.kill('SIGTERM');
+            rmSync(directory, { recursive: true, force: true });
+          }
         }
       },
     };
   } catch (error) { app?.kill(); provider.kill(); rmSync(directory, { recursive: true, force: true }); throw new Error(`${String(error)}\n${providerErrors}`); }
+}
+
+/** Retire the browser proxy before the Host it forwards to. Already running
+ * Node route callbacks must finish while their Host and native owner are live. */
+export async function stopDogfoodPage(page: Page, fixture: Pick<Awaited<ReturnType<typeof startDogfood>>, 'stop'>, check = true) {
+  try { await drainWorkspaceHostRoutes(page); await page.unrouteAll({ behavior: 'wait' }); }
+  finally {
+    try { await page.close(); }
+    finally { await fixture.stop(check); }
+  }
 }

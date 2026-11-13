@@ -285,7 +285,7 @@ pub(crate) struct ConfigurationContent {
     /// `before` and `after` state: a Tool's definition with its implementation
     /// identity (a digest of the server's transport and policy, never its
     /// credentials, the enabled Workflow program and the Named Agents it
-    /// runs), a Skill's entry with its content version.
+    /// runs), a Skill's entry with its definition version.
     pub(crate) catalog: String,
 }
 
@@ -429,7 +429,7 @@ impl Dependencies {
             .into_iter()
             .map(|tool| {
                 match &tool.origin {
-                    ToolOrigin::Builtin => {}
+                    ToolOrigin::Builtin | ToolOrigin::Host { .. } => {}
                     ToolOrigin::Mcp { server_id } => {
                         selected.insert(ToolSourceId::Mcp(server_id.clone()));
                     }
@@ -466,13 +466,13 @@ impl Dependencies {
 
 /// One Named Agent as a Tool runs it: its definition and what that
 /// definition resolves to in the generation — its Tools and sources, the
-/// content version of each Skill it selects, and its project instructions.
+/// definition version of each Skill it selects, and its project instructions.
 /// Its explicit model is compared with the Model domain.
 #[derive(Debug, PartialEq, serde::Serialize)]
 struct AgentEntry {
     definition: crate::runtime::subagent::NamedAgentDefinitionDigest,
     runs: Dependencies,
-    skills: BTreeMap<String, Option<crate::runtime::identity::SkillVersionId>>,
+    skills: BTreeMap<String, Option<SkillEntry>>,
     project_instructions: String,
     environment: Environment,
 }
@@ -506,7 +506,7 @@ impl AgentEntry {
         snapshot: &RuntimeResourceSnapshot,
         definition: &crate::runtime::subagent::NamedAgentDefinition,
         runs: Dependencies,
-        skills: BTreeMap<String, Option<crate::runtime::identity::SkillVersionId>>,
+        skills: BTreeMap<String, Option<SkillEntry>>,
     ) -> Self {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
@@ -544,7 +544,6 @@ impl AgentEntry {
                 | AgentToolSelection::All { source_id } => Some(source_id.clone()),
             })
             .chain(profile.resource_sources.iter().cloned());
-        let versions = skill_versions(snapshot);
         Some(Self::new(
             snapshot,
             snapshot.subagents().get(name)?,
@@ -552,7 +551,7 @@ impl AgentEntry {
             profile
                 .skills
                 .iter()
-                .map(|skill| (skill.clone(), versions.get(skill.as_str()).cloned()))
+                .map(|skill| (skill.clone(), skill_entry(snapshot, skill)))
                 .collect(),
         ))
     }
@@ -572,29 +571,53 @@ impl AgentEntry {
             ),
             frozen
                 .skills()
-                .map(|(name, version)| (name.to_owned(), Some(version.clone())))
+                .map(|(name, version)| {
+                    (
+                        name.to_owned(),
+                        skill_entry(snapshot, name).map(|mut entry| {
+                            entry.version_id = Some(version.clone());
+                            entry
+                        }),
+                    )
+                })
                 .collect(),
         )
     }
 }
 
-/// One Skill as a commit compares it: its catalog entry and content version.
+/// One Skill as a commit compares it: its catalog entry and definition version.
 #[derive(Debug, PartialEq, serde::Serialize)]
 struct SkillEntry {
     entry: crate::skills::SkillCatalogEntry,
     version_id: Option<crate::runtime::identity::SkillVersionId>,
+    definition: Option<serde_json::Value>,
+    source: Option<crate::skills::SkillSource>,
 }
 
-fn skill_versions(
-    snapshot: &RuntimeResourceSnapshot,
-) -> BTreeMap<&str, crate::runtime::identity::SkillVersionId> {
-    snapshot
-        .capability()
-        .skills()
-        .bindings()
-        .iter()
-        .map(|binding| (binding.skill_id.as_str(), binding.version_id.clone()))
-        .collect()
+fn skill_entry(snapshot: &RuntimeResourceSnapshot, name: &str) -> Option<SkillEntry> {
+    let skills = snapshot.capability().skills();
+    Some(SkillEntry {
+        entry: skills
+            .catalog_entries()
+            .iter()
+            .find(|entry| entry.name == name)?
+            .clone(),
+        version_id: skills
+            .bindings()
+            .iter()
+            .find(|binding| binding.skill_id.as_str() == name)
+            .map(|binding| binding.version_id.clone()),
+        definition: skills
+            .packages()
+            .iter()
+            .find(|package| package.name() == name)
+            .map(|package| package.definition()),
+        source: skills
+            .provenance()
+            .iter()
+            .find(|entry| entry.name == name)
+            .map(|entry| entry.source),
+    })
 }
 
 /// The enabled Workflow programs by the id of the Tool that runs each.
@@ -630,7 +653,8 @@ fn tool_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, ToolEntr
         .zip(registry.model_definitions())
         .map(|(definition, model)| {
             let server = match &definition.origin {
-                crate::tools::types::ToolOrigin::Builtin => None,
+                crate::tools::types::ToolOrigin::Builtin
+                | crate::tools::ToolOrigin::Host { .. } => None,
                 crate::tools::types::ToolOrigin::Mcp { server_id } => Some(server_id.clone()),
                 crate::tools::types::ToolOrigin::ManagedPython { package } => {
                     Some(crate::tools::python::python_server_id(package))
@@ -764,22 +788,15 @@ fn same_invocations(
 const SESSION_LAYER: crate::model::invocation::RequestParamsLayer =
     crate::model::invocation::RequestParamsLayer::SessionOverrides;
 
-/// A Skill is its catalog entry and its content-derived version, so a body or
-/// script edit under unchanged frontmatter is `changed`.
+/// A Skill is its frozen catalog binding and normalized definition version.
+/// Runtime body/script/asset edits do not produce configuration changes.
 fn skill_entries(snapshot: &RuntimeResourceSnapshot) -> BTreeMap<String, SkillEntry> {
-    let versions = skill_versions(snapshot);
     snapshot
         .capability()
         .model_skill_entries()
         .iter()
-        .map(|entry| {
-            (
-                entry.name.clone(),
-                SkillEntry {
-                    entry: entry.clone(),
-                    version_id: versions.get(entry.name.as_str()).cloned(),
-                },
-            )
+        .filter_map(|entry| {
+            skill_entry(snapshot, &entry.name).map(|value| (entry.name.clone(), value))
         })
         .collect()
 }

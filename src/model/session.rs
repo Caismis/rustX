@@ -206,6 +206,42 @@ impl SessionModelConfig {
     pub fn btw_selection(&self) -> Option<ModelSelection> {
         self.btw_model.selection()
     }
+
+    /// An auxiliary model removed from the catalog follows the primary model.
+    /// When a Session is updated, only an unchanged policy can be recovered.
+    pub(crate) fn use_available_auxiliary_models(
+        &mut self,
+        catalog: &crate::model::catalog::ModelCatalog,
+        previous: Option<&Self>,
+    ) {
+        if previous.is_none_or(|config| config.summary_model == self.summary_model)
+            && let SummaryModelPolicy::Explicit { model, .. } = &self.summary_model
+            && catalog.model(model).is_err()
+        {
+            self.summary_model = SummaryModelPolicy::Session;
+        }
+        for (auxiliary, carried) in [
+            (
+                &mut self.title_model,
+                previous.map(|config| &config.title_model),
+            ),
+            (
+                self.classification_model.as_mut(),
+                previous.map(|config| config.classification_model.as_ref()),
+            ),
+            (
+                self.btw_model.as_mut(),
+                previous.map(|config| config.btw_model.as_ref()),
+            ),
+        ] {
+            if carried.is_none_or(|carried| carried == auxiliary)
+                && let AuxiliaryModelPolicy::Explicit { model, .. } = auxiliary
+                && catalog.model(model).is_err()
+            {
+                *auxiliary = AuxiliaryModelPolicy::Session;
+            }
+        }
+    }
 }
 
 impl AuxiliaryModelPolicy {
@@ -1680,6 +1716,45 @@ mod tests {
         assert_eq!(
             serde_json::to_value(source).unwrap(),
             serde_json::to_value(state.view()).unwrap()
+        );
+    }
+
+    #[test]
+    fn auxiliary_recovery_distinguishes_carried_and_new_summary_selections() {
+        let registry = title_registry();
+        let catalog = registry.catalog().catalog();
+        let mut previous = SessionModelConfig::of(ModelRef::parse("example/demo-model").unwrap());
+        previous.summary_model = SummaryModelPolicy::Explicit {
+            model: ModelRef::parse("example/removed").unwrap(),
+            profile: None,
+            request_params: RequestParams::new(),
+        };
+        previous.title_model = AuxiliaryModelPolicy::Explicit {
+            model: ModelRef::parse("example/removed").unwrap(),
+            profile: None,
+            request_params: RequestParams::new(),
+            max_output_tokens: None,
+        };
+        let mut carried = previous.clone();
+        carried.use_available_auxiliary_models(catalog, Some(&previous));
+        assert_eq!(carried.summary_model, SummaryModelPolicy::Session);
+        assert_eq!(carried.title_model, AuxiliaryModelPolicy::Session);
+
+        let mut changed = previous.clone();
+        let SummaryModelPolicy::Explicit { model, .. } = &mut changed.summary_model else {
+            unreachable!()
+        };
+        *model = ModelRef::parse("example/new-missing").unwrap();
+        let requested = changed.summary_model.clone();
+        changed.use_available_auxiliary_models(catalog, Some(&previous));
+        assert_eq!(changed.summary_model, requested);
+        assert_eq!(changed.title_model, AuxiliaryModelPolicy::Session);
+
+        changed.use_available_auxiliary_models(catalog, None);
+        assert_eq!(changed.summary_model, SummaryModelPolicy::Session);
+        assert_eq!(
+            previous.summary_model.selection().unwrap().model.as_str(),
+            "example/removed"
         );
     }
 

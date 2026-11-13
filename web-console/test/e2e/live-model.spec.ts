@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import type { SessionModelConfig } from '../../../protocol/app-server/v73';
+import type { SessionModelConfig } from '../../../protocol/app-server/v78';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession } from './shell-actions';
@@ -24,7 +24,7 @@ async function chooseCurrentModel(page: Page, model: string) {
 }
 
 async function openExistingSession(page: Page, id: string, width: number) {
-  const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+  const expand = page.getByRole('button', { name: 'Home', exact: true });
   if (await expand.isVisible()) await expand.click();
   await page.locator(`button[data-session-id="${id}"]`).click();
   await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
@@ -80,7 +80,7 @@ max_output_tokens = { mode = "limit", tokens = 111 }
       await expect(page).toHaveTitle(/rustX/);
       await connectRemote(page, fixture.endpoint, fixture.token);
       await openExistingSession(page, id, width);
-      const attached = wire.responses.filter(response => response.method === 'session/attach').at(-1)!.result;
+      const attached = wire.responses.filter(response => response.method === 'thread/resume').at(-1)!.result;
       expect(attached.type).toBe('attached');
       expect(attached).not.toHaveProperty('snapshot');
       expect((await wire.read('session/checkpoint', await wire.attachedTarget(id))).checkpoint.snapshot.model!.configured).toEqual(complete);
@@ -218,7 +218,7 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       // attach must restore both authorities, with no mutation replay.
       await page.reload();
       await connectRemote(page, fixture.endpoint, fixture.token);
-      const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+      const expand = page.getByRole('button', { name: 'Home', exact: true });
       if (await expand.isVisible()) await expand.click();
       await page.locator(`button[data-session-id="${sessionId}"]`).click();
       // Let the native attachment publish its route before dismissing the
@@ -261,7 +261,7 @@ for (const width of [1440, 390]) for (const deferred of [false, true]) test(`a d
     let existing: string | undefined;
     if (deferred) {
       remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
-      existing = (await remote.client.call('session/create', { settings: { cwd: fixture.workspaceA, model: {
+      existing = (await remote.client.call('thread/start', { settings: { cwd: fixture.workspaceA, model: {
         model: 'fixture/integration-model', summaryModel: { mode: 'explicit', model: 'fixture/integration-model', request_params: { confirmation_fixture: 'x'.repeat(70_000) } },
       } } }, 'session_transition')).session.id;
     }
@@ -362,4 +362,41 @@ max_output_tokens = { mode = "limit", tokens = ${policy!.max_output_tokens} }` :
     expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(1);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   } finally { await remote?.shutdown(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
+});
+
+for (const width of [1440, 390]) test(`switching A → B → A restores each Session model without opening its picker (${width})`, async ({page}) => {
+  const fixture = await startDogfood('tui_multi_session');
+  let native: AppServerHost | undefined;
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const wire = await wireProbe(page);
+  try {
+    native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+    const ids: string[] = [];
+    const models = ['fixture/integration-model', 'fixture/second-model'];
+    for (const model of models) ids.push((await native.createSession({
+      cwd: fixture.workspaceA, model: { model, summaryModel: { mode: 'explicit', model, request_params: { deferred_switch_fixture: 'x'.repeat(70_000) } } },
+    })).session.id);
+    await page.setViewportSize({width, height:1000});
+    await routeWorkspaceHost(page, fixture); await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await openExistingSession(page, ids[0], width);
+    const trigger = page.locator('[data-model-select]');
+    await expect(trigger).toContainText(models[0]);
+    const first = await sessionSnapshot(wire, ids[0]);
+    expect(first.model_status?.body_deferred).toBe(true);
+    for (const index of [1,0,1,0]) {
+      if (width === 390) await page.getByRole('button', {name:'Home',exact:true}).click();
+      await page.locator(`button[data-session-id="${ids[index]}"]`).click();
+      const collapse = page.getByRole('button', {name:'Collapse Sidebar',exact:true});
+      if (width === 390 && await collapse.isVisible()) await collapse.click();
+      await expect(trigger).toContainText(models[index]);
+      await expect(trigger).toHaveAttribute('aria-expanded','false');
+    }
+    const second = await sessionSnapshot(wire, ids[1]);
+    expect(second.model_status?.binding_revision).toBe(first.model_status?.binding_revision);
+    expect((await wire.attachedTarget(ids[0])).attachment_id).toBe((await wire.attachedTarget(ids[1])).attachment_id);
+    expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(0);
+    expect(errors).toEqual([]);
+  } finally { await native?.shutdown(); await fixture.stop(false); }
 });

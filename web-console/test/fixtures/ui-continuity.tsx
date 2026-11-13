@@ -21,7 +21,7 @@ import { useComposerContent } from '../../src/app/agent/useComposerContent';
 import { TodoDock } from '../../src/app/composer/TodoDock';
 import { todoDock } from '../../src/bindings/composer-context';
 import { conversationPreferences } from '../../src/app/conversation-preferences';
-import type { ContentChunk, ContentRef, MessageBlock, ForegroundToolExecution, RuntimeClientGoalSnapshot, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v73';
+import type { ContentChunk, ContentRef, MessageBlock, ForegroundToolExecution, RuntimeClientGoalSnapshot, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, TurnProcessView } from '../../../protocol/app-server/v78';
 import { Server, snapshot, checkpoint, projectionHead } from '../fixture';
 import { foldRuntimeEvent } from '../../../protocol/app-server/projection';
 import '../../src/presentation/theme/base.css';
@@ -58,8 +58,8 @@ if (deferredReading) {
 server.handlers.set('workflow/list', request => { if (request.method !== 'workflow/list') throw Error('library'); return { type: 'workflow_library', library: { target: request.params.target, directory: '/workflows', absent_revision: 'empty', files: [], diagnostic: null } }; });
 await server.attached('A');
 if (scene === 'first') {
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'] }));
-  server.held.add('session/attach');
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
+  server.held.add('thread/resume');
 }
 const view = server.client.getSnapshot().views.A, cut = view.checkpoint!.read_cut;
 view.checkpoint!.collections.push({ domain: 'todos.tasks', revision: '1', total: '3', loaded: '0', next_offset: '0' });
@@ -150,10 +150,10 @@ function Continuity() {
       finishDeferredRead: () => { const request = server.requests.filter(row => row.socket === server.socket && row.request.method === 'conversation/contentRead').at(-1)?.request; if (!request) throw Error('No pending content read'); server.held.delete('conversation/contentRead'); server.reply(request); },
       replaceReadingAuthority: async () => { server.authorityId = 'replacement-server'; server.socket.close(); await server.connect(); await server.client.attach('A'); },
       otherReading: async () => { server.nodeSnapshots.set('node-other', readingSnapshot('B')); await server.client.switchNode('A', 'node-other'); await server.client.attach('A', 'node-other'); },
-      holdFirst: () => server.held.add('turn/start'),
-      attachFirst: () => { server.held.delete('session/attach'); for (const row of server.requests) if (row.request.method === 'session/attach' && row.request.params.session_id === 'B') server.reply(row.request); },
-      ackFirst: () => { const request = server.requests.find(row => row.request.method === 'turn/start')?.request; if (!request) throw Error('No first input'); server.reply(request); },
-      firstState: () => ({ phase: firstSubmissions(server.client).session('B')?.phase, fileReferences: firstSubmissions(server.client).session('B')?.draft.files.length, pending: server.client.getSnapshot().views.B?.submissions?.length ?? 0, requests: server.requests.filter(row => row.request.method === 'turn/start').length }),
+      holdFirst: () => server.held.add('inbound/queue'),
+      attachFirst: () => { server.held.delete('thread/resume'); for (const row of server.requests) if (row.request.method === 'thread/resume' && server.sessionForThread(row.request.params.threadId) === 'B') server.reply(row.request); },
+      ackFirst: () => { const request = server.requests.find(row => row.request.method === 'inbound/queue')?.request; if (!request) throw Error('No first input'); server.reply(request); },
+      firstState: () => ({ phase: firstSubmissions(server.client).session('B')?.phase, fileReferences: firstSubmissions(server.client).session('B')?.draft.files.length, pending: server.client.getSnapshot().views.B?.submissions?.length ?? 0, requests: server.requests.filter(row => row.request.method === 'inbound/queue').length }),
       observeFirst: async () => { const message = { role: 'user' as const, source: 'human' as const, id: 'accepted-user', content: [{ type: 'text' as const, text: 'First message stays visible' }] }; server.snapshots.set('B', { ...snapshot('B'), messages: [message], transcript: { entries: [{ cursor: '1', item: { type: 'message', message } }] } }); await server.client.refresh('B'); },
       changeGoal: () => {
         server.held.add('conversation/checkpointPage'); server.held.add('conversation/checkpointValueRead');
@@ -181,7 +181,7 @@ function Continuity() {
   if (descriptorScene) return <main style={{ width: 740, margin: '24px auto' }}><JournalSourceProvider presentationOwner={toolPresentation} source={{ client: server.client, target: server.client.target('A'), cut: () => server.client.getSnapshot().views.A.checkpoint?.read_cut, owned: () => server.client.isAttachmentObservationCurrent('A', server.client.getSnapshot().views.A.attachmentObservation) }}><AgentTranscript snapshot={toolsStage === 6 ? toolsContinuingDeferred : toolsStage === 5 ? toolsContinuing : toolsStage === 4 ? toolsDeferredReply : toolsStage === 3 ? toolsDurable : toolsStage === 2 ? toolsHydrated : toolsStage === 1 ? toolsCanonical : toolsLive} compactions={toolsCompactions}/></JournalSourceProvider></main>;
   if (scene === 'tools' || scene === 'tools-compaction') return <main style={{ width: 740, margin: '24px auto' }}><AgentTranscript snapshot={toolsStage === 2 ? toolsDurable : toolsStage === 1 ? toolsCanonical : toolsLive} compactions={toolsCompactions}/></main>;
   if (scene === 'workflow') return <main style={{ width: 740, margin: '24px auto' }}><WorkflowRunPanel run={{ ...completedWorkflow, instances: workflowHydrated ? completedWorkflow.instances : completedWorkflow.instances.slice(0, 2) }}/></main>;
-  if (scene === 'tasks') return <main style={{ width: 740, height: 700, margin: '24px auto' }}><TaskManagerPage client={tasksFixture.server.client} newTask={() => {}} openSession={() => {}}/></main>;
+  if (scene === 'tasks') return <main style={{ width: 740, height: 700, margin: '24px auto' }}><TaskManagerPage client={tasksFixture.server.client} host={tasksFixture.server.workspaceHost} authority={new WorkspaceAuthority(tasksFixture.server.workspaceHost)} openSession={() => {}}/></main>;
   if (scene === 'preview') return <main style={{ width: 740, height: 500, margin: '24px auto' }}><ArtifactPreview artifact={{ source: previewSource, name: 'example.ts', image: false }} resources={previewLease} viewState={{ viewer: 'code' }} onViewStateChange={() => {}} onDownload={() => {}}/></main>;
   return <main style={{ width: 740, margin: '24px auto' }}>
     <TodoDock state={todoDock(content.snapshot, content.todoLoaded ? undefined : current.checkpoint?.collections.find(row => row.domain === 'todos.tasks'))}/>

@@ -1,3 +1,5 @@
+import {threadStatusText,ThreadStatusNotifications} from '../../../protocol/app-server/thread-status.ts';
+import type {ThreadStatusEntry} from '../../../protocol/app-server/v78.ts';
 import { readSourceRepairFields, type SourceRepairRead } from '../../../protocol/app-server/source-observation.ts';
 import { materializeSettings } from '../../../protocol/app-server/settings-observation.ts';
 import { readEditor } from '../../../protocol/app-server/editor.ts';
@@ -128,7 +130,11 @@ function sessionIdOf(notification: Notification): string | undefined {
     case "configuration/changed":
       return notification.params.application.scope;
     case "configuration/sourceRepairChanged":
+    case "thread/status/changed":
+    case "thread/status/resyncRequired":
     case "schedule/changed":
+    case "command/exec/outputDelta":
+    case "fs/changed":
       return undefined;
     case "session/ownershipRetired":
     case "session/summaryInvalidated":
@@ -142,6 +148,99 @@ function sessionIdOf(notification: Notification): string | undefined {
 export type SourceRepairListener = (observation: SourceRepairObservation) => void;
 
 export class AppServerHost {
+  readonly #threadStatuses=new Map<string,ThreadStatusEntry>();
+  readonly #statusInterests = new Set<string>();
+  readonly #statusNotifications = new ThreadStatusNotifications();
+  readonly #threadStatusListeners=new Set<()=>void>();
+  #statusRepair?:Promise<void>;
+  readonly #pendingStatusReads=new Set<string>();
+  #statusRepairEpoch = 0;
+  #statusUnsynchronized = false;
+  threadStatus(id:string):ThreadStatusEntry|undefined {return this.client.closed||this.#statusUnsynchronized?undefined:this.#threadStatuses.get(id);}
+
+  threadStatusLabel(id:string):string {return threadStatusText(this.threadStatus(id));}
+  onThreadStatus(listener:()=>void):()=>void {this.#threadStatusListeners.add(listener);return()=>this.#threadStatusListeners.delete(listener);}
+  #retainThreadStatus(entry:ThreadStatusEntry):void {
+    const previous=this.#threadStatuses.get(entry.threadId),current=this.#statusNotifications.snapshot(entry,previous);
+    if(!current)return;
+    if(current===previous)return;
+    this.#threadStatuses.delete(entry.threadId);this.#threadStatuses.set(entry.threadId,current);
+    this.#trimThreadStatusCatalog();
+    for(const listener of this.#threadStatusListeners)listener();
+  }
+  #rememberStatusInterest(threadId:string):void {
+    this.#statusInterests.delete(threadId);this.#statusInterests.add(threadId);
+    this.#trimThreadStatusCatalog();
+  }
+  /** Attached identities follow the existing bounded attachment lifetime.
+   * Only the other 128 catalog identities are eligible for LRU eviction. */
+  #trimThreadStatusCatalog():void {
+    const attached=new Set([...this.#sessions.values()]
+      .filter(session=>!session.released&&!session.serverClosed)
+      .map(session=>session.target.conversation_id));
+    const proofs=[...this.#threadStatuses.keys()].filter(id=>!attached.has(id));
+    for(const id of proofs.slice(0,Math.max(0,proofs.length-128)))this.#threadStatuses.delete(id);
+    const interests=[...this.#statusInterests].filter(id=>!attached.has(id));
+    for(const id of interests.slice(0,Math.max(0,interests.length-128))){
+      this.#statusInterests.delete(id);this.#pendingStatusReads.delete(id);
+    }
+  }
+  async #readThreadStatus(threadId:string):Promise<void> {
+    const epoch=this.#statusRepairEpoch,cut=this.#statusNotifications.checkpoint();
+    try {
+      const {thread}=await this.client.call('thread/read',{threadId},'thread');
+      if(thread.id!==threadId)throw new Error('Mismatched Thread status identity.');
+      if(epoch!==this.#statusRepairEpoch){
+        if(this.#statusInterests.has(threadId))void this.#queueThreadStatuses([threadId]);
+        return;
+      }
+      if(!this.client.closed)this.#retainThreadStatus({threadId:thread.id,status:thread.status,revision:thread.statusRevision,runtimeIncarnation:thread.runtimeIncarnation});
+    } catch(error) {
+      if(!this.client.closed&&epoch===this.#statusRepairEpoch&&!this.#statusNotifications.latestSince(threadId,cut,this.#threadStatuses.get(threadId))){
+        this.#statusNotifications.forget(threadId,this.#threadStatuses.get(threadId));this.#threadStatuses.delete(threadId);
+        for(const listener of this.#threadStatusListeners)listener();
+      }
+      throw error;
+    }
+  }
+  /** One bounded owner drains exact status reads. Capacity delays this work;
+   * it never turns local backpressure into a dropped native observation. */
+  #queueThreadStatuses(ids:Iterable<string>):Promise<void> {
+    for(const id of ids){this.#rememberStatusInterest(id);this.#pendingStatusReads.add(id);}
+    if(this.#statusRepair)return this.#statusRepair;
+    const work=Promise.resolve().then(async()=>{
+      while(!this.client.closed){
+        while(this.#pendingStatusReads.size&&!this.client.closed){
+          await this.client.waitForMetadataCapacity();
+          if(this.client.closed||!this.#pendingStatusReads.size)break;
+          if(!this.client.metadataAvailable)continue;
+          const id=this.#pendingStatusReads.values().next().value!;
+          this.#pendingStatusReads.delete(id);
+          try {await this.#readThreadStatus(id);}catch { /* The exact read owns proof revocation. */ }
+        }
+        if(this.#statusUnsynchronized&&!this.client.closed){
+          this.#statusUnsynchronized=false;
+          for(const listener of this.#threadStatusListeners)listener();
+        }
+        if(!this.#pendingStatusReads.size)break;
+      }
+    }).finally(()=>{
+      if(this.#statusRepair===work){
+        this.#statusRepair=undefined;
+        if(this.#pendingStatusReads.size&&!this.client.closed)void this.#queueThreadStatuses([]);
+      }
+    });
+    this.#statusRepair=work;return work;
+  }
+  #repairThreadStatuses():Promise<void> {
+    ++this.#statusRepairEpoch;
+    this.#statusNotifications.clear();
+    this.#statusUnsynchronized = true;
+    const ids=new Set([...this.#statusInterests,...this.#threadStatuses.keys(),...[...this.#sessions.values()].map(session=>session.target.conversation_id)]);this.#threadStatuses.clear();
+    for(const listener of this.#threadStatusListeners)listener();
+    return this.#queueThreadStatuses(ids);
+  }
+
   readonly endpoint: string | undefined;
   readonly client: AppServerClient;
   readonly ownership: ProcessOwnership;
@@ -205,6 +304,13 @@ export class AppServerHost {
     // is its own, so a superseded incarnation cannot reach its replacement.
     // Source-scoped notices go to the host's source observations instead.
     client.onNotification((notification) => {
+      if(notification.method==='thread/status/changed') {
+        if(!this.#statusNotifications.observe(notification.params))return;
+        if(this.#statusInterests.has(notification.params.threadId)||this.#threadStatuses.has(notification.params.threadId)||[...this.#sessions.values()].some(session=>session.target.conversation_id===notification.params.threadId))this.#retainThreadStatus(notification.params);
+        return;
+      }
+      if(notification.method==='thread/status/resyncRequired') {void this.#repairThreadStatuses();return;}
+
       if (notification.method === "configuration/sourceRepairChanged") {
         const { target, receipt, sequence } = notification.params;
         this.#observeSourceRepair({ target, receipt: receipt ?? undefined, sequence });
@@ -434,6 +540,7 @@ export class AppServerHost {
     sessionId: SessionId,
     nodeId?: SessionNodeId,
     previous?: AppServerSession,
+    knownThreadId?: string,
   ): Promise<AppServerSession> {
     const existing = this.#sessions.get(sessionId);
     if (existing !== undefined && !existing.released && !existing.serverClosed) {
@@ -442,18 +549,22 @@ export class AppServerHost {
     }
     let session: AppServerSession;
     try {
-      session = await AppServerSession.attach(this.client, sessionId, nodeId, session => this.#sessions.set(sessionId, session), previous, this.#unknownModelSelections);
+      session = await AppServerSession.attach(this.client, sessionId, nodeId, session => { this.#sessions.set(sessionId, session); this.#trimThreadStatusCatalog(); }, previous, this.#unknownModelSelections, knownThreadId);
     } catch (error) {
       if (error instanceof AppServerRequestError && error.kind !== 'outcome_unknown' && !this.#sessions.has(sessionId)) this.#failedInitializations.add(sessionId);
       throw error;
     }
     this.#failedInitializations.delete(sessionId);
     this.#sessions.set(sessionId, session);
+    this.#trimThreadStatusCatalog();
+    await this.repairInputReceipts(session);
+    void this.#queueThreadStatuses([session.target.conversation_id]);
     session.onClosed(() => {
       // Residency ended for this attachment. Drop the route so a later attach
       // installs a fresh one rather than reusing a target the server retired.
       if (this.#sessions.get(sessionId) === session) {
         this.#sessions.delete(sessionId);
+        this.#trimThreadStatusCatalog();
       }
     });
     return session;
@@ -466,17 +577,37 @@ export class AppServerHost {
     }
   }
 
+  /** Local operation ownership survives a socket, including rejection before
+   * close listeners run. Authority and Conversation are never inferred anew. */
+  inheritInputUncertainty(previous: AppServerHost): void {
+    this.client.inputReceipts=previous.client.inputReceipts;
+  }
+
+  async repairInputReceipts(session: AppServerSession): Promise<void> {
+    const target=session.target,authorityId=this.authorityId,receipts=this.client.inputReceipts;
+    for(const record of [...receipts.records.values()]) {
+      if(record.authorityId!==authorityId||record.conversationId!==target.conversation_id)continue;
+      try {
+        const result=await this.client.call('inbound/submissionLookup',{target,inputId:record.inputId},'inbound_submission');
+        if(result.acceptance&&!session.released&&!session.serverClosed&&this.authorityId===authorityId)
+          receipts.accepted(authorityId,target.conversation_id,record.inputId,result.acceptance);
+      } catch { /* A failed or absent read proves nothing; keep the operation. */ }
+    }
+  }
+
   /** User-confirmed branch switch; the manager owns native retirement. */
   async openNode(sessionId: SessionId, nodeId: SessionNodeId, onSwitched?: () => void): Promise<AppServerSession> {
     const existing = this.#sessions.get(sessionId);
+    let threadId: string | undefined;
     if (existing !== undefined && !existing.released && !existing.serverClosed) {
-      await existing.switchNode(nodeId);
+      threadId = (await existing.switchNode(nodeId)).active_conversation_id;
       this.#sessions.delete(sessionId);
+      this.#trimThreadStatusCatalog();
     }
     // The confirmed target can accept submission intent while its successor
     // attachment waits for native preparation. Unknown switches never get here.
     onSwitched?.();
-    return this.attach(sessionId, nodeId);
+    return this.attach(sessionId, nodeId, undefined, threadId);
   }
 
   /** The attachment this connection holds for a Session, if any. */
@@ -497,6 +628,7 @@ export class AppServerHost {
       return;
     }
     this.#sessions.delete(sessionId);
+    this.#trimThreadStatusCatalog();
     await session.detach();
   }
 
@@ -513,6 +645,7 @@ export class AppServerHost {
     offset = 0,
     limit = SESSION_PROJECTION_PAGE_LIMIT,
   ): Promise<{ sessions: SessionSummaryView[]; nextOffset?: number }> {
+    const statusEpoch=this.#statusRepairEpoch,statusCut=this.#statusNotifications.checkpoint();
     const page = await this.client.call(
       "session/list",
       {
@@ -522,6 +655,17 @@ export class AppServerHost {
       },
       "sessions",
     );
+    const repairIds=new Set<string>();
+    for(const row of page.sessions){
+      this.#rememberStatusInterest(row.thread_id);
+      if(statusEpoch===this.#statusRepairEpoch&&row.thread_status)this.#retainThreadStatus(row.thread_status);
+      if(!row.thread_status&&!this.#statusNotifications.latestSince(row.thread_id,statusCut,this.#threadStatuses.get(row.thread_id))){
+        this.#statusNotifications.forget(row.thread_id,this.#threadStatuses.get(row.thread_id));this.#threadStatuses.delete(row.thread_id);
+        for(const listener of this.#threadStatusListeners)listener();
+      }
+      if(statusEpoch!==this.#statusRepairEpoch||!this.threadStatus(row.thread_id))repairIds.add(row.thread_id);
+    }
+    if(repairIds.size)void this.#queueThreadStatuses(repairIds);
     return {
       sessions: page.sessions,
       nextOffset: page.next_offset ?? undefined,
@@ -532,6 +676,10 @@ export class AppServerHost {
     if (!this.#failedInitializations.has(sessionId)) return;
     await this.client.call('session/retryInitialization', { session_id: sessionId, node_id: nodeId }, 'submission_intent_accepted');
     this.#failedInitializations.delete(sessionId);
+  }
+
+  async readNode(sessionId: SessionId, nodeId: SessionNodeId) {
+    return (await this.client.call('session/node',{session_id:sessionId,node_id:nodeId},'node')).node;
   }
 
   async readSession(sessionId: SessionId): Promise<SessionSnapshot> {
@@ -546,7 +694,7 @@ export class AppServerHost {
   async createSession(settings: SessionPersistentState): Promise<SessionTransition> {
     return transitionOf(this.client,
       await this.client.call(
-        "session/create",
+        "thread/start",
         { settings },
         "session_transition",
       ),
@@ -592,12 +740,12 @@ export class AppServerHost {
   async forkSession(
     sessionId: SessionId,
     surfaceRevision: SurfaceRevision,
-    boundary?: import("../../../protocol/app-server/v73.ts").CanonicalContentLocator,
+    boundary?: import("../../../protocol/app-server/v78.ts").CanonicalContentLocator,
     nodeId?: SessionNodeId,
   ): Promise<SessionTransition> {
     return transitionOf(this.client,
       await this.client.call(
-        "session/fork",
+        "thread/fork",
         {
           session_id: sessionId,
           node_id: nodeId ?? null,
@@ -615,7 +763,7 @@ export class AppServerHost {
     sessionId: SessionId,
     nodeId: SessionNodeId,
     surfaceRevision: SurfaceRevision,
-    boundary: import("../../../protocol/app-server/v73.ts").CanonicalContentLocator,
+    boundary: import("../../../protocol/app-server/v78.ts").CanonicalContentLocator,
   ): Promise<SessionTransition> {
     return transitionOf(this.client,
       await this.client.call(
@@ -708,6 +856,7 @@ export class AppServerHost {
   async #settle(): Promise<ChildExit | undefined> {
     for (const abort of this.#exports) abort.abort(new Error("TUI disconnected during export"));
     this.#sessions.clear();
+    this.#trimThreadStatusCatalog();
     if (this.ownership === "external" || this.#child === undefined) {
       await this.client.close();
       return undefined;
@@ -722,7 +871,7 @@ export class AppServerHost {
 
 async function transitionOf(client: AppServerClient, result: {
   session: SessionSnapshot;
-  editor?: import('../../../protocol/app-server/v73.ts').EditorLocator | null;
+  editor?: import('../../../protocol/app-server/v78.ts').EditorLocator | null;
   durability_diagnostic?: string | null;
 }): Promise<SessionTransition> {
   return {

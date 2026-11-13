@@ -1,10 +1,9 @@
 import {traceAttemptKey,traceStepKey,traceOccurrenceKey,sameTraceStep} from '../../../../protocol/app-server/trace-identity';
 import {canonicalLocatorKey} from '../../../../protocol/app-server/content-identity';
 import { traceStateLabel } from '../../bindings/status-labels';
-import { configurationSummary } from '../../bindings/configuration-change';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v73';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v78';
 import type { WorkflowNodes, WorkflowTraceNode } from './workflow';
 
 /** The Harness detail tab identities. Labels follow the locale; ids never do. */
@@ -126,7 +125,6 @@ export interface TrajectoryProjection {
 
 function cellsOf(tx: Translate, record: TraceRecord): InspectableDisplayItem[] {
   if (record.kind === 'attempt' || record.kind === 'step') return [];
-  if (record.kind === 'configuration' && record.configuration) return [{ ...origin(record, 'record', recordLabel(tx, record), configurationSummary(tx, record.configuration), 'overview', record.id), type: 'RecordRow' }];
   if (record.kind !== 'request' || !record.request) return [{ ...origin(record, 'record', recordLabel(tx, record), record.preview?.text ?? '', 'overview', record.id), type: 'RecordRow' }];
   const request = record.request;
   const cells: InspectableDisplayItem[] = [];
@@ -148,10 +146,12 @@ export function projectTrajectory(tx: Translate, records: readonly TraceRecord[]
   const turns = new Map<string, TrajectoryTurnModel>();
   const groups = new Map<string, TrajectoryGroupModel>();
   for (const record of records) {
-    // Harness shows Agent interactions as Tool calls and delivered Context.
-    // Native activation and interaction lifecycle audits remain in Trace, not
-    // as duplicate rows, spans or empty Turns when their Tool is on another page.
-    if (record.kind === 'interaction' || record.kind === 'subagent' || record.kind === 'workflow' && record.originating_tool_call_id != null) continue;
+    // Harness shows background work and Agent interactions through Tool calls
+    // and delivered Context. Lifecycle audits stay out of rows, spans and Turns
+    // even when the Tool or notice is on another page.
+    if (record.kind === 'background' || record.kind === 'interaction' || record.kind === 'subagent' || record.kind === 'workflow' && record.originating_tool_call_id != null) continue;
+    // Harness shows model-visible changes from the request's prompt and tools.
+    if (record.kind === 'configuration') continue;
     const attempt = traceAttemptKey(record.location), step = traceStepKey(record.location);
     if (attempt == null) {
       sections.push({ kind: 'outside', record, cells: cellsOf(tx, record) });
@@ -208,7 +208,7 @@ export function trajectoryItems(tx: Translate, projection: TrajectoryProjection,
 
 /** Never correlate incomplete scope, or ambiguous proposals. Session/Conversation
  * isolation is supplied by the native Trace cache, not reconstructed from IDs. */
-function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v73').RuntimeClientToolOccurrence|null}):string|undefined {
+function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v78').RuntimeClientToolOccurrence|null}):string|undefined {
  const owner=traceAttemptKey(record.location),step=traceStepKey(record.location);
  if(owner==null||step==null||!call.occurrence)return;
  return displayKey(owner,step,traceOccurrenceKey(call.occurrence));
@@ -312,6 +312,8 @@ export function selectionOf(item: InspectableDisplayItem): TrajectorySelection {
 export interface TrajectoryLedgerRow {
   display_key: string;
   kind: 'semantic' | 'marker' | 'structure' | 'summary' | 'history';
+  /** A middle boundary loads its own native continuation, not the oldest page. */
+  historyBefore?: string;
   height: 30 | 20 | 10;
   item?: InspectableDisplayItem;
   turn?: TurnStructure;
@@ -327,6 +329,36 @@ export interface TrajectoryLedgerRow {
   callsOwner?: string;
   /** End the workflow's visual branch on its last loaded node, including virtual rows. */
   workflowLast?: boolean;
+}
+
+export function withHistoryGaps(rows: TrajectoryLedgerRow[], records: readonly TraceRecord[], gaps: readonly { before: string }[] = []): TrajectoryLedgerRow[] {
+  if (!gaps.length) return rows;
+  const positions = new Map(records.map((record, index) => [record.id, index]));
+  const insertions = new Map<number, TrajectoryLedgerRow[]>();
+  const boundaries = gaps.map(gap => ({ gap, boundary: positions.get(gap.before) ?? records.length }))
+    .sort((left, right) => left.boundary - right.boundary);
+  for (const { gap, boundary } of boundaries) {
+    const successor = rows.findIndex(row => {
+      const owner = row.item?.owner_record_id ?? row.callsOwner;
+      return owner !== undefined && (positions.get(owner) ?? -1) >= boundary;
+    });
+    // Audit-only intervals, folding and search can leave no visible successor.
+    // The native gap still owns a paging control at that ledger boundary.
+    const index = successor < 0 ? rows.length : successor;
+    insertions.set(index, [...(insertions.get(index) ?? []), {
+      display_key: displayKey('history-gap', gap.before), historyBefore: gap.before, kind: 'history', height: 30, turnStart: false,
+    }]);
+  }
+  return [...rows.flatMap((row, index) => [...(insertions.get(index) ?? []), row]), ...(insertions.get(rows.length) ?? [])];
+}
+
+/** A cumulative fact requires the whole native prefix through its selected
+ * owner. Later gaps do not invalidate an earlier, already complete prefix. */
+export function completeHistoryThrough(records: readonly TraceRecord[], owner: string, nextCursor: string | null | undefined, gaps: readonly { before: string }[] = []): boolean {
+  if (nextCursor !== null) return false;
+  const positions = new Map(records.map((record, index) => [record.id, index]));
+  const selected = positions.get(owner);
+  return selected !== undefined && gaps.every(gap => (positions.get(gap.before) ?? -1) > selected);
 }
 
 export function ledgerRows(tx: Translate, projection: TrajectoryProjection, items: readonly TrajectoryDisplayItem[], folded: ReadonlySet<string>, searching: boolean): TrajectoryLedgerRow[] {

@@ -1056,6 +1056,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
         .append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("reasoning"),
             content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                origin: None,
                 text: Some("AUTHORED_REASONING_SECRET".into()),
                 provider_state: private("ARCHIVE_REASONING_SECRET"),
             })],
@@ -1112,6 +1113,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
     let output = MessageBlock::Assistant(AssistantMessageBlock {
         id: prior.provisional_message_id.clone(),
         content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+            origin: None,
             text: None,
             provider_state: private("ARCHIVE_CONTINUATION_SECRET"),
         })],
@@ -1891,6 +1893,7 @@ async fn lossy_archive_reports_missing_old_encrypted_input_without_invalidating_
     store.append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
         id: MessageId::new("old-native"),
         content: vec![AssistantContentBlock::Reasoning(crate::message::types::ReasoningBlock {
+            origin: None,
             text: None,
             provider_state: Some(crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(
                 crate::runtime::continuation::OpenAiResponsesContinuation::Stateless {

@@ -127,10 +127,13 @@ export function workspaceHandler(host?: ProductHostWorkspaces) {
         case 'adopt': value = await host.adoptWorkspace(scope(), string('location')); break;
         case 'rename': value = await host.renameWorkspace(scope(), string('id'), string('displayName')); break;
         case 'reorder': value = await host.reorderWorkspace(scope(), string('id'), body.before === undefined ? undefined : string('before')); break;
+        case 'select': value = await host.selectWorkspace(scope(), string('id'), body.intent); break;
         case 'remove': value = await host.removeWorkspace(scope(), string('id')); break;
         case 'resolve': value = await host.resolveWorkspace(string('id'), string('endpoint')); break;
         case 'configuration':
           if (!host.configureWorkspace) throw new Error('Workspace configuration is unavailable on this Host');
+          if (!body.operation || typeof body.operation !== 'object' || Array.isArray(body.operation)
+            || body.operation.expected_directory !== undefined && (typeof body.operation.expected_directory !== 'string' || !body.operation.expected_directory)) throw new Error('Invalid Workspace configuration operation');
           value = await host.configureWorkspace(string('id'), string('endpoint'), body.operation); break;
         case 'workflow':
           if (!host.workflowWorkspace || Object.keys(body).some(key => !['scope', 'native', 'id', 'operation'].includes(key))) throw new Error('Workflow authoring is unavailable on this Host');

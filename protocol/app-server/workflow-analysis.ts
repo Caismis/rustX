@@ -1,4 +1,4 @@
-import type { SourceTarget, WorkflowAnalysisQuery, WorkflowAnalysisReport } from './v73.ts';
+import type { SourceTarget, WorkflowAnalysisQuery, WorkflowAnalysisReport } from './v78.ts';
 
 /** Wire-default normalization only; scope and type proofs remain native. */
 function queryIdentity(query: WorkflowAnalysisQuery | null | undefined): unknown {

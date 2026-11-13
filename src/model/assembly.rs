@@ -486,6 +486,7 @@ impl ModelEventAssembler {
         if index == self.blocks.len() {
             self.blocks
                 .push(Some(AssistantContentBlock::Reasoning(ReasoningBlock {
+                    origin: None,
                     text: None,
                     provider_state: None,
                 })));
@@ -534,6 +535,7 @@ impl BlockKind {
                 text: String::new(),
             }),
             Self::Reasoning => AssistantContentBlock::Reasoning(ReasoningBlock {
+                origin: None,
                 text: None,
                 provider_state: None,
             }),
@@ -659,7 +661,7 @@ mod tests {
         assert!(turn.continuation.is_none());
     }
 
-    /// Interleaved reasoning, tool call, and text assemble in index order.
+    /// Interleaved reasoning, tool call, reasoning, and text assemble in index order.
     #[test]
     fn interleaved_blocks_assemble_in_order() {
         let turn = assemble(&[
@@ -667,21 +669,62 @@ mod tests {
             call_start(1, "call-1"),
             call_args(1, "call-1", r#"{"x":1}"#),
             call_done(1, "call-1", serde_json::json!({"x": 1})),
-            text(2, "Answer."),
+            reasoning(2, "Think again."),
+            text(3, "Answer."),
             completed(ModelFinishReason::ToolCalls),
         ]);
-        assert_eq!(turn.content.len(), 3);
+        assert_eq!(turn.content.len(), 4);
         assert!(matches!(
             &turn.content[0],
-            AssistantContentBlock::Reasoning(_)
+            AssistantContentBlock::Reasoning(r) if r.text.as_deref() == Some("Think.")
         ));
         assert!(
             matches!(&turn.content[1], AssistantContentBlock::ToolCall(call) if call.id.as_str() == "call-1")
         );
-        assert!(matches!(&turn.content[2], AssistantContentBlock::Text(t) if t.text == "Answer."));
+        assert!(matches!(
+            &turn.content[2],
+            AssistantContentBlock::Reasoning(r) if r.text.as_deref() == Some("Think again.")
+        ));
+        assert!(matches!(&turn.content[3], AssistantContentBlock::Text(t) if t.text == "Answer."));
         assert_eq!(turn.tool_calls.len(), 1);
         assert_eq!(turn.tool_calls[0].arguments, serde_json::json!({"x": 1}));
         assert_eq!(turn.finish_reason, ModelFinishReason::ToolCalls);
+    }
+
+    #[test]
+    fn continuation_state_without_reasoning_text_survives_assembly() {
+        use crate::runtime::continuation::{
+            OpenAiResponsesContinuation, ProviderContinuationState,
+        };
+
+        let state =
+            ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
+                items: vec![serde_json::json!({
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [],
+                    "encrypted_content": "opaque"
+                })],
+            });
+        let turn = assemble(&[
+            ModelEvent::ContinuationState {
+                block_index: ContentBlockIndex::new(0),
+                state: state.clone(),
+            },
+            text(1, "Visible answer."),
+            completed(ModelFinishReason::Stop),
+        ]);
+        let [
+            AssistantContentBlock::Reasoning(reasoning),
+            AssistantContentBlock::Text(answer),
+        ] = turn.content.as_slice()
+        else {
+            panic!("opaque reasoning and visible answer must remain separate blocks");
+        };
+        assert!(reasoning.text.is_none());
+        assert_eq!(reasoning.provider_state.as_ref(), Some(&state));
+        assert_eq!(turn.continuation, Some(state));
+        assert_eq!(answer.text, "Visible answer.");
     }
 
     /// A `ToolCalls` terminal without a complete canonical call is rejected

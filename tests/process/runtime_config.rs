@@ -16,13 +16,13 @@ use rustx::runtime_client::settings::{
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
 
 const MODELS: &str = r#"[providers.local]
+protocol = "openai_chat_completions"
 base_url = "http://127.0.0.1:9/v1"
 api_key = "$RUSTX_ISSUE96_KEY"
 
 [models."local/model-a"]
 provider = "local"
 id = "model-a"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
@@ -35,7 +35,6 @@ chat_reasoning_replay = "omit"
 [models."local/model-b"]
 provider = "local"
 id = "model-b"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
@@ -48,7 +47,6 @@ chat_reasoning_replay = "omit"
 [models."local/model-c"]
 provider = "local"
 id = "model-c"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 
@@ -87,7 +85,7 @@ fn config_json(
     builtin_tools: &[&str],
     _include_old_mcp: bool,
 ) -> String {
-    let profile = toml::to_string_pretty(&serde_json::json!({"schema_version": 10, "agent_id": "agent-issue96", "environment": {"ISSUE96_CURRENT": environment_value}, "agent": {"skills": "all", "model": {"model": model}, "plugins": {
+    let profile = toml::to_string_pretty(&serde_json::json!({"schema_version": 12, "agent_id": "agent-issue96", "environment": {"ISSUE96_CURRENT": environment_value}, "agent": {"skills": "all", "model": {"model": model}, "plugins": {
             "todo": {"enabled": true},
             "agent_status": {
                 "enabled": true,
@@ -308,10 +306,8 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         "and it is not an ordinary available capability, so no selector can name it"
     );
     assert!(
-        snapshot
-            .skill_catalog()
-            .unwrap()
-            .contains("<name>new-skill</name>")
+        snapshot.skill_catalog().is_none(),
+        "discovered Skills are advertised only when the model can read their instructions"
     );
     assert!(!snapshot.available_tools().tools().is_empty());
 
@@ -635,7 +631,7 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     // that quietly substituted built-in defaults could not pass.
     std::fs::write(
         &config_path,
-        toml::to_string_pretty(&serde_json::json!({"schema_version": 10, "agent_id": "agent-ext256", "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {
+        toml::to_string_pretty(&serde_json::json!({"schema_version": 12, "agent_id": "agent-ext256", "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {
                 "enabled": true,
                 "time": {"enabled": true, "timezone": "Asia/Shanghai"},
                 "background": {"enabled": false}
@@ -689,7 +685,7 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     // The deliberate divergence with the prospective configuration surface.
     std::fs::write(
         &config_path,
-        toml::to_string_pretty(&serde_json::json!({"schema_version": 10, "agent_id": "agent-ext256", "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {"enabled": false}}, "tools": {"builtin": ["read"]}}}))
+        toml::to_string_pretty(&serde_json::json!({"schema_version": 12, "agent_id": "agent-ext256", "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {"enabled": false}}, "tools": {"builtin": ["read"]}}}))
         .unwrap(),
     )
     .expect("config v2");

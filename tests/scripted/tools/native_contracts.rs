@@ -594,12 +594,8 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
             execution_deadline: None,
             tools: vec![],
             skills: rustx::runtime::agent_profile::AgentSkillSelection::default(),
-            project_instructions: rustx::runtime::agent_profile::AgentProjectInstructionPolicy {
-                inherit: false,
-                files: vec![],
-            },
+            inherit_project_instructions: false,
             extensions: rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
-            agents: std::collections::BTreeSet::default(),
             workflows: std::collections::BTreeSet::default(),
         },
         "worker.md".into(),
@@ -841,10 +837,18 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
             expected,
             "{selection:?}"
         );
-        assert!(
+        let advertises_skills = expected.contains(&"read") || expected.contains(&"bash");
+        assert_eq!(
             requests[0]
                 .effective_system_prompt
-                .contains("file-reading Tool")
+                .contains("<available_skills>"),
+            advertises_skills
+        );
+        assert_eq!(
+            requests[0]
+                .effective_system_prompt
+                .contains("lazy/SKILL.md"),
+            advertises_skills
         );
         assert!(
             !requests[0]

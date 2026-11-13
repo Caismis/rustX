@@ -34,8 +34,8 @@ impl PreparedModelSelection {
             ModelUpdateError::InvalidConfiguration("catalog model position is unavailable".into())
         })?;
         let mut config = SessionModelConfig::of(row.model.clone());
-        // Catalog defaults replace primary-owned parameters only. Summary is
-        // independently configured and must survive deferred observation.
+        // Preserve the independently configured auxiliary selections that
+        // still exist, including when recovering a conversation after deletion.
         config.summary_model = self.model.config().summary_model.clone();
         config.title_model = self.model.config().title_model.clone();
         config
@@ -56,6 +56,12 @@ impl PreparedModelSelection {
             );
         }
         Ok(config)
+    }
+
+    pub(crate) fn recover_auxiliary_models(&self, selection: &mut SessionModelConfig) {
+        if let Some(catalog) = self.model.catalog() {
+            selection.use_available_auxiliary_models(catalog, Some(self.model.config()));
+        }
     }
 }
 

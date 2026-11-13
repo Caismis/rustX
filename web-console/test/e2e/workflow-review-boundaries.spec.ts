@@ -3,14 +3,14 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 
 async function editor(page: Page, fixture: Awaited<ReturnType<typeof startDogfood>>, id: string) {
   await routeWorkspaceHost(page, fixture); await page.goto('/');
   await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-  await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
   await page.getByRole('button', { name: id, exact: true }).click();
   await expect(page).toHaveTitle(/rustX$/);
 }
@@ -25,6 +25,7 @@ for (const width of [1440, 390]) test(`focused Human Input fields save and follo
       edges: [{ from: 'start', to: 'human' }, { from: 'human', to: 'done', port: 'approve' }, { from: 'human', to: 'done', port: 'timeout' }] } }));
     await editor(page, fixture, 'review_fields'); await page.setViewportSize({ width, height: 1000 });
     const human = page.getByRole('region', { name: 'Workflow canvas' }).getByLabel('Human Input node human', { exact: true });
+    await expect(human).toBeVisible();
     await human.focus(); await human.press('Enter');
     const panel = page.getByRole('complementary', { name: 'Inspector' });
     const title = panel.getByRole('textbox', { name: 'Button text', exact: true });
@@ -41,7 +42,7 @@ for (const width of [1440, 390]) test(`focused Human Input fields save and follo
     await expect(page.getByRole('button', { name: 'Save File', exact: true })).toBeDisabled();
     await page.screenshot({ path: `/tmp/rustx-review-focused-fields-${width}.png` });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('a catalog larger than one RPC resolves a tool on the final page', async ({ page }) => {
@@ -65,7 +66,7 @@ test('a catalog larger than one RPC resolves a tool on the final page', async ({
     await expect(page.getByRole('button', { name: 'Save File', exact: true })).toBeDisabled();
     await page.screenshot({ path: '/tmp/rustx-large-tool-catalog.png' });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 for (const operation of ['add', 'remove'] as const) test(`End name drafts survive ${operation}, Undo/Redo and correction before save`, async ({ page }) => {
@@ -101,7 +102,7 @@ for (const operation of ['add', 'remove'] as const) test(`End name drafts surviv
     await expect(page.getByRole('button', { name: 'Save File', exact: true })).toBeDisabled();
     await page.screenshot({ path: `/tmp/rustx-end-draft-${operation}.png` });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 for (const width of [1440, 390]) test(`Loop variable rename saves all references and follows Undo/Redo at ${width}px`, async ({ page }) => {
@@ -134,7 +135,7 @@ for (const width of [1440, 390]) test(`Loop variable rename saves all references
     await page.screenshot({ path: `/tmp/rustx-loop-variable-rename-${width}.png` });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 for (const kind of ['required', 'optional']) test(`catalog ${kind} enum saves an explicit empty string`, async ({ page }) => {
@@ -164,7 +165,7 @@ for (const kind of ['required', 'optional']) test(`catalog ${kind} enum saves an
     await page.screenshot({ path: `/tmp/rustx-empty-enum-${kind}.png` });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 for (const operation of ['add', 'remove_other', 'remove_before'] as const) test(`Assigner unfinished number keeps its field through ${operation}, history and native save`, async ({ page }) => {
@@ -203,5 +204,5 @@ for (const operation of ['add', 'remove_other', 'remove_before'] as const) test(
     await page.screenshot({ path: `/tmp/rustx-assigner-draft-${operation}.png` });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });

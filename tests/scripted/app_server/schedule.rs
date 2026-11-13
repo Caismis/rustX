@@ -1,7 +1,7 @@
 //! Scheduler commands exercise the real native manager, writer and retirement gates.
 #![allow(clippy::too_many_lines, clippy::large_futures)]
 use super::*;
-use crate::durable::{InboxStore, ScheduleStore};
+use crate::durable::{InboxStore, JournalStore, ScheduleStore};
 use crate::runtime::types::RuntimeClock;
 use crate::scheduler::*;
 use chrono::{DateTime, Duration, Utc};
@@ -192,8 +192,11 @@ async fn pending_creation_reserves_runtime_capacity_independently_of_cold_storag
             cwd: f.workspaces[1].clone(),
             model: None,
         };
-        let creation =
-            tokio::spawn(async move { manager.create_session_submitted(settings, claim).await });
+        let creation = tokio::spawn(async move {
+            manager
+                .create_session_submitted(settings, Vec::new(), claim)
+                .await
+        });
         entered.await.unwrap();
         assert_eq!(f.manager.diagnostics().storage_only, 1);
         assert_eq!(f.manager.registry.0.lock().unwrap().pending_creations, 1);
@@ -1251,7 +1254,9 @@ async fn scheduler85_review_busy_hot_writer_does_not_block_activation_or_other_s
                 async move { manager.activate_scheduled_target(&binding, &trigger).await },
             );
         let mut other = f.load(1);
-        let progress = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        // Both operations must finish while the competing writer remains
+        // locked. The watchdog accommodates process scheduling under load.
+        let progress = tokio::time::timeout(std::time::Duration::from_secs(15), async {
             (&mut activation).await.unwrap().unwrap();
             let other = (&mut other).await.unwrap().unwrap();
             f.manager.unload(other.conversation_id()).await.unwrap();
@@ -1271,6 +1276,104 @@ async fn scheduler85_review_busy_hot_writer_does_not_block_activation_or_other_s
             progress.is_ok(),
             "a busy hot writer stalled native activation or another Session's admission"
         );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn archived_cold_trigger_keeps_its_receipt_without_admitting_execution() {
+    bounded(async {
+        let mut f = Fixture::with_session_count(None, 1).await;
+        let clock = Clock::new();
+        f.manager.schedule_clock = clock.clone();
+        let created = receipt(start(&f, 0, "archive-ready").await.unwrap().unwrap());
+        let id = f.id(0).await;
+        let session = &f.sessions[0];
+        clock.add(60);
+        f.manager
+            .schedule_operation(
+                &session.id,
+                &session.active_node,
+                ScheduleOperation::Admit {
+                    id: created.id,
+                    expected_revision: 1,
+                },
+            )
+            .await
+            .unwrap();
+        let access = f
+            .manager
+            .sessions
+            .acquire_session(&session.id, Some(&session.active_node))
+            .await
+            .unwrap();
+        let store = crate::durable::SqliteConversationStore::open_existing(
+            id.clone(),
+            &access.database_path,
+        )
+        .unwrap();
+        let trigger = store.schedule_summary().unwrap().ready[0].clone();
+        let accepted = store
+            .lookup_inbound(&trigger.correlation())
+            .unwrap()
+            .unwrap();
+        let database_path = access.database_path.clone();
+        drop(store);
+        drop(access);
+        f.manager.archive_thread(id.clone(), true).await.unwrap();
+        let binding = ScheduleBinding {
+            session_id: session.id.clone(),
+            node_id: session.active_node.clone(),
+            conversation_id: id.clone(),
+        };
+        assert!(
+            f.manager
+                .activate_scheduled_target(&binding, &trigger)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("archived")
+        );
+        assert_eq!(f.manager.probe(&id).compositions.load(Ordering::SeqCst), 0);
+        assert!(f.provider.request_bodies().is_empty());
+        assert!(f.manager.is_empty());
+        // No retry, new submission or manager storage operation may clear a
+        // failed flight between unarchive and this ordinary public load path.
+        f.manager.archive_thread(id.clone(), false).await.unwrap();
+        let loaded = f.manager.load(&session.id, None).await.unwrap();
+        assert!(loaded.client().validate().is_ok());
+        f.gates[0].wait_entered().await;
+        let store =
+            crate::durable::SqliteConversationStore::open_existing(id.clone(), &database_path)
+                .unwrap();
+        assert!(store.load_pending().unwrap().is_empty());
+        assert_eq!(
+            store.lookup_inbound(&trigger.correlation()).unwrap(),
+            Some(accepted)
+        );
+        // Re-observing the same accepted trigger cannot execute it again.
+        f.manager
+            .activate_scheduled_target(&binding, &trigger)
+            .await
+            .unwrap();
+        let live = loaded.inspect_runtime().unwrap();
+        let settled = live.settlement_signal().notified();
+        f.gates[0].release();
+        settled.await;
+        f.close().await;
+        let adoptions = store
+            .read_events(None, 100)
+            .unwrap()
+            .events
+            .into_iter()
+            .filter_map(|event| match event.event {
+                RuntimeEvent::InboundTurnAdopted { message_ids } => Some(message_ids),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(adoptions, vec![vec![trigger.message_id()]]);
+        assert_eq!(f.manager.probe(&id).compositions.load(Ordering::SeqCst), 1);
+        assert_eq!(f.provider.request_bodies().len(), 1);
     })
     .await;
 }

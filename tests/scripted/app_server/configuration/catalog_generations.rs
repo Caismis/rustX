@@ -51,7 +51,7 @@ async fn issue459_attempt_admitted_before_mixed_publication_stays_frozen() {
 
         issue459_edit(&fixture, |document| {
             issue459_replace_a_with_c(document);
-            issue459_set_instructions(document, "issue459 new instructions");
+            set_file_guidance(&fixture, "issue459 new instructions");
         })
         .await;
         let application = settled(&fixture, 0).await;
@@ -327,7 +327,7 @@ async fn issue459_publication_selection_race(selection_first: bool) {
             .unwrap()
             .remove("fast")
             .unwrap();
-        issue459_set_instructions(document, "issue459 raced instructions");
+        set_file_guidance(&fixture, "issue459 raced instructions");
         issue459_admit_reviewer(document);
     };
 
@@ -444,13 +444,7 @@ async fn issue459_publication_selection_race(selection_first: bool) {
         assert_eq!(runtime.model_view().configured, marker);
     }
     assert_eq!(
-        runtime
-            .runtime_resources()
-            .configuration()
-            .unwrap()
-            .config
-            .agent
-            .instructions,
+        guidance(runtime.runtime_resources().project_context_files()),
         "issue459 raced instructions"
     );
     assert!(fixture.provider.request_bodies().is_empty());
@@ -604,7 +598,7 @@ async fn issue459_failed_mixed_generations_keep_last_good_authority() {
                 .as_table_mut()
                 .unwrap()
                 .insert("undeclared/x".into(), model);
-            issue459_set_instructions(document, "issue459 unpublished instructions");
+            set_file_guidance(&fixture, "issue459 unpublished instructions");
         })
         .await;
         let application = settled(&fixture, 0).await;
@@ -616,12 +610,7 @@ async fn issue459_failed_mixed_generations_keep_last_good_authority() {
         assert!(diagnostic.contains("model catalog"), "{diagnostic}");
         assert_eq!(ledger(), good);
         assert_eq!(
-            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
-                &runtime
-            )
-            .unwrap()
-            .root_agent
-            .instructions,
+            guidance(runtime.runtime_resources().project_context_files()).to_owned(),
             "issue459 adopted instructions"
         );
 
@@ -839,21 +828,10 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
             .manager
             .probe(&fixture.sessions[0].active_conversation_id);
         issue459_pin_fast(&fixture).await;
-        let root_instructions = || {
-            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(&runtime)
-                .unwrap()
-                .root_agent
-                .instructions
-        };
+        let root_instructions =
+            || guidance(runtime.runtime_resources().project_context_files()).to_owned();
 
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("issue459 first instructions".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "issue459 first instructions".into()).await;
         applied(&fixture, 0).await;
         let revision = runtime.runtime_resources().revision();
         issue459_edit(&fixture, |document| {
@@ -894,7 +872,7 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
         probe.before_catalog_publication.arm();
         issue459_edit(&fixture, |document| {
             profile(document, "overtaken");
-            issue459_set_instructions(document, "issue459 overtaken instructions");
+            set_file_guidance(&fixture, "issue459 overtaken instructions");
         })
         .await;
         probe.before_catalog_publication.entered().await;
@@ -906,7 +884,7 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
                 .remove("overtaken")
                 .unwrap();
             profile(document, "newest");
-            issue459_set_instructions(document, "issue459 newest instructions");
+            set_file_guidance(&fixture, "issue459 newest instructions");
         })
         .await;
         probe.before_catalog_publication.release();
@@ -1005,7 +983,7 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
                 .unwrap()
                 .remove("fast")
                 .unwrap();
-            issue459_set_instructions(document, "issue459 summary instructions 1");
+            set_file_guidance(&fixture, "issue459 summary instructions 1");
         })
         .await;
         let application = applied(&fixture, 0).await;
@@ -1041,7 +1019,7 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
         // The Summary's Model goes; the primary stays valid.
         issue459_edit(&fixture, |document| {
             document["models"].as_table_mut().unwrap().remove("local/b");
-            issue459_set_instructions(document, "issue459 summary instructions 2");
+            set_file_guidance(&fixture, "issue459 summary instructions 2");
         })
         .await;
         // The idle Session commits the prepared instructions by itself.
@@ -1070,12 +1048,7 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
         applied(&fixture, 0).await;
         assert_eq!(runtime.model_view(), view);
         assert_eq!(
-            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
-                &runtime
-            )
-            .unwrap()
-            .root_agent
-            .instructions,
+            guidance(runtime.runtime_resources().project_context_files()).to_owned(),
             "issue459 summary instructions 2"
         );
         assert!(fixture.provider.request_bodies().is_empty());

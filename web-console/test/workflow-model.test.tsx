@@ -2,7 +2,7 @@ import { changeJson, readJson } from './json-editor-helpers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { createActor } from 'xstate';
-import type { WorkflowCandidateAnalysis, WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowFileDocument, WorkflowToolChoice } from '../../protocol/app-server/v73';
+import type { WorkflowCandidateAnalysis, WorkflowAnalysisQuery, WorkflowAnalysisReport, WorkflowFileDocument, WorkflowToolChoice } from '../../protocol/app-server/v78';
 import type { WorkflowEdit, WorkflowSource } from '../../protocol/app-server/workflow-documents.ts';
 import type { WorkflowCommit } from '../src/workspaces/host';
 import type { WorkflowScopePort } from '../src/app/workflows/port';

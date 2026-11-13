@@ -1,3 +1,4 @@
+import {threadFor} from '../../../protocol/app-server/testing.ts';
 import { fixtures as uploadFixtures } from "../../../protocol/app-server/fixtures.ts";
 const uploadPolicy = uploadFixtures.find(row => "result" in row && row.result?.type === "initialized")!;
 const nativeUploadPolicy = "result" in uploadPolicy && uploadPolicy.result?.type === "initialized" ? uploadPolicy.result.capabilities.upload_policy : (() => { throw new Error("missing policy") })();
@@ -26,12 +27,12 @@ import type {
   RuntimeClientSnapshot,
   SessionSettings,
 } from "../../src/protocol/app-server.ts";
-import { FakeTransport } from "./app-server-peer.ts";
-import { checkpoint, runtimeCursor, snapshot as defaultSnapshot } from "./fixtures.ts";
+import { FakeTransport, resolveThreadMetadata } from "./app-server-peer.ts";
+import { checkpoint, runtimeCursor, snapshot as defaultSnapshot, sessionView } from "./fixtures.ts";
 
 export const SERVER_CAPABILITIES = {
   upload_policy: nativeUploadPolicy, multi_session: true,
-  single_writable_controller: true,
+  shared_writable_clients: true,
   headless_interactions: true, delivery_access: false,
   experimental_methods: [],
 };
@@ -88,9 +89,10 @@ export async function harness(
     attachment_id: "att-1",
   };
   const attaching = host.attach(sessionId, nodeId);
-  const attach = (await transport.log.awaitMethod("session/attach")).at(-1)!;
+  await resolveThreadMetadata(transport, sessionView({id:sessionId,active_conversation_id:initial.conversation_id,...(nodeId ? {active_node:nodeId}: {})}));
+  const attach = (await transport.log.awaitMethod("thread/resume")).at(-1)!;
   // Identity admission precedes the independently bounded cut and registration.
-  transport.respond(attach.id, {type:'attached', target, configuration_revision:'0', attachment_kind:'controller', observation_source:'live'});
+  transport.respond(attach.id, {type:'attached', target, configuration_revision:'0', attachment_kind:'writable', observation_source:'live'});
   const read=(await transport.log.awaitMethod('session/checkpoint')).at(-1)!;
   transport.respond(read.id,{type:'checkpoint',checkpoint:checkpoint(initial,runtimeCursor(0))});
   const subscribe=(await transport.log.awaitMethod('session/subscribe')).at(-1)!;
@@ -98,6 +100,8 @@ export async function harness(
   const configuration=(await transport.log.awaitMethod('session/configuration')).at(-1)!;
   transport.respond(configuration.id,{type:'session_configuration',projection:(null)});
   const session = await attaching;
+  const statusRead = (await transport.log.awaitMethod('thread/read')).at(-1)!;
+  transport.respond(statusRead.id, {type:'thread',thread:{...threadFor(sessionView({id:sessionId,active_conversation_id:initial.conversation_id})),status:{type:'idle'},statusRevision:'1',runtimeIncarnation:'1'}});
 
   const stopRouting = client.onNotification((message) =>
     session.applyNotification(message),
@@ -113,7 +117,7 @@ export async function harness(
 
 /** The next request for one method, awaited by count rather than by time. */
 export async function nextRequest(
-  harnessed: Pick<Harness, "transport">,
+  harnessed: Pick<Harness, "transport"> & Partial<Pick<Harness,"target">>,
   method: string,
   seen = 0,
 ) {
@@ -121,6 +125,13 @@ export async function nextRequest(
     const pending = harnessed.transport.log.matching(method).slice(seen)
       .find(request => !harnessed.transport.answered.has(request.id));
     if (pending) return pending;
-    await harnessed.transport.log.awaitMethod(method, harnessed.transport.transportCount(method) + 1);
+    if(method==='thread/resume') {
+      const read=harnessed.transport.log.matching('session/read').find(row=>!harnessed.transport.answered.has(row.id));
+      if(read&&read.method==='session/read') {
+        harnessed.transport.respond(read.id,{type:'session',session:sessionView({id:read.params.session_id,active_conversation_id:harnessed.target?.conversation_id ?? sessionView().active_conversation_id})});
+        continue;
+      }
+      await Promise.race([harnessed.transport.log.awaitMethod(method,harnessed.transport.transportCount(method)+1),harnessed.transport.log.awaitMethod('session/read',harnessed.transport.transportCount('session/read')+1)]);
+    } else await harnessed.transport.log.awaitMethod(method, harnessed.transport.transportCount(method) + 1);
   }
 }

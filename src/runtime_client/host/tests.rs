@@ -2072,12 +2072,8 @@ async fn attachment_lifecycle_and_request_id_scope() {
     let second = fixture
         .host
         .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION);
-    assert!(matches!(
-        second,
-        Err(RuntimeClientError::AttachmentInUse {
-            existing_attachment_id,
-        }) if existing_attachment_id == first_id
-    ));
+    let (second, _) = second.expect("shared attachment");
+    assert_ne!(second.attachment_id(), &first_id);
 
     // The rejection never evicts the first attachment: its requests
     // still work.
@@ -4046,12 +4042,12 @@ async fn canonical_history_has_one_owner_at_a_time() {
     );
 }
 
-/// Blocks off the runtime until the worker-exit signal arrives.
+/// Blocks off the runtime until a native worker's exit signal arrives.
 async fn await_worker_exit(receiver: std::sync::mpsc::Receiver<()>) {
     tokio::task::spawn_blocking(move || {
         receiver
             .recv_timeout(std::time::Duration::from_secs(30))
-            .expect("the observation worker must terminate after the host is released");
+            .expect("the worker must terminate after the host is released");
     })
     .await
     .expect("worker exit task");
@@ -4102,7 +4098,15 @@ fn host_projection_snapshot(
 /// still succeed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_surviving_subsystem_handle_never_retains_the_host() {
-    let (_adapter, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+    let admission_gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+    let (_adapter, fixture) = host_fixture_with_runtime_probe(
+        Vec::new(),
+        CoordinatorProbe {
+            admission_gate: Some(admission_gate.clone()),
+            ..CoordinatorProbe::default()
+        },
+    )
+    .await;
     let HostFixture {
         directory: dir,
         host,
@@ -4119,11 +4123,31 @@ async fn a_surviving_subsystem_handle_never_retains_the_host() {
     let weak_runtime = host.weak_runtime_inner();
     let (exit_tx, exit_rx) = std::sync::mpsc::channel();
     host.install_worker_exit_probe(exit_tx);
+    let (admission_exit_tx, admission_exit_rx) = std::sync::mpsc::channel();
+    runtime.install_worker_exit_probe(admission_exit_tx);
 
+    // Force the independent admission worker to retain its ordinary temporary
+    // upgrade, without enqueuing a business message or retaining the host.
+    let _release_admission = admission_gate.arm_scoped();
+    mailbox.wake().notify_one();
+    tokio::task::spawn_blocking({
+        let gate = admission_gate.clone();
+        move || gate.wait_entered()
+    })
+    .await
+    .expect("admission entered");
     drop(host);
     drop(runtime);
     await_worker_exit(exit_rx).await;
     assert!(weak.upgrade().is_none(), "the host is gone");
+    assert!(
+        weak_runtime.upgrade().is_some(),
+        "the parked admission pass still owns its temporary runtime upgrade"
+    );
+    // Admission may still hold its temporary runtime upgrade after projection
+    // exits; both independent owners must release before testing weak lifetime.
+    admission_gate.release();
+    await_worker_exit(admission_exit_rx).await;
     assert!(
         weak_runtime.upgrade().is_none(),
         "the conversation runtime is gone"

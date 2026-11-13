@@ -2,7 +2,7 @@ import { checkpointSnapshot, foldRuntimeEvent, statusIdentity } from '../../prot
 import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v73';
+import type { AgentStatusView, MessageBlock, RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTranscriptEntry, UserMessageBlock } from '../../protocol/app-server/v78';
 import { App } from '../src/app/App';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { agentStatusFacets, agentStatusAnchor, agentStatusPlacement, isRuntimeStatusContext, statusesAt } from '../src/bindings/agent-status';
@@ -191,7 +191,7 @@ describe('cold attach, live folding and resync converge on one placement', () =>
   const mount = async (initial: RuntimeClientSnapshot, holdHistory = false) => {
     server = new Server(); if (holdHistory) server.held.add('session/transcript'); server.snapshots.set('A', initial);
     await server.attached('A');
-    localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'] }));
+    localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
     await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
   };
   const transcript = () => document.querySelector('[aria-label="Canonical conversation"]') as HTMLElement;

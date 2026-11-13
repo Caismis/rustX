@@ -1,8 +1,8 @@
 import { domainReceipt } from './fixture';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, expect, it } from 'vitest';
-import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v73';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import type { CatalogModelView, ForegroundToolExecution, RuntimeClientSnapshot } from '../../protocol/app-server/v78';
 import { AgentComposer } from '../src/app/agent/AgentComposer';
 import { ComposerDraft } from '../src/app/composer/draft';
 import { localeController } from '../src/locale/controller';
@@ -11,12 +11,14 @@ import { ModelSelect } from '../src/presentation/agent/ModelSelect';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { Interactions } from '../src/app/agent/Interactions';
 import { Tool } from '../src/app/agent/Tool';
+import { ToolInspectionContext } from '../src/app/agent/tool-inspection';
+import { FileLinks } from '../src/presentation/markdown/FileLinks';
 import { RpcFailure } from '../src/client/errors';
 import { toolCard } from '../src/bindings/tools';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
 import { Server, snapshot, interaction } from './fixture';
 let server: Server;
-beforeEach(() => { server = new Server(); server.handlers.set('turn/cancel', request => ({type:'cancellation_accepted',attempt_id:request.method==='turn/cancel' ? server.snapshots.get(request.params.target.session_id)?.attempt?.attempt_id ?? 'attempt-A' : 'attempt-A'})); });
+beforeEach(() => { server = new Server(); server.handlers.set('turn/interrupt', request => ({type:'cancellation_accepted',attempt_id:request.method==='turn/interrupt' ? server.snapshots.get(request.params.target.session_id)?.attempt?.attempt_id ?? 'attempt-A' : 'attempt-A'})); });
 afterEach(() => { cleanup(); server.client.disconnect(); act(() => localeController.setLocale('en')); });
 const count = (method: string) => server.requests.filter(row => row.request.method === method).length;
 it('keeps initial model loading inside the popup and cached refresh out of the trigger layout', () => {
@@ -115,7 +117,7 @@ it('model/profile menu advertises only exact native values and acknowledgement a
  expect(count('session/setModel')).toBe(1);
  expect(server.client.getSnapshot().views.A.modelMutation?.status).toBe('acknowledged');
  await expect(server.client.send('A', 'dependent turn')).rejects.toThrow('Reread native model state');
- expect(count('turn/start')).toBe(0);
+ expect(count('inbound/queue')).toBe(0);
  const read = await server.waitFor('session/checkpoint', 2);
  await act(async () => server.reply(read));
  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('brief');
@@ -153,7 +155,7 @@ it('a rejected model selection announces outside the composer and retains the na
  expect(screen.getByRole('menu')).toBeTruthy();
  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('exact/model');
  await expect(server.client.send('A', 'dependent turn')).rejects.toThrow('Reread native model state');
- expect(count('turn/start')).toBe(0);
+ expect(count('inbound/queue')).toBe(0);
  await openModels();
  expect(server.client.getSnapshot().views.A.modelMutation).toBeUndefined();
  expect(count('session/setModel')).toBe(1);
@@ -190,33 +192,32 @@ it('Session controls never expose source-authoring permission controls', async (
  expect(count('configuration/sourcesRead')).toBe(0); expect(count('configuration/sourceWrite')).toBe(0);
 });
 it('one Stop gesture issues one request, and only native snapshot settlement releases the cancellation guard', async () => {
- server.snapshots.set('A', running()); await server.attached('A'); server.held.add('turn/cancel');
+ server.snapshots.set('A', running()); await server.attached('A'); server.held.add('turn/interrupt');
  const expected = server.client.cancellationTarget('A')!;
  const stopped = server.client.cancelTurn(expected); await server.client.cancelTurn(expected);
- const request = await server.waitFor('turn/cancel', 1);
- expect(count('turn/cancel')).toBe(1);
+ const request = await server.waitFor('turn/interrupt', 1);
+ expect(count('turn/interrupt')).toBe(1);
  server.reply(request); await stopped;
  expect(server.client.getSnapshot().views.A.snapshot?.attempt?.phase.type).toBe('running');
  expect(server.client.getSnapshot().views.A.cancellation?.status).toBe('acknowledged');
- await server.client.cancelTurn(expected); expect(count('turn/cancel')).toBe(1);
+ await server.client.cancelTurn(expected); expect(count('turn/interrupt')).toBe(1);
  const settled = running(); settled.attempt!.phase = { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } };
  await server.update('A', settled);
  expect(server.client.getSnapshot().views.A.cancellation).toBeUndefined();
  expect(server.client.getSnapshot().views.A.snapshot?.attempt?.phase.type).toBe('settled');
- server.socket.close(); expect(count('turn/cancel')).toBe(1);
+ server.socket.close(); expect(count('turn/interrupt')).toBe(1);
 });
 it('pending approval restores after browser absence; accepted response cannot settle a still-pending snapshot', async () => {
  await server.attached('A'); server.socket.close();
  server.snapshots.get('A')!.pending_interactions = [interaction('approval')]; await server.connect();
  await server.client.waitForAttachment('A', () => true);
  function Pending() { const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot); return <Interactions client={server.client} state={state} view={state.views.A}/>; }
- render(<Pending/>); server.held.add('interaction/respond');
+ render(<Pending/>);
  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Allow once' })); fireEvent.click(screen.getByRole('button', { name: 'Allow once' })); });
- const request = await server.waitFor('interaction/respond', 1);
- server.handlers.set('interaction/respond', () => ({ type: 'interaction_settled', interaction: interaction('approval').interaction }));
- await act(async () => server.reply(request));
- expect(count('interaction/respond')).toBe(1);
- expect((screen.getByRole('button', { name: 'Allow once' }) as HTMLButtonElement).disabled).toBe(true);
+ await server.waitForReply();
+ await act(async () => { await server.client.refresh('A'); });
+ expect(server.replies).toHaveLength(1);
+ expect(screen.queryByRole('button', {name:'Allow once'})).toBeNull();
  await act(async () => server.update('A', snapshot()));
  expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
 });
@@ -254,7 +255,7 @@ it('an acknowledged Stop requires no observation reread', async () => {
  expect(server.client.getSnapshot().views.A.cancellation?.status).toBe('acknowledged');
  expect(server.client.getSnapshot().views.A.snapshot?.attempt?.phase.type).toBe('running');
  server.handlers.delete('session/checkpoint'); await server.client.refresh('A');
- await server.client.cancelTurn(expected); expect(count('turn/cancel')).toBe(1);
+ await server.client.cancelTurn(expected); expect(count('turn/interrupt')).toBe(1);
 });
 
 it('live foreground overlays only its exact canonical occurrence when historical Attempts reuse a provider call ID', () => {
@@ -323,16 +324,60 @@ it('Bash description is safe collapsed text while expanded detail retains comman
  expect(view.state).toBe('running');
  expect(view.input).toBe('printf authoritative');
 });
-it('image reads have a dedicated renderer and retain managed image references after replay', () => {
- const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'image-call', tool_id: 'tool-read-image', name: 'read_image', state: { type: 'settled', arguments: JSON.stringify({ path: 'sample.png' }), result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'image', artifact_id: 'artifact_1' }] } } };
- expect(toolCard(tool).variant).toBe('image');
- expect(toolCard(JSON.parse(JSON.stringify(tool)))).toEqual(toolCard(tool));
+it.each(['running', 'success', 'failure', 'cancelled'] as const)('Bash keeps its execution reason as the row summary when %s', lifecycle => {
+ const args = JSON.stringify({ command: "python3 - <<'PY'\nimport openpyxl\nPY", description: '检查 Excel 依赖是否可用\nAdditional detail' });
+ const tool: ForegroundToolExecution = { committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'reason' }, block_index: 0 }, assembly_complete: true,
+  message_id: 'reason', block_index: 0, call_id: 'reason-call', tool_id: 'tool-bash', name: 'bash', state: lifecycle === 'running' ? { type: 'running', arguments: args }
+   : { type: 'settled', arguments: args, result: { status: lifecycle === 'success' ? { type: 'success' } : lifecycle === 'cancelled' ? { type: 'cancelled', reason: 'user_requested', phase: 'during_execution' } : { type: 'failed', error: 'Native command failed' }, duration_ms: '1' } } };
  const ui = render(<Tool tool={tool}/>);
+ const row = ui.getByRole('button', { expanded: false });
+ expect(row.textContent).toContain('检查 Excel 依赖是否可用');
+ expect(row.textContent).not.toContain('python3'); expect(row.textContent).not.toContain('Native command failed');
+ expect(row.textContent).not.toContain('Additional detail');
+ fireEvent.click(row);
+ expect(ui.getByRole('button', { expanded: true }).textContent).toContain('检查 Excel 依赖是否可用');
+ expect(ui.container.textContent).toContain('import openpyxl');
+ if (lifecycle === 'failure') expect(ui.container.textContent).toContain('Native command failed');
+});
+it('Bash without a description keeps the row quiet and exposes the command only in its details', () => {
+ const tool: ForegroundToolExecution = { committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'missing-description' }, block_index: 0 }, assembly_complete: true,
+  message_id: 'missing-description', block_index: 0, call_id: 'missing-description', tool_id: 'tool-bash', name: 'bash', state: { type: 'settled', arguments: JSON.stringify({ command: 'python3 generate_report.py' }), result: { status: { type: 'failed', error: 'Native error' }, duration_ms: '1' } } };
+ const ui = render(<Tool tool={tool}/>), row = ui.getByRole('button', { expanded: false });
+ expect(toolCard(tool).summary).toBe(''); expect(row.textContent).toBe('bash');
+ fireEvent.click(row);
+ expect(ui.container.textContent).toContain('python3 generate_report.py');
+ expect(ui.container.textContent).toContain('Native error');
+});
+it('replayed image reads use the saved image and keep extra result text', () => {
+ const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'image-call', tool_id: 'tool-read-image', name: 'read_image', state: { type: 'settled', arguments: JSON.stringify({ path: '/workspace/sample.png' }), result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'Read static PNG image' }, { type: 'image', artifact_id: 'artifact_1' }, { type: 'text', text: 'Extra result text' }] } } };
+ const openFile = vi.fn();
+ const ui = render(<FileLinks value={openFile}><Tool tool={JSON.parse(JSON.stringify(tool))}/></FileLinks>);
  expect(ui.container.querySelector('[data-tool-renderer="image"]')).toBeTruthy();
- fireEvent.click(screen.getByText('read_image'));
- expect(ui.container.textContent).toContain('artifact_1');
+ const path = ui.getByRole('button', { name: /^sample\.png$/ });
+ expect(path.closest('[role="button"]')).toBeNull();
+ fireEvent.click(path);
+ expect(openFile).toHaveBeenCalledWith({ path: '/workspace/sample.png' });
+ expect(ui.queryByText('/workspace/sample.png')).toBeNull();
+ fireEvent.click(screen.getByRole('button', { name: 'Read image', expanded: false }));
+ expect(ui.getByText('/workspace/sample.png')).toBeTruthy();
+ expect(ui.getByText('Extra result text')).toBeTruthy();
+ expect(ui.container.textContent).not.toMatch(/artifact_1|Read static PNG image/);
 });
 
+
+it('keeps the trace inspector reachable for an image read with a deferred result', async () => {
+  const occurrence = { locator: { type: 'by_message_id' as const, message_id: 'assistant' }, block_index: 0 };
+  const tool: ForegroundToolExecution = {
+    occurrence, block_index: 0, call_id: 'image', tool_id: 'tool-read-image', name: 'read_image',
+    assembly_complete: true, committed_result_deferred: true,
+    state: { type: 'running', arguments: '{"path":"/workspace/sample.png"}' },
+  };
+  const inspect = vi.fn(async () => {});
+  render(<ToolInspectionContext value={inspect}><Tool tool={tool}/></ToolInspectionContext>);
+  fireEvent.click(screen.getByRole('button', { name: /Read image.*sample\.png/, expanded: false }));
+  fireEvent.click(screen.getByRole('button', { name: 'Inspect' }));
+  await waitFor(() => expect(inspect).toHaveBeenCalledWith({ occurrence, call_id: 'image', tool_id: 'tool-read-image' }));
+});
 
 it('preloads the model catalog and reopens the menu without another read or loading state', async () => {
   modelFixture(); server.held.add('session/models'); await server.attached('A'); render(<Control/>);
@@ -395,7 +440,7 @@ it('slash keyboard profile selection on the current model waits for acknowledgem
  await act(async () => server.reply(reread));
  expect(server.client.getSnapshot().views.A.snapshot?.model?.effective?.profile).toBe('brief');
  expect(input.value).toBe(''); expect(document.activeElement).toBe(input);
- await server.client.send('A', 'after confirmation'); expect(count('turn/start')).toBe(1); expect(count('session/setModel')).toBe(1);
+ await server.client.send('A', 'after confirmation'); expect(count('inbound/queue')).toBe(1); expect(count('session/setModel')).toBe(1);
 });
 
 it.each(['original', 'edited', 'replacement'] as const)('acknowledged slash gesture survives its native binding update but preserves %s editor ownership', async editor => {
@@ -426,7 +471,7 @@ it.each(['original', 'edited', 'replacement'] as const)('acknowledged slash gest
  expect(server.client.getSnapshot().views.A.snapshot?.model_status?.binding_revision).toBe('2');
  expect(server.client.getSnapshot().views.A.snapshot?.model?.configured.model).toBe('other');
  expect(input.value).toBe(editor === 'original' ? '' : 'Newer authored text');
- expect(count('session/setModel')).toBe(1); expect(count('turn/start')).toBe(0);
+ expect(count('session/setModel')).toBe(1); expect(count('inbound/queue')).toBe(0);
 });
 
 it('a successful model receipt cannot consume its retained editor after another Session owns the view', async () => {
@@ -445,7 +490,7 @@ it('a successful model receipt cannot consume its retained editor after another 
  await act(async () => server.reply(read));
  expect(original.snapshot()?.text).toBe('/model'); expect(replacement.snapshot()?.text).toBe('Session B draft');
  expect(server.client.getSnapshot().views.A.snapshot?.model?.configured.model).toBe('other');
- expect(count('session/setModel')).toBe(1); expect(count('turn/start')).toBe(0);
+ expect(count('session/setModel')).toBe(1); expect(count('inbound/queue')).toBe(0);
 });
 for (const choice of ['exact/model / brief', 'exact/model']) it.each(['refused', 'unknown'] as const)(`slash selection ${choice} %s preserves the invocation and never replays`, async outcome => {
  const input = await slashFixture(); server.held.add('session/setModel');
@@ -490,7 +535,7 @@ it('a late acknowledgement for the current-model gesture cannot report success a
 
 /** One Model, `example/chat`, whose Profiles resolve like native: a pinned
  * Profile is itself, an absent one follows the catalog's current default. */
-function profileFixture(configured: import('../../protocol/app-server/v73').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
+function profileFixture(configured: import('../../protocol/app-server/v78').SessionModelConfig, models = ['example/chat'], profiles = ['balanced', 'fast']) {
   const state = { profiles, defaultProfile: profiles.length ? 'balanced' : undefined as string | undefined, revision: 1 };
   const base = cfg3Effective().effective_model;
   const resolve = (config: typeof configured) => ({ ...base, configured: config, effective: { ...base.effective!, model: config.model, profile: config.profile ?? state.defaultProfile ?? null } });
@@ -562,7 +607,7 @@ it.each(['menu', 'slash'] as const)('%s reselects the current model with its com
   const before = server.client.getSnapshot().views.A.snapshot;
   await chooseCurrent();
   const mutation = await server.waitFor('session/setModel', 1);
-  expect(mutation.params).toEqual({ target: server.target('A'), config: configured });
+  expect(mutation.params).toEqual({ target: server.target('A'), config: configured, recover_unavailable_auxiliary: true });
   expect(server.client.getSnapshot().views.A.snapshot).toBe(before);
   if (surface === 'slash') expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLInputElement).value).toBe('/model');
   ui.rerender(surface === 'menu' ? <Control/> : <SlashControl/>);
@@ -597,9 +642,9 @@ it('a Draft equivalent choice stays local, while a deliberate current-model choi
   expect(chosen).toEqual([]); expect(count('session/setModel')).toBe(0);
   ui.unmount();
 
-  await server.connect(); server.held.add('session/attach'); server.held.add('session/setModel');
+  await server.connect(); server.held.add('thread/resume'); server.held.add('session/setModel');
   const attaching = server.client.attach('A');
-  const opening = await server.waitFor('session/attach', 1);
+  const opening = await server.waitFor('thread/resume', 1);
   function ConnectingControl() {
     const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
     return <AgentControls client={server.client} view={state.views.A} coldSource={source}/>;
@@ -611,7 +656,7 @@ it('a Draft equivalent choice stays local, while a deliberate current-model choi
   expect(server.client.getSnapshot().views.A.modelIntent?.config).toEqual(configured);
   await act(async () => { server.reply(opening); await attaching; });
   const mutation = await server.waitFor('session/setModel', 1);
-  expect(mutation.params).toEqual({ target: server.target('A'), config: configured });
+  expect(mutation.params).toEqual({ target: server.target('A'), config: configured, recover_unavailable_auxiliary: true });
   await act(async () => server.reply(mutation));
   expect(count('session/setModel')).toBe(1);
 });
@@ -809,9 +854,9 @@ it('a catalog revision that drops a pinned Profile offers recovery while mounted
 });
 
 it('the menu retry forces a catalog reread with cached choices and a retained rejected cold selection', async () => {
- modelFixture(); await server.connect(); server.held.add('session/attach');
+ modelFixture(); await server.connect(); server.held.add('thread/resume');
  const attaching = server.client.attach('A');
- const opening = await server.waitFor('session/attach', 1);
+ const opening = await server.waitFor('thread/resume', 1);
  server.handlers.set('session/setModel', () => { throw new RpcFailure({ code: -32000, message: 'Model removed' }); });
  const chosen = server.client.prepareAgentModel('A', { model: 'removed' });
  const rejected = expect(chosen).rejects.toThrow('Model removed');
@@ -927,4 +972,37 @@ it.each(['reply', 'expired'] as const)('revalidates a deferred selection when th
  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('other');
  expect(count('session/setModel')).toBe(1);
+});
+
+it('rereads the Session model and closes the old picker when attachments have the same local sequence', async () => {
+ modelFixture();
+ const models = new Map(['A', 'B'].map(id => {
+   const model = structuredClone(server.snapshots.get('A')!.model!);
+   model.configured.model = model.effective!.model = id === 'A' ? 'exact/model' : 'other';
+   return [id, model];
+ }));
+ for (const id of ['A', 'B']) server.snapshots.set(id, { ...snapshot(id), model_status: { available: true, body_deferred: true, binding_revision: '1' } });
+ await server.attached('A', 'B');
+ // Native Attachment IDs are local to each Session's runtime host.
+ const state = server.client.getSnapshot();
+ const views = Object.fromEntries(Object.entries(state.views).map(([id, view]) => [id, { ...view, target: { ...view.target!, attachment_id: 'attachment-1' } }]));
+ vi.spyOn(server.client, 'getSnapshot').mockReturnValue({ ...state, views });
+ vi.spyOn(server.client, 'isAttachmentControlCurrent').mockReturnValue(true);
+ const catalog = vi.spyOn(server.client.reads, 'modelCatalogRead').mockResolvedValue({catalog:{models:[]},page:domainReceipt('model_catalog.models',[]).page});
+ const modelRead = vi.spyOn(server.client.reads, 'modelRead').mockImplementation(async target => models.get(target.session_id)!);
+ function Selected({id}: {id:string}) { return <AgentControls client={server.client} view={server.client.getSnapshot().views[id]}/>; }
+ const ui = render(<Selected id="A"/>);
+ const trigger = () => screen.getByRole('button', {name:'Model and thinking effort'});
+ await waitFor(() => expect(trigger().textContent).toContain('exact/model'));
+ fireEvent.click(trigger());
+ expect(trigger().getAttribute('aria-expanded')).toBe('true');
+ ui.rerender(<Selected id="B"/>);
+ await waitFor(() => expect(trigger().textContent).toContain('other'));
+ expect(trigger().getAttribute('aria-expanded')).toBe('false');
+ expect(screen.queryByRole('menu')).toBeNull();
+ ui.rerender(<Selected id="A"/>);
+ await waitFor(() => expect(trigger().textContent).toContain('exact/model'));
+ expect(catalog).toHaveBeenCalledTimes(3);
+ expect(modelRead.mock.calls.map(([target]) => target.session_id)).toEqual(['A','B','A']);
+ expect(count('session/setModel')).toBe(0);
 });

@@ -290,7 +290,10 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
                 "deep".into(),
                 toml::Value::try_from(json!({"request_params": "{\"temperature\":0.1}"})).unwrap(),
             );
-        document["agent"]["model"]["model"] = "local/missing".into();
+        document["agent"]["model"]
+            .as_table_mut()
+            .unwrap()
+            .insert("profile".into(), "missing-profile".into());
         std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
         let workspace = SourceTarget::Workspace {
             directory: fixture.workspaces[0].clone(),
@@ -713,8 +716,8 @@ async fn issue459_selection_racing_catalog_publication_linearizes_on_one_authori
 /// choice. A removed primary Profile is replaced while the valid explicit
 /// Summary is kept; a removed Summary Model makes the selection unavailable
 /// on its own; switching only the primary while keeping that invalid Summary
-/// is refused explicitly; a complete valid configuration succeeds. Nothing
-/// resets the Summary automatically.
+/// is refused explicitly. An opted-in primary picker may recover only the
+/// unchanged removed reference. A complete valid configuration also succeeds.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
     use crate::model::catalog::ModelRef;
@@ -817,6 +820,34 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
         };
         assert!(diagnostic.contains("local/b"), "{diagnostic}");
         assert_eq!(runtime.model_view(), view);
+        // Opting in never masks a newly requested invalid policy.
+        let mut changed = with_summary(None, summary_on("local/b"));
+        let SummaryModelPolicy::Explicit { request_params, .. } = &mut changed.summary_model else {
+            unreachable!()
+        };
+        request_params.insert("temperature".into(), json!(0.2));
+        assert!(matches!(
+            fixture
+                .manager
+                .set_model_with_recovery(&id, changed, true)
+                .await,
+            Err(ModelSelectionError::Model(
+                crate::runtime::conversation_runtime::ModelUpdateError::InvalidConfiguration(..)
+            ))
+        ));
+        assert_eq!(runtime.model_view(), view);
+        let recovered = fixture
+            .manager
+            .set_model_with_recovery(&id, with_summary(None, summary_on("local/b")), true)
+            .await
+            .unwrap()
+            .0;
+        assert!(recovered.unavailable.is_none());
+        assert_eq!(
+            recovered.configured.summary_model,
+            SummaryModelPolicy::Session
+        );
+        settled(&fixture, 0).await;
         // A complete valid configuration corrects both.
         let view = fixture
             .manager
@@ -992,14 +1023,7 @@ async fn issue459_catalog_publication_metadata_names_what_was_published() {
         assert!(Arc::ptr_eq(&after, &runtime.runtime_resources()));
 
         // Committing a real context change moves the baseline forward.
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("issue459 adopted".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "issue459 adopted".into()).await;
         let committed = applied(&fixture, 0).await;
         let adopted = runtime.runtime_resources().configuration().unwrap().clone();
         let binding = retained();

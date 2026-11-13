@@ -1,0 +1,236 @@
+{
+  "scope": "Supplementary installed-browser functional verification; not pinned CI or screenshot acceptance.",
+  "environment": {
+    "purpose": "Supplementary functional verification; not pinned browser acceptance",
+    "browser": "Google Chrome 157.0.8103.38",
+    "executable": "/usr/bin/google-chrome",
+    "headless": true,
+    "extraArgs": [
+      "--no-sandbox",
+      "--use-angle=swiftshader",
+      "--enable-unsafe-swiftshader"
+    ],
+    "playwright": "1.63.0",
+    "previewPorts": [
+      18373,
+      18374
+    ],
+    "testTimeoutMs": 120000,
+    "retries": 0,
+    "screenshotBaselineAssertions": false,
+    "screenshotsUpdated": false,
+    "note": "Original failures and interrupted stale-selector batch are retained separately; follow-up reports cover authorized test-only fixes."
+  },
+  "aggregation": "Distinct source file and full test title; only the latest executed passing outcome is included. Historical failures, interrupted tests and unrun tests are excluded.",
+  "sourceBuild": "Production Web build and separate production fixture build; no runtime or test timeouts, retries, screenshot baselines or admission limits changed by this verification harness.",
+  "distinctPassed": 29,
+  "groups": [
+    {
+      "id": "geometry",
+      "name": "Geometry viewer and resource ownership",
+      "distinctPassed": 16,
+      "reports": [
+        "geometry-report.json",
+        "follow-up-report.json",
+        "final-report.json"
+      ],
+      "cases": [
+        {
+          "source": "web-console/test/e2e/geometry-review.spec.ts",
+          "title": "degenerate selected GLB scene fails before renderer admission and retains original Download",
+          "evidenceReport": "geometry-report.json",
+          "durationMs": 2665
+        },
+        {
+          "source": "web-console/test/e2e/geometry-review.spec.ts",
+          "title": "empty selected GLB scene fails before renderer admission and retains original Download",
+          "evidenceReport": "geometry-report.json",
+          "durationMs": 3753
+        },
+        {
+          "source": "web-console/test/e2e/geometry-review.spec.ts",
+          "title": "parts from numeric-sibling unnamed branches remain independent siblings",
+          "evidenceReport": "geometry-report.json",
+          "durationMs": 3803
+        },
+        {
+          "source": "web-console/test/e2e/geometry-review.spec.ts",
+          "title": "parts from unequal-depth unnamed branches remain independent siblings",
+          "evidenceReport": "geometry-report.json",
+          "durationMs": 4507
+        },
+        {
+          "source": "web-console/test/e2e/geometry.spec.ts",
+          "title": "Bottom horizontal orbit uses the selected up axis before and after restoration",
+          "evidenceReport": "geometry-report.json",
+          "durationMs": 2213
+        },
+        {
+          "source": "web-console/test/e2e/geometry.spec.ts",
+          "title": "GLB external resources and lost WebGL contexts fail without requests or retained graphics",
+          "evidenceReport": "geometry-report.json",
+          "durationMs": 1285
+        },
+        {
+          "source": "web-console/test/e2e/geometry.spec.ts",
+          "title": "Top horizontal orbit uses the selected up axis before and after restoration",
+          "evidenceReport": "geometry-report.json",
+          "durationMs": 2287
+        },
+        {
+          "source": "web-console/test/e2e/geometry.spec.ts",
+          "title": "a burst of camera changes is coalesced and immediate hide saves its final pose",
+          "evidenceReport": "geometry-report.json",
+          "durationMs": 1440
+        },
+        {
+          "source": "web-console/test/e2e/geometry.spec.ts",
+          "title": "a decoded texture arriving after close is released without mounting a stale scene",
+          "evidenceReport": "geometry-report.json",
+          "durationMs": 1382
+        },
+        {
+          "source": "web-console/test/e2e/geometry.spec.ts",
+          "title": "actual Worker retains near-limit dense closed STL under its original deadline",
+          "evidenceReport": "follow-up-report.json",
+          "durationMs": 2621
+        },
+        {
+          "source": "web-console/test/e2e/geometry.spec.ts",
+          "title": "actual Worker retains plane with disconnected tiny zero-normal solid under its original deadline",
+          "evidenceReport": "follow-up-report.json",
+          "durationMs": 1510
+        },
+        {
+          "source": "web-console/test/e2e/geometry.spec.ts",
+          "title": "all geometry formats render through actual delivery and Workspace entry points",
+          "evidenceReport": "geometry-report.json",
+          "durationMs": 24298
+        },
+        {
+          "source": "web-console/test/e2e/geometry.spec.ts",
+          "title": "failed embedded-image decodes release generated URLs and physical import slots",
+          "evidenceReport": "geometry-report.json",
+          "durationMs": 982
+        },
+        {
+          "source": "web-console/test/e2e/geometry.spec.ts",
+          "title": "fixed copies survive source changes and hide/show; Refresh and original Download reauthorize",
+          "evidenceReport": "geometry-report.json",
+          "durationMs": 5523
+        },
+        {
+          "source": "web-console/test/e2e/geometry.spec.ts",
+          "title": "production startup defers geometry and the STL envelope remains responsive",
+          "evidenceReport": "final-report.json",
+          "durationMs": 3113
+        },
+        {
+          "source": "web-console/test/e2e/geometry.spec.ts",
+          "title": "selection, visibility, keyboard views, split/fullscreen and narrow localized layouts preserve ownership",
+          "evidenceReport": "geometry-report.json",
+          "durationMs": 7011
+        }
+      ]
+    },
+    {
+      "id": "native_app",
+      "name": "Production App navigation, CAD sidebars and native automation tasks",
+      "distinctPassed": 13,
+      "reports": [
+        "follow-up-report.json",
+        "app-report.json",
+        "final-report.json"
+      ],
+      "cases": [
+        {
+          "source": "web-console/test/e2e/geometry-sidebar.spec.ts",
+          "title": "Workbench CAD uses the shared document body and defaults to revealing the original file",
+          "evidenceReport": "follow-up-report.json",
+          "durationMs": 9042
+        },
+        {
+          "source": "web-console/test/e2e/geometry-sidebar.spec.ts",
+          "title": "delivery CAD occupies the existing document sidebar without clipping on a short window",
+          "evidenceReport": "app-report.json",
+          "durationMs": 13727
+        },
+        {
+          "source": "web-console/test/e2e/navigation-restoration.spec.ts",
+          "title": "a real page reload restores the last selected Session on the same native authority",
+          "evidenceReport": "final-report.json",
+          "durationMs": 6033
+        },
+        {
+          "source": "web-console/test/e2e/scheduler.spec.ts",
+          "title": "native task creation dialog en dark at 1440",
+          "evidenceReport": "follow-up-report.json",
+          "durationMs": 2410
+        },
+        {
+          "source": "web-console/test/e2e/scheduler.spec.ts",
+          "title": "native task creation dialog en dark at 390",
+          "evidenceReport": "follow-up-report.json",
+          "durationMs": 1760
+        },
+        {
+          "source": "web-console/test/e2e/scheduler.spec.ts",
+          "title": "native task creation dialog en light at 1440",
+          "evidenceReport": "follow-up-report.json",
+          "durationMs": 2692
+        },
+        {
+          "source": "web-console/test/e2e/scheduler.spec.ts",
+          "title": "native task creation dialog en light at 390",
+          "evidenceReport": "follow-up-report.json",
+          "durationMs": 1780
+        },
+        {
+          "source": "web-console/test/e2e/scheduler.spec.ts",
+          "title": "native task creation dialog zh dark at 1440",
+          "evidenceReport": "follow-up-report.json",
+          "durationMs": 2827
+        },
+        {
+          "source": "web-console/test/e2e/scheduler.spec.ts",
+          "title": "native task creation dialog zh dark at 390",
+          "evidenceReport": "follow-up-report.json",
+          "durationMs": 1619
+        },
+        {
+          "source": "web-console/test/e2e/scheduler.spec.ts",
+          "title": "native task creation dialog zh light at 1440",
+          "evidenceReport": "follow-up-report.json",
+          "durationMs": 2676
+        },
+        {
+          "source": "web-console/test/e2e/scheduler.spec.ts",
+          "title": "native task creation dialog zh light at 390",
+          "evidenceReport": "follow-up-report.json",
+          "durationMs": 1925
+        },
+        {
+          "source": "web-console/test/e2e/scheduler.spec.ts",
+          "title": "recovering a padded task name without Cancel acknowledges the normalized editor baseline",
+          "evidenceReport": "follow-up-report.json",
+          "durationMs": 1570
+        },
+        {
+          "source": "web-console/test/e2e/scheduler.spec.ts",
+          "title": "structured time controls preserve the selected IANA zone and submit the exact native rule",
+          "evidenceReport": "follow-up-report.json",
+          "durationMs": 1964
+        }
+      ]
+    }
+  ],
+  "cleanup": {
+    "browserServer": "closed",
+    "previewServers": "closed",
+    "verifiedListenersAbsent": [
+      18373,
+      18374,
+      36251
+    ]
+  }
+}

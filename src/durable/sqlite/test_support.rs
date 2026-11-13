@@ -125,6 +125,7 @@ pub(super) fn envelope(
 
 pub(super) fn invocation() -> ModelInvocationConfig {
     ModelInvocationConfig {
+        replay_binding: Some("test-binding".into()),
         model: "model-before-restart".to_owned(),
         protocol: ModelProtocol::OpenAiChatCompletions,
         max_output_tokens: 128,

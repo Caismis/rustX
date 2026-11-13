@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, openSettingsPage } from './shell-actions';
+import { connectRemote, openSettingsPage, settledSave } from './shell-actions';
 import { readSource } from './source-reading';
 
 /** Observe the real socket and hold selected server responses until the test
@@ -65,13 +65,13 @@ test('publications and an acknowledgement during outstanding convergence reads c
   try {
     await routeWorkspaceHost(page, f); await page.goto('/'); await connectRemote(page, f.endpoint, f.token);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-    // Process policy and source revisions are both on Advanced.
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    // Runtime limits live on Advanced; coordination metadata stays internal.
     await openSettingsPage(page, 'Advanced');
-    await expect(settings.getByText(/Revision:/)).toBeVisible();
-    const field = settings.getByLabel('max_connections', { exact: true });
-    const save = settings.getByRole('button', { name: 'Save App Server policy', exact: true });
-    const notice = settings.getByText('App Server policy saved.');
+    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
+    const field = settings.getByLabel('Response start timeout (ms)', { exact: true });
+    const save = settings.getByRole('button', { name: 'Save Model timeout', exact: true });
+    const notice = settledSave(settings, 'Model timeout');
     // Settle a save whose acknowledgement already landed: release held
     // authoritative reads one at a time until the post-commit read is adopted.
     // Each stale or superseded read may owe exactly one more bounded read.
@@ -89,7 +89,7 @@ test('publications and an acknowledgement during outstanding convergence reads c
     await expect(field).toBeEnabled();
     // First save: acknowledgements flow, authoritative reads are held.
     probe.armReads();
-    await field.fill('19');
+    await field.fill('19000');
     await save.click();
     await expect.poll(() => probe.readsIssued()).toBeGreaterThan(1);
     await settle();
@@ -99,12 +99,12 @@ test('publications and an acknowledgement during outstanding convergence reads c
     // the acknowledgement neither cancels the reads nor poses as the
     // observation; every obligation converges through the same read owner.
     const changedBefore = probe.changed();
-    await field.fill('20');
+    await field.fill('20000');
     await save.click();
     await expect.poll(() => probe.changed()).toBeGreaterThan(changedBefore);
     await settle();
     probe.releaseReads();
-    await expect(field).toHaveValue('20');
+    await expect(field).toHaveValue('20000');
     expect(probe.writes()).toBe(2);
     // No spin remains after the obligations settle: nothing else is read.
     const settledReads = probe.readsIssued();
@@ -121,17 +121,17 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
   try {
     await routeWorkspaceHost(page, f); await page.goto('/'); await connectRemote(page, f.endpoint, f.token);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-    // Process policy and source revisions are both on Advanced.
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
+    // Runtime limits live on Advanced; coordination metadata stays internal.
     await openSettingsPage(page, 'Advanced');
-    await expect(settings.getByText(/Revision:/)).toBeVisible();
+    await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
 
     // The write commits natively, but its acknowledgement is held on the wire.
-    await expect(settings.getByLabel('max_connections', { exact: true })).toBeEnabled();
+    await expect(settings.getByLabel('Maximum concurrent subagents', { exact: true })).toBeEnabled();
     probe.armWrites();
     probe.armReads();
-    await settings.getByLabel('max_connections', { exact: true }).fill('19');
-    await settings.getByRole('button', { name: 'Save App Server policy', exact: true }).click();
+    await settings.getByLabel('Maximum concurrent subagents', { exact: true }).fill('19');
+    await settings.getByRole('button', { name: 'Save Subagent limits', exact: true }).click();
     await expect.poll(() => probe.heldWrites.length).toBe(1);
     await expect.poll(() => probe.heldReads.length).toBeGreaterThan(0);
 
@@ -141,22 +141,21 @@ test('a delayed write acknowledgement cannot regress a newer authoritative sourc
     const authored = readFileSync(f.settings, 'utf8');
     expect(authored).toContain('stream_idle_timeout_ms = 600000');
     writeFileSync(f.settings, authored.replace('stream_idle_timeout_ms = 600000', 'stream_idle_timeout_ms = 600001'));
-    const revision = settings.getByText(/Revision:/);
+    const timeout = settings.getByLabel('Response idle timeout (ms)', { exact: true });
     await remote.client.call('configuration/reconcile', { target: { kind: 'user' } }, 'configuration_receipt');
     const latest = await readSource(remote, { kind: 'user' });
     expect(latest.user.authored?.model_timeout_policy?.stream_idle_timeout_ms).toBe('600001');
-    const observed = `${f.settings} · Revision: ${latest.user.revision}`;
     // The held convergence read predates the external edit. Its delivery can
     // change the revision once before the newer publication is observed, so
-    // wait for the exact external revision rather than any revision change.
+    // wait for the exact external value rather than any unrelated update.
     probe.releaseReads();
-    await expect(revision).toHaveText(observed);
+    await expect(timeout).toHaveValue('600001');
 
     // The delayed acknowledgement settles only the save outcome. The visible
     // whole projection stays the authoritative one and nothing is replayed.
     probe.releaseWrites();
-    await expect(settings.getByText('App Server policy saved.')).toBeVisible();
-    await expect(revision).toHaveText(observed);
+    await expect(settledSave(settings, 'Subagent limits')).toBeVisible();
+    await expect(timeout).toHaveValue('600001');
     expect(probe.writes()).toBe(1);
   } finally { await remote.shutdown(); await f.stop(false); }
 });

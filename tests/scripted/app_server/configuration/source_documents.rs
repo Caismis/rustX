@@ -394,7 +394,7 @@ async fn issue456_json_string_sources_round_trip_and_formatting_is_semantically_
         let mut agent_model = crate::model::session::SessionModelConfig::of(ModelRef::parse("local/b").unwrap());
         agent_model.profile = Some(ModelProfileId::new("precise"));
         agent_model.request_params = params(serde_json::json!({"metadata": {"k": null}})).0;
-        let agent = crate::local_runtime::config::AgentProfileDocument {
+        let agent = crate::local_runtime::config::NamedAgentProfileDocument {
             description: "Profiles".into(),
             model: Some(agent_model.clone()),
             ..Default::default()
@@ -861,6 +861,10 @@ async fn issue456_effective_invocation_decides_preparation_and_commit() {
             .await
             .unwrap();
         let provider = crate::local_runtime::configuration::settings::ProviderWrite {
+            display_name: None,
+            hidden: false,
+            icon: None,
+            protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
             base_url: fixture.provider.url("/v2"),
             credential: crate::local_runtime::configuration::settings::CredentialEdit::Retain,
         };
@@ -960,6 +964,7 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
             ConfigMutation::Model {
                 id: "local/a".into(),
                 authored: Some(crate::model::authoring::Model {
+    hidden: false,
                     request_params: Some(params(json!({"seed": 9_007_199_254_740_993_u64}))),
                     ..authored.clone()
                 }),
@@ -1015,7 +1020,7 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
             native,
             "{\"seed\":9007199254740993}",
             1,
-        ) + "\n[providers.extra]\nbase_url = \"https://example.invalid/v1\"\napi_key = \"sk-SECRET_NEIGHBOR\"\n";
+        ) + "\n[providers.extra]\nprotocol = \"openai_responses\"\nbase_url = \"https://example.invalid/v1\"\napi_key = \"sk-SECRET_NEIGHBOR\"\n";
         std::fs::write(&path, &unsafe_text).unwrap();
         let broken = f.manager.source_settings(&target).await.unwrap();
         assert!(broken.user.authored.is_none());
@@ -1067,7 +1072,7 @@ fn raw_request(call: crate::app_server::protocol::Method, literal: &str) -> Stri
 async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
     use crate::app_server::{connection::AppServerConnection, protocol::*};
     use crate::local_runtime::authoring::{ModelLayer, SummaryModelAuthoring};
-    use crate::local_runtime::config::AgentProfileDocument;
+    use crate::local_runtime::config::NamedAgentProfileDocument;
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::authoring::Profile;
     use crate::model::catalog::{ModelProfileId, ModelRef};
@@ -1129,6 +1134,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
             write(ConfigMutation::Model {
                 id: "local/a".into(),
                 authored: Some(crate::model::authoring::Model {
+    hidden: false,
                     request_params: Some(AuthoredRequestParams(holes())),
                     ..authored.clone()
                 }),
@@ -1150,16 +1156,17 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
                 expected_revision: source.user.revision.clone(),
                 mutation: SourceMutation::Agent {
                     name: crate::runtime::subagent::SubagentName::parse("reviewer").unwrap(),
-                    authored: Some(AgentProfileDocument {
+                    authored: Some(NamedAgentProfileDocument {
                         description: "Reviews".into(),
                         instructions: "Review.".into(),
                         model: Some(selection.clone()),
-                        ..AgentProfileDocument::default()
+                        ..NamedAgentProfileDocument::default()
                     }),
                 },
             },
-            Method::ModelSet { target: target.clone(), config: Box::new(selection.clone()) },
+            Method::ModelSet { recover_unavailable_auxiliary: None, target: target.clone(), config: Box::new(selection.clone()) },
             Method::ModelSet {
+                recover_unavailable_auxiliary: None,
                 target: target.clone(),
                 config: Box::new(SessionModelConfig {
                     title_model: crate::model::session::AuxiliaryModelPolicy::Session,
@@ -1232,6 +1239,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
         // A Session override from raw text reaches the provider wire exactly.
         let override_text = r#"{"o1":1.50,"o2":-9007199254740991,"o3":15e-1,"o4":[1e20,{"o5":0.1}]}"#;
         let call = Method::ModelSet {
+            recover_unavailable_auxiliary: None,
             target: target.clone(),
             config: Box::new(SessionModelConfig {
                 profile: Some(ModelProfileId::new("p")),
@@ -1270,7 +1278,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
 async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
     use crate::app_server::{connection::AppServerConnection, protocol::*};
     use crate::local_runtime::authoring::{ModelLayer, SummaryModelAuthoring};
-    use crate::local_runtime::config::AgentProfileDocument;
+    use crate::local_runtime::config::NamedAgentProfileDocument;
     use crate::local_runtime::configuration::settings::SourceTarget;
     use crate::model::authoring::Profile;
     use crate::model::catalog::{ModelProfileId, ModelRef};
@@ -1387,7 +1395,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
                 .handle_request(Request {
                     jsonrpc: JsonRpcVersion::V2,
                     id: RequestId::Integer(1),
-                    call: Method::ModelSet { target: target.clone(), config: Box::new(config) },
+                    call: Method::ModelSet { recover_unavailable_auxiliary: None, target: target.clone(), config: Box::new(config) },
                 })
                 .await;
             let text = serde_json::to_string(&response).unwrap();
@@ -1410,7 +1418,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
         // An unrelated override key is no collision.
         assert!(matches!(super::super::protocol::call(
             &connection, 2,
-            Method::ModelSet { target: target.clone(), config: Box::new(selection(json!({"top_k": 40}))) },
+            Method::ModelSet { recover_unavailable_auxiliary: None, target: target.clone(), config: Box::new(selection(json!({"top_k": 40}))) },
         ).await, MethodResult::ModelSet { .. }));
         let model = super::super::protocol::read_model_result(
             &connection, &target,
@@ -1467,7 +1475,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
         f.manager
             .write_source_settings(&user, source.absent_resource_revision.clone(), SourceMutation::Agent {
                         name: reviewer.clone(),
-                        authored: Some(AgentProfileDocument {
+                        authored: Some(NamedAgentProfileDocument {
                             description: "Reviews".into(),
                             instructions: "Review.".into(),
                             model: Some(SessionModelConfig {
@@ -1475,7 +1483,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
                                 request_params: object(json!({"top_k": 1, KEY: true})),
                                 ..SessionModelConfig::of(local.clone())
                             }),
-                            ..AgentProfileDocument::default()
+                            ..NamedAgentProfileDocument::default()
                         }),
                     })
             .await

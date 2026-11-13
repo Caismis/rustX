@@ -2,19 +2,10 @@
   "$defs": {
     "AgentProjectInstructionsDocument": {
       "additionalProperties": false,
-      "description": "Project-instruction selection from admitted workspace resources.",
+      "description": "Whether to include the automatically discovered AGENTS.md guidance chain.",
       "properties": {
-        "files": {
-          "default": [],
-          "description": "Explicit agent-owned project instruction files, in deterministic\nconfigured order. Relative paths resolve against the owning\nconfiguration document's directory at launch resolution.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "inherit": {
           "default": true,
-          "description": "Whether the invoking generation's normal project instruction chain is\nprepended to the explicit files.",
           "type": "boolean"
         }
       },
@@ -300,10 +291,6 @@
       ],
       "description": "Exactly two trust granularities for one source. This is also the authoring\nboundary: only the literal \"all\" or an exact array is accepted. `All`\ngrants source-wide Tools and negotiated Resources; `Exact` grants only\nthe named ordinary Tools and never source-wide Resources access."
     },
-    "SubagentName": {
-      "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
-      "type": "string"
-    },
     "SummaryModelAuthoring": {
       "oneOf": [
         {
@@ -407,19 +394,11 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Strict Agent Profile authoring shared by root and named Agents.\n\nComplete selected intent resolves against admitted resources. Execution\nscope controls child lifecycle applicability. Dynamic child\ninvocations may replace only Tools, Skills and Extensions within their\nfrozen delegation ceiling; the other dimensions remain authored defaults.",
+  "description": "A complete named Agent resource profile.",
   "properties": {
-    "agents": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/SubagentName"
-      },
-      "type": "array"
-    },
     "agents_md": {
       "$ref": "#/$defs/AgentProjectInstructionsDocument",
       "default": {
-        "files": [],
         "inherit": true
       },
       "description": "The project-instruction policy of this agent."
@@ -493,6 +472,6 @@
       "type": "array"
     }
   },
-  "title": "AgentProfileDocument",
+  "title": "NamedAgentProfileDocument",
   "type": "object"
 }

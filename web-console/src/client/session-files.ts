@@ -1,11 +1,11 @@
 import { canonicalLocatorKey } from '../../../protocol/app-server/content-identity';
-import type { CanonicalContentLocator } from '../../../protocol/app-server/v73';
+import type { CanonicalContentLocator } from '../../../protocol/app-server/v78';
 import { sameSessionFile } from '../../shared/session-file-identity.ts';
 import { validateRaster } from './raster';
 import type { AppServerClient } from './app-server';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { ArtifactResources, safeArtifactMime } from './artifacts';
-import type { SessionFileReference } from '../../../protocol/app-server/v73';
+import type { SessionFileReference } from '../../../protocol/app-server/v78';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope } from '../workspaces/host';
 import { settlementFailureKind } from '../workspaces/host';
 import type { WorkspaceAuthority } from '../workspaces/authority';
@@ -13,6 +13,7 @@ import { PREVIEW_POLICY } from './preview-policy';
 import { FILE_PREVIEW_LIMITS, isFileData, type FileReadOptions } from '../../shared/file-preview.ts';
 import type { DeliveryBytes } from '../workspaces/host';
 import { PreviewContentCache, PreviewContentOwner, type PreviewTextPage, type PreviewBytes } from './preview-content';
+import { readGeometrySource } from './geometry-source';
 
 export const SESSION_FILE_MAX_BYTES = FILE_PREVIEW_LIMITS.fileBytes;
 export const SESSION_FILE_MAX_TRANSFERS = 2;
@@ -138,7 +139,9 @@ export class FilePreviewCoordinator {
       return result.version;
     };
     return new PreviewContentOwner({ current: () => this.sourceCurrent(source), immutable: source.kind === 'artifact',
-      page: (offset, signal) => this.readPage(source, offset, signal), bytes: signal => this.read(source, signal),
+      page: (offset, signal) => this.readPage(source, offset, signal),
+      bytes: (signal, mode) => mode === 'geometry' && source.kind === 'session_file'
+        ? readGeometrySource((options, signal) => this.readSession(source, options, signal), signal) : this.read(source, signal),
       document: (extension, signal) => this.derive(source, extension, signal), probe,
       observe: source.kind === 'session_file' && this.host.observeDelivery ? (signal, changed) => this.demand.privateReads.run(signal, async () => {
         const observation = this.authority.capture();
@@ -171,6 +174,10 @@ export class FilePreviewCoordinator {
   }
   sourceCurrent(source:PreviewSource):boolean {
     return this.current()&&(!source.owned||source.owned())&&(source.kind==='artifact'||(source.agentId!=null?source.owned!=null:source.conversationId===this.target.conversation_id));
+  }
+  retainedCurrent(occurrenceId: number, source: PreviewSource, content: PreviewContentOwner | undefined): boolean {
+    const retained = this.contents.get(occurrenceId);
+    return this.sourceCurrent(source) && !!retained && retained.owner === content && samePreviewSource(retained.source, source);
   }
   async read(source: PreviewSource, signal: AbortSignal): Promise<PreviewBytes> {
     if (!this.sourceCurrent(source) || signal.aborted) throw new Error('Obsolete file view');
@@ -251,6 +258,8 @@ export class FilePreviewLease {
   readonly signal = this.abort.signal;
   constructor(private readonly owner: FilePreviewCoordinator, readonly occurrenceId: number, readonly source: PreviewSource, readonly content?: PreviewContentOwner) {}
   current = () => !this.signal.aborted && this.owner.sourceCurrent(this.source);
+  /** Permission for final inert geometry metadata, independent of body visibility. */
+  sourceCurrent = () => this.owner.retainedCurrent(this.occurrenceId, this.source, this.content);
   async readData(signal: AbortSignal): Promise<PreviewBytes> {
     if (!this.current() || signal.aborted) throw new Error('Obsolete file view');
     if (this.reading) throw new Error('File lease capacity reached');

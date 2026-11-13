@@ -5,16 +5,79 @@ use crate::local_runtime::configuration::UserConfigSources;
 use std::fmt::Write;
 use std::os::unix::fs::PermissionsExt;
 
+#[test]
+fn saving_a_provider_before_its_first_model_is_valid_editable_configuration() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, "");
+    fixture.write(&fixture.workspace, "");
+    let initial = fixture
+        .manager
+        .read_source_settings(&SourceTarget::User)
+        .unwrap();
+    let mutation = serde_json::from_value(serde_json::json!({
+        "kind": "config", "mutation": { "unit": "provider", "id": "first", "authored": {
+            "protocol": "openai_chat_completions",
+            "base_url": "https://provider.invalid/v1",
+            "credential": { "kind": "literal", "value": "fixture-only" }
+        }}
+    }))
+    .unwrap();
+    fixture
+        .manager
+        .write_source_settings(&SourceTarget::User, &initial.user.revision, mutation)
+        .unwrap();
+    let saved = fixture
+        .manager
+        .read_source_settings(&fixture.workspace)
+        .unwrap();
+    assert!(saved.user.diagnostic.is_none());
+    assert!(saved.prospective_diagnostic.is_none());
+    assert!(saved.resolved.is_some());
+    // A source can be edited before it is ready to create a Session.
+    let failure = fixture
+        .manager
+        .resolve_session(&super::super::SessionConfigInput::new(
+            fixture.workspace.workspace().unwrap().to_path_buf(),
+        ))
+        .unwrap_err();
+    assert!(failure.incomplete);
+
+    let mutation = serde_json::from_value(serde_json::json!({
+        "kind": "config", "mutation": { "unit": "model", "id": "first/one", "authored": {
+            "provider": "first", "id": "one",
+            "context_window": 128_000, "max_output_tokens": 8192,
+            "capabilities": { "input_modalities": ["text"], "output_modalities": ["text"], "json_schema_output": false }
+        }}
+    })).unwrap();
+    fixture
+        .manager
+        .write_source_settings(&SourceTarget::User, &saved.user.revision, mutation)
+        .unwrap();
+    let saved = fixture
+        .manager
+        .read_source_settings(&fixture.workspace)
+        .unwrap();
+    assert!(saved.prospective_diagnostic.is_none());
+    assert!(
+        saved
+            .resolved
+            .unwrap()
+            .models
+            .unwrap()
+            .contains_key("first/one")
+    );
+}
+
 /// A complete, valid User source: Provider, Model and default selection.
 const USER: &str = r#"# User configuration — keep this comment.
 [providers.local]
+protocol = "openai_responses"
 base_url = "http://127.0.0.1:9/v1"
 api_key = "SECRET_SENTINEL"
 
 [models."local/a"]
 provider = "local"
 id = "wire-a"
-protocol = "openai_responses"
 context_window = 128000
 max_output_tokens = 8192
 request_params = '{"vendor_x":{"secret_mode":true},"temperature":0.25}'
@@ -154,12 +217,12 @@ fn the_issue_example_converges_to_its_documented_result() {
     let plan = plan(before.as_bytes()).unwrap();
     assert_eq!(
         String::from_utf8(plan.candidate.clone()).unwrap(),
-        "schema_version = 10\n\n[agent.tools]\nbuiltin = [\"read\", \"grep\"]\n\n[agent.plugins.todo]\nenabled = true\n"
+        "schema_version = 12\n\n[agent.tools]\nbuiltin = [\"read\", \"grep\"]\n\n[agent.plugins.todo]\nenabled = true\n"
     );
     assert_eq!(
         plan.changes,
         vec![
-            ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 10 },
+            ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 12 },
             removed("agent.plugins.todo"),
             removed("native_tools"),
             unknown_tool(1),
@@ -286,11 +349,11 @@ approval = "always"
 
 #[test]
 fn comments_and_unrelated_bytes_survive_deletions() {
-    let text = "# head comment\nschema_version = 10 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\nstale = 'x'\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"nope\",\n  \"grep\",\n]\n";
+    let text = "# head comment\nschema_version = 12 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\nstale = 'x'\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"nope\",\n  \"grep\",\n]\n";
     let repaired = candidate(text);
     assert_eq!(
         repaired,
-        "# head comment\nschema_version = 10 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"grep\",\n]\n"
+        "# head comment\nschema_version = 12 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"grep\",\n]\n"
     );
 }
 
@@ -358,15 +421,15 @@ fn native_tool_entries_are_classified_by_the_native_domain() {
 
 #[test]
 fn explicit_schema_versions_are_normalized_and_omission_is_preserved() {
-    for from in [0_i64, 8, 9, 11, 99, -1] {
+    for from in [0_i64, 8, 9, 10, 11, 13, 99, -1] {
         let text = format!("schema_version = {from} # authored\n");
         assert_eq!(
             changes(&text),
-            vec![ConfigRepairChange::UpdatedSchemaVersion { from, to: 10 }]
+            vec![ConfigRepairChange::UpdatedSchemaVersion { from, to: 12 }]
         );
-        assert_eq!(candidate(&text), "schema_version = 10 # authored\n");
+        assert_eq!(candidate(&text), "schema_version = 12 # authored\n");
     }
-    assert!(changes("schema_version = 10\n").is_empty());
+    assert!(changes("schema_version = 12\n").is_empty());
     assert!(changes("[agent]\ndescription = 'x'\n").is_empty());
     assert!(!candidate("[agent]\nstale = 1\n").contains("schema_version"));
     // A non-integer version is a type error, not version metadata.
@@ -855,13 +918,13 @@ fn array_removals_keep_neighbouring_layout_and_comments() {
 
 /// A Workspace that defines a Provider and Model the User selects.
 const WORKSPACE_MODEL: &str = r#"[providers.workspace-provider]
+protocol = "openai_responses"
 base_url = "https://example.com/v1"
 api_key = "$MODEL_API_KEY"
 
 [models."workspace-provider/model-a"]
 provider = "workspace-provider"
 id = "model-a"
-protocol = "openai_responses"
 context_window = 128000
 max_output_tokens = 8192
 
@@ -884,11 +947,13 @@ fn unresolved_diagnostic(fixture: &Fixture, target: &SourceTarget) -> String {
 #[test]
 fn semantic_diagnostics_never_echo_authored_values_or_identities() {
     let provider = |name: &str, url: &str| {
-        format!("[providers.{name}]\nbase_url = \"{url}\"\napi_key = \"$MODEL_API_KEY\"\n")
+        format!(
+            "[providers.{name}]\nprotocol = \"openai_responses\"\nbase_url = \"{url}\"\napi_key = \"$MODEL_API_KEY\"\n"
+        )
     };
     let model = |key: &str, extra: &str| {
         format!(
-            "[models.\"{key}\"]\nprovider = \"local\"\nid = \"wire\"\nprotocol = \"openai_responses\"\ncontext_window = 128000\nmax_output_tokens = 8192\n{extra}[models.\"{key}\".capabilities]\ninput_modalities = [\"text\"]\noutput_modalities = [\"text\"]\n"
+            "[models.\"{key}\"]\nprovider = \"local\"\nid = \"wire\"\ncontext_window = 128000\nmax_output_tokens = 8192\n{extra}[models.\"{key}\".capabilities]\ninput_modalities = [\"text\"]\noutput_modalities = [\"text\"]\n"
         )
     };
     let local = provider("local", "https://example.com/v1");
@@ -1147,7 +1212,7 @@ fn independent_constraints_hold_without_a_default_model() {
 #[test]
 fn a_partial_intrinsically_valid_source_is_repaired_without_inventing_facts() {
     let fixture = Fixture::new();
-    let text = "legacy_field = true\n[agent]\ninstructions = \"Be brief.\"\n";
+    let text = "legacy_field = true\n[agent]\ndescription = \"Review\"\n";
     fixture.write(&SourceTarget::User, text);
     assert_eq!(
         fixture.repair(&SourceTarget::User, &SourceTarget::User),
@@ -1155,7 +1220,7 @@ fn a_partial_intrinsically_valid_source_is_repaired_without_inventing_facts() {
     );
     assert_eq!(
         fixture.read(&SourceTarget::User),
-        "[agent]\ninstructions = \"Be brief.\"\n"
+        "[agent]\ndescription = \"Review\"\n"
     );
     let receipt = fixture.receipt(&SourceTarget::User).unwrap();
     assert_eq!(receipt.changes, vec![removed("")]);
@@ -2395,7 +2460,6 @@ description = "partial"
 [models.partial]
 provider = "provided-by-other-scope"
 id = "partial"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
@@ -3160,7 +3224,7 @@ fn a_repair_candidate_exactly_at_the_bound_is_published_and_readable() {
     );
     let published = std::fs::read(fixture.path(&SourceTarget::User)).unwrap();
     assert_eq!(published.len(), bound());
-    assert!(published.starts_with(b"schema_version = 10\n"));
+    assert!(published.starts_with(b"schema_version = 12\n"));
     // The normal native reader accepts exactly what was published.
     let read = fixture
         .manager
@@ -3198,7 +3262,7 @@ fn a_repair_growing_past_the_bound_is_unresolved_without_a_backup() {
     assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
     assert_eq!(
         receipt.changes,
-        [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 10 }]
+        [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 12 }]
     );
     assert!(!receipt.backup_available);
     assert!(receipt.after_revision.is_none());
@@ -3343,6 +3407,7 @@ const SENTINEL: &str = "zsecretz";
 const SENTINEL_SOURCE: &str = r#"zsecretz_root_key = "zsecretz-value"
 
 [providers.zsecretz-provider]
+protocol = "openai_responses"
 base_url = "http://127.0.0.1:9/v1"
 api_key = "zsecretz-credential"
 zsecretz_provider_key = "zsecretz-value"
@@ -3350,7 +3415,6 @@ zsecretz_provider_key = "zsecretz-value"
 [models."zsecretz-provider/zsecretz-model"]
 provider = "zsecretz-provider"
 id = "zsecretz-wire"
-protocol = "openai_responses"
 context_window = 128000
 max_output_tokens = 8192
 default_profile = "zsecretz-profile"
@@ -3430,7 +3494,7 @@ fn receipts_never_carry_authored_identities_keys_or_tool_names() {
     // and unsupported Tool selection is gone.
     let repaired = fixture.read(&SourceTarget::User);
     for kept in [
-        "[providers.zsecretz-provider]",
+        "[providers.zsecretz-provider]\nprotocol = \"openai_responses\"",
         "api_key = \"zsecretz-credential\"",
         "[models.\"zsecretz-provider/zsecretz-model\".profiles.\"zsecretz-profile\"]",
         "request_params = '{\"zsecretz_param\":\"zsecretz-value\"}'",
@@ -4525,7 +4589,7 @@ fn resolved(fixture: &Fixture) -> Result<BTreeMap<PathBuf, String>, String> {
 fn captured(fixture: &Fixture) -> Result<(), String> {
     fixture
         .manager
-        .capture_application(&session_input(fixture))
+        .capture_application(&session_input(fixture), None)
         .map(drop)
 }
 
@@ -4773,7 +4837,7 @@ fn a_native_writer_during_a_session_capture_is_never_mixed_into_it() {
         let failure = if application {
             fixture
                 .manager
-                .capture_application_at_boundary(&session_input(&fixture), write)
+                .capture_application_at_boundary(&session_input(&fixture), None, write)
                 .map(drop)
                 .unwrap_err()
         } else {

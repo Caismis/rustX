@@ -81,7 +81,8 @@ test('portaled Menu placement, flip, shift, bounded height and anchor tracking',
   // A viewport too short for the rows: the list takes only the height the
   // viewport leaves and scrolls its rows inside itself.
   await page.setViewportSize({ width: 700, height: 150 });
-  await pin('position: fixed; left: 8px; top: 8px;');
+  // The permanent 56px primary rail owns its pointer region.
+  await pin('position: fixed; left: 64px; top: 8px;');
   await open();
   m = await box();
   expect(m.y).toBeGreaterThanOrEqual(12 - 0.5);
@@ -616,3 +617,54 @@ test('a keyboard-owned submenu survives passive pointer hover until a pointer pr
   await expect(menu.trigger).toBeFocused();
   expect(errors).toEqual([]);
 });
+
+for (const locale of ['en', 'zh'] as const) for (const dark of [false, true]) {
+  test(`compact hover stays bounded and preserves copy feedback (${locale}, dark=${dark})`, async ({ page }) => {
+    await page.addInitScript(value => localStorage.setItem('rustx-locale-v1', value), locale);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${fixtureOrigin}/test/fixtures/foundation.html`);
+    await page.evaluate(dark => { if (dark) document.body.setAttribute('data-ds-dark-theme', ''); }, dark);
+    const fixture = page.locator('[data-copy-hover-fixture]');
+    await fixture.evaluate(el => { el.setAttribute('style', 'position: fixed; width: 120px; right: 2px; bottom: 2px'); });
+    const trigger = fixture.getByRole('button');
+    await trigger.hover();
+    const card = page.locator('[data-hover-card="default"]');
+    await expect(card).toBeVisible();
+    const bounded = async () => {
+      const rect = (await card.boundingBox())!, viewport = page.viewportSize()!;
+      expect(rect.width).toBeLessThanOrEqual(244);
+      expect(rect.x).toBeGreaterThanOrEqual(7);
+      expect(rect.y).toBeGreaterThanOrEqual(7);
+      expect(rect.x + rect.width).toBeLessThanOrEqual(viewport.width - 7);
+      expect(rect.y + rect.height).toBeLessThanOrEqual(viewport.height - 7);
+      return rect;
+    };
+    await bounded();
+    const path = card.locator('p');
+    const text = (await path.textContent())!;
+    expect(text.length).toBeGreaterThan(200);
+    await card.hover();
+    await page.waitForTimeout(250);
+    await expect(card).toBeVisible();
+    await page.evaluate(() => { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { (window as unknown as { copiedDetails: string }).copiedDetails = text; } } }); });
+    // A selection is preserved; clicking selected text does not trigger Copy.
+    await path.evaluate(el => { const selection = window.getSelection()!; const range = document.createRange(); range.selectNodeContents(el); selection.removeAllRanges(); selection.addRange(range); });
+    await card.dispatchEvent('click');
+    expect(await page.evaluate(() => (window as unknown as { copiedDetails?: string }).copiedDetails)).toBeUndefined();
+    await page.evaluate(() => window.getSelection()!.removeAllRanges());
+    const beforeCopy = await bounded();
+    await card.click();
+    await expect(card).toHaveText(locale === 'zh' ? '已复制' : 'Copied');
+    expect(await page.evaluate(() => (window as unknown as { copiedDetails: string }).copiedDetails)).toBe(text);
+    expect((await card.boundingBox())!.height).toBeCloseTo(beforeCopy.height, 0);
+    await expect(path).toHaveText(text);
+    await page.setViewportSize({ width: 420, height: 300 });
+    await expect.poll(async () => { const rect = (await card.boundingBox())!; return rect.x + rect.width; }).toBeLessThanOrEqual(413);
+    await bounded();
+    await trigger.click();
+    await expect(card).toHaveCount(0);
+    await page.getByRole('button', { name: 'Details', exact: true }).hover();
+    await expect(page.getByText('Hover details')).toBeVisible();
+    await bounded();
+  });
+}

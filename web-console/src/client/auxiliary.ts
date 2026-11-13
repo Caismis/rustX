@@ -1,5 +1,5 @@
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
-import type { AttachmentTarget, AuxiliarySegment, AuxiliarySubmissionReceipt, AuxiliaryResult } from '../../../protocol/app-server/v73';
+import type { AttachmentTarget, AuxiliarySegment, AuxiliarySubmissionReceipt, AuxiliaryResult } from '../../../protocol/app-server/v78';
 import type { AppServerClient } from './app-server';
 import { isOutcomeUncertain, RpcFailure } from './errors';
 function diagnostic(error: unknown): string {
@@ -15,20 +15,56 @@ export interface BtwQuestion {
   readonly diagnostic?: string; readonly cancelling?: boolean;
 }
 interface Entry { question: BtwQuestion; target: AttachmentTarget; authority?: string; readFailed?: boolean; }
-/** Sixteen bounded question slots per client, including hidden views. One slot
- * contains <=16 KiB input, <=8 KiB output and <=2 KiB identity/diagnostics.
+interface Draft { text: string; target: AttachmentTarget; authority?: string; }
+/** Sixteen bounded question/draft slots per client, including hidden views.
+ * One slot contains <=16 KiB submitted input, <=16 KiB draft, <=8 KiB output
+ * and <=2 KiB identity/diagnostics. Drafts remain memory-only.
  * At most one visible owner may poll; it holds one bounded response at a time.
  * Closing releases observation only. No path retries an uncertain submission. */
 export class AuxiliaryQuestions {
   private entries = new Map<string, Entry>();
+  private drafts = new Map<string, Draft>();
   private listeners = new Set<() => void>();
   private viewing?: { key: string; target: AttachmentTarget; current(): boolean; abort: AbortController };
   private reading?: Promise<void>;
   constructor(private client: AppServerClient) {
-    client.onDispose(() => { this.viewing?.abort.abort(); this.viewing = undefined; this.entries.clear(); this.emit(); });
+    const unsubscribe = client.subscribe(() => {
+      const state = client.getSnapshot();
+      let changed = false;
+      for (const [key, draft] of this.drafts) {
+        const target = state.views[draft.target.session_id]?.target;
+        if (draft.authority !== state.authorityId || state.views[draft.target.session_id]?.deleting || (target && target.conversation_id !== draft.target.conversation_id)) { this.drafts.delete(key); changed = true; }
+      }
+      if (changed) this.emit();
+    });
+    client.onDispose(() => { unsubscribe(); this.viewing?.abort.abort(); this.viewing = undefined; this.entries.clear(); this.drafts.clear(); this.emit(); });
   }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   snapshot = (id: string): BtwQuestion | undefined => this.entry(id)?.question;
+  draft = (id: string): string => {
+    const state = this.client.getSnapshot();
+    if (state.views[id]?.target) return this.drafts.get(this.key(id))?.text ?? '';
+    const candidates = [...this.drafts.values()].filter(draft => draft.authority === state.authorityId && draft.target.session_id === id);
+    return candidates.length === 1 ? candidates[0].text : '';
+  };
+  setDraft(id: string, text: string) {
+    const context = this.context(id), key = this.key(id);
+    if (new TextEncoder().encode(text).length > 16_384) throw new Error('Question must contain at most 16384 UTF-8 bytes.');
+    if (!text) this.drafts.delete(key);
+    else {
+      this.reserve(key);
+      this.drafts.set(key, { text, target: context.target, authority: this.client.getSnapshot().authorityId });
+    }
+    this.emit();
+  }
+  clearDraft(id: string) {
+    for (const [key, draft] of this.drafts) if (draft.target.session_id === id) this.drafts.delete(key);
+    this.emit();
+  }
+  private reserve(key: string) {
+    const slots = new Set([...this.entries.keys(), ...this.drafts.keys()]);
+    if (!slots.has(key) && slots.size >= 16) throw new Error('Temporary question capacity is full.');
+  }
   private key(id: string) { const state = this.client.getSnapshot(); return JSON.stringify([state.authorityId, id, state.views[id]?.target?.conversation_id]); }
   private entry(id: string) {
     const state = this.client.getSnapshot();
@@ -39,7 +75,15 @@ export class AuxiliaryQuestions {
     return candidates.length === 1 ? candidates[0] : undefined;
   }
   private emit() { for (const listener of this.listeners) listener(); }
-  private set(entry: Entry, patch: Partial<BtwQuestion>) { entry.question = { ...entry.question, ...patch }; this.emit(); }
+  private set(entry: Entry, patch: Partial<BtwQuestion>) {
+    if (!entry.question.receipt && patch.receipt) {
+      const key = JSON.stringify([entry.authority, entry.target.session_id, entry.target.conversation_id]);
+      // Admission consumes only its exact draft, even while the panel is
+      // closed. A delayed receipt cannot erase a newer edit or consume twice.
+      if (this.entries.get(key) === entry && this.drafts.get(key)?.text === entry.question.question) this.drafts.delete(key);
+    }
+    entry.question = { ...entry.question, ...patch }; this.emit();
+  }
   private context(id: string) {
     const state = this.client.getSnapshot(), view = state.views[id], target = view?.target, generation = state.generation;
     if (!target || !this.client.hasAuxiliaryAuthority(id)) throw new Error('Auxiliary attachment is unavailable.');
@@ -65,7 +109,7 @@ export class AuxiliaryQuestions {
     const old = this.entry(id)?.question;
     if (old && !old.settled) return;
     const context = this.context(id), key = this.key(id), authority = this.client.getSnapshot().authorityId;
-    if (!this.entries.has(key) && this.entries.size >= 16) throw new Error('Temporary question capacity is full.');
+    this.reserve(key);
     const entry: Entry = { target: context.target, authority, question: { correlation: crypto.randomUUID(), question: text, phase: 'submitting', text: '', frontier: 0, complete: false } };
     this.entries.set(key, entry); this.emit();
     try {

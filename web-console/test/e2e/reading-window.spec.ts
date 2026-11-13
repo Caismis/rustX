@@ -6,7 +6,7 @@ for (const width of [1440, 390]) test(`short Chat and Trace load automatically w
  await page.setViewportSize({width:1440,height:1000});
  await page.goto(`${origin}/test/fixtures/startup.html?existing&reading-window`);await expect(page).toHaveTitle('rustX');
  await page.evaluate(()=>{const fixture=(window as any).startupFixture;fixture.allow('session/summary');fixture.resumeCatalog()});
- await page.locator('button[data-session-id=A]').click();await page.evaluate(()=>(window as any).startupFixture.release('session/attach'));
+ await page.locator('button[data-session-id=A]').click();await page.evaluate(()=>(window as any).startupFixture.release('thread/resume'));
  if(width<600){const collapse=page.getByRole('button',{name:'Collapse Sidebar',exact:true});if(await collapse.isVisible())await collapse.click();await page.setViewportSize({width,height:844});}
  const chat=page.getByLabel('Canonical conversation');
  await expect(chat.getByText('History message 1',{exact:true})).toBeAttached();await expect(chat.getByText('History message 40',{exact:true})).toBeAttached();

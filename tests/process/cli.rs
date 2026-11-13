@@ -294,13 +294,13 @@ const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","param
 fn models(base_url: &str) -> String {
     format!(
         r#"[providers.fixture]
+protocol = "openai_chat_completions"
 base_url = "{base_url}"
 api_key = "$RUSTX_PROCESS_TEST_KEY"
 
 [models."fixture/process-model"]
 provider = "fixture"
 id = "process-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 

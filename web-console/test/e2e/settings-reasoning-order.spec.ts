@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { closeSettings, connectRemote, openEmptySession, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { returnHome, connectRemote, openEmptySession, openSettingsPage, openWorkspaceSettings, settledSave } from './shell-actions';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -12,7 +12,6 @@ test('parseable invalid Model orders expose whole-source repair and restore nati
 [models.${id}]
 provider = "fixture"
 id = "console-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
@@ -25,24 +24,23 @@ reasoning_profile_order = [${id === 'a' ? '"low", "high"' : second}]
   try {
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await closeSettings(page);
+    await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A');
     await openSettingsPage(page, 'Models');
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
     const repair = settings.getByRole('form', { name: 'Repair invalid source', exact: true });
     await expect(repair).toBeVisible();
-    await expect(settings.getByRole('alert')).toContainText('invalid Model reasoning Profile order at models.*.reasoning_profile_order');
+    await expect(page.locator('[data-toast][data-foreground]')).toContainText('invalid Model reasoning Profile order at models.*.reasoning_profile_order');
     await expect(settings.getByRole('button', { name: 'Add Model', exact: true })).toHaveCount(0);
     await repair.getByLabel('Replacement TOML').fill(document('"low"'));
     await repair.getByRole('button', { name: 'Save Repair invalid source', exact: true }).click();
-    await expect(repair.getByRole('alert')).toBeVisible();
+    await expect(page.locator('[data-toast][data-foreground]')).toBeVisible();
     expect(readFileSync(source, 'utf8')).toBe(invalid);
     await repair.getByLabel('Replacement TOML').fill(document('"high", "low"'));
     await repair.getByRole('button', { name: 'Save Repair invalid source', exact: true }).click();
     await expect(repair).toHaveCount(0);
     await settings.getByRole('button', { name: 'Reload configuration', exact: true }).click();
-    await settings.getByRole('button', { name: /^All Models/ }).click();
-    await settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name: 'b', exact: true }).click();
+    await settings.getByRole('row', { name: 'b', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
     const modal = page.getByRole('dialog', { name: 'Model b', exact: true });
     await modal.getByRole('button', { name: 'Advanced configuration', exact: true }).click();
     const list = modal.getByRole('list', { name: 'Reasoning order (low to high)' });
@@ -50,7 +48,7 @@ reasoning_profile_order = [${id === 'a' ? '"low", "high"' : second}]
     for (const id of ['high', 'low']) await expect(modal.getByRole('button', { name: `Profile ${id}`, exact: true })).toBeVisible();
     await modal.getByRole('button', { name: 'Move low up', exact: true }).click();
     await modal.getByRole('button', { name: 'Save Model b', exact: true }).click();
-    await expect(page.getByText('Model b saved.', { exact: true })).toBeVisible();
+    await expect(settledSave(page, 'Model b')).toBeVisible();
     expect(readFileSync(source, 'utf8')).toMatch(/\[models\.b\][\s\S]*?reasoning_profile_order = \[\s*"low",\s*"high",?\s*\]/s);
   } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
 });
@@ -66,7 +64,6 @@ for (const width of [1440, 390]) test(`reasoning order ${width}: native save, re
 [models.ordered]
 provider = "fixture"
 id = "console-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
@@ -79,14 +76,13 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(page).toHaveTitle(/rustX/);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await closeSettings(page);
-    const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+    await returnHome(page);
+    const expand = page.getByRole('button', { name: 'Home', exact: true });
     if (await expand.isVisible()) await expand.click();
     await openWorkspaceSettings(page, 'Workspace A');
-    const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
-    await settings.getByRole('button', { name: /^All Models/ }).click();
+    const settings = page.getByRole('region', { name: 'Settings', exact: true });
     const open = async () => {
-      await settings.getByRole('grid', { name: 'All Models', exact: true }).getByRole('row', { name: 'ordered', exact: true }).click();
+      await settings.getByRole('row', { name: 'ordered', exact: true }).getByRole('button', { name: 'Edit Model', exact: true }).click();
       await page.getByRole('dialog', { name: 'Model ordered', exact: true }).getByRole('button', { name: 'Advanced configuration', exact: true }).click();
     };
     await open();
@@ -95,7 +91,7 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     const ids = () => list.locator('li').evaluateAll(rows => rows.map(row => row.getAttribute('data-profile-order')));
     const save = async () => {
       await modal.getByRole('button', { name: 'Save Model ordered', exact: true }).click();
-      await expect(page.getByText('Model ordered saved.', { exact: true })).toBeVisible();
+      await expect(settledSave(page, 'Model ordered')).toBeVisible();
       await expect(modal.getByRole('button', { name: 'Save Model ordered', exact: true })).toBeDisabled();
     };
     await expect(modal.getByText('Not configured', { exact: true })).toBeVisible();
@@ -107,7 +103,7 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     await expect(up).toBeFocused();
     expect(await ids()).toEqual(['z-off', 'a-high']);
     // Reorder leaves the current invalid parameter buffer mounted and unsaved.
-    const json = modal.getByRole('textbox', { name: 'Profile parameters (JSON)', exact: true });
+    const json = modal.getByRole('textbox', { name: 'API parameters (JSON)', exact: true });
     await json.fill('{"request_params":');
     await modal.getByRole('button', { name: 'Move a-high up', exact: true }).click();
     await expect(json).toHaveText('{"request_params":', { useInnerText: true });
@@ -121,7 +117,7 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     await modal.getByLabel('New profile identity').fill(custom);
     await modal.getByLabel('New profile identity').press('Enter');
     expect(await ids()).toEqual(['a-high', 'z-off', custom]);
-    await expect(modal.getByText(`Profile ${custom} was placed last in this draft. Adjust its position before Save.`, { exact: true })).toBeVisible();
+    await expect(page.locator('[data-toast][data-foreground]')).toHaveText(`Profile ${custom} was placed last in this draft. Adjust its position before Save.`);
     await list.scrollIntoViewIfNeeded();
     await page.screenshot({ path: test.info().outputPath(`reasoning-order-long-${width}.png`) });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -152,7 +148,7 @@ profiles = { a-high = { request_params = '{"effort":"high"}' }, z-off = { max_ou
     expect(await ids()).toEqual(['z-off']);
     await modal.getByRole('button', { name: 'Delete profile z-off', exact: true }).click();
     await expect(list).toHaveCount(0);
-    await expect(modal.getByText('Add Profiles before configuring reasoning order.')).toBeVisible();
+    await expect(modal.getByText('Add a profile to configure reasoning levels.')).toBeVisible();
     await save();
     const empty = readFileSync(source, 'utf8');
     expect(empty).not.toContain('reasoning_profile_order');

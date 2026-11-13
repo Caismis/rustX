@@ -27,11 +27,6 @@
             "string"
           ]
         },
-        "instructions": {
-          "type": [
-            "string"
-          ]
-        },
         "model": {
           "anyOf": [
             {
@@ -73,19 +68,10 @@
     },
     "AgentProjectInstructionsDocument": {
       "additionalProperties": false,
-      "description": "Project-instruction selection from admitted workspace resources.",
+      "description": "Whether to include the automatically discovered AGENTS.md guidance chain.",
       "properties": {
-        "files": {
-          "default": [],
-          "description": "Explicit agent-owned project instruction files, in deterministic\nconfigured order. Relative paths resolve against the owning\nconfiguration document's directory at launch resolution.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "inherit": {
           "default": true,
-          "description": "Whether the invoking generation's normal project instruction chain is\nprepended to the explicit files.",
           "type": "boolean"
         }
       },
@@ -140,6 +126,15 @@
     "AppServerPolicy": {
       "additionalProperties": false,
       "properties": {
+        "environment_roots": {
+          "default": [],
+          "description": "Instance-wide native roots for standalone commands and filesystem RPCs.\nEmpty denies these operations. Only User/Host configuration owns grants.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
         "idle_grace_ms": {
           "default": 300000,
           "format": "uint64",
@@ -570,6 +565,10 @@
             }
           ]
         },
+        "hidden": {
+          "description": "Hide this entry from new model choices. Existing selections stay resolvable.",
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
         },
@@ -586,9 +585,6 @@
           "type": [
             "object"
           ]
-        },
-        "protocol": {
-          "$ref": "#/$defs/ModelProtocol"
         },
         "provider": {
           "type": "string"
@@ -614,7 +610,6 @@
       "required": [
         "provider",
         "id",
-        "protocol",
         "context_window",
         "max_output_tokens",
         "capabilities"
@@ -870,9 +865,31 @@
         },
         "base_url": {
           "type": "string"
+        },
+        "display_name": {
+          "description": "Display label. The Provider's map key remains its identity.",
+          "maxLength": 100,
+          "minLength": 1,
+          "type": [
+            "string"
+          ]
+        },
+        "hidden": {
+          "description": "Hide this entry from new model choices. Existing selections stay resolvable.",
+          "type": "boolean"
+        },
+        "icon": {
+          "description": "Presentation-only `LobeHub` icon slug. Never participates in model resolution.",
+          "type": [
+            "string"
+          ]
+        },
+        "protocol": {
+          "$ref": "#/$defs/ModelProtocol"
         }
       },
       "required": [
+        "protocol",
         "base_url",
         "api_key"
       ],

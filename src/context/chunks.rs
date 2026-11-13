@@ -49,6 +49,7 @@ pub enum SummarySource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SummarySourceKind {
     Message,
+    QueuedMessage,
     GoalContinuation,
     CompactionContext,
     Context(SummaryContextKind),
@@ -79,6 +80,7 @@ impl From<&InboundKind> for SummarySourceKind {
     fn from(kind: &InboundKind) -> Self {
         match kind {
             InboundKind::Message => Self::Message,
+            InboundKind::QueuedMessage => Self::QueuedMessage,
             InboundKind::GoalContinuation(_) => Self::GoalContinuation,
             InboundKind::Context(context) => Self::Context(context.into()),
         }
@@ -617,6 +619,35 @@ mod tests {
     #[allow(clippy::unnecessary_wraps)] // Match the fallible estimator seam exercised by the planner.
     fn cost(request: &SummaryRequest) -> Result<u64, ContextError> {
         Ok(request.fragment.as_ref().unwrap().text.len() as u64)
+    }
+
+    #[test]
+    fn queued_message_fragment_retains_and_validates_its_provenance() {
+        let mut queued = user("queued request");
+        let MessageBlock::User(message) = &mut queued else {
+            unreachable!()
+        };
+        message.kind = InboundKind::QueuedMessage;
+        let messages = input(vec![queued]);
+        let mut plan = ChunkPlan::new(&messages, 1).unwrap();
+        let request = plan.next(None, None, None, u64::MAX, true, cost).unwrap();
+        assert_eq!(
+            request.fragment.as_ref().unwrap().sources,
+            [SummarySource::User {
+                source: UserSource::Human,
+                kind: SummarySourceKind::QueuedMessage,
+                earlier_summary: false,
+            }]
+        );
+        let mut altered = request.clone();
+        let SummarySource::User { kind, .. } = &mut altered.fragment.as_mut().unwrap().sources[0]
+        else {
+            unreachable!()
+        };
+        *kind = SummarySourceKind::Message;
+        assert!(plan.accept(&altered).is_err());
+        plan.accept(&request).unwrap();
+        assert!(plan.is_complete());
     }
 
     #[test]

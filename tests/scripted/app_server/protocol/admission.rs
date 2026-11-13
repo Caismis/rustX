@@ -40,18 +40,18 @@ async fn initialize_rejects_v53_and_malformed_wire_is_transactional() {
             let response = connection.handle_json(&request.to_string()).await.unwrap();
             assert!(matches!(response, Response::Failure(Failure { error: RpcError {
                 data: Some(ErrorData::UnsupportedVersion { supported: APP_SERVER_PROTOCOL_VERSION, requested: rejected }), .. }, .. }) if rejected == requested));
-            assert_eq!(rejected(&connection, Method::SessionAttach { session_id: f.sessions[0].id.clone(), node_id: None }).await, ErrorData::NotInitialized);
+            assert_eq!(rejected(&connection, Method::SessionAttach { thread_id: f.sessions[0].active_conversation_id.clone() }).await, ErrorData::NotInitialized);
             assert_eq!(rejected(&connection, Method::ServerInfo {}).await, ErrorData::NotInitialized);
             assert_eq!(connection.attachment_counts(), (0, 0));
         }
         initialize(&connection).await;
         for (json, expected_code) in [
             (r#"{"jsonrpc":"2.0","id":1,"method":"missing","params":{}}"#, -32601),
-            (r#"{"jsonrpc":"2.0","id":2,"method":"session/create","params":{"settings":{}}}"#, -32602),
-            (r#"{"jsonrpc":"1.0","id":3,"method":"session/create","params":{}}"#, -32600),
-            (r#"{"jsonrpc":"2.0","id":4,"method":"session/create","params":{},"extra":true}"#, -32600),
+            (r#"{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"settings":{}}}"#, -32602),
+            (r#"{"jsonrpc":"1.0","id":3,"method":"thread/start","params":{}}"#, -32600),
+            (r#"{"jsonrpc":"2.0","id":4,"method":"thread/start","params":{},"extra":true}"#, -32600),
             ("{", -32700),
-            (r#"{"jsonrpc":"2.0","id":9007199254740993,"method":"session/create","params":{}}"#, -32600),
+            (r#"{"jsonrpc":"2.0","id":9007199254740993,"method":"thread/start","params":{}}"#, -32600),
             (r#"{"jsonrpc":"2.0","id":9,"method":"session/list","params":{"offset":9007199254740993,"limit":32}}"#, -32602),
             (r#"{"jsonrpc":"2.0","id":8,"method":"session/name","params":{"session_id":"s","name":"first","name":"second"}}"#, -32602),
             (r#"{"jsonrpc":"2.0","id":6,"method":"settings/saveDefault","params":{"target":{"session_id":"s","conversation_id":"c","runtime_incarnation":1,"attachment_id":"a"},"scope":"user","expected_revision":"r","setting":"settings/saveDefault"}}"#, -32601),
@@ -61,7 +61,7 @@ async fn initialize_rejects_v53_and_malformed_wire_is_transactional() {
             assert_eq!(failure.error.code, expected_code);
             serde_json::to_value(Response::Failure(failure)).expect("even invalid correlation IDs produce a serializable error");
         }
-        assert!(connection.handle_json(r#"{"jsonrpc":"2.0","method":"session/create","params":{}}"#).await.is_none());
+        assert!(connection.handle_json(r#"{"jsonrpc":"2.0","method":"thread/start","params":{}}"#).await.is_none());
         let MethodResult::Sessions { sessions, .. } = call(&connection, 5, Method::SessionList { query: None, offset: 0, limit: 32 }).await else { panic!("list") };
         assert_eq!(sessions.len(), 2);
         assert_eq!(f.manager.probe(&f.id(0).await).compositions.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -93,8 +93,7 @@ async fn a_draining_host_refuses_attach_before_waiting_for_the_session_catalog()
         let mut response = Box::pin(rejected(
             &connection,
             Method::SessionAttach {
-                session_id: f.sessions[1].id.clone(),
-                node_id: None,
+                thread_id: f.sessions[1].active_conversation_id.clone(),
             },
         ));
         assert_eq!(
@@ -174,10 +173,8 @@ async fn host_request_owner_outlives_dropped_protocol_waiter() {
 #[tokio::test]
 async fn ux04_initialize_identity_is_owned_by_host_not_connection_or_endpoint() {
     let f = Fixture::with_session_count(None, 0).await;
-    let replacement = crate::app_server::host::AppServerHost::new(
-        f.manager.clone(),
-        crate::local_runtime::app_server_policy::AppServerPolicy::default(),
-    );
+    let other = Fixture::with_session_count(None, 0).await;
+    let replacement = other.host.clone();
     let mut identities = Vec::new();
     for host in [f.host.clone(), f.host.clone(), replacement] {
         let connection = AppServerConnection::new(host);
@@ -203,6 +200,7 @@ async fn ux04_initialize_identity_is_owned_by_host_not_connection_or_endpoint() 
     }
     assert_eq!(identities[0], identities[1]);
     assert_ne!(identities[0], identities[2]);
+    other.close().await;
     assert!(f.provider.request_bodies().is_empty());
     f.close().await;
 }
@@ -417,16 +415,11 @@ async fn metadata_reads_bypass_full_ordinary_and_observation_lanes_without_borro
             .map(|id| {
                 connection.admitted_request_for_test(request(
                     500 + id,
-                    Method::SessionAttach {
-                        session_id: f.sessions[0].id.clone(),
-                        node_id: None,
-                    },
+                    Method::SessionAttach { thread_id: f.sessions[0].active_conversation_id.clone() },
                 ))
             })
             .collect::<Vec<_>>();
-        assert_eq!(rejected(&connection, Method::SessionAttach {
-            session_id: f.sessions[0].id.clone(), node_id: None,
-        }).await, ErrorData::RequestCapacity);
+        assert_eq!(rejected(&connection, Method::SessionAttach { thread_id: f.sessions[0].active_conversation_id.clone() }).await, ErrorData::RequestCapacity);
         let ordinary = (0..6)
             .map(|id| {
                 connection.admitted_request_for_test(request(
@@ -519,13 +512,13 @@ async fn session_creation_uses_bounded_metadata_while_cold_attachments_remain_ow
                 connection.admitted_request_for_test(request(
                     100 + id,
                     Method::SessionAttach {
-                        session_id: f.sessions[0].id.clone(),
-                        node_id: None,
+                        thread_id: f.sessions[0].active_conversation_id.clone(),
                     },
                 ))
             })
             .collect::<Vec<_>>();
         let create = || Method::SessionCreate {
+            dynamic_tools: Vec::new(),
             submission: None,
             settings: crate::local_runtime::session::SessionPersistentState {
                 cwd: f.workspaces[0].clone(),
@@ -651,8 +644,7 @@ async fn t20_observation_cancel_after_admission_before_first_poll_never_dispatch
             &connection,
             1,
             Method::SessionAttach {
-                session_id: f.sessions[0].id.clone(),
-                node_id: None,
+                thread_id: f.sessions[0].active_conversation_id.clone(),
             },
         )
         .await
@@ -702,8 +694,7 @@ async fn t20_aborted_response_waiter_retains_native_operation_reservation_until_
             &connection,
             1,
             Method::SessionAttach {
-                session_id: f.sessions[0].id.clone(),
-                node_id: None,
+                thread_id: f.sessions[0].active_conversation_id.clone(),
             },
         )
         .await

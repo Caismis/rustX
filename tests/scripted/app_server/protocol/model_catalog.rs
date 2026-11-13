@@ -51,6 +51,7 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
                 &connection,
                 102,
                 Method::ModelSet {
+                    recover_unavailable_auxiliary: None,
                     target: target.clone(),
                     config: Box::new(pinned("balanced")),
                 }
@@ -110,6 +111,7 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
             &connection,
             104,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
                     text: "request-A".into(),
@@ -196,6 +198,7 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
             &connection,
             108,
             Method::ModelSet {
+                recover_unavailable_auxiliary: None,
                 target: target.clone(),
                 config: Box::new(pinned("deep")),
             },
@@ -250,6 +253,7 @@ async fn issue459_published_profile_reaches_attached_session_without_adoption() 
             &connection,
             109,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
                     text: "request-A deep".into(),
@@ -306,6 +310,7 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
             ..SessionModelConfig::of(ModelRef::parse("local/a").unwrap())
         };
         let set = |profile: &str| Method::ModelSet {
+            recover_unavailable_auxiliary: None,
             target: target.clone(),
             config: Box::new(pinned(profile)),
         };
@@ -331,7 +336,7 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
         call(
             &connection,
             103,
-            Method::TurnStart {
+            Method::TurnStart { input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
                     text: "request-A".into(),
@@ -417,7 +422,7 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
         let refused = refusal(
             &connection,
             108,
-            Method::TurnStart {
+            Method::TurnStart { input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
                     text: "request-B".into(),
@@ -466,7 +471,7 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
         call(
             &connection,
             112,
-            Method::TurnStart {
+            Method::TurnStart { input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
                     text: "request-C".into(),
@@ -519,6 +524,7 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
         let target = attach(&connection, &f, 0).await;
         let model = |id: &str| SessionModelConfig::of(ModelRef::parse(id).unwrap());
         let set = |id: &str| Method::ModelSet {
+            recover_unavailable_auxiliary: None,
             target: target.clone(),
             config: Box::new(model(id)),
         };
@@ -648,6 +654,7 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
                 &connection,
                 105,
                 Method::TurnStart {
+                    input_id: uuid::Uuid::new_v4().to_string(),
                     target: target.clone(),
                     content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
                         text: "on a".into(),
@@ -687,6 +694,7 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
             &connection,
             107,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
                     text: "on c".into(),

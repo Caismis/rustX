@@ -1,10 +1,10 @@
 import { readSource } from './source-reading';
-import { openEmptySession } from './shell-actions';
+import { openEmptySession, settledSave } from './shell-actions';
 import { expect, test } from '@playwright/test';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
-import { connectRemote, connectionAction, closeSettings, openSettingsPage, openWorkspaceSettings } from './shell-actions';
+import { connectRemote, connectionAction, returnHome, openSettingsPage, openWorkspaceSettings } from './shell-actions';
 import { wireProbe } from './wire-probe';
 
 test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorization and lost-write recovery', async ({ page }) => {
@@ -18,69 +18,68 @@ test('C01 C02 C06 C08 C09 C10 real zero-Session Settings, Workspace authorizatio
    const sessions = () => remote.client.call('session/list', { offset: 0, limit: 32 }, 'sessions');
    expect((await sessions()).sessions).toEqual([]);
    await page.getByRole('button', { name: 'Settings', exact: true }).click();
-   const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+   const settings = page.getByRole('region', { name: 'Settings', exact: true });
    await openSettingsPage(page, 'Advanced');
-   await expect(settings.getByText(/Revision:/)).toBeVisible();
-   await settings.getByLabel('max_connections', { exact: true }).fill('19');
-   await settings.getByRole('button', { name: 'Save App Server policy', exact: true }).click();
-   await expect(settings.getByText('App Server policy saved.')).toBeVisible();
-   await expect(settings.getByText('Saved process policy is active.')).toBeVisible();
+   await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
+   await settings.getByLabel('Response start timeout (ms)', { exact: true }).fill('19000');
+   await settings.getByRole('button', { name: 'Save Model timeout', exact: true }).click();
+   await expect(settledSave(settings, 'Model timeout')).toBeVisible();
    const source = await readSource(remote,{kind:'user'});
-   expect(source.process_bindings?.max_connections).toBe(19);
+   expect(source.user.authored?.model_timeout_policy?.response_start_timeout_ms).toBe('19000');
    expect(source.workspace).toBeNull();
-   await closeSettings(page);
+   await returnHome(page);
    await openWorkspaceSettings(page, a.displayName);
    await openSettingsPage(page, 'Tools & Permissions');
    // The User source authors every Native Tool, so this Workspace displays the
    // native effective value while authoring none of it.
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-   await settings.getByRole('form', { name: 'Native Tools', exact: true }).getByRole('button', { name: 'Configuration details', exact: true }).click();
-   await expect(settings.getByRole('form', { name: 'Native Tools', exact: true }).getByText('Inherited — no Workspace override')).toBeVisible();
-   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
+   await expect(settings.getByRole('form', { name: 'Built-in tools', exact: true })).toHaveAttribute('data-authored', 'absent');
+   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
    // An explicit edit against that displayed value is Workspace A's own draft.
    await settings.getByLabel('read', { exact: true }).uncheck();
-   await closeSettings(page);
+   await returnHome(page);
    await openWorkspaceSettings(page, b.displayName);
    await openSettingsPage(page, 'Tools & Permissions');
    // Workspace B is a different target: it still shows the inherited value and
    // never receives Workspace A's draft.
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
+   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
    await settings.getByLabel('write', { exact: true }).uncheck();
-   await closeSettings(page);
+   await returnHome(page);
    await openWorkspaceSettings(page, a.displayName);
    await openSettingsPage(page, 'Tools & Permissions');
    await expect(settings.getByLabel('read', { exact: true })).not.toBeChecked();
    await expect(settings.getByLabel('write', { exact: true })).toBeChecked();
-   await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
-   await expect(settings.getByText('Native Tools saved.')).toBeVisible();
+   await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
+   await expect(settledSave(settings, 'Built-in tools')).toBeVisible();
    const authored = await f.workspaceHost.host.configureWorkspace(a.id, f.endpoint, { kind: 'read' });
    if (authored.kind !== 'read') throw new Error('expected a read outcome');
    expect(authored.projection.workspace?.authored?.agent?.tools?.builtin).not.toContain('read');
    expect(authored.projection.workspace?.authored?.agent?.tools?.builtin).toContain('write');
    expect((await sessions()).sessions).toEqual([]);
-   expect(wire.requests.some(row => ['session/create', 'session/attach', 'turn/start'].includes(row.method))).toBe(false);
+   expect(wire.requests.some(row => ['thread/start', 'thread/resume', 'inbound/queue'].includes(row.method))).toBe(false);
    await expect(f.workspaceHost.host.configureWorkspace('unregistered', f.endpoint, { kind: 'read' })).rejects.toThrow('Unknown');
    await f.workspaceHost.host.removeWorkspace(await f.workspaceHost.host.listWorkspaces(), a.id);
    // A revoked target fences the next authored change and retains the draft.
    await settings.getByLabel('read', { exact: true }).check();
-   await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
-   await expect(settings.getByRole('alert').filter({ hasText: /was not saved\. WorkspaceHostError: Workspace Host: Error: Unknown/ })).toBeVisible();
+   await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
+   await expect(page.locator('[data-toast][data-foreground]').filter({ hasText: 'Unknown Workspace registration' })).toBeVisible();
    await expect(settings.getByLabel('read', { exact: true })).toBeChecked();
-   await closeSettings(page);
+   await returnHome(page);
    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+   await settings.getByRole('button', { name: 'Open User Settings', exact: true }).click();
    await openSettingsPage(page, 'Tools & Permissions');
    // A fresh User lifetime carries no draft, so there is nothing to save until
    // an explicit edit changes the authored value.
-   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeDisabled();
+   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeDisabled();
    await settings.getByLabel('read', { exact: true }).uncheck();
-   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeEnabled();
+   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeEnabled();
    const before = wire.requests.filter(row => row.method === 'configuration/sourceWrite').length;
    wire.loseNext('configuration/sourceWrite');
-   await settings.getByRole('button', { name: 'Save Native Tools', exact: true }).click();
+   await settings.getByRole('button', { name: 'Save Built-in tools', exact: true }).click();
    await expect.poll(wire.lost).toBe(1);
    await connectionAction(page, 'Reconnect');
-   await expect(settings.getByRole('button', { name: 'Save Native Tools', exact: true })).toBeEnabled();
+   await expect(settings.getByRole('button', { name: 'Save Built-in tools', exact: true })).toBeEnabled();
    expect(wire.lost()).toBe(1);
    expect(wire.requests.filter(row => row.method === 'configuration/sourceWrite')).toHaveLength(before + 1);
    expect((await sessions()).sessions).toEqual([]);
@@ -98,8 +97,8 @@ test('C13 C15 real native automatic commit waits for Session work and preserves 
    const selection = await remote.client.call('session/settings', { session_id: id }, 'settings');
    await message.fill('Long action in A'); await message.press('Enter'); await f.gate('finish-a');
    const source = await readSource(remote,{kind:'user'});
-   await remote.client.call('configuration/sourceWrite', { target: { kind: 'user' }, expected_revision: source.user.revision,
-     mutation: { kind: 'config', mutation: { unit: 'instructions', authored: 'New instructions apply at the next safe boundary.' } } }, 'sources_written');
+   await remote.client.call('configuration/sourceWrite', { target: { kind: 'user' }, expected_revision: source.global_guidance!.revision,
+     mutation: { kind: 'global_guidance', document: 'New instructions apply at the next safe boundary.' } }, 'sources_written');
    const waiting = page.getByText('Configuration changes will apply automatically after the current work settles.');
    await expect(waiting).toBeVisible();
    await page.screenshot({ path: '/tmp/rustx-configuration-waiting.png' });

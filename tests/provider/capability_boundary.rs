@@ -188,6 +188,7 @@ async fn chat_replays_previous_reasoning() {
             id: MessageId::new("msg-r"),
             content: vec![AssistantContentBlock::Reasoning(
                 rustx::message::types::ReasoningBlock {
+                    origin: request.invocation.replay_origin(),
                     text: Some("Think.".to_owned()),
                     provider_state: None,
                 },
@@ -256,6 +257,7 @@ async fn chat_reasoning_replay_defaults_and_overrides_reach_the_wire() {
                 id: MessageId::new(format!("msg-r-{attempt}")),
                 content: vec![AssistantContentBlock::Reasoning(
                     rustx::message::types::ReasoningBlock {
+                        origin: request.invocation.replay_origin(),
                         text: Some("Think.".to_owned()),
                         provider_state: None,
                     },
@@ -298,6 +300,7 @@ async fn chat_omit_ignores_unavailable_reasoning() {
             id: MessageId::new("msg-r-omit-unavailable"),
             content: vec![
                 AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                    origin: request.invocation.replay_origin(),
                     text: None,
                     provider_state: Some(
                         rustx::runtime::continuation::ProviderContinuationState::Anthropic(
@@ -349,10 +352,12 @@ async fn chat_omit_ignores_multiple_reasoning_blocks() {
             id: MessageId::new("msg-r-omit-multiple"),
             content: vec![
                 AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                    origin: request.invocation.replay_origin(),
                     text: Some("first".to_owned()),
                     provider_state: None,
                 }),
                 AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                    origin: request.invocation.replay_origin(),
                     text: None,
                     provider_state: None,
                 }),
@@ -420,6 +425,7 @@ async fn chat_replay_concatenates_plaintext_and_skips_opaque_blocks() {
                     .into_iter()
                     .map(|text| {
                         AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                            origin: request.invocation.replay_origin(),
                             text: text.map(str::to_owned),
                             provider_state: None,
                         })

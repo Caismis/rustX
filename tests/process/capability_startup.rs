@@ -25,13 +25,13 @@ use rustx::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientResult
 /// A catalog whose only model is never invoked: these tests compose the
 /// runtime and drive tools directly, they do not run an attempt.
 const MODELS_TOML: &str = r#"[providers.local]
+protocol = "openai_chat_completions"
 base_url = "https://local.fixture.invalid/v1"
 api_key = "$RUSTX_ISSUE81_KEY"
 
 [models."local/composed-model"]
 provider = "local"
 id = "composed-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 
@@ -991,7 +991,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
             toml::to_string_pretty(&session).unwrap()
         ),
     );
-    let session_id = rustx::local_runtime::session_controller::SessionController::open(
+    let thread_id = rustx::local_runtime::session_controller::SessionController::open(
         &root.path().join("private"),
     )
     .unwrap()
@@ -1003,7 +1003,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     .await
     .unwrap()
     .session
-    .id;
+    .active_conversation_id;
     let home = root.path().join("host");
     std::fs::create_dir_all(&home).unwrap();
 
@@ -1050,10 +1050,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
         &mut stdin,
         &mut stdout,
         2,
-        rustx::app_server::protocol::Method::SessionAttach {
-            session_id,
-            node_id: None,
-        },
+        rustx::app_server::protocol::Method::SessionAttach { thread_id },
     )
     .await;
     let rustx::app_server::protocol::MethodResult::Attached { target, .. } = attached else {

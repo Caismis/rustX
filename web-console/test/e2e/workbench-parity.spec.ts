@@ -28,6 +28,10 @@ for (const locale of ['en', 'zh'] as const) for (const narrow of [false, true]) 
     await page.goto(`${origin}/test/fixtures/workbench.html`);
     await page.locator('[data-preview-toggle]').click();
     const panel = panelOf(page), mode = panel.locator('[data-sidebar-right-mode]');
+    // Measure the settled chrome after the panel's opening transform completes.
+    await panel.evaluate(async element => {
+      await Promise.allSettled(element.getAnimations({ subtree: true }).map(animation => animation.finished));
+    });
     const collapse = panel.getByRole('button', { name: locale === 'zh' ? '收起右侧边栏' : 'Collapse right sidebar', exact: true });
     const boxes = await panel.locator('[data-dockkit-split-button], [data-sidebar-right-mode], [data-sidebar-right-toggle]').evaluateAll(elements => elements.map(element => {
       const box = element.getBoundingClientRect();
@@ -94,16 +98,28 @@ test('collapsing and floating retain the selected HTML document and its live sta
   await expect(panel.locator('iframe')).toHaveCount(1);
   await page.locator('[data-preview-toggle]').click();
   await expect(panel.frameLocator('iframe').getByRole('button', { name: 'Count 1' })).toBeVisible();
+  const frame = await panel.locator('iframe').elementHandle();
+  let count = 1;
+  for (const destination of ['Settings', 'Workflows', 'Scheduled Tasks']) {
+    await page.getByRole('button', { name: destination, exact: true }).click();
+    await expect(panel).toBeHidden();
+    expect(await frame!.evaluate(element => element.isConnected)).toBe(true);
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
+    await expect(panel.frameLocator('iframe').getByRole('button', { name: `Count ${count}` })).toBeVisible();
+    expect(await panel.locator('iframe').evaluate((element, original) => element === original, frame)).toBe(true);
+    await panel.frameLocator('iframe').getByRole('button', { name: `Count ${count}` }).click();
+    count++;
+  }
   await floatTab(page, /interactive.html/);
   const floating = panel.locator('[data-dockkit-float]');
-  await expect(floating.frameLocator('iframe').getByRole('button', { name: 'Count 1' })).toBeVisible();
+  await expect(floating.frameLocator('iframe').getByRole('button', { name: `Count ${count}` })).toBeVisible();
   await expect(floating).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(floating).toBeVisible();
   await floating.getByRole('button', { name: 'Send back to the sidebar', exact: true }).click();
   await expect(floating).toHaveCount(0);
   await expect(panel.locator('[data-dockkit-pane]')).toBeFocused();
-  await expect(panel.frameLocator('iframe').getByRole('button', { name: 'Count 1' })).toBeVisible();
+  await expect(panel.frameLocator('iframe').getByRole('button', { name: `Count ${count}` })).toBeVisible();
   expect(errors).toEqual([]);
 });
 

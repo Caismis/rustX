@@ -31,7 +31,7 @@ impl SessionRuntimeManager {
             let composition = composition.as_ref()?;
             (
                 composition.runtime().clone(),
-                composition.runtime().title_lifecycle(),
+                composition.runtime().lifecycle(),
             )
         };
         let mut publications = runtime.runtime_catalog_publications();
@@ -207,6 +207,7 @@ impl SessionRuntimeManager {
         &self,
         policy: super::super::app_server_policy::AppServerPolicy,
     ) {
+        self.environment.configure(&policy.environment_roots);
         *self.process_policy.write().expect("process policy") = policy;
     }
 
@@ -214,8 +215,12 @@ impl SessionRuntimeManager {
         &self,
         desired: &super::super::app_server_policy::AppServerPolicy,
     ) -> bool {
+        self.environment.configure(&desired.environment_roots);
         let mut actual = self.process_policy.write().expect("process policy");
         let restart = actual.shutdown_deadline_ms != desired.shutdown_deadline_ms;
+        actual
+            .environment_roots
+            .clone_from(&desired.environment_roots);
         actual.max_connections = desired.max_connections;
         actual.max_external_attachments = desired.max_external_attachments;
         actual.max_resident_runtimes = desired.max_resident_runtimes;
@@ -577,7 +582,12 @@ impl SessionRuntimeManager {
         application.capture_source(target, revision, process);
         if let SourceTarget::Workspace { directory } = target {
             let input = super::super::configuration::SessionConfigInput::new(directory.clone());
-            application.record_source(directory, &self.configuration.capture_application(&input));
+            application.record_source(
+                directory,
+                &self
+                    .configuration
+                    .capture_application(&input, Some(&self.credentials)),
+            );
         }
         if matches!(target, SourceTarget::User) {
             // A User commit also refreshes the desired capture of every
@@ -586,8 +596,12 @@ impl SessionRuntimeManager {
             // only successful fenced preparation publishes there.
             for directory in application.known_source_directories() {
                 let input = super::super::configuration::SessionConfigInput::new(directory.clone());
-                application
-                    .record_source(&directory, &self.configuration.capture_application(&input));
+                application.record_source(
+                    &directory,
+                    &self
+                        .configuration
+                        .capture_application(&input, Some(&self.credentials)),
+                );
             }
         }
         let inputs: Vec<_> = self
@@ -607,7 +621,8 @@ impl SessionRuntimeManager {
             application.capture(
                 session.to_string(),
                 &input.cwd,
-                self.configuration.capture_session_application(&input),
+                self.configuration
+                    .capture_session_application(&input, &self.credentials),
             );
         }
     }
@@ -770,8 +785,26 @@ impl SessionRuntimeManager {
         let owner = self.clone();
         let target = target.clone();
         tokio::task::spawn_blocking(move || {
+            use super::super::configuration::settings::{ConfigMutation, SourceMutation};
             target.validate().map_err(SourceSettingsError::Source)?;
             let mut application = owner.applications.lock();
+            let publish_catalog = match &mutation {
+                SourceMutation::Config {
+                    mutation:
+                        ConfigMutation::Model { authored: None, .. }
+                        | ConfigMutation::Provider { authored: None, .. }
+                        | ConfigMutation::RestoreProvider { .. },
+                    ..
+                } => Some(true),
+                SourceMutation::Config {
+                    mutation:
+                        ConfigMutation::Model { .. }
+                        | ConfigMutation::Provider { .. }
+                        | ConfigMutation::RootModel { .. },
+                    ..
+                } => Some(false),
+                _ => None,
+            };
             let result = owner
                 .configuration
                 .write_source_settings(&target, &expected, mutation);
@@ -782,6 +815,13 @@ impl SessionRuntimeManager {
                 )
             {
                 owner.capture_source_consumers(&mut application, &target);
+                if let Some(removing) = publish_catalog {
+                    application.publish_creation_catalog(
+                        target.workspace(),
+                        &owner.credentials,
+                        removing,
+                    );
+                }
                 owner.applications.notify(&application);
             }
             let configuration_revision = application

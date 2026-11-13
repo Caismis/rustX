@@ -5,7 +5,7 @@ import { parse } from 'yaml';
 import { codeDefaults } from '../../src/app/workflows/document/code';
 import { codeDocument } from '../workflow-code-document';
 import { viewId } from '../../src/app/workflows/ui/editor/selection';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote,openEmptySession,choose } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -19,10 +19,11 @@ for(const width of [1440,390])for(const language of ['python3','javascript'] as 
       await page.context().grantPermissions(['clipboard-read','clipboard-write']);
       await page.addInitScript(dark=>localStorage.setItem('rustx-appearance-v1',dark?'dark':'light'),width===390);
       await routeWorkspaceHost(page,fixture);await page.goto('/');await connectRemote(page,fixture.endpoint,fixture.token);await openEmptySession(page,fixture,'Workspace A');
-      await page.getByRole('navigation',{name:'Global panels'}).getByRole('button',{name:'Workflows',exact:true}).click();await page.getByRole('button',{name:'code',exact:true}).click();
+      await page.getByRole('navigation',{name:'Primary navigation'}).getByRole('button',{name:'Workflows',exact:true}).click();await page.getByRole('button',{name:'code',exact:true}).click();
       await expect(page).toHaveTitle(/rustX$/);
       const card=page.locator(`.react-flow__node[data-id='${viewId([],'node','code')}']`);await card.focus();await card.press('Enter');
-      await page.getByRole('button',{name:'Settings',exact:true}).click();await choose(page.getByRole('dialog',{name:'Settings',exact:true}),'Language','中文');await page.getByRole('button',{name:'关闭设置',exact:true}).click();
+      await page.getByRole('button',{name:'Settings',exact:true}).click();await choose(page.getByRole('region',{name:'Settings',exact:true}),'Language','中文');await page.getByRole('button',{name:'工作流',exact:true}).click();
+      await card.focus();await card.press('Enter');
       const panel=page.getByRole('complementary',{name:'检查器',exact:true});
       await expect(panel.getByText('视觉',{exact:true})).toHaveCount(0);await expect(panel.getByRole('button',{name:/AI|生成代码|生成提示词/})).toHaveCount(0);
       const languageSelector=panel.getByRole('combobox',{name:'语言',exact:true});await expect(languageSelector).toHaveValue(language);
@@ -70,6 +71,6 @@ for(const width of [1440,390])for(const language of ['python3','javascript'] as 
       expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
       await page.getByRole('button',{name:'返回工作流',exact:true}).first().click();await page.getByRole('button',{name:'code',exact:true}).click();await card.focus();await card.press('Enter');await expect(code.locator('.cm-line')).toHaveText(script.split('\n'));
       await expect(page.locator('vite-error-overlay')).toHaveCount(0);expect(errors).toEqual([]);
-    }finally{await fixture.stop(false);}
+    }finally{await stopDogfoodPage(page, fixture, false);}
   });
 });

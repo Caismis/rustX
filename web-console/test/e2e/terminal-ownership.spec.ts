@@ -29,10 +29,10 @@ test('real native ABA commits and delayed wire retirements preserve successor PT
     const created=await native.createSession({cwd:fixture.workspaceA});
     const session=created.session.id,root=created.session.active_node;
     await native.renameSession(session,'New session');
-    const attached=await native.client.call('session/attach',{session_id:session},'attached');
+    const attached=await native.client.call('thread/resume', {threadId:(await native.readSession(session)).active_conversation_id},'attached');
     const following=await followRoot(native,attached.target);
     const finished=following.nextSettlement();
-    await native.client.call('turn/start',{target:attached.target,content:[{type:'text',text:'Ownership branch seed'}]},'inbound_accepted');
+    await native.client.call('inbound/queue',{ inputId:crypto.randomUUID(),target:attached.target,content:[{type:'text',text:'Ownership branch seed'}]},'inbound_accepted');
     await finished;following.stop();
     const boundaries=await native.client.call('session/boundaries',{target:attached.target,offset:0,limit:32},'boundaries');
     const scope=await host.listWorkspaces();
@@ -52,7 +52,7 @@ test('real native ABA commits and delayed wire retirements preserve successor PT
     // Branch publication changes catalog ownership; switching retires the old resident runtime.
     await native.client.call('session/switchNode',{target:attached.target,node_id:branch.session.active_node},'session');
     expect((await summary()).ownership_generation).toBe(b.ownership_generation);
-    const current=await native.client.call('session/attach',{session_id:session},'attached');
+    const current=await native.client.call('thread/resume', {threadId:(await native.readSession(session)).active_conversation_id},'attached');
     await native.client.call('session/switchNode',{target:current.target,node_id:root},'session');
     const a2=await summary();
     expect(a2.active_node).toBe(a1.active_node);

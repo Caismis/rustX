@@ -1,3 +1,6 @@
+import { providerAction } from './settings-harness';
+import {openResourceModule} from './settings-harness';
+import { waitForSettingsRevision } from './settings-harness';
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -22,20 +25,20 @@ function redactedSources(s: ReturnType<typeof cfg3Client>) {
   s.source.user.authored = {
     ...s.source.user.authored,
     environment: ['SECRET_ENV', 'PLAIN_ENV'],
-    providers: { transport: { base_url: 'https://user.invalid', credential: { type: 'literal' } } },
+    providers: { transport: { protocol: 'openai_responses', base_url: 'https://user.invalid', credential: { type: 'literal' } } },
   };
-  s.source.resolved = { environment: ['SECRET_ENV', 'PLAIN_ENV'], providers: { transport: { base_url: 'https://user.invalid', credential: { type: 'literal' } } }, models: {} };
+  s.source.resolved = { environment: ['SECRET_ENV', 'PLAIN_ENV'], providers: { transport: { protocol: 'openai_responses', base_url: 'https://user.invalid', credential: { type: 'literal' } } }, models: {} };
   s.source.provenance = { 'environment.SECRET_ENV': { kind: 'user', document: '/bound/rustx.toml', base: '/bound' } };
   s.source.user_mcp.authored = { search: { definition: { type: 'stdio', command: 'search-server' }, retained_env: ['TOKEN'], retained_headers: [] } };
 }
 
-/** Literal Tool environment values are authored on Advanced, where the native
+/** Values are authored on Advanced, where the native
  * environment identities and the rest of the diagnostics live. */
 async function openWorkspaceRuntime(s: ReturnType<typeof cfg3Client>) {
   render(<SettingsSurface client={s.client} target={workspaceSettingsTarget('A', 'Workspace A')} host={cfg3Host(s)} />);
   await settingsReady();
   await openSettingsPage('Advanced');
-  await screen.findByText(/Revision: workspace-1/);
+  await waitForSettingsRevision('workspace-1');
 }
 
 it('S1-15 an inherited environment identity is discoverable while its User value is never projected', async () => {
@@ -48,11 +51,11 @@ it('S1-15 an inherited environment identity is discoverable while its User value
   const form = within(screen.getByRole('form', { name: 'Environment SECRET_ENV' }));
   // The Workspace authors no override, and the effective value is reported as
   // existing-but-never-projected rather than as available, absent or empty.
-  expect(form.getByText(/Inherited — no Workspace override/)).toBeTruthy();
+  expect(screen.getByRole('form', { name: 'Environment SECRET_ENV' }).dataset.authored).toBe('absent');
   // The native-resolved disclosure exists, and carries the redaction fact in
   // place of a value: there is no branch that could render one.
-  expect(form.getByText('Native resolved value (not Session adoption)')).toBeTruthy();
-  expect(form.getByText('Native effective value exists — the literal is never projected', { selector: 'pre' })).toBeTruthy();
+  expect(screen.getByRole('form', { name: 'Environment SECRET_ENV' }).dataset.effective).toBe('redacted');
+  expect(form.getByLabelText('Value').getAttribute('type')).toBe('password');
   // Nothing anywhere in the document carries the value.
   expect(document.body.innerHTML).not.toContain(SENTINEL);
   expect(retained(s)).not.toContain(SENTINEL);
@@ -67,7 +70,7 @@ it('S1-15 Override authors an empty Workspace draft and sends only the newly typ
   expect((form.getByRole('button', { name: 'Save Environment SECRET_ENV' }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(form.getByRole('button', { name: 'Override Environment SECRET_ENV' }));
   // Override starts from the neutral seed, never from the inherited literal.
-  const field = form.getByLabelText('Literal Tool environment value') as HTMLInputElement;
+  const field = form.getByLabelText('Value') as HTMLInputElement;
   expect(field.value).toBe('');
   expect(field.type).toBe('password');
   fireEvent.change(field, { target: { value: 'WORKSPACE-ONLY' } });
@@ -83,24 +86,17 @@ it('S1-15 Override authors an empty Workspace draft and sends only the newly typ
   expect(JSON.stringify(writes(s))).not.toContain(SENTINEL);
 });
 
-it('S1-15 Advanced diagnostics render the native projection without any literal value', async () => {
+it('S1-15 Advanced exposes useful environment names without raw projections or literal values', async () => {
   const s = cfg3Client(); redactedSources(s);
   render(<SettingsSurface client={s.client} target={userSettingsTarget} host={cfg3Host(s)} />);
   await settingsReady();
   await openSettingsPage('Advanced');
-  await screen.findByText(/Revision: user-1/);
-  const diagnostics = screen.getByLabelText('Source and application projection').textContent!;
-  const resolved = screen.getByLabelText('Resolved preview projection').textContent!;
-  // Both diagnostics carry the identities and no value at all: the environment
-  // members are a list of names, the Provider credential is `"type":"literal"`
-  // with no secret, and the MCP definition's `env` was cleared natively.
-  for (const rendered of [diagnostics, resolved]) {
-    expect(rendered).toContain('SECRET_ENV');
-    expect(rendered).not.toContain(SENTINEL);
-  }
-  expect(JSON.parse(resolved).resolved.environment).toEqual(['SECRET_ENV', 'PLAIN_ENV']);
-  expect(JSON.parse(diagnostics).user_mcp.authored.search.definition.env).toBeUndefined();
-  expect(JSON.parse(diagnostics).user_mcp.authored.search.retained_env).toEqual(['TOKEN']);
+  await waitForSettingsRevision('user-1');
+  expect(screen.queryByLabelText('Source and application projection')).toBeNull();
+  expect(screen.queryByLabelText('Resolved preview projection')).toBeNull();
+  expect(screen.getByRole('button', { name: 'SECRET_ENV' })).toBeTruthy();
+  expect(document.body.innerHTML).not.toContain(SENTINEL);
+  expect(retained(s)).not.toContain(SENTINEL);
 });
 
 it('S1-15 a Provider credential is never read back from a shadowed definition', async () => {
@@ -109,33 +105,23 @@ it('S1-15 a Provider credential is never read back from a shadowed definition', 
   await settingsReady();
   // The inherited identity is reachable and reported as a redacted native fact.
   await openResourceRow('transport');
-  const dialog = screen.getByRole('dialog', { name: 'Settings' });
+  const dialog = screen.getByRole('region', { name: 'Settings' });
   const provider = screen.getByRole('form', { name: 'Provider transport' });
   const form = within(provider);
-  expect(within(dialog).getByText(/Native effective Provider transport/).textContent).toContain('Literal secret (redacted)');
+  expect(within(dialog).queryByText(/Native effective Provider transport/)).toBeNull();
   const endpoint = form.getByLabelText('Base URL') as HTMLInputElement;
-  expect(endpoint.value).toBe('');
-  expect((form.getByRole('button', { name: 'Save Provider transport' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(endpoint.value).toBe('https://user.invalid');
+  expect(endpoint.matches(':disabled')).toBe(true);
+  expect((form.getByLabelText('API Key') as HTMLInputElement).value).toBe('');
   const transactionsBefore = retained(s);
   const requestsBefore = s.request.mock.calls.slice();
   const sourceBefore = structuredClone(s.source);
-  // Authoring an override starts a complete new definition; `retain` is not
-  // even offered, because this Workspace authors no credential to retain.
-  fireEvent.click(form.getByRole('button', { name: /Credential source/ }));
-  const listbox = await screen.findByRole('listbox');
-  expect(within(listbox).getAllByRole('option').map(option => option.textContent)).toEqual([
-    'Read it from an environment variable', 'Enter a literal secret',
-  ]);
-  expect(within(listbox).queryByRole('option', { name: 'Keep the credential this scope already authored' })).toBeNull();
-  // Select owns this Escape. A synthetic click need not settle browser focus,
-  // so document.activeElement can still name a control in the Settings layer.
-  fireEvent.keyDown(listbox, { key: 'Escape' });
-  expect(screen.queryByRole('listbox')).toBeNull();
-  expect(screen.getByRole('dialog', { name: 'Settings' })).toBe(dialog);
+  fireEvent.click(form.getByRole('button', { name: 'Provider actions' }));
+  expect(await screen.findByRole('menuitem', { name: 'Customize' })).toBeTruthy();
+  expect(screen.queryByRole('menuitem', { name: 'Use an API Key' })).toBeNull();
+  fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+  expect(screen.getByRole('region', { name: 'Settings' })).toBe(dialog);
   expect(screen.getByRole('form', { name: 'Provider transport' })).toBe(provider);
-  expect(form.getByLabelText('Base URL')).toBe(endpoint);
-  expect(endpoint.value).toBe('');
-  expect((form.getByRole('button', { name: 'Save Provider transport' }) as HTMLButtonElement).disabled).toBe(true);
   expect(document.body.innerHTML).not.toContain(SENTINEL);
   expect(retained(s)).not.toContain(SENTINEL);
   expect(retained(s)).toBe(transactionsBefore);
@@ -149,11 +135,12 @@ it('S1-15 an MCP literal environment value is never projected back into its edit
   render(<SettingsSurface client={s.client} target={userSettingsTarget} host={cfg3Host(s)} />);
   await settingsReady();
   await openSettingsPage('Extensions');
-  fireEvent.click(screen.getByRole('tab', { name: 'MCP servers' }));
+  await openResourceModule('mcp');
   await openResourceRow('search');
   // Native cleared the literal map and named only the identities it retained.
   expect(screen.queryByRole('group', { name: 'Literal environment' })).toBeNull();
-  expect((within(screen.getByRole('group', { name: 'Retain existing environment keys' })).getByRole('textbox', { name: 'Retain existing environment keys 1' }) as HTMLInputElement).value).toBe('TOKEN');
+  expect(s.source.user_mcp.authored?.search.retained_env).toEqual(['TOKEN']);
+  expect(screen.queryByRole('group',{name:'Retain existing environment keys'})).toBeNull();
   expect(document.body.innerHTML).not.toContain(SENTINEL);
   expect(retained(s)).not.toContain(SENTINEL);
 });
@@ -172,8 +159,7 @@ it('S2-12 the form library opens no devtools channel, so a typed secret is never
     await settingsReady();
     await openSettingsPage('Models');
     await openResourceRow('transport');
-    fireEvent.click(screen.getByRole('button', { name: /Credential source$/ }));
-    fireEvent.click(await screen.findByRole('option', { name: 'Enter a literal secret' }));
+    await providerAction('Use an API Key');
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: SENTINEL } });
     // The draft legitimately holds the secret in the actor-owned transaction.
     await waitFor(() => expect(retained(s)).toContain(SENTINEL));

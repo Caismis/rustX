@@ -1,3 +1,4 @@
+import {isPlainMessageKind} from '../../../../protocol/app-server/message-kind';
 import { message } from '../../locale/translation';
 import { useTranslation, useNotice } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
@@ -10,7 +11,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { contentPreview, inboundOrigin, type InboundRow } from '../../bindings/composer-context';
 import type { InboundControlOutcome, Submission } from '../../client/contracts';
 import { IconChevronDownOutline14, IconQueueOutline14 } from '../../presentation/primitives/icons';
-import type { PendingInboundRef } from '../../../../protocol/app-server/v73';
+import type { PendingInboundRef } from '../../../../protocol/app-server/v78';
 import css from './QueueDock.module.css';
 
 const QueueGlyph = () => <span className={css.lead} aria-hidden><IconQueueOutline14 /></span>;
@@ -68,8 +69,9 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
         : message('agent:copy.this-item-cannot-be-edited-with-the-text-editor'));
     }
   };
-  // An ordinary idle send is admitted directly, not queued: its echo is not a queue row.
-  const echoes = running ? submissions : [];
+  // The caller places only submissions dispatched during an active attempt
+  // here. Keep them until exact observation, including after that attempt ends.
+  const echoes = submissions;
   const count = rows.length + echoes.length;
   useEffect(() => { if (count === 0) setCollapsed(true); }, [count]);
   if (count === 0 && !draft && !notice) return null;
@@ -91,7 +93,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
             {count === 1 && <QueueGlyph />}
             <span className={css.preview} title={contentPreview(tx, row.message.content)}>{contentPreview(tx, row.message.content)}</span>
             {origin && <span className={css.status}>{origin}</span>}
-            {row.message.source === 'human' && (!row.message.kind || row.message.kind === 'message') && <div className={css.actions}>
+            {row.message.source === 'human' && isPlainMessageKind(row.message.kind) && <div className={css.actions}>
               <button type="button" className={css.action} disabled={locked || !edit || row.deferred || row.message.content.length !== 1 || row.message.content[0].type !== 'text'}
                 title={row.deferred ? tx('common:activity.loading') : row.message.content.length !== 1 || row.message.content[0].type !== 'text' ? tx('agent:queue-dock.non-text-or-multiple-content-blocks-cannot-be-safely-edited-here') : tx('agent:queue-dock.edit-queued-message')}
                 onClick={() => { setDraft({ expected: expected(row), messageId:row.message.id, text: row.message.content[0].type === 'text' ? row.message.content[0].text : '' }); setNotice(''); }}>{tx('agent:queue-dock.edit')}</button>
@@ -102,7 +104,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
         })}
         {echoes.map(submission => <li key={`accepted:${submission.messageId}`} className={`${css.row} ${css.pendingRow}`} data-submission-echo="" data-accepted-message-id={submission.messageId}>
           {count === 1 && <QueueGlyph />}
-          <span className={css.preview}>{contentPreview(tx, submission.content)}</span>
+          <span className={css.preview}>{contentPreview(tx, submission.content ?? [])}</span>
           <span className={css.status} role="status">{ACCEPTED}</span>
         </li>)}
       </ul>}

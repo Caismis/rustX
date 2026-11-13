@@ -2,7 +2,7 @@ import { selectedCheckpoint, selectedSessionId } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { connectRemote } from './shell-actions';
-import { connectionAction, closeSettings, expectSettled } from './shell-actions';
+import { connectionAction, returnHome, expectSettled } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { test, expect, type Page } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
@@ -29,7 +29,7 @@ test('native history, rich settlement, real image previews, reconnect and native
   const wire = await wireProbe(page);
   const reconnectChat = async () => {
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Access token')).toBeHidden();
     const target = await wire.attachedTarget(id);
     await expect.poll(() => wire.responses.some(row => row.method === 'session/subscribe' && sameTarget(row.result?.target, target))).toBe(true);
     // Released history survives this attachment. Wait for the executable UI
@@ -52,13 +52,13 @@ test('native history, rich settlement, real image previews, reconnect and native
   try {
     // Build durable history via typed native admission before the browser attaches.
     const remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
-    const created = await remote.client.call('session/create', { settings: { cwd: fixture.workspaceA } }, 'session_transition');
+    const created = await remote.client.call('thread/start', { settings: { cwd: fixture.workspaceA } }, 'session_transition');
     id = created.session.id;
     await remote.renameSession(id, 'New session');
-    const attached = await remote.client.call('session/attach', { session_id: id }, 'attached');
+    const attached = await remote.client.call('thread/resume', {threadId:(await remote.readSession(id)).active_conversation_id}, 'attached');
     await expect(remote.client.call('artifact/read', { target: attached.target, artifact_id: 'artifact_999' }, 'artifact_bytes')).rejects.toThrow();
     for (let i = 0; i < 34; i++) {
-      await remote.client.call('turn/start', { target: attached.target, content: [{ type: 'text', text: `History ${i}` }] }, 'inbound_accepted');
+      await remote.client.call('inbound/queue', { inputId:crypto.randomUUID(), target: attached.target, content: [{ type: 'text', text: `History ${i}` }] }, 'inbound_accepted');
       await expect.poll(async () => {
         const current = await remote.client.call('session/checkpoint', { target: attached.target }, 'checkpoint');
         const history=await remote.client.call('session/transcript',{target:attached.target,at:{type:'latest'},limit:32},'transcript_window');
@@ -144,7 +144,7 @@ test('native history, rich settlement, real image previews, reconnect and native
     expect(await inspector.innerText()).not.toContain(fixture.workspaceA);
     await trajectory.getByLabel('Search trajectory').fill('');
     await inspector.getByRole('button', { name: 'Close details' }).click();
-    await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await returnHome(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     await page.getByLabel('Message', { exact: true }).fill('Rich reply');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await fixture.gate('settle-chat');
@@ -168,7 +168,7 @@ test('native history, rich settlement, real image previews, reconnect and native
     await ledger.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
     const retainedLedger = (await ledger.elementHandle())!;
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Access token')).toBeHidden();
     // Connected can still expose the previous attachment's long retained window.
     // Its replacement first mounts a short head, then assembles native pages.
     const traceTarget = await wire.attachedTarget(id);
@@ -188,7 +188,7 @@ test('native history, rich settlement, real image previews, reconnect and native
     await expect(settling).toHaveAttribute('data-state', 'completed');
     await expect(settling.locator('xpath=ancestor::*[@role="row"]')).toHaveAttribute('data-kind', 'assistant');
     expect(await ledger.evaluate(el => el.scrollTop)).toBe(0);
-    await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await returnHome(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     await expect(page.getByText('Settled', { exact: true })).toHaveCount(1);
     await expect(page.locator('[aria-label="Streaming response"]')).toHaveCount(0);
     await expect(page.getByRole('table')).toHaveCount(1);
@@ -211,11 +211,11 @@ test('native history, rich settlement, real image previews, reconnect and native
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Uploaded workspace file received.', { exact: true })).toBeVisible();
     await expectSettled(page, wire);
-    expect(wire.requests.filter(row => row.method === 'turn/start').at(-1)!.params.content.filter((block: any) => block.type === 'upload')).toEqual([{ type: 'upload', ...receipt }]);
+    expect(wire.requests.filter(row => row.method === 'inbound/queue').at(-1)!.params.content.filter((block: any) => block.type === 'upload')).toEqual([{ type: 'upload', ...receipt }]);
     await expect(page.getByLabel('Message', { exact: true })).toHaveValue('');
     await expect(page.getByLabel('Canonical conversation').getByText('note.txt', { exact: true })).toBeVisible();
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await expect(page.getByLabel('Canonical conversation').getByText('note.txt', { exact: true })).toBeVisible();
     await expectSettled(page, wire);
     await page.getByLabel('Message', { exact: true }).fill('Image please');
@@ -268,7 +268,7 @@ test('native history, rich settlement, real image previews, reconnect and native
     expect(await urlCount()).toBe(1);
     const previousImageUrl = await canonical.locator('img').getAttribute('src');
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await expandImage();
     // The hydrated history retains this component and its explicit load intent.
     // Reconnection still replaces its byte lease and reads under fresh authority.
@@ -327,10 +327,10 @@ test('native history, rich settlement, real image previews, reconnect and native
     await expect(page.getByText('Content deferred', { exact: true })).toHaveCount(0);
     await page.screenshot({ path: 'test-results/trajectory-inspector.png', fullPage: true });
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await expect(trajectory.locator(`[data-trace-id="${stableToolId}"]`)).toHaveCount(1);
     expect(await trajectory.innerText()).not.toContain(fixture.workspaceA);
-    await closeSettings(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await returnHome(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     expect((await fixture.control('requests')).requests).toHaveLength(38);
     await page.screenshot({ path: 'test-results/chat-history.png', fullPage: true });
     // A Fork preserves independently readable managed images.

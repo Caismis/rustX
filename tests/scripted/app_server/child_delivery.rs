@@ -47,7 +47,7 @@ impl ChildDelivery {
             "[agent]\nagents=['reviewer']\n",
         )
         .unwrap();
-        let connection = AppServerConnection::with_delivery_access(
+        let connection = AppServerConnection::with_connection_lifetime(
             fixture.host.clone(),
             tokio_util::sync::CancellationToken::new(),
         );
@@ -61,6 +61,7 @@ impl ChildDelivery {
             &connection,
             8100,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: wire_text("request-A"),
             },

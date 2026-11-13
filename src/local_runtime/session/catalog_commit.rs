@@ -209,6 +209,9 @@ impl SessionCatalog {
         }
         let now = Utc::now();
         let node = SessionNode {
+            name: None,
+            archived: false,
+            dynamic_tools: prepared.dynamic_tools.clone(),
             ordinal: self.document.next_node_ordinal,
             id: prepared.node_id.clone(),
             parent: None,
@@ -282,6 +285,9 @@ impl SessionCatalog {
             });
         }
         let node = SessionNode {
+            name: None,
+            archived: false,
+            dynamic_tools: prepared.dynamic_tools.clone(),
             ordinal: self.document.next_node_ordinal,
             id: prepared.node_id.clone(),
             parent: Some(parent),
@@ -468,6 +474,17 @@ pub(super) fn validate_document(document: &CatalogDocument) -> Result<(), Sessio
             super::title::validate_title(title, session)?;
         }
         for (node_id, node) in &session.nodes {
+            crate::tools::host::validate_definitions(&node.dynamic_tools)
+                .map_err(|detail| SessionError::Catalog { detail })?;
+            if node
+                .name
+                .as_ref()
+                .is_some_and(|name| name.trim().is_empty() || name.len() > 512)
+            {
+                return Err(SessionError::Catalog {
+                    detail: "invalid Thread name".into(),
+                });
+            }
             if document.retired.nodes.contains(node_id)
                 || document
                     .retired

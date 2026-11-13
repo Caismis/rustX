@@ -173,6 +173,7 @@ mod tests {
             continuation_source: None,
             images: std::collections::BTreeMap::new(),
             invocation: crate::model::invocation::ModelInvocationConfig {
+                replay_binding: Some("test-binding".into()),
                 model: "m".to_owned(),
                 protocol: ModelProtocol::OpenAiChatCompletions,
                 max_output_tokens: 512,

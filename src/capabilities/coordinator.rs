@@ -442,26 +442,17 @@ pub struct PreparedCapabilityCandidate {
 }
 
 impl PreparedCapabilityCandidate {
-    /// Rebinds the candidate's root context profile to `agent`'s instructions
-    /// and project-instruction policy and its resolved root project files.
+    /// Rebinds the candidate's root context profile to its AGENTS.md policy.
     pub(crate) fn set_context_profile(
         &mut self,
         agent: &crate::local_runtime::config::AgentProfileDocument,
-        root_agent_project_files: &[crate::runtime::resources::ProjectContextFile],
     ) {
         if let Some(profile) = &mut self.resolved_profile {
             let profile = Arc::make_mut(profile);
-            profile.instructions.clone_from(&agent.instructions);
-            profile.project_instructions.inherit = agent.agents_md.inherit;
-            profile.project_instructions.files = root_agent_project_files.to_vec();
+            profile.inherit_project_instructions = agent.agents_md.inherit;
         }
         let activation = &mut self.resource_inputs.agent_activation;
-        activation
-            .profile
-            .instructions
-            .clone_from(&agent.instructions);
         activation.profile.agents_md.clone_from(&agent.agents_md);
-        activation.project_files = root_agent_project_files.to_vec();
     }
     /// An admission-local view; the caller retains this candidate until the
     /// child has frozen its materialization or the Workflow has settled.
@@ -670,15 +661,16 @@ impl CapabilityCoordinator {
     ) -> Result<Self, CapabilityPreparationError> {
         Self::with_backend_and_preparation(
             config,
-            Arc::new(RunnerBackedSkillEnvironmentBackend::new(Arc::new(
-                RunnerBackedProcessRunner::default(),
-            ))),
+            Arc::new(RunnerBackedSkillEnvironmentBackend::new(
+                Arc::new(RunnerBackedProcessRunner::default()),
+                crate::runtime::CancellationSignal::new(),
+            )),
             preparation,
         )
     }
 
     /// The coordinator constructor with an explicit materialization
-    /// backend (deterministic testing seam).
+    /// backend (child lifetime ownership and deterministic testing seam).
     ///
     /// # Errors
     ///
@@ -1235,11 +1227,10 @@ impl CapabilityCoordinator {
         let discovered = if let Some(discovered) = discovered {
             discovered
         } else {
-            let workspace = self.inner.workspace.clone();
             let config = inputs.skill_discovery.clone();
             let signal = cancellation.cloned().unwrap_or_default();
             let discovered = tokio::task::spawn_blocking(move || {
-                SkillDiscovery::with_config(&workspace, config)
+                SkillDiscovery::with_config(config)
                     .with_cancellation(signal)
                     .discover()
             })
@@ -1250,7 +1241,13 @@ impl CapabilityCoordinator {
             }
             discovered
         };
-        let merged = merge_dependency_manifests(&discovered.packages)?;
+        let environment_packages: Vec<_> = discovered
+            .packages
+            .iter()
+            .filter(|package| inputs.agent_activation.selects_root_skill(package))
+            .cloned()
+            .collect();
+        let merged = merge_dependency_manifests(&environment_packages)?;
         let python = self
             .inner
             .environment_store
@@ -1703,6 +1700,34 @@ impl CapabilityCoordinator {
                 })
             })
             .collect()
+    }
+
+    /// Prepare only the frozen child selection's declared dependencies. This
+    /// uses the same environment owner as ordinary preparation, without discovery.
+    pub(crate) async fn prepare_frozen_skill_dependencies(
+        &self,
+        candidate: &mut PreparedCapabilityCandidate,
+        manifest: &crate::skills::DependencyManifest,
+    ) -> Result<(), CapabilityPreparationError> {
+        candidate.python = self
+            .inner
+            .environment_store
+            .ensure_python_environment(&manifest.python)
+            .await?;
+        candidate.node = self
+            .inner
+            .environment_store
+            .ensure_node_environment(&manifest.node)
+            .await?;
+        let mut overlay = ToolEnvironmentOverlay::default();
+        if let Some(python) = &candidate.python {
+            overlay = overlay.merge(ToolEnvironmentOverlay::python(&python.root));
+        }
+        if let Some(node) = &candidate.node {
+            overlay = overlay.merge(ToolEnvironmentOverlay::node(&node.root));
+        }
+        candidate.effective_environment = candidate.effective_environment.with_overlay(&overlay);
+        Ok(())
     }
 
     /// Prepares the **base-only** candidate of a subagent child runtime
@@ -2208,6 +2233,60 @@ impl CapabilityCoordinator {
         candidate: &mut Option<PreparedCapabilityCandidate>,
     ) -> Result<CommittedCapability, CapabilityCommitError> {
         self.commit_candidate(candidate, Some(publication), true)
+    }
+
+    /// Publish a context-only generation's inert Skill catalog and root
+    /// instructions under the same runtime authority and lifecycle grant as
+    /// ordinary publication. Physical owners and `CapabilityRevision` stay fixed.
+    /// Runtime catalog recovery must subsequently use these admitted definitions,
+    /// rather than restoring the catalog from before this context commit.
+    pub(crate) fn try_publish_context(
+        &self,
+        publication: &RuntimeCapabilityPublication,
+        context: &CapabilitySnapshot,
+        agent: &crate::local_runtime::config::AgentProfileDocument,
+    ) -> Result<(), CapabilityCommitError> {
+        let mut state = self.inner.state.lock().expect("capability state");
+        if !Arc::ptr_eq(&self.inner, &publication.coordinator) {
+            return Err(CapabilityCommitError::RuntimePublicationRequired);
+        }
+        let lifecycle = state
+            .conversation_lifecycle
+            .clone()
+            .ok_or(CapabilityCommitError::RuntimePublicationRequired)?;
+        if context.revision() != state.revision {
+            return Err(CapabilityCommitError::StaleCandidate {
+                prepared_from: context.revision(),
+                current: state.revision,
+            });
+        }
+        lifecycle
+            .try_admit_running_commit(|_admission| {
+                let mut inputs = self
+                    .inner
+                    .resource_inputs
+                    .lock()
+                    .expect("capability inputs");
+                inputs
+                    .agent_activation
+                    .profile
+                    .agents_md
+                    .clone_from(&agent.agents_md);
+                state.snapshot = Arc::new(
+                    state
+                        .snapshot
+                        .as_ref()
+                        .clone()
+                        .with_skills(context.skills().clone())
+                        .with_resolved_profile(context.resolved_profile().cloned().map(Arc::new)),
+                );
+            })
+            .map_err(|refusal| match refusal {
+                crate::runtime::types::NativeAdmissionRefusal::Busy => CapabilityCommitError::Busy,
+                crate::runtime::types::NativeAdmissionRefusal::Closed(_) => {
+                    CapabilityCommitError::ConversationInactive
+                }
+            })
     }
 
     fn commit_with_authority(
@@ -3174,6 +3253,86 @@ body
         assert_eq!(lease.revision(), snapshot.revision());
         assert_eq!(lease.snapshot().as_ref(), &*snapshot);
         drop(lease);
+    }
+
+    #[tokio::test]
+    async fn skill_definition_preparation_preserves_attempts_and_rejects_stale_successors() {
+        let (dir, coordinator) = coordinator();
+        let path = dir.path().join("workspace/.agents/skills/pdf/SKILL.md");
+        let first = coordinator.commit(prepare(&coordinator).await).unwrap();
+        let attempt_a = coordinator.acquire_attempt_lease();
+        let write = |description: &str| {
+            std::fs::write(
+                &path,
+                format!("---\nname: pdf\ndescription: {description}\n---\nlive body\n"),
+            )
+            .unwrap();
+        };
+        write("Version two");
+        let stale = prepare(&coordinator).await;
+        write("Version three");
+        let blocked = prepare(&coordinator).await;
+        assert_eq!(
+            coordinator.commit(blocked),
+            Err(CapabilityCommitError::Busy)
+        );
+        assert_eq!(
+            attempt_a.snapshot().skills().bindings(),
+            first.skills().bindings()
+        );
+        assert_eq!(
+            attempt_a.snapshot().skills().catalog_entries()[0].description,
+            "PDF skill."
+        );
+        drop(attempt_a);
+        let successor = coordinator.commit(prepare(&coordinator).await).unwrap();
+        let attempt_b = coordinator.acquire_attempt_lease();
+        assert_eq!(
+            attempt_b.snapshot().skills().catalog_entries()[0].description,
+            "Version three"
+        );
+        assert_ne!(successor.skills().bindings(), first.skills().bindings());
+        drop(attempt_b);
+        assert!(matches!(
+            coordinator.commit(stale),
+            Err(CapabilityCommitError::StaleCandidate { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn unselected_skills_do_not_merge_conflicts_or_prepare_environments() {
+        let (dir, coordinator) = coordinator();
+        coordinator
+            .inner
+            .resource_inputs
+            .lock()
+            .unwrap()
+            .agent_activation
+            .profile
+            .skills = Some(crate::runtime::agent_profile::AgentSkillSelection::Exact(
+            Vec::new(),
+        ));
+        let collection = dir.path().join("workspace/.agents/skills");
+        for (name, version) in [("pdf", "1.0"), ("unused", "2.0")] {
+            std::fs::create_dir_all(collection.join(name)).unwrap();
+            std::fs::write(collection.join(name).join("SKILL.md"), format!("---\nname: {name}\ndescription: {name}\nmetadata:\n  rustx.python-dependencies: '{{\"example\":\"{version}\"}}'\n---\n")).unwrap();
+        }
+        let candidate = prepare(&coordinator).await;
+        assert_eq!(candidate.skill_packages().len(), 2);
+        assert!(candidate.python_environment().is_none() && candidate.node_environment().is_none());
+        assert!(!dir.path().join("skill-env/python").exists());
+        coordinator
+            .inner
+            .resource_inputs
+            .lock()
+            .unwrap()
+            .agent_activation
+            .profile
+            .skills = Some(crate::runtime::agent_profile::AgentSkillSelection::All);
+        assert!(matches!(
+            coordinator.prepare_candidate().await,
+            Err(crate::capabilities::CapabilityPreparationError::DependencyConflict(_))
+        ));
     }
 
     /// A runtime claim closes the ordinary coordinator publication path, but
@@ -4496,6 +4655,7 @@ mod mcp_race_tests {
                 stdout_capture: None,
                 workspace_changes: None,
                 model_invocation: None,
+                attempt_id: None,
                 goal: None,
                 schedule: None,
                 conversation_id: runtime_bundle.conversation_id(),

@@ -238,6 +238,10 @@ class Planning(unittest.TestCase):
         run = v.plan("pull_request", [], modified("src/lib.rs"))["run"]
         self.assertTrue(run["rust-fast"] and run["rust-platform-core"] and run["web-client"])
         self.assertFalse(run["rust-contracts"] or run["rust-platform-boundaries"])
+        self.assertFalse(run["desktop-macos"])
+        for path in ("src/runtime/interactive_supervisor.rs", "src/runtime/supervised_unit.rs"):
+            with self.subTest(path=path):
+                self.assertTrue(v.plan("pull_request", [], modified(path))["run"]["desktop-macos"])
         run = v.plan("pull_request", [], modified("README.md"))["run"]
         self.assertEqual({job for job, selected in run.items() if selected}, {"documentation-contracts"})
         run = v.plan("pull_request", [], modified("tests/README.md"))["run"]
@@ -263,9 +267,9 @@ class AffectedSteps(unittest.TestCase):
 
 
 class BrowserSelection(unittest.TestCase):
-    def test_full_runs_the_complete_inventory_in_two_shards(self):
+    def test_full_runs_the_complete_inventory_in_three_shards(self):
         self.assertEqual(v.plan("push", [], [])["browser"],
-                         {"selection": "full", "shards": [1, 2], "specs": [], "presentation": False})
+                         {"selection": "full", "shards": [1, 2, 3], "specs": [], "presentation": False})
 
     def test_fast_is_one_shard_of_smoke_and_changed_specs(self):
         browser = v.plan("pull_request", [], modified("web-console/test/e2e/chat.spec.ts", "README.md"))["browser"]

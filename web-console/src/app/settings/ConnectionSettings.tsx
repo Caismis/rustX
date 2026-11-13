@@ -1,3 +1,4 @@
+import { SettingsNotice } from './SettingsFeedback';
 import { displayText } from '../../locale/translation';
 import { useTranslation } from '../../locale/react';
 import { useState, useSyncExternalStore } from 'react';
@@ -10,45 +11,45 @@ export function ConnectionSettings({ connection, client }: { connection: Connect
   const tx = useTranslation();
   const selection = useSyncExternalStore(connection.subscribe, connection.getSnapshot);
   const transport = useSyncExternalStore(client.subscribe, client.getSnapshot);
-  const [endpoint, setEndpoint] = useState(''), [token, setToken] = useState(''), [deliveryToken, setDeliveryToken] = useState('');
+  const [endpoint, setEndpoint] = useState(''), [token, setToken] = useState('');
   return <section className="connection-form" aria-label={tx('settings:connection-settings.connection-settings')}>
     <h2>{tx('settings:connection-settings.connection')}</h2>
-    <label>{tx('settings:connection-settings.mode')}<select aria-label={tx('settings:connection-settings.connection-mode')} value={selection.selectedMode} onChange={event => { setToken(''); setDeliveryToken(''); void connection.select(event.target.value as 'local' | 'remote'); }}>
+    <label>{tx('settings:connection-settings.mode')}<select aria-label={tx('settings:connection-settings.connection-mode')} value={selection.selectedMode} onChange={event => { setToken(''); void connection.select(event.target.value as 'local' | 'remote'); }}>
       <option value="local">{tx('settings:connection-settings.local-managed-connection')}</option><option value="remote">{tx('settings:connection-settings.remote-app-server')}</option>
     </select></label>
-    <p role="status">{tx('settings:connection-settings.active-mode')}{' '}{selection.mode === 'local' ? tx('settings:connection-settings.local-managed-connection') : tx('settings:connection-settings.remote-app-server')}</p>
+    {selection.mode !== selection.selectedMode && <p role="status">{tx('settings:connection-settings.active-mode')}{' '}{selection.mode === 'local' ? tx('settings:connection-settings.local-managed-connection') : tx('settings:connection-settings.remote-app-server')}</p>}
     <p className="connection-status">{transport.connection === 'connected' ? tx('settings:connection-settings.connected') : selection.busy ? tx('settings:connection-settings.connecting') : tx('settings:connection-settings.disconnected')}</p>
     {selection.selectedMode === 'remote' ? <>
       <label>{tx('settings:connection-settings.websocket-endpoint')}<Input aria-label={tx('settings:connection-settings.websocket-endpoint')} value={endpoint} onChange={event => setEndpoint(event.target.value)} /></label>
       <label>{tx('settings:connection-settings.transport-token')}<Input type="password" autoComplete="off" aria-label={tx('settings:connection-settings.transport-token')} value={token} onChange={event => setToken(event.target.value)} /></label>
-      <label>{tx('settings:connection-settings.delivery-token')}<Input type="password" autoComplete="off" aria-label={tx('settings:connection-settings.delivery-token')} value={deliveryToken} onChange={event => setDeliveryToken(event.target.value)} /></label>
-      <p>{tx('settings:connection-settings.transport-credentials-stay-in-page-memory-remote-attachment-gran')}</p>
-      <Button disabled={selection.busy} onClick={() => void connection.connectRemote(endpoint, token, deliveryToken || undefined)}>{tx('settings:connection-settings.connect')}</Button>
+      <Button disabled={selection.busy} onClick={() => void connection.connectRemote(endpoint, token)}>{tx('settings:connection-settings.connect')}</Button>
     </> : <p>{tx('settings:connection-settings.the-launcher-supplies-this-connection-automatically')}</p>}
     <Button disabled={selection.busy} onClick={() => void connection.reconnect()}>{tx('settings:connection-settings.reconnect')}</Button>
     <Button onClick={() => void connection.disconnect()}>{tx('settings:connection-settings.disconnect')}</Button>
-    {(selection.error || transport.error) && <p role="alert">{displayText(tx, selection.error || transport.error || '')}</p>}
-    <details><summary>{tx('settings:connection-settings.connection-details')}</summary><p>{transport.endpoint} {tx('settings:connection-settings.generation')} {transport.generation} {tx('settings:copy.app-server-v73')}</p></details>
+    <SettingsNotice text={displayText(tx, selection.error || transport.error || '')}/>
     {!!transport.detached?.length && <details><summary>{tx('settings:connection-settings.detached-authority-diagnostics')}</summary>
       <p>{tx('settings:connection-settings.historical-evidence-only-these-operations-are-never-replayed-and')}</p>
-      {transport.detached.map((evidence, index) => <section key={index}><h3>{evidence.authority}</h3>
+      {transport.detached.map((evidence, index) => <section key={index}><h3>{tx('settings:connection.previous-connection', { number: index + 1 })}</h3>
+        {evidence.sessions.filter(row => !row.deletion).map(row => <p key={row.id}>{tx('settings:connection.review-conversation', { id: row.id })}{row.error && `: ${displayText(tx, row.error)}`}</p>)}
         {evidence.sessions.filter(row => row.deletion).map(row => <p key={row.id}>{row.id}: {tx(row.deletion === 'uncertain' ? 'settings:connection-settings.deletion-uncertain' : row.deletion === 'committed_cleanup_pending' ? 'settings:connection-settings.deletion-cleanup' : 'settings:connection-settings.deletion-durability')}</p>)}
-        <pre>{JSON.stringify(evidence, null, 2)}</pre>
+        {!!evidence.operations.length && <p>{tx('settings:connection.pending-count', { count: evidence.operations.length })}</p>}
         <Button onClick={() => client.acknowledgeDetached(index)}>{tx('settings:connection-settings.i-have-reviewed-this-historical-evidence')}</Button>
       </section>)}
     </details>}
     {['disconnected', 'stale', 'error'].includes(transport.connection) && Object.values(transport.views).some(view => view.deleting || view.error || view.modelMutation || view.cancellation) && <details><summary>{tx('settings:connection-settings.current-evidence')}</summary>
       <p>{tx('settings:connection-settings.historical-evidence-only-these-operations-are-never-replayed-and')}</p>
       {Object.values(transport.views).filter(view => view.deleting || view.error || view.modelMutation || view.cancellation).map(view => <section key={view.id}>
-        <p>{transport.endpoint} · {transport.authorityId} · {view.id}</p>
-        <pre>{JSON.stringify({ id: view.id, error: view.error, modelMutation: view.modelMutation, cancellation: view.cancellation,
-          deletion: view.deleting ? view.deletionCommitted ?? 'uncertain' : undefined }, null, 2)}</pre>
+        <p>{tx('settings:connection.review-conversation', { id: view.id })}</p>
+        {view.error && <p>{displayText(tx, view.error)}</p>}
+        {view.deleting && <p>{tx(!view.deletionCommitted ? 'settings:connection-settings.deletion-uncertain' : view.deletionCommitted === 'committed_cleanup_pending' ? 'settings:connection-settings.deletion-cleanup' : 'settings:connection-settings.deletion-durability')}</p>}
+        {view.modelMutation && <p>{tx('settings:connection.review-model-change')}</p>}
+        {view.cancellation && <p>{tx('settings:connection.review-cancellation')}</p>}
         <Button onClick={() => client.acknowledgeSessionDiagnostic(view.id)}>{tx('settings:connection-settings.i-have-reviewed-this-historical-evidence')}</Button>
       </section>)}
     </details>}
     {!!transport.uncertain.filter(item => !item.interactionKey).length && <details><summary>{tx('settings:connection-settings.review-uncertain-operations')}</summary>
       <p>{tx('settings:connection-settings.verify-the-affected-work-before-acknowledging')}</p>
-      {transport.uncertain.filter(item => !item.interactionKey).map(item => <div key={item.id}><p>{item.method} {tx('settings:connection-settings.request')}{' '}{item.id}</p><Button onClick={() => client.acknowledgeDiagnostic(item.id)}>{tx('settings:connection-settings.i-have-verified-the-affected-work')}</Button></div>)}
+      {transport.uncertain.filter(item => !item.interactionKey).map((item, index) => <div key={item.id}><p>{item.sessionId ? tx('settings:connection.review-conversation', { id: item.sessionId }) : tx('settings:connection.pending-operation', { number: index + 1 })}</p>{item.diagnostic && <p>{displayText(tx, item.diagnostic)}</p>}<Button onClick={() => client.acknowledgeDiagnostic(item.id)}>{tx('settings:connection-settings.i-have-verified-the-affected-work')}</Button></div>)}
     </details>}
   </section>;
 }

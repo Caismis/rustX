@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { SessionModelConfig } from '../../../protocol/app-server/v73';
+import type { SessionModelConfig } from '../../../protocol/app-server/v78';
 import type { AppServerClient } from '../client/app-server';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 
@@ -55,7 +55,7 @@ export async function selectSessionModel(client: AppServerClient, id: string, se
     return;
   }
   const target = client.target(id);
-  await client.setAgentModel(id, selection);
+  await client.setAgentModel(id, selection, true);
   const current = client.getSnapshot();
   if (current.generation === generation && current.endpoint === endpoint && sameTarget(current.views[id]?.target, target)) {
     modelPreferences().select(endpoint ?? '', selection);

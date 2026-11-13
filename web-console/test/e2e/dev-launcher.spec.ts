@@ -1,4 +1,4 @@
-import { chooseWorkspace, openConnectionSettings, closeSettings } from './shell-actions';
+import { chooseWorkspace, openConnectionSettings, returnHome } from './shell-actions';
 import { test, expect } from '@playwright/test';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,12 +18,12 @@ test('development launcher serves the real Web carrier, native App Server and ex
   const settings = join(directory, 'rustx.toml'); writeFileSync(settings, `[agent.model]
 model = "local/local-model"
 [providers.local]
+protocol = "openai_chat_completions"
 base_url = "http://127.0.0.1:1/v1"
 api_key = "launcher-test-unused"
 [models."local/local-model"]
 provider = "local"
 id = "local-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 4096
 capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
@@ -46,7 +46,7 @@ compat = { chat_reasoning_replay = "omit" }
     expect(launchToken).not.toBe(token);
     // Real native admission: browser credentials cannot enter the v9 transport.
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v73', `rustx-token.${launchToken}`]);
+      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v78', `rustx-token.${btoa(launchToken!).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}`]);
       socket.onopen = () => { socket.close(); reject(new Error('Browser token admitted by native App Server')); };
       socket.onerror = () => resolve();
     });
@@ -55,21 +55,21 @@ compat = { chat_reasoning_replay = "omit" }
     const clean = new URL('/', ready.url).href;
     await expect(page).toHaveURL(clean);
     await expect(page.getByLabel('WebSocket endpoint')).toHaveCount(0);
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await expect(page.getByRole('region', { name: 'Connection recovery' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Select Workspace workspace with spaces' })).toBeVisible();
     await page.screenshot({ path: test.info().outputPath('local-managed.png') });
     const proof = await page.evaluate(key => sessionStorage.getItem(key), BROWSER_SESSION_STORAGE);
     expect(proof).toMatch(/^[A-Za-z0-9_-]{43}$/); expect([token, launchToken]).not.toContain(proof);
     await new Promise<void>((resolve, reject) => {
-      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v73', `rustx-token.${proof}`]);
+      const socket = new WebSocket(ready.endpoint, ['rustx.app-server.v78', `rustx-token.${btoa(proof!).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}`]);
       socket.onopen = () => { socket.close(); reject(new Error('Browser session proof admitted by native App Server')); };
       socket.onerror = () => resolve();
     });
     const headers = { [BROWSER_SESSION_HEADER]: proof! };
     const bootstrap = await page.request.get(`${clean}__rustx/bootstrap`, { headers });
     expect(bootstrap.headers()['cache-control']).toBe('no-store');
-    expect(await bootstrap.json()).toEqual({ connectionMode: 'local', appServerEndpoint: ready.endpoint, appServerTransportToken: token, appServerDeliveryToken: readFileSync(ready.deliveryTokenFile, 'utf8') });
+    expect(await bootstrap.json()).toEqual({ connectionMode: 'local', appServerEndpoint: ready.endpoint, appServerTransportToken: token });
     const catalog = await (await page.request.post(`${clean}product-host/list`, { headers, data: {} })).json();
     expect(catalog.endpoint).toBe(ready.endpoint);
     expect(catalog.workspaces.map((row: { displayPath: string }) => row.displayPath)).toEqual([workspace]);
@@ -82,43 +82,43 @@ compat = { chat_reasoning_replay = "omit" }
     await openConnectionSettings(page);
     await expect(page.getByLabel('Connection mode')).toHaveValue('local');
     await page.getByLabel('Connection mode').selectOption('remote');
-    await expect(page.getByText('Active mode: Local managed connection', { exact: true })).toBeVisible();
+    await expect(page.getByText('Active mode: Local', { exact: true })).toBeVisible();
     await expect(page.locator('.connection-status')).toHaveText('Connected');
     await page.getByLabel('WebSocket endpoint').fill('ws://user:password@127.0.0.1:1/');
-    await page.getByLabel('Transport token').fill(token);
+    await page.getByLabel('Access token').fill(token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.getByRole('region', { name: 'Connection Settings' }).getByRole('alert')).toContainText('no credentials');
+    await expect(page.locator('[data-toast][data-foreground]').filter({ hasText: 'no credentials' })).toBeVisible();
     await page.getByLabel('WebSocket endpoint').fill(ready.endpoint);
-    await page.getByLabel('Transport token').fill(launchToken);
+    await page.getByLabel('Access token').fill(launchToken);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
-    await expect(page.getByRole('region', { name: 'Connection Settings' }).getByRole('alert')).toContainText('WebSocket');
+    await expect(page.locator('[data-toast][data-foreground]').filter({ hasText: 'WebSocket' })).toBeVisible();
     await expect(page.getByLabel('Connection mode')).toHaveValue('remote');
-    await page.getByLabel('Transport token').fill(token);
+    await page.getByLabel('Access token').fill(token);
     await page.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect(page.locator('.connection-status')).toHaveText('Connected');
     await page.screenshot({ path: test.info().outputPath('remote-settings.png') });
     expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain(token);
     await page.route('**/__rustx/bootstrap', route => route.fulfill({ status: 503, body: 'Unavailable' }));
     await page.getByLabel('Connection mode').selectOption('local');
-    await expect(page.getByRole('region', { name: 'Connection Settings' }).getByRole('alert')).toContainText('No local managed connection');
+    await expect(page.locator('[data-toast][data-foreground]').filter({ hasText: 'No local managed connection' })).toBeVisible();
     await expect(page.getByLabel('Connection mode')).toHaveValue('local');
     await expect(page.locator('.connection-status')).toHaveText('Connected');
-    await expect(page.getByText('Active mode: Remote App Server', { exact: true })).toBeVisible();
+    await expect(page.getByText('Active mode: Remote server', { exact: true })).toBeVisible();
     await page.unroute('**/__rustx/bootstrap');
-    await page.route('**/__rustx/bootstrap', route => route.fulfill({ json: { connectionMode: 'local', appServerEndpoint: ready.endpoint, appServerTransportToken: launchToken, appServerDeliveryToken: readFileSync(ready.deliveryTokenFile, 'utf8') } }));
+    await page.route('**/__rustx/bootstrap', route => route.fulfill({ json: { connectionMode: 'local', appServerEndpoint: ready.endpoint, appServerTransportToken: launchToken } }));
     await page.getByLabel('Connection mode').selectOption('local');
-    await expect(page.getByRole('region', { name: 'Connection Settings' }).getByRole('alert')).toContainText('WebSocket');
+    await expect(page.locator('[data-toast][data-foreground]').filter({ hasText: 'WebSocket' })).toBeVisible();
     await expect(page.getByLabel('Connection mode')).toHaveValue('local');
-    await expect(page.getByText('Active mode: Local managed connection', { exact: true })).toBeVisible();
+    await expect(page.getByText('Active mode: Local', { exact: true })).toHaveCount(0);
     await expect(page.locator('.connection-status')).toHaveText('Disconnected');
-    await closeSettings(page);
+    await returnHome(page);
     await page.getByRole('button', { name: 'Show details', exact: true }).click();
     await expect(page.getByRole('tablist', { name: 'Settings pages' }).getByRole('tab', { name: 'Advanced', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('region', { name: 'Connection Settings' })).toBeVisible();
     await page.unroute('**/__rustx/bootstrap');
     await page.getByRole('region', { name: 'Connection Settings' }).getByRole('button', { name: 'Reconnect', exact: true }).click();
     await expect(page.locator('.connection-status')).toHaveText('Connected');
-    await closeSettings(page);
+    await returnHome(page);
     expect(await page.evaluate(() => indexedDB.databases())).toEqual([]);
     expect(await page.evaluate(() => document.cookie)).not.toContain('rustx-browser');
     expect(await page.context().cookies(clean)).toEqual([]);

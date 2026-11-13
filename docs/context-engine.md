@@ -557,9 +557,8 @@ authority. RustX renders it with `render_effective_system_prompt` from:
    request-time Skill catalog when the immutable snapshot has visible Skills.
 
 The built-in guidance and execution working directory are always present for
-primary Root and child Agent requests. `agent.instructions` and project
-instructions extend it in their own sections; omitting or clearing either
-leaves the built-in guidance intact. Execution, idle compaction budgeting
+primary Root and child Agent requests. Project instructions and named Agent
+profile instructions extend it in their own sections. Execution, idle compaction budgeting
 and configuration request comparison construct their
 static System input from the same admitted resource generation. Auxiliary
 summarization remains isolated from all primary System guidance.

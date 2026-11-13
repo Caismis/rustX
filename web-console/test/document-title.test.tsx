@@ -12,7 +12,7 @@ const open = (title: string) => act(async () => { fireEvent.click(screen.getByRo
 it('follows native naming and committed conversation focus without exposing previews or identities', async () => {
   server.summaries.set('A', { name: null, preview: 'Opening question' });
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   document.title = 'stale title';
   const app = await act(async () => render(<App client={server.client} workspaceHost={server.workspaceHost}/>));
   expect(document.title).toBe('rustX');
@@ -41,16 +41,17 @@ it('retains the conversation title under Settings and uses the product title in 
     return { type: 'workflow_library', library: { target: request.params.target, directory: '/workspace/.agents/workflows', absent_revision: 'missing', files: [], diagnostic: null } };
   });
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost}/>); });
   expect(document.title).toBe('Session A — rustX');
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Settings' })); });
   expect(document.title).toBe('Session A — rustX');
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close Settings' })); });
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Home' })); });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Workflows' })); });
   expect(document.title).toBe('rustX');
   await act(async () => { await server.client.renameSession('A', 'Revised while away'); });
   expect(document.title).toBe('rustX');
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Home' })));
   await open('Revised while away');
   expect(document.title).toBe('Revised while away — rustX');
 });

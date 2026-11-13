@@ -1,12 +1,12 @@
-import type { McpProbeResult, SourceMutation, SourceSettings, SourceTarget } from '../../../protocol/app-server/v73.ts';
-import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v73.ts';
-import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor } from '../../../protocol/app-server/v73.ts';
+import type { McpProbeResult, ModelProbeOutcome, ModelProbeSource, SourceMutation, SourceScope, SourceSettings, SourceTarget } from '../../../protocol/app-server/v78.ts';
+import type { AttachmentTarget, CanonicalContentLocator, SessionFileReference } from '../../../protocol/app-server/v78.ts';
+import type { ErrorData, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor } from '../../../protocol/app-server/v78.ts';
 import type { WorkflowEdit, WorkflowSource } from '../../../protocol/app-server/workflow-documents.ts';
 import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts';
 import type { FileBytes, FileReadOptions } from '../../shared/file-preview.ts';
 export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; locator: CanonicalContentLocator; delivery_index: number; read?: FileReadOptions }
 export interface DeliveryBytes extends FileBytes { file: SessionFileReference }
-export type WorkspaceConfigurationOperation =  { kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'write'; expected_revision: string; mutation: SourceMutation };
+export type WorkspaceConfigurationOperation = ({ kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'model_probe'; model: string; source: ModelProbeSource } | { kind: 'write'; expected_revision: string; mutation: SourceMutation }) & { expected_directory?: string };
 /** The separate authoritative read attempted after a confirmed write. It may
  * succeed or fail without changing the fact that the write committed. */
 export type WorkspaceConfigurationReread =
@@ -24,6 +24,7 @@ export interface WorkspaceConfigurationCommit {
  * never be mistaken for an uncommitted write. */
 export type WorkspaceConfigurationResult =
   | { kind: 'mcp_probe'; result: McpProbeResult }
+  | { kind: 'model_probe'; outcome: ModelProbeOutcome }
   | { kind: 'read' | 'reconcile'; projection: SourceSettings }
   | { kind: 'write'; commit: WorkspaceConfigurationCommit };
 /** One native Workflow file operation on one registered Workspace's own
@@ -32,7 +33,7 @@ export type WorkflowHostOperation =
   | { kind: 'list' }
   | { kind: 'read'; id: string }
   | { kind: 'model_choices'; query: WorkflowModelChoicesQuery; expected_revision?: string | null }
-  | { kind: 'tool_catalog'; source?: string | null; cursor?: WorkflowToolCatalogCursor | null }
+  | { kind: 'tool_catalog'; source?: string | null; cursor?: WorkflowToolCatalogCursor | null; expected_scope?: SourceScope | null; expected_directory?: string }
   | { kind: 'enable'; id: string; expected_revision: string; enabled: boolean }
   | { kind: 'analyze'; id: string; document: WorkflowFileDocument; generation: string; query?: WorkflowAnalysisQuery }
   | { kind: 'check'; id: string; document: WorkflowFileDocument }
@@ -63,8 +64,10 @@ export interface WorkspaceAuthorityScope {
 }
 export interface WorkspaceCatalog extends WorkspaceAuthorityScope {
   workspaces: ProductHostWorkspace[];
+  preferredWorkspace?: string;
   picker: { kind: 'configured'; locations: { id: string; displayName: string }[] } | { kind: 'unavailable'; reason: string };
 }
+export interface WorkspaceSelectionIntent { client: string; sequence: number }
 export type SessionLocation = { authorized: false; reason: 'denied' | 'unavailable' } | { authorized: true; workspaceId?: string };
 /** Validate the current positional contract before any display or admission consumer. */
 export function validateLocations(value: unknown, count: number): asserts value is SessionLocation[] {
@@ -142,6 +145,7 @@ export interface ProductHostWorkspaces {
   adoptWorkspace(scope: WorkspaceAuthorityScope, location: string): Promise<void>;
   renameWorkspace(scope: WorkspaceAuthorityScope, id: string, displayName: string): Promise<void>;
   reorderWorkspace(scope: WorkspaceAuthorityScope, id: string, before?: string): Promise<void>;
+  selectWorkspace(scope: WorkspaceAuthorityScope, id: string, intent: WorkspaceSelectionIntent): Promise<void>;
   removeWorkspace(scope: WorkspaceAuthorityScope, id: string): Promise<void>;
   resolveWorkspace(id: string, endpoint: string): Promise<{ cwd: string }>;
   /** Authorization is independent of registration. Exact Host-owned classification, bounded to a page. */

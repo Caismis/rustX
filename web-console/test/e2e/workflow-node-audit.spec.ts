@@ -7,7 +7,7 @@ import { setNodePresentation } from '../../src/app/workflows/document/geometry';
 import type { BlockPath, WorkflowDocument } from '../../src/app/workflows/document/model';
 import { viewId } from '../../src/app/workflows/ui/editor/selection';
 import { rootBlock } from '../workflow-root';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -208,7 +208,7 @@ for (const width of [1440, 390])
         await connectRemote(page, fixture.endpoint, fixture.token);
         await openEmptySession(page, fixture, 'Workspace A');
         await page
-          .getByRole('navigation', { name: 'Global panels' })
+          .getByRole('navigation', { name: 'Primary navigation' })
           .getByRole('button', { name: 'Workflows', exact: true })
           .click();
         await page.getByRole('button', { name: 'all_nodes', exact: true }).click();
@@ -347,7 +347,7 @@ for (const width of [1440, 390])
         expect(errors).toEqual([]);
         expect((await fixture.control('requests')).requests).toHaveLength(0);
       } finally {
-        await fixture.stop(false);
+        await stopDogfoodPage(page, fixture, false);
       }
     });
   });

@@ -878,6 +878,7 @@ mod tests {
                         }),
                         crate::message::types::AssistantContentBlock::Reasoning(
                             crate::message::types::ReasoningBlock {
+                                origin: None,
                                 text: Some("private historical chain".into()),
                                 provider_state: None,
                             },

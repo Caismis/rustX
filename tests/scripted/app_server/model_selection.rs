@@ -574,14 +574,9 @@ async fn r06_catalog_publication_rejects_prepared_selection_and_commits_unrelate
         let f = fixture().await;
         let id = &f.sessions[0].id;
         let runtime = f.manager.configuration_runtime(id).unwrap();
-        let original_instructions = runtime
-            .runtime_resources()
-            .configuration()
-            .unwrap()
-            .config
-            .agent
-            .instructions
-            .clone();
+        let original = runtime.runtime_resources();
+        let original_instructions =
+            super::configuration::guidance(original.project_context_files());
         let original_settings = f.manager.sessions.read_settings(id).await.unwrap();
         let mut gate = SelectionGate::prepared(&f);
         let pending = select(&f, selection("local/b"));
@@ -599,10 +594,7 @@ async fn r06_catalog_publication_rejects_prepared_selection_and_commits_unrelate
             .as_table_mut()
             .unwrap()
             .insert("local/c".into(), third);
-        document["agent"].as_table_mut().unwrap().insert(
-            "instructions".into(),
-            "pending unrelated instructions".into(),
-        );
+        super::configuration::set_file_guidance(&f, "pending unrelated instructions");
         std::fs::write(source.user.path, toml::to_string(&document).unwrap()).unwrap();
         f.manager
             .reconcile_configuration(&SourceTarget::User)
@@ -628,14 +620,8 @@ async fn r06_catalog_publication_rejects_prepared_selection_and_commits_unrelate
         assert_authority(&f, &selected).await;
         // The unrelated instructions committed automatically; the rejected
         // selection fence never decided it, and nothing invoked a model.
-        let instructions = runtime
-            .runtime_resources()
-            .configuration()
-            .unwrap()
-            .config
-            .agent
-            .instructions
-            .clone();
+        let published = runtime.runtime_resources();
+        let instructions = super::configuration::guidance(published.project_context_files());
         assert_ne!(instructions, original_instructions);
         assert_eq!(instructions, "pending unrelated instructions");
         assert!(f.provider.request_bodies().is_empty());

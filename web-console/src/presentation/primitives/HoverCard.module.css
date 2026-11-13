@@ -21,6 +21,19 @@
   border-radius: 12px;
   background: var(--dsw-hovercard-bg);
   box-shadow: var(--dsw-shadow-lv3);
+  overflow: auto;
+}
+
+.preview {
+  max-height: 420px;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  box-shadow: var(--dsw-elevation-panel);
 }
 
 .copyable {

@@ -42,16 +42,6 @@ pub(super) fn capture(
     crate::package_io::check_cancelled(signal).map_err(|error| error.to_string())?;
     let mut hash = Sha256::new();
     hash.update(b"rustx-accepted-resource-domain-v1\n");
-    let skills = crate::skills::SkillDiscovery::user_root(root.join("skills"))
-        .with_cancellation(signal.clone())
-        .discover();
-    include(
-        &mut hash,
-        &(&skills.provenance, &skills.invalid, &skills.diagnostics),
-    )?;
-    for package in &skills.packages {
-        include(&mut hash, &(package.id(), package.version_id()))?;
-    }
     let python = super::super::managed_python_resources::discover_controlled(None, root, signal)
         .map_err(|error| error.to_string())?;
     include(&mut hash, &python.locations)?;
@@ -84,16 +74,6 @@ pub(super) fn capture(
             .map(|(id, error)| (id, error.to_string()))
             .collect::<Vec<_>>(),
     )?;
-    for definition in catalog.definitions() {
-        for file in &definition.profile().project_instructions.files {
-            include_source(
-                &mut hash,
-                workspace.unwrap_or(&agent_root),
-                &file.path,
-                crate::bounded_file::MAX_RESOURCE_BYTES,
-            )?;
-        }
-    }
     include_source(
         &mut hash,
         root,

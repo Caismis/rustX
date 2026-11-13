@@ -17,6 +17,7 @@ export const en = {
   "todo.title": "Update tasks",
 
   "tool-card.inspect": "Inspect",
+  "tool-card.read-image": "Read image",
   "tool-card.copy": "Copy",
   "tool-card.copied": "Copied",
   "tool-card.collapse-output": "Collapse output",
@@ -74,6 +75,7 @@ export const zh = {
   "todo.title": "更新任务",
 
   "tool-card.inspect": "查看",
+  "tool-card.read-image": "读取图片",
   "tool-card.copy": "复制",
   "tool-card.copied": "已复制",
   "tool-card.collapse-output": "收起输出",

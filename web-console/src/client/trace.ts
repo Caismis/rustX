@@ -1,7 +1,7 @@
 export {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import type {TraceValueSelector} from '../../../protocol/app-server/trace-field';
-import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v73';
+import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v78';
 
 /** Records requested per older page. */
 export const TRACE_PAGE_SIZE = 32;
@@ -30,8 +30,8 @@ export interface TraceDetailEntry {
   /** One in-flight read; lifecycle refreshes may mark its result stale without cancelling it. */
   readonly read?: object;
   readonly stale?: boolean;
-  readonly content?:import('../../../protocol/app-server/v73').ContentBinding[];
-  readonly readContent?:(ref:import('../../../protocol/app-server/v73').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v73').ContentChunk>;
+  readonly content?:import('../../../protocol/app-server/v78').ContentBinding[];
+  readonly readContent?:(ref:import('../../../protocol/app-server/v78').ContentRef,offset:number,current:()=>boolean)=>Promise<import('../../../protocol/app-server/v78').ContentChunk>;
   /** A positive finite descriptor is not a complete TraceDetail. */
   readonly page?: CheckpointPage;
   readonly reader?: TraceFieldReader;
@@ -43,8 +43,8 @@ export interface TraceDetailEntry {
 /**
  * The browser's replaceable Trace read domain.
  *
- * It holds a finite window of server-ordered summary records describing one
- * contiguous server-proven interval, the details fetched for inspected
+ * It holds server-ordered summary intervals, explicit paging boundaries
+ * between disconnected intervals, and the details fetched for inspected
  * records, and the current selection. It folds no events, derives no
  * execution semantics, and is discarded wholesale whenever the server says
  * the interval it described no longer applies.
@@ -55,9 +55,11 @@ export interface TraceFieldReader {
  page(cut:CheckpointReadCut,domain:string,offset:number,current:()=>boolean):Promise<CheckpointPage>;
 }
 export interface TraceCache {
-  /** A native tool landing retains its historical interval until explicitly released. */
+  /** Navigation marker only; locating history never pauses live appends. */
   located?: true;
   page: TracePage;
+  /** Unloaded history between retained records and a newer native interval. */
+  gaps?: readonly TraceGap[];
   /** Issued for each represented row; renewed only by that row's native head. */
   readCuts?:Readonly<Record<string,CheckpointReadCut>>;
   fields?:TraceFieldReader;
@@ -68,6 +70,7 @@ export interface TraceCache {
   loading?: boolean;
   error?: string;
 }
+export interface TraceGap { after: string; before: string; cursor: string }
 
 function pageCuts(page:TracePage,outerCut?:CheckpointReadCut):Record<string,CheckpointReadCut> {
  const cut=page.read_cut??outerCut;
@@ -255,10 +258,27 @@ function contentIdentity(record: TraceRecord | undefined) {
       request.context_next_offset, request.context_additions, request.system_prompt, request.tool_catalog]]);
 }
 
+/** One continuous native interval can bridge or advance several retained gaps. */
+function mergeTraceGaps(gaps: readonly TraceGap[], page: TracePage, paging?: TraceGap): TraceGap[] {
+  const incoming = new Set(page.records.map(record => record.id));
+  return gaps.flatMap(gap => {
+    // A paging response connects to its requested right boundary even though
+    // that exclusive boundary is absent from the response itself. Other gaps
+    // move only when the interval actually crosses their right boundary.
+    if (gap !== paging && !incoming.has(gap.before)) return [gap];
+    if (incoming.has(gap.after)) return [];
+    const first = page.records[0]?.id;
+    if (gap !== paging && first === gap.before) return [gap];
+    return page.next_cursor == null ? [] : [{ ...gap, before: first ?? gap.before, cursor: page.next_cursor }];
+  });
+}
+
 export function refreshTrace(previous: TraceCache | undefined, page: TracePage, updates: TraceLifecycle[] = [],outerCut?:CheckpointReadCut,lifecycleOnly=false): TraceCache {
   if (!previous) return replaceTrace(page,undefined,outerCut);
+  const overlap = new Set(previous.page.records.map(record => record.id));
+  const retainPage = lifecycleOnly;
   const cut=page.read_cut??outerCut;
-  const readCuts={...previous.readCuts,...(lifecycleOnly||previous.located?{}:pageCuts(page,outerCut)),...(cut?Object.fromEntries(updates.map(update=>[update.id,cut])):{})};
+  const readCuts={...previous.readCuts,...(retainPage?{}:pageCuts(page,outerCut)),...(cut?Object.fromEntries(updates.map(update=>[update.id,cut])):{})};
   const repairs = new Map(updates.map(update => [update.id, update]));
   const repair = (record: TraceRecord): TraceRecord => {
     const update = repairs.get(record.id);
@@ -276,16 +296,16 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
       tool: record.tool && update.tool ? { ...record.tool, ...update.tool } : record.tool,
     };
   };
-  if (previous.located||lifecycleOnly) page = { ...previous.page, records: previous.page.records.map(repair) };
+  if (retainPage) page = { ...previous.page, records: previous.page.records.map(repair) };
   const selection = previous.selection
     ? repair(page.records.find(record => record.id === previous.selection!.id) ?? previous.selection)
     : undefined;
   if (previous.page.records.length === 0) return { ...previous, page, selection,readCuts:retainedCuts(readCuts,page.records,selection) };
-  const overlap = new Set(previous.page.records.map(record => record.id));
-  // A flat ledger describes one server-proven interval. No shared anchor means
-  // unknown intervening history, never permission to concatenate two ranges.
-  if (!page.records.some(record => overlap.has(record.id))) {
-    return { ...replaceTrace(page, previous,outerCut), selection,readCuts:retainedCuts(readCuts,page.records,selection) };
+  // Latest pages advance independently of the reading position. Keep an
+  // explicit native paging boundary wherever they leave unloaded history.
+  const gaps = retainPage ? [...previous.gaps ?? []] : mergeTraceGaps(previous.gaps ?? [], page);
+  if (!retainPage && page.records.length && !page.records.some(record => overlap.has(record.id)) && page.next_cursor) {
+    gaps.push({ after: previous.page.records.at(-1)!.id, before: page.records[0]!.id, cursor: page.next_cursor });
   }
   const records = merge(previous.page.records.map(repair), page.records);
   const latest = new Map(records.map(record => [record.id, record]));
@@ -303,7 +323,23 @@ export function refreshTrace(previous: TraceCache | undefined, page: TracePage, 
     [id, unchanged(id) && !(entry.error && old.get(id)?.state !== latest.get(id)?.state)
       ? entry : { ...entry, stale: true, error: undefined }],
   ));
-  return { ...previous, selection, details, readCuts:retainedCuts(readCuts,records,selection),page: { read_cut:null,records, next_cursor: previous.page.next_cursor } };
+  return { ...previous, gaps, selection, details, readCuts:retainedCuts(readCuts,records,selection),page: { read_cut:null,records, next_cursor: previous.page.next_cursor } };
+}
+
+/** Insert one bounded native page at its own gap, without replacing the live tail. */
+export function fillTraceGap(previous: TraceCache, gap: TraceGap, page: TracePage): TraceCache {
+  if (!previous.gaps?.includes(gap)) return previous;
+  const boundary = previous.page.records.findIndex(record => record.id === gap.before);
+  const older = previous.page.records.slice(0, boundary);
+  const newer = previous.page.records.slice(boundary);
+  const oldRecords = new Map(older.map(record => [record.id, record]));
+  // A paging reply can predate live repairs. Retain each resident row together
+  // with its own immutable field cut; the subsequent interest read repairs it.
+  const records = [...merge(older, page.records.map(record => oldRecords.get(record.id) ?? record)), ...newer];
+  const gaps = mergeTraceGaps(previous.gaps, page, gap);
+  return { ...previous, gaps, loading: false, error: undefined,
+    readCuts: retainedCuts({ ...pageCuts(page), ...previous.readCuts }, records, previous.selection),
+    page: { read_cut: null, records, next_cursor: previous.page.next_cursor } };
 }
 
 export function prependTrace(previous: TraceCache, page: TracePage): TraceCache {

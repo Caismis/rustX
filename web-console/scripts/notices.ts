@@ -14,6 +14,7 @@ const packages = new Map<string, string>();
  * is pinned to one exact version and one declared license, so an upgrade or a
  * license change fails closed instead of inheriting this record. */
 const declaredOnly: Record<string, { license: string | undefined; notice: string }> = {
+  '@lobehub/icons-static-svg 1.102.0': { license: 'MIT', notice: readFileSync(join(root, 'licenses/lobehub-icons-static-svg-1.102.0.txt'), 'utf8') },
   '@uiw/react-codemirror 4.25.12': { license: 'MIT', notice: readFileSync(join(root, 'licenses/react-codemirror-4.25.12.txt'), 'utf8') },
   '@uiw/codemirror-extensions-basic-setup 4.25.12': { license: 'MIT', notice: readFileSync(join(root, 'licenses/react-codemirror-4.25.12.txt'), 'utf8') },
   '@fortune-sheet/core 1.0.4': { license: 'MIT', notice: readFileSync(join(root, 'licenses/fortune-sheet-1.0.4.txt'), 'utf8') },
@@ -60,9 +61,15 @@ const pdfPackage = locate(root, 'pdfjs-dist'), pdfVersion = JSON.parse(readFileS
 for (const asset of ['cmaps/LICENSE', 'standard_fonts/LICENSE_FOXIT', 'standard_fonts/LICENSE_LIBERATION']) {
   packages.set(`pdfjs-dist ${pdfVersion} (${asset})`, readFileSync(join(dirname(pdfPackage), asset), 'utf8'));
 }
+// The CAD package's compiled OCCT closure has its own distributed license text.
+const cadPackage = locate(root, 'occt-import-js');
+const cadVersion = JSON.parse(readFileSync(cadPackage, 'utf8')).version;
+for (const asset of ['dist/license.occt-import-js.txt', 'dist/license.occt.txt']) {
+  packages.set(`occt-import-js ${cadVersion} (${asset})`, readFileSync(join(dirname(cadPackage), asset), 'utf8').replace(/\r\n/g, '\n'));
+}
 packages.set('Lucide 0.468.0 (vendored git-fork and wrench icons)', readFileSync(join(root, 'public/LICENSE-Lucide.txt'), 'utf8'));
 packages.set('Lucide 1.17.0 (vendored Cable icon used by ZCode)', readFileSync(join(root, 'public/LICENSE-Lucide-1.17.txt'), 'utf8'));
-const output = 'Production install dependency notices for rustX Web Console\nIncludes the complete pinned install closure; only selected modules enter the browser bundle.\n\n' + [...packages].sort(([a], [b]) => a.localeCompare(b)).map(([name, license]) => `===== ${name} =====\n${license.trim().replace(/[ \t]+$/gm, '')}\n`).join('\n');
+const output = 'Production install dependency notices for rustX Web Console\nIncludes the complete pinned install closure; only selected modules enter the browser bundle.\nModified CAD runtime source and rebuild instructions: cad-runtime-source/README.md\n\n' + [...packages].sort(([a], [b]) => a.localeCompare(b)).map(([name, license]) => `===== ${name} =====\n${license.trim().replace(/[ \t]+$/gm, '')}\n`).join('\n');
 const path = join(root, 'public/THIRD-PARTY-NOTICES.txt');
 if (process.argv.includes('--write')) writeFileSync(path, output);
 else if (readFileSync(path, 'utf8') !== output) throw new Error('Dependency notices drifted: run node scripts/notices.ts --write');

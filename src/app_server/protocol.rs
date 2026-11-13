@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v73 envelope and method vocabulary.
+//! Rust authority for the App Server v78 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -7,12 +7,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::local_runtime::session::{SessionId, SessionNodeId, SessionPersistentState};
 use crate::runtime::identity::{ConversationId, MessageId};
-use crate::runtime::interaction::{InteractionRef, InteractionResponse};
+use crate::runtime::interaction::InteractionRef;
 use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 73;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 78;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -116,6 +116,128 @@ pub use crate::local_runtime::session::uploads::UserInputBlock;
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)] // Wire commands are short-lived and bounded by the transport frame.
 pub enum Method {
+    #[serde(rename = "mcp/catalog")]
+    McpCatalog {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        id: crate::runtime::identity::McpServerId,
+        expected_revision: String,
+        kind: crate::tools::mcp::catalog::CatalogKind,
+    },
+    #[serde(rename = "skills/list")]
+    SkillsList {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        offset: usize,
+        limit: usize,
+        expected_revision: Option<String>,
+    },
+    #[serde(rename = "skills/read")]
+    SkillsRead {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        name: String,
+        kind: crate::local_runtime::skill_management::SkillContentKind,
+        offset: u64,
+        max_bytes: usize,
+        expected_revision: Option<String>,
+    },
+    #[serde(rename = "command/exec")]
+    CommandExec(super::command::ExecParams),
+    #[serde(rename = "command/exec/write")]
+    CommandWrite(super::command::WriteParams),
+    #[serde(rename = "command/exec/resize")]
+    CommandResize {
+        #[serde(rename = "processId")]
+        process_id: String,
+        size: super::command::TerminalSize,
+    },
+    #[serde(rename = "command/exec/terminate")]
+    CommandTerminate {
+        #[serde(rename = "processId")]
+        process_id: String,
+    },
+    #[serde(rename = "fs/readFile")]
+    FsReadFile {
+        path: String,
+        offset: u64,
+        #[serde(rename = "maxBytes")]
+        max_bytes: usize,
+        #[serde(rename = "expectedRevision")]
+        expected_revision: Option<String>,
+    },
+    #[serde(rename = "fs/writeFile")]
+    FsWriteFile {
+        path: String,
+        #[serde(rename = "dataBase64")]
+        data_base64: String,
+        #[serde(rename = "expectedRevision")]
+        expected_revision: Option<String>,
+    },
+    #[serde(rename = "fs/readDirectory")]
+    FsReadDirectory {
+        path: String,
+        offset: usize,
+        limit: usize,
+        #[serde(rename = "expectedRevision")]
+        expected_revision: Option<String>,
+    },
+    #[serde(rename = "fs/getMetadata")]
+    FsGetMetadata { path: String },
+    #[serde(rename = "fs/createDirectory")]
+    FsCreateDirectory { path: String, recursive: bool },
+    #[serde(rename = "fs/remove")]
+    FsRemove {
+        path: String,
+        recursive: bool,
+        force: bool,
+    },
+    #[serde(rename = "fs/copy")]
+    FsCopy {
+        #[serde(rename = "sourcePath")]
+        source_path: String,
+        #[serde(rename = "destinationPath")]
+        destination_path: String,
+        recursive: bool,
+    },
+    #[serde(rename = "fs/watch")]
+    FsWatch {
+        #[serde(rename = "watchId")]
+        watch_id: String,
+        path: String,
+    },
+    #[serde(rename = "fs/unwatch")]
+    FsUnwatch {
+        #[serde(rename = "watchId")]
+        watch_id: String,
+    },
+
+    #[serde(rename = "thread/read")]
+    ThreadRead {
+        #[serde(rename = "threadId")]
+        thread_id: ConversationId,
+    },
+    #[serde(rename = "thread/loaded/list")]
+    ThreadLoadedList { offset: usize, limit: usize },
+    #[serde(rename = "thread/list")]
+    ThreadList {
+        offset: usize,
+        limit: usize,
+        archived: bool,
+    },
+    #[serde(rename = "thread/name/set")]
+    ThreadName {
+        #[serde(rename = "threadId")]
+        thread_id: ConversationId,
+        name: Option<String>,
+    },
+    #[serde(rename = "thread/archive")]
+    ThreadArchive {
+        #[serde(rename = "threadId")]
+        thread_id: ConversationId,
+    },
+    #[serde(rename = "thread/unarchive")]
+    ThreadUnarchive {
+        #[serde(rename = "threadId")]
+        thread_id: ConversationId,
+    },
     #[serde(rename = "auxiliary/classify")]
     AuxiliaryClassify {
         target: AttachmentTarget,
@@ -183,10 +305,9 @@ pub enum Method {
     },
     /// Original bytes (at most 512 KiB) of one committed `present` delivery.
     ///
-    /// Requires delivery access, which only transport authentication grants
-    /// (an explicitly delegated stdio owner, or the separate WebSocket
-    /// delivery credential). Without it this fails `session_file_read`
-    /// `unauthorized` before any lookup, whatever the coordinates.
+    /// Every authenticated, initialized ordinary client has the same API
+    /// eligibility. The exact attachment must belong to this connection;
+    /// native resource, provenance and descriptor checks still apply.
     #[serde(rename = "delivery/read")]
     DeliveryRead {
         target: AttachmentTarget,
@@ -296,6 +417,9 @@ pub enum Method {
     ModelSet {
         target: AttachmentTarget,
         config: Box<crate::model::session::SessionModelConfig>,
+        /// A primary-model picker can recover unchanged auxiliary model references that were removed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recover_unavailable_auxiliary: Option<bool>,
     },
     /// Choose catalog defaults by finite native ordinals, even when names are deferred.
     #[serde(rename = "session/selectModel")]
@@ -487,8 +611,10 @@ pub enum Method {
     },
     /// Commit Session identity and validated initial settings without composing a runtime.
     /// An acknowledged identity remains committed when `durability_diagnostic` is present.
-    #[serde(rename = "session/create")]
+    #[serde(rename = "thread/start")]
     SessionCreate {
+        #[serde(default, rename = "dynamicTools")]
+        dynamic_tools: Vec<crate::tools::host::HostToolDefinition>,
         settings: SessionPersistentState,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         submission: Option<crate::local_runtime::mcp_drafts::McpDraftTarget>,
@@ -652,7 +778,7 @@ pub enum Method {
         ledger: crate::context::resources::LedgerFrontier,
         activation: crate::context::checkpoint::ProjectionActivationId,
     },
-    #[serde(rename = "session/fork")]
+    #[serde(rename = "thread/fork")]
     SessionFork {
         session_id: SessionId,
         node_id: Option<SessionNodeId>,
@@ -677,10 +803,10 @@ pub enum Method {
     },
     #[serde(rename = "session/recoverDeletion")]
     SessionRecoverDeletion { session_id: SessionId },
-    #[serde(rename = "session/attach")]
+    #[serde(rename = "thread/resume")]
     SessionAttach {
-        session_id: SessionId,
-        node_id: Option<SessionNodeId>,
+        #[serde(rename = "threadId")]
+        thread_id: ConversationId,
     },
     /// Explicitly retry a terminal failed initialization. No-op when there is
     /// no failed owner; never creates a Session or admits/replays input.
@@ -774,12 +900,31 @@ pub enum Method {
     #[serde(rename = "turn/start")]
     TurnStart {
         target: AttachmentTarget,
+        #[serde(rename = "inputId")]
+        input_id: String,
         content: Vec<UserInputBlock>,
     },
     #[serde(rename = "turn/steer")]
     TurnSteer {
         target: AttachmentTarget,
+        #[serde(rename = "inputId")]
+        input_id: String,
+        #[serde(rename = "expectedTurnId")]
+        expected_turn_id: crate::runtime::identity::AttemptId,
         content: Vec<UserInputBlock>,
+    },
+    #[serde(rename = "inbound/queue")]
+    InboundQueue {
+        target: AttachmentTarget,
+        #[serde(rename = "inputId")]
+        input_id: String,
+        content: Vec<UserInputBlock>,
+    },
+    #[serde(rename = "inbound/submissionLookup")]
+    InboundSubmissionLookup {
+        target: AttachmentTarget,
+        #[serde(rename = "inputId")]
+        input_id: String,
     },
     #[serde(rename = "inbound/edit")]
     InboundEdit {
@@ -792,18 +937,11 @@ pub enum Method {
         target: AttachmentTarget,
         expected: crate::durable::inbox::PendingInboundRef,
     },
-    #[serde(rename = "turn/cancel")]
-    TurnCancel { target: AttachmentTarget },
-    #[serde(rename = "interaction/respond")]
-    InteractionRespond {
+    #[serde(rename = "turn/interrupt")]
+    TurnCancel {
         target: AttachmentTarget,
-        interaction: InteractionRef,
-        response: InteractionResponse,
-    },
-    #[serde(rename = "interaction/cancel")]
-    InteractionCancel {
-        target: AttachmentTarget,
-        interaction: InteractionRef,
+        #[serde(rename = "turnId")]
+        turn_id: crate::runtime::identity::AttemptId,
     },
     #[serde(rename = "session/effectiveConfiguration")]
     ConfigurationGet { target: AttachmentTarget },
@@ -829,6 +967,13 @@ pub enum Method {
     #[serde(rename = "configuration/sourcesRead")]
     SourcesRead {
         target: crate::local_runtime::configuration::settings::SourceTarget,
+    },
+    /// Test a saved Model without creating a Session.
+    #[serde(rename = "model/probe")]
+    ModelProbe {
+        target: crate::local_runtime::configuration::settings::SourceTarget,
+        model: crate::model::catalog::ModelRef,
+        source: crate::local_runtime::model_probe::ModelProbeSource,
     },
     /// Finite configuration connectivity check; never an Agent connection.
     #[serde(rename = "mcp/probe")]
@@ -930,6 +1075,8 @@ pub enum Method {
         source: Option<String>,
         #[serde(default)]
         cursor: Option<crate::local_runtime::workflow_tools::WorkflowToolCatalogCursor>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_scope: Option<crate::runtime::resources::SourceScope>,
     },
     /// Offline structural check, optional explanation, and dependency
     /// admission in an explicit Workspace context of one candidate document.
@@ -997,7 +1144,17 @@ impl Method {
     pub(crate) const fn may_commit(&self) -> bool {
         match self {
             Self::Goal { control, .. } => !matches!(control, crate::goal::GoalControl::Show),
-            Self::WorkflowScheduledRecovery { .. }
+            Self::McpCatalog { .. }
+            | Self::SkillsList { .. }
+            | Self::SkillsRead { .. }
+            | Self::FsReadFile { .. }
+            | Self::FsReadDirectory { .. }
+            | Self::FsGetMetadata { .. }
+            | Self::ThreadRead { .. }
+            | Self::ThreadList { .. }
+            | Self::ThreadLoadedList { .. }
+            | Self::InboundSubmissionLookup { .. }
+            | Self::WorkflowScheduledRecovery { .. }
             | Self::ScheduleCatalog { .. }
             | Self::ScheduleList { .. }
             | Self::ScheduleGet { .. }
@@ -1087,13 +1244,27 @@ impl Method {
             | Self::SettingsValueRead { .. }
             | Self::SessionConfiguration { .. }
             | Self::SessionApplicationValueRead { .. } => false,
-            Self::AuxiliaryClassify { .. }
+            Self::CommandExec(..)
+            | Self::CommandWrite(..)
+            | Self::CommandResize { .. }
+            | Self::CommandTerminate { .. }
+            | Self::FsWriteFile { .. }
+            | Self::FsCreateDirectory { .. }
+            | Self::FsRemove { .. }
+            | Self::FsCopy { .. }
+            | Self::FsWatch { .. }
+            | Self::FsUnwatch { .. }
+            | Self::ThreadName { .. }
+            | Self::ThreadArchive { .. }
+            | Self::ThreadUnarchive { .. }
+            | Self::AuxiliaryClassify { .. }
             | Self::AuxiliaryBtw { .. }
             | Self::AuxiliaryCancel { .. }
             | Self::AuxiliaryDiscard { .. }
             | Self::DeliveryCancel { .. }
             | Self::SessionUploadPrepare { .. }
             | Self::SessionSwitchNode { .. }
+            | Self::ModelProbe { .. }
             | Self::ModelSet { .. }
             | Self::ModelSelect { .. }
             | Self::CompactContext { .. }
@@ -1123,11 +1294,10 @@ impl Method {
             | Self::SessionSubscribe { .. }
             | Self::TurnStart { .. }
             | Self::TurnSteer { .. }
+            | Self::InboundQueue { .. }
             | Self::InboundEdit { .. }
             | Self::InboundRemove { .. }
             | Self::TurnCancel { .. }
-            | Self::InteractionRespond { .. }
-            | Self::InteractionCancel { .. }
             | Self::SourcesWrite { .. }
             | Self::ConfigurationReconcile { .. } => true,
         }
@@ -1137,6 +1307,10 @@ impl Method {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ErrorData {
+    ConnectionClosed,
+    EnvironmentUnauthorized,
+    EnvironmentResourceNotFound,
+    EnvironmentCapacityOrConflict,
     Auxiliary {
         reason: crate::runtime::auxiliary::submission::AuxiliaryFailure,
     },
@@ -1241,7 +1415,6 @@ pub enum ErrorData {
     SubscriptionSuperseded,
     StaleAttachment,
     StaleRuntime,
-    ControllerInUse,
     InvalidState,
     InvalidParams,
     ResyncRequired,
@@ -1255,6 +1428,118 @@ pub struct RpcError {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<ErrorData>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnInputDisposition {
+    Started,
+    Steered,
+}
+
+/// Client replies to live server-originated requests. RPC identity is scoped
+/// to the server incarnation; it is never a tool execution or history ID.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum ClientReply {
+    Success(ClientSuccess),
+    Error(ClientError),
+}
+impl ClientReply {
+    #[must_use]
+    pub fn id(&self) -> &RequestId {
+        match self {
+            Self::Success(v) => &v.id,
+            Self::Error(v) => &v.id,
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClientSuccess {
+    pub jsonrpc: JsonRpcVersion,
+    pub id: RequestId,
+    pub result: serde_json::Value,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClientError {
+    pub jsonrpc: JsonRpcVersion,
+    pub id: RequestId,
+    pub error: ClientRpcError,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClientRpcError {
+    pub code: i32,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(remote = "Self", deny_unknown_fields)]
+pub struct ServerRequest {
+    pub jsonrpc: JsonRpcVersion,
+    pub id: RequestId,
+    #[serde(flatten)]
+    pub call: ServerRequestMethod,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "method", content = "params", deny_unknown_fields)]
+pub enum ServerRequestMethod {
+    #[serde(rename = "item/tool/call")]
+    ToolCall(HostToolCall),
+    /// rustX's native approval, questionnaire and Workflow review extension.
+    /// The finite header retains its source-owned chunked body contract.
+    #[serde(rename = "item/interaction/request")]
+    Interaction {
+        #[serde(rename = "threadId")]
+        thread_id: ConversationId,
+        interaction: Box<crate::observation::interaction::RuntimeClientInteractionHeader>,
+    },
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostToolCall {
+    pub thread_id: ConversationId,
+    pub turn_id: crate::runtime::identity::AttemptId,
+    pub call_id: crate::runtime::identity::ToolCallId,
+    pub namespace: Option<String>,
+    pub tool: String,
+    pub arguments: serde_json::Value,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostToolResponse {
+    pub success: bool,
+    pub content_items: Vec<HostToolContent>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum HostToolContent {
+    #[serde(rename = "inputText")]
+    Text { text: String },
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServerRequestResolved {
+    pub request_id: RequestId,
+    pub thread_id: ConversationId,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub enum ServerResolvedMethod {
+    #[serde(rename = "serverRequest/resolved")]
+    Resolved,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum ServerMessage {
+    Request(ServerRequest),
+    Resolved {
+        jsonrpc: JsonRpcVersion,
+        method: ServerResolvedMethod,
+        params: ServerRequestResolved,
+    },
 }
 
 /// Success and failure are exclusive, including on deserialization.
@@ -1284,6 +1569,24 @@ pub struct Failure {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MethodResult {
+    Skills { page: crate::local_runtime::skill_management::SkillPage },
+    SkillContent { content: crate::local_runtime::skill_management::SkillContent },
+    CommandExec { result: super::command::ExecResult },
+    EnvironmentAccepted {},
+    FileChunk { chunk: crate::local_runtime::environment::files::FileChunk },
+    FileMetadata { metadata: crate::local_runtime::environment::files::FileMetadata },
+    DirectoryPage { page: crate::local_runtime::environment::files::DirectoryPage },
+    Thread { thread: super::thread_status::Thread },
+    Threads { data: Vec<super::thread_status::ThreadSummary>, next_offset: Option<usize> },
+    LoadedThreads { data: Vec<super::thread_status::ThreadStatusEntry>, next_offset: Option<usize> },
+    InboundSubmission { acceptance: Option<crate::durable::inbox::InboundAcceptance> },
+    TurnInputAccepted {
+        #[serde(rename = "turnId")]
+        turn_id: crate::runtime::identity::AttemptId,
+        disposition: TurnInputDisposition,
+        message_id: MessageId,
+        inbound_sequence: crate::runtime::inbound::InboundSequence,
+    },
     ScheduledWorkflowRecovery { recovery:Option<crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowRecovery> },
 
     ScheduleCatalog { page: crate::local_runtime::session_runtime_manager::ScheduleCatalogPage },
@@ -1422,15 +1725,16 @@ pub enum MethodResult {
         page: super::editor_read::EditorPage,
     },
     SessionTransition {
+        thread: super::thread_status::Thread,
         session: crate::local_runtime::session::SessionSnapshot,
         editor: Option<super::editor_read::EditorLocator>,
         durability_diagnostic: Option<String>,
     },
     SessionSummary {
-        summary: crate::local_runtime::session::SessionSummary,
+        summary: super::thread_status::SessionSummary,
     },
     Sessions {
-        sessions: Vec<crate::local_runtime::session::SessionSummary>,
+        sessions: Vec<super::thread_status::SessionSummary>,
         next_offset: Option<usize>,
     },
     Node {
@@ -1508,6 +1812,9 @@ pub enum MethodResult {
     EffectiveConfiguration {
         projection: Box<crate::local_runtime::configuration::effective_observation::BoundedEffectiveConfiguration>,
     },
+    ModelProbe {
+        outcome: crate::local_runtime::model_probe::ModelProbeOutcome,
+    },
     McpProbe {
         result: crate::local_runtime::mcp_probe::McpProbeResult,
     },
@@ -1559,10 +1866,10 @@ pub enum MethodResult {
 pub struct ServerCapabilities {
     pub upload_policy: crate::local_runtime::session::uploads::UploadPolicy,
     pub multi_session: bool,
-    pub single_writable_controller: bool,
+    pub shared_writable_clients: bool,
     pub headless_interactions: bool,
-    /// Whether this connection holds transport-granted delivery access.
-    /// Reporting it grants nothing; the native seam checks the capability.
+    /// Ordinary trusted clients may read committed deliveries. Native resource,
+    /// provenance, size and connection-lifetime checks still apply.
     pub delivery_access: bool,
     pub experimental_methods: Vec<String>,
 }
@@ -1572,9 +1879,9 @@ impl Default for ServerCapabilities {
         Self {
             upload_policy: crate::local_runtime::session::uploads::UPLOAD_POLICY,
             multi_session: true,
-            single_writable_controller: true,
+            shared_writable_clients: true,
             headless_interactions: true,
-            delivery_access: false,
+            delivery_access: true,
             experimental_methods: Vec::new(),
         }
     }
@@ -1591,6 +1898,14 @@ pub struct Notification {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "method", content = "params", deny_unknown_fields)]
 pub enum NotificationMethod {
+    #[serde(rename = "command/exec/outputDelta")]
+    CommandOutputDelta(super::command::OutputDelta),
+    #[serde(rename = "fs/changed")]
+    FsChanged(super::filesystem::Changed),
+    #[serde(rename = "thread/status/changed")]
+    ThreadStatusChanged(super::thread_status::ThreadStatusEntry),
+    #[serde(rename = "thread/status/resyncRequired")]
+    ThreadStatusResyncRequired {},
     /// Task definitions or their latest trigger changed; clients re-read native facts.
     #[serde(rename = "schedule/changed")]
     ScheduleChanged {},
@@ -1696,6 +2011,16 @@ pub enum NotificationMethod {
     },
 }
 
+/// Direction-specific server output. Generic client replies cannot weaken
+/// validation of typed server responses sharing the same JSON-RPC envelope.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum ServerOutput {
+    Response(Response),
+    Notification(Notification),
+    Callback(ServerMessage),
+}
+
 /// Complete public wire surface used by schema and client generation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
@@ -1703,6 +2028,8 @@ pub enum ProtocolMessage {
     Request(Box<Request>),
     Response(Response),
     Notification(Notification),
+    ServerMessage(ServerMessage),
+    ClientReply(ClientReply),
 }
 
 #[cfg(test)]
@@ -1749,7 +2076,7 @@ mod lifecycle_protocol_tests {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AttachmentKind {
-    Controller,
+    Writable,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]

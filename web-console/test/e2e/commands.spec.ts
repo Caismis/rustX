@@ -27,7 +27,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await routeWorkspaceHost(page, fixture);
     await page.goto('/'); await expect(page).toHaveTitle(/rustX/);
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(message).toBeEnabled();
     expect((await snapshot()).conversation_id).toMatch(/^conv_/);
@@ -46,7 +46,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await expect(popup).toHaveCount(0); await expect(message).toBeFocused();
     await expect(message).toHaveValue('/model');
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await expect.poll(async () => (await snapshot()).model?.configured.model).toBe('fixture/second-model');
     await message.fill('/not-a-command'); await message.press('Enter');
     await expect(page.getByRole('alert')).toContainText('Unsupported command');
@@ -77,7 +77,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     // A completed response names its exact boundary: Regenerate runs on the click.
     await page.getByRole('button', { name: 'Regenerate', exact: true }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    phase = 'awaiting validated retry provider request (branch → switchNode → attach → turn/start)';
+    phase = 'awaiting validated retry provider request (branch → switchNode → attach → inbound/queue)';
     await test.step('native retry reaches the provider with validated editor content', async () => {
       // The gate is reached only after the real provider validates model, native
       // upload-bearing input and absence of old output. Its existing deadline is
@@ -122,7 +122,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     })).toBe(true);
     await fork.click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    await expect.poll(() => wire.requests.filter(request => request.method === 'session/fork').length).toBe(1);
+    await expect.poll(() => wire.requests.filter(request => request.method === 'thread/fork').length).toBe(1);
     // The Fork runs on the click; the attached Fork replaces the selected Session.
     await expect.poll(() => selectedSessionId(page)).not.toBe(originalId);
     await expect(message).toHaveValue('');
@@ -142,7 +142,7 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     expect(batches).toHaveLength(1);
     expect(readFileSync(join(root, batches[0], 'note.txt'), 'utf8')).toBe('Owned by native Session');
     await connectionAction(page, 'Reconnect');
-    await expect(page.getByLabel('Transport token')).toHaveCount(0);
+    await expect(page.getByLabel('Access token')).toBeHidden();
     await expect(message).toBeEnabled();
     // Model selection belongs to Session identity and is inherited by its Fork;
     // cold lineage replacement does not select the global default again.
@@ -160,13 +160,13 @@ test('typed selectors, native upload-bearing retry branch, original lineage and 
     await settled();
     await expect(transcript.getByText('Regenerate my uploaded note', { exact: true })).toHaveCount(1);
     await expect(transcript.getByText('Original native answer', { exact: true })).toHaveCount(0);
-    wire.holdNext('session/history', 'session/attach');
+    wire.holdNext('session/history', 'thread/resume');
     await sessionTree(page);
     await page.getByRole('dialog', { name: 'Session tree', exact: true }).getByRole('option').filter({ hasText: forkConversation }).click();
     await expect.poll(() => wire.held()).toBe(2);
     // Cold history is best-effort and may return stale_runtime as attach wins.
     // Establish live controls first, then deliver the actual late history reply.
-    wire.releaseHeld('session/attach');
+    wire.releaseHeld('thread/resume');
     await expect(page.getByRole('button', { name: 'Regenerate', exact: true })).toBeEnabled();
     expect((await snapshot()).conversation_id).toBe(forkConversation);
     await expect(transcript.getByText('Original native answer', { exact: true })).toBeVisible();

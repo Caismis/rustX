@@ -4,7 +4,7 @@ import { test, expect, type Locator, type Page, type TestInfo } from '@playwrigh
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
@@ -57,7 +57,7 @@ async function capture(page: Page, info: TestInfo, name: string) {
 async function openLibrary(page: Page, fixture: Awaited<ReturnType<typeof startDogfood>>) {
   await routeWorkspaceHost(page, fixture); await page.goto('/');
   await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-  await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+  await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
 }
 
 async function saveFile(page: Page) {
@@ -147,7 +147,9 @@ test('adds parallel next nodes from the inspector and keeps every existing conne
     }).toPass({ timeout: 5000 });
     await page.screenshot({ path: info.outputPath('parallel-node-picker-mobile.png') });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally {
+    await stopDogfoodPage(page, fixture, false);
+  }
 });
 
 test('reconnects ordinary edges to the real Start without replacing its other successor', async ({ page }) => {
@@ -174,7 +176,9 @@ test('reconnects ordinary edges to the real Start without replacing its other su
     await expect(panel(page).getByRole('button', { name: 'done', exact: true })).toHaveCount(0);
     await expect(panel(page).getByRole('button', { name: 'model', exact: true })).toBeVisible();
     await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
-  } finally { await fixture.stop(false); }
+  } finally {
+    await stopDogfoodPage(page, fixture, false);
+  }
 });
 
 test('renames input fields and edits optional array items through the field dialog', async ({ page }) => {
@@ -207,7 +211,9 @@ test('renames input fields and edits optional array items through the field dial
     await saveFile(page);
     expect(parse(readFileSync(file, 'utf8')).block.input.properties.list).toEqual({ type: 'array', items: { type: 'boolean' } });
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally {
+    await stopDogfoodPage(page, fixture, false);
+  }
 });
 
 test('refuses destination-only finite schema collisions without adopting extra properties or losing rename text', async ({ page }) => {
@@ -236,7 +242,9 @@ test('refuses destination-only finite schema collisions without adopting extra p
       await page.getByRole('button', { name: 'Back to Workflows', exact: true }).click();
     }
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally {
+    await stopDogfoodPage(page, fixture, false);
+  }
 });
 
 test('discovers every matching display title together with original field paths', async ({ page }) => {
@@ -259,7 +267,9 @@ test('discovers every matching display title together with original field paths'
     await expect(picker.locator('legend').filter({ hasText: 'Second Draft' })).toBeVisible();
     await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally {
+    await stopDogfoodPage(page, fixture, false);
+  }
 });
 
 test('uses the same visible duplicate transaction from Inspector and canvas for nodes and private containers', async ({ page }) => {
@@ -312,7 +322,9 @@ test('uses the same visible duplicate transaction from Inspector and canvas for 
       await selected.click(); await expect(selected).toBeFocused();
     }
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally {
+    await stopDogfoodPage(page, fixture, false);
+  }
 });
 
 test('authors structured required output, nested contracts and repeated downstream bindings using visual controls', async ({ page }, info) => {
@@ -369,7 +381,9 @@ test('authors structured required output, nested contracts and repeated downstre
     await expect(structuredDialog(page).getByRole('tab', { name: 'JSON Schema', exact: true })).toBeVisible();
     await expect(structuredDialog(page)).toContainText('risk');
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally {
+    await stopDogfoodPage(page, fixture, false);
+  }
 });
 
 import { scaleWorkflow } from '../fixtures/workflow-scale';
@@ -401,7 +415,9 @@ test('measures the native 256-node nested fixture and one metadata-only organize
     const measurements = info.outputPath('bounded-scene-measurements.json'); writeFileSync(measurements, JSON.stringify(measurement, null, 2) + '\n');
     await info.attach('bounded-scene-measurements', { path: measurements, contentType: 'application/json' });
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally {
+    await stopDogfoodPage(page, fixture, false);
+  }
 });
 
 
@@ -426,5 +442,7 @@ test('appends siblings from connected canvas handles instead of inserting into t
     await expect(next.getByRole('button', { name: 'done', exact: true })).toBeVisible();
     await expect(next.getByRole('button', { name: 'Branch', exact: true })).toBeVisible();
     await expect(canvas(page).locator('.react-flow__edge')).toHaveCount(5);
-  } finally { await fixture.stop(false); }
+  } finally {
+    await stopDogfoodPage(page, fixture, false);
+  }
 });

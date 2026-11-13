@@ -8,6 +8,10 @@ export interface RequestTiming {
   resultType?: string;
   sessionId?: string;
   nodeId?: string;
+  /** Page-local WebSocket identity; a reconnect starts a new authority. */
+  connection?: number;
+  threadId?: string;
+  resultThreadId?: string;
   /** Opaque JSON encoding of the exact native attachment identity tuple. */
   target?: string;
 }
@@ -24,7 +28,7 @@ function completed(row: RequestTiming): row is CompletedTiming {
  * observation. Return the original evidence rows; never erase their errors. */
 export function supersededHistoryReads(rpc: readonly RequestTiming[]): RequestTiming[] {
   const successful = rpc.filter((row): row is CompletedTiming => completed(row) && row.error === undefined);
-  const following = successful.filter(attach => attach.method === 'session/attach' && attach.resultType === 'attached' && attach.target
+  const following = successful.filter(attach => attach.method === 'thread/resume' && attach.resultType === 'attached' && attach.target
     && successful.some(checkpoint => checkpoint.method === 'session/checkpoint' && checkpoint.resultType === 'checkpoint'
       && checkpoint.target === attach.target && attach.end <= checkpoint.start
       && successful.some(subscribe => subscribe.method === 'session/subscribe' && subscribe.resultType === 'subscribed'
@@ -33,4 +37,16 @@ export function supersededHistoryReads(rpc: readonly RequestTiming[]): RequestTi
     && history.sessionId && history.nodeId && completed(history)
     && following.some(attach => attach.sessionId === history.sessionId && attach.nodeId === history.nodeId
       && history.start < attach.end && attach.start < history.end));
+}
+
+/** Strong status reads can fail while native status capture is busy. Require
+ * a new successful strong read of that exact Thread on the same connection;
+ * unrelated reads, earlier/overlapping reads and reconnects prove no recovery. */
+export function recoveredThreadStatusReads(rpc: readonly RequestTiming[]): RequestTiming[] {
+  const recovered = rpc.filter((row): row is CompletedTiming => completed(row)
+    && row.method === 'thread/read' && row.error === undefined && row.resultType === 'thread'
+    && !!row.threadId && row.resultThreadId === row.threadId);
+  return rpc.filter(row => completed(row) && row.method === 'thread/read' && row.error === 'observation_unavailable'
+    && row.connection !== undefined && Number.isSafeInteger(row.connection) && row.connection > 0 && !!row.threadId
+    && recovered.some(read => read.connection === row.connection && read.threadId === row.threadId && read.start >= row.end));
 }

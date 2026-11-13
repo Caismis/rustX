@@ -427,8 +427,8 @@ fn construct_request(
         timeout_phase: None,
         generation: None,
     })?;
-    crate::model::adapter::correlation::encode(&mut value, ModelProtocol::AnthropicMessages)
-        .map_err(invalid_request)?;
+    crate::model::adapter::correlation::encode(&mut value, request)
+        .map_err(|error| invalid_request(&error))?;
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
@@ -500,11 +500,14 @@ fn translate_messages(
                     tools,
                     continuation,
                     is_continuation_output,
+                    request.invocation.replay_origin().as_ref(),
                 )?;
-                messages.push(WireRequestMessage {
-                    role: "assistant",
-                    content,
-                });
+                if !content.is_empty() {
+                    messages.push(WireRequestMessage {
+                        role: "assistant",
+                        content,
+                    });
+                }
             }
             ModelMessageView::Tool(tool_call_id, result) => {
                 pending_tool_results.push(translate_tool_result(
@@ -578,14 +581,15 @@ fn translate_user_content(
 /// Translates one canonical Assistant message into Anthropic assistant
 /// content blocks.
 ///
-/// Previous thinking blocks are replayed from their rustX-owned opaque
-/// provider state; a signed thinking block is never reconstructed from
-/// canonical text alone and no signature is ever fabricated.
+/// Same-owner thinking is replayed from its complete native state. Other
+/// models' readable reasoning and refusals become ordinary assistant text;
+/// foreign opaque state is omitted and signatures are never fabricated.
 fn translate_assistant_content(
     assistant: &[crate::message::types::AssistantContentBlock],
     _tools: &ValidatedTools,
     continuation: Option<&AnthropicContinuation>,
     is_continuation_output: bool,
+    origin: Option<&crate::model::replay::ReplayOrigin>,
 ) -> Result<Vec<serde_json::Value>, ModelError> {
     let mut content = Vec::new();
     let mut reasoning_seen = false;
@@ -601,9 +605,19 @@ fn translate_assistant_content(
                 }));
             }
             AssistantContentBlock::Reasoning(reasoning) => {
-                reasoning_seen = true;
                 let is_boundary =
                     is_continuation_output && Some(position) == last_reasoning_position;
+                if !reasoning.belongs_to(origin) {
+                    if let Some(text) = reasoning
+                        .text
+                        .as_deref()
+                        .filter(|text| !text.trim().is_empty())
+                    {
+                        content.push(serde_json::json!({"type":"text", "text":text}));
+                    }
+                    continue;
+                }
+                reasoning_seen = true;
                 let state = match &reasoning.provider_state {
                     Some(ProviderContinuationState::Anthropic(state)) => {
                         if is_boundary
@@ -617,13 +631,7 @@ fn translate_assistant_content(
                         }
                         state
                     }
-                    Some(ProviderContinuationState::OpenAiResponses(_)) => {
-                        return Err(unsupported(
-                            "foreign OpenAI Responses continuation state cannot be translated \
-                             into Anthropic thinking",
-                        ));
-                    }
-                    None => {
+                    _ => {
                         return Err(unsupported(
                             "Anthropic thinking lacks its complete original native replay unit",
                         ));
@@ -640,11 +648,8 @@ fn translate_assistant_content(
                     "input": call.arguments,
                 }));
             }
-            AssistantContentBlock::Refusal(_) => {
-                return Err(unsupported(
-                    "Anthropic cannot represent a previous refusal block; refusing to flatten \
-                     refusal into text",
-                ));
+            AssistantContentBlock::Refusal(refusal) => {
+                content.push(serde_json::json!({"type":"text", "text":refusal.text}));
             }
             AssistantContentBlock::Image(_) => {
                 return Err(unsupported(

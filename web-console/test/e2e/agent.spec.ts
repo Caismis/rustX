@@ -11,6 +11,11 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
    await page.goto(`${fixtureOrigin}/test/fixtures/agent.html?mode=${mode}`);
    await expect(page).toHaveTitle('Session A — rustX');
    await expect(page.getByLabel('Canonical conversation')).toBeVisible();
+   if (mode === 'tools' || mode === 'error') {
+     const bash = page.locator('[data-tool-call-id="bash-1"]').locator('[data-disclosure-row]');
+     await expect(bash).toContainText('Run native boundary tests');
+     await expect(bash).not.toContainText('cargo test --lib');
+   }
    if (mode === 'error') {
      await page.locator('[data-tool-call-id="bash-1"]').getByRole('button').click();
      await page.locator('[data-tool-call-id="edit-1"]').getByRole('button').click();
@@ -43,7 +48,7 @@ for (const mode of ['settled', 'streaming', 'tools', 'error', 'approval', 'quest
  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
  await page.getByRole('button', { name: 'Settings', exact: true }).click();
  await page.getByRole('group', { name: 'Appearance', exact: true }).getByRole('button', { name: 'Dark', exact: true }).click();
- await page.getByRole('button', { name: 'Close Settings' }).click();
+ await page.getByRole('button', { name: 'Home' }).click();
  await expectStableScreenshot(page, 'agent-dark-desktop.png');
  await page.setViewportSize({ width: 390, height: 844 });
  await expectStableScreenshot(page, 'agent-dark-narrow.png');
@@ -134,8 +139,8 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
           });
         });
         expect(labels).toEqual([
-          { text:'native/coder', x:143.453125, y:271, width:70.78125, height:20, fontSize:'13px', fontWeight:'400', lineHeight:'20px', color:'rgb(207, 211, 214)', transform:'none' },
-          { text:'deliberate', x:218.234375, y:271, width:20.765625, height:20, fontSize:'13px', fontWeight:'400', lineHeight:'20px', color:'rgb(129, 133, 140)', transform:'none' },
+          { text:'native/coder', x:143.453125, y:309, width:70.78125, height:20, fontSize:'13px', fontWeight:'400', lineHeight:'20px', color:'rgb(207, 211, 214)', transform:'none' },
+          { text:'deliberate', x:218.234375, y:309, width:20.765625, height:20, fontSize:'13px', fontWeight:'400', lineHeight:'20px', color:'rgb(129, 133, 140)', transform:'none' },
         ]);
       }
       await expectStableScreenshot(stack, `composer-${state}-${theme}-${width}.png`);
@@ -160,15 +165,16 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
     await expect(primary).toHaveAccessibleName('Send'); await expect(primary).toBeEnabled();
     await shot('idle-draft');
     await primary.click(); await expect(input).toHaveValue('');
-    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start']);
+    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['inbound/queue']);
     await page.evaluate(() => window.composerFixture.running(true));
     await expect(primary).toHaveAccessibleName('Stop'); await shot('running-empty');
+    await expect(stack).not.toContainText('updating');
     await input.fill('Queue the next review.');
     await expect(primary).toHaveAccessibleName('Queue'); await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
     await shot('running-draft');
     await input.press('Enter'); await expect(input).toHaveValue('');
     await input.fill('Steer through the existing native operation.'); await input.press('Control+Enter'); await expect(input).toHaveValue('');
-    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start', 'turn/start', 'turn/steer']);
+    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['inbound/queue', 'inbound/queue', 'turn/steer']);
     // A real picker gesture and receipt path; the toolbar accessory stays quiet.
     await page.getByRole('button', { name: 'Add', exact: true }).click();
     const chooser = page.waitForEvent('filechooser'); await page.locator('#command-file').click();
@@ -344,18 +350,18 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
     await input.press('Enter'); await expect(input).toHaveValue('');
     await input.fill('Complementary steer'); await input.press('Control+Enter'); await expect(input).toHaveValue('');
     await input.fill('Queue from primary'); await primary.click(); await expect(input).toHaveValue('');
-    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start', 'turn/steer', 'turn/start']);
+    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['inbound/queue', 'turn/steer', 'inbound/queue']);
     await page.getByRole('button', { name: locale === 'en' ? 'Settings' : '设置', exact: true }).click();
-    const settings = page.getByRole('dialog', { name: locale === 'en' ? 'Settings' : '设置', exact: true });
+    const settings = page.getByRole('region', { name: locale === 'en' ? 'Settings' : '设置', exact: true });
     await settings.getByRole('button', { name: locale === 'en' ? /Send behavior while busy/ : /繁忙时的发送行为/ }).click();
     await page.getByRole('option', { name: locale === 'en' ? 'Immediately' : '立即', exact: true }).click();
-    await page.getByRole('button', { name: locale === 'en' ? 'Close Settings' : '关闭设置', exact: true }).click();
+    await page.getByRole('button', { name: locale === 'en' ? 'Home' : '主页', exact: true }).click();
     expect(await page.evaluate(() => localStorage.getItem('rustx-composer-busy-enter-v1'))).toBe('steer');
     await input.fill('Preferred steer'); await expect(primary).toHaveAccessibleName(names.steer);
     await input.press('Enter'); await expect(input).toHaveValue('');
     await input.fill('Complementary queue'); await input.press('Meta+Enter'); await expect(input).toHaveValue('');
     await input.fill('Steer from primary'); await primary.click(); await expect(input).toHaveValue('');
-    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['turn/start', 'turn/steer', 'turn/start', 'turn/steer', 'turn/start', 'turn/steer']);
+    expect(await page.evaluate(() => window.composerFixture.submissions())).toEqual(['inbound/queue', 'turn/steer', 'inbound/queue', 'turn/steer', 'inbound/queue', 'turn/steer']);
     await input.fill('Line one'); await input.press('Shift+Enter'); await page.keyboard.type('Line two');
     await expect(input).toHaveValue('Line one\nLine two'); await expect(primary).toHaveAccessibleName(names.steer);
     await input.focus(); await expect(input).toBeFocused();

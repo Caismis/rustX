@@ -1,16 +1,19 @@
-import { traceRecord } from '../trace-fixture';
+import { traceRecord, traceTool, toolDetail } from '../trace-fixture';
+import { nativeTraceFixture } from '../native-trace-fixture';
 import { domainReceipt, jobReceipt } from '../fixture';
 // Explicit native-state gates. This fixture is not part of the production bundle.
-import { useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Tool } from '../../src/app/agent/Tool';
+import { TrajectoryInspector } from '../../src/app/trajectory/TrajectoryInspector';
+import type { TrajectoryFacet } from '../../src/app/trajectory/layout';
 import { ArtifactContext } from '../../src/app/components/Artifact';
 import { ArtifactResources } from '../../src/client/artifacts';
 import { AgentCard } from '../../src/app/components/ActivityCards';
 import { RuntimeFacts } from '../runtime-facts';
 import { BackgroundJobs } from '../../src/app/agent/BackgroundJobs';
 import { InboundMessage } from '../../src/app/agent/InboundMessage';
-import type { RuntimeClientAgent, RuntimeClientJob } from '../../../protocol/app-server/v73';
+import type { RuntimeClientAgent, RuntimeClientJob } from '../../../protocol/app-server/v78';
 import { Server, snapshot, childConversation } from '../fixture';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
@@ -53,9 +56,42 @@ server.handlers.set('job/cancel', () => {
   void server.update('A', structuredClone(s));
   return { type: 'job_cancellation_accepted', job_id: s.jobs![0].job_id };
 });
-server.handlers.set('artifact/read', () => ({ type: 'artifact_bytes', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZ1sAAAAASUVORK5CYII=' }));
+const canvas = document.createElement('canvas');
+canvas.width = 320;
+canvas.height = 180;
+const picture = canvas.getContext('2d')!;
+picture.fillStyle = '#eef2ff';
+picture.fillRect(0, 0, 320, 180);
+picture.fillStyle = '#4f67c8';
+picture.fillRect(50, 50, 220, 80);
+const imageBytes = canvas.toDataURL('image/png').split(',')[1]!;
+server.handlers.set('artifact/read', () => ({ type: 'artifact_bytes', data: imageBytes }));
 await server.attached('A');
 const artifacts = new ArtifactResources(server.client, 'A');
+const imagePath = '/workspace/runs/sample.png';
+const imageReceipt = 'Read static PNG image';
+function ImageTrace() {
+  const [facet, setFacet] = useState<TrajectoryFacet>('overview');
+  const [fixture] = useState(() => {
+    const record = traceTool(295);
+    Object.assign(record.tool!, { name: 'read_image', tool_id: 'tool-read-image', outcome: 'success' });
+    record.attachments = [{ artifact_id: 'artifact_1', image: true }];
+    const detail = toolDetail(295);
+    detail.tool!.definition = null;
+    detail.tool!.arguments = { value: { path: imagePath }, truncated: false };
+    detail.tool!.result!.blocks = [
+      { type: 'text', text: { text: imageReceipt, truncated: false } },
+      { type: 'image', artifact: record.attachments[0]! },
+    ];
+    return { record, ...nativeTraceFixture(record, detail) };
+  });
+  const { record, page, reader } = fixture;
+  return <ArtifactContext.Provider value={artifacts}>
+    <TrajectoryInspector item={{ type: 'RecordRow', record, display_key: 'image', owner_record_id: record.id, facet: 'overview', label: 'Tool', preview: '' }}
+      facet={facet} onFacet={setFacet} detailPage={page} detailReader={reader}
+      onLoadDetail={() => {}} onClose={() => {}} records={[record]} executions={new Map()} requestNumbers={new Map()} completeHistory onOpen={() => {}}/>
+  </ArtifactContext.Provider>;
+}
 declare global { interface Window { activityFixture: { jobs(count: number): Promise<void>; settle(id: string): Promise<void> } } }
 window.activityFixture = {
   async jobs(count) { s.jobs = Array.from({ length: count }, (_, i): RuntimeClientJob => ({ job_id: `job-${i}`, tool_id: 'tool-bash', tool_name: `Task ${i + 1}`, state: 'running', bash: { command: `printf 'task ${i + 1}'`, description: `Background task ${i + 1}` } })); await server.update('A', structuredClone(s)); },
@@ -65,6 +101,6 @@ function Fixture() {
   const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
   const backgroundChat = <><section aria-label="Background launch in chat"><Tool tool={{ committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'background-launch' }, block_index: 0 }, assembly_complete: true, message_id: 'background-launch', block_index: 0, call_id: 'launch-call', tool_id: 'tool-bash', name: 'bash', state: { type: 'settled', arguments: '{"command":"sleep 5","execution_mode":"background"}', result: { status: { type: 'success' }, duration_ms: '0', content: [{ type: 'json', value: { job_id: 'job-launched', tool: 'bash', state: 'starting', output_path: '/workspace/output.txt' } }] } } }}/></section>
     <section aria-label="Background completion in chat"><InboundMessage message={{ role: 'user', id: 'background-job-finished-terminal', source: 'runtime', kind: 'message', content: [{ type: 'text', text: 'Background execution job-finished (bash) settled: failed\n\nResult:\nBuild output failed verification' }] }}/></section></>;
-  return <div style={{ maxWidth: 760, margin: '24px auto', padding: 16 }}><header style={{ position: 'sticky', top: 0, zIndex: 10, display: 'flex', alignItems: 'center', gap: 16, background: 'var(--dsw-alias-bg-base)' }}><h1 style={{ fontSize: 14, minWidth: 0, flex: 1 }}>Jobs and Agents</h1><BackgroundJobs client={server.client} sessionId="A"/><button type="button">Session actions</button></header><div id="subagent-header-actions"/>{backgroundChat}<ArtifactContext.Provider value={artifacts}><Tool tool={{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:"image-message"},block_index:0},assembly_complete:true, message_id: "image-message", block_index: 0, call_id: "read-image", tool_id: "tool-read-image", name: "read_image", state: { type: "settled", arguments: '{"path":"sample.png"}', result: { status: { type: "success" }, duration_ms: "1", content: [{ type: "image", artifact_id: "artifact_1" }] } } }}/></ArtifactContext.Provider><AgentCard agent={state.views.A.snapshot!.agents![0]} client={server.client} sessionId="A"/><RuntimeFacts snapshot={state.views.A.snapshot!}/><div style={{ height: 1600 }} aria-label="Long conversation"/></div>;
+  return <div style={{ maxWidth: 760, margin: '24px auto', padding: 16 }}><header style={{ position: 'sticky', top: 0, zIndex: 10, display: 'flex', alignItems: 'center', gap: 16, background: 'var(--dsw-alias-bg-base)' }}><h1 style={{ fontSize: 14, minWidth: 0, flex: 1 }}>Jobs and Agents</h1><BackgroundJobs client={server.client} sessionId="A"/><button type="button">Session actions</button></header><div id="subagent-header-actions"/>{backgroundChat}<ArtifactContext.Provider value={artifacts}><Tool tool={{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:"image-message"},block_index:0},assembly_complete:true, message_id: "image-message", block_index: 0, call_id: "read-image", tool_id: "tool-read-image", name: "read_image", state: { type: "settled", arguments: JSON.stringify({ path: imagePath }), result: { status: { type: "success" }, duration_ms: "1", content: [{ type: 'text', text: imageReceipt }, { type: "image", artifact_id: "artifact_1" }] } } }}/></ArtifactContext.Provider><AgentCard agent={state.views.A.snapshot!.agents![0]} client={server.client} sessionId="A"/><RuntimeFacts snapshot={state.views.A.snapshot!}/><div style={{ height: 1600 }} aria-label="Long conversation"/></div>;
 }
-createRoot(document.getElementById('root')!).render(<Fixture/>);
+createRoot(document.getElementById('root')!).render(new URLSearchParams(location.search).has('image-trace') ? <ImageTrace/> : <Fixture/>);

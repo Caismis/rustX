@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { App } from '../src/app/App';
 import { AppServerClient } from '../src/client/app-server';
-import type { ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v73';
+import type { ConfigurationApplication, SourceTarget } from '../../protocol/app-server/v78';
 import type { ProductHostWorkspaces, WorkspaceCatalog } from '../src/workspaces/host';
 import { Server, TOKEN, endpoint } from './fixture';
 import { ConnectionController } from '../src/connection/controller';
@@ -38,7 +38,7 @@ function hostWith(list: () => Promise<WorkspaceCatalog>): ProductHostWorkspaces 
     listWorkspaces: list,
     classifyLocations: async cwds => cwds.map(cwd => ['/workspace/A', '/workspace/B'].includes(cwd) ? { authorized: true as const, workspaceId: cwd === '/workspace/A' ? 'wA' : 'wB' } : { authorized: false as const, reason: 'denied' as const }),
     resolveWorkspace: async () => ({ cwd: '/workspace/A' }),
-    adoptWorkspace: async () => {}, renameWorkspace: async () => {}, reorderWorkspace: async () => {}, removeWorkspace: async () => {},
+    adoptWorkspace: async () => {}, renameWorkspace: async () => {}, selectWorkspace: async () => {}, reorderWorkspace: async () => {}, removeWorkspace: async () => {},
     configureWorkspace: async () => { throw new Error('not used'); },
   };
 }
@@ -57,8 +57,8 @@ async function mountOwnerFailure() {
   return {
     startLookup() {
       hold = true; held = deferred<WorkspaceCatalog>();
-      // Some cases take this decision while the Settings modal covers the
-      // Session surface, which the modal hides from the accessibility tree.
+      // Some cases invoke the owner entry point while the retained Home
+      // surface is hidden by the independent Settings page.
       fireEvent.click(screen.getByRole('button', { name: 'Open Workspace Settings — /workspace/A', hidden: true }));
       return held;
     },
@@ -74,6 +74,8 @@ const release = async (held: ReturnType<typeof deferred<WorkspaceCatalog>>, succ
 it('navigation A: a newer User Settings decision fences a stale owner-lookup failure', async () => {
   const { startLookup } = await mountOwnerFailure();
   const held = startLookup();
+  fireEvent.click(screen.getByRole('button', { name: 'Home' }));
+  await screen.findByRole('button', { name: 'Open Session A' });
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   await screen.findByRole('heading', { name: 'User Settings' });
   await release(held);
@@ -85,6 +87,8 @@ it('navigation A: a newer User Settings decision fences a stale owner-lookup fai
 it('navigation B: a newer Workspace Settings decision fences a stale owner-lookup failure', async () => {
   const { startLookup } = await mountOwnerFailure();
   const held = startLookup();
+  fireEvent.click(screen.getByRole('button', { name: 'Home' }));
+  await screen.findByRole('button', { name: 'Workspace actions for Workspace B' });
   fireEvent.click(screen.getByRole('button', { name: 'Workspace actions for Workspace B' }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace settings' }));
   await screen.findByRole('heading', { name: 'Workspace Settings — Workspace B' });
@@ -94,12 +98,13 @@ it('navigation B: a newer Workspace Settings decision fences a stale owner-looku
   expect(screen.queryByText(/stale owner lookup failed/)).toBeNull();
 });
 
-it('navigation C: closing Settings fences a stale owner-lookup failure', async () => {
+it('navigation C: leaving Settings fences a stale owner-lookup failure', async () => {
   const { startLookup } = await mountOwnerFailure();
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   await screen.findByRole('heading', { name: 'User Settings' });
   const held = startLookup();
-  fireEvent.click(screen.getByRole('button', { name: 'Close Settings' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Home' }));
+  await screen.findByRole('button', { name: 'Open Session A' });
   expect(screen.queryByRole('heading', { name: 'User Settings' })).toBeNull();
   await release(held);
   expect(screen.queryByRole('dialog')).toBeNull();
@@ -141,6 +146,8 @@ it('navigation success: a current lookup still commits the exact owning Workspac
 it('navigation success: a delayed successful lookup is fenced by a newer navigation', async () => {
   const { startLookup } = await mountOwnerFailure();
   const held = startLookup();
+  fireEvent.click(screen.getByRole('button', { name: 'Home' }));
+  await screen.findByRole('button', { name: 'Open Session A' });
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
   await screen.findByRole('heading', { name: 'User Settings' });
   await release(held, true);
@@ -164,6 +171,8 @@ const selected = (name: string) => screen.getByRole('tab', { name }).getAttribut
 async function recoveryWithStaleLookup() {
   const { startLookup } = await mountOwnerFailure();
   const held = startLookup();
+  fireEvent.click(screen.getByRole('button', { name: 'Home' }));
+  await screen.findByRole('button', { name: 'View options' });
   fireEvent.click(screen.getByRole('button', { name: 'View options' }));
   await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Close all views' })); });
   await act(async () => { await server.client.disconnect(); });

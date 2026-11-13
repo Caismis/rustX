@@ -1,6 +1,6 @@
 import {applicationReceipt} from './support/fixtures.ts';
 import {readCut} from './support/fixtures.ts';
-import { registrationId } from "./support/app-server-peer.ts";
+import { registrationId, inputIdOf } from "./support/app-server-peer.ts";
 import { checkpoint } from "./support/fixtures.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -26,7 +26,7 @@ function pending(sequence: string, revision: string, text: string) {
 }
 
 test("Composer idle Enter, running Enter and running Tab issue exactly one native request each", async () => {
-  for (const [running, key, method] of [[false, "\r", "turn/start"], [true, "\r", "turn/steer"], [true, "\t", "turn/start"]] as const) {
+  for (const [running, key, method] of [[false, "\r", "inbound/queue"], [true, "\r", "turn/steer"], [true, "\t", "inbound/queue"]] as const) {
     const h = await harness(snapshot({ attempt: running ? attemptView() : undefined }));
     const editor = new ComposerEditor(terminal());
     editor.running = () => running;
@@ -39,10 +39,10 @@ test("Composer idle Enter, running Enter and running Tab issue exactly one nativ
     editor.onQueue = text => submit(text, true);
     editor.setText("draft"); editor.handleInput(key);
     const request = await nextRequest(h, method, 0);
-    assert.deepEqual(request.params, { target: h.target, content: [{ type: "text", text: "draft" }] });
-    h.transport.respond(request.id, { type: "inbound_accepted", message_id: "m", inbound_sequence: "10" });
+    assert.deepEqual(request.params, {inputId: inputIdOf(request), ...(method==='turn/steer'?{expectedTurnId:'a1'}:{}), target: h.target, content: [{ type: "text", text: "draft" }] });
+    h.transport.respond(request.id, method==='turn/steer' ? {type:"turn_input_accepted",turnId:"a1",disposition:"steered",message_id:"m",inbound_sequence:"10"} : { type: "inbound_accepted", message_id: "m", inbound_sequence: "10" });
     await done;
-    assert.equal(h.transport.transportCount("turn/start") + h.transport.transportCount("turn/steer"), 1);
+    assert.equal(h.transport.transportCount("inbound/queue") + h.transport.transportCount("turn/steer"), 1);
     assert.deepEqual(h.session.state.inbound.pending, []);
     h.client.close();
   }
@@ -60,7 +60,7 @@ test("native queue order survives reconnect reconstruction and is independent of
   await repair;
   const after = new PendingInputView(terminal(), h.session, () => {}, () => {}).render(80).join("\n");
   assert.equal(before, after); assert.match(after, /first[\s\S]*second/);
-  assert.equal(h.transport.transportCount("turn/start"), 0); h.client.close();
+  assert.equal(h.transport.transportCount("inbound/queue"), 0); h.client.close();
 });
 
 test("pending edit/remove use exact observed CAS once, including stale results", async () => {
@@ -121,8 +121,8 @@ test("upload returns native receipts, preserves ordered blocks, never submits a 
   assert.deepEqual(editorSubmission(blocks, "beforeafter"), blocks);
   assert.throws(() => editorSubmission(blocks, "ambiguous edit"), /ordering/);
   const sending = h.session.submitInbound(blocks);
-  const sent = await nextRequest(h, "turn/start", 0);
-  assert.deepEqual(sent.params, { target: h.target, content: blocks });
+  const sent = await nextRequest(h, "inbound/queue", 0);
+  assert.deepEqual(sent.params, {inputId: inputIdOf(sent), target: h.target, content: blocks });
   h.transport.respond(sent.id, { type: "inbound_accepted", message_id: "m", inbound_sequence: "1" }); await sending;
   assert.ok(!JSON.stringify(sent.params).includes("local-path"));
   h.client.close();

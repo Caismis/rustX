@@ -2,19 +2,21 @@ import { test, expect, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
 import { rootBlock } from '../workflow-root';
-import type { WorkflowCheckReport } from '../../../protocol/app-server/v73';
+import type { WorkflowCheckReport } from '../../../protocol/app-server/v78';
 import { setNodePresentation } from '../../src/app/workflows/document/geometry';
 import type { WorkflowDocument } from '../../src/app/workflows/document/model';
 
 const inspector = (page: Page) => page.getByRole('complementary', { name: 'Inspector' });
 const canvas = (page: Page) => page.getByRole('region', { name: 'Workflow canvas' });
 async function activate(page: Page) {
-  const node = canvas(page).getByLabel('Branch node choose', { exact: true }); await node.focus(); await node.press('Enter');
+  const node = canvas(page).getByLabel('Branch node choose', { exact: true });
+  await expect(node).toBeVisible();
+  await node.focus(); await node.press('Enter');
 }
 
 test('six concurrent reference conditions retain numeric operators during edits in both scopes', async ({ page }) => {
@@ -35,7 +37,7 @@ test('six concurrent reference conditions retain numeric operators during edits 
     }
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     for (const scope of ['Global', 'Workspace']) {
       await page.getByRole('tab', { name: scope, exact: true }).click();
       await page.getByRole('button', { name: 'concurrent_conditions', exact: true }).click(); await activate(page);
@@ -52,7 +54,7 @@ test('six concurrent reference conditions retain numeric operators during edits 
     }
     expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 for (const width of [1440, 390]) test(`single integer token retains string template semantics after save at ${width}px`, async ({ page }, info) => {
@@ -80,7 +82,7 @@ for (const width of [1440, 390]) test(`single integer token retains string templ
       checks.push({ condition: condition.type === 'and' ? condition.predicates[0] : condition, report: result.report });
     }); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'string_template', exact: true }).click(); await activate(page);
     const value = () => inspector(page).getByRole('textbox', { name: 'Value', exact: true });
     await expect(value()).toContainText('n=');
@@ -108,7 +110,7 @@ for (const width of [1440, 390]) test(`single integer token retains string templ
     expect((await fixture.control('requests')).requests).toHaveLength(0);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 for (const width of [1440, 390]) test(`object-array membership retains its full operand through editing and save at ${width}px`, async ({ page }, info) => {
@@ -130,7 +132,7 @@ for (const width of [1440, 390]) test(`object-array membership retains its full 
     await page.setViewportSize({ width, height: 844 });
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'object_membership', exact: true }).click(); await activate(page);
     await expect(page).toHaveTitle(/rustX$/);
     const settings = inspector(page).getByRole('region', { name: 'Settings', exact: true });
@@ -158,7 +160,7 @@ for (const width of [1440, 390]) test(`object-array membership retains its full 
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-style card and panel', async ({ page }, info) => {
@@ -177,7 +179,7 @@ test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-sty
     const file = join(directory, 'branch_cases.yaml'); writeFileSync(file, JSON.stringify(document));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'branch_cases', exact: true }).click();
     await expect(page).toHaveTitle(/rustX$/); await activate(page);
     const card = canvas(page).getByLabel('Branch node choose', { exact: true });
@@ -257,7 +259,7 @@ test('authors ordered IF ELIF ELSE conditions and stable exits with the Dify-sty
     await expect(inspector(page)).toHaveCSS('position', 'absolute'); await captureEvidence(page, 'branch-mobile', info);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('branch variable picker shows upstream outputs and excludes parallel siblings and later nodes', async ({ page }, info) => {
@@ -279,7 +281,7 @@ test('branch variable picker shows upstream outputs and excludes parallel siblin
     writeFileSync(join(directory, 'branch_scope.yaml'), JSON.stringify(document));
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await page.getByRole('button', { name: 'branch_scope', exact: true }).click();
     await activate(page);
     await inspector(page).getByRole('region', { name: 'IF', exact: true }).getByRole('button', { name: 'Add condition', exact: true }).click();
@@ -295,5 +297,5 @@ test('branch variable picker shows upstream outputs and excludes parallel siblin
     await picker.getByRole('button', { name: /^before \/ text ·/ }).click();
     await expect(picker).toHaveCount(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });

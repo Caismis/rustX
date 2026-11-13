@@ -96,12 +96,13 @@
 }
 .disclosureButton[data-focus-visible] { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; border-radius: 6px; }
 .disclosureMarker { flex: none; color: var(--dsw-alias-label-tertiary); font-size: 11px; }
+.disclosureButton[aria-expanded=true] .disclosureMarker { transform: rotate(90deg); }
 .disclosurePanel { padding: 0 0 8px; min-width: 0; }
 /* A collapsed panel is `hidden="until-found"`: laid out but empty, so it keeps
    no padding either. */
 .disclosurePanel[hidden] { padding: 0; }
 
-/* Confirmation dialog — a transient layer over the one Settings modal root,
+/* Confirmation dialog — a transient layer over the retained Settings page,
    never a second Settings tree. */
 .confirmOverlay { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; background: var(--dsw-alias-bg-mask-1); backdrop-filter: var(--dsw-mask-blur); }
 .confirmModal { max-width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); display: flex; }

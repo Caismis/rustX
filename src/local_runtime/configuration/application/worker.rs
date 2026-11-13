@@ -254,10 +254,12 @@ impl ConfigurationApplications {
                 return;
             }
             if let Some(old) = &adopted
-                && capture.preserves_adopted_models(old)
+                && capture.preserves_adopted_models(old, |_| false)
                 && (capture.same_session_model(old) || capture.selection_unavailable().is_some())
             {
-                let others_unchanged = capture.same_capabilities(old) && capture.same_context(old);
+                let others_unchanged = capture.same_capabilities(old)
+                    && capture.same_context(old)
+                    && capture.same_skill_catalog(old);
                 // Capture validated the catalog and its default; publication
                 // resolves it. Source availability composes the whole
                 // generation, so it waits for any unit still to prepare.
@@ -411,7 +413,7 @@ impl ConfigurationApplications {
             let prepared_capture = capture.clone();
             let mut preparation = Box::pin(runtime.prepare_configuration(
                 |capability| resource_loader.prepare(capability, prepared_capture, &cancellation),
-                capture.config.initial_model().clone(),
+                capture.session_model().clone(),
             ));
             let prepared =
                 tokio::time::timeout(std::time::Duration::from_mins(2), &mut preparation).await;

@@ -8,6 +8,7 @@ import { WorkspaceAuthority } from '../src/workspaces/authority';
 import type { AppServerClient } from '../src/client/app-server';
 import { WorkspaceHostError, type ProductHostWorkspaces } from '../src/workspaces/host';
 import type { DocumentRequest } from '../shared/documents';
+import { FILE_PREVIEW_LIMITS } from '../shared/file-preview';
 function gate<T = void>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 const scope = { authorityId: 'host', endpoint: 'ws://127.0.0.1:7777' };
 const request: DocumentRequest = { target: { session_id: 'ses_00000000-0000-7000-8000-000000000001', conversation_id: 'conv_00000000-0000-7000-8000-000000000001', attachment_id: 'a', runtime_incarnation: '1' }, source: { kind: 'artifact', artifact_id: 'a' }, extension: 'docx' };
@@ -18,7 +19,7 @@ async function serve(previewDocument: NonNullable<ProductHostWorkspaces['preview
   const unexpected = async (): Promise<never> => { throw new Error('Unexpected Workspace metadata operation'); };
   const host: ProductHostWorkspaces = { previewDocument, readDelivery, observeDelivery: observation,
     listWorkspaces: async () => ({ ...scope, workspaces: [], picker: { kind: 'unavailable', reason: 'fixture' } }),
-    adoptWorkspace: unexpected, renameWorkspace: unexpected, reorderWorkspace: unexpected, removeWorkspace: unexpected,
+    adoptWorkspace: unexpected, renameWorkspace: unexpected, selectWorkspace: async () => {}, reorderWorkspace: unexpected, removeWorkspace: unexpected,
     resolveWorkspace: unexpected, classifyLocations: unexpected };
   const handler = workspaceHandler(host);
   server = createServer((req, res) => { void handler(req, res); });
@@ -212,4 +213,51 @@ it.each(['converter', 'file', 'document'] as const)('canceled document carrier p
     await entered.promise; abort.abort(); await aborted.promise;
     settle.resolve(); await rejected;
   } finally { settle.resolve(); await rejected; }
+});
+
+it('a canceled successful large response waits for physical settlement without materializing its Blob', async () => {
+  const entered = gate(), aborted = gate(), settle = gate();
+  const data = new Uint8Array(600 * 1024);
+  const host = await serve(async (_scope, _request, signal) => {
+    entered.resolve(); signal!.addEventListener('abort', () => aborted.resolve(), { once: true });
+    await settle.promise;
+    return { ...result, preview: { kind: 'pdf', data } };
+  });
+  const abort = new AbortController(), work = host.previewDocument(scope, request, abort.signal);
+  const rejected = expect(work).rejects.toMatchObject({ name: 'AbortError' });
+  const terminal = vi.fn(); void work.then(terminal, terminal);
+  try {
+    await entered.promise;
+    const materialize = vi.spyOn(Blob.prototype, 'arrayBuffer');
+    abort.abort(); await aborted.promise;
+    expect(terminal).not.toHaveBeenCalled();
+    settle.resolve(); await rejected;
+    expect(materialize).not.toHaveBeenCalled();
+  } finally { settle.resolve(); await rejected; }
+});
+
+it.each(['unknown attachment', 'invalid placeholder', 'oversized body'] as const)('a canceled %s remains an unknown physical settlement', async failure => {
+  const parsing = gate(), finish = gate();
+  vi.stubGlobal('location', { href: 'http://127.0.0.1', origin: 'http://127.0.0.1' });
+  vi.stubGlobal('fetch', async (input: string, init?: RequestInit) => {
+    if (input.endsWith('/file-cancel')) return Response.json({ ok: true });
+    const { operationId } = JSON.parse(init!.body as string);
+    const form = new FormData();
+    form.set('metadata', JSON.stringify({ ok: true, attachment: failure === 'unknown attachment' ? 'unknown' : 'preview', value: { preview: { kind: 'pdf', data: failure === 'invalid placeholder' ? [] : null } } }));
+    form.set('data', new Blob([new Uint8Array(failure === 'oversized body' ? FILE_PREVIEW_LIMITS.fileBytes + 1 : 1)]));
+    const encoded = new Response(form);
+    const reader = encoded.body!.getReader();
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        parsing.resolve(); await finish.promise;
+        const next = await reader.read();
+        if (next.done) controller.close(); else controller.enqueue(next.value);
+      },
+    });
+    return new Response(body, { headers: { 'Content-Type': encoded.headers.get('Content-Type')!, 'X-Rustx-File-Operation': operationId } });
+  });
+  const abort = new AbortController(), work = new HttpWorkspaceHost().readDelivery(scope, { target: request.target, locator: { type: 'by_message_id', message_id: 'm' }, delivery_index: 0 }, abort.signal);
+  const rejected = expect(work).rejects.toMatchObject({ kind: 'file_settlement_unknown' });
+  try { await parsing.promise; abort.abort(); finish.resolve(); await rejected; }
+  finally { finish.resolve(); await rejected; }
 });

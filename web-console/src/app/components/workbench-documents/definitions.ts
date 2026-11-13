@@ -1,8 +1,9 @@
 import { languageForPath } from '../../../presentation/primitives/file-language';
 import { binaryDocumentPath, matchingDocumentPreviews, type DocumentPreviewDefinition } from './registry';
-export type Viewer = 'markdown' | 'html' | 'image' | 'pdf' | 'excel' | 'office' | 'code' | 'text';
+export type Viewer = 'markdown' | 'html' | 'image' | 'pdf' | 'excel' | 'office' | 'geometry' | 'code' | 'text';
 /** Harness registration order is semantic: specialized views precede source code. */
 const definitions: DocumentPreviewDefinition[] = [
+  { id: 'geometry', extensions: ['glb','stl','step','stp','iges','igs','brep'], binaryExtensions: ['glb','stl','step','stp','iges','igs','brep'], loading: 'bytes-complete', wrap: false },
   { id: 'markdown', extensions: ['md', 'markdown'], loading: 'text-pages', wrap: false },
   { id: 'html', extensions: ['html', 'htm'], loading: 'bytes-complete', wrap: false },
   { id: 'image', extensions: ['png','jpg','jpeg','gif','webp','bmp','avif'], binaryExtensions: ['png','jpg','jpeg','gif','webp','bmp','avif'], loading: 'bytes-complete', wrap: false },
@@ -17,4 +18,12 @@ export function viewersForPath(path: string): Viewer[] {
   if (!specialized.length && unsupported.has(path.split('.').at(-1)?.toLowerCase() ?? '')) return [];
   return binaryDocumentPath(definitions,path) ? specialized : [...specialized, ...(languageForPath(path) ? ['code' as const] : []), 'text'];
 }
-export const loadsBytes = (viewer: Viewer) => viewer === 'html' || viewer === 'image' || viewer === 'pdf' || viewer === 'excel';
+/** Managed media types override display-name suffixes; delivered files use paths. */
+export function viewersForArtifact(artifact: { source: { kind: string }; name: string; image: boolean; mimeType?: string }): Viewer[] {
+  const managed = artifact.source.kind === 'artifact';
+  const mime = managed ? artifact.mimeType?.split(';')[0].trim().toLowerCase() : undefined;
+  if (managed && (artifact.image || mime?.startsWith('image/'))) return ['image'];
+  if (mime === 'text/markdown') return ['markdown', 'code', 'text'];
+  return viewersForPath(artifact.name);
+}
+export const loadsBytes = (viewer: Viewer) => viewer === 'geometry' || viewer === 'html' || viewer === 'image' || viewer === 'pdf' || viewer === 'excel';

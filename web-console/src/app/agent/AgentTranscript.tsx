@@ -1,3 +1,4 @@
+import {isPlainMessageKind} from '../../../../protocol/app-server/message-kind';
 import { ConfigurationChangeRow, hasConfigurationChangeRow } from './ConfigurationChangeRow';
 import { WorkflowRunPanel } from './WorkflowRunPanel';
 import { workflowKey } from '../../bindings/workflow-children';
@@ -20,15 +21,16 @@ import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, AssistantContentBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v73';
+import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, AssistantContentBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v78';
 import { conversation } from '../../bindings/projection';
 import { agentStatusPlacement, isContextInjection, statusesAt } from '../../bindings/agent-status';
 import { TranscriptContinuation } from './TranscriptContinuation';
-import { Feedback } from '../components/ConversationFeedback';
 import { AgentStatusAnnotation } from './AgentStatus';
 import { Message, Content } from './Message';
 import { messageContinuation, useMessageBlocks } from './message-blocks';
-import { AssistantMessage, UserMessage } from '../../presentation/agent/Message';
+import { AssistantMessage, UserMessage, MessageFile } from '../../presentation/agent/Message';
+import type { Submission } from '../../client/contracts';
+import pendingCss from './PendingMessage.module.css';
 import { TurnDeliveries } from './TurnDeliveries';
 import { TurnChanges } from './TurnChanges';
 import { CreatedTasks } from '../scheduler/CreatedTasks';
@@ -45,7 +47,7 @@ import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { PublicationHead } from '../../client/publication-heads';
-import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v73';
+import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v78';
 /** Standalone Tool-result bodies are suppressed: the native call projection
  * already renders their content beside the call. Context injections are
  * Harness hidden rows in every work-detail mode. Suppressing a body does not
@@ -87,7 +89,7 @@ function withProcessSpacing(rows: (FlowRow | null)[]) {
     return next;
   });
 }
-export function AgentTranscript({ snapshot, history, publicationHeads = [], retrying = false, loadEarlier, loadLater, onHistorical, historicalDisabled, forking, lineageSwitchSafe = false, requestFeedback: suppliedFeedback, compactions = [], contextActivity, workflows }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'> & Partial<Pick<RuntimeClientSnapshot,'message_descriptors'|'publication_settlements'|'pending_interactions'>>; history?: TranscriptCache; publicationHeads?: readonly PublicationHead[]; retrying?: boolean; loadEarlier?: () => void; loadLater?: () => void | Promise<void>; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; forking?: CompletedResponseView; lineageSwitchSafe?: boolean; requestFeedback?: RequestFeedback; compactions?: readonly { head: RuntimeClientProjectionHeadView; content: ReactNode }[]; contextActivity?: ReactNode; workflows?: RuntimeClientSnapshot['workflows'] }) {
+export function AgentTranscript({ snapshot, history, accepted = [], publicationHeads = [], retrying = false, loadEarlier, loadLater, onHistorical, historicalDisabled, forking, lineageSwitchSafe = false, requestFeedback: suppliedFeedback, compactions = [], contextActivity, workflows }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'> & Partial<Pick<RuntimeClientSnapshot,'message_descriptors'|'publication_settlements'|'pending_interactions'>>; history?: TranscriptCache; accepted?: readonly Submission[]; publicationHeads?: readonly PublicationHead[]; retrying?: boolean; loadEarlier?: () => void; loadLater?: () => void | Promise<void>; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; forking?: CompletedResponseView; lineageSwitchSafe?: boolean; requestFeedback?: RequestFeedback; compactions?: readonly { head: RuntimeClientProjectionHeadView; content: ReactNode }[]; contextActivity?: ReactNode; workflows?: RuntimeClientSnapshot['workflows'] }) {
   const tx = useTranslation();
   const receiver = useContext(AgentConversationContext);
   const isUser = (message: MessageBlock) => isUserBubble(message, receiver?.parent_agent_id);
@@ -204,7 +206,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   const durableFlow = compactionPlacement(turnPresentation(entries, snapshot.conversation_id), compactions, entries, snapshot.transcript, history);
   const trailingCompaction = durableFlow.filter(node => node.kind === 'compaction' && BigInt(node.marker.head.transcript_anchor) >= BigInt(entries.at(-1)?.cursor ?? '0')).at(-1);
   const pendingMessages = !history?.window ? messages.filter(message => !durableIds.has(message.id) && message.role !== 'tool'
-    && !(message.role === 'user' && message.kind && message.kind !== 'message')) : [];
+    && !(message.role === 'user' && !isPlainMessageKind(message.kind))) : [];
   const activeOwner = snapshot.attempt ? { conversation_id: snapshot.conversation_id, attempt_id: snapshot.attempt.attempt_id, attempt_id_source: snapshot.attempt.attempt_id_source } : undefined;
   if (streaming && activeOwner) headOwners.current.values.set(streaming.message_id, activeOwner);
   for (const descriptor of snapshot.message_descriptors ?? []) if (descriptor.identity && descriptor.turn_process?.conversation_id === snapshot.conversation_id) headOwners.current.values.set(descriptor.identity, descriptor.turn_process);
@@ -340,7 +342,7 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   };
   // Context injections are hidden rows (Agent Status has its own anchored
   // annotation): only a not-yet-durable Goal continuation remains here.
-  const currentContext = messages.filter(message => message.role === 'user' && message.kind && message.kind !== 'message' && !durableIds.has(message.id) && !isContextInjection(message));
+  const currentContext = messages.filter(message => message.role === 'user' && !isPlainMessageKind(message.kind) && !durableIds.has(message.id) && !isContextInjection(message));
   const runningAttempt = !history?.window && !!snapshot.attempt && ['admitted','running'].includes(snapshot.attempt.phase.type) ? snapshot.attempt : undefined;
   const latestTurn = snapshot.transcript.statistics?.latest_turn;
   const startedAt = runningAttempt && (latestTurn?.attempt_id != null && latestTurn.attempt_id === runningAttempt.attempt_id ? latestTurn.started_at
@@ -370,7 +372,15 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
     flow.splice(at < 0 ? flow.length : at, 0, { kind: 'head', head });
   }
   if (streaming && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id)) flow.push({ kind: 'streaming', streaming });
-  const nodes: (typeof flow[number] | { kind: 'continuation' })[] = [...flow];
+  const nodes: (typeof flow[number] | { kind: 'continuation' } | { kind: 'accepted'; submission: Submission })[] = [...flow];
+  if (!history?.window && accepted.length) {
+    // An acknowledged idle input belongs before the new live reply. It never
+    // enters canonical history, and its native identity retires the echo.
+    const at = nodes.findIndex(node => node.kind === 'streaming'
+      || node.kind === 'head' && snapshot.attempt && node.head.owner && attemptOwnerKey(node.head.owner) === attemptOwnerKey({ conversation_id: snapshot.conversation_id, ...snapshot.attempt })
+      || node.kind === 'process' && node.process.outcome === 'running');
+    nodes.splice(at < 0 ? nodes.length : at, 0, ...accepted.filter(value => !durableIds.has(value.messageId) && !messages.some(message => message.id === value.messageId)).map(submission => ({ kind: 'accepted' as const, submission })));
+  }
   const continuation = history?.window?.newer_cursor;
   if (continuation != null && loadLater) {
     const at = flow.findIndex(node => node.kind === 'entry' && BigInt(node.entry.cursor) > BigInt(continuation)
@@ -381,8 +391,15 @@ export function AgentTranscript({ snapshot, history, publicationHeads = [], retr
   return <ToolDisclosureContext.Provider value={toolDisclosure}><div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
     {!retrying && !history?.initialLoading && history?.page.next_cursor != null && <div className={css.older}><button type="button" disabled={history.loading || !loadEarlier} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</button></div>}
     {history?.error && <p role="alert">{history.error}</p>}
-    {!retrying && !history?.initialLoading && !snapshot.message_descriptors?.length && !messages.length && !entries.length && !runs.length && <Feedback kind="empty" title={tx('agent:agent-transcript.ready-for-a-task')}><p>{tx('agent:agent-transcript.what-would-you-like-to-work-on')}</p></Feedback>}
     {withProcessSpacing(nodes.map(node => {
+      if (node.kind === 'accepted') {
+        const value = node.submission;
+        if (!value.content) return null; // Identity-only repair cannot invent a provisional body.
+        const files = value.content.filter(block => block.type === 'upload').length;
+        const text = value.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
+        return <div key={'message:' + value.messageId} className={css.flowItem} data-pending-message="" data-provisional-message-id={value.messageId}><MessageSeat key="seat" id={'message:' + value.messageId}
+          other={<UserMessage label={tx('agent:message.your-message')} attachments={files ? <MessageFile name={tx(files === 1 ? 'agent:attachments.one' : 'agent:attachments.other', { n: files })}/> : undefined}>{text !== '' ? <div className={pendingCss.text}>{text}</div> : undefined}</UserMessage>}/></div>;
+      }
       if (node.kind === 'compaction') return <div className={css.flowItem} key={`compaction:${node.marker.head.activation_id}`} data-chat-anchor-key={`compaction:${node.marker.head.activation_id}`} data-compaction-anchor={node.marker.head.transcript_anchor}>{node.marker.content}</div>;
       if (node.kind === 'continuation') return <TranscriptContinuation key="history-continuation" cursor={continuation!} loading={!!history?.loading} load={loadLater!}/>;
       if (node.kind === 'head') {

@@ -462,6 +462,18 @@ def web_preview_workspace() -> Scenario:
 SCENARIOS['web_preview_workspace'] = web_preview_workspace
 
 
+def web_geometry_previews() -> Scenario:
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model='console-model', body_contains=('Inspect the CAD model',))
+    files = [{'path': name} for name in ['mounting-bracket.step', 'mounting-bracket.glb', 'notes.md']]
+    return Scenario('web_geometry_previews',
+        Step(expected, Stream(ToolCall('geometry-present', 'present', json.dumps({'files': files})), Finish('tool_calls'))),
+        Step(expected, Stream(Text('The model files are ready to inspect.'), Finish())),
+    )
+
+
+SCENARIOS['web_geometry_previews'] = web_geometry_previews
+
+
 SCENARIOS['web_artifact_document'] = lambda: Scenario('web_artifact_document')
 
 
@@ -474,6 +486,32 @@ def web_model_errors() -> Scenario:
         Step(expected, Stream(Text("Conversation recovered after model errors."), Finish())))
 
 SCENARIOS["web_model_errors"] = web_model_errors
+
+
+def web_model_probe() -> Scenario:
+    expected = Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Reply with OK.",))
+    return Scenario("web_model_probe",
+        Step(expected, Stream(Text("OK"), Finish())),
+        Step(expected, HttpError(401, {"error": {"message": "Fixture authentication rejected"}})),
+        Step(expected, Stream(Text("OK"), Finish())))
+
+
+SCENARIOS["web_model_probe"] = web_model_probe
+
+
+def web_model_deletion() -> Scenario:
+    def reply(model: str, prompt: str, answer: str) -> Step:
+        return Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=model, body_contains=(prompt,)),
+                    Stream(Text(answer), Finish()))
+
+    return Scenario("web_model_deletion",
+        reply("console-model", "Before model deletion", "Existing conversation history."),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="second-model", body_contains=("Start with the replacement",)),
+             Stream(Gate("new-conversation-ready"), Text("New conversation uses the replacement."), Finish())),
+        reply("second-model", "Continue the old conversation", "Old conversation continues after reselecting."))
+
+
+SCENARIOS["web_model_deletion"] = web_model_deletion
 
 
 def web_timeout_retry() -> Scenario:

@@ -19,12 +19,12 @@ for (const width of [1440, 390]) test(`native automatic Title, explicit invocati
   try {
     writeFileSync(join(primary.workspaceA, 'rustx.toml'), `
 [providers.titles]
+protocol = "openai_chat_completions"
 base_url = "${auxiliary.providerUrl}/v1"
 api_key = "$RUSTX_CONSOLE_FIXTURE_KEY"
 [models."titles/short"]
 provider = "titles"
 id = "title-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 256
 capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
@@ -62,7 +62,7 @@ max_output_tokens = { mode = "limit", tokens = 128 }
     expect(generated.generated_title).toMatchObject({ text: 'Cache invalidation investigation', provenance: { type: 'local' } });
     expect((await native.readSettings(id)).revision).toBe(settings.revision);
     await page.screenshot({ path: info.outputPath(`automatic-title-${width}.png`) });
-    const sidebar = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+    const sidebar = page.getByRole('button', { name: 'Home', exact: true });
     if (await sidebar.isVisible()) await sidebar.click();
     await page.locator(`button[data-session-id="${id}"]`).hover();
     await page.getByRole('button', { name: 'Session actions for Cache invalidation investigation', exact: true }).click();
@@ -74,14 +74,17 @@ max_output_tokens = { mode = "limit", tokens = 128 }
     expect((await native.readSession(id)).generated_title).toEqual(generated.generated_title);
     await page.reload();
     await connectRemote(page, primary.endpoint, primary.token);
-    const expand = page.getByRole('button', { name: 'Expand Sidebar', exact: true });
+    const expand = page.getByRole('button', { name: 'Home', exact: true });
     if (await expand.isVisible()) await expand.click();
     await page.locator(`button[data-session-id="${id}"]`).click();
     await expect(page.getByLabel('Session title', { exact: true })).toHaveText('Manual cache review');
     await expect(page).toHaveTitle('Manual cache review — rustX');
-    await page.getByRole('navigation', { name: 'Global panels' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await expect(page).toHaveTitle('rustX');
-    await page.getByRole('button', { name: 'New Conversation', exact: true }).first().click();
+    await expand.click();
+    await expect(page).toHaveTitle('Manual cache review — rustX');
+    if (!await page.getByRole('button', { name: 'New Conversation', exact: true }).isVisible()) await expand.click();
+    await page.getByRole('button', { name: 'New Conversation', exact: true }).click();
     await expect(page).toHaveTitle('rustX');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);

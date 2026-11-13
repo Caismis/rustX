@@ -175,17 +175,11 @@ async fn assert_noop(f: &Fixture, stage: Option<&NoopStage>) {
 }
 
 async fn edit_instructions(f: &Fixture) {
-    let path = f.workspaces[0].join("rustx.toml");
-    let mut source: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    source
-        .as_table_mut()
-        .unwrap()
-        .entry("agent")
-        .or_insert_with(|| toml::Value::Table(toml::map::Map::default()))
-        .as_table_mut()
-        .unwrap()
-        .insert("instructions".into(), "saved Workspace instructions".into());
-    std::fs::write(path, toml::to_string(&source).unwrap()).unwrap();
+    std::fs::write(
+        f.workspaces[0].join("AGENTS.md"),
+        "saved Workspace instructions",
+    )
+    .unwrap();
     f.manager
         .reconcile_configuration(&SourceTarget::Workspace {
             directory: f.workspaces[0].clone(),
@@ -285,16 +279,13 @@ async fn identical_explicit_selection_is_inert_after_automatic_commit() {
         edit_instructions(&f).await;
         super::configuration::applied(&f, 0).await;
         assert_noop(&f, None).await;
+        let resources = f
+            .manager
+            .configuration_runtime(&f.sessions[0].id)
+            .unwrap()
+            .runtime_resources();
         assert_eq!(
-            f.manager
-                .configuration_runtime(&f.sessions[0].id)
-                .unwrap()
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
+            super::configuration::guidance(resources.project_context_files()),
             "saved Workspace instructions"
         );
         f.close().await;

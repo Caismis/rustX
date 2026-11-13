@@ -95,6 +95,16 @@ impl core::fmt::Debug for CapabilitySnapshot {
 }
 
 impl CapabilitySnapshot {
+    /// Replace inert discovery metadata without changing executable capability
+    /// identity or its physical resource owners.
+    pub(crate) fn with_skills(mut self, skills: Arc<SkillSnapshot>) -> Self {
+        if self.skills == skills {
+            return self;
+        }
+        self.skills = skills;
+        let profile = self.resolved_profile.clone();
+        self.with_resolved_profile(profile)
+    }
     pub(crate) fn with_resolved_profile(
         mut self,
         profile: Option<Arc<crate::runtime::agent_profile::ResolvedAgentProfile>>,
@@ -245,9 +255,25 @@ impl CapabilitySnapshot {
     /// Effective System Prompt; it is not canonical conversation history.
     #[must_use]
     pub fn skill_catalog(&self) -> Option<String> {
+        use crate::skills::SkillReadTool;
+        use crate::tools::types::ToolOrigin;
         let entries = self.model_skill_entries();
-        (!entries.is_empty())
-            .then(|| crate::skills::render_skill_catalog(entries, self.skills.roots()))
+        if entries.is_empty() {
+            return None;
+        }
+        let has = |name| {
+            self.tool_registry
+                .definition_refs()
+                .any(|tool| tool.origin == ToolOrigin::Builtin && tool.name == name)
+        };
+        let reader = if has("read") {
+            SkillReadTool::Read
+        } else if has("bash") {
+            SkillReadTool::Bash
+        } else {
+            return None;
+        };
+        Some(crate::skills::render_skill_catalog(entries, reader))
     }
 
     /// Exact profile-selected Skill metadata, independent of Tool selection.
@@ -282,7 +308,8 @@ impl CapabilitySnapshot {
                 .into_iter()
                 .filter_map(|definition| match definition.origin {
                     crate::tools::types::ToolOrigin::Mcp { server_id } => Some(server_id),
-                    crate::tools::types::ToolOrigin::Builtin => None,
+                    crate::tools::types::ToolOrigin::Builtin
+                    | crate::tools::ToolOrigin::Host { .. } => None,
                     crate::tools::types::ToolOrigin::ManagedPython { package } => {
                         Some(crate::tools::python::python_server_id(&package))
                     }

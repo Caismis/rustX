@@ -1,29 +1,10 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { WorkflowToolSource, WorkflowToolCatalogCursor } from '../../../../../../protocol/app-server/v73';
-import type { WorkflowScopePort } from '../../port';
+import type { WorkflowToolSource } from '../../../../../../protocol/app-server/v78';
+import { readToolCatalog, type WorkflowScopePort } from '../../port';
 
 export type ToolCatalogState = { status: 'idle' | 'loading' | 'failed' } | { status: 'ready'; sources: readonly WorkflowToolSource[] };
 
 const Catalog = createContext<{ state: ToolCatalogState; load: () => void }>({ state: { status: 'idle' }, load: () => {} });
-
-/** Each page belongs to one unchanged catalog. A source becomes listed only
- * after every page has arrived through the same captured authority. */
-export async function readToolCatalog(port: Pick<WorkflowScopePort, 'toolCatalog'>, source?: string) {
-  const sources: WorkflowToolSource[] = [];
-  let cursor: WorkflowToolCatalogCursor | undefined;
-  do {
-    const catalog = await port.toolCatalog(source, cursor);
-    for (const item of catalog.sources) {
-      const prior = source && sources.find(prior => prior.source_id === item.source_id);
-      if (prior) prior.tools.push(...item.tools);
-      else sources.push({ ...item, tools: [...item.tools] });
-    }
-    const next = catalog.next ?? undefined;
-    if (next && cursor && (next.offset <= cursor.offset || next.digest !== cursor.digest)) throw new Error('Invalid Tool catalog continuation');
-    cursor = next;
-  } while (cursor);
-  return { sources };
-}
 
 /** The scope's MCP servers and Managed Python packages, read once per
  * editor when first needed, then each listed on its own, so a package still

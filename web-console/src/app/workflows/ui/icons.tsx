@@ -23,8 +23,6 @@ function iconify(icon: IconifyIcon) {
 export const IconWorkflow = glyph(<><rect x="3" y="3" width="6" height="6" rx="1.5" /><rect x="15" y="3" width="6" height="6" rx="1.5" /><rect x="9" y="15" width="6" height="6" rx="1.5" /><path d="M6 9v4h6v2M18 9v4h-6" /></>);
 export const IconFile = glyph(<path d="M6 2.5h9l5 5v13a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2v-15a2 2 0 0 1 2-2zM15 2.5V8h5M8 13h8M8 17h7" />);
 export const IconFolder = glyph(<path d="M3.5 7a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />);
-export const IconGrid = glyph(<><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>);
-export const IconList = glyph(<path d="M4 6h2M10 6h10M4 12h2M10 12h10M4 18h2M10 18h10" />);
 export const IconArrowLeft = glyph(<path d="m14 5-7 7 7 7M8 12h13" />);
 export const IconCursor = glyph(<path d="M4 3 18 12l-7 1.5L8 21z" />);
 export const IconHand = glyph(<path d="M9 13V6a2 2 0 0 1 4 0v6-4a2 2 0 0 1 4 0v5m0-2a2 2 0 0 1 4 0v4a7 7 0 0 1-7 7h-2c-2 0-3.5-.5-5-2l-3-3c-1-1-1-2.7 0-3.5s2-1 3 0l2 1" />);

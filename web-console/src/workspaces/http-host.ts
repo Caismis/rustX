@@ -8,7 +8,7 @@ import { WorkspaceHostError, settlementFailureKind, validateLocations, type Prod
 export class HttpWorkspaceHost implements ProductHostWorkspaces {
   private observations?: FileObservationFeed;
   constructor(private readonly base = '/product-host') {}
-  async observeDelivery(scope: WorkspaceAuthorityScope, read: DeliveryRead, file: import('../../../protocol/app-server/v73.ts').SessionFileReference, changed: () => void, signal: AbortSignal): Promise<import('../../shared/file-observation.ts').PreviewObservation> {
+  async observeDelivery(scope: WorkspaceAuthorityScope, read: DeliveryRead, file: import('../../../protocol/app-server/v78.ts').SessionFileReference, changed: () => void, signal: AbortSignal): Promise<import('../../shared/file-observation.ts').PreviewObservation> {
     return this.observeFile(scope, { read, file }, changed, signal);
   }
   observeWorkspaceFile(scope: WorkspaceAuthorityScope, call: import('./workbench.ts').WorkbenchCall, changed: () => void, signal: AbortSignal) {
@@ -50,8 +50,8 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
       feed.release(operationId); throw error;
     }
   }
-  private async call<T>(method: string, body: unknown = {}, signal?: AbortSignal): Promise<T> {
-    const response = await carrierFetch(`${this.base}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+  private async call<T>(method: string, body: unknown = {}, signal?: AbortSignal, keepalive = false): Promise<T> {
+    const response = await carrierFetch(`${this.base}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal, keepalive });
     if (!response.ok) throw hostFailure(await response.json());
     return response.json();
   }
@@ -91,7 +91,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     if (signal?.aborted) cancel();
     try {
       let result: { ok: boolean; value?: T } & HostFailure;
-      try { result = await fileResponse(response, kind === 'file' ? FILE_PREVIEW_LIMITS.fileBytes : FILE_PREVIEW_LIMITS.convertedPdfBytes) as typeof result; }
+      try { result = await fileResponse(response, kind === 'file' ? FILE_PREVIEW_LIMITS.fileBytes : FILE_PREVIEW_LIMITS.convertedPdfBytes, signal) as typeof result; }
       catch { throw new WorkspaceHostError('File operation settlement unavailable', unknown); }
       if (!result || typeof result.ok !== 'boolean' || (result.ok && result.value === undefined)) {
         throw new WorkspaceHostError('File operation settlement unavailable', unknown);
@@ -121,6 +121,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
   adoptWorkspace = (scope: WorkspaceAuthorityScope, location: string) => this.call<void>('adopt', { scope, location });
   renameWorkspace = (scope: WorkspaceAuthorityScope, id: string, displayName: string) => this.call<void>('rename', { scope, id, displayName });
   reorderWorkspace = (scope: WorkspaceAuthorityScope, id: string, before?: string) => this.call<void>('reorder', { scope, id, before });
+  selectWorkspace = (scope: WorkspaceAuthorityScope, id: string, intent: import('./host.ts').WorkspaceSelectionIntent) => this.call<void>('select', { scope, id, intent }, undefined, true);
   removeWorkspace = (scope: WorkspaceAuthorityScope, id: string) => this.call<void>('remove', { scope, id });
   resolveWorkspace = (id: string, endpoint: string) => this.call<{ cwd: string }>('resolve', { id, endpoint });
   classifyLocations = async (cwds: readonly string[], endpoint: string, authorityId?: string, signal?: AbortSignal) => {
@@ -130,7 +131,7 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
   };
 }
 
-interface HostFailure { message?: unknown; kind?: string; uncertain?: boolean; nativeError?: { message?: string; data?: import('../../../protocol/app-server/v73.ts').ErrorData } }
+interface HostFailure { message?: unknown; kind?: string; uncertain?: boolean; nativeError?: { message?: string; data?: import('../../../protocol/app-server/v78.ts').ErrorData } }
 function hostFailure(failure: HostFailure) {
   const nativeError = failure.nativeError ?? (() => {
     if (typeof failure.message !== 'string') return undefined;

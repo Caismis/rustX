@@ -431,6 +431,7 @@ pub fn invocation(
     let chat_reasoning_replay = (protocol == rustx::model::ModelProtocol::OpenAiChatCompletions)
         .then_some(rustx::model::ChatReasoningReplay::Omit);
     rustx::model::ModelInvocationConfig {
+        replay_binding: Some("test-binding".into()),
         model: model.to_owned(),
         protocol,
         max_output_tokens: 512,
@@ -484,6 +485,7 @@ pub fn bind_accepted_continuation_source(
     request: &mut rustx::model::ModelRequest,
     accepted_item: usize,
 ) {
+    let origin = request.invocation.replay_origin();
     let rustx::model::ModelInputMessage::Canonical(rustx::message::types::MessageBlock::Assistant(
         assistant,
     )) = &mut request.messages[accepted_item]
@@ -492,9 +494,17 @@ pub fn bind_accepted_continuation_source(
     };
     if !assistant.content.iter().any(|block| matches!(block, rustx::message::types::AssistantContentBlock::Reasoning(reasoning) if reasoning.provider_state.is_some())) {
         assistant.content.push(rustx::message::types::AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+            origin: None,
             text: None,
             provider_state: request.continuation.clone(),
         }));
+    }
+    for block in &mut assistant.content {
+        if let rustx::message::types::AssistantContentBlock::Reasoning(reasoning) = block
+            && reasoning.origin.is_none()
+        {
+            reasoning.origin.clone_from(&origin);
+        }
     }
     let accepted = request.messages[accepted_item]
         .as_canonical()

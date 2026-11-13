@@ -1,8 +1,8 @@
 import { checkWorkflowDocument, readWorkflowSource, withWorkflowDocument, type WorkflowRequest } from '../../protocol/app-server/workflow-documents.ts';
-import { materializeSource } from '../../protocol/app-server/source-observation.ts';
+import { readSourceSettings } from '../../protocol/app-server/source-observation.ts';
 import { analysisMatches } from '../../protocol/app-server/workflow-analysis.ts';
 /** Local trusted Product Host. This module runs in Node, never in the browser. */
-import { deriveWorkspaceOffice } from './documents/operation.ts';
+import { OfficeDocuments } from './documents/operation.ts';
 import { observeTerminalOwnership } from './terminal-ownership.ts';
 import { WorkspaceTerminals, workspaceFile, withWorkspacePath } from './workbench.ts';
 import { OfficeSettlementError } from './documents/office-cgroup.ts';
@@ -12,7 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread, WorkflowHostOperation, WorkflowHostResult, WorkflowReread } from '../src/workspaces/host.ts';
-import { AppServerClient } from '../../tui/src/app-server/client.ts';
+import { AppServerClient, AppServerRequestError } from '../../tui/src/app-server/client.ts';
 import { WebSocketTransport } from '../../tui/src/app-server/websocket-transport.ts';
 import { DesktopAdapter } from './desktop.ts';
 import { readDesktopSession } from './desktop-session.ts';
@@ -20,7 +20,6 @@ import type { DesktopAppId, DesktopTarget, DesktopCatalog } from '../src/workspa
 import type { WorkbenchCall, WorkbenchResult } from '../src/workspaces/workbench.ts';
 import { NativeFileReadError, readNativeDelivery, readNativeSource, validDeliveryLocator, validateDeliveryRead, validateDeliveryObservation } from './file-read.ts';
 
-import { deriveDocument } from './documents/operation.ts';
 import type { DocumentRequest, DocumentResult } from '../shared/documents.ts';
 import { FILE_PREVIEW_LIMITS } from '../shared/file-preview.ts';
 import { observeFile } from './file-observation.ts';
@@ -42,7 +41,7 @@ export interface LocalHostConfig {
   /** Operator-owned file outside the browser and rustX runtime root. */
   metadataFile: string;
 }
-type Registration = { id: string; location: string; displayName: string };
+type Registration = { id: string; location: string; displayName: string; selected?: true };
 export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private readonly terminals: WorkspaceTerminals;
   private terminalObserver?: Promise<() => Promise<void>>;
@@ -50,6 +49,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private terminalObserverEnded = false;
   private closing?: Promise<void>;
   private documentReads = new Set<AbortController>();
+  private readonly documents = new OfficeDocuments();
   private fileReads = new Set<AbortController>();
   private fileObservations = new Set<AbortController>();
   private fileObservationTasks = new Set<Promise<void>>();
@@ -59,6 +59,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   private closed = false;
   private readonly authorityId = randomUUID();
   private registrations: Registration[];
+  private readonly selections = new Map<string, number>();
   private readonly roots: LocalHostConfig['roots'];
   private readonly config: LocalHostConfig;
   private readonly desktop: DesktopAdapter;
@@ -77,7 +78,8 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (new Set(this.roots.map(root => root.id)).size !== this.roots.length || new Set(this.roots.map(root => root.cwd)).size !== this.roots.length) throw new Error('Duplicate Host location');
     this.registrations = existsSync(config.metadataFile) ? JSON.parse(readFileSync(config.metadataFile, 'utf8')) as Registration[]
       : this.roots.map(root => ({ id: randomUUID(), location: root.id, displayName: root.displayName }));
-    if (!Array.isArray(this.registrations) || this.registrations.some(row => typeof row.id !== 'string' || typeof row.displayName !== 'string' || !this.roots.some(root => root.id === row.location))) throw new Error('Invalid Host registrations');
+    if (!Array.isArray(this.registrations) || this.registrations.some(row => !row || typeof row.id !== 'string' || typeof row.displayName !== 'string' || !this.roots.some(root => root.id === row.location) || (row.selected !== undefined && row.selected !== true))
+      || this.registrations.filter(row => row.selected).length > 1) throw new Error('Invalid Host registrations');
     this.commit(this.registrations);
   }
   private commit(rows: Registration[]) {
@@ -104,8 +106,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (!sameEndpoint(endpoint, this.config.endpoint)) throw new Error('Workspace Host belongs to a different rustX process');
   }
   async listWorkspaces(): Promise<WorkspaceCatalog> {
+    const preferredWorkspace = this.registrations.find(row => row.selected)?.id;
     return { authorityId: this.authorityId, endpoint: this.config.endpoint,
-      workspaces: this.registrations.map(row => ({ ...row, displayPath: this.roots.find(root => root.id === row.location)!.cwd })),
+      workspaces: this.registrations.map(({ id, location, displayName }) => ({ id, location, displayName, displayPath: this.roots.find(root => root.id === location)!.cwd })),
+      ...(preferredWorkspace ? { preferredWorkspace } : {}),
       picker: this.config.picker ? { kind: 'configured', locations: this.roots.map(root => ({ id: root.id, displayName: root.displayName })) }
         : { kind: 'unavailable', reason: 'This Host has no directory picker. Ask its operator to configure authorized roots.' } };
   }
@@ -118,7 +122,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     this.closed = true;
     for (const read of [...this.fileReads, ...this.documentReads, ...this.fileObservations]) read.abort();
     return this.closing ??= (async () => {
-      const result = await Promise.allSettled([this.terminals.close(), this.terminalObserver?.then(close => close()), this.fileOwnership?.then(close => close()), ...this.fileObservationTasks]);
+      const result = await Promise.allSettled([this.documents.dispose(), this.terminals.close(), this.terminalObserver?.then(close => close()), this.fileOwnership?.then(close => close()), ...this.fileObservationTasks]);
       const failures = result.flatMap(item => item.status === 'rejected' ? [item.reason] : []);
       if (this.terminalFailure) failures.push(this.terminalFailure);
       if (failures.length) throw new AggregateError(failures, 'Host terminal settlement failed');
@@ -141,7 +145,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
     return this.readFile(scope, read, FILE_PREVIEW_LIMITS.fileBytes, signal);
   }
-  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v73.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
+  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v78.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
     this.mutationScope(scope); validateDeliveryObservation(read, file);
     if (this.config.nativeFilesystem !== 'shared') throw new Error('Native filesystem observation unavailable on this Product Host');
     const probe = async (signal: AbortSignal) => {
@@ -259,7 +263,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     const abort = () => operation.abort(); signal?.addEventListener('abort', abort, { once: true });
     try {
       signal?.throwIfAborted();
-      return await deriveDocument(request, async () => {
+      return await this.documents.deriveDocument(request, async () => {
         this.mutationScope(scope); operation.signal.throwIfAborted();
         if (source.kind === 'session_file') return this.readFile(scope, { target: request.target, locator: source.locator, delivery_index: source.delivery_index, agent_id: source.agent_id }, FILE_PREVIEW_LIMITS.officeBytes, operation.signal);
         const result = await readNativeSource(this.config.endpoint, this.config.productHostToken!, request.target, source, [], operation.signal, { kind: 'bytes' }, FILE_PREVIEW_LIMITS.officeBytes);
@@ -346,7 +350,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     if (request.kind === 'office') {
       const path = request.path, extension = path.split('.').at(-1)?.toLowerCase();
       if (extension !== 'docx' && extension !== 'pptx') throw new Error('converter_unavailable');
-      const result = await deriveWorkspaceOffice(extension, async () => {
+      const result = await this.documents.deriveWorkspaceOffice(extension, async () => {
         this.mutationScope(scope); signal?.throwIfAborted();
         const { cwd: current } = await read();
         check(current);
@@ -431,6 +435,15 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     rows.splice(before ? rows.findIndex(row => row.id === before) : rows.length, 0, row);
     this.commit(rows);
   }
+  async selectWorkspace(scope: WorkspaceAuthorityScope, id: string, intent: import('../src/workspaces/host.ts').WorkspaceSelectionIntent) {
+    this.mutationScope(scope); this.registered(id);
+    if (!intent || typeof intent.client !== 'string' || !/^[a-f0-9-]{36}$/.test(intent.client)
+      || !Number.isSafeInteger(intent.sequence) || intent.sequence < 1) throw new Error('Invalid Workspace selection');
+    if (intent.sequence <= (this.selections.get(intent.client) ?? 0)) return;
+    this.commit(this.registrations.map(({ selected: _selected, ...row }) => row.id === id ? { ...row, selected: true } : row));
+    this.selections.delete(intent.client); this.selections.set(intent.client, intent.sequence);
+    while (this.selections.size > 32) this.selections.delete(this.selections.keys().next().value!);
+  }
   /** Per-registration authority lane. A native configuration mutation holds its
    * registration's lane from first resolution to final reread, so removal can
    * never commit while that registration still has a native write in flight.
@@ -475,12 +488,21 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     } finally { await client.close(); }
   }
   async configureWorkspace(id: string, endpoint: string, operation: WorkspaceConfigurationOperation): Promise<WorkspaceConfigurationResult> {
-    return this.nativeLane(id, async () => (await this.resolveWorkspace(id, endpoint)).cwd, async (client, cwd, current) => {
+    return this.nativeLane(id, () => this.resolveExpectedDirectory(id, endpoint, operation.expected_directory), async (client, cwd, current) => {
       const target = { kind: 'workspace' as const, directory: cwd };
       const readSource = async () => {
-        const result = await client.call('configuration/sourcesRead', {target}, 'source_settings');
-        return materializeSource(result.projection, async(reference,offset)=>(await client.call('configuration/sourceValueRead',{target,reference,offset,max_bytes:65536},'source_value_chunk')).chunk, ()=>true);
+        return readSourceSettings(async()=>(await client.call('configuration/sourcesRead', {target}, 'source_settings')).projection, async(reference,offset)=>(await client.call('configuration/sourceValueRead',{target,reference,offset,max_bytes:65536},'source_value_chunk')).chunk, ()=>true);
       };
+      if (operation.kind === 'model_probe') {
+        const { outcome } = await client.call('model/probe', { target, model: operation.model, source: operation.source }, 'model_probe').catch(error => {
+          if (error instanceof AppServerRequestError && error.error.code === -32601) {
+            throw new WorkspaceHostError('App Server does not support model connection tests', 'model_probe_unsupported');
+          }
+          throw error;
+        });
+        if (!await current()) throw new Error('Workspace authority changed');
+        return { kind: 'model_probe', outcome };
+      }
       if (operation.kind === 'mcp_probe') {
         const { result } = await client.call('mcp/probe', { target, id: operation.id, expected_revision: operation.expected_revision }, 'mcp_probe');
         if (!await current()) throw new Error('Workspace authority changed');
@@ -507,6 +529,14 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
       return { kind: operation.kind, projection };
     });
   }
+
+  private async resolveExpectedDirectory(id: string, endpoint: string, expected?: string) {
+    const { cwd } = await this.resolveWorkspace(id, endpoint);
+    // Both strings originate at this canonical Host/native boundary. The
+    // expected directory is a fence only; the registered location selects I/O.
+    if (expected !== undefined && expected !== cwd) throw new WorkspaceHostError('Workspace directory changed', 'workspace_unavailable');
+    return cwd;
+  }
   /** Native Workflow file authoring in exactly this registered Workspace of
    * exactly the Product Host authority that admitted the transaction. A
    * replaced authority is `authority_replaced` even when it reuses the
@@ -519,7 +549,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
     // dispatch, validate the authority before mapping the registration.
     const resolve = async () => {
       this.mutationScope(scope);
-      try { return (await this.resolveWorkspace(id, scope.endpoint)).cwd; }
+      try { return await this.resolveExpectedDirectory(id, scope.endpoint, operation.kind === 'tool_catalog' ? operation.expected_directory : undefined); }
       catch (cause) { throw new WorkspaceHostError(cause instanceof Error ? cause.message : String(cause), 'workspace_unavailable'); }
     };
     const run = async (client: AppServerClient, cwd: string, current: () => Promise<boolean>): Promise<WorkflowHostResult> => {
@@ -550,7 +580,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
           return { kind: 'enable' };
         }
         case 'tool_catalog': {
-          const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source, cursor: operation.cursor }, 'workflow_tool_catalog');
+          const { catalog } = await client.call('workflow/toolCatalog', { target, source: operation.source, cursor: operation.cursor, expected_scope: operation.expected_scope }, 'workflow_tool_catalog');
           await unchanged();
           return { kind: 'tool_catalog', catalog };
         }
@@ -568,7 +598,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         case 'write': {
           // The native write is the linearization point; its reread is a
           // separate fact that can fail without undoing the commit.
-          const commit = (edit: import('../../protocol/app-server/v73.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
+          const commit = (edit: import('../../protocol/app-server/v78.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
           const acknowledgement = operation.edit.operation === 'replace' ? await withWorkflowDocument(client, request, target, operation.edit.document, reference => commit({ operation: 'replace', document: reference })) : await commit(operation.edit);
           let reread: WorkflowReread;
           try {
@@ -628,7 +658,11 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
     value!.kind === 'list' ? fields(['kind'])
       : value!.kind === 'enable' ? fields(['kind', 'id', 'expected_revision', 'enabled']) && id() && typeof value!.expected_revision === 'string' && typeof value!.enabled === 'boolean'
       : value!.kind === 'read' ? fields(['kind', 'id']) && id()
-        : value!.kind === 'tool_catalog' ? fields(['kind', 'source', 'cursor']) && (value!.source == null || typeof value!.source === 'string' && value!.source.length > 0 && value!.source.length <= 256) && catalogCursor(value!.cursor)
+        : value!.kind === 'tool_catalog' ? fields(['kind', 'source', 'cursor', 'expected_scope', 'expected_directory'])
+          && (value!.source == null || typeof value!.source === 'string' && value!.source.length > 0 && value!.source.length <= 256)
+          && (value!.expected_scope == null || value!.source != null && (value!.expected_scope === 'user' || value!.expected_scope === 'workspace'))
+          && (value!.expected_directory === undefined || typeof value!.expected_directory === 'string' && value!.expected_directory.length > 0)
+          && catalogCursor(value!.cursor)
         : value!.kind === 'model_choices' ? fields(['kind', 'query', 'expected_revision']) && choicesQuery(value!.query) && (value!.expected_revision == null || typeof value!.expected_revision === 'string')
         : value!.kind === 'analyze' ? fields(['kind', 'id', 'document', 'generation', 'query']) && id() && object(value!.document) && typeof value!.generation === 'string' && value!.generation.length > 0 && value!.generation.length <= 64 && (value!.query == null || object(value!.query))
         : value!.kind === 'check' ? fields(['kind', 'id', 'document']) && id() && object(value!.document)

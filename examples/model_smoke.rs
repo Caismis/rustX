@@ -168,6 +168,7 @@ fn build_request(protocol: &str, model: &str, prompt: &str) -> ModelRequest {
         continuation_source: None,
         images: std::collections::BTreeMap::new(),
         invocation: ModelInvocationConfig {
+            replay_binding: None,
             model: model.to_owned(),
             protocol,
             max_output_tokens: 512,

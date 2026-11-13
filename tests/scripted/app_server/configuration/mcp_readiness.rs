@@ -324,14 +324,7 @@ async fn live_schema_recovery_preserves_whole_attempt_and_commits_authored_inten
             format!("[mcp_servers.late]\nurl = {:?}\n", replacement.endpoint),
         )
         .unwrap();
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("unadopted instructions".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "unadopted instructions".into()).await;
         let pending = settled(&fixture, 0).await;
         assert!(
             pending
@@ -383,13 +376,7 @@ async fn live_schema_recovery_preserves_whole_attempt_and_commits_authored_inten
         assert_eq!(runtime.model_view().configured, selected);
         assert_ne!(runtime.runtime_resources().revision(), frozen.revision());
         assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
+            guidance(runtime.runtime_resources().project_context_files()),
             "unadopted instructions"
         );
         assert!(
@@ -592,14 +579,7 @@ async fn failed_explicit_runtime_refresh_retains_last_good_without_automatic_ret
                 .any(|diagnostic| diagnostic.field == "runtime.catalog")
         );
         assert!(fixture.provider.request_bodies().is_empty());
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("new authored instructions".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "new authored instructions".into()).await;
         applied(&fixture, 0).await;
         let adopted = runtime.runtime_resources();
         assert_eq!(
@@ -650,13 +630,7 @@ async fn failed_explicit_runtime_refresh_retains_last_good_without_automatic_ret
                 .any(|diagnostic| diagnostic.field == "runtime.catalog")
         );
         assert_eq!(
-            runtime
-                .runtime_resources()
-                .configuration()
-                .unwrap()
-                .config
-                .agent
-                .instructions,
+            guidance(runtime.runtime_resources().project_context_files()),
             "new authored instructions"
         );
         assert!(fixture.provider.request_bodies().is_empty());
@@ -1486,6 +1460,7 @@ async fn live_catalog_publication_never_parks_on_background_ownership() {
         fixture.sessions.push(session.clone());
         fixture.manager.load(&session.id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&session.id).unwrap();
+        let mut status_changes=fixture.manager.status_notifications();
         let mut publications = runtime.runtime_catalog_publications();
         let before = *publications.borrow();
         let background = runtime.tool_runtime().background().clone();
@@ -1519,6 +1494,8 @@ async fn live_catalog_publication_never_parks_on_background_ownership() {
         tokio::task::spawn_blocking(move || entered.wait_entered())
             .await
             .unwrap();
+        assert!(fixture.manager.thread_statuses(vec![session.active_conversation_id.clone()]).await.is_err(),"a long native source lock makes reads unavailable without parking Coordinator");
+        loop {if matches!(status_changes.recv().await.unwrap(),crate::local_runtime::session_runtime_manager::status::ThreadStatusEvent::ResyncRequired){break;}}
         *mcp.control.schema_kind.lock().unwrap() = "integer";
         runtime
             .capability()
@@ -1582,7 +1559,7 @@ async fn live_catalog_busy_frontier_defers_existing_admission_without_parking_co
         super::super::gate_entered(&admission).await;
         let frontier = Arc::new(Gate::default());
         let release_frontier = frontier.arm_scoped();
-        let lifecycle = runtime.title_lifecycle();
+        let lifecycle = runtime.lifecycle();
         let holding = frontier.clone();
         let held =
             tokio::task::spawn_blocking(move || lifecycle.with_running_commit(|| holding.enter()));
@@ -1717,14 +1694,7 @@ async fn superseded_refresh_completion_cannot_publish_into_authored_source_bindi
                 format!("[mcp_servers.late]\nurl = {:?}\n", replacement.endpoint),
             )
             .unwrap();
-            write(
-                &fixture,
-                0,
-                ConfigMutation::Instructions {
-                    authored: Some("adopted replacement instructions".into()),
-                },
-            )
-            .await;
+            write_guidance(&fixture, "adopted replacement instructions".into()).await;
             applied(&fixture, 0).await;
             let adopted = runtime.configuration_cut();
             assert!(
@@ -1797,14 +1767,7 @@ async fn pending_success_publishes_without_erasing_newer_explicit_refresh_failur
         assert_eq!(catalog_failure(&runtime).as_ref(), Some(&failure));
         assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 3);
         assert_eq!(fixture.provider.request_bodies().len(), 1);
-        write(
-            &fixture,
-            0,
-            ConfigMutation::Instructions {
-                authored: Some("context after retained success".into()),
-            },
-        )
-        .await;
+        write_guidance(&fixture, "context after retained success".into()).await;
         applied(&fixture, 0).await;
         assert_eq!(catalog_failure(&runtime).as_ref(), Some(&failure));
         mcp.control.fail.store(false, Ordering::SeqCst);
@@ -2476,7 +2439,7 @@ async fn a_lazy_child_source_hides_neither_its_skills_nor_its_binding() {
             std::fs::create_dir_all(&guide).unwrap();
             std::fs::write(
                 guide.join("SKILL.md"),
-                format!("---\nname: guide\ndescription: Guide\n---\n{body}\n"),
+                format!("---\nname: guide\ndescription: Guide\nlicense: {body}\n---\nbody\n"),
             )
             .unwrap();
         };

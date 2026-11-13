@@ -991,12 +991,10 @@ pub async fn a_second_attachment_is_rejected(factory: &dyn DriverFactory) {
             protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
         })
         .await;
-    assert_eq!(
-        error(response),
-        RuntimeClientError::AttachmentInUse {
-            existing_attachment_id: first_id.clone(),
-        }
-    );
+    let RuntimeClientResult::Initialized { attachment_id, .. } = result(response) else {
+        panic!("shared initialization");
+    };
+    assert_ne!(attachment_id, first_id);
 
     // The first attachment was never evicted.
     let (_, _) = snapshot_of(&mut *first, 2).await;

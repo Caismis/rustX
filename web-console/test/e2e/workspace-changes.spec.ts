@@ -1,5 +1,5 @@
 import { test,expect } from '@playwright/test';
-import { expectStableScreenshot } from './screenshot';
+import { captureEvidence, expectStableScreenshot } from './screenshot';
 const origin=`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT??5174}`;
 for(const width of [1440,390])test(`completed turn changes and sampled back-to-bottom at ${width}px`,async({page})=>{
   const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
@@ -57,4 +57,104 @@ test('a single changed file uses one compact card',async({page})=>{
   await expect(card.getByRole('list')).toHaveCount(0);
   await card.getByRole('button').click();
   await expect(page.locator('[data-changes-review]')).toBeVisible();
+});
+
+for (const locale of ['en', 'zh'] as const) for (const dark of [false, true]) test(`long changed-file previews fit the viewport and copy independently (${locale}, dark=${dark})`, async ({page, context}) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], {origin});
+  await page.addInitScript(language => localStorage.setItem('rustx-locale-v1', language), locale);
+  await page.goto(`${origin}/test/fixtures/agent.html?mode=workspace-changes&long-diff`);
+  await page.evaluate(dark => document.body.toggleAttribute('data-ds-dark-theme', dark), dark);
+  await expect(page).toHaveTitle('Session A — rustX');
+  await expect(page.getByLabel(locale === 'zh' ? '规范对话' : 'Canonical conversation')).toBeVisible();
+  await page.evaluate(() => window.workspaceChangesFixture.settle());
+  const card = page.locator('[data-changed-files]');
+  const row = card.locator('ul button').first();
+  const preview = page.locator('[data-changes-hover-preview]');
+  const path = preview.locator('[data-changes-preview-path]');
+  const diff = preview.locator('[data-review-view="unified"]');
+  await expect(row).toBeVisible();
+  expect(await page.evaluate(() => window.workspaceChangesFixture.requests())).toEqual([
+    expect.objectContaining({method:'conversation/changes'}),
+  ]);
+  for (const width of [1214, 390]) {
+    await page.setViewportSize({width, height: 660});
+    await row.hover({position: {x: 60, y: 12}});
+    await expect(diff.locator('[data-diff-line="del"]')).toContainText('19-export const old');
+    await expect(diff.locator('[data-diff-line="add"]').first()).toContainText('27+export const path');
+    await expect(diff.locator('[data-diff-line="add"]').last()).toContainText('67+export const value39');
+    await expect(row).toHaveAccessibleDescription(await path.textContent() ?? '');
+    await expect(row).not.toHaveAttribute('title');
+    const anchor = (await row.boundingBox())!;
+    const bounds = (await preview.boundingBox())!;
+    const cardBounds = (await card.boundingBox())!;
+    expect(bounds.x - cardBounds.x).toBeCloseTo(24, 0);
+    expect(bounds.width).toBeCloseTo(cardBounds.width - 48, 0);
+    expect(bounds.height).toBeLessThanOrEqual(420);
+    expect(bounds.y).toBeGreaterThanOrEqual(8);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(652);
+    expect(bounds.y + bounds.height <= anchor.y || bounds.y >= anchor.y + anchor.height).toBe(true);
+    await expect(path).toHaveCSS('white-space', 'nowrap');
+    expect(await path.evaluate(element => { element.scrollLeft = 50; return element.scrollLeft; })).toBe(50);
+    await path.evaluate(element => { element.scrollLeft = 0; });
+    await diff.hover();
+    expect(await diff.evaluate(element => {
+      element.scrollTo(80, 90);
+      return [element.scrollLeft, element.scrollTop];
+    })).toEqual([80, 90]);
+    await diff.evaluate(element => { element.scrollTo(0, 0); });
+    // Real selection remains available inside the pointer-interactive preview.
+    const code = diff.locator('[data-diff-line="add"]').first().locator(':scope > span').nth(3);
+    await code.dblclick({position: {x: 20, y: 10}});
+    expect(await page.evaluate(() => window.getSelection()?.toString())).toBeTruthy();
+    const copy = preview.getByRole('button', {name: locale === 'zh' ? '复制' : 'Copy', exact: true});
+    const expected = `src/${'nested-workspace-folder/'.repeat(10)}file-1.ts:27\n- export const old = 1;\n+ export const path = '${'long-value-'.repeat(90)}';\n` + Array.from({length:40},(_,i)=>`+ export const value${i} = ${i};`).join('\n');
+    await page.evaluate(() => navigator.clipboard.writeText('before preview copy'));
+    await copy.focus();
+    await page.keyboard.press(width === 1214 ? 'Enter' : 'Space');
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expected);
+    await expect(preview.getByRole('button', {name: locale === 'zh' ? '已复制' : 'Copied', exact: true})).toBeVisible();
+    await expect(preview).toBeVisible();
+    await expect(copy).toBeVisible();
+    await page.evaluate(() => navigator.clipboard.writeText('before pointer copy'));
+    await copy.click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expected);
+    expect(await page.evaluate(() => window.workspaceChangesFixture.requests())).toEqual([
+      expect.objectContaining({method:'conversation/changes'}),
+      ...Array.from({length:width === 1214 ? 1 : 2}, () => expect.objectContaining({method:'conversation/changeDiff'})),
+    ]);
+    await captureEvidence(page, `changed-file-preview-${width}`);
+    if (width === 1214) await page.keyboard.press('Escape');
+    else await row.click();
+    await expect(preview).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+  await expect(page.locator('[data-changes-review] [data-change-comparison]')).toContainText('export const path');
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('changed-file previews dismiss when their anchor becomes hidden, inert or scrolled away', async ({page}) => {
+  await page.goto(`${origin}/test/fixtures/agent.html?mode=workspace-changes&long-diff`);
+  await expect(page.getByLabel('Canonical conversation')).toBeVisible();
+  await page.evaluate(() => window.workspaceChangesFixture.settle());
+  const card = page.locator('[data-changed-files]');
+  const row = card.locator('ul button').first();
+  const preview = page.locator('[data-changes-hover-preview]');
+  for (const attribute of ['hidden', 'inert']) {
+    await page.mouse.move(0, 0);
+    await row.hover();
+    await expect(preview).toBeVisible();
+    await card.evaluate((element, name) => element.setAttribute(name, ''), attribute);
+    await expect(preview).toHaveCount(0);
+    await card.evaluate((element, name) => element.removeAttribute(name), attribute);
+  }
+  await page.mouse.move(0, 0);
+  await row.hover();
+  await expect(preview).toBeVisible();
+  await page.locator('[data-conversation-scroll]').first().evaluate(element => { element.scrollTop = 0; });
+  await expect(row).not.toBeInViewport();
+  await expect(preview).toHaveCount(0);
 });

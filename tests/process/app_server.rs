@@ -164,7 +164,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":73,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":78,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -234,9 +234,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v53, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v73"),
+            Some("rustx.app-server.v78"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v73, rustx-token.wrong"),
+            Some("rustx.app-server.v78, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -274,7 +274,7 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
             ("{", -32700),
             (r#"{"jsonrpc":"2.0","id":2,"method":"bogus"}"#, -32601),
             (
-                r#"{"jsonrpc":"2.0","id":3,"method":"session/create","params":{}}"#,
+                r#"{"jsonrpc":"2.0","id":3,"method":"thread/start","params":{}}"#,
                 -32602,
             ),
             ("[]", -32600),
@@ -487,8 +487,11 @@ async fn app_server_explicit_user_config_are_authoritative_for_both_transports()
                             jsonrpc: JsonRpcVersion::V2,
                             id: RequestId::Integer(10 + i64::try_from(index).unwrap()),
                             call: Method::SessionAttach {
-                                session_id: session_id.clone(),
-                                node_id: None,
+                                thread_id: app_server_conformance::thread_id(
+                                    &client,
+                                    session_id.clone(),
+                                )
+                                .await,
                             },
                         })
                         .await
@@ -587,8 +590,7 @@ async fn attach(
         client,
         id,
         Method::SessionAttach {
-            session_id: session,
-            node_id: None,
+            thread_id: app_server_conformance::thread_id(client, session).await,
         },
     )
     .await
@@ -716,7 +718,16 @@ async fn app_server_websocket_drain_supervises_active_root_and_cold_resume() {
                 },
             )];
             assert!(matches!(
-                rpc(&client, 4, Method::TurnStart { target: a, content }).await,
+                rpc(
+                    &client,
+                    4,
+                    Method::TurnStart {
+                        input_id: uuid::Uuid::new_v4().to_string(),
+                        target: a,
+                        content
+                    }
+                )
+                .await,
                 Response::Success(_)
             ));
             let (mut request, _) = listener.accept().await.unwrap();
@@ -794,7 +805,7 @@ async fn driver_fails_pending_requests_with_the_transport_cause() {
                     |_: &Upgrade, mut response: Response| {
                         response.headers_mut().insert(
                             "sec-websocket-protocol",
-                            "rustx.app-server.v73".parse().unwrap(),
+                            "rustx.app-server.v78".parse().unwrap(),
                         );
                         Ok(response)
                     },
@@ -874,6 +885,7 @@ async fn app_server_process_exits_with_cancelled_blocked_presentation_read() {
                 &client,
                 3,
                 Method::TurnStart {
+                    input_id: uuid::Uuid::new_v4().to_string(),
                     target,
                     content: vec![UserInputBlock::Text(rustx::message::content::TextBlock {
                         text: "presentation cancellation".into()
@@ -1025,6 +1037,7 @@ async fn start_turn(
     result(
         client,
         Method::TurnStart {
+            input_id: uuid::Uuid::new_v4().to_string(),
             target: target.clone(),
             content: (vec![rustx::message::types::UserContentBlock::Text(
                 rustx::message::content::TextBlock { text: text.into() },
@@ -1080,6 +1093,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
             let MethodResult::SessionTransition { session, .. } = result(
                 &client,
                 Method::SessionCreate {
+                    dynamic_tools: Vec::new(),
                     submission: None,
                     settings: SessionPersistentState::from_input(&SessionConfigInput::new(
                         f.root.path().join(cwd),
@@ -1112,6 +1126,14 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
         loop {
             use app_server_conformance::AppServerConformanceDriver;
             let notification = client.next_notification().await.notification;
+            // Lightweight Thread status is instance-scoped, without changing
+            // transcript routing or subscribing this client to another Thread.
+            if let NotificationMethod::ThreadStatusChanged(entry) = &notification {
+                assert!(
+                    entry.thread_id == a.conversation_id || entry.thread_id == b.conversation_id
+                );
+                continue;
+            }
             // Session metadata invalidation is not a Conversation event and is
             // not routed by attachment target (Issue #386); nor is a
             // source-scoped repair level (Issue #464), nor a Session's
@@ -1122,6 +1144,7 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
                 NotificationMethod::SummaryInvalidated { .. }
                     | NotificationMethod::SourceRepairChanged { .. }
                     | NotificationMethod::ConfigurationChanged { .. }
+                    | NotificationMethod::ThreadStatusResyncRequired { .. }
             ) {
                 continue;
             }
@@ -1261,6 +1284,7 @@ async fn app_server_current_sources_and_persisted_selection_survive_process_reco
         result(
             &client,
             Method::ModelSet {
+                recover_unavailable_auxiliary: None,
                 target: a.clone(),
                 config: Box::new(selected),
             },
@@ -1398,7 +1422,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             startup_stderr.push(stderr);
             let client = driver::websocket(&endpoint).await;
             initialize_client(&client).await;
-            let MethodResult::SessionTransition { session, .. } = result(&client, Method::SessionCreate { submission: None,
+            let MethodResult::SessionTransition { session, .. } = result(&client, Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
                 settings: SessionPersistentState::from_input(&SessionConfigInput::new(user.root.path().join("a")))
             }).await else { panic!("created") };
             result(&client, Method::SessionName { session_id: session.id.clone(), name: format!("user-{identity}-private") }).await;
@@ -1420,7 +1444,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         for (index, count) in [(0, 1), (1, 2)] {
             let mut id = targets[index].session_id.clone();
             for _ in 0..count {
-                let MethodResult::SessionTransition { session, .. } = result(&clients[index], Method::SessionCreate { submission: None,
+                let MethodResult::SessionTransition { session, .. } = result(&clients[index], Method::SessionCreate { dynamic_tools: Vec::new(), submission: None,
                     settings: SessionPersistentState::from_input(&SessionConfigInput::new(users[index].1.root.path().join("b")))
                 }).await else { panic!("private Session") };
                 id = session.id;
@@ -1451,7 +1475,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             assert_eq!(before["attempt"]["phase"]["type"], "running");
             let mut model: rustx::model::session::SessionModelConfig = serde_json::from_value(before["model"]["configured"].clone()).unwrap();
             model.request_params.insert("temperature".into(), serde_json::json!(0.42));
-            let MethodResult::ModelSet { .. } = result(client, Method::ModelSet { target: targets[index].clone(), config: Box::new(model.clone()) }).await else { panic!("bounded live model selection receipt") };
+            let MethodResult::ModelSet { .. } = result(client, Method::ModelSet { recover_unavailable_auxiliary: None, target: targets[index].clone(), config: Box::new(model.clone()) }).await else { panic!("bounded live model selection receipt") };
             let selected:rustx::model::session::SessionModelView=serde_json::from_value(checkpoint_state(client,&targets[index]).await["model"].clone()).unwrap();
             assert_eq!(selected.configured, model);
             assert_eq!(selected.effective.as_ref().unwrap().request_params["temperature"], serde_json::json!(0.42));
@@ -1621,13 +1645,13 @@ builtin = ["read", "write", "bash", "job_status"]
 model = "fixture/process-model"
 
 [providers.fixture]
+protocol = "openai_chat_completions"
 base_url = "{}"
 api_key = "$RUSTX_PROCESS_TEST_KEY"
 
 [models."fixture/process-model"]
 provider = "fixture"
 id = "process-model"
-protocol = "openai_chat_completions"
 context_window = 128000
 max_output_tokens = 512
 request_params = '{{"temperature":0.11}}'
@@ -1755,8 +1779,7 @@ async fn app_server_failed_attach_composition_leaves_the_catalog_untouched() {
             &client,
             2,
             Method::SessionAttach {
-                session_id: f.sessions[0].clone(),
-                node_id: None,
+                thread_id: app_server_conformance::thread_id(&client, f.sessions[0].clone()).await,
             },
         )
         .await;
@@ -1826,6 +1849,7 @@ async fn app_server_retired_persisted_model_attaches_unavailable_without_rewriti
             &client,
             4,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: vec![UserInputBlock::Text(rustx::message::content::TextBlock {
                     text: "refused".into(),
@@ -1855,6 +1879,7 @@ async fn app_server_retired_persisted_model_attaches_unavailable_without_rewriti
             &client,
             5,
             Method::ModelSet {
+                recover_unavailable_auxiliary: None,
                 target: target.clone(),
                 config: Box::new(SessionModelConfig::of(
                     ModelRef::parse("local/test").unwrap(),
@@ -1887,11 +1912,9 @@ async fn app_server_retired_persisted_model_attaches_unavailable_without_rewriti
     .await;
 }
 
-// Delivery access is process composition: an explicit stdio-owner delegation,
-// or a separate owner-only WebSocket credential. Invalid compositions fail
-// before readiness; client names and the transport token grant nothing.
+/// Network authentication and OS-owned stdio enter the same ordinary API.
 #[tokio::test]
-async fn app_server_delivery_access_is_explicit_transport_composition() {
+async fn app_server_ordinary_clients_have_equal_delivery_eligibility() {
     async fn granted(client: &driver::Driver) -> bool {
         use rustx::app_server::protocol::*;
         let request: Request = serde_json::from_str(INITIALIZE).unwrap();
@@ -1904,113 +1927,36 @@ async fn app_server_delivery_access_is_explicit_transport_composition() {
         capabilities.delivery_access
     }
     bounded(async {
-        use std::os::unix::fs::PermissionsExt;
         let f = Fixture::new().await;
-        let secret = "delivery-secret-000000000000000000000000000000000000";
-        let private = |name: &str, value: &str, mode: u32| {
-            let path = f.root.path().join(name);
-            std::fs::write(&path, value).unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
-            path
-        };
-        let delivery = private("delivery", secret, 0o600);
-        let reused = private("reused", driver::TOKEN, 0o600);
-        let readable = private("readable", secret, 0o644);
-        let token = f.root.path().join("token");
-        let ws = "ws://127.0.0.1:0";
-        for (listen, args) in [
-            (
-                ws,
-                vec![
-                    ("--token-file", Some(&token)),
-                    ("--stdio-delivery-access", None),
-                ],
-            ),
-            (
-                "stdio",
-                vec![("--delivery-access-token-file", Some(&delivery))],
-            ),
-            (
-                ws,
-                vec![
-                    ("--token-file", Some(&token)),
-                    ("--delivery-access-token-file", Some(&reused)),
-                ],
-            ),
-            (
-                ws,
-                vec![
-                    ("--token-file", Some(&token)),
-                    ("--delivery-access-token-file", Some(&readable)),
-                ],
-            ),
-            (
-                ws,
-                vec![
-                    ("--token-file", Some(&token)),
-                    ("--product-host-token-file", Some(&delivery)),
-                    ("--delivery-access-token-file", Some(&delivery)),
-                ],
-            ),
-        ] {
-            let mut command = f.command(listen);
-            for (flag, value) in &args {
-                command.arg(flag);
-                if let Some(value) = value {
-                    command.arg(value);
-                }
-            }
-            let output = command.output().await.unwrap();
-            assert!(!output.status.success(), "{listen} {args:?}");
-            assert!(output.stdout.is_empty());
-            assert!(
-                !String::from_utf8(output.stderr)
-                    .unwrap()
-                    .contains("listening")
-            );
-        }
-        for delegated in [false, true] {
-            let mut command = f.command("stdio");
-            if delegated {
-                command.arg("--stdio-delivery-access");
-            }
-            let mut child = command.spawn().unwrap();
-            let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
-            assert_eq!(granted(&client).await, delegated);
-            client.close().await;
-            detach_then_shutdown(&mut child).await;
-            assert!(child.wait().await.unwrap().success());
-        }
+        let mut child = f.command("stdio").spawn().unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        assert!(granted(&client).await);
+        client.close().await;
+        detach_then_shutdown(&mut child).await;
+        assert!(child.wait().await.unwrap().success());
         let mut child = f
-            .command(ws)
+            .command("ws://127.0.0.1:0")
             .arg("--token-file")
-            .arg(&token)
-            .arg("--delivery-access-token-file")
-            .arg(&delivery)
+            .arg(f.root.path().join("token"))
             .spawn()
             .unwrap();
         let (url, _stderr) = websocket_startup(&mut child).await;
-        let ordinary = driver::websocket(&url).await;
-        assert!(!granted(&ordinary).await);
-        ordinary.close().await;
-        let trusted = driver::websocket_offering(
-            &url,
-            &format!(
-                "rustx.app-server.v73, rustx-token.{}, rustx-delivery-access.{secret}",
-                driver::TOKEN
-            ),
-        )
-        .await;
-        assert!(granted(&trusted).await);
-        trusted.close().await;
+        for _ in 0..2 {
+            let client = driver::websocket(&url).await;
+            assert!(granted(&client).await);
+            client.close().await;
+        }
+        // A private or obsolete second credential is never an ordinary fallback.
         assert!(
             driver::try_socket(
                 &url,
-                &format!("rustx.app-server.v73, rustx-delivery-access.{secret}")
+                &format!(
+                    "rustx.app-server.v78, {}, rustx-delivery-access.obsolete",
+                    driver::credential_offer(driver::TOKEN)
+                )
             )
             .await
-            .is_err(),
-            "delivery access never substitutes for the transport credential"
+            .is_err()
         );
         kill(
             Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
@@ -2286,7 +2232,7 @@ async fn app_server_startup_repairs_the_user_source_before_process_policy() {
         assert_eq!(
             receipt.changes,
             vec![
-                ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 10 },
+                ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 12 },
                 ConfigRepairChange::RemovedField { object_path: String::new() },
                 ConfigRepairChange::RemovedField {
                     object_path: "app_server".into()
@@ -2497,28 +2443,14 @@ async fn auxiliary_classification_real_stdio_and_websocket_preserve_primary_and_
         driver::Driver,
         BufReader<tokio::process::ChildStderr>,
     ) {
-        use std::os::unix::fs::PermissionsExt;
-        let secret = "auxiliary-delivery-000000000000000000000000000000000";
-        let path = f.root.path().join("delivery");
-        std::fs::write(&path, secret).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         let mut child = f
             .command("ws://127.0.0.1:0")
             .arg("--token-file")
             .arg(f.root.path().join("token"))
-            .arg("--delivery-access-token-file")
-            .arg(path)
             .spawn()
             .unwrap();
         let (url, stderr) = websocket_startup(&mut child).await;
-        let client = driver::websocket_offering(
-            &url,
-            &format!(
-                "rustx.app-server.v73, rustx-token.{}, rustx-delivery-access.{secret}",
-                driver::TOKEN
-            ),
-        )
-        .await;
+        let client = driver::websocket(&url).await;
         (child, client, stderr)
     }
     bounded(Box::pin(async {
@@ -2542,11 +2474,7 @@ async fn auxiliary_classification_real_stdio_and_websocket_preserve_primary_and_
                 let (child, client, stderr) = authorized_ws(&f).await;
                 (child, client, Some(stderr))
             } else {
-                let mut child = f
-                    .command("stdio")
-                    .arg("--stdio-delivery-access")
-                    .spawn()
-                    .unwrap();
+                let mut child = f.command("stdio").spawn().unwrap();
                 let client =
                     driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
                 (child, client, None)

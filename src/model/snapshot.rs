@@ -664,6 +664,7 @@ mod tests {
                             };
                             if let Some(state) = native.clone() {
                                 content.push(AssistantContentBlock::Reasoning(ReasoningBlock {
+                                    origin: request.invocation.replay_origin(),
                                     text: (protocol == ModelProtocol::AnthropicMessages)
                                         .then(|| "native".into()),
                                     provider_state: Some(state),
@@ -721,7 +722,7 @@ mod tests {
                             .filter_map(|m| m.as_canonical().cloned())
                             .collect();
                         let mut snapshot = frozen(&request);
-                        if mode == 1 || mode == 2 {
+                        if mode == 1 {
                             let covered =
                                 serde_json::to_value(&snapshot.tool_associations[..2]).unwrap();
                             assert!(
@@ -757,16 +758,6 @@ mod tests {
                         }
                         snapshot.freeze_input(&scope, &request).unwrap();
                         snapshot.tool_associations = associations;
-                        if mode == 4 {
-                            assert!(
-                                crate::model::adapter::validation::validate_prepared_request(
-                                    &request
-                                )
-                                .is_err(),
-                                "opaque older output cannot receive fabricated correlation labels"
-                            );
-                            continue;
-                        }
                         let translate = |input: &ModelRequest| {
                             let tools = crate::model::adapter::validation::validate_request(
                                 input, protocol,

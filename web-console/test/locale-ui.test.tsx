@@ -13,7 +13,11 @@ afterEach(() => { cleanup(); server?.client.disconnect(); localStorage.clear(); 
 const text = (key: TranslationKey) => translator(localeController.getSnapshot().active)(key);
 
 it('switches the complete active shell and General through Language, preserving the composer and making zero server requests', async () => {
-  server = new Server(); await server.connect();
+  server = new Server();
+  // Automatic defaults select the advertised registration. Returning Home
+  // reauthorizes it, so this locale fixture must provide its real directory.
+  server.workspaceHost.resolveWorkspace = async () => ({ cwd: '/workspace' });
+  await server.connect();
   await act(async () => { render(<App client={server!.client} workspaceHost={server!.workspaceHost}/>); });
   expect(screen.getByRole('tree', { name: 'Session browser' })).toBeTruthy();
   const composer = screen.getByRole('textbox', { name: 'Message' });
@@ -30,7 +34,7 @@ it('switches the complete active shell and General through Language, preserving 
   fireEvent.click(screen.getByRole('button', { name: /语言$/ }));
   expect(screen.getByRole('option', { name: 'English' })).toBeTruthy();
   fireEvent.keyDown(screen.getByRole('listbox'), { key: 'Escape' });
-  fireEvent.click(screen.getByRole('button', { name: text('settings:settings-root.close-settings') }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: text('sidebar:navigation.home') })));
   expect(screen.getByRole('tree', { name: text('workspace:workspace-browser.session-browser') })).toBeTruthy();
   expect(screen.getByRole('region', { name: text('common:conversation-composer.new-conversation') })).toBeTruthy();
   expect(screen.getByRole('textbox', { name: text('agent:agent-composer.message') })).toBe(composer);
@@ -56,15 +60,15 @@ it('a native approval has identical request count, ordering, methods and payload
     act(() => localeController.setLocale(locale));
     expect(server.requests).toHaveLength(before);
     expect(screen.getByText(/Developer approval required/)).toBeTruthy();
-    server.held.add('interaction/respond');
+
     const allow = text('interactions:approval-takeover.allow-once');
     await act(async () => fireEvent.click(screen.getByRole('button', { name: allow })));
-    await server.waitFor('interaction/respond', 1);
-    sequences.push(server.requests.slice(before).map(row => row.request));
+    await server.waitForReply();
+    sequences.push(server.replies.map(reply=>'result' in reply ? reply.result : reply.error));
     cleanup(); server.client.disconnect();
   }
   expect(sequences[0]).toHaveLength(1);
-  expect(sequences[0][0].method).toBe('interaction/respond');
+  expect(sequences[0][0]).toMatchObject({type:'approval'});
   expect(sequences[1]).toEqual(sequences[0]);
 });
 
@@ -151,7 +155,7 @@ it('Session renaming never promotes a localized fallback title into native data 
 });
 
 it.each(['en', 'zh'] as const)('policy display choices preserve exact native values in %s', async locale => {
-  const { PolicyFields } = await import('../src/app/settings/tools/ToolsPage');
+  const { PolicyFields } = await import('../src/app/settings/forms/PolicyFields');
   act(() => localeController.setLocale(locale));
   const change = vi.fn(), tx = translator(locale);
   render(<PolicyFields value={{}} change={change}/>);

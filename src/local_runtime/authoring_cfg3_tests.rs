@@ -318,7 +318,7 @@ fn plugin_omission_empty_and_explicit_enable_are_distinct_without_splicing() {
             .background
             .enabled
     );
-    let named: super::super::config::AgentProfileDocument =
+    let named: super::super::config::NamedAgentProfileDocument =
         crate::toml_authoring::parse(b"[plugins.agent_status]\n[plugins.todo]\n").unwrap();
     assert!(named.extensions.resolve().is_empty());
 }

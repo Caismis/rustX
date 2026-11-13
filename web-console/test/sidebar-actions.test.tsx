@@ -9,7 +9,7 @@ let server: Server | undefined;
 afterEach(() => { cleanup(); server?.client.disconnect(); vi.unstubAllGlobals(); localStorage.clear(); });
 async function mount() {
   localStorage.clear(); server = new Server(); await server.attached('A', 'B');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A', 'B'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A', 'B'], route: { kind: 'session', sessionId: 'A' } }));
   const ui = render(<App client={server.client} workspaceHost={server.workspaceHost}/>);
   await act(async () => {}); return ui;
 }
@@ -37,7 +37,7 @@ it('DSH row actions pin and copy an inactive Session without opening it or touch
   expect(screen.getByLabelText('Session title').textContent).toBe('Session A');
   fireEvent.click(trigger()); await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Copy Session ID' })));
   expect(writeText).toHaveBeenCalledWith('B'); expect(screen.getByText('Session ID copied').closest('[role="status"]')).toBeTruthy();
-  expect(server!.requests.slice(before).filter(row => ['session/attach', 'session/detach', 'turn/cancel', 'session/name'].includes(row.request.method))).toEqual([]);
+  expect(server!.requests.slice(before).filter(row => ['thread/resume', 'session/detach', 'turn/interrupt', 'session/name'].includes(row.request.method))).toEqual([]);
   fireEvent.click(screen.getByRole('button', { name: 'View options' })); fireEvent.click(screen.getByRole('menuitem', { name: 'Flat view' }));
   expect([...document.querySelectorAll<HTMLButtonElement>('button[data-session-id]')].map(row => row.dataset.sessionId)).toEqual(['B', 'A']);
   fireEvent.click(trigger()); fireEvent.click(screen.getByRole('menuitem', { name: 'Unpin session' }));

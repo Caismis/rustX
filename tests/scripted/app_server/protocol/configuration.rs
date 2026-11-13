@@ -171,6 +171,7 @@ async fn web08_catalog_commit_preserves_admitted_attempt_and_updates_cold_resolu
             &connection,
             101,
             Method::TurnStart {
+                input_id: uuid::Uuid::new_v4().to_string(),
                 target: target.clone(),
                 content: vec![UserInputBlock::Text(crate::message::content::TextBlock {
                     text: "request-A".into(),
@@ -758,7 +759,7 @@ async fn t15_source_fields_and_many_small_revisions_page_with_exact_cut_evidence
             name: crate::runtime::subagent::SubagentName::parse("title-reader").unwrap(),
             source: crate::local_runtime::configuration::settings::SourceView {
                 path: "/fixture/title-reader.toml".into(), revision: "title-source-v1".into(), diagnostic: None,
-                authored: Some(crate::local_runtime::config::AgentProfileDocument { model: Some(authored.resolve().unwrap()), ..Default::default() }),
+                authored: Some(crate::local_runtime::config::NamedAgentProfileDocument { model: Some(authored.resolve().unwrap()), ..Default::default() }),
             },
         });
         native.prospective_diagnostic = Some("é\n".repeat(140_000));

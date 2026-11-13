@@ -1,0 +1,9 @@
+.rail { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; padding: 18px 8px 12px; background: var(--dsw-specific-sidebar-fill); color: var(--dsw-alias-label-primary); }
+.destinations, .bottom { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.bottom { margin-top: auto; padding-top: 12px; }
+.item { flex: none; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; border: none; border-radius: var(--dsw-radius-md); background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; -webkit-app-region: no-drag; }
+.item > span { display: flex; align-items: center; justify-content: center; }
+.item:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.item.active { background: var(--dsw-alias-interactive-bg-active); color: var(--dsw-alias-label-primary); }
+.item:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: -2px; }
+:global([data-platform='darwin']:not([data-fullscreen])) .rail { padding-top: 58px; }

@@ -36,7 +36,7 @@ pub(super) fn unit_keys(unit: application::ApplyUnit) -> &'static [&'static str]
             "mcp_startup_policy",
         ],
         ApplyUnit::SharedCapacity => &["subagents"],
-        ApplyUnit::Instructions => &["agent.instructions", "agent.agents_md"],
+        ApplyUnit::Instructions => &["agent.agents_md"],
         ApplyUnit::Provider => &["agent.model", "models", "providers"],
         ApplyUnit::Capabilities | ApplyUnit::ProcessBindings => {
             unreachable!("not a composed unit")

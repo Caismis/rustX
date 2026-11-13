@@ -42,6 +42,7 @@ pub mod managed_python_resources;
 pub mod mcp_drafts;
 pub mod mcp_probe;
 pub mod mcp_resources;
+pub mod model_probe;
 #[cfg(all(test, unix))]
 mod preparation_e2e;
 mod probes;
@@ -102,3 +103,6 @@ mod mcp_tests;
 #[cfg(all(test, target_os = "macos"))]
 #[path = "../../tests/support/case_insensitive_volume.rs"]
 pub(crate) mod case_insensitive_volume;
+pub mod environment;
+
+pub mod skill_management;

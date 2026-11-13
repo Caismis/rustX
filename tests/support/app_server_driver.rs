@@ -237,6 +237,15 @@ async fn route(
     }
     let value: serde_json::Value =
         serde_json::from_str(&record).map_err(|error| format!("malformed record: {error}"))?;
+    if matches!(
+        value.get("method").and_then(serde_json::Value::as_str),
+        Some("item/tool/call" | "item/interaction/request" | "serverRequest/resolved")
+    ) {
+        serde_json::from_str::<rustx::app_server::protocol::ServerMessage>(&record)
+            .map_err(|error| format!("malformed server request: {error}"))?;
+        // Generic peers deliberately ignore requests they do not implement.
+        return Ok(());
+    }
     if let Some(id) = value.get("id") {
         let response = serde_json::from_str(&record)
             .map_err(|error| format!("malformed response: {error}"))?;
@@ -311,13 +320,23 @@ where
     })
 }
 
+pub fn credential_offer(token: &str) -> String {
+    use base64::Engine;
+    format!(
+        "rustx-token.{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token)
+    )
+}
 pub const TOKEN: &str = "test-token-000000000000000000000000000000000000000";
 pub async fn socket(
     url: &str,
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
-    try_socket(url, &format!("rustx.app-server.v73, rustx-token.{TOKEN}"))
-        .await
-        .unwrap()
+    try_socket(
+        url,
+        &format!("rustx.app-server.v78, {}", credential_offer(TOKEN)),
+    )
+    .await
+    .unwrap()
 }
 /// Offer exact subprotocol values; a refused handshake is an `Err`.
 pub async fn try_socket(
@@ -335,13 +354,17 @@ pub async fn try_socket(
     let (socket, response) = tokio_tungstenite::connect_async(request).await?;
     assert_eq!(
         response.headers()["sec-websocket-protocol"],
-        "rustx.app-server.v73",
+        "rustx.app-server.v78",
         "the response selects only the public subprotocol, never a secret"
     );
     Ok(socket)
 }
 pub async fn websocket(url: &str) -> Driver {
-    websocket_offering(url, &format!("rustx.app-server.v73, rustx-token.{TOKEN}")).await
+    websocket_offering(
+        url,
+        &format!("rustx.app-server.v78, {}", credential_offer(TOKEN)),
+    )
+    .await
 }
 pub async fn websocket_offering(url: &str, offered: &str) -> Driver {
     let (writer, reader) = try_socket(url, offered).await.unwrap().split();

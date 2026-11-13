@@ -1,10 +1,46 @@
 # Automatic sequential compaction validation
 
-The implementation is based on `origin/main` at
+The original implementation was based on `origin/main` at
 `a81d053f`. It replaces authored compaction
 tuning with a model-derived policy and one sequential Summary pipeline. The
 background operation lifecycle and final Web/TUI presentation are separate
 changes.
+
+## Main integration state (2026-11-13)
+
+PR #531 is being integrated with `origin/main` at `c076354d6` from PR head
+`881d99759`. The integrated contract is App Server v78, Runtime Client v85,
+Child IPC v39, SQLite schema 87, Runtime authoring schema 12 and Runtime
+Manifest v6. The model catalog remains schema 2 and Session catalog schema 19.
+The integration retains shared writable Thread clients, instance bearer/JWT
+authentication, Provider-owned protocol, Agent resources and Skills, and
+automatic configuration application. It also retains model-derived sequential
+compaction, removes authored context tuning and Summary output overrides, and
+keeps accepted chunk progress and distinct cancelled/skipped Trace terminals.
+
+Local integration verification passed with Rust 1.98.1 and the locked dependencies:
+
+- All-target, all-feature Rust tests: 6,167 passed, 33 ignored, none failed,
+  with the required provider emulator and eight test threads. The host's HTTP
+  proxies require `NO_PROXY=127.0.0.1,localhost` and the same lowercase variable
+  for loopback fixtures; remote proxy settings remain unchanged.
+- Complete Web suite: 4,812 passed, four skipped. Complete TUI suite: 1,351
+  passed, one skipped. Provider emulator: 58 passed.
+- All 27 distinct browser scenarios in the compaction, Settings presentation,
+  Settings ownership and Settings observation suites passed. The delayed-write
+  regression holds Subagent limits while independently observing Model timeout.
+  The changed Advanced screenshot was regenerated and checked strictly against
+  the same pinned Playwright image digest used by CI. Local execution uses its
+  cached read-only OCI filesystem through Bubblewrap, without host fonts.
+- Generated protocol and editor schemas, Protocol/Web/TUI typechecks,
+  translation/provenance/notice/icon/geometry audits, production Web build,
+  formatting, strict all-target, all-feature Clippy and Linux test-lane coverage
+  passed.
+
+The verification recorded below belongs to the earlier revisions explicitly
+identified there. A fresh FULL CI run must verify the integrated commit,
+including native macOS and the complete browser shards; historical green runs
+do not establish that result.
 
 ## Accounting and limits
 

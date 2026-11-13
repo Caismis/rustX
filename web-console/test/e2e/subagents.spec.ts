@@ -6,7 +6,7 @@ test('file drops belong only to the visible resident conversation', async ({ pag
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/startup.html?existing&models&subagents`);
   await expect(page).toHaveTitle(/rustX/);
-  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); f.hold('session/uploadPrepare'); });
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('thread/resume'); f.resumeCatalog(); f.hold('session/uploadPrepare'); });
   await page.locator('button[data-session-id="A"]').click();
   await page.getByRole('button', { name: 'Subagents', exact: true }).click();
   await page.getByRole('treeitem', { name: /Verify findings/ }).click();
@@ -36,7 +36,7 @@ test('header child navigation preserves the parent draft and renders agent retur
   await page.addInitScript(() => localStorage.setItem('rustx-locale-v1', 'en'));
   await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/startup.html?existing&models&subagents`);
   await page.waitForFunction(() => (window as any).startupFixture);
-  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('session/attach'); f.resumeCatalog(); });
+  await page.evaluate(() => { const f = (window as any).startupFixture; f.allow('session/summary'); f.allow('thread/resume'); f.resumeCatalog(); });
   await page.locator('button[data-session-id="A"]').click();
   const draft = page.getByRole('textbox', { name: 'Message', exact: true });
   await draft.fill('Preserved root draft');

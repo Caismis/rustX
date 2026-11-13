@@ -1,7 +1,9 @@
+import { SettingsNotice } from '../SettingsFeedback';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted typed request controls; see PROVENANCE.md. */
 import { useContext, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import type { Model, Modality } from '../../../../../protocol/app-server/v73';
+import type { Model, Modality } from '../../../../../protocol/app-server/v78';
 import { useTranslation } from '../../../locale/react';
+import { message } from '../../../locale/translation';
 import { Button } from '../../../presentation/primitives/Button';
 import { UnitReset, type TypedUnitForm as TypedForm } from '../forms/bridge';
 import { Bool, JsonObjectEditor, Numeric, NumericText, RequestParameters, Text } from '../forms/fields';
@@ -10,19 +12,20 @@ import css from '../../../presentation/settings/SettingsContent.module.css';
 import cards from './ModelsPage.module.css';
 
 const inputModalities: readonly Modality[] = ['text', 'image'];
-export function ModelFields({ form }: { form: TypedForm<Model> }) {
+export function ModelFields({ form, duplicate }: { form: TypedForm<Model>; duplicate?: (provider: string, id: string) => boolean }) {
   const tx = useTranslation();
   const resets = useContext(UnitReset);
   const modelParameters = useRef<HTMLDivElement>(null);
   return <>
     <div className={cards.basicFields}>
-      <Text form={form} name="id" label={tx('settings:models-page.wire-model-identity')} required />
-      <Protocol form={form} />
-      <NumericText form={form} name="context_window" label={tx('settings:models-page.context-window')} />
-      <Numeric form={form} name="max_output_tokens" label={tx('settings:models-page.maximum-output-tokens')} />
+      <Text form={form} name="id" label={tx('settings:models-page.wire-model-identity')} required
+        validate={value => duplicate?.(form.state.values.provider, String(value).trim()) ? message('settings:models.duplicate') : undefined} />
+      <NumericText form={form} name="context_window" label={tx('settings:models-page.context-window')} required />
+      <Numeric form={form} name="max_output_tokens" label={tx('settings:models-page.maximum-output-tokens')} required listenTo={['context_window']}
+        validate={value => !Number.isInteger(Number(value)) || Number(value) > 4294967295 ? message('settings:validation.positive-integer')
+          : Number(value) >= Number(form.state.values.context_window) ? message('settings:models.output-context-limit') : undefined} />
     </div>
     <Advanced title={tx('settings:models.advanced')}>
-    <Text form={form} name="provider" label={tx('settings:models-page.provider-identity')} required />
     <InputModalities form={form} />
     <Bool form={form} name="capabilities.json_schema_output" label={tx('settings:models-page.json-schema-output')} />
     <Profiles key={resets} form={form} modelParameters={modelParameters} />
@@ -31,33 +34,13 @@ export function ModelFields({ form }: { form: TypedForm<Model> }) {
   </>;
 }
 
-/** Changing API format drops overrides owned by the old protocol. Editing
- * ordinary fields keeps expert overrides authored in source configuration. */
-function Protocol({ form }: { form: TypedForm<Model> }) {
-  const tx = useTranslation();
-  const Bound = form.Field as unknown as Field;
-  return <Bound name="compat">{compat => <Bound name="protocol">{protocol => <Choice
-    label={tx('settings:models-page.protocol')} value={protocol.state.value as string}
-    options={[
-      ['openai_chat_completions', tx('settings:models.api-chat')],
-      ['openai_responses', tx('settings:models.api-responses')],
-      ['anthropic_messages', tx('settings:models.api-anthropic')],
-    ]}
-    onChange={next => {
-      if (next !== protocol.state.value) {
-        compat.handleChange(undefined as never);
-        protocol.handleChange(next as never);
-      }
-    }} />}</Bound>}</Bound>;
-}
-
 function InputModalities({ form }: { form: TypedForm<Model> }) {
   const tx = useTranslation();
   const Bound = form.Field as unknown as Field;
   return <Bound name="capabilities.input_modalities">{field => {
     const value = (field.state.value as Modality[] | undefined) ?? [];
     return <div className={cards.modalityGroup}><span>{tx('settings:models-page.input-modalities')}</span><div className={cards.chips}>{inputModalities.map(modality => <label className={cards.chip} key={modality}>
-      <input type="checkbox" checked={value.includes(modality)}
+      <input type="checkbox" checked={value.includes(modality)} disabled={modality === 'text'}
         onChange={event => field.handleChange((event.target.checked ? [...value, modality] : value.filter(item => item !== modality)) as never)} />{tx(`settings:model-option.${modality}`)}
     </label>)}</div></div>;
   }}</Bound>;
@@ -91,7 +74,6 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
   const addingDraft = useRef(false);
   const panel = useRef<HTMLDivElement>(null);
   const chips = useRef<HTMLDivElement>(null);
-  const errorId = useId();
   const Bound = form.Field as unknown as Field;
   return <Bound name="request_params">{params => <Bound name="default_profile">{fallback => <Bound name="reasoning_profile_order">{ranking => <Bound name="profiles">{field => {
     const profiles = (field.state.value as ProfileMap | null | undefined) ?? {};
@@ -144,7 +126,7 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
           }}>×</Button>
         </div>)}
         {adding && <input autoFocus aria-label={tx('settings:models-page.new-profile-identity')} className={cards.profileName}
-          value={identity} aria-invalid={duplicate || undefined} aria-describedby={duplicate ? errorId : undefined}
+          value={identity} aria-invalid={duplicate || undefined}
           onChange={event => setIdentity(event.target.value)} onBlur={finishAdd} onKeyDown={event => {
             if (event.key === 'Enter') { event.preventDefault(); finishAdd(); }
             if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); addingDraft.current = false; setAdding(false); setIdentity(''); focusAdd(); }
@@ -152,7 +134,7 @@ function Profiles({ form, modelParameters }: { form: TypedForm<Model>; modelPara
         <Button data-add-profile size="sm" variant="outline" className={cards.profileAdd} aria-label={tx('settings:models-page.add-profile')}
           onClick={() => { if (canSwitch()) { addingDraft.current = true; setIdentity(''); setAdding(true); } }}>+</Button>
       </div>
-      {adding && duplicate && <p id={errorId} role="alert" className={css.error}>{name} {tx('settings:fields.is-already-listed')}</p>}
+      <SettingsNotice text={adding && duplicate ? `${name} ${tx('settings:fields.is-already-listed')}` : undefined}/>
       <div ref={panel}>
         {current && <ProfileFields key={current} id={current} profile={profiles[current]} change={next => update(current, next)} />}
       </div>
@@ -208,7 +190,7 @@ function ReasoningOrder({ identities, order, appended, change }: {
           </li>)}
         </ol>
         <p className={css.hint}>{tx('settings:models-page.reasoning-draft-help')}</p>
-        {appended && <p role="status" className={css.hint}>{tx('settings:models-page.reasoning-appended', { p0: appended })}</p>}
+        <SettingsNotice tone="success" text={appended ? tx('settings:models-page.reasoning-appended', { p0: appended }) : undefined}/>
       </>}
     <p className={css.hint}>{tx('settings:models-page.reasoning-help')}</p>
   </section>;
@@ -217,8 +199,13 @@ function ReasoningOrder({ identities, order, appended, change }: {
 function ProfileFields({ id, profile, change }: { id: string; profile: ProfileMap[string]; change: (next: ProfileMap[string]) => void }) {
   const tx = useTranslation();
   return <div role="group" aria-label={tx('settings:models-page.profile-value', { p0: id })} data-profile={id}>
-    <JsonObjectEditor label={tx('settings:models-page.profile-parameters')} value={{ ...profile }} optional={false}
+    <label>{tx('settings:models-page.profile-output-limit')}
+      <input type="number" min="1" max="4294967295" step="1" value={profile.max_output_tokens ?? ''}
+        placeholder={tx('settings:models-page.profile-output-default')}
+        onChange={event => change({ ...profile, max_output_tokens: event.target.value ? Number(event.target.value) : undefined })}/>
+    </label>
+    <JsonObjectEditor label={tx('settings:models-page.profile-parameters')} value={profile.request_params ?? {}} optional={false}
       hint={tx('settings:models-page.profile-parameters-hint')}
-      change={next => change((next ?? {}) as ProfileMap[string])} />
+      change={request_params => change({ ...profile, request_params: request_params ?? {} })} />
   </div>;
 }

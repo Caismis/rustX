@@ -6630,6 +6630,7 @@ fn raw_publication_snapshot(
         Vec::new(),
         crate::runtime::RuntimeResourceRevision::new(1),
         crate::model::invocation::ModelInvocationConfig {
+            replay_binding: Some("test-binding".into()),
             model: "scripted".into(),
             protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
             max_output_tokens: 100,

@@ -178,25 +178,6 @@ impl core::fmt::Display for Ecosystem {
     }
 }
 
-/// Parses the rustX dependency declaration keys of one Skill's metadata.
-///
-/// # Errors
-///
-/// Returns [`DependencyError`] for a malformed or unsupported declaration.
-pub fn parse_dependency_map(
-    metadata: &BTreeMap<String, String>,
-) -> Result<DependencyManifest, DependencyError> {
-    let python = match metadata.get(PYTHON_DEPENDENCIES_METADATA_KEY) {
-        Some(value) => parse_python_dependencies(value)?,
-        None => BTreeMap::new(),
-    };
-    let node = match metadata.get(NODE_DEPENDENCIES_METADATA_KEY) {
-        Some(value) => parse_node_dependencies(value)?,
-        None => BTreeMap::new(),
-    };
-    Ok(DependencyManifest { python, node })
-}
-
 /// Parses one `rustx.python-dependencies` metadata value.
 ///
 /// # Errors
@@ -402,43 +383,57 @@ fn validate_node_exact_version(version: &str) -> Result<(), ()> {
 pub fn merge_dependency_manifests(
     packages: &[SkillPackage],
 ) -> Result<DependencyManifest, DependencyConflict> {
+    merge_named_manifests(
+        packages
+            .iter()
+            .map(|package| (package.id(), package.dependencies())),
+    )
+}
+
+/// Merge already-frozen declarations without reading any resource file.
+pub(crate) fn merge_named_manifests<'a>(
+    declarations: impl Iterator<
+        Item = (
+            &'a crate::runtime::identity::SkillId,
+            &'a DependencyManifest,
+        ),
+    >,
+) -> Result<DependencyManifest, DependencyConflict> {
+    let declarations: Vec<_> = declarations.collect();
     let mut merged = DependencyManifest::default();
-    let mut candidates: Vec<(&SkillPackage, Ecosystem, &BTreeMap<String, String>)> = Vec::new();
-    for package in packages {
-        candidates.push((package, Ecosystem::Python, &package.dependencies().python));
-        candidates.push((package, Ecosystem::Node, &package.dependencies().node));
-    }
-    for (package, ecosystem, map) in candidates {
-        let _ = package;
-        for (name, version) in map {
-            let slot = match ecosystem {
-                Ecosystem::Python => &mut merged.python,
-                Ecosystem::Node => &mut merged.node,
-            };
-            match slot.get(name) {
-                Some(existing) if existing == version => {}
-                Some(_) => {
-                    let mut declarations = packages
-                        .iter()
-                        .filter_map(|candidate| {
-                            let candidate_map = match ecosystem {
-                                Ecosystem::Python => &candidate.dependencies().python,
-                                Ecosystem::Node => &candidate.dependencies().node,
-                            };
-                            candidate_map
-                                .get(name)
-                                .map(|declared| (candidate.id().clone(), declared.clone()))
-                        })
-                        .collect::<Vec<_>>();
-                    declarations.sort_by(|left, right| left.0.cmp(&right.0));
-                    return Err(DependencyConflict {
-                        ecosystem,
-                        package: name.clone(),
-                        declarations,
-                    });
-                }
-                None => {
-                    slot.insert(name.clone(), version.clone());
+    for (_, manifest) in &declarations {
+        for (ecosystem, map) in [
+            (Ecosystem::Python, &manifest.python),
+            (Ecosystem::Node, &manifest.node),
+        ] {
+            for (name, version) in map {
+                let slot = match ecosystem {
+                    Ecosystem::Python => &mut merged.python,
+                    Ecosystem::Node => &mut merged.node,
+                };
+                match slot.get(name) {
+                    Some(existing) if existing == version => {}
+                    Some(_) => {
+                        let mut conflicts: Vec<_> = declarations
+                            .iter()
+                            .filter_map(|(id, manifest)| {
+                                let map = match ecosystem {
+                                    Ecosystem::Python => &manifest.python,
+                                    Ecosystem::Node => &manifest.node,
+                                };
+                                map.get(name).map(|value| ((*id).clone(), value.clone()))
+                            })
+                            .collect();
+                        conflicts.sort_by(|a, b| a.0.cmp(&b.0));
+                        return Err(DependencyConflict {
+                            ecosystem,
+                            package: name.clone(),
+                            declarations: conflicts,
+                        });
+                    }
+                    None => {
+                        slot.insert(name.clone(), version.clone());
+                    }
                 }
             }
         }
@@ -562,13 +557,7 @@ mod tests {
             "https://example.com/pkg.tgz",
             "file:../pkg",
             "workspace:*",
-            "1.0.0-beta.1",
         ] {
-            // 1.0.0-beta.1 is a valid prerelease exact version.
-            if bad_node == "1.0.0-beta.1" {
-                assert!(parse_node_dependencies(&format!(r#"{{"pkg":"{bad_node}"}}"#)).is_ok());
-                continue;
-            }
             let json = format!(r#"{{"pkg":"{bad_node}"}}"#);
             let result = parse_node_dependencies(&json);
             assert!(
@@ -576,6 +565,8 @@ mod tests {
                 "node {bad_node:?} must be rejected, got {result:?}"
             );
         }
+        assert!(parse_python_dependencies(r#"{"pkg":"1.0rc1"}"#).is_ok());
+        assert!(parse_node_dependencies(r#"{"pkg":"1.0.0-beta.1"}"#).is_ok());
     }
 
     /// Duplicate compatible declarations coalesce; incompatible ones
@@ -621,9 +612,7 @@ mod tests {
             ),
         )
         .expect("write");
-        let workspace = crate::tools::workspace::Workspace::new(dir.path()).expect("workspace");
         let mut discovered = crate::skills::package::SkillDiscovery::with_config(
-            &workspace,
             crate::skills::package::SkillDiscoveryConfig::workspace_root(
                 dir.path().join(".agents/skills"),
             ),

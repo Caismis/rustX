@@ -6,6 +6,7 @@ use std::path::Path;
 
 const PROVIDER: &str = r#"
 [providers.transport]
+protocol = "openai_responses"
 base_url = "https://user.invalid/v1"
 api_key = "$USER_KEY"
 "#;
@@ -13,7 +14,6 @@ const MODEL: &str = r#"
 [models."arbitrary-name"]
 provider = "transport"
 id = "wire-model"
-protocol = "openai_responses"
 context_window = 128000
 max_output_tokens = 8192
 [models."arbitrary-name".capabilities]
@@ -24,6 +24,36 @@ const ROOT: &str = r#"
 [agent.model]
 model = "arbitrary-name"
 "#;
+
+#[test]
+fn hidden_providers_and_models_stay_resolvable_but_are_absent_from_model_choices() {
+    let second = MODEL.replace("arbitrary-name", "second");
+    let hidden_model = second.replace("provider = ", "hidden = true\nprovider = ");
+    let hidden_provider = PROVIDER.replace("protocol = ", "hidden = true\nprotocol = ");
+    for (catalog, visible) in [
+        (
+            format!("{PROVIDER}{MODEL}{second}"),
+            vec!["arbitrary-name", "second"],
+        ),
+        (
+            format!("{PROVIDER}{MODEL}{hidden_model}"),
+            vec!["arbitrary-name"],
+        ),
+        (format!("{hidden_provider}{MODEL}{second}"), vec![]),
+    ] {
+        let catalog = ModelCatalog::from_toml_slice(catalog.as_bytes()).unwrap();
+        let choices: Vec<_> = catalog
+            .view()
+            .models
+            .iter()
+            .map(|model| model.model.to_string())
+            .collect();
+        assert_eq!(choices, visible);
+        for id in ["arbitrary-name", "second"] {
+            assert!(catalog.model(&ModelRef::parse(id).unwrap()).is_ok());
+        }
+    }
+}
 
 const WORKFLOW: &str = "description: Return a literal\nblock:\n  input: {type: object, properties: {}, additionalProperties: false}\n  edges:\n  - from: workflow_start\n    to: done\n  nodes:\n    workflow_start:\n      type: start\n    done:\n      type: return\n      outputs: []\n";
 
@@ -327,7 +357,7 @@ fn provider_replacement_cannot_borrow_lower_credential() {
     let (host, request) = sources(
         root.path(),
         &format!("{PROVIDER}{MODEL}{ROOT}"),
-        "[providers.transport]\nbase_url = 'https://workspace.invalid/v1'\n",
+        "[providers.transport]\nprotocol = \"openai_responses\"\nbase_url = 'https://workspace.invalid/v1'\n",
     );
     assert!(analyze(&request, &host).is_err());
 }
@@ -400,7 +430,8 @@ fn native_whitelist_empty_replaces_while_absence_inherits() {
 
 #[test]
 fn skills_all_exact_and_empty_are_valid_for_both_agent_kinds() {
-    use rustx::runtime::agent_profile::{AgentProfile, AgentProfileKind, AgentSkillSelection};
+    use rustx::local_runtime::config::{AgentProfileDocument, NamedAgentProfileDocument};
+    use rustx::runtime::agent_profile::AgentSkillSelection;
     for (text, selection) in [
         ("skills = 'all'", AgentSkillSelection::All),
         (
@@ -409,16 +440,10 @@ fn skills_all_exact_and_empty_are_valid_for_both_agent_kinds() {
         ),
         ("skills = []", AgentSkillSelection::Exact(vec![])),
     ] {
-        let document: rustx::local_runtime::config::AgentProfileDocument =
-            toml::from_str(text).unwrap();
-        for kind in [AgentProfileKind::Root, AgentProfileKind::Named] {
-            assert_eq!(
-                AgentProfile::from_document(&document, kind, vec![])
-                    .unwrap()
-                    .skills,
-                selection
-            );
-        }
+        let root: AgentProfileDocument = toml::from_str(text).unwrap();
+        let named: NamedAgentProfileDocument = toml::from_str(text).unwrap();
+        assert_eq!(root.skills.as_ref(), Some(&selection));
+        assert_eq!(named.skills, Some(selection));
     }
 }
 
@@ -524,6 +549,95 @@ fn competing_native_writers_have_exactly_one_commit_winner() {
 }
 
 #[test]
+fn removing_a_provider_cascades_only_within_the_revision_fenced_source() {
+    use rustx::local_runtime::configuration::settings::{
+        ConfigMutation, SettingsError, SourceMutation,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let other = MODEL
+        .replace("arbitrary-name", "other-model")
+        .replace("transport", "other");
+    let other_provider = PROVIDER.replace("transport", "other");
+    let local = MODEL.replace("arbitrary-name", "workspace-alias");
+    let (host, request) = sources(
+        root.path(),
+        &format!("{PROVIDER}{MODEL}{other_provider}{other}{ROOT}"),
+        &format!("{PROVIDER}{local}"),
+    );
+    let (owner, input) = request.session_input(&host).unwrap();
+    let target = rustx_target(&input.cwd);
+    let before = owner.read_source_settings(&target).unwrap();
+    let mutation = |mutation| SourceMutation::Config { mutation };
+    owner
+        .write_source_settings(
+            &target,
+            &before.workspace.as_ref().unwrap().revision,
+            mutation(ConfigMutation::RestoreProvider {
+                id: "transport".into(),
+            }),
+        )
+        .unwrap();
+    let restored = owner.read_source_settings(&target).unwrap();
+    let workspace = restored
+        .workspace
+        .as_ref()
+        .unwrap()
+        .authored
+        .as_ref()
+        .unwrap();
+    assert!(
+        workspace
+            .providers
+            .as_ref()
+            .is_none_or(|providers| !providers.contains_key("transport"))
+    );
+    assert!(
+        workspace
+            .models
+            .as_ref()
+            .unwrap()
+            .contains_key("workspace-alias")
+    );
+    assert!(analyze(&request, &host).is_ok());
+
+    let delete = || {
+        mutation(ConfigMutation::Provider {
+            id: "transport".into(),
+            authored: None,
+        })
+    };
+    assert!(matches!(
+        owner.write_source_settings(&USER_TARGET, "stale", delete()),
+        Err(SettingsError::Conflict { .. })
+    ));
+    assert_eq!(
+        owner
+            .read_source_settings(&USER_TARGET)
+            .unwrap()
+            .user
+            .revision,
+        before.user.revision
+    );
+    owner
+        .write_source_settings(&USER_TARGET, &before.user.revision, delete())
+        .unwrap();
+    let after = owner.read_source_settings(&target).unwrap();
+    let user = after.user.authored.as_ref().unwrap();
+    assert_eq!(
+        user.providers.as_ref().unwrap().keys().collect::<Vec<_>>(),
+        ["other"]
+    );
+    assert_eq!(
+        user.models.as_ref().unwrap().keys().collect::<Vec<_>>(),
+        ["other-model"]
+    );
+    assert_eq!(
+        after.workspace.as_ref().unwrap().revision,
+        restored.workspace.as_ref().unwrap().revision
+    );
+}
+
+#[test]
 fn provider_secrets_are_not_read_back_and_cannot_be_retained_from_lower_scope() {
     use rustx::local_runtime::configuration::settings::{
         ConfigMutation, CredentialEdit, ProviderWrite, SettingsError, SourceMutation,
@@ -553,6 +667,10 @@ fn provider_secrets_are_not_read_back_and_cannot_be_retained_from_lower_scope() 
             mutation: ConfigMutation::Provider {
                 id: "transport".into(),
                 authored: Some(ProviderWrite {
+                    display_name: None,
+                    hidden: false,
+                    icon: None,
+                    protocol: rustx::model::ModelProtocol::OpenAiResponses,
                     base_url: "https://higher.invalid/v1".into(),
                     credential: CredentialEdit::Retain,
                 }),
@@ -616,7 +734,7 @@ fn session_persistence_refuses_obsolete_effective_configuration_fields() {
 }
 
 #[test]
-fn malformed_workspace_skill_reserves_identity_and_selected_invalid_fails() {
+fn malformed_workspace_skill_leaves_the_valid_user_definition_available() {
     let root = tempfile::tempdir().unwrap();
     let (host, request) = sources(root.path(), &format!("{PROVIDER}{MODEL}{ROOT}"), "");
     let user = host.home_directory.join("rustx/.agents/skills/review");
@@ -633,27 +751,23 @@ fn malformed_workspace_skill_reserves_identity_and_selected_invalid_fails() {
     )
     .unwrap();
     std::fs::write(workspace.join("SKILL.md"), "invalid manifest").unwrap();
-    let boundary =
-        rustx::tools::workspace::Workspace::new(request.workspace.as_ref().unwrap()).unwrap();
-    let outcome = rustx::skills::SkillDiscovery::with_config(
-        &boundary,
-        rustx::skills::SkillDiscoveryConfig {
-            automatic: vec![
-                rustx::skills::AutomaticSkillRoot {
-                    source: rustx::skills::SkillSource::User,
-                    root: user.parent().unwrap().to_owned(),
-                },
-                rustx::skills::AutomaticSkillRoot {
-                    source: rustx::skills::SkillSource::Workspace,
-                    root: workspace.parent().unwrap().to_owned(),
-                },
-            ],
-        },
-    )
+    let outcome = rustx::skills::SkillDiscovery::with_config(rustx::skills::SkillDiscoveryConfig {
+        automatic: vec![
+            rustx::skills::AutomaticSkillRoot {
+                source: rustx::skills::SkillSource::User,
+                root: user.parent().unwrap().to_owned(),
+            },
+            rustx::skills::AutomaticSkillRoot {
+                source: rustx::skills::SkillSource::Workspace,
+                root: workspace.parent().unwrap().to_owned(),
+            },
+        ],
+    })
     .discover();
-    assert!(
-        outcome.packages.is_empty(),
-        "invalid Workspace identity cannot fall back"
+    assert_eq!(outcome.packages.len(), 1);
+    assert_eq!(
+        outcome.packages[0].source(),
+        rustx::skills::SkillSource::User
     );
     assert!(!outcome.diagnostics.is_empty());
     assert!(
@@ -665,39 +779,26 @@ fn malformed_workspace_skill_reserves_identity_and_selected_invalid_fails() {
         "[agent]\nskills = ['review']\n",
     )
     .unwrap();
-    assert!(
-        analyze(&request, &host).is_err(),
-        "selected invalid package fails resolution"
-    );
+    assert!(analyze(&request, &host).is_ok());
 }
 
 #[test]
-fn skill_prompt_exposes_collection_roots_without_enumerating_absolute_package_paths() {
-    use rustx::skills::{AutomaticSkillRoot, SkillCatalogEntry, SkillSource, render_skill_catalog};
-    let roots = vec![
-        AutomaticSkillRoot {
-            source: SkillSource::User,
-            root: "/home/example/rustx/.agents/skills".into(),
-        },
-        AutomaticSkillRoot {
-            source: SkillSource::Workspace,
-            root: "/work/project/.agents/skills".into(),
-        },
-    ];
-    let location = "/work/project/.agents/skills/review/SKILL.md";
+fn skill_prompt_exposes_escaped_instruction_paths() {
+    use rustx::skills::{SkillCatalogEntry, SkillReadTool, render_skill_catalog};
     let prompt = render_skill_catalog(
         &[SkillCatalogEntry {
             name: "review".into(),
-            description: "Review code".into(),
-            location: location.into(),
+            description: "Review <code> & tests".into(),
+            location: "/work/a&b/.agents/skills/team/review/SKILL.md".into(),
         }],
-        &roots,
+        SkillReadTool::Bash,
     );
-    assert!(prompt.contains("User Skill root (root0): /home/example/rustx/.agents/skills"));
-    assert!(prompt.contains("Workspace Skill root (root1): /work/project/.agents/skills"));
-    assert!(prompt.contains("<root>root1</root>"));
-    assert!(!prompt.contains(location));
-    assert!(prompt.contains("not filesystem access"));
+    assert!(
+        prompt.contains("<location>/work/a&amp;b/.agents/skills/team/review/SKILL.md</location>")
+    );
+    assert!(prompt.contains("Review &lt;code&gt; &amp; tests"));
+    assert!(prompt.contains("Use bash to load"));
+    assert!(render_skill_catalog(&[], SkillReadTool::Read).is_empty());
 }
 
 #[test]
@@ -712,7 +813,7 @@ fn config_and_runtime_root_are_absolute_process_bindings() {
 }
 
 #[tokio::test]
-async fn selected_skill_visibility_is_independent_of_native_tool_selection() {
+async fn skill_prompt_requires_an_available_reader() {
     use rustx::local_runtime::composition::{LocalConversationCore, LocalRuntimeDependencies};
     let root = tempfile::tempdir().unwrap();
     let (host, request) = sources(
@@ -721,7 +822,7 @@ async fn selected_skill_visibility_is_independent_of_native_tool_selection() {
             "{}{MODEL}{ROOT}",
             PROVIDER.replace("$USER_KEY", "fixture-key")
         ),
-        "[agent]\nskills = ['review']\n[agent.tools]\nbuiltin = []\n",
+        "[agent]\n[agent.tools]\nbuiltin = []\n",
     );
     let package = host.launch_directory.join(".agents/skills/review");
     std::fs::create_dir_all(&package).unwrap();
@@ -745,25 +846,7 @@ async fn selected_skill_visibility_is_independent_of_native_tool_selection() {
         generation.capability().model_skill_entries()[0].name,
         "review"
     );
-    let prompt = generation.skill_catalog().unwrap();
-    assert!(prompt.contains("Review code"));
-    assert!(!prompt.contains("PRIVATE_BODY_SENTINEL"));
-    assert!(
-        prompt.contains(
-            host.home_directory
-                .join("rustx/.agents/skills")
-                .to_str()
-                .unwrap()
-        )
-    );
-    assert!(
-        prompt.contains(
-            host.launch_directory
-                .join(".agents/skills")
-                .to_str()
-                .unwrap()
-        )
-    );
+    assert!(generation.skill_catalog().is_none());
     runtime.shutdown().await.unwrap();
 }
 
@@ -889,7 +972,7 @@ fn named_agent_save_validates_complete_definition_before_committing() {
         .read_source_settings(&rustx_target(&input.cwd))
         .unwrap();
     let name = rustx::runtime::subagent::SubagentName::parse("reviewer").unwrap();
-    let mut profile = rustx::local_runtime::config::AgentProfileDocument {
+    let mut profile = rustx::local_runtime::config::NamedAgentProfileDocument {
         description: "Review changes".into(),
         instructions: "x".repeat(64 * 1024 + 1),
         ..Default::default()
@@ -1128,4 +1211,103 @@ fn each_scope_enables_only_the_workflow_files_it_owns() {
     )
     .unwrap();
     assert!(enabled(), "the Workspace enables its own file");
+}
+
+#[test]
+fn provider_display_metadata_round_trips_without_changing_model_resolution_or_exposing_secrets() {
+    use rustx::local_runtime::configuration::settings::{
+        ConfigMutation, CredentialEdit, ProviderWrite, SettingsError, SourceMutation,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let (host, request) = sources(root.path(), &format!("{PROVIDER}{MODEL}{ROOT}"), "");
+    let (owner, input) = request.session_input(&host).unwrap();
+    let target = rustx_target(&input.cwd);
+    for (icon, name) in [
+        (Some("deepseek"), Some("模型供应商")),
+        (Some("openai"), Some("Another display name")),
+        (None, None),
+    ] {
+        let before = owner.read_source_settings(&target).unwrap();
+        owner
+            .write_source_settings(
+                &target,
+                &before.workspace.as_ref().unwrap().revision,
+                SourceMutation::Config {
+                    mutation: ConfigMutation::Provider {
+                        id: "transport".into(),
+                        authored: Some(ProviderWrite {
+                            display_name: name.map(str::to_owned),
+                            hidden: false,
+                            icon: icon.map(str::to_owned),
+                            protocol: rustx::model::ModelProtocol::OpenAiResponses,
+                            base_url: "https://workspace.invalid/v1".into(),
+                            credential: CredentialEdit::Literal {
+                                value: "private-icon-fixture".into(),
+                            },
+                        }),
+                    },
+                },
+            )
+            .unwrap();
+        let after = owner.read_source_settings(&target).unwrap();
+        let authored = after.workspace.as_ref().unwrap().authored.as_ref().unwrap();
+        let provider = &authored.providers.as_ref().unwrap()["transport"];
+        assert_eq!(provider.icon.as_deref(), icon);
+        assert_eq!(provider.display_name.as_deref(), name);
+        assert!(
+            !serde_json::to_string(&after)
+                .unwrap()
+                .contains("private-icon-fixture")
+        );
+        assert!(analyze(&request, &host).is_ok());
+        let bytes = std::fs::read_to_string(input.cwd.join("rustx.toml")).unwrap();
+        assert_eq!(bytes.contains("icon ="), icon.is_some());
+        assert_eq!(bytes.contains("display_name ="), name.is_some());
+    }
+    for (icon, name) in [
+        (Some(""), None),
+        (Some("https://example.com/icon.svg"), None),
+        (Some("../openai"), None),
+        (Some("OpenAI"), None),
+        (Some("-openai"), None),
+        (Some("openai-"), None),
+        (Some("a".repeat(65).as_str()), None),
+        (None, Some("")),
+        (None, Some(" leading space")),
+        (None, Some("two\nlines")),
+        (None, Some("模".repeat(101).as_str())),
+    ] {
+        let before = owner.read_source_settings(&target).unwrap();
+        let bytes = std::fs::read(input.cwd.join("rustx.toml")).unwrap();
+        let result = owner.write_source_settings(
+            &target,
+            &before.workspace.as_ref().unwrap().revision,
+            SourceMutation::Config {
+                mutation: ConfigMutation::Provider {
+                    id: "transport".into(),
+                    authored: Some(ProviderWrite {
+                        display_name: name.map(str::to_owned),
+                        hidden: false,
+                        icon: icon.map(str::to_owned),
+                        protocol: rustx::model::ModelProtocol::OpenAiResponses,
+                        base_url: "https://workspace.invalid/v1".into(),
+                        credential: CredentialEdit::Retain,
+                    }),
+                },
+            },
+        );
+        assert!(
+            matches!(result, Err(SettingsError::Invalid)),
+            "{icon:?} {name:?}"
+        );
+        assert_eq!(std::fs::read(input.cwd.join("rustx.toml")).unwrap(), bytes);
+    }
+    // Manual source edits obey the same native validation as managed writes.
+    std::fs::write(
+        input.cwd.join("rustx.toml"),
+        format!("{PROVIDER}icon = '../openai'\n"),
+    )
+    .unwrap();
+    let invalid = owner.read_source_settings(&target).unwrap();
+    assert!(invalid.workspace.as_ref().unwrap().diagnostic.is_some());
 }

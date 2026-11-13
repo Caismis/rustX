@@ -424,55 +424,25 @@ async fn run_preparation_gate_if_armed(
     Ok(())
 }
 
-/// Materializes the child's frozen Skill packages and returns the catalog
-/// entries with their locations remapped onto the child's own copies.
-fn materialize_frozen_skills(
+/// Install only the parent-authorized definitions and live resource locations.
+/// No discovery, resource reads, package validation or copying occurs here.
+fn frozen_skills(
     spec: &crate::runtime::subagent::ipc::SubagentChildSpec,
-    cancellation: &crate::runtime::CancellationSignal,
-) -> Result<crate::skills::SkillSnapshot, LocalRuntimeError> {
-    let root = spec
-        .runtime_root()
-        .map_err(|e| LocalRuntimeError::ToolRuntime {
-            detail: e.to_string(),
-        })?
-        .join("skills");
-    let mut entries = Vec::with_capacity(spec.resolved.skills.len());
-    let roots = [
-        crate::skills::SkillSource::User,
-        crate::skills::SkillSource::Workspace,
-    ]
-    .into_iter()
-    .map(|source| crate::skills::AutomaticSkillRoot {
-        source,
-        root: root.join(source.as_str()),
-    })
-    .collect();
-    for skill in &spec.resolved.skills {
-        let destination = root
-            .join(skill.provenance.source.as_str())
-            .join(skill.binding.skill_id.as_str());
-        let location = crate::skills::materialization::materialize_skill(
-            &skill.binding,
-            &skill.source_root,
-            &skill.files,
-            &destination,
-            cancellation,
-        )
-        .map_err(|error| LocalRuntimeError::Capability {
-            detail: error.to_string(),
-        })?;
-        let mut provenance = skill.provenance.clone();
-        provenance.location.clone_from(&location);
-        entries.push((
-            crate::skills::SkillCatalogEntry {
-                location,
-                ..skill.catalog_entry.clone()
-            },
-            skill.binding.clone(),
-            provenance,
-        ));
-    }
-    Ok(crate::skills::SkillSnapshot::from_frozen(entries, roots))
+) -> crate::skills::SkillSnapshot {
+    crate::skills::SkillSnapshot::from_frozen(
+        spec.resolved
+            .skills
+            .iter()
+            .map(|skill| {
+                (
+                    skill.catalog_entry.clone(),
+                    skill.binding.clone(),
+                    skill.provenance.clone(),
+                )
+            })
+            .collect(),
+        spec.resolved.skill_roots.clone(),
+    )
 }
 
 /// Projects the frozen specification into the child's selected-only
@@ -547,10 +517,10 @@ impl LocalConversationCore {
     ///   or force-activated; recursive `subagent` is structurally
     ///   unregistrable, while `ask_user` is materialized only when the frozen
     ///   definition explicitly selected it;
-    /// - the capability plane is **base-only**: no Skill discovery, no
-    ///   Python/Node environments, and no MCP servers; it never opens or
-    ///   creates Python package storage (Issue #81), so a broken Python
-    ///   store location cannot fail child composition;
+    /// - the capability plane prepares only frozen selected requirements:
+    ///   no Skill discovery or package copying, and no unrelated dependencies
+    ///   or external sources. Declared Python/Node dependencies use the same
+    ///   supervised environment owner as ordinary capability preparation;
     /// - the Skill catalog is exactly the parent-resolved allowlist, handed
     ///   over by value, with progressive disclosure preserved: only catalog
     ///   metadata is frozen, never a `SKILL.md` body;
@@ -695,35 +665,18 @@ impl LocalConversationCore {
                 ),
             ));
 
-            // 7. The exact frozen Skill packages are materialized into the
-            // child-private runtime root and their frozen `SkillVersionId` is
-            // re-proven over the materialized bytes. Discovery is never
-            // restarted, and the model-visible location is remapped onto the
-            // child's own copy so the frozen identity stays authoritative even
-            // once the child's filesystem ancestry differs from the parent's.
-            let skill_spec = spec.clone();
-            let skill_cancellation = preparation.cancellation();
-            let skills = preparation
-                .guard(async move {
-                    tokio::task::spawn_blocking(move || {
-                        materialize_frozen_skills(&skill_spec, &skill_cancellation)
-                    })
-                    .await
-                    .map_err(|error| {
-                        crate::capabilities::CapabilityPreparationError::PreparationSettled(
-                            error.to_string(),
-                        )
-                    })?
-                    .map_err(|error| {
-                        crate::capabilities::CapabilityPreparationError::PreparationSettled(
-                            error.to_string(),
-                        )
-                    })
-                })
-                .await
-                .map_err(|error| LocalRuntimeError::Capability {
-                    detail: error.to_string(),
-                })?;
+            // 7. Definitions and authorization are frozen; resource bytes remain
+            // ordinary live Tool inputs in the shared host filesystem.
+            let skills = frozen_skills(spec);
+            let skill_dependencies = crate::skills::dependencies::merge_named_manifests(
+                spec.resolved
+                    .skills
+                    .iter()
+                    .map(|skill| (&skill.binding.skill_id, &skill.dependencies)),
+            )
+            .map_err(|error| LocalRuntimeError::Capability {
+                detail: error.to_string(),
+            })?;
 
             // 8. The deny-by-construction base registry: exactly the Builtin
             // capabilities the parent's resolution authorized, with their exact
@@ -747,22 +700,36 @@ impl LocalConversationCore {
             for binding in mcp_servers.values_mut() {
                 binding.credentials.capture_from(credentials);
             }
-            let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
-                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
-                conversation_id: tool_runtime.conversation_id().clone(),
-                workspace: tool_runtime.workspace().clone(),
-                base_tool_registry: Arc::new(base_registry),
-                // The child's extension Tool surfaces, derived from the owners
-                // its own tool runtime materialized above. The child never
-                // rereads a role file or a configuration document to reinterpret
-                // which extensions it owns.
-                extension_tools: tool_runtime.extension_tool_plane_for(&spec.resolved.extensions),
-                agent_activation: AgentActivation::default(),
-                skill_discovery: SkillDiscoveryConfig::default(),
-                mcp_servers,
-                base_environment,
-                environment_store_root: runtime_root.join("environments"),
-            })
+            let capability = CapabilityCoordinator::with_backend(
+                CapabilityCoordinatorConfig {
+                    source_demand: crate::capabilities::source::ToolSourceDemand::default(),
+                    conversation_id: tool_runtime.conversation_id().clone(),
+                    workspace: tool_runtime.workspace().clone(),
+                    base_tool_registry: Arc::new(base_registry),
+                    // The child's extension Tool surfaces, derived from the owners
+                    // its own tool runtime materialized above. The child never
+                    // rereads a role file or a configuration document to reinterpret
+                    // which extensions it owns.
+                    extension_tools: tool_runtime
+                        .extension_tool_plane_for(&spec.resolved.extensions),
+                    agent_activation: AgentActivation::default(),
+                    skill_discovery: SkillDiscoveryConfig::default(),
+                    mcp_servers,
+                    base_environment,
+                    environment_store_root: spec
+                        .product_root
+                        .join("environments")
+                        .join(spec.child_conversation_id.as_str()),
+                },
+                Arc::new(
+                    crate::skills::environments::RunnerBackedSkillEnvironmentBackend::new(
+                        Arc::new(
+                            crate::runtime::process_runner::RunnerBackedProcessRunner::default(),
+                        ),
+                        preparation.cancellation(),
+                    ),
+                ),
+            )
             .map_err(|error| LocalRuntimeError::Capability {
                 detail: format!("{error:?}"),
             })?;
@@ -774,7 +741,10 @@ impl LocalConversationCore {
             // finishing a long MCP connect or uv build for an owner that is
             // already gone, and every preparatory supervised unit observes the
             // one preparation cancellation authority.
-            let candidate = if plan.is_empty() && !preparation_gate_armed(&runtime_root) {
+            let candidate = if plan.is_empty()
+                && skill_dependencies.is_empty()
+                && !preparation_gate_armed(&runtime_root)
+            {
                 capability
                     .prepare_selected_candidate(&plan, &preparation.cancellation())
                     .await
@@ -785,9 +755,17 @@ impl LocalConversationCore {
                 let cancellation = preparation.cancellation();
                 let step = async {
                     run_preparation_gate_if_armed(&runtime_root, &cancellation).await?;
-                    capability
+                    let mut candidate = capability
                         .prepare_selected_candidate(&plan, &cancellation)
+                        .await?;
+                    if let Err(error) = capability
+                        .prepare_frozen_skill_dependencies(&mut candidate, &skill_dependencies)
                         .await
+                    {
+                        candidate.retire_uncommitted().await;
+                        return Err(error);
+                    }
+                    Ok(candidate)
                 };
                 match preparation.guard(step).await {
                     Ok(candidate) => {

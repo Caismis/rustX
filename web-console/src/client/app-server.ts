@@ -1,3 +1,7 @@
+import {newerThreadStatus, ThreadStatusNotifications} from '../../../protocol/app-server/thread-status';
+import type {ThreadStatusEntry} from '../../../protocol/app-server/v78';
+import {credentialSubprotocol} from '../../../protocol/app-server/auth';
+import { ServerCallbacks, type HostToolHandler } from '../../../protocol/app-server/callbacks';
 import { AuxiliaryQuestions } from './auxiliary';
 import { parseTransportJson } from '../../shared/json-numbers';
 import { ObservationChain, validateRootCheckpoint, validateRootEvent } from '../../../protocol/app-server/observation';
@@ -26,12 +30,12 @@ import type {
   TraceToolLocator, PendingInboundRef, AttachmentTarget, GoalMutation, GoalRef, InteractionRef, InteractionResponse, MethodResult, Notification,
   Request1, Response, RuntimeClientSnapshot, RuntimeClientEvent,
   UserInputBlock, UploadReceipt, UploadedFile, SessionModelConfig, RuntimeClientInteractionHeader,
-} from '../../../protocol/app-server/v73';
+} from '../../../protocol/app-server/v78';
 import { transferUpload } from '../../../protocol/app-server/upload';
 import { refreshTranscript, replaceTranscript, type TurnSelection } from './transcript';
 import { RequestPipeline } from './request-pipeline';
 import { RequestAdmissionDeferred, RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
-import { interactionKey, type CancellationTarget, type ClientView, type ConnectionState, type OperationAdmission, type SessionView, type Socket, type SocketFactory, type Submission } from './contracts';
+import { interactionKey, type CancellationTarget, type ClientView, type ConnectionState, type OperationAdmission, type SessionView, type SessionSummary, type Socket, type SocketFactory, type Submission } from './contracts';
 
 
 type SessionAdmission = (id: string, current: () => boolean) => Promise<false | OperationAdmission>;
@@ -64,6 +68,13 @@ export class AppServerClient {
   /** Application owners that must fence work of a replaced App Server authority. */
   onAuthorityRetired = (listener: () => void) => { this.authorityListeners.add(listener); return () => { this.authorityListeners.delete(listener); }; };
   private socket?: Socket;
+  readonly callbacks = new ServerCallbacks(async message => {
+    const socket = this.socket;
+    if (!socket || !this.initialized) throw new Error('Connection is unavailable. Response not sent.');
+    socket.send(JSON.stringify(message));
+  });
+  installHostToolHandler(namespace: string | undefined, name: string, handler: HostToolHandler) { return this.callbacks.installHandler(namespace, name, handler); }
+
   private initialized = false;
   private readonly sourceRepairs = new SourceRepairObserver({
     request: (...args) => this.request(...args),
@@ -99,7 +110,7 @@ export class AppServerClient {
   private acquiring = new Set<string>();
   private resubscribe = new Set<string>();
   private observationChains = new Map<string, ObservationChain<RuntimeClientEvent>>();
-  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v73').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
+  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v78').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
   private retainAppliedObservations() {
     for(const [id,chain] of this.observationChains) {
       const view=this.state.views[id];
@@ -136,7 +147,50 @@ export class AppServerClient {
     return !!this.state.views[id]?.snapshot && this.observationChains.get(id)?.phase === 'following'
       && this.lifecycles.controls(id, admission);
   }
+  private readonly statusNotifications = new ThreadStatusNotifications();
+  private statusGapQueued = false;
+  private readonly statusSnapshotCut = new WeakMap<SessionSummary,number>();
+  private readonly statusSnapshotEpoch = new WeakMap<ThreadStatusEntry,number>();
+  private threadStatusSince(threadId:string,cut:number,previous?:ThreadStatusEntry|null):ThreadStatusEntry|undefined {
+    return this.statusNotifications.latestSince(threadId,cut,previous,
+      this.state.sessions.find(row=>row.thread_id===threadId)?.thread_status,
+      ...Object.values(this.state.views).flatMap(view=>[view.threadStatus,view.summary?.thread_status]));
+  }
+  private mergeSummaryStatus(row: SessionSummary, previous?: ThreadStatusEntry|null): SessionSummary {
+    if(row.thread_status===undefined)return row;
+    const threadId=row.thread_id??row.thread_status?.threadId;
+    if (!threadId) return row;
+    const currentEpoch=this.statusRepairEpoch;
+    const freshPrevious=previous&&(this.statusSnapshotEpoch.get(previous)??0)===currentEpoch?previous:undefined;
+    const status = !row.thread_status ? this.threadStatusSince(threadId,this.statusSnapshotCut.get(row)??this.statusNotifications.checkpoint(),previous) : (this.statusSnapshotEpoch.get(row.thread_status)??0)!==currentEpoch
+      ? this.statusNotifications.latest(row.thread_status.threadId)??freshPrevious
+      : this.statusNotifications.snapshot(row.thread_status, freshPrevious);
+    if(!row.thread_status&&!status)this.revokeStatusProof(threadId,previous);
+    if (!status && row.thread_status && !this.statusGapQueued) {
+      const generation = this.state.generation;
+      this.statusGapQueued = true;
+      queueMicrotask(() => {
+        this.statusGapQueued = false;
+        if (this.current(generation)) void this.repairThreadStatuses();
+      });
+    }
+    return { ...row, thread_status: status };
+  }
   private publish(patch: Partial<ClientView>) {
+    // Preserve newer native status proofs when a catalog/snapshot response
+    // races a lightweight notification. Metadata has its own catalog fences.
+    if(patch.sessions)patch.sessions=patch.sessions.map(row=>{
+      const old=this.state.sessions.find(value=>value.id===row.id)?.thread_status;
+      return this.mergeSummaryStatus(row, old);
+    });
+    if(patch.views)patch.views=Object.fromEntries(Object.entries(patch.views).map(([id,view])=>{
+      const old=this.state.views[id];
+      const summary=view.summary?this.mergeSummaryStatus(view.summary,old?.summary?.thread_status):view.summary;
+      const threadId=view.target?.conversation_id??view.nodeConversationId;
+      const offered=(view.threadStatus?.threadId===threadId?view.threadStatus:undefined)??(summary?.thread_status&&summary.thread_status.threadId===threadId?summary.thread_status:undefined);
+      const threadStatus=offered?this.statusNotifications.snapshot(offered,old?.threadStatus?.threadId===threadId?old.threadStatus:undefined):undefined;
+      return [id,{...view,summary,threadStatus}];
+    }));
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
   }
@@ -166,10 +220,10 @@ export class AppServerClient {
         turnOutline: view.turnOutline && { ...view.turnOutline, loading: false },
         turnNavigation: view.turnNavigation && { intent: view.turnNavigation.intent },
       } : {}),
-      ...(changedNode ? { snapshot: undefined, publicationHeads: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
+      ...(changedNode ? { threadStatus: undefined, snapshot: undefined, publicationHeads: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(opening ? { modelIntent: undefined, cancellation: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(facts.attachmentIntent === 'released' ? { modelIntent: undefined, cancellation: undefined } : {}),
-      ...(attached && result ? { snapshot: undefined, publicationHeads: undefined, cursor: undefined, observationState: 'attached' as const, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
+      ...(attached && result ? { threadStatus: undefined, snapshot: undefined, publicationHeads: undefined, cursor: undefined, observationState: 'attached' as const, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
         history: readingHistory ? { ...readingHistory, loading: false, initialLoading: false, error: undefined } : undefined,
         turnOutline: undefined, turnNavigation: undefined } : {}),
     };
@@ -181,6 +235,7 @@ export class AppServerClient {
       return;
     }
     this.publish({ views: { ...this.state.views, [id]: projection } });
+    if (attached && result) void this.readThreadStatus(result.target.conversation_id).catch(() => {});
     if (previous?.epoch !== context.epoch) this.catalog.epochChanged(id);
     if (retiredClaim || facts.deletionCommitted && facts.deletionCommitted !== previous?.facts.deletionCommitted) this.retireAttachmentWork(id);
     if (facts.deletionCommitted && facts.deletionCommitted !== previous?.facts.deletionCommitted) {
@@ -207,9 +262,9 @@ export class AppServerClient {
         return found.conversation_id;
       },
       admit: current => this.admitSessionOperation(id, current),
-      attach: async (node_id, admission) => {
+      attach: async (node_id, conversation, admission) => {
         const generation = this.state.generation;
-        try { return await native({ method: 'session/attach', params: { session_id: id, node_id } }, 'attached', admission); }
+        try { return await native({ method: 'thread/resume', params: { threadId: conversation } }, 'attached', admission); }
         catch (error) {
           // A bounded receipt can be lost after commitment. Reconcile the
           // existing connection claim; never replay Attach to infer its outcome.
@@ -218,7 +273,7 @@ export class AppServerClient {
           if (!status.target || status.target.session_id !== id) throw error;
           const {node} = await this.request({method:'session/node',params:{session_id:id,node_id}},'node',undefined,admission.current);
           if (node.id !== node_id || node.conversation_id !== status.target.conversation_id) throw error;
-          return {type:'attached' as const,target:status.target,configuration_revision:status.configuration_revision,attachment_kind:'controller' as const,observation_source:'live' as const};
+          return {type:'attached' as const,target:status.target,configuration_revision:status.configuration_revision,attachment_kind:'writable' as const,observation_source:'live' as const};
         }
       },
       detach: async (target, admission) => { await native({ method: 'session/detach', params: { target } }, 'detached', admission); },
@@ -232,7 +287,7 @@ export class AppServerClient {
         this.resumeSeeds.delete(id);
         const resumable=previous&&previous.target.conversation_id===result.target.conversation_id
           &&previous.target.runtime_incarnation===result.target.runtime_incarnation;
-        let checkpoint:import('../../../protocol/app-server/v73').RuntimeClientCheckpoint;
+        let checkpoint:import('../../../protocol/app-server/v78').RuntimeClientCheckpoint;
         let observed:RuntimeClientSnapshot;
         if(resumable){checkpoint={...previous.checkpoint,cursor:previous.cursor};observed=previous.snapshot;}
         else {
@@ -328,19 +383,20 @@ export class AppServerClient {
     const detached = [...(this.state.detached ?? [])];
     if (this.state.uncertain.length || sessions.length) detached.push({ authority: this.state.endpoint!, authorityId: this.state.authorityId, operations: this.state.uncertain, sessions });
     this.lifecycles.replaceAuthority(); this.reading.retireAuthority(); this.catalog.retireAuthority();
-    this.publish({ authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
+    this.inputAcknowledgements.clear();
+    this.statusNotifications.clear();
+    this.publish({ threadStatusSynchronized:false, authorityId: undefined, views: {}, sessions: [], nextOffset: undefined, uncertain: [], interactionOperations: {}, detached,
       authorityRevision: (this.state.authorityRevision ?? 0) + 1 });
   }
   // Browser transport authority, not a durable server identity. Reconnect alone
   // can restore wanted Session intent; replacement must retire it after fencing.
   isSameAuthority(endpoint: string) { return !this.state.endpoint || new URL(endpoint).href === this.state.endpoint; }
-  async connect(endpoint: string, token: string, transition: 'reconnect' | 'replace-authority' = 'reconnect', committed?: () => void, deliveryToken?: string) {
+  async connect(endpoint: string, token: string, transition: 'reconnect' | 'replace-authority' = 'reconnect', committed?: () => void) {
     const url = new URL(endpoint);
     if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== '/') {
       throw new Error('Use a ws:// or wss:// endpoint at / with no credentials, query, or fragment.');
     }
-    if (!/^[A-Za-z0-9_-]{43,128}$/.test(token)) throw new Error('Enter the dedicated 43–128 character App Server transport token.');
-    if (deliveryToken && (!/^[A-Za-z0-9_-]{43,128}$/.test(deliveryToken) || deliveryToken === token)) throw new Error('Enter a separate 43–128 character Delivery Access token.');
+    if (!/^[A-Za-z0-9._~+/=-]{1,16384}$/.test(token)) throw new Error('Enter a valid App Server bearer token.');
     const replacing = !this.isSameAuthority(url.href);
     if (replacing && transition !== 'replace-authority') throw new Error('Different App Server authority requires explicit replacement.');
     if (replacing) this.admitAuthorityReplacement();
@@ -358,7 +414,7 @@ export class AppServerClient {
     // Ownership commits after close/retirement, before attempting the new transport.
     committed?.();
     try {
-      const socket = this.socketFactory(url.href, ['rustx.app-server.v73', `rustx-token.${token}`, ...(deliveryToken ? [`rustx-delivery-access.${deliveryToken}`] : [])]);
+      const socket = this.socketFactory(url.href, ['rustx.app-server.v78', credentialSubprotocol(token)]);
       this.socket = socket;
       await new Promise<void>((resolve, reject) => {
         const fail = (message: string) => {
@@ -376,12 +432,12 @@ export class AppServerClient {
         socket.onerror = () => { clearTimeout(timer); fail('WebSocket failed. Check endpoint and transport token.'); };
       });
       const hello = await this.request({ method: 'initialize', params: {
-        protocol_version: 73, client: { name: 'rustx-web-console', version: '0.1.0' },
+        protocol_version: 78, client: { name: 'rustx-web-console', version: '0.1.0' },
         presentation: { images: true, questionnaires: true, reviews: true },
       } }, 'initialized');
       if (!this.current(generation)) return;
-      if (!hello.authority_id || hello.protocol_version !== 73 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.single_writable_controller) {
-        throw new Error('Incompatible App Server protocol or capabilities. Protocol v73 with native multi-Session, headless interactions, and single-controller admission is required.');
+      if (!hello.authority_id || hello.protocol_version !== 78 || !hello.capabilities.multi_session || !hello.capabilities.headless_interactions || !hello.capabilities.shared_writable_clients) {
+        throw new Error('Incompatible App Server protocol or capabilities. Protocol v78 with native multi-Session, headless interactions, and shared writable admission is required.');
       }
       if (this.state.authorityId && this.state.authorityId !== hello.authority_id) {
         try { this.admitAuthorityReplacement(); }
@@ -399,12 +455,13 @@ export class AppServerClient {
       this.sourceRepairs.attribute(hello.authority_id);
       this.lifecycles.transport(generation, true);
       this.publish({ capabilities: hello.capabilities, connection: 'resynchronizing' });
+      const statusEpoch = this.statusRepairEpoch;
       await this.catalog.list();
       if (!this.current(generation)) return;
       // Transport readiness precedes runtime restoration. A cold attachment
       // may wait for MCP; an actual Send must already be able to arm Native's
       // submission deadline while that Session keeps its own connecting state.
-      this.publish({ connection: 'connected' });
+      this.publish({ connection: 'connected', threadStatusSynchronized: statusEpoch === this.statusRepairEpoch && !this.statusRepair });
       this.lifecycles.reconnect();
     } catch (error) {
       if (!this.current(generation)) return;
@@ -451,6 +508,7 @@ export class AppServerClient {
     this.retainAppliedObservations();
     this.socket = undefined;
     this.initialized = false;
+    this.callbacks.clear();
     this.sourceRepairs.disconnect();
     const uncertain = [...this.state.uncertain];
     uncertain.push(...this.pipeline.disconnect(this.state.generation));
@@ -458,12 +516,13 @@ export class AppServerClient {
     for (const chain of this.observationChains.values()) chain.retire(); this.observationChains.clear();
     this.refreshes.clear(); this.traces.disconnect(); this.reading.disconnect(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
     const operations = { ...this.state.interactionOperations };
-    for (const [key, operation] of Object.entries(operations)) if (operation.status === 'in-flight') delete operations[key];
+    for (const [key, operation] of Object.entries(operations)) operations[key] = {...operation,status:'uncertain'};
     for (const item of uncertain) if (item.interactionKey) operations[item.interactionKey] = { sessionId: item.sessionId!, status: 'uncertain' };
     this.lifecycles.transport(this.state.generation + 1, false);
-    this.publish({ connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
+    this.statusNotifications.clear();
+    this.publish({ sessions:this.state.sessions.map(row=>({...row,thread_status:undefined})), threadStatusSynchronized:false, connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view,modelIntent:undefined,history:view.history,turnOutline: undefined, turnNavigation: undefined, submissions: undefined, inboundRequests: undefined,
+        ...view,threadStatus:undefined,summary:view.summary&&{...view.summary,thread_status:undefined},modelIntent:undefined,history:view.history,turnOutline: undefined, turnNavigation: undefined, submissions: undefined, inboundRequests: undefined,
       }])),
     });
     if (oldSocket && !this.closedSockets.has(oldSocket)) {
@@ -491,9 +550,13 @@ export class AppServerClient {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       this.lose(generation); return;
     }
+    try { if (this.callbacks.receive(parsed)) { for(const [id,view] of Object.entries(this.state.views))if(view.snapshot&&this.lifecycles.observe(id))this.interactions.reconcile(id);this.publish({ views: { ...this.state.views } }); return; } } catch { this.lose(generation); return; }
     const value = parsed as Response | Notification;
     if (value.jsonrpc !== '2.0') { this.lose(generation); return; }
     if ('result' in value || 'error' in value || 'id' in value) { this.pipeline.response(value as Response, generation); return; }
+    if (value.method === 'command/exec/outputDelta' || value.method === 'fs/changed') return;
+    if(value.method==='thread/status/changed'){this.observeThreadStatus(value.params);return;}
+    if(value.method==='thread/status/resyncRequired'){void this.repairThreadStatuses();return;}
     if (value.method === 'configuration/changed') { this.configurations.changed(value.params.application, generation); return; }
     if (value.method === 'configuration/sourceRepairChanged') {
       // Source-scoped (Issue #464): it addresses a configuration source, never
@@ -632,7 +695,7 @@ export class AppServerClient {
     coldScope: (id, admitted) => this.cold.scope(id, admitted),
     readContent: (...args) => this.reads.readContent(...args),
   });
-  loadEarlierTrace(id: string) { return this.traces.loadEarlierTrace(id); }
+  loadEarlierTrace(id: string, gapBefore?: string) { return this.traces.loadEarlierTrace(id, false, gapBefore); }
   loadInitialTrace(id: string) { return this.traces.loadInitialTrace(id); }
   locateToolTrace(id: string, locator: TraceToolLocator) { return this.traces.locateToolTrace(id, locator); }
   returnToLatestTrace(id: string) { return this.traces.returnToLatestTrace(id); }
@@ -640,7 +703,7 @@ export class AppServerClient {
   loadTraceDetail(id: string, record: string) { return this.traces.loadTraceDetail(id, record); }
   projections(id: string, after?: string) { return this.traces.projections(id, after); }
   projectionDetail(id: string, checkpointId: string, offset?: number) { return this.traces.projectionDetail(id, checkpointId, offset); }
-  projectionDetailReader(detail: import('../../../protocol/app-server/v73').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
+  projectionDetailReader(detail: import('../../../protocol/app-server/v78').ProjectionDetail) { return this.traces.projectionDetailReader(detail); }
   private readonly controls = new SessionControls({
     request: (...args) => this.request(...args),
     state: () => this.state,
@@ -676,11 +739,12 @@ export class AppServerClient {
     modelRead: (target, current) => this.reads.modelRead(target, current),
   });
   prepareAgentModel(id: string, config: SessionModelConfig) { return this.models.prepareAgentModel(id, config); }
-  setAgentModel(id: string, config: SessionModelConfig) { return this.models.setAgentModel(id, config); }
+  setAgentModel(id: string, config: SessionModelConfig, recoverCarriedAuxiliary = false) { return this.models.setAgentModel(id, config, recoverCarriedAuxiliary); }
   repairAgentModel(id: string) { return this.models.repairAgentModel(id); }
   confirmAgentModel(id: string, config: SessionModelConfig, current: () => boolean) { return this.models.confirmAgentModel(id, config, current); }
   private readonly interactions = new Interactions({
     request: (...args) => this.request(...args),
+    callbacks: this.callbacks,
     state: () => this.state,
     current: generation => this.current(generation),
     setSession: (id, patch) => this.setSession(id, patch),
@@ -720,13 +784,93 @@ export class AppServerClient {
   loadInitialHistory(id: string) { return this.reading.loadInitialHistory(id); }
   loadEarlierPreview(id: string) { return this.cold.loadEarlierPreview(id); }
   private readonly catalog = new SessionCatalog({
-    request: (...args) => this.request(...args),
+    request: async (...args) => {
+      const epoch=this.statusRepairEpoch,cut=this.statusNotifications.checkpoint();
+      const result=await this.request(...args);
+      const response:MethodResult=result;
+      if(response.type==='sessions')for(const row of response.sessions){this.statusSnapshotCut.set(row,cut);if(row.thread_status)this.statusSnapshotEpoch.set(row.thread_status,epoch);}
+      if(response.type==='session_summary'){this.statusSnapshotCut.set(response.summary,cut);if(response.summary.thread_status)this.statusSnapshotEpoch.set(response.summary.thread_status,epoch);}
+      return result;
+    },
     state: () => this.state,
     current: generation => this.current(generation),
     epoch: id => this.lifecycles.epoch(id),
     publish: patch => this.publish(patch),
   });
-  listSessions(offset?: number, query?: string, current?: () => boolean) { return this.catalog.list(offset, query, current); }
+  async listSessions(offset?: number, query?: string, current?: () => boolean) {
+    await this.catalog.list(offset, query, current);
+  }
+  private observeThreadStatus(entry:ThreadStatusEntry) {
+    if(!this.statusNotifications.observe(entry))return;
+    this.statusSnapshotEpoch.set(entry,this.statusRepairEpoch);
+    let changed=false;
+    const sessions=this.state.sessions.map(row=>{
+      if(row.thread_id!==entry.threadId)return row;
+      const current=newerThreadStatus(row.thread_status??undefined,entry);if(current===row.thread_status)return row;
+      changed=true;return {...row,thread_status:current};
+    });
+    const views=Object.fromEntries(Object.entries(this.state.views).map(([id,view])=>{
+      const summary=view.summary&&view.summary.thread_id===entry.threadId?{...view.summary,thread_status:newerThreadStatus(view.summary.thread_status??undefined,entry)}:view.summary;
+      const threadStatus=(view.target?.conversation_id??view.nodeConversationId)===entry.threadId?newerThreadStatus(view.threadStatus,entry):view.threadStatus;
+      if(summary===view.summary&&threadStatus===view.threadStatus)return [id,view];
+      changed=true;return [id,{...view,summary,threadStatus}];
+    }));
+    if(changed)this.publish({sessions,views});
+  }
+  private async readThreadStatus(threadId:string,generation=this.state.generation) {
+    const epoch=this.statusRepairEpoch,cut=this.statusNotifications.checkpoint();
+    try {
+      const {thread}=await this.request({method:'thread/read',params:{threadId}},'thread');
+      if(thread.id!==threadId)throw new Error('Mismatched Thread status identity.');
+      if(this.current(generation)&&epoch===this.statusRepairEpoch)this.observeThreadStatus({threadId:thread.id,status:thread.status,revision:thread.statusRevision,runtimeIncarnation:thread.runtimeIncarnation});
+    } catch(error) {
+      // A failed read revokes only its starting evidence. A newer recovery
+      // notification can overtake that response on the same connection.
+      const recovery=this.threadStatusSince(threadId,cut);
+      if(this.current(generation)&&epoch===this.statusRepairEpoch&&!recovery)this.forgetThreadStatus(threadId);
+      throw error;
+    }
+  }
+  private revokeStatusProof(threadId:string,previous?:ThreadStatusEntry|null):void {
+    this.statusNotifications.forget(threadId,previous);
+    for(const view of Object.values(this.state.views)){
+      this.statusNotifications.forget(threadId,view.threadStatus);
+      this.statusNotifications.forget(threadId,view.summary?.thread_status);
+    }
+  }
+  private forgetThreadStatus(threadId:string):void {
+    this.revokeStatusProof(threadId,this.state.sessions.find(row=>row.thread_id===threadId)?.thread_status);
+    this.publish({sessions:this.state.sessions.map(row=>row.thread_status?.threadId===threadId?{...row,thread_status:undefined}:row),
+      views:Object.fromEntries(Object.entries(this.state.views).map(([id,view])=>[id,{...view,
+        threadStatus:view.threadStatus?.threadId===threadId?undefined:view.threadStatus,
+        summary:view.summary?.thread_status?.threadId===threadId?{...view.summary,thread_status:undefined}:view.summary,
+      }]))});
+  }
+  private statusRepair?:Promise<void>;
+  private statusRepairEpoch = 0;
+  private repairThreadStatuses():Promise<void> {
+    ++this.statusRepairEpoch;
+    this.statusNotifications.clear();
+    if(this.statusRepair)return this.statusRepair;
+    const generation=this.state.generation;
+    this.publish({threadStatusSynchronized:false});
+    const work=(async()=>{
+      let repaired: number;
+      do {
+        repaired = this.statusRepairEpoch;
+        const knownIds = () => [...this.state.sessions.map(row=>row.thread_id),...Object.values(this.state.views).flatMap(view=>[view.target?.conversation_id,view.nodeConversationId,view.summary?.thread_id])].filter((id):id is string=>!!id);
+        const ids = new Set(knownIds());
+        await this.catalog.list().catch(()=>{});
+        for(const id of knownIds())ids.add(id);
+        for(const id of ids) {
+          try {await this.readThreadStatus(id,generation);}
+          catch { /* The exact read owns proof revocation at its notification cut. */ }
+        }
+      } while(this.current(generation) && repaired !== this.statusRepairEpoch);
+      if(this.current(generation))this.publish({threadStatusSynchronized:true});
+    })().catch(()=>{}).finally(()=>{if(this.statusRepair===work)this.statusRepair=undefined;});
+    this.statusRepair=work;return work;
+  }
   readSessionSummary(id: string) { return this.catalog.readSummary(id); }
   renameSession(id: string, name: string) { return this.catalog.rename(id, name); }
   private exports = new SessionExportController(async id => {
@@ -769,6 +913,7 @@ export class AppServerClient {
   async attach(id: string, nodeId?: string, navigationCurrent: () => boolean = () => true, attached?: (target: AttachmentTarget) => void): Promise<void> {
     if (!navigationCurrent()) return;
     await this.lifecycles.command(id, { kind: 'open', node: nodeId, current: navigationCurrent, attached });
+
   }
   /** Explicit reconciliation/recovery only. Native bounded replay owns overlap. */
   refresh(id: string): Promise<void> {
@@ -853,6 +998,36 @@ export class AppServerClient {
     this.models.reconcile(id);
     this.controls.reconcileCancellation(id);
     this.interactions.reconcile(id);
+    this.repairInputReceipts(id);
+  }
+  private readonly inputRepairs = new Set<string>();
+  /** Application-owned settlement, retained only while its bounded uncertain
+   * operation exists. A repaired receipt is the same evidence as a direct ACK. */
+  private readonly inputAcknowledgements = new Map<string, {authorityId: string | undefined; conversationId: string; acknowledge: NonNullable<Parameters<AppServerClient['send']>[4]>}>();
+  private repairInputReceipts(id:string) {
+    const target=this.state.views[id]?.target,generation=this.state.generation;
+    if(!target)return;
+    for(const operation of this.state.uncertain) {
+      if(operation.sessionId!==id||operation.conversationId!==target.conversation_id||!operation.inputId||this.inputRepairs.has(operation.id))continue;
+      this.inputRepairs.add(operation.id);
+      void this.request({method:'inbound/submissionLookup',params:{target,inputId:operation.inputId}},'inbound_submission')
+        .then(({acceptance})=>{
+          if(acceptance&&this.current(generation)&&sameTarget(this.state.views[id]?.target,target)) {
+            const owner=this.inputAcknowledgements.get(operation.inputId!);
+            if(owner&&owner.authorityId===this.state.authorityId&&owner.conversationId===target.conversation_id) {
+              this.inputAcknowledgements.delete(operation.inputId!);
+              try { owner.acknowledge({type:'inbound_accepted',...acceptance}); }
+              catch(error) { console.error('App Server recovered acknowledgement observer failed',error); }
+            }
+            if(!this.current(generation)||!sameTarget(this.state.views[id]?.target,target))return;
+            const view=this.state.views[id],submissions=view.submissions??[];
+            // Acceptance proof takes over lost transport ownership atomically;
+            // only a native observation of the exact MessageId can release it.
+            this.publish({uncertain:this.state.uncertain.filter(value=>value.id!==operation.id),views:{...this.state.views,[id]:{...view,submissions:submissions.some(value=>value.messageId===acceptance.message_id)?submissions:[...submissions,{messageId:acceptance.message_id,submittedWhileRunning:false}]}}});
+            this.settleSubmissions(id);
+          }
+        }).catch(()=>{}).finally(()=>this.inputRepairs.delete(operation.id));
+    }
   }
   target(id: string) {
     return this.lifecycles.target(id);
@@ -863,7 +1038,7 @@ export class AppServerClient {
     const view = this.state.views[target.session_id];
     if (!sameTarget(view?.target, target) || view?.attachmentNodeId !== nodeId) throw new Error('Node does not own the current attachment.');
   }
-  async send(id: string, text: string, receipts: readonly UploadReceipt[] = [], delivery: 'send' | 'steer' = 'send', acknowledged?: (result: Extract<MethodResult, { type: 'inbound_accepted' }>) => void, dispatchCurrent?: () => boolean) {
+  async send(id: string, text: string, receipts: readonly UploadReceipt[] = [], delivery: 'send' | 'steer' = 'send', acknowledged?: (result: Extract<MethodResult, { type: 'inbound_accepted' | 'turn_input_accepted' }>) => void, dispatchCurrent?: () => boolean) {
     if (receipts.some(receipt => receipt.session_id !== id)) throw new Error('Invalid Session upload receipts.');
     const content: UserInputBlock[] = [
       ...receipts.map(receipt => ({ type: 'upload' as const, ...receipt })),
@@ -871,7 +1046,7 @@ export class AppServerClient {
     ];
     return this.sendContent(id, content, delivery, acknowledged, dispatchCurrent);
   }
-  async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send', acknowledged?: (result: Extract<MethodResult, { type: 'inbound_accepted' }>) => void, dispatchCurrent?: () => boolean) {
+  async sendContent(id: string, content: UserInputBlock[], delivery: 'send' | 'steer' = 'send', acknowledged?: (result: Extract<MethodResult, { type: 'inbound_accepted' | 'turn_input_accepted' }>) => void, dispatchCurrent?: () => boolean) {
     const generation = this.state.generation;
     const preparation = this.models.preparation(id);
     if (preparation) await preparation;
@@ -883,7 +1058,20 @@ export class AppServerClient {
     // admits a fresh attempt, a running one drains the mailbox at a safe boundary.
     // The request pipeline owns unresolved transport and its acknowledgement
     // handoff. No MessageId or queue identity is invented before acceptance.
-    return this.request({ method: delivery === 'steer' ? 'turn/steer' : 'turn/start', params: { target, content } }, 'inbound_accepted', acknowledged, dispatchCurrent);
+    const inputId=crypto.randomUUID();
+    if(acknowledged)this.inputAcknowledgements.set(inputId,{authorityId:this.state.authorityId,conversationId:target.conversation_id,acknowledge:acknowledged});
+    const acknowledge: typeof acknowledged = result => { this.inputAcknowledgements.delete(inputId); acknowledged?.(result); };
+    try {
+    if (delivery === 'steer') {
+      const expectedTurnId = this.state.views[id].snapshot?.attempt?.attempt_id;
+      if (!expectedTurnId) throw new Error('No exact active Turn is available.');
+      return await this.request({ method:'turn/steer', params:{target,content,expectedTurnId,inputId} }, 'turn_input_accepted', acknowledge, dispatchCurrent);
+    }
+    return await this.request({ method:'inbound/queue', params:{target,content,inputId} }, 'inbound_accepted', acknowledge, dispatchCurrent);
+    } finally {
+      // The pipeline publishes uncertainty before rejecting the request.
+      if(!this.state.uncertain.some(operation=>operation.inputId===inputId))this.inputAcknowledgements.delete(inputId);
+    }
   }
   private publishInbound(id: string, accepted?: Submission) {
     const view = this.state.views[id];
@@ -910,6 +1098,7 @@ export class AppServerClient {
   }
   /** Intent events are synchronously admitted and projected by the Session actor. */
   async release(id: string): Promise<void> {
+    this.auxiliary.clearDraft(id);
     this.models.release(id);
     await this.lifecycles.command(id, { kind: 'release', current: () => true });
   }
@@ -934,6 +1123,8 @@ export class AppServerClient {
   acknowledgeDiagnostic(id: string) {
     // This acknowledges only the notice. Uncertain interaction controls remain
     // disabled until native state resolves them; no RPC is emitted.
+    const inputId=this.state.uncertain.find(item=>item.id===id)?.inputId;
+    if(inputId)this.inputAcknowledgements.delete(inputId);
     this.publish({ uncertain: this.state.uncertain.filter(item => item.id !== id) });
   }
 }

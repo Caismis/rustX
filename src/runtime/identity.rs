@@ -432,7 +432,7 @@ id_type! {
     /// Identifies a skill bound to the runtime.
     ///
     /// M6 makes the standard Agent Skills `name` the logical skill identity:
-    /// a `SkillId` is the validated standard skill name, not an externally
+    /// a `SkillId` is the discovered skill name, not an externally
     /// assigned opaque string.
     SkillId
 }
@@ -440,10 +440,9 @@ id_type! {
 id_type! {
     /// Identifies an immutable skill version.
     ///
-    /// M6 derives `SkillVersionId` deterministically from the complete
-    /// accepted Skill package content (SHA-256 over the stable textual form
-    /// `sha256:<64 lowercase hex characters>`). Any package-content change
-    /// yields a new version id.
+    /// SHA-256 of the normalized validated frontmatter definition, under
+    /// `rustx-skill-definition-v1`, rendered as `sha256:<64 lowercase hex>`.
+    /// Bodies, assets, host paths and provenance do not enter this digest.
     SkillVersionId
 }
 

@@ -4575,17 +4575,6 @@ async fn mandatory_adapter_preflight_rejects_native_history_without_continuation
         ),
     ];
     for (protocol, native) in cases {
-        let history = vec![
-            user("M1", "history"),
-            MessageBlock::Assistant(AssistantMessageBlock {
-                id: MessageId::new("M2"),
-                content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
-                    text: Some("native".into()),
-                    provider_state: Some(native),
-                })],
-            }),
-            user("M3", "next"),
-        ];
         let model = fake_model(vec![vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(text_delta(0, "should not dispatch")),
@@ -4594,14 +4583,27 @@ async fn mandatory_adapter_preflight_rejects_native_history_without_continuation
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
         let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
-        let mut input = request("attempt-1", history.clone(), 128, &model);
-        input.model = fixture_session_model(
+        let selected_model = fixture_session_model(
             &[FixtureModel::text("fixture/native", protocol)],
             "fixture/native",
             &ScriptedAdapterFactory::new(model.clone()),
         )
         .snapshot()
         .unwrap();
+        let history = vec![
+            user("M1", "history"),
+            MessageBlock::Assistant(AssistantMessageBlock {
+                id: MessageId::new("M2"),
+                content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                    origin: selected_model.primary().invocation_config().replay_origin(),
+                    text: Some("native".into()),
+                    provider_state: Some(native),
+                })],
+            }),
+            user("M3", "next"),
+        ];
+        let mut input = request("attempt-1", history.clone(), 128, &model);
+        input.model = selected_model;
         let summarizer = FakeContextSummarizer::new(Vec::new());
         let result = common::durable_agent_result(
             AgentExecution::new(
@@ -4704,27 +4706,11 @@ async fn mandatory_preflight_validates_once_for_frozen_transient_retries() {
 #[tokio::test]
 async fn mandatory_preflight_rejects_retained_native_history_after_successful_compaction() {
     use rustx::message::types::{AssistantMessageBlock, ReasoningBlock};
-    let history = vec![
-        user("M1", "old"),
-        user("M2", "middle"),
-        MessageBlock::Assistant(AssistantMessageBlock {
-            id: MessageId::new("M3"),
-            content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
-                text: Some("native".into()),
-                provider_state: Some(ProviderContinuationState::OpenAiResponses(
-                    OpenAiResponsesContinuation::Stored {
-                        previous_response_id: "foreign-response".into(),
-                    },
-                )),
-            })],
-        }),
-    ];
     let model = fake_model(vec![]);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let tools = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(ToolRegistry::new(), &tools).await;
-    let mut input = request("attempt-1", history.clone(), 1, &model);
-    input.model = fixture_session_model(
+    let selected_model = fixture_session_model(
         &[FixtureModel::text(
             "fixture/native",
             rustx::model::ModelProtocol::AnthropicMessages,
@@ -4735,6 +4721,24 @@ async fn mandatory_preflight_rejects_retained_native_history_after_successful_co
     )
     .snapshot()
     .unwrap();
+    let history = vec![
+        user("M1", "old"),
+        user("M2", "middle"),
+        MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("M3"),
+            content: vec![AssistantContentBlock::Reasoning(ReasoningBlock {
+                origin: selected_model.primary().invocation_config().replay_origin(),
+                text: Some("native".into()),
+                provider_state: Some(ProviderContinuationState::OpenAiResponses(
+                    OpenAiResponsesContinuation::Stored {
+                        previous_response_id: "foreign-response".into(),
+                    },
+                )),
+            })],
+        }),
+    ];
+    let mut input = request("attempt-1", history.clone(), 1, &model);
+    input.model = selected_model;
     let summary = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
         "summary".into(),
     )]));
