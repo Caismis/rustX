@@ -844,11 +844,7 @@ fn inject_elevation_for_root_instance(
         let Some(object) = node.as_object_mut() else {
             return Ok(());
         };
-        if object.contains_key("const") || object.contains_key("enum") {
-            return Err(SchemaError::UndecorableElevationRoot(
-                "root const/enum cannot admit optional elevation_reason".into(),
-            ));
-        }
+        expand_root_finite_values(object, document)?;
         for keyword in ["allOf", "anyOf", "oneOf"] {
             // Take branches out so we can recurse without overlapping borrows.
             let Some(serde_json::Value::Array(mut branches)) = object.remove(keyword) else {
@@ -877,6 +873,67 @@ fn inject_elevation_for_root_instance(
         }
     }
     inject_elevation_into_object_schema(node)
+}
+
+/// Match finite business objects independently of optional metadata. Double
+/// negation preserves validation without introducing evaluated-property
+/// annotations that the original const/enum did not produce.
+fn expand_root_finite_values(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    document: &serde_json::Value,
+) -> Result<(), SchemaError> {
+    let draft4 = document
+        .get("$schema")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|draft| draft.contains("draft-04"));
+    for keyword in ["const", "enum"] {
+        if keyword == "const" && draft4 {
+            continue;
+        }
+        let Some(value) = object.remove(keyword) else {
+            continue;
+        };
+        let values = if keyword == "enum" {
+            value.as_array().expect("validated enum array").clone()
+        } else {
+            vec![value]
+        };
+        let mut alternatives = Vec::new();
+        for value in values {
+            let Some(fields) = value.as_object() else {
+                // Every root-applicable schema sees the object arguments.
+                continue;
+            };
+            if fields.contains_key(ELEVATION_REASON_FIELD) {
+                return Err(SchemaError::ElevationReasonCollision(
+                    ExecutionModeClaim::Property,
+                ));
+            }
+            let properties: serde_json::Map<_, _> = fields
+                .iter()
+                .map(|(name, value)| (name.clone(), serde_json::json!({"enum": [value]})))
+                .collect();
+            let mut exact = serde_json::json!({
+                "type": "object", "properties": properties, "additionalProperties": false,
+            });
+            if !fields.is_empty() {
+                exact["required"] = serde_json::json!(fields.keys().collect::<Vec<_>>());
+            }
+            alternatives.push(exact);
+        }
+        let matcher = if alternatives.is_empty() {
+            serde_json::json!({"not": {}})
+        } else {
+            serde_json::json!({"anyOf": alternatives})
+        };
+        object
+            .entry("allOf")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .expect("validated allOf array")
+            .push(serde_json::json!({"not": {"not": matcher}}));
+    }
+    Ok(())
 }
 
 fn inject_elevation_into_object_schema(schema: &mut serde_json::Value) -> Result<(), SchemaError> {
@@ -1440,6 +1497,90 @@ mod tests {
             execution_policy: policy,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
+        }
+    }
+
+    fn assert_finite_elevation_projection(
+        schema: &serde_json::Value,
+        values: &[serde_json::Value],
+    ) {
+        let compiled = compile_model_definition(&definition(
+            ToolExecutionPolicy::ForegroundOnly,
+            schema.clone(),
+        ))
+        .expect("finite business schemas must compile");
+        let mut candidates = Vec::new();
+        for value in values {
+            candidates.push(value.clone());
+            for reason in [json!(null), json!("Request permission")] {
+                let mut annotated = value.clone();
+                annotated[ELEVATION_REASON_FIELD] = reason;
+                candidates.push(annotated);
+            }
+        }
+        assert_elevation_projection_equivalence(schema, &compiled.input_schema, &candidates);
+    }
+
+    #[test]
+    fn workflow_finite_input_contracts_accept_optional_elevation() {
+        let renames: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/workflow/schema-rename.json"
+        ))
+        .unwrap();
+        for case in renames.as_array().unwrap() {
+            for (schema, input) in [("before", "oldInput"), ("after", "input")] {
+                assert_finite_elevation_projection(
+                    &case[schema],
+                    &[
+                        case[input].clone(),
+                        json!({}),
+                        json!({"before": "wrong"}),
+                        json!({"after": "wrong"}),
+                        json!({"before": "x", "extra": true}),
+                    ],
+                );
+            }
+        }
+        let collisions: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/workflow/schema-rename-collisions.json"
+        ))
+        .unwrap();
+        for case in collisions.as_array().unwrap() {
+            assert_finite_elevation_projection(
+                &case["schema"],
+                &[case["input"].clone(), json!({}), json!({"before": "x"})],
+            );
+        }
+    }
+
+    #[test]
+    fn finite_elevation_preserves_composition_drafts_and_evaluation_annotations() {
+        for constraints in [
+            json!({"const": {}}),
+            json!({"const": {"a": 1}}),
+            json!({"enum": [null, {"a": 1}, {"a": 2}]}),
+            json!({"enum": [null, 1]}),
+            json!({"const": {"a": 1}, "enum": [{"a": 2}]}),
+            json!({"const": {"a": 1}, "unevaluatedProperties": false}),
+            json!({"not": {"const": {"a": 1}}}),
+            json!({"if": {"const": {"a": 1}}, "then": false, "else": true}),
+            json!({"$defs": {"value": {"const": {"a": 1}}}, "$ref": "#/$defs/value"}),
+            json!({"$schema": "http://json-schema.org/draft-04/schema#", "const": {"a": 1}}),
+            json!({"$schema": "http://json-schema.org/draft-04/schema#", "enum": [{}, 1]}),
+            json!({"const": {"a": {"$ref": "#"}}}),
+        ] {
+            let mut schema = constraints;
+            schema["type"] = json!("object");
+            assert_finite_elevation_projection(
+                &schema,
+                &[
+                    json!({}),
+                    json!({"a": 1}),
+                    json!({"a": 2}),
+                    json!({"a": 1, "extra": true}),
+                    json!({"a": {"$ref": "#"}}),
+                ],
+            );
         }
     }
 

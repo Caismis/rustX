@@ -1844,17 +1844,12 @@ mod tests {
                         schema.clone(),
                     ),
                 );
-                if *label == "whole-instance assertion" {
-                    assert!(matches!(result, Err(ToolRegistryError::ModelSchema { .. })));
-                    assert!(registry.model_definitions().is_empty());
-                } else {
-                    result.unwrap_or_else(|error| panic!("{label} under {policy:?}: {error}"));
-                    assert_eq!(
-                        registry.model_definitions().len(),
-                        1,
-                        "{label} under {policy:?}"
-                    );
-                }
+                result.unwrap_or_else(|error| panic!("{label} under {policy:?}: {error}"));
+                assert_eq!(
+                    registry.model_definitions().len(),
+                    1,
+                    "{label} under {policy:?}"
+                );
             }
         }
     }
@@ -1867,8 +1862,8 @@ mod tests {
             ToolExecutionPolicy::ModelSelectable,
         ] {
             for schema in [
-                json!({"type": "object", "const": {}}),
-                json!({"type": "object", "enum": [{}]}),
+                json!({"type": "object", "const": {"elevation_reason": "business"}}),
+                json!({"type": "object", "enum": [{"elevation_reason": "business"}]}),
                 json!({"type": "object", "properties": {"elevation_reason": {}}}),
                 json!({"type": "object", "required": ["elevation_reason"]}),
                 json!({"type": "object", "$defs": {"rustx_business": {}}}),

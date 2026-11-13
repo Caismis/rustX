@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nodeLineageIdentity, recoveredThreadStatusReads, supersededHistoryReads, type RequestTiming } from './session-latency';
+import { nodeLineageIdentity, recoveredThreadStatusReads, supersededHistoryReads, type RequestTiming, type ThreadStatusTiming } from './session-latency';
 
 describe('node lineage identity narrowing', () => {
   it('records only complete string identities', () => {
@@ -181,6 +181,46 @@ describe('latency evidence for recovered native status capture', () => {
     ];
   }
 
+  const notification = (time: number, revision = '5'): Extract<ThreadStatusTiming, { entry: unknown }> => ({
+    kind: 'notification', connection: 1, time,
+    entry: { threadId: 'thread-a', revision, status: { type: 'idle' } },
+  });
+
+  it('accepts a newer same-connection notification after the failed read, preserving the refusal', () => {
+    const rows = evidence().slice(0, 1), original = structuredClone(rows);
+    for (const time of [21, 30]) {
+      const statuses = [notification(5, '4'), notification(time)];
+      expect(recoveredThreadStatusReads(rows, statuses)).toEqual([rows[0]]);
+      expect(recoveredThreadStatusReads(rows, statuses)[0]).toBe(rows[0]);
+    }
+    expect(rows).toEqual(original);
+  });
+
+  it('rejects stale, foreign, early and malformed notification evidence', () => {
+    const rows = evidence().slice(0, 1);
+    for (const event of [
+      notification(5), notification(10), notification(15), notification(20), notification(21, '4'), notification(21, '3'),
+      notification(21, 'invalid'), { ...notification(21), connection: 2 },
+      { ...notification(21), time: Number.NaN }, { ...notification(21), connection: 0 },
+      { ...notification(21), entry: { threadId: 'other', revision: '5', status: { type: 'idle' as const } } },
+      { ...notification(21), kind: 'snapshot' as const },
+    ] satisfies ThreadStatusTiming[]) {
+      expect(recoveredThreadStatusReads(rows, [notification(1, '4'), event])).toEqual([]);
+    }
+  });
+
+  it('uses snapshot floors and accepts new notification proof after a resync', () => {
+    const rows = evidence().slice(0, 1);
+    const snapshot: ThreadStatusTiming = { ...notification(5, '8'), kind: 'snapshot' };
+    expect(recoveredThreadStatusReads(rows, [snapshot, notification(21, '7')])).toEqual([]);
+    expect(recoveredThreadStatusReads(rows, [snapshot, notification(21, '9')])).toEqual([rows[0]]);
+    expect(recoveredThreadStatusReads(rows, [notification(15), { kind: 'resync', connection: 1, time: 16 }])).toEqual([]);
+    expect(recoveredThreadStatusReads(rows, [notification(21), { kind: 'resync', connection: 1, time: 15 }])).toEqual([rows[0]]);
+    expect(recoveredThreadStatusReads(rows, [notification(15), { kind: 'resync', connection: 1, time: 12 }])).toEqual([]);
+    expect(recoveredThreadStatusReads(rows, [notification(21), { kind: 'resync', connection: 2, time: 15 }])).toEqual([rows[0]]);
+    expect(recoveredThreadStatusReads(rows, [notification(21), { kind: 'resync', connection: 1, time: 5 }])).toEqual([rows[0]]);
+  });
+
   it('retains the original error and only accepts a later strong read of the same Thread and connection', () => {
     const rows = evidence(), original = structuredClone(rows);
     expect(recoveredThreadStatusReads([rows[1], rows[0]])).toEqual([rows[0]]);
@@ -206,6 +246,13 @@ describe('latency evidence for recovered native status capture', () => {
       const rows = evidence(); Object.assign(rows[1], interval);
       expect(recoveredThreadStatusReads(rows)).toEqual([]);
     }
+  });
+
+  it('requires a strong recovery read to finish within its connection epoch', () => {
+    const rows = evidence();
+    expect(recoveredThreadStatusReads(rows, [{ kind: 'resync', connection: 1, time: 25 }])).toEqual([]);
+    expect(recoveredThreadStatusReads(rows, [{ kind: 'resync', connection: 2, time: 25 }])).toEqual([rows[0]]);
+    expect(recoveredThreadStatusReads(rows, [{ kind: 'resync', connection: 1, time: 19 }])).toEqual([rows[0]]);
   });
 
   it.each([0, 1])('requires the exact connection and request Thread identity for row %i', index => {

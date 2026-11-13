@@ -2,11 +2,12 @@ import { test, expect, type Page, type TestInfo } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, closeSessionView } from './shell-actions';
-import { recoveredThreadStatusReads, supersededHistoryReads, type RequestTiming } from '../session-latency';
+import { recoveredThreadStatusReads, supersededHistoryReads, type RequestTiming, type ThreadStatusTiming } from '../session-latency';
+import type { ThreadStatusEntry } from '../../../protocol/app-server/v78';
 
 type HttpTiming = { path: string; start: number; end?: number };
 type Mark = { kind: 'click' | 'selected' | 'phase'; name: string; time: number };
-interface SessionLatency { marks: Mark[]; rpc: RequestTiming[]; http: HttpTiming[] }
+interface SessionLatency { marks: Mark[]; rpc: RequestTiming[]; http: HttpTiming[]; statuses: ThreadStatusTiming[] }
 declare global { interface Window { __sessionLatency: SessionLatency } }
 
 /** Observe the production client using one browser performance clock. No RPC
@@ -14,7 +15,7 @@ declare global { interface Window { __sessionLatency: SessionLatency } }
  * method/identity/path/timing metadata is recorded; conversation content stays private. */
 async function observeLatency(page: Page) {
   await page.addInitScript(() => {
-    const evidence: SessionLatency = { marks: [], rpc: [], http: [] };
+    const evidence: SessionLatency = { marks: [], rpc: [], http: [], statuses: [] };
     window.__sessionLatency = evidence;
     const NativeSocket = window.WebSocket;
     const lineage = new Map<string, { sessionId: string; nodeId: string }>();
@@ -42,15 +43,28 @@ async function observeLatency(page: Page) {
         this.addEventListener('message', event => {
           const reply = JSON.parse(event.data) as {
             id?: unknown;
+            method?: string;
+            params?: ThreadStatusEntry;
             error?: { data?: { kind?: string } };
             result?: {
               type?: string;
               target?: Record<string, unknown>;
-              thread?: { id?: string };
+              thread?: { id: string; status: ThreadStatusEntry['status']; statusRevision: string; runtimeIncarnation?: string | null };
+              sessions?: { thread_status?: ThreadStatusEntry | null }[];
+              summary?: { thread_status?: ThreadStatusEntry | null };
               node?: { id?: string; conversation_id?: string };
               session?: { id?: string; active_node?: string; active_conversation_id?: string };
             };
           };
+          const statusTime = { connection: this.connection, time: performance.now() };
+          if (reply.method === 'thread/status/resyncRequired') evidence.statuses.push({ ...statusTime, kind: 'resync' });
+          if (reply.method === 'thread/status/changed' && reply.params) evidence.statuses.push({ ...statusTime, kind: 'notification', entry: reply.params });
+          const snapshots = [...(reply.result?.sessions ?? []).map(row => row.thread_status), reply.result?.summary?.thread_status];
+          if (reply.result?.thread) {
+            const thread = reply.result.thread;
+            snapshots.push({ threadId: thread.id, status: thread.status, revision: thread.statusRevision, runtimeIncarnation: thread.runtimeIncarnation });
+          }
+          for (const entry of snapshots) if (entry) evidence.statuses.push({ ...statusTime, kind: 'snapshot', entry });
           const row = this.calls.get(reply.id);
           if (reply.result?.type === 'session' || reply.result?.type === 'session_transition') {
             const session = reply.result.session;
@@ -137,9 +151,9 @@ async function report(page: Page, info: TestInfo) {
     expect(attach).toMatchObject({ sessionId: expect.any(String), nodeId: expect.any(String), target: expect.any(String) });
   }
   // Preserve every rejection. A cold preview needs its exact live handoff;
-  // unavailable status capture needs a new strong read proving recovery.
+  // unavailable status capture needs a strong read or newer native notification.
   // Unrelated reads and every required operation must still succeed.
-  const recovered = new Set([...supersededHistoryReads(evidence.rpc), ...recoveredThreadStatusReads(evidence.rpc)]);
+  const recovered = new Set([...supersededHistoryReads(evidence.rpc), ...recoveredThreadStatusReads(evidence.rpc, evidence.statuses)]);
   expect(evidence.rpc.filter(row => row.error !== undefined && !recovered.has(row))).toEqual([]);
   return evidence;
 }

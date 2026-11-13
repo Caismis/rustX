@@ -1,3 +1,11 @@
+import { ThreadStatusNotifications } from '../../protocol/app-server/thread-status';
+import type { ThreadStatusEntry } from '../../protocol/app-server/v78';
+
+export type ThreadStatusTiming = { connection: number; time: number } & (
+  | { kind: 'notification' | 'snapshot'; entry: ThreadStatusEntry }
+  | { kind: 'resync' }
+);
+
 export interface RequestTiming {
   method: string;
   start: number;
@@ -50,14 +58,31 @@ export function supersededHistoryReads(rpc: readonly RequestTiming[]): RequestTi
       && history.start < attach.end && attach.start < history.end));
 }
 
-/** Strong status reads can fail while native status capture is busy. Require
- * a new successful strong read of that exact Thread on the same connection;
- * unrelated reads, earlier/overlapping reads and reconnects prove no recovery. */
-export function recoveredThreadStatusReads(rpc: readonly RequestTiming[]): RequestTiming[] {
+/** Require new evidence after a refused status read completes: a strong read
+ * or a newer notification. Earlier notifications may have been revoked by a
+ * concurrent nullable catalog snapshot, so they cannot certify recovery here.
+ * Replay the production revision fence to reject stale notifications. */
+export function recoveredThreadStatusReads(rpc: readonly RequestTiming[], statuses: readonly ThreadStatusTiming[] = []): RequestTiming[] {
   const recovered = rpc.filter((row): row is CompletedTiming => completed(row)
     && row.method === 'thread/read' && row.error === undefined && row.resultType === 'thread'
     && !!row.threadId && row.resultThreadId === row.threadId);
+  const notifications: ThreadStatusTiming[] = [];
+  const authorities = new Map<number, ThreadStatusNotifications>();
+  const ordered = statuses.filter(event => Number.isSafeInteger(event.connection) && event.connection > 0
+    && Number.isFinite(event.time) && event.time >= 0).sort((a, b) => a.time - b.time);
+  for (const event of ordered) {
+    const authority = authorities.get(event.connection) ?? new ThreadStatusNotifications();
+    authorities.set(event.connection, authority);
+    if (event.kind === 'resync') { authority.clear(); continue; }
+    if (!event.entry.threadId || !/^\d+$/.test(event.entry.revision)) continue;
+    if (event.kind === 'snapshot') authority.snapshot(event.entry);
+    else if (authority.observe(event.entry)) notifications.push(event);
+  }
   return rpc.filter(row => completed(row) && row.method === 'thread/read' && row.error === 'observation_unavailable'
     && row.connection !== undefined && Number.isSafeInteger(row.connection) && row.connection > 0 && !!row.threadId
-    && recovered.some(read => read.connection === row.connection && read.threadId === row.threadId && read.start >= row.end));
+    && (recovered.some(read => read.connection === row.connection && read.threadId === row.threadId && read.start >= row.end
+      && !ordered.some(gap => gap.kind === 'resync' && gap.connection === read.connection
+        && gap.time >= read.start && gap.time <= read.end))
+      || notifications.some(event => event.kind === 'notification' && event.connection === row.connection
+        && event.entry.threadId === row.threadId && event.time > row.end)));
 }
