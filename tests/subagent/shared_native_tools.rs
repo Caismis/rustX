@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::os::unix::fs::MetadataExt;
 
 fn tool_reply(name: &str, arguments: &Value) -> crate::common::FixtureReply {
+    let arguments = crate::common::tool_call_envelope(arguments.clone());
     let chunk = json!({"id":"shared-tools", "object":"chat.completion.chunk",
         "created":1, "model":"subagent-model", "choices":[{"index":0,
         "delta":{"role":"assistant", "tool_calls":[{"index":0,

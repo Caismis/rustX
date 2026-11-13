@@ -1315,7 +1315,7 @@ pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::Model
 }
 
 /// Asserts one provider tool-parameter payload carries the compiled
-/// `execution_mode` selector verbatim next to the untouched business schema.
+/// `execution_mode` selector outside the required business `arguments`.
 ///
 /// Provider adapters are policy-unaware: they translate the already-compiled
 /// [`rustx::tools::types::ModelToolDefinition`] and never inject, rename, or
@@ -1342,13 +1342,29 @@ pub fn assert_compiled_execution_mode_schema(
         "the selector is required: {parameters}"
     );
     assert!(
-        required.contains(&serde_json::json!(business_property)),
-        "the tool's own required arguments survive decoration: {parameters}"
+        required.contains(&serde_json::json!("arguments")),
+        "the business object is required: {parameters}"
     );
-    assert_eq!(
-        parameters["properties"][business_property]["type"],
-        serde_json::json!("string"),
-        "the business schema reaches the provider untouched: {parameters}"
+    let validator = jsonschema::Validator::new(parameters).expect("compiled provider schema");
+    let mut business = serde_json::json!({});
+    business[business_property] = serde_json::json!("printf actual");
+    for mode in ["foreground", "background"] {
+        assert!(validator.is_valid(&serde_json::json!({
+            "arguments": business, "execution_mode": mode,
+        })));
+    }
+    assert!(
+        !validator.is_valid(&serde_json::json!({
+            "arguments": {}, "execution_mode": "foreground",
+        })),
+        "the original business property remains required"
+    );
+    business[business_property] = serde_json::json!(7);
+    assert!(
+        !validator.is_valid(&serde_json::json!({
+            "arguments": business, "execution_mode": "foreground",
+        })),
+        "the original business property remains a string"
     );
     assert!(
         !parameters.to_string().contains("__rustx_execution"),

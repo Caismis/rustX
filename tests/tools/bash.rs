@@ -1412,14 +1412,14 @@ async fn model_selectable_bash_rejects_unusable_execution_mode() {
 
     let fixture = crate::common::model_selectable_native_fixture();
     let bash = selectable_bash(&fixture);
-    let reject = |arguments: serde_json::Value| {
+    let reject = |envelope: serde_json::Value| {
         let outcome = fixture
             .registry
             .preflight(&ToolCall {
                 id: ToolCallId::new("call-bash-selectable"),
                 tool_id: bash.id.clone(),
                 name: "bash".to_owned(),
-                arguments: crate::common::tool_call_envelope(arguments),
+                arguments: envelope,
             })
             .expect("preflight outcome");
         let PreflightOutcome::Rejected { error, .. } = outcome else {
@@ -1428,19 +1428,22 @@ async fn model_selectable_bash_rejects_unusable_execution_mode() {
         error
     };
 
-    let missing = reject(serde_json::json!({"command": "echo hi"}));
+    let missing = reject(serde_json::json!({"arguments": {"command": "echo hi"}}));
     assert!(
         missing.contains("\"execution_mode\": \"foreground\"")
             && missing.contains("\"execution_mode\": \"background\""),
         "the model is told exactly how to retry: {missing}"
     );
-    let invalid = reject(serde_json::json!({"execution_mode": "detached", "command": "echo hi"}));
+    let invalid = reject(
+        serde_json::json!({"execution_mode": "detached", "arguments": {"command": "echo hi"}}),
+    );
     assert!(
         invalid.contains("execution_mode") && invalid.contains("detached"),
         "the invalid value is named: {invalid}"
     );
-    let retired =
-        reject(serde_json::json!({"__rustx_execution": "background", "command": "echo hi"}));
+    let retired = reject(
+        serde_json::json!({"__rustx_execution": "background", "arguments": {"command": "echo hi"}}),
+    );
     assert!(
         retired.contains("__rustx_"),
         "the retired selector is a forged reserved argument, not a mode: {retired}"
