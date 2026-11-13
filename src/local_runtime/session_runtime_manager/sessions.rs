@@ -262,7 +262,7 @@ impl SessionRuntimeManager {
         let mut application = self.applications.lock();
         application.register_session_scope(result.session.id.to_string(), &capture);
         self.applications.notify(&application);
-        crate::tools::workspace_python::schedule(workspace);
+        crate::tools::workspace_python::schedule(&workspace);
         Ok(result)
     }
 

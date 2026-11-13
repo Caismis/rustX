@@ -1466,7 +1466,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             assert!(!requests[0]["body"].to_string().contains(if *identity == "a" { "host-b-only" } else { "host-a-only" }));
             assert_eq!(std::fs::read(user.root.path().join("a/host-effect")).unwrap(), b"x");
             let projected = checkpoint_state(&clients[index], &targets[index]).await;
-            assert!(projected["messages"].to_string().contains(&format!("{identity}:unset")));
+            assert!(projected["messages"].to_string().contains(&format!("{identity}:fake-{identity}")));
             assert!(projected["messages"].to_string().contains(user.root.path().join("a").to_str().unwrap()));
         }
         let mut selections = Vec::new();
@@ -1525,7 +1525,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         let cold = attach(&recovered, targets[1].session_id.clone(), 3).await;
         let after = checkpoint_state(&recovered, &cold).await;
         assert_eq!(after["model"]["configured"], serde_json::to_value(&selections[1]).unwrap(), "the active selection was durable before the process crash");
-        assert!(after["messages"].to_string().contains("b:unset"));
+        assert!(after["messages"].to_string().contains("b:fake-b"));
         assert!(!after["messages"].to_string().contains("result-b"));
         assert_eq!(std::fs::read(users[1].1.root.path().join("a/host-effect")).unwrap(), b"x");
         assert_eq!(pb.requests().await.len(), 2);

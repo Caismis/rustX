@@ -62,6 +62,8 @@ it('registration admits the authorized directory rather than the location id', a
   try {
     const shared = fixture();
     const host = new LocalWorkspaceHost({ ...shared.config, nativeFilesystem: 'shared' });
+    const [alpha] = (await host.listWorkspaces()).workspaces;
+    await host.removeWorkspace(await host.listWorkspaces(), alpha.id);
     await host.adoptWorkspace(await host.listWorkspaces(), 'a');
     const admit = join(home, 'rustx', 'runtime', 'workspace-python', 'admit');
     const files = readdirSync(admit);
@@ -69,6 +71,8 @@ it('registration admits the authorized directory rather than the location id', a
     expect(readFileSync(join(admit, files[0]), 'utf8').trim()).toBe(shared.a);
     const plain = fixture();
     const before = readdirSync(admit);
+    const [plainAlpha] = (await plain.host.listWorkspaces()).workspaces;
+    await plain.host.removeWorkspace(await plain.host.listWorkspaces(), plainAlpha.id);
     await plain.host.adoptWorkspace(await plain.host.listWorkspaces(), 'a');
     expect(readdirSync(admit)).toEqual(before);
     expect(existsSync(admit)).toBe(true);

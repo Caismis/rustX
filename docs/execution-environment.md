@@ -53,6 +53,9 @@ ordinary meaning.
   checked against both inputs before it is ready. The readiness identity is
   snapshotted after the environment exists and before those probes. A pin,
   project, or interpreter change during a probe does not publish Ready.
+  Unreadable version pins are conflicts, and exact pins retain prerelease
+  and postrelease qualifiers. Changes to `pyvenv.cfg`, environment-root
+  identity, interpreter targets or permissions invalidate cached readiness.
   Neither root file is edited.
 - When the environment is not ready, `python` and `python3` resolve to a
   guard that exits 127. The guard is a private directory ahead of the host
@@ -98,9 +101,10 @@ supervisor that spawned it.
 The lock coordinates rustX processes on one machine. Shutdown stops waiting
 for it. It does not stop an unrelated program from changing `.venv`, and it
 is not an NFS lock. Readiness
-identity is the device, inode, mtime, and length of the Workspace root, its
-version files, and `.venv/bin/python` plus `python3`. A replacement that keeps
-the same length and timestamp can remain cached until another input changes.
+identity tracks the Workspace root and the device, inode, mtime, length and
+permissions of its version files, `.venv`, `pyvenv.cfg`, and the resolved
+`.venv/bin/python` plus `python3` targets. An in-place edit that preserves all
+tracked metadata can remain cached until another input changes.
 One process admits at most two uv or interpreter probes at a time; that cap
 does not span processes. One Workspace keeps a single preparation task until
 it finishes, and a process retains a bounded number of finished tasks, probe

@@ -46,16 +46,25 @@ struct FileStamp {
     mtime: i64,
     mtime_nsec: i64,
     len: u64,
+    mode: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PathStamp {
+    entry: FileStamp,
+    target: Option<FileStamp>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Generation {
     root_dev: u64,
     root_ino: u64,
-    pin_file: Option<FileStamp>,
-    project_file: Option<FileStamp>,
-    python: Option<FileStamp>,
-    python3: Option<FileStamp>,
+    pin_file: Option<PathStamp>,
+    project_file: Option<PathStamp>,
+    venv: Option<FileStamp>,
+    config: Option<PathStamp>,
+    python: Option<PathStamp>,
+    python3: Option<PathStamp>,
 }
 
 #[derive(Clone, Debug)]
@@ -242,7 +251,7 @@ impl Owner {
             _ => {}
         }
         if self.schedules && std::ptr::eq(self, Arc::as_ptr(global())) {
-            global().schedule_on(canonical);
+            global().schedule_on(&canonical);
         }
         let diagnostic = record
             .map(|record| record.diagnostic())
@@ -251,14 +260,15 @@ impl Owner {
         guarded(&diagnostic)
     }
 
-    fn schedule_on(self: &Arc<Self>, root: PathBuf) {
+    fn schedule_on(self: &Arc<Self>, root: &Path) {
+        const MAX_LIVE_TASKS: usize = 64;
         if !self.schedules {
             return;
         }
         let Some(handle) = tokio::runtime::Handle::try_current().ok() else {
             return;
         };
-        let Ok(canonical) = std::fs::canonicalize(&root) else {
+        let Ok(canonical) = std::fs::canonicalize(root) else {
             return;
         };
         {
@@ -269,7 +279,6 @@ impl Owner {
         }
         let mut tasks = self.tasks.lock().expect("workspace python tasks");
         tasks.retain(|task| !task.is_finished());
-        const MAX_LIVE_TASKS: usize = 64;
         if tasks.len() >= MAX_LIVE_TASKS {
             drop(tasks);
             self.admitted
@@ -294,14 +303,7 @@ impl Owner {
             self.unavailable(
                 &root,
                 "the workspace directory is unavailable",
-                Generation {
-                    root_dev: 0,
-                    root_ino: 0,
-                    pin_file: None,
-                    project_file: None,
-                    python: None,
-                    python3: None,
-                },
+                generation_of(&root),
             );
             return;
         };
@@ -356,6 +358,13 @@ impl Owner {
             drop(lock);
             return;
         }
+        let pin = match pin {
+            Ok(pin) => pin,
+            Err(message) => {
+                self.conflict(root, message, generation);
+                return;
+            }
+        };
         if matches!(requires, Requires::Invalid) {
             self.conflict(root, "requires-python cannot be parsed", generation.clone());
             drop(lock);
@@ -647,7 +656,7 @@ impl Owner {
                     program.display().to_string(),
                     "-I".to_owned(),
                     "-c".to_owned(),
-                    "import sys; print(sys.prefix); print(sys.base_prefix); print('%d.%d.%d' % sys.version_info[:3]); print(sys.implementation.name)".to_owned(),
+                    "import platform, sys; print(sys.prefix); print(sys.base_prefix); print(platform.python_version()); print(sys.implementation.name)".to_owned(),
                 ],
                 host,
                 PROBE_TIMEOUT,
@@ -742,8 +751,8 @@ impl Owner {
     }
 
     fn bound_records(&self) {
-        let mut records = self.records.lock().expect("workspace python records");
         const MAX_RECORDS: usize = 128;
+        let mut records = self.records.lock().expect("workspace python records");
         if records.len() <= MAX_RECORDS {
             return;
         }
@@ -915,7 +924,7 @@ pub(crate) fn observe(root: &Path) -> PythonSelection {
 }
 
 /// Schedules preparation without waiting. Session creation and registration use this.
-pub(crate) fn schedule(root: PathBuf) {
+pub(crate) fn schedule(root: &Path) {
     global().schedule_on(root);
 }
 
@@ -1014,7 +1023,7 @@ fn scan_admit(directory: &Path) {
         };
         let location = text.trim();
         if Path::new(location).is_absolute() {
-            schedule(PathBuf::from(location));
+            schedule(Path::new(location));
         }
         let _ = std::fs::remove_file(path);
     }
@@ -1055,20 +1064,38 @@ fn generation_of(root: &Path) -> Generation {
         root_ino: meta.as_ref().map_or(0, MetadataExt::ino),
         pin_file: stamp(&root.join(".python-version")),
         project_file: stamp(&root.join("pyproject.toml")),
+        venv: std::fs::symlink_metadata(root.join(".venv"))
+            .ok()
+            .as_ref()
+            .map(file_stamp),
+        config: stamp(&root.join(".venv/pyvenv.cfg")),
         python: stamp(&root.join(".venv/bin/python")),
         python3: stamp(&root.join(".venv/bin/python3")),
     }
 }
 
-fn stamp(path: &Path) -> Option<FileStamp> {
+fn stamp(path: &Path) -> Option<PathStamp> {
     let meta = std::fs::symlink_metadata(path).ok()?;
-    Some(FileStamp {
+    let target = if meta.is_symlink() {
+        std::fs::metadata(path).ok().as_ref().map(file_stamp)
+    } else {
+        None
+    };
+    Some(PathStamp {
+        entry: file_stamp(&meta),
+        target,
+    })
+}
+
+fn file_stamp(meta: &std::fs::Metadata) -> FileStamp {
+    FileStamp {
         dev: meta.dev(),
         ino: meta.ino(),
         mtime: meta.mtime(),
         mtime_nsec: meta.mtime_nsec(),
         len: meta.len(),
-    })
+        mode: meta.mode(),
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1096,25 +1123,41 @@ enum Requires {
     Invalid,
 }
 
-fn read_pin(root: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(root.join(".python-version")).ok()?;
+fn read_pin(root: &Path) -> Result<Option<String>, &'static str> {
+    let Some(text) = read_optional_file(&root.join(".python-version"))
+        .map_err(|()| ".python-version cannot be read")?
+    else {
+        return Ok(None);
+    };
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        return Some(line.to_owned());
+        return Ok(Some(line.to_owned()));
     }
-    None
+    Ok(None)
+}
+
+fn read_optional_file(path: &Path) -> Result<Option<String>, ()> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && std::fs::symlink_metadata(path)
+                    .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            Ok(None)
+        }
+        Err(_) => Err(()),
+    }
 }
 
 fn read_requires(root: &Path) -> Requires {
-    let path = root.join("pyproject.toml");
-    if !path.exists() {
-        return Requires::Absent;
-    }
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Requires::Invalid;
+    let text = match read_optional_file(&root.join("pyproject.toml")) {
+        Ok(Some(text)) => text,
+        Ok(None) => return Requires::Absent,
+        Err(()) => return Requires::Invalid,
     };
     let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
         return Requires::Invalid;
@@ -1221,8 +1264,7 @@ fn create_private_directory(parents: &[PathBuf], prefix: &str) -> Option<PathBuf
 fn monotonic_nanos() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0)
+        .map_or(0, |duration| duration.as_nanos())
 }
 
 fn uv_can_create(text: &str) -> bool {
@@ -1347,7 +1389,7 @@ fn request_satisfied(
     version: &Version,
     implementation: &str,
 ) -> Result<(), &'static str> {
-    let request = parse_request(pin).map_err(|_| ".python-version cannot be verified")?;
+    let request = parse_request(pin).map_err(|()| ".python-version cannot be verified")?;
     match request {
         ParsedRequest::Spec {
             implementation: required,
@@ -1378,8 +1420,10 @@ fn request_satisfied(
                     return Err("Workspace Python does not satisfy .python-version");
                 }
             }
-            let matches = if requested.release().len() >= 3 {
-                requested.release() == version.release()
+            let matches = if requested.release().len() >= 3
+                || requested != Version::new(requested.release())
+            {
+                requested == *version
             } else {
                 version.release().starts_with(requested.release())
             };
@@ -1515,10 +1559,7 @@ fn install_process_guard(parents: &[PathBuf], diagnostic: &str) -> Option<PathBu
             continue;
         }
         for _ in 0..4 {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0);
+            let nanos = monotonic_nanos();
             let directory =
                 parent.join(format!("rustx-python-guard-{}-{nanos}", std::process::id()));
             if claim_fresh_directory(&directory).is_none() {
@@ -1565,6 +1606,16 @@ fn install_guard(directory: &Path, diagnostic: &str) -> Option<PathBuf> {
             Err(_) => return None,
         };
         file.write_all(script.as_bytes()).ok()?;
+    }
+    for name in ["python", "python3"] {
+        let path = directory.join(name);
+        let meta = std::fs::metadata(&path).ok()?;
+        if !meta.is_file()
+            || meta.permissions().mode() & 0o111 == 0
+            || std::fs::read(&path).ok()?.as_slice() != script.as_bytes()
+        {
+            return None;
+        }
     }
     Some(directory.to_path_buf())
 }
@@ -1863,6 +1914,11 @@ mod tests {
         assert!(!pin_matches("jython-3.12", &actual));
         assert!(!pin_matches("3.11", &actual));
         assert!(!pin_matches("3.12.4", &actual));
+        assert!(!pin_matches("3.12.3rc1", &actual));
+        assert!(!pin_matches("3.12.3.post1", &actual));
+        let prerelease = Version::from_str("3.12.3rc1").expect("prerelease");
+        assert!(pin_matches("3.12.3rc1", &prerelease));
+        assert!(!pin_matches("3.12.3", &prerelease));
         assert!(exact_pin_conflicts("3.11.0", ">=3.12"));
         assert!(!exact_pin_conflicts("3.12", ">=3.12.1"));
         assert!(!exact_pin_conflicts(
@@ -2364,6 +2420,91 @@ mod tests {
         assert!(!selection.path_prefix.is_empty());
     }
 
+    #[tokio::test]
+    async fn environment_structure_changes_invalidate_readiness() {
+        for change in [
+            "config",
+            "root",
+            "base-interpreter",
+            "permissions",
+            "pin-target",
+        ] {
+            let root = workspace();
+            let root_path = std::fs::canonicalize(root.path()).expect("canonical");
+            let target = root.path().join(".venv");
+            let interpreter = root.path().join("base-python");
+            write_executable(&interpreter, "#!/bin/sh\nexit 0\n");
+            write_linked_venv(&target, &interpreter);
+            let version = root.path().join("version");
+            std::fs::write(&version, "3.12\n").expect("version");
+            std::os::unix::fs::symlink(&version, root.path().join(".python-version"))
+                .expect("pin link");
+            let owner = Owner::for_test(Arc::new(Scripted::new("0.10.2")), None, None, None);
+            owner.prepare(root_path.clone()).await;
+            assert!(owner.observe(&root_path).virtual_env.is_some());
+            match change {
+                "config" => std::fs::remove_file(target.join("pyvenv.cfg")).expect("remove config"),
+                "root" => {
+                    let moved = root.path().join("moved-venv");
+                    std::fs::rename(&target, &moved).expect("move environment");
+                    std::os::unix::fs::symlink(&moved, &target).expect("link environment");
+                }
+                "base-interpreter" => {
+                    std::fs::remove_file(&interpreter).expect("remove interpreter");
+                    write_executable(&interpreter, "#!/bin/sh\necho replaced\nexit 0\n");
+                }
+                "permissions" => {
+                    std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o644))
+                        .expect("interpreter permissions");
+                }
+                "pin-target" => std::fs::write(&version, "3.11\n").expect("changed pin target"),
+                _ => unreachable!(),
+            }
+            assert!(
+                owner.observe(&root_path).virtual_env.is_none(),
+                "{change} left stale readiness"
+            );
+            owner.prepare(root_path.clone()).await;
+            if matches!(change, "config" | "root" | "pin-target") {
+                assert!(owner.observe(&root_path).virtual_env.is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn unreadable_pin_is_a_conflict_without_probing() {
+        for (filename, invalid) in [
+            (".python-version", "bytes"),
+            (".python-version", "directory"),
+            (".python-version", "dangling-link"),
+            ("pyproject.toml", "bytes"),
+            ("pyproject.toml", "directory"),
+            ("pyproject.toml", "dangling-link"),
+        ] {
+            let root = workspace();
+            let root_path = std::fs::canonicalize(root.path()).expect("canonical");
+            write_venv(&root.path().join(".venv"));
+            let pin = root.path().join(filename);
+            match invalid {
+                "bytes" => std::fs::write(&pin, [0xff]).expect("invalid UTF-8 pin"),
+                "directory" => std::fs::create_dir(&pin).expect("directory pin"),
+                "dangling-link" => {
+                    std::os::unix::fs::symlink(root.path().join("missing"), &pin)
+                        .expect("dangling pin");
+                }
+                _ => unreachable!(),
+            }
+            let probe = Arc::new(Scripted::new("0.10.2"));
+            let owner = Owner::for_test(probe.clone(), None, None, None);
+            owner.prepare(root_path.clone()).await;
+            assert!(probe.calls.lock().expect("calls").is_empty(), "{invalid}");
+            assert!(matches!(
+                owner.records.lock().expect("records").get(&root_path),
+                Some(Record::Conflict { .. })
+            ));
+        }
+    }
+
     #[test]
     fn failed_guard_install_does_not_restore_host_python() {
         let blocked = workspace();
@@ -2416,6 +2557,36 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&tool.stdout), "TOOL\n");
     }
 
+    #[test]
+    fn incomplete_state_guard_does_not_restore_host_python() {
+        for altered in [false, true] {
+            let directory = workspace();
+            let diagnostic = "Workspace Python is not ready";
+            super::install_guard(directory.path(), diagnostic).expect("initial guard");
+            let python = directory.path().join("python");
+            if altered {
+                std::fs::write(&python, "#!/bin/sh\nexit 0\n").expect("alter guard");
+            } else {
+                std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o644))
+                    .expect("guard permissions");
+            }
+            let specific = super::install_guard(directory.path(), diagnostic);
+            assert!(specific.is_none());
+            let selection = super::selection_from_guard(specific, diagnostic);
+            let entries = super::execution_environment::compose(
+                &host_from_entries(vec![("PATH", "/usr/bin:/bin")]),
+                &crate::tools::environment::ToolEnvironment::new(),
+                &selection,
+            )
+            .expect("composed");
+            for command in ["python", "/usr/bin/env python3"] {
+                let output = run_bash(&entries, command);
+                assert_eq!(output.status.code(), Some(127));
+                assert!(String::from_utf8_lossy(&output.stderr).contains("Workspace Python"));
+            }
+        }
+    }
+
     #[tokio::test]
     async fn changed_pin_during_probe_is_not_published_ready() {
         let root = workspace();
@@ -2435,10 +2606,13 @@ mod tests {
         std::fs::write(root_path.join(".python-version"), "3.13.1\n").expect("new pin");
         release_tx.send(()).expect("release");
         prepare.await.expect("prepare");
-        match owner.records.lock().expect("records").get(&root_path) {
-            Some(Record::Ready { .. }) => panic!("a stale probe published Ready"),
-            _ => {}
-        }
+        assert!(
+            !matches!(
+                owner.records.lock().expect("records").get(&root_path),
+                Some(Record::Ready { .. })
+            ),
+            "a stale probe published Ready"
+        );
     }
 
     #[tokio::test]
@@ -2464,10 +2638,13 @@ mod tests {
         );
         release_tx.send(()).expect("release");
         prepare.await.expect("prepare");
-        match owner.records.lock().expect("records").get(&root_path) {
-            Some(Record::Ready { .. }) => panic!("a replaced interpreter published Ready"),
-            _ => {}
-        }
+        assert!(
+            !matches!(
+                owner.records.lock().expect("records").get(&root_path),
+                Some(Record::Ready { .. })
+            ),
+            "a replaced interpreter published Ready"
+        );
     }
 
     #[tokio::test]
@@ -2611,7 +2788,7 @@ mod tests {
         let prepare = tokio::spawn(async move { preparing.prepare(prepare_root).await });
         entered_rx.await.expect("probe entered");
         for _ in 0..20 {
-            owner.schedule_on(root_path.clone());
+            owner.schedule_on(&root_path);
         }
         assert!(owner.tasks.lock().expect("tasks").len() <= 1);
         assert!(owner.signals.lock().expect("signals").len() <= 1);
@@ -3073,7 +3250,7 @@ mod tests {
             write_venv(&root.path().join(".venv"));
             let root_path = std::fs::canonicalize(root.path()).expect("canonical");
             roots.push(root);
-            owner.schedule_on(root_path);
+            owner.schedule_on(&root_path);
         }
         assert_eq!(owner.tasks.lock().expect("tasks").len(), 64);
         assert_eq!(owner.admitted.lock().expect("admitted").len(), 64);
