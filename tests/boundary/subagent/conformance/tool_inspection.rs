@@ -108,7 +108,16 @@ async fn assert_child_definition(
     .unwrap();
     assert_eq!(definition["tool_id"], "tool-inspect");
     assert_eq!(definition["name"], "inspect_tool");
-    assert_eq!(definition["description"]["text"], "Tool inspect_tool");
+    let expected = crate::tools::compile_model_definition(&common::tool_policies(
+        "inspect_tool",
+        "tool-inspect",
+        crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
+    ))
+    .unwrap();
+    assert_eq!(definition["description"]["text"], expected.description);
+    assert_eq!(definition["description"]["truncated"], false);
+    assert_eq!(definition["input_schema"]["value"], expected.input_schema);
+    assert_eq!(definition["input_schema"]["truncated"], false);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

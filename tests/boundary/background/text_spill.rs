@@ -451,7 +451,7 @@ async fn the_background_live_output_path_reaches_the_provider_before_completion(
     );
     let arguments = serde_json::json!({
         "execution_mode": "background",
-        "command": command,
+        "arguments": {"command": command},
     })
     .to_string();
     // A dynamically built SSE turn-one reply: one background Bash tool

@@ -1611,7 +1611,7 @@ async fn retry_exhaustion_publishes_one_bounded_failure_without_child_content() 
             FakeStep::Emit(ModelEvent::ToolCallArgumentsDelta {
                 block_index: ContentBlockIndex::new(2),
                 call_id: ToolCallId::new("call-secret"),
-                arguments_delta: "{\"secret\":\"CHILD-SECRET-ARGS\"}".to_owned(),
+                arguments_delta: "{\"arguments\":{\"secret\":\"CHILD-SECRET-ARGS\"}}".to_owned(),
             }),
             // The proposal never completes: the stream fails transiently
             // with an uncommitted partial generation.

@@ -998,7 +998,7 @@ fn structurally_incomplete_turn() -> Vec<FakeStep> {
         FakeStep::Emit(ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(1),
             call_id: ToolCallId::new("call-partial"),
-            arguments_delta: "{\"file_p".to_owned(),
+            arguments_delta: "{\"arguments\":{\"file_p".to_owned(),
         }),
         done(ModelFinishReason::Stop),
     ]
