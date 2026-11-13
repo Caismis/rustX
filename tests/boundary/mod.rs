@@ -55,6 +55,10 @@
 //! - [`mcp_tasks_managed`] — the same contract end to end against a real
 //!   managed `FastMCP` 4 child whose own `requirements.txt` declares the
 //!   SEP-2663 `fastmcp-tasks` extension.
+//! - [`skill_launch`] — Linux launch accounting for Skill discovery. An
+//!   `LD_PRELOAD` recorder counts `posix_spawn` and `exec` attempts, including
+//!   a probe that has already exited, and discovery of dependency metadata
+//!   records none.
 //! - [`tool_deadline`] — the generic Issue #204 hard deadline bounding a
 //!   real foreground Bash process: process-group kill and reap are the
 //!   physical settlement behind the proven `TimedOut`.
@@ -87,5 +91,6 @@ mod mcp_resources;
 mod mcp_tasks;
 mod mcp_tasks_managed;
 mod runtime_client;
+mod skill_launch;
 mod subagent;
 mod tool_deadline;

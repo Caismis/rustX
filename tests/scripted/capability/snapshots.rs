@@ -1644,153 +1644,11 @@ fn assert_no_skill_environment(dir: &std::path::Path) {
     }
 }
 
-/// Compiles the libc launch recorder and runs `test_name` in a fresh process
-/// with that library preloaded. Parallel tests cannot write its log. A harness
-/// that runs zero tests is a failure.
-#[cfg(target_os = "linux")]
-fn run_isolated_observation(test_name: &str) {
-    let library = compile_launch_recorder();
-    let log = tempfile::NamedTempFile::new().expect("launch log");
-    let output =
-        std::process::Command::new(std::env::current_exe().expect("current test executable"))
-            .args(["--exact", test_name, "--test-threads=1"])
-            .env("RUSTX_SKILL_PROBE_CHILD", "1")
-            .env("RUSTX_LAUNCH_LOG", log.path())
-            .env("LD_PRELOAD", &library)
-            .output()
-            .expect("spawn the isolated launch observation");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success() && stdout.contains("test result: ok. 1 passed"),
-        "isolated observation failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-}
-
-#[cfg(target_os = "linux")]
-fn compile_launch_recorder() -> std::path::PathBuf {
-    let directory =
-        std::env::temp_dir().join(format!("rustx-launch-recorder-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).expect("launch recorder directory");
-    let library = directory.join("librustx_launch_recorder.so");
-    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/scripted/capability/launch_recorder_preload.rs");
-    let output = std::process::Command::new("rustc")
-        .args([
-            "--crate-type",
-            "cdylib",
-            "--edition",
-            "2021",
-            "-C",
-            "panic=abort",
-            "-C",
-            "opt-level=3",
-            "-o",
-        ])
-        .arg(&library)
-        .arg(&source)
-        .output()
-        .expect("run rustc for the launch recorder");
-    assert!(
-        output.status.success(),
-        "launch recorder failed to compile\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    library
-}
-
-/// The preloaded recorder must be mapped. An absent recorder is a failure,
-/// never an empty launch log.
-#[cfg(target_os = "linux")]
-fn launch_log_path() -> std::path::PathBuf {
-    let path = std::env::var("RUSTX_LAUNCH_LOG").expect("RUSTX_LAUNCH_LOG");
-    let maps = std::fs::read_to_string("/proc/self/maps").expect("process maps");
-    assert!(
-        maps.contains("librustx_launch_recorder"),
-        "launch recorder is not loaded; refusing to report zero starts"
-    );
-    std::path::PathBuf::from(path)
-}
-
-/// Reads the launch log after every launch the caller awaited has returned.
-///
-/// The recorder writes each attempt on the launching thread before the libc
-/// function returns, so this read follows those writes.
-#[cfg(target_os = "linux")]
-fn drain_launch_log(path: &std::path::Path) -> String {
-    std::fs::read_to_string(path).expect("launch log")
-}
-
-/// Spawns `python3 --version`, waits until it has exited, and returns its pid.
-#[cfg(target_os = "linux")]
-fn await_exited_python_probe(fork_exec: bool) -> u32 {
-    use std::os::unix::process::CommandExt;
-    let mut command = std::process::Command::new("python3");
-    command
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    if fork_exec {
-        // An empty `pre_exec` selects std's fork/`execvp` path. The closure
-        // runs between fork and exec and performs no work.
-        #[allow(unsafe_code)]
-        unsafe {
-            command.pre_exec(|| Ok(()));
-        }
-    }
-    let mut child = command.spawn().expect("spawn python3 --version");
-    let pid = child.id();
-    let status = child.wait().expect("wait for python3 --version");
-    assert!(status.success(), "{status}");
-    assert!(
-        !std::path::Path::new(&format!("/proc/{pid}")).exists(),
-        "the probe must already have exited"
-    );
-    pid
-}
-
-/// Negative control: the observer does not read until both awaited probes have
-/// exited. The log still contains the `posix_spawnp` and `execvp` attempts.
-#[cfg(target_os = "linux")]
-#[test]
-fn launch_recorder_counts_an_exited_probe_while_the_observer_is_gated() {
-    if std::env::var_os("RUSTX_SKILL_PROBE_CHILD").is_none() {
-        run_isolated_observation(
-            "scripted_suites::capability::snapshots::launch_recorder_counts_an_exited_probe_while_the_observer_is_gated",
-        );
-        return;
-    }
-    let path = launch_log_path();
-    std::fs::write(&path, "").expect("truncate launch log");
-    let released = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let (release, gate) = std::sync::mpsc::channel::<()>();
-    let reader_path = path.clone();
-    let reader_released = std::sync::Arc::clone(&released);
-    let reader = std::thread::spawn(move || {
-        gate.recv().expect("observation gate");
-        reader_released.store(true, std::sync::atomic::Ordering::SeqCst);
-        drain_launch_log(&reader_path)
-    });
-    let _spawn_pid = await_exited_python_probe(false);
-    let _exec_pid = await_exited_python_probe(true);
-    assert!(
-        !released.load(std::sync::atomic::Ordering::SeqCst),
-        "the observer read the launch log before both probes had exited"
-    );
-    release.send(()).expect("release the observer");
-    let launches = reader.join().expect("observer joins after the probes exit");
-    assert!(
-        launches.contains("posix_spawnp\tpython3\n"),
-        "missing posix_spawnp attempt after the probe exited:\n{launches}"
-    );
-    assert!(
-        launches.contains("execvp\tpython3\n"),
-        "missing execvp attempt after the probe exited:\n{launches}"
-    );
-}
-
-async fn exercise_skill_catalog_without_environments() {
+/// Catalog, environment, and store-layout assertions for Skills that carry
+/// uninterpreted dependency text. The launch proof lives in
+/// `boundary_suites::skill_launch`, because it loads a recorder and awaits a
+/// real interpreter.
+pub(crate) async fn exercise_skill_catalog_without_environments() {
     let conversation = conversation();
     write_skill(
         conversation.workspace.root(),
@@ -1842,38 +1700,12 @@ async fn exercise_skill_catalog_without_environments() {
     assert_no_skill_environment(conversation.dir.path());
 }
 
-/// S01/S02: selecting and reloading Skills that carry Python and Node metadata
-/// starts no interpreter or package manager and creates no Skill environment.
+/// S01/S02 catalog half: selecting and reloading Skills that carry Python and
+/// Node metadata publishes both names, leaves the effective environment
+/// unchanged, and creates no Skill environment directory. The zero-launch
+/// proof is `boundary_suites::skill_launch`.
 #[tokio::test]
 async fn skill_metadata_does_not_probe_or_materialize() {
-    if std::env::var_os("RUSTX_SKILL_PROBE_CHILD").is_some() {
-        #[cfg(target_os = "linux")]
-        {
-            let path = launch_log_path();
-            let before = drain_launch_log(&path);
-            exercise_skill_catalog_without_environments().await;
-            let after = drain_launch_log(&path);
-            assert!(
-                after.starts_with(&before),
-                "the launch log was replaced during skill discovery"
-            );
-            let started = &after[before.len()..];
-            assert!(
-                started.is_empty(),
-                "skill discovery launched processes:\n{started}"
-            );
-        }
-        #[cfg(not(target_os = "linux"))]
-        panic!(
-            "launch observation was requested without the Linux recorder; refusing to report zero"
-        );
-        return;
-    }
-    #[cfg(target_os = "linux")]
-    run_isolated_observation(
-        "scripted_suites::capability::snapshots::skill_metadata_does_not_probe_or_materialize",
-    );
-    #[cfg(not(target_os = "linux"))]
     exercise_skill_catalog_without_environments().await;
 }
 
