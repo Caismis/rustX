@@ -417,10 +417,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   async adoptWorkspace(scope: WorkspaceAuthorityScope, location: string) {
     this.mutationScope(scope);
     if (!this.config.picker) throw new Error('Directory picker unavailable');
-    this.cwd(location);
+    const directory = this.cwd(location);
     if (this.registrations.some(row => row.location === location)) return;
     this.commit([...this.registrations, { id: randomUUID(), location, displayName: this.roots.find(root => root.id === location)!.displayName }]);
-    queueWorkspacePythonAdmission(location);
+    if (this.config.nativeFilesystem === 'shared') queueWorkspacePythonAdmission(directory);
   }
   async renameWorkspace(scope: WorkspaceAuthorityScope, id: string, displayName: string) {
     this.mutationScope(scope);
@@ -673,13 +673,13 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
 }
 
 /** Best-effort handoff after a Workspace registration has already committed. */
-function queueWorkspacePythonAdmission(location: string) {
+function queueWorkspacePythonAdmission(workspace: string) {
   try {
-    const home = homedir();
-    if (!home) return;
+    const home = process.env.HOME && isAbsolute(process.env.HOME) ? process.env.HOME : homedir();
+    if (!home || !isAbsolute(workspace)) return;
     const directory = join(home, 'rustx', 'runtime', 'workspace-python', 'admit');
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    writeFileSync(join(directory, `${randomUUID()}.txt`), location, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    writeFileSync(join(directory, `${randomUUID()}.txt`), workspace, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
   } catch {
     // Registration remains successful when the native runtime is not ready to observe this file.
   }

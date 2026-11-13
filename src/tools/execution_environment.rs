@@ -351,12 +351,14 @@ mod tests {
                 ],
                 virtual_env: Some(PathBuf::from("/work/.venv")),
                 diagnostic: String::new(),
+                guard_unavailable: false,
             }
         } else {
             PythonSelection {
                 path_prefix: vec![PathBuf::from("/guards/missing")],
                 virtual_env: None,
                 diagnostic: "Workspace Python is not ready".to_owned(),
+                guard_unavailable: false,
             }
         }
     }

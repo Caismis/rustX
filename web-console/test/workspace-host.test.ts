@@ -1,7 +1,7 @@
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 // @vitest-environment node
 import { afterEach, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalWorkspaceHost } from '../host/workspaces';
@@ -53,6 +53,29 @@ it('HTTP carrier refuses path adoption and cross-origin mutations', async () => 
     const foreign = await fetch(`${service.url}/product-host/list`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://foreign.example' }, body: '{}' });
     expect(foreign.status).toBe(400);
   } finally { await service.stop(); }
+});
+
+it('registration admits the authorized directory rather than the location id', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'workspace-home-')); directories.push(home);
+  const previous = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const shared = fixture();
+    const host = new LocalWorkspaceHost({ ...shared.config, nativeFilesystem: 'shared' });
+    await host.adoptWorkspace(await host.listWorkspaces(), 'a');
+    const admit = join(home, 'rustx', 'runtime', 'workspace-python', 'admit');
+    const files = readdirSync(admit);
+    expect(files).toHaveLength(1);
+    expect(readFileSync(join(admit, files[0]), 'utf8').trim()).toBe(shared.a);
+    const plain = fixture();
+    const before = readdirSync(admit);
+    await plain.host.adoptWorkspace(await plain.host.listWorkspaces(), 'a');
+    expect(readdirSync(admit)).toEqual(before);
+    expect(existsSync(admit)).toBe(true);
+  } finally {
+    if (previous === undefined) delete process.env.HOME;
+    else process.env.HOME = previous;
+  }
 });
 
 it('canonical endpoint identity accepts URL equivalence and rejects different hosts/ports', async () => {

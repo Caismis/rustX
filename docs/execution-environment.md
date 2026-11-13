@@ -30,19 +30,31 @@ ordinary meaning.
 - A valid existing virtual environment is reused after its interpreters are
   probed. `uv` is not required for reuse.
 - A missing environment is created only with `uv` 0.10.0 or newer, at the
-  final path, without `--clear`, `--seed`, or `--allow-existing`. There is no
-  installer, `python -m venv` fallback, `uv sync`, or package seed.
+  final path, without `--clear`, `--seed`, or `--allow-existing`. Bootstrap
+  `uv` commands also pass `--no-config` so an ancestor `.python-version` cannot
+  select the interpreter. Offline, proxy, certificate, index, and cache
+  settings still come from the captured environment. There is no installer,
+  `python -m venv` fallback, `uv sync`, or package seed.
 - A symlink, file, or invalid directory at `.venv` is left in place and
   reported internally as a conflict.
 - The Workspace-root `.python-version` is the explicit interpreter request.
-  A path request must resolve to that interpreter. With no pin, the root
+  A path request must resolve to that interpreter. An implementation prefix
+  such as `cpython-` or `pypy-` must match `sys.implementation.name`; an
+  unknown or trailing qualifier is rejected. With no pin, the root
   `pyproject.toml` `[project].requires-python` specifier is passed to
-  `uv python find --no-project`. The selected interpreter is checked against
-  both inputs before it is ready. Ancestor project files are not read, and
-  neither root file is edited.
+  `uv python find --no-project --no-config`. The selected interpreter is
+  checked against both inputs before it is ready. The readiness identity is
+  snapshotted after the environment exists and before those probes. A pin,
+  project, or interpreter change during a probe does not publish Ready.
+  Neither root file is edited.
 - When the environment is not ready, `python` and `python3` resolve to a
-  guard that exits 127. `git`, `ls`, `cargo`, and other commands keep the
-  host `PATH`.
+  guard that exits 127. If the Workspace state directory cannot be written,
+  a process-lifetime fallback guard is used instead of the host interpreter.
+  `git`, `ls`, `cargo`, and other commands keep the host `PATH`.
+- Registration queues the authorized directory only when the Product Host
+  attests a shared filesystem. The location id is not a path. Waiting for
+  the cross-process lock observes runtime shutdown and does not stay blocked
+  in `flock`.
 
 Registration and session creation schedule this work and do not wait for it.
 Read-only listing does not create an environment. The first native Bash use
@@ -65,15 +77,18 @@ supervisor that spawned it.
 
 ## Residual limits
 
-The lock coordinates rustX processes on one machine. It does not stop an
-unrelated program from changing `.venv`, and it is not an NFS lock. Readiness
+The lock coordinates rustX processes on one machine. Shutdown stops waiting
+for it. It does not stop an unrelated program from changing `.venv`, and it
+is not an NFS lock. Readiness
 identity is the device, inode, mtime, and length of the Workspace root, its
 version files, and `.venv/bin/python` plus `python3`. A replacement that keeps
 the same length and timestamp can remain cached until another input changes.
 One process admits at most two uv or interpreter probes at a time; that cap
-does not span processes. A launcher that starts rustX with a short `PATH` is
-a launcher configuration problem: a running host does not observe later
-changes made in a parent terminal. `uv` is optional and is installed
-separately; creation requires 0.10.0 or newer. The environment is frozen on
-the native Bash invocation before permission approval, so a later Ready
-publication does not change a command that was already prepared.
+does not span processes. One Workspace keeps a single preparation task until
+it finishes, and a process retains a bounded number of finished tasks, probe
+cancellation signals, and non-ready records. A launcher that starts rustX
+with a short `PATH` is a launcher configuration problem: a running host does
+not observe later changes made in a parent terminal. `uv` is optional and is
+installed separately; creation requires 0.10.0 or newer. The environment is
+frozen on the native Bash invocation before permission approval, so a later
+Ready publication does not change a command that was already prepared.
