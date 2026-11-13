@@ -38,7 +38,7 @@ import { useActorRef, useSelector } from '@xstate/react';
 import { shellNavigationMachine, isHomeRoute, committedRouteCurrent, draftSessionCurrent, type ShellNavigationActor } from './navigation/machine';
 import { navigationPreferencesKey, readNavigationPreferences, restoreRoute, resumableViews, saveRoute } from './navigation/preferences';
 import type { AppServerClient } from '../client/app-server';
-import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v77';
+import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v78';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
 import { type ResponseAction } from './commands/native';
 import { available, commands } from './commands/registry';

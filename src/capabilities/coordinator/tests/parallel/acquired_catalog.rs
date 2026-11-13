@@ -45,6 +45,8 @@ async fn stdio_preparation(dir: &tempfile::TempDir, test: &str) -> StdioPreparat
             environment: control.environment(&RecoveryScript::default()),
         },
         policy: crate::tools::types::ToolInvocationPolicy::default(),
+        permissions: None,
+        tool_permissions: std::collections::BTreeMap::new(),
     };
     let pause = Arc::new(ConnectOwnershipPause::default());
     let _release = ReleasePause(pause.clone());

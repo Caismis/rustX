@@ -261,7 +261,6 @@ impl UserConfigManager {
                 .unwrap_or_else(|| config.initial_model()),
         )
         .map_err(|e| e.to_string())?;
-        let summary = summary.as_ref().unwrap_or(&primary);
         config
             .context_policy()
             .validate_budgets(
@@ -539,9 +538,6 @@ impl UserConfigManager {
                     authored.resolve()
                 })
                 .transpose()?;
-        }
-        if allow_unselected && let Some(selection) = &mut config.agent.model {
-            selection.use_available_auxiliary_models(&models, None);
         }
         let mcp = super::super::mcp_resources::load(
             &self.sources.home_directory.join("rustx/.agents"),
@@ -862,6 +858,8 @@ impl UserConfigManager {
                     .chain(ResourceDiagnostic::of_managed_python(&managed_python)),
             );
         }
+        #[cfg(test)]
+        self.test_hooks.reach("before_resource_verification");
         for (root, scope) in [
             (host.home_directory.join("rustx/.agents"), SourceScope::User),
             (locations.workspace.join(".agents"), SourceScope::Workspace),
@@ -1171,8 +1169,10 @@ impl MetadataAdmission {
     ) -> Self {
         let main_subagents =
             subagents.selected_definitions(&config.agent.agents.iter().cloned().collect());
-        let native_metadata =
-            crate::tools::native::definitions(config.native_tools.to_policies(), &main_subagents);
+        let native_metadata = crate::tools::native::definitions(
+            crate::tools::NativeToolPolicies::default(),
+            &main_subagents,
+        );
         let native_leaves = native_metadata
             .iter()
             .filter(|(_, policy)| *policy == crate::tools::deadline::ForegroundPolicy::Leaf)

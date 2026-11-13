@@ -498,8 +498,6 @@ mod tests {
             description: "check".into(),
             input_schema: serde_json::json!({"type":"object","additionalProperties":false}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin,
         }
@@ -512,10 +510,19 @@ mod tests {
         let mcp = definition(ToolOrigin::Mcp {
             server_id: server_id.clone(),
         });
-        let catalog = AvailableToolCatalog::new(vec![
-            ToolRegistration::plain(builtin.clone(), Arc::new(Unused)),
-            ToolRegistration::plain(mcp.clone(), Arc::new(Unused)),
-        ]);
+        let catalog = AvailableToolCatalog::new(
+            [builtin.clone(), mcp.clone()]
+                .into_iter()
+                .flat_map(|definition| {
+                    ToolRegistry::from_registrations([ToolRegistration::plain(
+                        definition,
+                        Arc::new(Unused),
+                    )])
+                    .unwrap()
+                    .validated_registrations()
+                })
+                .collect(),
+        );
         let local = ExactToolSelector::Builtin {
             name: "check".into(),
         };
@@ -566,7 +573,12 @@ mod tests {
     fn registration_policy_is_frozen_independently_of_executor_and_model_input() {
         let executor: Arc<dyn ToolExecutor> = Arc::new(Unused);
         let definition = definition(ToolOrigin::Builtin);
-        let leaf = ToolRegistration::plain(definition.clone(), executor.clone());
+        let leaf_registry = ToolRegistry::from_registrations([ToolRegistration::plain(
+            definition.clone(),
+            executor.clone(),
+        )])
+        .unwrap();
+        let leaf = leaf_registry.registrations().remove(0);
         let composite = ForegroundPolicy::Composite {
             total: ToolExecutionDeadlinePolicy::new(std::time::Duration::from_mins(10), None),
         };
@@ -598,8 +610,8 @@ mod tests {
             crate::tools::executor::PreflightOutcome::Rejected { .. }
         ));
         assert_ne!(
-            AvailableToolCatalog::new(vec![leaf]),
-            AvailableToolCatalog::new(vec![changed])
+            AvailableToolCatalog::new(leaf_registry.validated_registrations()),
+            AvailableToolCatalog::new(rebuilt.validated_registrations())
         );
     }
 

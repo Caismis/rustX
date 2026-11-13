@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v77 envelope and method vocabulary.
+//! Rust authority for the App Server v78 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 77;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 78;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -417,7 +417,8 @@ pub enum Method {
     ModelSet {
         target: AttachmentTarget,
         config: Box<crate::model::session::SessionModelConfig>,
-        /// A primary-model picker can recover unchanged auxiliary model references that were removed.
+        /// Explicitly recover an unchanged auxiliary selection whose model is unavailable.
+        /// Ordinary primary-model or profile edits must omit this opt-in.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recover_unavailable_auxiliary: Option<bool>,
     },

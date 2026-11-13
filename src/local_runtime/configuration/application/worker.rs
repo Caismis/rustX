@@ -367,9 +367,21 @@ impl ConfigurationApplications {
             self.notify(&state);
             return;
         };
-        let context_only = adopted
-            .as_ref()
-            .is_some_and(|old| capture.same_capabilities(old));
+        // Context-only preparation requires unchanged capabilities, and a
+        // settled Provider/model plane: either this turn already published the
+        // catalog without changing invocations, or every adopted
+        // Session/Agent/Workflow model invocation (including Lowest auxiliary
+        // resolution) is unchanged. Capability equality alone is not enough —
+        // a default_profile or reasoning_profile_order edit can change Lowest
+        // while leaving capabilities identical (#543). provider_published
+        // alone is also not enough: a catalog publish paired with a capability
+        // change must still run full capability preparation.
+        let context_only = adopted.as_ref().is_some_and(|old| {
+            capture.same_capabilities(old)
+                && (provider_published
+                    || (capture.same_session_model(old)
+                        && capture.preserves_adopted_models(old, |_| false)))
+        });
         let bindings = |capture: &crate::local_runtime::configuration::ProspectiveSessionConfig| {
             capture
                 .models

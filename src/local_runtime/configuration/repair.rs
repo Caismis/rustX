@@ -209,10 +209,12 @@ pub(crate) enum Uneditable {
         line: Option<usize>,
         column: Option<usize>,
     },
+    /// Pre-`auxiliary` model fields that must be rewritten explicitly.
+    ObsoleteAuxiliaryModelFields,
 }
 
 impl Uneditable {
-    fn diagnostic(self) -> String {
+    pub(crate) fn diagnostic(self) -> String {
         match self {
             Self::NotUtf8 => {
                 "rustx.toml is not valid UTF-8; it cannot be repaired automatically".into()
@@ -222,8 +224,39 @@ impl Uneditable {
                 line.unwrap_or(1),
                 column.unwrap_or(1)
             ),
+            Self::ObsoleteAuxiliaryModelFields => {
+                "obsolete agent.model fields summary_model/title_model/classification_model/btw_model are present; replace them with agent.model.auxiliary before the source can load".into()
+            }
         }
     }
+}
+
+/// Retired #543 fields. Automatic repair must not delete them into Follow
+/// Session + Lowest; the author has to choose the replacement explicitly.
+const OBSOLETE_AUXILIARY_MODEL_FIELDS: &[&str] = &[
+    "summary_model",
+    "title_model",
+    "classification_model",
+    "btw_model",
+];
+
+fn reject_obsolete_auxiliary_model_fields(document: &DocumentMut) -> Result<(), Uneditable> {
+    let Some(model) = document
+        .as_table()
+        .get("agent")
+        .and_then(Item::as_table_like)
+        .and_then(|agent| agent.get("model"))
+        .and_then(Item::as_table_like)
+    else {
+        return Ok(());
+    };
+    if OBSOLETE_AUXILIARY_MODEL_FIELDS
+        .iter()
+        .any(|field| model.get(field).is_some())
+    {
+        return Err(Uneditable::ObsoleteAuxiliaryModelFields);
+    }
+    Ok(())
 }
 
 /// The generated source schema of [`RuntimeLayer`], computed once.
@@ -245,6 +278,7 @@ pub(crate) fn plan(bytes: &[u8]) -> Result<RepairPlan, Uneditable> {
             column: prefix.map(|s| s.rsplit('\n').next().unwrap_or_default().chars().count() + 1),
         }
     })?;
+    reject_obsolete_auxiliary_model_fields(&document)?;
     let mut changes = Vec::new();
     normalize_schema_version(&mut document, &mut changes);
     let mut walker = Walker {

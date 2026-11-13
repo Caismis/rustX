@@ -63,9 +63,8 @@ use rustx::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
 };
 use rustx::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin,
-    ToolReplayPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
 };
 use support::fake::{FakeModel, FakeStep, ScriptedCall, fake_model, tool_call_events};
 
@@ -194,6 +193,7 @@ impl PreToolPolicy for ScriptedPreToolPolicy {
     fn evaluate<'a>(
         &'a self,
         view: &'a PreToolView<'a>,
+        _cancellation: &'a rustx::runtime::cancellation::ExecutionCancellation,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
         self.observed
             .lock()
@@ -700,7 +700,8 @@ struct GatedToolHandle {
     invocations: Arc<Mutex<Vec<ToolInvocation>>>,
 }
 
-const GATED_TOOL_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_mins(2);
+// Short guard so a Plan/Ask stall fails the test instead of the CI job.
+const GATED_TOOL_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(15);
 
 impl GatedToolHandle {
     async fn await_started(&mut self) {
@@ -868,12 +869,7 @@ fn text_of(content: &[UserContentBlock]) -> String {
 }
 
 fn parallel_tool(name: &str, id: &str) -> ToolDefinition {
-    common::tool_policies(
-        name,
-        id,
-        ToolExecutionPolicy::ForegroundOnly,
-        ToolConcurrencyPolicy::Parallel,
-    )
+    common::tool_policies(name, id, ToolExecutionPolicy::ForegroundOnly)
 }
 
 fn scripted_call(id: &str, tool_id: &'static str, name: &'static str) -> ScriptedCall {
@@ -2073,17 +2069,29 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                 .into_iter()
                 .find(|tool| tool.name == name)
                 .unwrap();
-            assert_eq!(definition.approval_policy, ToolApprovalPolicy::Always);
             let (probe, mut handle) =
                 GatedTool::new(definition.clone(), Arc::new(Mutex::new(Vec::new())));
             let mut tools = ToolRegistry::new();
             probe.register(&mut tools);
             let arguments = match name {
-                "write" => serde_json::json!({"path":"test.txt","content":"new"}),
-                "edit" => {
-                    serde_json::json!({"path":"test.txt","edits":[{"oldText":"old","newText":"new"}]})
-                }
-                "bash" => serde_json::json!({"command":"true","execution_mode":"foreground"}),
+                // Plan elevates non-fast-path defaults only with a nonblank
+                // elevation_reason; otherwise the call is Denied and never Asks.
+                "write" => serde_json::json!({
+                    "path":"test.txt",
+                    "content":"new",
+                    "elevation_reason":"lifecycle approval fixture"
+                }),
+                "edit" => serde_json::json!({
+                    "path":"test.txt",
+                    "edits":[{"oldText":"old","newText":"new"}],
+                    "elevation_reason":"lifecycle approval fixture"
+                }),
+                // `true` is proven read-only; use an unproven redirect so Plan Asks.
+                "bash" => serde_json::json!({
+                    "command":"printf x >/tmp/rustx-lifecycle-ask",
+                    "execution_mode":"foreground",
+                    "elevation_reason":"lifecycle approval fixture"
+                }),
                 _ => unreachable!(),
             };
             let call = ScriptedCall {
@@ -2105,7 +2113,7 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
             let mode = if decision == "full_access" {
                 ApprovalMode::FullAccess
             } else {
-                ApprovalMode::Policy
+                ApprovalMode::Plan
             };
             let task = {
                 let model = model.clone();
@@ -2130,9 +2138,10 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                 let observed = facts.lock().unwrap()[0].clone();
                 assert_eq!(observed.tool_id, definition.id);
                 assert_eq!(observed.mode, ToolInvocationMode::Foreground);
-                // Bash's execution metadata was stripped at frozen preflight.
+                // Runtime metadata was stripped at frozen preflight.
                 let mut business = arguments.clone();
                 business.as_object_mut().unwrap().remove("execution_mode");
+                business.as_object_mut().unwrap().remove("elevation_reason");
                 assert_eq!(observed.arguments, business);
                 if decision == "cancel" {
                     cancellation.cancel();
@@ -2305,7 +2314,10 @@ async fn approval_allow_executes_the_exact_prepared_invocation() {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].id, ToolCallId::new("call-a"));
     assert_eq!(calls[0].tool_id, ToolId::new("tool-alpha"));
-    assert_eq!(calls[0].arguments, serde_json::json!({}));
+    assert_eq!(
+        calls[0].arguments,
+        common::tool_call_envelope(serde_json::json!({}))
+    );
     let messages = tool_messages(&result);
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].tool_call_id, calls[0].id);
@@ -2376,11 +2388,11 @@ async fn approval_deny_emits_one_denied_result_without_starting_executor() {
     ));
 }
 
-/// The strong parallel-batch contract resolves every approval in canonical
-/// call order before any executor start frontier advances. A denied sibling
-/// receives a result slot but never receives an executor future.
+/// P15: an allowed call may start while a sibling still waits for Ask. Denial
+/// of the sibling fills its result slot without an executor future. Committed
+/// `ToolMessages` stay in original call order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn parallel_batch_resolves_approvals_before_any_tool_start() {
+async fn parallel_batch_allows_independent_work_while_sibling_awaits_ask() {
     let policy = Arc::new(ScriptedPreToolPolicy::new(vec![
         PreToolDecision::Ask {
             reason: "first".to_owned(),
@@ -2427,10 +2439,13 @@ async fn parallel_batch_resolves_approvals_before_any_tool_start() {
         })
     };
 
+    // Both Ask requests may publish concurrently; wait until both are pending.
     request_count
-        .wait_for(|count| *count == 1)
+        .wait_for(|count| *count == 2)
         .await
-        .expect("first approval request");
+        .expect("both approval requests");
+    assert!(!*alpha_handle.started.borrow());
+    assert!(!*beta_handle.started.borrow());
     first_tx
         .send(InteractionOutcome::Responded {
             response: InteractionResponse::Approval {
@@ -2438,12 +2453,12 @@ async fn parallel_batch_resolves_approvals_before_any_tool_start() {
             },
         })
         .expect("first approval waiter");
-    request_count
-        .wait_for(|count| *count == 2)
-        .await
-        .expect("second approval request");
-    assert!(!*alpha_handle.started.borrow());
-    assert!(!*beta_handle.started.borrow());
+    // Allowed work progresses without waiting for the sibling Ask.
+    alpha_handle.await_started().await;
+    assert!(
+        !*beta_handle.started.borrow(),
+        "pending Ask sibling never starts"
+    );
     second_tx
         .send(InteractionOutcome::Responded {
             response: InteractionResponse::Approval {
@@ -2453,7 +2468,6 @@ async fn parallel_batch_resolves_approvals_before_any_tool_start() {
             },
         })
         .expect("second approval waiter");
-    alpha_handle.await_started().await;
     assert!(
         !*beta_handle.started.borrow(),
         "denied sibling never starts"
@@ -2492,8 +2506,6 @@ async fn invalid_preflight_never_reaches_pre_tool_policy() {
             "properties": {"path": {"type": "string"}}
         }),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };
@@ -2575,9 +2587,15 @@ async fn observer_sees_the_exact_committed_result_and_changes_nothing() {
         .collect::<Vec<_>>();
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].id, ToolCallId::new("call-a"));
-    assert_eq!(calls[0].arguments, serde_json::json!({}));
+    assert_eq!(
+        calls[0].arguments,
+        common::tool_call_envelope(serde_json::json!({}))
+    );
     assert_eq!(calls[1].id, ToolCallId::new("call-b"));
-    assert_eq!(calls[1].arguments, serde_json::json!({}));
+    assert_eq!(
+        calls[1].arguments,
+        common::tool_call_envelope(serde_json::json!({}))
+    );
 }
 
 /// A consumer distinguishes the native rustX Read capability from an
@@ -2645,12 +2663,8 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
 
     // 2. A non-native tool whose public name is also `read`.
     let mut tools = ToolRegistry::new();
-    let mut impostor = common::tool_policies(
-        "read",
-        "tool-mcp-read",
-        ToolExecutionPolicy::ForegroundOnly,
-        ToolConcurrencyPolicy::Sequential,
-    );
+    let mut impostor =
+        common::tool_policies("read", "tool-mcp-read", ToolExecutionPolicy::ForegroundOnly);
     impostor.origin = ToolOrigin::Mcp {
         server_id: rustx::runtime::identity::McpServerId::new("mcp-fs"),
     };
@@ -3609,9 +3623,25 @@ async fn deferred_context_never_changes_the_effective_system_prompt() {
         .map(|snapshot| snapshot.effective_system_prompt.clone())
         .collect::<Vec<_>>();
     assert_eq!(prompts.len(), 2, "two admitted model steps");
+    // Sparse §10 permission reminders are injected only on the first
+    // successful request-start; strip them so deferred-context admission is
+    // compared on the stable native system prompt alone.
+    let without_permission_reminder = |prompt: &str| -> String {
+        const MARKER: &str = "Execution permission mode:";
+        if let Some(index) = prompt.find("\n\nExecution permission mode:") {
+            prompt[..index].to_owned()
+        } else if let Some(index) = prompt.find(&format!("\n{MARKER}")) {
+            prompt[..index].to_owned()
+        } else if prompt.starts_with(MARKER) {
+            String::new()
+        } else {
+            prompt.to_owned()
+        }
+    };
     assert_eq!(
-        prompts[0], prompts[1],
-        "the step that admitted deferred context has the same Effective System Prompt"
+        without_permission_reminder(&prompts[0]),
+        without_permission_reminder(&prompts[1]),
+        "the step that admitted deferred context has the same Effective System Prompt aside from the sparse permission reminder"
     );
     assert!(
         !prompts[1].contains("deferred user fact"),

@@ -625,6 +625,7 @@ impl RuntimeResourceSnapshot {
             agent_profile: self.agent_profile().map(str::to_owned),
             workspace_instructions: self.project_instructions().map(str::to_owned),
             skill_guidance: self.skill_catalog().map(str::to_owned),
+            permission_reminder: None,
         }
     }
 

@@ -70,7 +70,7 @@ async fn classifier_and_model_check_and_explain_match_committed_node_values() {
     )];
     for (output, response) in [(text_output, "model text"), (structured, r#"{"ok":true}"#)] {
         let mut definition =
-            model_definition(output.clone(), crate::model::AuxiliaryModelPolicy::Session);
+            model_definition(output.clone(), crate::model::DirectModelPolicy::Session);
         definition.block.nodes.insert(
             "done".into(),
             return_node(BTreeMap::from([("node".into(), reference("generate"))])),

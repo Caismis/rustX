@@ -113,6 +113,8 @@ impl SettledExecution<'_> {
             conversation: self.execution.conversation,
             durable_failure: self.execution.durable_failure,
             durable_failure_kind: self.execution.durable_failure_kind,
+            permission_reminder_consumed: self.execution.permission_reminder.consumed_mode(),
+            permission_task_message: self.execution.committed_permission_task_message,
         }
     }
 }
@@ -145,10 +147,72 @@ impl<'a> AgentExecution<'a> {
         Box::pin(self.run_owned())
     }
 
+    /// Resolve native task provenance after the Attempt start has committed.
+    fn bind_permission_task(&mut self) {
+        // Opening-input attribution requires the now-committed AttemptStarted.
+        if self.durable_failure.is_none() {
+            // A recovered adoption is a candidate for this request, not a
+            // replacement for the last committed task until request start.
+            let inherited = self
+                .recovered_permission_task_message
+                .take()
+                .or_else(|| self.committed_permission_task_message.clone());
+            let opening = self
+                .store
+                .presentation_frontier()
+                .and_then(|through| self.store.attempt_prompt(&self.request.attempt_id, through))
+                .and_then(|opening| {
+                    let Some(id) = opening else {
+                        return Ok(inherited);
+                    };
+                    if inherited.is_none() {
+                        return Ok(Some(id));
+                    }
+                    let messages = self.store.load_messages(std::slice::from_ref(&id))?;
+                    // Match safe-boundary adoption and reconstruction: a new
+                    // Human task replaces the previous task; Agent input may
+                    // establish an initial task but never erase an existing one.
+                    if matches!(
+                        messages.first(),
+                        Some(crate::message::MessageBlock::User(message))
+                            if message.id == id
+                                && message.kind == crate::message::InboundKind::Message
+                                && message.source == crate::message::UserSource::Human
+                    ) {
+                        Ok(Some(id))
+                    } else {
+                        Ok(inherited)
+                    }
+                });
+            match opening.and_then(|id| {
+                let Some(id) = id else { return Ok(None) };
+                let messages = self.store.load_messages(std::slice::from_ref(&id))?;
+                let task = messages
+                    .first()
+                    .filter(|message| message.id() == &id)
+                    .and_then(crate::runtime::permission::PermissionTaskEvidence::canonical)
+                    .ok_or_else(|| {
+                        crate::durable::ConversationStoreError::InvalidReference(
+                            "native permission task does not name an ordinary canonical input"
+                                .into(),
+                        )
+                    })?;
+                Ok(Some(std::sync::Arc::new(task)))
+            }) {
+                Ok(task) => self.permission_task = task,
+                Err(error) => {
+                    self.durable_failure =
+                        Some(format!("native permission task read failed: {error}"));
+                }
+            }
+        }
+    }
+
     async fn run_owned(mut self) -> SettledExecution<'a> {
         self.emit(RuntimeEvent::AttemptStarted {
             attempt_id: self.request.attempt_id.clone(),
         });
+        self.bind_permission_task();
         let terminal = if let Err(error) = self.state.start() {
             Terminal::Failed {
                 failure: AttemptFailure::Runtime { error },
@@ -734,6 +798,18 @@ impl<'a> AgentExecution<'a> {
         {
             Ok(settled) => settled,
             Err(error) => {
+                // Cancellation may win only over deferred Interaction failures
+                // (for example ControlLost after a committed sibling batch). Durable
+                // and conversation commit errors must still record through
+                // `commit_failure_terminal` so the coordinator keeps the
+                // durable-authority failure.
+                if self.cancellation.is_cancelled()
+                    && matches!(error, super::terminal::CanonicalCommitError::Interaction(_))
+                {
+                    return Some(Terminal::Cancelled {
+                        reason: self.cancellation.reason(),
+                    });
+                }
                 return Some(
                     self.commit_failure_terminal("a tool result cannot be committed", error),
                 );

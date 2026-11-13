@@ -59,7 +59,7 @@ async fn model_wait_and_call_identity_are_published_before_provider_completion()
     let plane = workflow_test_plane(1);
     let program = model_program(
         WorkflowModelOutput::Text {},
-        crate::model::AuxiliaryModelPolicy::Session,
+        crate::model::DirectModelPolicy::Session,
     );
     let (context, executor, mut entries, _) = setup(
         &plane,
@@ -210,7 +210,7 @@ async fn failed_model_wait_append_withholds_call_identity_until_confirmed_progre
     let plane = workflow_test_plane(1);
     let program = model_program(
         WorkflowModelOutput::Text {},
-        crate::model::AuxiliaryModelPolicy::Session,
+        crate::model::DirectModelPolicy::Session,
     );
     let (context, executor, mut entries, _) = setup(
         &plane,

@@ -217,14 +217,15 @@ fn the_issue_example_converges_to_its_documented_result() {
     let plan = plan(before.as_bytes()).unwrap();
     assert_eq!(
         String::from_utf8(plan.candidate.clone()).unwrap(),
-        "schema_version = 11\n\n[agent.tools]\nbuiltin = [\"read\", \"grep\"]\n\n[agent.plugins.todo]\nenabled = true\n"
+        "schema_version = 12\n\n[agent.tools]\nbuiltin = [\"read\", \"grep\"]\n\n[agent.plugins.todo]\nenabled = true\n"
     );
     assert_eq!(
         plan.changes,
         vec![
-            ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 11 },
+            ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 12 },
+            // Issue #544: the whole obsolete native_tools overlay is unknown.
+            removed(""),
             removed("agent.plugins.todo"),
-            removed("native_tools"),
             unknown_tool(1),
             tool(3, "read", NativeToolRemoval::Duplicate),
         ]
@@ -245,6 +246,23 @@ fn the_rule_anchors_are_typed_source_schema_fields() {
 }
 
 #[test]
+fn obsolete_auxiliary_model_fields_are_rejected_not_silently_removed() {
+    let text = r#"schema_version = 8
+[agent.model]
+model = "local/a"
+summary_model = "local/b"
+title_model = "local/c"
+"#;
+    let err = plan(text.as_bytes()).expect_err("obsolete fields must not repair");
+    assert_eq!(err, Uneditable::ObsoleteAuxiliaryModelFields);
+    assert!(
+        err.diagnostic().contains("agent.model.auxiliary"),
+        "{}",
+        err.diagnostic()
+    );
+}
+
+#[test]
 fn nested_unknown_fields_and_tables_go_in_one_pass_without_security_exemptions() {
     let text = r#"unknown_root = 1
 [security]
@@ -253,7 +271,6 @@ sandbox = "off"
 allow = ["*"]
 
 [native_tools.bash]
-approval = "always"
 allow_unsandboxed = true
 
 [agent.plugins.goal]
@@ -272,7 +289,6 @@ max_concurrent = 2
 isolation = "none"
 
 [mcp_tool_policies.docs]
-approval = "never"
 trust_all = true
 "#;
     let repaired = candidate(text);
@@ -281,35 +297,33 @@ trust_all = true
         vec![
             removed(""),
             removed(""),
-            removed("native_tools.bash"),
+            // Issue #544: obsolete execution overlays are unknown top-level tables.
+            removed(""),
+            removed(""),
             removed("agent.plugins.goal"),
             removed("agent.model.max_output_tokens"),
             removed("subagents"),
-            removed("mcp_tool_policies.*"),
         ]
     );
     for gone in [
         "unknown_root",
         "security",
+        "native_tools",
         "allow_unsandboxed",
         "permissions",
         "bypass",
         "isolation",
+        "mcp_tool_policies",
         "trust_all",
     ] {
         assert!(!repaired.contains(gone), "{gone} survived:\n{repaired}");
     }
     // Known policy values stay exactly as authored.
-    for kept in [
-        "approval = \"always\"",
-        "approval = \"never\"",
-        "max_concurrent = 2",
-        "tokens = 512",
-    ] {
+    for kept in ["max_concurrent = 2", "tokens = 512"] {
         assert!(repaired.contains(kept), "{kept} was lost:\n{repaired}");
     }
     let layer: RuntimeLayer = crate::toml_authoring::parse(repaired.as_bytes()).unwrap();
-    assert!(layer.native_tools.unwrap().bash.is_some());
+    assert!(layer.agent.is_some());
 }
 
 #[test]
@@ -325,9 +339,6 @@ request_params = '{{"unknown_vendor_key":{{"nested":[1,2]}},"x-api-key":"SECRET_
 [environment]
 CUSTOM_TOKEN = "SECRET_ENV"
 "weird.name" = "v"
-
-[mcp_tool_policies."docs"]
-approval = "always"
 "#
     );
     assert!(changes(&text).is_empty(), "{:?}", changes(&text));
@@ -345,15 +356,19 @@ approval = "always"
     ] {
         assert!(repaired.contains(exact), "{exact}");
     }
+    // Issue #544: obsolete mcp_tool_policies is unknown, never a retained open map.
+    let with_obsolete =
+        format!("{text}\n[mcp_tool_policies.\"docs\"]\nexecution = \"foreground_only\"\n");
+    assert_eq!(changes(&with_obsolete), vec![removed("")]);
 }
 
 #[test]
 fn comments_and_unrelated_bytes_survive_deletions() {
-    let text = "# head comment\nschema_version = 11 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\nstale = 'x'\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"nope\",\n  \"grep\",\n]\n";
+    let text = "# head comment\nschema_version = 12 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\nstale = 'x'\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"nope\",\n  \"grep\",\n]\n";
     let repaired = candidate(text);
     assert_eq!(
         repaired,
-        "# head comment\nschema_version = 11 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"grep\",\n]\n"
+        "# head comment\nschema_version = 12 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"grep\",\n]\n"
     );
 }
 
@@ -421,15 +436,16 @@ fn native_tool_entries_are_classified_by_the_native_domain() {
 
 #[test]
 fn explicit_schema_versions_are_normalized_and_omission_is_preserved() {
-    for from in [0_i64, 8, 9, 10, 12, 99, -1] {
+    for from in [0_i64, 8, 9, 10, 99, -1] {
         let text = format!("schema_version = {from} # authored\n");
         assert_eq!(
             changes(&text),
-            vec![ConfigRepairChange::UpdatedSchemaVersion { from, to: 11 }]
+            vec![ConfigRepairChange::UpdatedSchemaVersion { from, to: 12 }]
         );
-        assert_eq!(candidate(&text), "schema_version = 11 # authored\n");
+        assert_eq!(candidate(&text), "schema_version = 12 # authored\n");
     }
-    assert!(changes("schema_version = 11\n").is_empty());
+    assert!(changes("schema_version = 12\n").is_empty());
+    assert!(changes("schema_version = 12 # authored\n").is_empty());
     assert!(changes("[agent]\ndescription = 'x'\n").is_empty());
     assert!(!candidate("[agent]\nstale = 1\n").contains("schema_version"));
     // A non-integer version is a type error, not version metadata.
@@ -440,11 +456,11 @@ fn explicit_schema_versions_are_normalized_and_omission_is_preserved() {
 
 #[test]
 fn tagged_unions_close_only_their_selected_variant() {
-    let text = "[agent.model]\nmodel = 'local/a'\n[agent.model.summary_model]\nmode = 'explicit'\nmodel = 'local/a'\nlegacy = true\n[tool_deadline_policy.idle_liveness_ms]\nmode = 'window'\nmilliseconds = 5\nextra = 1\n";
+    let text = "[agent.model]\nmodel = 'local/a'\n[agent.model.auxiliary]\nmode = 'explicit'\nmodel = 'local/a'\nlegacy = true\n[tool_deadline_policy.idle_liveness_ms]\nmode = 'window'\nmilliseconds = 5\nextra = 1\n";
     assert_eq!(
         changes(text),
         vec![
-            removed("agent.model.summary_model"),
+            removed("agent.model.auxiliary"),
             removed("tool_deadline_policy.idle_liveness_ms"),
         ]
     );
@@ -3212,7 +3228,7 @@ fn a_repair_candidate_exactly_at_the_bound_is_published_and_readable() {
     );
     let published = std::fs::read(fixture.path(&SourceTarget::User)).unwrap();
     assert_eq!(published.len(), bound());
-    assert!(published.starts_with(b"schema_version = 11\n"));
+    assert!(published.starts_with(b"schema_version = 12\n"));
     // The normal native reader accepts exactly what was published.
     let read = fixture
         .manager
@@ -3250,7 +3266,7 @@ fn a_repair_growing_past_the_bound_is_unresolved_without_a_backup() {
     assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
     assert_eq!(
         receipt.changes,
-        [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 11 }]
+        [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 12 }]
     );
     assert!(!receipt.backup_available);
     assert!(receipt.after_revision.is_none());
@@ -3416,8 +3432,7 @@ request_params = '{"zsecretz_param":"zsecretz-value"}'
 zsecretz_profile_key = true
 
 [mcp_tool_policies."zsecretz-mcp"]
-approval = "always"
-trust_all = true
+execution = "foreground_only"
 
 [environment]
 ZSECRETZ_ENV = "zsecretz-value"
@@ -3466,10 +3481,11 @@ fn receipts_never_carry_authored_identities_keys_or_tool_names() {
         vec![
             removed(""),
             removed(""),
+            // Issue #544: obsolete mcp_tool_policies is an unknown top-level table.
+            removed(""),
             removed("providers.*"),
             removed("models.*"),
             removed("models.*.profiles.*"),
-            removed("mcp_tool_policies.*"),
             unknown_tool(1),
             tool(2, "read", NativeToolRemoval::Duplicate),
             unknown_tool(3),
@@ -3486,13 +3502,16 @@ fn receipts_never_carry_authored_identities_keys_or_tool_names() {
         "api_key = \"zsecretz-credential\"",
         "[models.\"zsecretz-provider/zsecretz-model\".profiles.\"zsecretz-profile\"]",
         "request_params = '{\"zsecretz_param\":\"zsecretz-value\"}'",
-        "[mcp_tool_policies.\"zsecretz-mcp\"]",
         "ZSECRETZ_ENV = \"zsecretz-value\"",
         "\"mcp:zsecretz-source\" = [\"zsecretz_search\"]",
         "builtin = [\"read\"]",
     ] {
         assert!(repaired.contains(kept), "{kept} was lost:\n{repaired}");
     }
+    assert!(
+        !repaired.contains("mcp_tool_policies"),
+        "obsolete overlay survived:\n{repaired}"
+    );
     for gone in [
         "zsecretz_root_key",
         "zsecretz_provider_key",
@@ -3573,7 +3592,7 @@ fn schema_paths_are_native_and_bounded() {
     for index in 0..(MAX_RECEIPT_CHANGES * 2) {
         writeln!(
             text,
-            "[mcp_tool_policies.\"zsecretz-{index}\"]\nzsecretz_{index} = 1"
+            "[providers.\"zsecretz-{index}\"]\nprotocol = \"openai_chat_completions\"\nbase_url = \"http://127.0.0.1:9/v1\"\napi_key = \"k\"\nzsecretz_{index} = 1"
         )
         .unwrap();
     }
@@ -3583,7 +3602,7 @@ fn schema_paths_are_native_and_bounded() {
         let ConfigRepairChange::RemovedField { object_path } = change else {
             panic!("a removed field");
         };
-        assert_eq!(object_path, "mcp_tool_policies.*");
+        assert_eq!(object_path, "providers.*");
         assert!(object_path.chars().count() <= MAX_PATH_CHARS);
     }
 }
@@ -4562,6 +4581,54 @@ fn a_missing_directory_created_during_a_read_is_compared_like_any_change() {
 
 fn session_input(fixture: &Fixture) -> super::super::SessionConfigInput {
     super::super::SessionConfigInput::new(fixture.workspace.workspace().unwrap().to_path_buf())
+}
+
+#[test]
+fn python_permission_edit_during_large_candidate_construction_discards_candidate() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, USER);
+    let package = fixture
+        .workspace
+        .workspace()
+        .unwrap()
+        .join(".agents/tools/large");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        package.join("server.py"),
+        "from fastmcp import FastMCP\nmcp = FastMCP('large')\n",
+    )
+    .unwrap();
+    std::fs::write(package.join("requirements.txt"), "").unwrap();
+    std::fs::File::create(package.join("asset.bin"))
+        .unwrap()
+        .set_len(65 * 1024 * 1024)
+        .unwrap();
+    let permissions = package.join("permissions.toml");
+    std::fs::write(
+        &permissions,
+        "[permissions]\nplan = 'allow'\nautomatic = 'default'\nfull_access = 'allow'\n",
+    )
+    .unwrap();
+    assert!(resolved(&fixture).is_ok());
+    fixture
+        .manager
+        .test_hooks
+        .insert("before_resource_verification", move || {
+            std::fs::write(
+                &permissions,
+                "[permissions]\nplan = 'deny'\nautomatic = 'default'\nfull_access = 'allow'\n",
+            )
+            .unwrap();
+        });
+    let failure = fixture
+        .manager
+        .resolve_session(&session_input(&fixture))
+        .unwrap_err();
+    assert_eq!(
+        failure.diagnostic.reason,
+        "authored resources changed during candidate construction"
+    );
+    assert!(resolved(&fixture).is_ok());
 }
 
 /// Session resolution's source revisions, or its failure detail.

@@ -455,6 +455,7 @@ mod tests {
                     questionnaire_requester: None,
                     todos: None,
                     subagent: None,
+                    bound_mutation: None,
                 },
             )
         };
@@ -678,6 +679,7 @@ mod tests {
                 questionnaire_requester: None,
                 todos: None,
                 subagent: None,
+                bound_mutation: None,
             };
             ReadTool.start(invocation, context).completion
         }

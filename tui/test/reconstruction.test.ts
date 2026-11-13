@@ -93,19 +93,19 @@ function representative(): RuntimeClientSnapshot {
             call_id: "call-2",
             tool_id: "tool-grep",
             name: "grep",
-            arguments: '{"pattern":"AttemptSettled","path":"src"}',
+            arguments: "{\"arguments\":{\"pattern\":\"AttemptSettled\",\"path\":\"src\"}}",
           },
         ],
       },
       foreground: [
         foreground("call-1", "tool-bash", "bash", {
           type: "settled",
-          arguments: '{"command":"cargo test"}',
+          arguments: "{\"arguments\":{\"command\":\"cargo test\"}}",
           result: toolResult({ exit_code: 0, duration_ms: "2800" }),
         }),
         foreground("call-2", "tool-grep", "grep", {
           type: "running",
-          arguments: '{"pattern":"AttemptSettled","path":"src"}',
+          arguments: "{\"arguments\":{\"pattern\":\"AttemptSettled\",\"path\":\"src\"}}",
           progress: { message: "scanning", completed: 40, total: 900 },
         }),
       ],
@@ -284,6 +284,6 @@ it("pure Tool/footer rendering performs no filesystem, process, or native contro
     return original(content, args);
   });
   const rendered = renderFooter(state, "connected");
-  assert.match(rendered, /approval POLICY/);
+  assert.match(rendered, /approval PLAN/);
   for (const tool of tools.byCallId.values()) renderToolCard(tool, { expanded: true, budget: prefs().previewBudget });
 });

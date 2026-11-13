@@ -32,7 +32,7 @@ use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::limits::MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL;
-use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus};
+use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, fake_model, success_result,
     tool_call_events,
@@ -103,7 +103,7 @@ async fn run_with_runtime(
         support::default_execution_policy(),
         runtime(model),
         tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -212,15 +212,10 @@ fn scripted(id: &str, tool_id: &str, name: &str, arguments: serde_json::Value) -
 }
 
 /// A foreground-only fake tool emitting `progress` numbered progress
-/// observations per call, with the given concurrency policy.
-fn progress_tool(name: &str, tool_id: &str, concurrency: ToolConcurrencyPolicy) -> FakeTool {
+/// observations per call, for progress-bound tests.
+fn progress_tool(name: &str, tool_id: &str) -> FakeTool {
     FakeTool::new(
-        common::tool_policies(
-            name,
-            tool_id,
-            ToolExecutionPolicy::ForegroundOnly,
-            concurrency,
-        ),
+        common::tool_policies(name, tool_id, ToolExecutionPolicy::ForegroundOnly),
         success_result("ok"),
     )
 }
@@ -286,7 +281,7 @@ async fn foreground_progress_at_the_exact_bound_is_committed_verbatim() {
     let call = scripted("call-1", "tool-alpha", "alpha", serde_json::json!({}));
     let model = fake_model(tool_turn_then_stop(&[&call]));
     let mut tools = ToolRegistry::new();
-    progress_tool("alpha", "tool-alpha", ToolConcurrencyPolicy::Sequential)
+    progress_tool("alpha", "tool-alpha")
         .emitting_progress(MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL)
         .register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -338,7 +333,7 @@ async fn foreground_progress_one_over_the_bound_keeps_first_prefix_plus_latest()
     let call = scripted("call-1", "tool-alpha", "alpha", serde_json::json!({}));
     let model = fake_model(tool_turn_then_stop(&[&call]));
     let mut tools = ToolRegistry::new();
-    progress_tool("alpha", "tool-alpha", ToolConcurrencyPolicy::Sequential)
+    progress_tool("alpha", "tool-alpha")
         .emitting_progress(MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL + 1)
         .register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -374,7 +369,7 @@ async fn foreground_progress_flood_is_bounded_and_still_settles() {
     let call = scripted("call-1", "tool-alpha", "alpha", serde_json::json!({}));
     let model = fake_model(tool_turn_then_stop(&[&call]));
     let mut tools = ToolRegistry::new();
-    progress_tool("alpha", "tool-alpha", ToolConcurrencyPolicy::Sequential)
+    progress_tool("alpha", "tool-alpha")
         .emitting_progress(FLOOD)
         .register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -431,21 +426,11 @@ async fn parallel_calls_bound_progress_per_call_and_keep_canonical_order() {
     let call_b = scripted("call-b", "tool-beta", "beta", serde_json::json!({"n": 2}));
     let model = fake_model(tool_turn_then_stop(&[&call_a, &call_b]));
     let (tool_a, release_a) = FakeTool::parking(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let (tool_b, release_b) = FakeTool::parking(
-        common::tool_policies(
-            "beta",
-            "tool-beta",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+        common::tool_policies("beta", "tool-beta", ToolExecutionPolicy::ForegroundOnly),
         success_result("b"),
     );
     let tool_a = tool_a.emitting_progress(FLOOD);

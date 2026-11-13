@@ -209,7 +209,29 @@ impl WorkflowRuntime {
                 },
             )?;
         }
+        let workspace_root = services.runtime.workspace().root();
+        let mut prepared = prepared;
+        match crate::tools::native::support::bind_invocation_mutation_target(
+            &prepared.origin,
+            &prepared.invocation.tool_name,
+            &prepared.invocation.arguments,
+            workspace_root,
+            services.runtime.tool_output(),
+        ) {
+            Ok(bound) => prepared.mutation_target = bound,
+            Err(error) => {
+                return Ok((terminal(ToolExecutionStatus::Failed { error }), true));
+            }
+        }
+        let resource_permission =
+            crate::runtime::permission::effective_invocation_resource_permission(
+                prepared.resource_permissions,
+                &prepared.resource_permission_targets,
+                &prepared.invocation.arguments,
+                services.lifecycle.approval_mode(),
+            );
         let view = crate::agent::PreToolView {
+            task: services.task.as_deref(),
             conversation_id: &run.run_id.conversation_id,
             execution: services.execution.clone(),
             invocation_id: &id,
@@ -219,7 +241,13 @@ impl WorkflowRuntime {
             mode: prepared.invocation.mode,
             arguments: &prepared.invocation.arguments,
             audit_arguments: &prepared.invocation.arguments,
-            approval_policy: prepared.approval,
+            elevation_reason: prepared.elevation_reason.as_deref(),
+            workspace_root: Some(workspace_root),
+            mutation_target: prepared
+                .mutation_target
+                .as_ref()
+                .map(crate::tools::native::support::BoundMutationTarget::path),
+            resource_permission,
         };
         self.read_model.node(node, |view| {
             view.state = super::read_model::WorkflowState::Waiting {
@@ -234,24 +262,10 @@ impl WorkflowRuntime {
         {
             result
         } else {
-            enum Permit<'a> {
-                Read {
-                    _guard: tokio::sync::RwLockReadGuard<'a, ()>,
-                },
-                Write {
-                    _guard: tokio::sync::RwLockWriteGuard<'a, ()>,
-                },
-            }
-            let acquire = async {
-                match prepared.concurrency {
-                    crate::tools::types::ToolConcurrencyPolicy::Parallel => Permit::Read {
-                        _guard: services.scheduling.read().await,
-                    },
-                    crate::tools::types::ToolConcurrencyPolicy::Sequential => Permit::Write {
-                        _guard: services.scheduling.write().await,
-                    },
-                }
-            };
+            // Batch slots run concurrently; domain owners keep their own
+            // synchronization. The shared lock only participates as a
+            // non-exclusive capacity gate.
+            let acquire = async { services.scheduling.read().await };
             self.read_model.node(node, |view| {
                 view.state = super::read_model::WorkflowState::Waiting {
                     reason: super::read_model::WorkflowWait::Capacity,
@@ -291,6 +305,7 @@ impl WorkflowRuntime {
                     context.resources().capability().effective_environment(),
                 );
                 native_context.stdout_capture = stdout;
+                native_context.bound_mutation = prepared.mutation_target.clone();
                 let requester = services
                     .lifecycle
                     .native_interaction_coordinator()

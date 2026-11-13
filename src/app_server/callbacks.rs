@@ -1014,6 +1014,7 @@ mod tests {
                 namespace: Some("business".into()),
                 name: "lookup".into(),
                 description: String::new(),
+                permissions: None,
                 input_schema: serde_json::json!({"type":"object"}),
             };
             let signal = CancellationSignal::new();

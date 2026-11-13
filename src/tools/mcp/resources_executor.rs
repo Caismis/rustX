@@ -17,9 +17,8 @@ use crate::runtime::identity::ToolId;
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolCancellationPhase, ToolConcurrencyPolicy, ToolDefinition,
-    ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin,
-    ToolReplayPolicy,
+    ToolCancellationPhase, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
+    ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 
 use super::generation::McpRuntimeBinding;
@@ -71,22 +70,58 @@ enum ResourceTool {
 #[derive(Clone, Debug)]
 pub(crate) struct McpResourceBinding {
     runtime: McpRuntimeBinding,
-    approval: ToolApprovalPolicy,
+    /// Source-default three-mode permission object from the owning MCP binding.
+    permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+    /// Exact-tool permission exceptions keyed by resource helper name.
+    tool_permissions: BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
 }
 
 impl McpResourceBinding {
-    pub(crate) fn new(runtime: McpRuntimeBinding, approval: ToolApprovalPolicy) -> Self {
-        Self { runtime, approval }
+    pub(crate) fn new(runtime: McpRuntimeBinding) -> Self {
+        Self {
+            runtime,
+            permissions: None,
+            tool_permissions: BTreeMap::new(),
+        }
+    }
+
+    /// Attaches the owning MCP server's authored permission objects.
+    #[must_use]
+    pub(crate) fn with_permissions(
+        mut self,
+        permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+        tool_permissions: BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
+    ) -> Self {
+        self.permissions = permissions;
+        self.tool_permissions = tool_permissions;
+        self
     }
 }
 
 /// Exactly one group, regardless of the number of eligible sources.
 pub(crate) fn resource_definitions(
     sources: BTreeMap<ToolSourceId, McpResourceBinding>,
-) -> Vec<(ToolDefinition, Arc<dyn ToolExecutor>)> {
+) -> Vec<crate::tools::executor::ToolRegistration> {
     if sources.is_empty() {
         return Vec::new();
     }
+    // Single-source catalogs freeze the authored source/exact permission object
+    // onto the helper registration. Multi-source catalogs freeze per-server
+    // objects so named reads authorize the selected target and aggregates take
+    // the strictest queried source.
+    let frozen_permissions = (sources.len() == 1)
+        .then(|| sources.values().next().cloned())
+        .flatten();
+    let target_permissions: Vec<(String, Option<_>, BTreeMap<String, _>)> = sources
+        .iter()
+        .map(|(source, binding)| {
+            (
+                source_server_id(source).as_str().to_owned(),
+                binding.permissions,
+                binding.tool_permissions.clone(),
+            )
+        })
+        .collect();
     let sources = Arc::new(sources);
     let servers: Vec<_> = sources.keys().map(source_server_id).collect();
     let servers = serde_json::to_string(&servers).expect("server identities serialize");
@@ -109,15 +144,40 @@ pub(crate) fn resource_definitions(
             description: format!("{description} Authorized servers: {servers}."),
             input_schema,
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Parallel,
-            // The target source's frozen policy is resolved per invocation,
-            // before the ordinary approval boundary, by `invocation_approval`.
-            approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         };
         let executor = ResourceExecutor { operation, sources: Arc::clone(&sources) };
-        (definition, Arc::new(executor) as Arc<dyn ToolExecutor>)
+        let mut registration = crate::tools::executor::ToolRegistration::plain(
+            definition,
+            Arc::new(executor) as Arc<dyn ToolExecutor>,
+        );
+        if let Some(binding) = frozen_permissions.as_ref() {
+            if let Some(set) = binding
+                .tool_permissions
+                .get(name)
+                .copied()
+                .or(binding.permissions)
+            {
+                registration = registration.with_resource_permissions(set);
+            }
+        } else {
+            // Every authorized server must participate in aggregate strictness,
+            // including servers that inherit mode defaults (no authored object).
+            let mut targets = BTreeMap::new();
+            for (server, permissions, tool_permissions) in &target_permissions {
+                let set = tool_permissions
+                    .get(name)
+                    .copied()
+                    .or(*permissions)
+                    .unwrap_or_default();
+                targets.insert(server.clone(), set);
+            }
+            if !targets.is_empty() {
+                registration = registration.with_resource_permission_targets(targets);
+            }
+        }
+        registration
     })
     .collect()
 }
@@ -128,24 +188,6 @@ struct ResourceExecutor {
 }
 
 impl ToolExecutor for ResourceExecutor {
-    fn invocation_approval(
-        &self,
-        arguments: &serde_json::Value,
-    ) -> Result<ToolApprovalPolicy, String> {
-        let (server, _) = self.decode(arguments.clone())?;
-        let sources = self.selected_sources(server.as_deref())?;
-        Ok(
-            if sources
-                .iter()
-                .any(|(_, source)| source.approval == ToolApprovalPolicy::Always)
-            {
-                ToolApprovalPolicy::Always
-            } else {
-                ToolApprovalPolicy::Never
-            },
-        )
-    }
-
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,

@@ -360,10 +360,7 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
     document["models"].as_table_mut().unwrap().remove("local/a");
     // Require real capability construction as well as new provider/default
     // preparation; the old Session cannot bind this catalog to its selection.
-    document.as_table_mut().unwrap().insert(
-        "native_tools".into(),
-        toml::toml! { read = { approval = "always" } }.into(),
-    );
+    document["agent"]["tools"]["builtin"] = toml::Value::try_from(vec!["read", "grep"]).unwrap();
     std::fs::write(&source.user.path, toml::to_string(&document).unwrap()).unwrap();
     fixture
         .manager
@@ -425,8 +422,9 @@ async fn t09_available_default_preparation_is_independent_of_retained_session_se
             .into_iter()
             .find(|tool| tool.name == "read")
             .unwrap()
-            .approval_policy,
-        crate::tools::types::ToolApprovalPolicy::Always
+            .execution_policy,
+        // Product default after removing native_tools execution overlays.
+        crate::tools::types::ToolExecutionPolicy::ForegroundOnly
     );
     // The commit published the capabilities; the old Session keeps its
     // configured selection, still unavailable, and the published catalog.

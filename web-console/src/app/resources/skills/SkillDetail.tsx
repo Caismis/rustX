@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
-import type {SourceScope,SourceSettings} from '../../../../../protocol/app-server/v77';
+import type {SourceScope,SourceSettings} from '../../../../../protocol/app-server/v78';
 import type {AppServerClient} from '../../../client/app-server';
 import {useTranslation} from '../../../locale/react';
 import {DialogSurface} from '../../../presentation/primitives/DialogSurface';

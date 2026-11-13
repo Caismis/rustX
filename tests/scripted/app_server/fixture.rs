@@ -276,6 +276,16 @@ impl Fixture {
             .insert("local/b".into(), alternate);
         catalog["agent"].as_table_mut().unwrap().insert("tools".into(),
             toml::Value::try_from(serde_json::json!({"builtin":["read", "write", "edit", "glob", "grep", "bash", "present", "ask_user", "job_status"]})).unwrap());
+        // Tool-execution fixtures mutate via fake Builtin tools without a
+        // browser Ask; Full Access keeps Plan elevation from denying the turn.
+        // Configuration-transition fixtures keep the Plan product default so a
+        // later FullAccess write remains a real ExecutionPolicy change.
+        if tool.is_some() {
+            catalog.as_table_mut().unwrap().insert(
+                "approval_mode".into(),
+                toml::Value::String("full_access".into()),
+            );
+        }
         documents[0] = toml::to_string(&catalog).unwrap().into_bytes();
         crate::local_runtime::initialization::initialize(&host, &documents);
         phases.enter("launch analysis");
@@ -404,6 +414,11 @@ impl Fixture {
 /// One streamed OpenAI-chat completion that proposes a single tool call
 /// `<id>-call` and finishes with `tool_calls`.
 fn tool_call_reply(id: &str, name: &str, arguments: &str) -> FixtureReply {
+    let arguments = crate::scripted_suites::support::fake::scripted_call_envelope(
+        name,
+        &serde_json::from_str(arguments).expect("fixture business arguments are JSON"),
+    )
+    .to_string();
     let chunk = serde_json::json!({"id":id,"object":"chat.completion.chunk","created":1,"model":"a",
         "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":format!("{id}-call"),"type":"function",
             "function":{"name":name,"arguments":arguments}}]},"finish_reason":"tool_calls"}]});

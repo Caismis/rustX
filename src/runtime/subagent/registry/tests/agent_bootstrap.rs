@@ -23,6 +23,7 @@ async fn agent_bootstrap_ignores_activation_record_iteration_order() {
                 &first.child_agent_id,
                 message,
                 AgentActivationOrigin::ClientControl,
+                crate::runtime::types::ApprovalMode::FullAccess,
                 signal.clone()
             ),
             child.accept_delegate(),
@@ -67,6 +68,7 @@ async fn agent_bootstrap_ignores_activation_record_iteration_order() {
             &first.child_agent_id,
             "fourth",
             AgentActivationOrigin::ClientControl,
+            crate::runtime::types::ApprovalMode::FullAccess,
             signal.clone()
         ),
         fourth_child.accept_delegate(),
@@ -136,6 +138,7 @@ async fn proven_child_loss_has_identical_resume_authority_before_and_after_reope
             &admitted.child_agent_id,
             "continue after proven loss",
             AgentActivationOrigin::ClientControl,
+            crate::runtime::types::ApprovalMode::FullAccess,
             signal.clone()
         ),
         next.accept_delegate(),
@@ -352,6 +355,7 @@ async fn admission_receipts_release_observation_frontier_after_owner_installatio
                 &first.child_agent_id,
                 "rollback",
                 AgentActivationOrigin::ClientControl,
+                crate::runtime::types::ApprovalMode::FullAccess,
                 CancellationSignal::new()
             )
             .await

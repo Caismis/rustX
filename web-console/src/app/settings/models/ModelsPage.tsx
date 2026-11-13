@@ -5,7 +5,7 @@ import { useTranslation } from '../../../locale/react';
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { shallowEqual, useSelector } from '@xstate/react';
 import { Button as AriaButton, GridList, GridListItem } from 'react-aria-components';
-import type { Model, ModelLayer, ProviderView, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v77';
+import type { Model, ModelLayer, ProviderView, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v78';
 import { Badge } from '../../../presentation/settings/SettingsContent';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { Button } from '../../../presentation/primitives/Button';
@@ -290,48 +290,63 @@ export function AgentModelOptions({ value, change, models, profiles }: ModelSele
   </>;
 }
 
+type AuxiliaryAuthoring = NonNullable<ModelLayer['auxiliary']>;
+type AuxiliaryProfileAuthoring = AuxiliaryAuthoring['profile'];
+
+function auxiliaryPolicy(value: ModelLayer): AuxiliaryAuthoring {
+  return value.auxiliary ?? { mode: 'session', profile: { mode: 'lowest' } };
+}
+
 function AuxiliaryModelSelections({ value, change, models, profiles }: ModelSelectionProps) {
   const tx = useTranslation();
-  const summary = value.summary_model;
-  const title = value.title_model;
+  const auxiliary = auxiliaryPolicy(value);
   const identities = (extra?: string) => [...new Set([...models, ...(extra ? [extra] : [])])];
+  const modelId = auxiliary.mode === 'explicit' ? auxiliary.model : value.model;
+  const profileMode = auxiliary.profile?.mode ?? 'lowest';
+  const setAuxiliary = (next: AuxiliaryAuthoring) => change({ ...value, auxiliary: next });
+  const setProfile = (profile: AuxiliaryProfileAuthoring) => setAuxiliary({ ...auxiliary, profile });
   return <>
-    <Choice label={tx('settings:models-page.summary-model')} value={summary?.mode === 'explicit' ? summary.model : ''}
-      options={[['', tx('settings:copy.follow-selected-model')], ...identities(summary?.mode === 'explicit' ? summary.model : undefined).map(id => [id, id] as const)]}
-      onChange={model => change({ ...value, summary_model: model ? { ...(summary?.mode === 'explicit' ? summary : {}), mode: 'explicit', model } : { mode: 'session' } })} />
-    {summary?.mode === 'explicit' && <fieldset><legend>{tx('settings:models-page.explicit-summary-model-settings')}</legend>
-      <ModelRequestFields value={summary} variant="summary" change={summary_model => change({ ...value, summary_model })} profiles={profiles[summary.model] ?? []} />
-    </fieldset>}
-    <Choice label={tx('settings:models-page.title-model')} value={title?.mode === 'explicit' ? title.model : ''}
-      options={[['', tx('settings:copy.follow-selected-model')], ...identities(title?.mode === 'explicit' ? title.model : undefined).map(id => [id, id] as const)]}
-      onChange={model => change({ ...value, title_model: model ? { ...(title?.mode === 'explicit' ? title : {}), mode: 'explicit', model } : { mode: 'session' } })} />
-    {title?.mode === 'explicit' && <fieldset><legend>{tx('settings:models-page.explicit-title-model-settings')}</legend>
-      <ModelRequestFields value={title} variant="title" change={title_model => change({ ...value, title_model })} profiles={profiles[title.model] ?? []} />
-    </fieldset>}
-    <Choice label={tx('settings:models-page.classification-model')} value={value.classification_model?.mode === 'explicit' ? value.classification_model.model : ''}
-      options={[['', tx('settings:copy.follow-selected-model')], ...identities(value.classification_model?.mode === 'explicit' ? value.classification_model.model : undefined).map(id => [id, id] as const)]}
-      onChange={model => change({ ...value, classification_model: model ? { ...(value.classification_model?.mode === 'explicit' ? value.classification_model : {}), mode: 'explicit', model } : { mode: 'session' } })} />
-    {value.classification_model?.mode === 'explicit' && <fieldset><legend>{tx('settings:models-page.explicit-classification-model-settings')}</legend>
-      <ModelRequestFields value={value.classification_model} variant="classification" change={classification_model => change({ ...value, classification_model })} profiles={profiles[value.classification_model.model] ?? []} />
-    </fieldset>}
-    <Choice label={tx('settings:models-page.btw-model')} value={value.btw_model?.mode === 'explicit' ? value.btw_model.model : ''}
-      options={[['', tx('settings:copy.follow-selected-model')], ...identities(value.btw_model?.mode === 'explicit' ? value.btw_model.model : undefined).map(id => [id, id] as const)]}
-      onChange={model => change({ ...value, btw_model: model ? { ...(value.btw_model?.mode === 'explicit' ? value.btw_model : {}), mode: 'explicit', model } : { mode: 'session' } })} />
-    {value.btw_model?.mode === 'explicit' && <fieldset><legend>{tx('settings:models-page.explicit-btw-model-settings')}</legend>
-      <ModelRequestFields value={value.btw_model} variant="btw" change={btw_model => change({ ...value, btw_model })} profiles={profiles[value.btw_model.model] ?? []} />
-    </fieldset>}
+    <Choice label={tx('settings:models-page.auxiliary-model')} value={auxiliary.mode === 'explicit' ? auxiliary.model : ''}
+      options={[['', tx('settings:copy.follow-selected-model')], ...identities(auxiliary.mode === 'explicit' ? auxiliary.model : undefined).map(id => [id, id] as const)]}
+      onChange={model => setAuxiliary(model
+        ? { ...(auxiliary.mode === 'explicit' ? auxiliary : { profile: auxiliary.profile, request_params: auxiliary.request_params, max_output_tokens: auxiliary.max_output_tokens }), mode: 'explicit', model }
+        : { mode: 'session', profile: { mode: 'lowest' } })} />
+    <Choice label={tx('settings:models-page.auxiliary-profile-strategy')} value={profileMode}
+      options={[
+        ['lowest', tx('settings:models-page.auxiliary-profile-lowest')],
+        ['model_default', tx('settings:models-page.auxiliary-profile-model-default')],
+        ['explicit', tx('settings:models-page.auxiliary-profile-explicit')],
+      ]}
+      onChange={mode => {
+        if (mode === 'lowest') setProfile({ mode: 'lowest' });
+        else if (mode === 'model_default') setProfile({ mode: 'model_default' });
+        else {
+          const existing = auxiliary.profile?.mode === 'explicit' ? auxiliary.profile.id : undefined;
+          const first = profiles[modelId ?? '']?.[0];
+          const id = existing && existing.length > 0 ? existing : first;
+          // Explicit requires a concrete Profile id; without one, keep model_default.
+          if (id) setProfile({ mode: 'explicit', id });
+          else setProfile({ mode: 'model_default' });
+        }
+      }} />
+    <p className={css.hint}>{tx('settings:models-page.auxiliary-profile-lowest-help')}</p>
+    <fieldset><legend>{tx('settings:models-page.auxiliary-model-settings')}</legend>
+      {profileMode === 'explicit' && modelId && <ModelProfileChoice label={tx('settings:models-page.auxiliary-profile')} profile={auxiliary.profile?.mode === 'explicit' ? auxiliary.profile.id : undefined}
+        profiles={profiles[modelId] ?? []}
+        onChange={id => {
+          if (!id) setProfile({ mode: 'model_default' });
+          else setProfile({ mode: 'explicit', id });
+        }} />}
+      <label>{tx('settings:models-page.output-limit-auxiliary')}<input type="number" min="1" value={auxiliary.max_output_tokens?.mode === 'limit' ? auxiliary.max_output_tokens.tokens : ''}
+        onChange={event => setAuxiliary({ ...auxiliary, max_output_tokens: event.target.value ? { mode: 'limit', tokens: Number(event.target.value) } : { mode: 'catalog_default' } })} /></label>
+      <JsonObjectEditor label={tx('settings:models-page.request-parameter-overrides-auxiliary')} value={auxiliary.request_params ?? undefined}
+        change={request_params => setAuxiliary({ ...auxiliary, request_params })} />
+    </fieldset>
   </>;
 }
 type RequestFields = Pick<ModelLayer, 'profile' | 'max_output_tokens' | 'request_params'>;
-/** Each variant owns complete, distinct labels so the Summary model's fields
- * and the outer model's fields stay unambiguously distinguishable, for a reader
- * and for a test alike, in every locale. */
 const REQUEST_FIELD_LABELS = {
-  classification: { profile: 'settings:models-page.profile-classification', limit: 'settings:models-page.output-limit-classification', params: 'settings:models-page.request-parameter-overrides-classification' },
-  btw: { profile: 'settings:models-page.profile-btw', limit: 'settings:models-page.output-limit-btw', params: 'settings:models-page.request-parameter-overrides-btw' },
   default: { profile: 'settings:models-page.profile', limit: 'settings:models-page.output-limit', params: 'settings:models-page.request-parameter-overrides' },
-  summary: { profile: 'settings:models-page.profile-summary', limit: 'settings:models-page.output-limit-summary', params: 'settings:models-page.request-parameter-overrides-summary' },
-  title: { profile: 'settings:models-page.profile-title', limit: 'settings:models-page.output-limit-title', params: 'settings:models-page.request-parameter-overrides-title' },
 } as const satisfies Record<string, Record<string, TranslationKey>>;
 /** A selection's Profile, output budget and explicit overrides. An omitted
  * Profile selects the Model's own default; an override may not repeat a key
@@ -354,6 +369,8 @@ export function ModelProfileChoice({ label, profile, profiles, onChange }: {
   const tx = useTranslation();
   const choices = new Set(profiles);
   if (profile) choices.add(profile);
+  // Empty id is not a valid Explicit Profile; the blank option clears back to
+  // the model default through the empty-string sentinel handled by callers.
   return choices.size > 0 ? <Choice label={label} value={profile ?? ''}
     options={[['', tx('settings:copy.model-default-profile')], ...[...choices].map(id => [id, id] as const)]}
     onChange={onChange}/> : null;

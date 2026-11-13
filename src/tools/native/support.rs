@@ -58,76 +58,37 @@ fn lexical_normalize(path: &Path) -> PathBuf {
     normalized
 }
 
-/// One filesystem target prepared for a native whole-file mutation.
-///
-/// The path is resolved once, before any parent directory or temporary-file
-/// side effect. Write/Edit pass this same value through to `atomic_commit`,
-/// so the ownership decision and the committed target cannot diverge merely
-/// because a final or ancestor symlink is involved.
-#[derive(Debug)]
-pub struct MutationTarget {
-    path: PathBuf,
-}
+pub use super::mutation::{BoundMutationTarget, atomic_commit, bind_mutation_target};
 
-impl MutationTarget {
-    /// The effective absolute host path that will be replaced.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-/// Resolves and authorizes one native mutation target before side effects.
-///
-/// This is deliberately not a workspace sandbox. `ManagedToolOutput` owns
-/// the only model-mutation exception: its runtime-owned namespace is
-/// read-only even though Read/Grep/Glob can inspect it.
-/// `interpreted` is the already absolute, lexically normalized result of
-/// [`interpret_path`].
-pub fn prepare_mutation_target(
-    interpreted: &Path,
+/// Binds the Write/Edit mutation target for one prepared invocation, or
+/// returns `None` for non-mutation tools.
+pub fn bind_invocation_mutation_target(
+    origin: &crate::tools::types::ToolOrigin,
+    tool_name: &str,
+    arguments: &serde_json::Value,
+    workspace_root: &Path,
     tool_output: &ManagedToolOutput,
-) -> Result<MutationTarget, String> {
-    let effective = resolve_effective_path(interpreted)?;
-    tool_output
-        .ensure_model_mutation_allowed(&effective)
-        .map_err(|error| error.to_string())?;
-    Ok(MutationTarget { path: effective })
-}
-
-/// The one file-mutation commit of the native tool plane.
-///
-/// Write and Edit both replace a whole file with a whole new content
-/// snapshot, so they share one commit: a uniquely named temporary file is
-/// created inside the target's own directory, the complete content is
-/// written to it, and it is renamed over the target. A reader of the target
-/// therefore observes either the previous file or the complete new one, and
-/// a failed commit leaves no temporary file behind.
-///
-/// `prepare_mutation_target` resolves final and ancestor symlinks before this
-/// function is called. The prepared target is therefore both the path that
-/// passed the managed-output ownership check and the path committed here;
-/// ordinary write-through semantics are retained without replacing a link.
-pub fn atomic_commit(target: &MutationTarget, content: &[u8]) -> Result<(), String> {
-    let parent = target
-        .path
-        .parent()
-        .ok_or_else(|| format!("{} has no parent directory", target.path.display()))?;
-    let temp = create_temp_in(parent)?;
-    if let Err(error) = std::fs::write(&temp, content) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(format!("cannot write {}: {error}", temp.display()));
+) -> Result<Option<BoundMutationTarget>, String> {
+    if !matches!(origin, crate::tools::types::ToolOrigin::Builtin)
+        || !matches!(tool_name, "write" | "edit")
+    {
+        return Ok(None);
     }
-    if let Err(error) = std::fs::rename(&temp, &target.path) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(format!("cannot persist {}: {error}", target.path.display()));
-    }
-    Ok(())
+    let requested = arguments
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "write/edit invocation is missing a path".to_owned())?;
+    let interpreted = interpret_path(workspace_root, requested);
+    Ok(Some(bind_mutation_target(&interpreted, tool_output)?))
 }
 
 /// Resolves all existing symlink components and preserves the effective
 /// destination of a dangling final symlink or a not-yet-created descendant.
-fn resolve_effective_path(target: &Path) -> Result<PathBuf, String> {
+///
+/// Permission classification for Write/Edit must use this same resolver so a
+/// dangling `PLAN.md` symlink cannot authorize a different host target than
+/// the mutation commit will write.
+pub(crate) fn resolve_effective_path(target: &Path) -> Result<PathBuf, String> {
     let mut candidate = lexical_normalize(target);
     for _ in 0..40 {
         match std::fs::symlink_metadata(&candidate) {
@@ -184,28 +145,6 @@ fn canonicalize_deepest_existing(path: &Path) -> std::io::Result<PathBuf> {
         .map(std::ffi::OsStr::to_os_string)
         .unwrap_or_default();
     Ok(canonicalize_deepest_existing(parent)?.join(file_name))
-}
-
-/// Creates a unique temporary file inside `parent` for the atomic commit.
-fn create_temp_in(parent: &Path) -> Result<PathBuf, String> {
-    for attempt in 0..100u32 {
-        let candidate = parent.join(format!(".rustx-tool-tmp-{}-{attempt}", std::process::id()));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(_) => return Ok(candidate),
-            Err(error) if attempt >= 99 => {
-                return Err(format!(
-                    "cannot create a temporary file in {}: {error}",
-                    parent.display()
-                ));
-            }
-            Err(_) => {}
-        }
-    }
-    Err("temporary file creation exhausted its attempts".to_owned())
 }
 
 /// A normalized failed tool result. A business-level failure of a native
@@ -284,5 +223,102 @@ pub fn success_text(
         truncation,
         workflow: None,
         managed_output: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::managed_output::ManagedToolOutput;
+
+    #[test]
+    fn external_write_and_edit_names_never_bind_local_mutation_targets() {
+        use crate::tools::types::ToolOrigin;
+        let workspace = tempfile::tempdir().unwrap();
+        let output = ManagedToolOutput::new(
+            crate::runtime::identity::ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ),
+            workspace.path().join("tool-output"),
+        )
+        .unwrap();
+        for origin in [
+            ToolOrigin::Mcp {
+                server_id: crate::runtime::identity::McpServerId::new("remote"),
+            },
+            ToolOrigin::ManagedPython {
+                package: "remote".into(),
+            },
+            ToolOrigin::Host {
+                namespace: None,
+                name: "remote".into(),
+            },
+        ] {
+            for name in ["write", "edit"] {
+                assert!(
+                    bind_invocation_mutation_target(
+                        &origin,
+                        name,
+                        &serde_json::json!({}),
+                        workspace.path(),
+                        &output
+                    )
+                    .unwrap()
+                    .is_none()
+                );
+                assert!(
+                    bind_invocation_mutation_target(
+                        &origin,
+                        name,
+                        &serde_json::json!({"path": output.root().unwrap()}),
+                        workspace.path(),
+                        &output
+                    )
+                    .unwrap()
+                    .is_none()
+                );
+            }
+        }
+        assert!(
+            bind_invocation_mutation_target(
+                &ToolOrigin::Builtin,
+                "write",
+                &serde_json::json!({}),
+                workspace.path(),
+                &output
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn bound_target_refuses_when_plan_file_is_replaced_with_external_symlink() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let outside = tempfile::tempdir().expect("outside");
+        let plan = workspace.path().join("PLAN.md");
+        std::fs::write(&plan, "plan").expect("seed plan");
+        let tool_output = ManagedToolOutput::new(
+            crate::runtime::identity::ConversationId::new(
+                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+            ),
+            workspace.path().join("tool-output"),
+        )
+        .expect("managed tool output");
+        let interpreted = interpret_path(workspace.path(), "PLAN.md");
+        let bound = bind_mutation_target(&interpreted, &tool_output).expect("bind");
+        assert_eq!(bound.path(), &plan.canonicalize().expect("canonical plan"));
+
+        std::fs::remove_file(&plan).expect("remove plan");
+        let dangling = outside.path().join("secret.txt");
+        std::os::unix::fs::symlink(&dangling, &plan).expect("replace with symlink");
+
+        let error = bound
+            .ensure_still_authorized(&tool_output)
+            .expect_err("symlink replacement invalidates authorization");
+        assert!(
+            error.contains("mutation target changed since authorization"),
+            "{error}"
+        );
+        assert!(!dangling.exists(), "outside target must stay untouched");
     }
 }

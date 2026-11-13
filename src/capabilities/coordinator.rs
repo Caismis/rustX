@@ -264,8 +264,6 @@ fn select_verified_mcp_tools(
             &candidate.description,
             &candidate.input_schema,
             binding.policy.execution,
-            binding.policy.concurrency,
-            binding.policy.approval,
         );
         if observed != wanted.identity {
             return Err(SelectedMaterializationError::SourceIdentityMismatch {
@@ -761,7 +759,7 @@ impl CapabilityCoordinator {
             // executable authority; bootstrap never exposes the base catalog.
             Arc::new(ToolRegistry::new()),
             Arc::new(AvailableToolCatalog::new(
-                config.base_tool_registry.registrations(),
+                config.base_tool_registry.validated_registrations(),
             )),
             initial_skills,
             None,
@@ -1428,19 +1426,28 @@ impl CapabilityCoordinator {
                     if discovery.capabilities.resources {
                         resource_bindings.insert(
                             source_id.clone(),
-                            crate::tools::mcp::McpResourceBinding::new(
-                                generation.binding(),
-                                binding.policy.approval,
-                            ),
+                            crate::tools::mcp::McpResourceBinding::new(generation.binding())
+                                .with_permissions(
+                                    binding.permissions,
+                                    binding.tool_permissions.clone(),
+                                ),
                         );
                     }
-                    mcp_tools.extend(crate::tools::mcp::definitions_owned_for_source(
-                        &source_id,
-                        server_id,
-                        binding.policy,
-                        &generation.binding(),
-                        discovery.tools,
-                    ));
+                    mcp_tools.extend(
+                        crate::tools::mcp::definitions_owned_for_source(
+                            &source_id,
+                            server_id,
+                            binding.policy,
+                            &generation.binding(),
+                            discovery.tools,
+                        )
+                        .into_iter()
+                        .map(|(definition, executor)| {
+                            crate::tools::mcp::with_binding_permissions(
+                                definition, executor, binding,
+                            )
+                        }),
+                    );
                     mcp_runtimes.push(generation);
                     availability.insert(source_id.clone(), CapabilitySourceState::Ready);
                 }
@@ -1461,11 +1468,7 @@ impl CapabilityCoordinator {
                 CapabilitySourceState::unavailable(reason),
             );
         }
-        discovered_tools.extend(
-            mcp_tools
-                .into_iter()
-                .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
-        );
+        discovered_tools.extend(mcp_tools);
         let selection = select_tools(
             &discovered_tools,
             self.inner.extension_tools.registrations(),
@@ -1939,10 +1942,8 @@ impl CapabilityCoordinator {
                 }
                 resource_bindings.insert(
                     source_id.clone(),
-                    crate::tools::mcp::McpResourceBinding::new(
-                        generation.binding(),
-                        binding.policy.approval,
-                    ),
+                    crate::tools::mcp::McpResourceBinding::new(generation.binding())
+                        .with_permissions(binding.permissions, binding.tool_permissions.clone()),
                 );
             }
             let selected: Vec<_> = plan
@@ -1960,7 +1961,7 @@ impl CapabilityCoordinator {
                 Ok(definitions) => {
                     mcp_epochs.insert(server_id.clone(), epoch);
                     registrations.extend(definitions.into_iter().map(|(definition, executor)| {
-                        ToolRegistration::plain(definition, executor)
+                        crate::tools::mcp::with_binding_permissions(definition, executor, binding)
                     }));
                     mcp_runtimes.push(generation);
                 }
@@ -1981,16 +1982,26 @@ impl CapabilityCoordinator {
         // Tools are composed alongside it from the extension set its invoking
         // generation froze into `ResolvedSubagentSpec` — never from its
         // ordinary selection, and never from a document it reads itself.
-        let available_tools = AvailableToolCatalog::new(registrations.clone())
-            .with_resource_sources(resource_bindings.keys().cloned().collect());
-        registrations.extend(
-            crate::tools::mcp::resource_definitions(resource_bindings.clone())
-                .into_iter()
-                .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
-        );
+        let available_registry = match ToolRegistry::from_registrations(registrations) {
+            Ok(registry) => registry,
+            Err(error) => {
+                retire_candidate_runtimes(mcp_runtimes).await;
+                return Err(CapabilityPreparationError::ToolActivation(
+                    error.to_string(),
+                ));
+            }
+        };
+        let available_tools =
+            AvailableToolCatalog::new(available_registry.validated_registrations())
+                .with_resource_sources(resource_bindings.keys().cloned().collect());
         let candidate_registry = match ToolRegistry::from_registrations(
-            registrations
-                .into_iter()
+            available_tools
+                .registrations()
+                .iter()
+                .cloned()
+                .chain(crate::tools::mcp::resource_definitions(
+                    resource_bindings.clone(),
+                ))
                 .chain(self.inner.extension_tools.registrations().iter().cloned()),
         ) {
             Ok(registry) => registry,
@@ -3073,6 +3084,8 @@ body
                     headers: std::collections::BTreeMap::new(),
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
+                permissions: None,
+                tool_permissions: std::collections::BTreeMap::new(),
             };
             candidate
                 .resource_inputs
@@ -3599,8 +3612,6 @@ body
                                 description: (*name).into(),
                                 input_schema: serde_json::json!({"type":"object"}),
                                 execution_policy: ToolExecutionPolicy::ForegroundOnly,
-                                concurrency_policy: ToolConcurrencyPolicy::Sequential,
-                                approval_policy: ToolApprovalPolicy::Never,
                                 replay_policy: ToolReplayPolicy::Never,
                                 origin: match &source {
                                     ToolSourceId::Mcp(id) => ToolOrigin::Mcp {
@@ -3617,10 +3628,11 @@ body
                         )
                     })
                     .collect::<Vec<_>>();
-                candidate.available_tools =
-                    Arc::new(AvailableToolCatalog::new(registrations.clone()));
-                candidate.candidate_registry =
-                    Arc::new(ToolRegistry::from_registrations(registrations).unwrap());
+                let registry = ToolRegistry::from_registrations(registrations).unwrap();
+                candidate.available_tools = Arc::new(AvailableToolCatalog::new(
+                    registry.validated_registrations(),
+                ));
+                candidate.candidate_registry = Arc::new(registry);
                 candidate
                     .availability
                     .insert(source.clone(), CapabilitySourceState::Ready);
@@ -4181,6 +4193,8 @@ mod mcp_race_tests {
                         )]),
                     },
                     policy: crate::tools::types::ToolInvocationPolicy::default(),
+                    permissions: None,
+                    tool_permissions: std::collections::BTreeMap::new(),
                 },
             )]),
             base_environment: ToolEnvironment::new(),
@@ -4227,6 +4241,8 @@ mod mcp_race_tests {
                             )]),
                         },
                         policy: crate::tools::types::ToolInvocationPolicy::default(),
+                        permissions: None,
+                        tool_permissions: std::collections::BTreeMap::new(),
                     },
                 )
             })
@@ -4672,6 +4688,7 @@ mod mcp_race_tests {
                 questionnaire_requester: None,
                 todos: None,
                 subagent: None,
+                bound_mutation: None,
             },
         )
         .completion

@@ -173,44 +173,31 @@
       },
       "type": "object"
     },
-    "ApprovalMode": {
-      "description": "The runtime-wide control state for tool approval behavior.\n\n`Policy` consults each resolved Tool's\n[`ToolApprovalPolicy`](crate::tools::types::ToolApprovalPolicy).\n`FullAccess` changes only the effective approval result to `Never`; it\nnever changes availability, activation, execution ownership, concurrency,\nor tool authority.",
-      "oneOf": [
-        {
-          "const": "policy",
-          "description": "Use each Tool's configured approval policy.",
-          "type": "string"
-        },
-        {
-          "const": "full_access",
-          "description": "Bypass approval prompts for eligible tool calls only.",
-          "type": "string"
-        }
-      ]
-    },
-    "ApprovalPolicyDocument": {
-      "description": "The configurable HITL approval policy of one Tool.",
-      "oneOf": [
-        {
-          "const": "never",
-          "description": "Execute without an approval interaction.",
-          "type": "string"
-        },
-        {
-          "const": "always",
-          "description": "Require an approval interaction before execution.",
-          "type": "string"
-        }
-      ]
-    },
     "AuxiliaryModelAuthoring": {
       "oneOf": [
         {
           "additionalProperties": false,
           "properties": {
+            "max_output_tokens": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModelOutput"
+                }
+              ]
+            },
             "mode": {
               "const": "session",
               "type": "string"
+            },
+            "profile": {
+              "$ref": "#/$defs/AuxiliaryProfileAuthoring",
+              "default": {
+                "mode": "lowest"
+              }
+            },
+            "request_params": {
+              "$ref": "#/$defs/RequestParamsJson",
+              "default": "{}"
             }
           },
           "required": [
@@ -236,11 +223,10 @@
               "$ref": "#/$defs/ModelRef"
             },
             "profile": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/ModelProfileId"
-                }
-              ]
+              "$ref": "#/$defs/AuxiliaryProfileAuthoring",
+              "default": {
+                "mode": "lowest"
+              }
             },
             "request_params": {
               "$ref": "#/$defs/RequestParamsJson",
@@ -250,6 +236,53 @@
           "required": [
             "mode",
             "model"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AuxiliaryProfileAuthoring": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "lowest",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "const": "model_default",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/ModelProfileId"
+            },
+            "mode": {
+              "const": "explicit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "id"
           ],
           "type": "object"
         }
@@ -402,21 +435,6 @@
       },
       "type": "object"
     },
-    "ConcurrencyPolicyDocument": {
-      "description": "The configurable in-batch scheduling policy of one tool.",
-      "oneOf": [
-        {
-          "const": "sequential",
-          "description": "Calls within one batch run one at a time.",
-          "type": "string"
-        },
-        {
-          "const": "parallel",
-          "description": "Calls within one batch may run concurrently.",
-          "type": "string"
-        }
-      ]
-    },
     "ContextLayer": {
       "additionalProperties": false,
       "properties": {
@@ -448,22 +466,22 @@
       "description": "The declared source of one provider credential.\n\nThe syntax is exactly two forms and is never extended implicitly: a\nliteral string, or `$ENV_VAR`.",
       "type": "string"
     },
-    "ExecutionPolicyDocument": {
-      "description": "The configurable execution-ownership policy of one tool.",
+    "ExecutionPermissionMode": {
+      "description": "The runtime-wide execution-permission mode.\n\nModes are built into Rust and are not extensible through TOML presets.\nChanging mode never changes Tool Registry membership, model-facing names,\ntool Schema, MCP discovery, or capability selection.",
       "oneOf": [
         {
-          "const": "foreground_only",
-          "description": "Attempt-owned execution only.",
+          "const": "plan",
+          "description": "Native reads and approved bookkeeping are allowed; Write/Edit may\nautomatically change only workspace-root `PLAN.md`; Bash requires a\nproven read-only classification. Other defaults refuse without a\nnonblank `elevation_reason`.",
           "type": "string"
         },
         {
-          "const": "background_only",
-          "description": "Conversation-owned execution only.",
+          "const": "automatic",
+          "description": "Retain Plan's deterministic fast paths. Remaining defaults go through\nthe shared Auxiliary permission reviewer. Denied calls may escalate\nwith `elevation_reason`.",
           "type": "string"
         },
         {
-          "const": "model_selectable",
-          "description": "The model selects the execution mode per invocation.",
+          "const": "full_access",
+          "description": "Default calls are allowed without Auxiliary or ordinary human review.\nEffective explicit `deny` and `ask` resource settings still apply.",
           "type": "string"
         }
       ]
@@ -514,28 +532,6 @@
           "type": "object"
         }
       ]
-    },
-    "InvocationPolicyDocument": {
-      "additionalProperties": false,
-      "description": "One tool invocation policy document.",
-      "properties": {
-        "approval": {
-          "$ref": "#/$defs/ApprovalPolicyDocument",
-          "default": "never",
-          "description": "Human approval behavior for otherwise eligible calls."
-        },
-        "concurrency": {
-          "$ref": "#/$defs/ConcurrencyPolicyDocument",
-          "default": "sequential",
-          "description": "In-batch scheduling policy."
-        },
-        "execution": {
-          "$ref": "#/$defs/ExecutionPolicyDocument",
-          "default": "foreground_only",
-          "description": "Foreground/background ownership policy."
-        }
-      },
-      "type": "object"
     },
     "McpStartupPolicyLayer": {
       "additionalProperties": false,
@@ -646,14 +642,7 @@
     "ModelLayer": {
       "additionalProperties": false,
       "properties": {
-        "btw_model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AuxiliaryModelAuthoring"
-            }
-          ]
-        },
-        "classification_model": {
+        "auxiliary": {
           "anyOf": [
             {
               "$ref": "#/$defs/AuxiliaryModelAuthoring"
@@ -686,20 +675,6 @@
           "anyOf": [
             {
               "$ref": "#/$defs/RequestParamsJson"
-            }
-          ]
-        },
-        "summary_model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AuxiliaryModelAuthoring"
-            }
-          ]
-        },
-        "title_model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AuxiliaryModelAuthoring"
             }
           ]
         }
@@ -769,73 +744,6 @@
     "ModelRef": {
       "description": "An authored Model identity. Its spelling has no provider or wire semantics.",
       "type": "string"
-    },
-    "NativePolicyOverrideDocument": {
-      "additionalProperties": false,
-      "description": "Explicit native policy axes, resolved over that tool's product default.\nAbsence never applies the generic external-tool policy to a native tool.",
-      "properties": {
-        "approval": {
-          "$ref": "#/$defs/ApprovalPolicyDocument",
-          "description": "Tool approval override."
-        },
-        "concurrency": {
-          "$ref": "#/$defs/ConcurrencyPolicyDocument",
-          "description": "In-batch scheduling override."
-        },
-        "execution": {
-          "$ref": "#/$defs/ExecutionPolicyDocument",
-          "description": "Foreground/background ownership override."
-        }
-      },
-      "type": "object"
-    },
-    "NativeToolsLayer": {
-      "additionalProperties": false,
-      "properties": {
-        "bash": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativePolicyOverrideDocument"
-            }
-          ]
-        },
-        "edit": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativePolicyOverrideDocument"
-            }
-          ]
-        },
-        "glob": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativePolicyOverrideDocument"
-            }
-          ]
-        },
-        "grep": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativePolicyOverrideDocument"
-            }
-          ]
-        },
-        "read": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativePolicyOverrideDocument"
-            }
-          ]
-        },
-        "write": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativePolicyOverrideDocument"
-            }
-          ]
-        }
-      },
-      "type": "object"
     },
     "PluginsLayer": {
       "additionalProperties": false,
@@ -1132,7 +1040,7 @@
     "approval_mode": {
       "anyOf": [
         {
-          "$ref": "#/$defs/ApprovalMode"
+          "$ref": "#/$defs/ExecutionPermissionMode"
         }
       ]
     },
@@ -1159,14 +1067,6 @@
         }
       ]
     },
-    "mcp_tool_policies": {
-      "additionalProperties": {
-        "$ref": "#/$defs/InvocationPolicyDocument"
-      },
-      "type": [
-        "object"
-      ]
-    },
     "model_timeout_policy": {
       "anyOf": [
         {
@@ -1180,13 +1080,6 @@
       },
       "type": [
         "object"
-      ]
-    },
-    "native_tools": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/NativeToolsLayer"
-        }
       ]
     },
     "providers": {

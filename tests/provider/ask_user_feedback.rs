@@ -52,7 +52,7 @@ fn rejection_history(protocol: ModelProtocol) -> ModelRequest {
         id: ToolCallId::new(CALL_IDS[1]),
         tool_id: ask_user.id.clone(),
         name: ask_user.name.clone(),
-        arguments: json!({"questions": [{
+        arguments: crate::common::tool_call_envelope(json!({"questions": [{
             "question": "Choose the implementation approach.",
             "header": "Approach",
             "options": [
@@ -60,7 +60,7 @@ fn rejection_history(protocol: ModelProtocol) -> ModelRequest {
                 {"label": "Independent", "description": "Second approach."},
                 {"label": "PRIVATE_DUPLICATE_LABEL", "description": "Third approach."}
             ]
-        }]}),
+        }]})),
     };
     let PreflightOutcome::Rejected { tool_id, error, .. } = fixture
         .registry
@@ -85,14 +85,14 @@ fn rejection_history(protocol: ModelProtocol) -> ModelRequest {
             id: ToolCallId::new(CALL_IDS[0]),
             tool_id: read.id.clone(),
             name: read.name.clone(),
-            arguments: json!({"path": "before.txt"}),
+            arguments: crate::common::tool_call_envelope(json!({"path": "before.txt"})),
         },
         rejected_call,
         ToolCall {
             id: ToolCallId::new(CALL_IDS[2]),
             tool_id: read.id.clone(),
             name: read.name.clone(),
-            arguments: json!({"path": "after.txt"}),
+            arguments: crate::common::tool_call_envelope(json!({"path": "after.txt"})),
         },
     ];
     let results = [
@@ -448,7 +448,8 @@ fn argument_stream(protocol: ModelProtocol, fragments: &[String]) -> String {
 
 async fn assert_unicode_stream(protocol: ModelProtocol) {
     let original = unicode_questionnaire();
-    let raw = serde_json::to_string(&original).unwrap();
+    let envelope = json!({"arguments":original});
+    let raw = serde_json::to_string(&envelope).unwrap();
     // Single-character fragments deliberately split every multi-character
     // Chinese field value and JSON escape; adapters must assemble them exactly.
     let fragments: Vec<String> = raw.chars().map(|character| character.to_string()).collect();
@@ -506,7 +507,7 @@ async fn assert_unicode_stream(protocol: ModelProtocol) {
     assert_eq!(call.tool_id, definition.id);
     assert_eq!(call.name, "ask_user");
     assert_eq!(
-        call.arguments, original,
+        call.arguments, envelope,
         "deserialized field values remain exact"
     );
     let PreflightOutcome::Ready(prepared) = fixture.registry.preflight(call).unwrap() else {

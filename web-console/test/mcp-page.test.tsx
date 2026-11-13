@@ -270,3 +270,26 @@ it('JSON presents a named definition without transaction metadata and accepts bo
  expect(parseMcpJson(JSON.stringify({mcpServers:{docs:value.definition}})).docs.definition).toEqual(value.definition);
  expect(text).not.toContain('retained_env');
 });
+
+it('JSON round-trips native permission defaults, mixed overrides, and optional tool permissions',()=>{
+ const permissions={plan:'ask' as const,automatic:'default' as const,full_access:'allow' as const};
+ const tools={
+  read:{},
+  write:{permissions:null},
+  search:{permissions:{plan:'deny' as const,automatic:'ask' as const,full_access:'default' as const}},
+ };
+ for (const definition of [
+  {command:'server',permissions,tools},
+  {command:'server',permissions:null,tools:{read:{}}},
+  {type:'http' as const,url:'https://example.com/mcp',permissions,tools:{read:{permissions:null}}},
+ ]) {
+  const value={definition};
+  const text=formatMcpJson('docs',value);
+  expect(parseMcpJson(text).docs.definition).toEqual(definition);
+  expect(parseMcpJson(JSON.stringify({mcpServers:{docs:definition}})).docs.definition).toEqual(definition);
+ }
+ expect(()=>parseMcpJson(JSON.stringify({command:'server',permissions:{plan:'ask',automatic:'default',full_access:'maybe'}}))).toThrow(/default, allow, ask, or deny/);
+ expect(()=>parseMcpJson(JSON.stringify({command:'server',tools:{read:{permissions:{plan:'ask',automatic:'ask'}}}}))).toThrow(/plan, automatic, and full_access/);
+ expect(()=>parseMcpJson(JSON.stringify({command:'server',tools:{read:{timeoutMs:1}}}))).toThrow('Unsupported field');
+});
+

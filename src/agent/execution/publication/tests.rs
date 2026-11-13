@@ -204,7 +204,7 @@ async fn long_attempt_history_is_durable_and_boundedly_inspectable() {
             id: ToolCallId::new(format!("call-{turn}")),
             tool_id: ToolId::new("tool-alpha"),
             name: "alpha".to_owned(),
-            arguments: serde_json::json!({}),
+            arguments: crate::scripted_suites::common::tool_call_envelope(serde_json::json!({})),
         };
         scripts.push(tool_call_script(&call));
     }

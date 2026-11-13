@@ -314,12 +314,11 @@ pub struct ResolvedSubagentSpec {
 ///                            effective selection requires. The bindings
 ///                            behind them are physical (transport, resource
 ///                            root) or secret (credentials). Ordinary Tools'
-///                            policies are framed in their frozen definitions
-///                            and cross-process identities above. Resource
-///                            helpers consume source approval even with zero
-///                            ordinary Tools, so it is framed with the source
-///                            below; they do not consume source execution or
-///                            concurrency policy.
+///                            effective three-mode permissions are framed
+///                            per selected Tool, using exact-tool overrides
+///                            before source defaults. Resource helpers frame
+///                            the same precedence per authorized source even
+///                            when no ordinary Tool is selected.
 /// effective extensions       the closed composition's EFFECTIVE framing:
 ///                            an omitted timezone frames as the UTC it
 ///                            actually renders, and a DISABLED Time
@@ -396,6 +395,8 @@ pub struct SubagentExecutionProfileDigest(String);
 ///           including resource-only sources without ordinary Tool identities.
 /// v7 -> v8  Skill versions identify definitions; live source/location bindings
 ///           execute directly instead of being remapped onto child copies.
+/// v8 -> v9  Frames effective three-mode permissions for selected source Tools
+///           and authorized Resource helpers, including exact-tool overrides.
 /// ```
 ///
 /// Both `v2 -> v3` corrections change what an existing preimage means: the
@@ -405,7 +406,7 @@ pub struct SubagentExecutionProfileDigest(String);
 /// visibly a different framing rather than silently reinterpreted under the
 /// corrected rules — so the version moves even though `v2` never shipped and
 /// no compatibility mode exists.
-pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v8";
+pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v9";
 
 impl SubagentExecutionProfileDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
@@ -1266,15 +1267,8 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
     // invocation" — and the explicit one is framed by the SAME helper as the
     // primary, so no behavior-affecting summary field can be dropped from
     // the identity while the equivalent primary field is kept.
-    match summary {
-        crate::model::frozen::FrozenSummaryModel::Session => {
-            field(&mut hasher, "model_summary", "session");
-        }
-        crate::model::frozen::FrozenSummaryModel::Explicit(invocation) => {
-            field(&mut hasher, "model_summary", "explicit");
-            frame_frozen_model_invocation(&mut hasher, "model_summary", invocation);
-        }
-    }
+    field(&mut hasher, "model_summary", "auxiliary");
+    frame_frozen_model_invocation(&mut hasher, "model_summary", &summary.0);
     // Tool and Skill selections are semantically unordered and arrive
     // canonically ordered and deduplicated, so the framing preserves that
     // order without imposing a second one.
@@ -1316,6 +1310,24 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
                 // here as that frozen value, and this digest never performs
                 // the verification itself.
                 field(&mut hasher, "tool.source_identity", identity.as_str());
+                let permissions = framing
+                    .materialization
+                    .sources
+                    .get(source_id)
+                    .map(|binding| {
+                        binding
+                            .tool_permissions
+                            .get(name)
+                            .copied()
+                            .or(binding.permissions)
+                            .unwrap_or_default()
+                    })
+                    .unwrap_or_default();
+                field(
+                    &mut hasher,
+                    "tool.permissions",
+                    &canonical_json(&permissions),
+                );
             }
         }
     }
@@ -1379,17 +1391,28 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
     for (source, binding) in &framing.materialization.sources {
         field(&mut hasher, "materialization_source", &source.to_string());
         if framing.resource_sources.contains(source) {
-            // Resource helpers inherit only approval from the source policy.
-            // Physical transport/credentials never enter the semantic identity.
-            let crate::tools::types::ToolInvocationPolicy {
-                approval,
-                execution: _,
-                concurrency: _,
-            } = binding.policy;
+            for name in crate::tools::mcp::RESOURCE_TOOL_NAMES {
+                let permissions = binding
+                    .tool_permissions
+                    .get(name)
+                    .copied()
+                    .or(binding.permissions)
+                    .unwrap_or_default();
+                field(&mut hasher, "resource_helper", name);
+                field(
+                    &mut hasher,
+                    "resource_helper.permissions",
+                    &canonical_json(&permissions),
+                );
+            }
+
+            // Resource helpers inherit execution ownership from the source
+            // policy. Physical transport/credentials never enter the semantic
+            // identity; permission is owned by the Issue #544 mode matrix.
             field(
                 &mut hasher,
-                "materialization_source.resource_approval_policy",
-                &format!("{approval:?}"),
+                "materialization_source.resource_execution_policy",
+                &format!("{:?}", binding.policy.execution),
             );
         }
     }
@@ -1417,7 +1440,7 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
 /// # The classification
 ///
 /// Every field of [`ToolDefinition`] is destructured, so adding one is a
-/// compile error until it is decided. All nine are **included**:
+/// compile error until it is decided. All seven are **included**:
 ///
 /// ```text
 /// id                  the capability identity the child resolves against
@@ -1428,11 +1451,13 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
 /// input_schema        the accepted-argument contract, framed through the
 ///                     rustX-owned canonical JSON writer
 /// execution_policy    attempt-owned vs conversation-owned vs model-selected
-/// concurrency_policy  in-batch sequential barrier vs parallel group
-/// approval_policy     whether an eligible invocation stops for a human
 /// replay_policy       whether the runtime may re-execute after an unknown
 ///                     outcome
 /// ```
+///
+/// Permission is decided by the built-in mode matrix and resource overrides,
+/// never by a per-tool authoring axis on the frozen definition. Batch slots
+/// may run concurrently; domain owners keep their own synchronization.
 ///
 /// `replay_policy` is included deliberately rather than by omission. It is
 /// today's frozen declaration of whether automatic re-execution after a crash
@@ -1457,8 +1482,6 @@ fn frame_tool_definition(hasher: &mut Sha256, prefix: &str, definition: &ToolDef
         description,
         input_schema,
         execution_policy,
-        concurrency_policy,
-        approval_policy,
         replay_policy,
         origin,
     } = definition;
@@ -1500,16 +1523,6 @@ fn frame_tool_definition(hasher: &mut Sha256, prefix: &str, definition: &ToolDef
         hasher,
         &key("execution_policy"),
         &format!("{execution_policy:?}"),
-    );
-    field(
-        hasher,
-        &key("concurrency_policy"),
-        &format!("{concurrency_policy:?}"),
-    );
-    field(
-        hasher,
-        &key("approval_policy"),
-        &format!("{approval_policy:?}"),
     );
     field(hasher, &key("replay_policy"), &format!("{replay_policy:?}"));
 }
@@ -1689,10 +1702,7 @@ mod tests {
     };
     use crate::runtime::identity::{McpServerId, ToolId};
     use crate::runtime::subagent::catalog::{AgentCatalog, NamedAgentDefinition, SubagentName};
-    use crate::tools::types::{
-        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
-        ToolReplayPolicy,
-    };
+    use crate::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 
     fn tool(name: &str, origin: ToolOrigin) -> ToolDefinition {
         ToolDefinition {
@@ -1701,8 +1711,6 @@ mod tests {
             description: format!("{name} tool"),
             input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin,
         }
@@ -1725,11 +1733,15 @@ mod tests {
         AvailableToolCatalog::new(
             definitions
                 .into_iter()
-                .map(|definition| {
-                    crate::tools::executor::ToolRegistration::plain(
-                        definition,
-                        std::sync::Arc::new(UnusedExecutor),
-                    )
+                .flat_map(|definition| {
+                    crate::tools::executor::ToolRegistry::from_registrations([
+                        crate::tools::executor::ToolRegistration::plain(
+                            definition,
+                            std::sync::Arc::new(UnusedExecutor),
+                        ),
+                    ])
+                    .unwrap()
+                    .validated_registrations()
                 })
                 .collect(),
         )
@@ -1836,6 +1848,7 @@ mod tests {
                 tools,
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 inherit_project_instructions: true,
+                permissions: None,
                 extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
                     crate::context::AgentStatusConfig::default(),
                 )
@@ -1926,6 +1939,8 @@ mod tests {
                 environment: std::collections::BTreeMap::new(),
             },
             policy: crate::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
         };
         let configured: crate::tools::mcp::McpServerBindings =
             [(github.clone(), binding()), (unrelated.clone(), binding())]
@@ -2019,10 +2034,9 @@ mod tests {
                     cwd: None,
                     environment: std::collections::BTreeMap::new(),
                 },
-                policy: crate::tools::types::ToolInvocationPolicy {
-                    approval: crate::tools::types::ToolApprovalPolicy::Always,
-                    ..Default::default()
-                },
+                policy: crate::tools::types::ToolInvocationPolicy::default(),
+                permissions: None,
+                tool_permissions: std::collections::BTreeMap::new(),
             };
             let mut configured = [(server.clone(), binding.clone())].into();
             let frozen =
@@ -2034,11 +2048,13 @@ mod tests {
                 frozen.materialization.sources,
                 [(source.clone(), binding)].into()
             );
-            configured.get_mut(&server).unwrap().policy.approval =
-                crate::tools::types::ToolApprovalPolicy::Never;
+            configured.get_mut(&server).unwrap().policy =
+                crate::tools::types::ToolInvocationPolicy::new(
+                    crate::tools::types::ToolExecutionPolicy::BackgroundOnly,
+                );
             assert_eq!(
-                frozen.materialization.sources[&source].policy.approval,
-                crate::tools::types::ToolApprovalPolicy::Always,
+                frozen.materialization.sources[&source].policy,
+                crate::tools::types::ToolInvocationPolicy::default(),
                 "resource-only MCP and managed Python children retain the captured source policy"
             );
             configured.clear();
@@ -2220,6 +2236,7 @@ mod tests {
                 tools,
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 inherit_project_instructions: true,
+                permissions: None,
                 extensions,
                 workflows: std::collections::BTreeSet::default(),
             },
@@ -2291,6 +2308,7 @@ mod tests {
                     tools: Vec::new(),
                     skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                     inherit_project_instructions: true,
+                    permissions: None,
                     extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
                         crate::context::AgentStatusConfig::default(),
                     )
@@ -2310,6 +2328,7 @@ mod tests {
                     tools: Vec::new(),
                     skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                     inherit_project_instructions: true,
+                    permissions: None,
                     extensions: crate::extensions::NativeAgentExtensions::with_agent_status(
                         crate::context::AgentStatusConfig::default(),
                     )
@@ -2386,7 +2405,7 @@ mod tests {
                     crate::model::catalog::ModelRef::parse("local/model-a").expect("model"),
                 ),
                 primary: frozen_invocation(),
-                summary: crate::model::frozen::FrozenSummaryModel::Session,
+                summary: crate::model::frozen::FrozenSummaryModel(Box::new(frozen_invocation())),
             },
             tools: Vec::new(),
             resource_sources: BTreeSet::new(),
@@ -2412,7 +2431,7 @@ mod tests {
             // an override would have replaced away.
             "An entirely different routing description.".to_owned(), instructions: "instructions".to_owned(), model: None, execution_deadline: None, tools: vec![AgentToolSelection::Builtin {
                 name: "read".to_owned(),
-            }], skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(vec!["some-skill".to_owned()]), inherit_project_instructions: true, extensions: crate::extensions::NativeAgentExtensions::with_agent_status(crate::context::AgentStatusConfig::default()).and_todo(), workflows: std::collections::BTreeSet::default() }, std::path::PathBuf::from("/w/reviewer.md"))
+            }], skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(vec!["some-skill".to_owned()]), inherit_project_instructions: true, extensions: crate::extensions::NativeAgentExtensions::with_agent_status(crate::context::AgentStatusConfig::default()).and_todo(), workflows: std::collections::BTreeSet::default(), permissions: None }, std::path::PathBuf::from("/w/reviewer.md"))
         .expect("definition");
 
         let mut relabelled = spec.clone();
@@ -2502,16 +2521,12 @@ mod tests {
             let mut invocation = frozen_invocation();
             mutate(&mut invocation);
             let mut spec = base.clone();
-            spec.model.summary =
-                crate::model::frozen::FrozenSummaryModel::Explicit(Box::new(invocation));
+            spec.model.summary = crate::model::frozen::FrozenSummaryModel(Box::new(invocation));
             spec
         };
 
         let mut variants = vec![
-            // "follows the session primary" and "an explicit invocation that
-            // happens to equal the primary" are two different policies.
             base.clone(),
-            explicit(&|_| {}),
             explicit(&|invocation| {
                 invocation.model =
                     crate::model::catalog::ModelRef::parse("local/model-b").expect("model");
@@ -2618,18 +2633,14 @@ mod tests {
 
         let mut explicit_summary = base.clone();
         explicit_summary.model.summary =
-            crate::model::frozen::FrozenSummaryModel::Explicit(Box::new(frozen_invocation()));
+            crate::model::frozen::FrozenSummaryModel(Box::new(frozen_invocation()));
         let explicit_identity = explicit_summary.profile_digest();
         let mut rebound_summary = explicit_summary.clone();
-        if let crate::model::frozen::FrozenSummaryModel::Explicit(invocation) =
-            &mut rebound_summary.model.summary
-        {
-            rebind(invocation);
-        }
+        rebind(&mut rebound_summary.model.summary.0);
         assert_eq!(
             rebound_summary.profile_digest(),
             explicit_identity,
-            "an explicit summary's provider binding is excluded exactly like the primary's"
+            "an auxiliary summary's provider binding is excluded exactly like the primary's"
         );
 
         let mut reconfigured = base.clone();
@@ -2691,7 +2702,7 @@ mod tests {
     fn sub258_the_profile_framing_is_versioned() {
         assert_eq!(
             super::SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION,
-            "rustx-subagent-profile-v8",
+            "rustx-subagent-profile-v9",
             "the corrected framing is not one of the readings it replaced"
         );
         assert!(
@@ -2719,8 +2730,6 @@ mod tests {
                 "required": ["path"]
             }),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         }
@@ -2774,14 +2783,6 @@ mod tests {
         let mut model_selected = base.clone();
         model_selected.execution_policy = ToolExecutionPolicy::ModelSelectable;
         variants.push(spec_with_builtin(model_selected));
-
-        let mut parallel = base.clone();
-        parallel.concurrency_policy = ToolConcurrencyPolicy::Parallel;
-        variants.push(spec_with_builtin(parallel));
-
-        let mut gated = base.clone();
-        gated.approval_policy = ToolApprovalPolicy::Always;
-        variants.push(spec_with_builtin(gated));
 
         // `replay_policy` participates deliberately: it is the frozen
         // declaration of whether re-execution after an unknown outcome is
@@ -2867,7 +2868,7 @@ mod tests {
     /// cross-process identity, and neither substitutes for the other.
     ///
     /// `SourceToolIdentity` commits the server-published contract — name,
-    /// description, canonical schema, and the three invocation policies — but
+    /// description, canonical schema, and execution ownership — but
     /// deliberately not `replay_policy` or `ToolId`. Relying on it alone would
     /// therefore reintroduce exactly the collision this issue corrects, on the
     /// MCP side. The identity stays framed because it is an independently
@@ -2882,8 +2883,6 @@ mod tests {
             description: "Reads one issue.".to_owned(),
             input_schema: serde_json::json!({"type": "object"}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Mcp {
                 server_id: server.clone(),
@@ -2921,12 +2920,12 @@ mod tests {
         );
 
         // A field the cross-process identity does cover moves both.
-        let mut gated = definition.clone();
-        gated.approval_policy = ToolApprovalPolicy::Always;
-        assert_ne!(identity_of(&definition), identity_of(&gated));
+        let mut backgrounded = definition.clone();
+        backgrounded.execution_policy = ToolExecutionPolicy::BackgroundOnly;
+        assert_ne!(identity_of(&definition), identity_of(&backgrounded));
         assert_ne!(
             spec_with(definition.clone()).profile_digest(),
-            spec_with(gated).profile_digest()
+            spec_with(backgrounded).profile_digest()
         );
 
         // And the frozen identity is itself framed: a specification that
@@ -2971,35 +2970,122 @@ mod tests {
             "the framing identifies the value the resolver actually freezes"
         );
 
-        // Transport, credentials and resource root are physical or secret;
-        // only the server identity a required source contributes is framed.
-        let server = McpServerId::new("github");
-        let binding = |command: &str| crate::tools::mcp::McpServerBinding {
-            credentials: crate::credentials::SourceCredentials::default(),
-            transport: crate::tools::mcp::McpTransportConfig::Stdio {
-                program: command.to_owned(),
-                args: Vec::new(),
-                cwd: None,
-                environment: std::collections::BTreeMap::new(),
-            },
-            policy: crate::tools::types::ToolInvocationPolicy::default(),
-        };
-        let plane = |command: &str| {
-            let mut spec = frozen_spec();
-            spec.materialization = super::ResolvedSubagentMaterialization {
-                sources: [(
-                    crate::capabilities::ToolSourceId::Mcp(server.clone()),
-                    binding(command),
-                )]
-                .into_iter()
-                .collect(),
-            };
-            spec
-        };
         assert_eq!(
-            plane("/usr/bin/server").profile_digest(),
-            plane("/opt/relocated/server").profile_digest(),
+            spec_with_materialization("/usr/bin/server").profile_digest(),
+            spec_with_materialization("/opt/relocated/server").profile_digest(),
             "a physical launch plane never identifies an effective profile"
+        );
+    }
+
+    fn spec_with_materialization(command: &str) -> ResolvedSubagentSpec {
+        let mut spec = frozen_spec();
+        spec.materialization.sources.insert(
+            crate::capabilities::ToolSourceId::Mcp(McpServerId::new("github")),
+            crate::tools::mcp::McpServerBinding {
+                credentials: crate::credentials::SourceCredentials::default(),
+                transport: crate::tools::mcp::McpTransportConfig::Stdio {
+                    program: command.into(),
+                    args: Vec::new(),
+                    cwd: None,
+                    environment: std::collections::BTreeMap::new(),
+                },
+                policy: crate::tools::types::ToolInvocationPolicy::default(),
+                permissions: None,
+                tool_permissions: std::collections::BTreeMap::new(),
+            },
+        );
+        spec
+    }
+
+    #[test]
+    fn sub258_effective_resource_permissions_identify_profiles() {
+        use crate::runtime::permission::{ResourcePermissionSet, ResourcePermissionValue};
+        let server = McpServerId::new("github");
+        let source = crate::capabilities::ToolSourceId::Mcp(server.clone());
+        let mut selected = spec_with_materialization("/usr/bin/server");
+        selected.tools = vec![freeze_tool(
+            &AgentToolSelection::Source {
+                source_id: source.clone(),
+                name: "get_issue".into(),
+            },
+            &tool(
+                "get_issue",
+                ToolOrigin::Mcp {
+                    server_id: server.clone(),
+                },
+            ),
+        )];
+        let deny = ResourcePermissionSet {
+            plan: ResourcePermissionValue::Deny,
+            ..ResourcePermissionSet::default()
+        };
+        let mut changed = selected.clone();
+        changed
+            .materialization
+            .sources
+            .get_mut(&source)
+            .unwrap()
+            .permissions = Some(deny);
+        assert_ne!(selected.profile_digest(), changed.profile_digest());
+        changed
+            .materialization
+            .sources
+            .get_mut(&source)
+            .unwrap()
+            .tool_permissions
+            .insert("get_issue".into(), ResourcePermissionSet::default());
+        assert_eq!(
+            selected.profile_digest(),
+            changed.profile_digest(),
+            "an exact override replaces the source default"
+        );
+        changed
+            .materialization
+            .sources
+            .get_mut(&source)
+            .unwrap()
+            .tool_permissions
+            .insert("unselected".into(), deny);
+        assert_eq!(
+            selected.profile_digest(),
+            changed.profile_digest(),
+            "unselected tools do not execute"
+        );
+        changed
+            .materialization
+            .sources
+            .get_mut(&source)
+            .unwrap()
+            .tool_permissions
+            .insert("get_issue".into(), deny);
+        assert_ne!(selected.profile_digest(), changed.profile_digest());
+
+        let mut resources = spec_with_materialization("/usr/bin/server");
+        resources.resource_sources.insert(source.clone());
+        let mut changed = resources.clone();
+        changed
+            .materialization
+            .sources
+            .get_mut(&source)
+            .unwrap()
+            .permissions = Some(deny);
+        assert_ne!(
+            resources.profile_digest(),
+            changed.profile_digest(),
+            "resource-only sources consume permissions"
+        );
+        let mut changed = resources.clone();
+        changed
+            .materialization
+            .sources
+            .get_mut(&source)
+            .unwrap()
+            .tool_permissions
+            .insert(crate::tools::mcp::RESOURCE_TOOL_NAMES[0].into(), deny);
+        assert_ne!(
+            resources.profile_digest(),
+            changed.profile_digest(),
+            "resource helper overrides execute"
         );
     }
 

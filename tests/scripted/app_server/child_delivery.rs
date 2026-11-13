@@ -191,7 +191,9 @@ fn commit_delivery(
         id: ToolCallId::new(id),
         tool_id: ToolId::new("tool-present"),
         name: "present".into(),
-        arguments: serde_json::json!({"files":[{"path":file.path}]}),
+        arguments: crate::scripted_suites::common::tool_call_envelope(
+            serde_json::json!({"files":[{"path":file.path}]}),
+        ),
     };
     let event = |suffix: &str, event| crate::events::types::RuntimeEventEnvelope {
         tool_occurrence: None,

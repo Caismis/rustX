@@ -28,6 +28,7 @@
 //!
 //! [`register_native_tools`]: super::register_native_tools
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use schemars::generate::{SchemaGenerator, SchemaSettings};
@@ -62,6 +63,11 @@ pub(crate) struct NativeToolRegistration {
     /// Tool-owned normalization applied after runtime metadata is stripped
     /// and before the canonical schema is validated.
     pub(crate) normalizer: BusinessArgumentNormalizer,
+    /// Exact-or-source resource permission object frozen with the registration.
+    pub(crate) resource_permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+    /// Per-target permission objects for invocations that select a named target.
+    pub(crate) resource_permission_targets:
+        BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
 }
 
 impl NativeToolRegistration {
@@ -77,7 +83,31 @@ impl NativeToolRegistration {
             executor,
             foreground: Self::ordinary_foreground(),
             normalizer: identity_arguments,
+            resource_permissions: None,
+            resource_permission_targets: BTreeMap::new(),
         }
+    }
+
+    /// Attaches the winning authored resource permission object.
+    #[must_use]
+    pub(super) fn with_resource_permissions(
+        mut self,
+        permissions: crate::runtime::permission::ResourcePermissionSet,
+    ) -> Self {
+        self.resource_permissions = Some(permissions);
+        self.resource_permission_targets.clear();
+        self
+    }
+
+    /// Attaches per-target permission objects for named-target invocations.
+    #[must_use]
+    pub(super) fn with_resource_permission_targets(
+        mut self,
+        targets: BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
+    ) -> Self {
+        self.resource_permissions = None;
+        self.resource_permission_targets = targets;
+        self
     }
 
     pub(super) fn with_foreground_policy(
@@ -93,6 +123,27 @@ impl NativeToolRegistration {
         self.normalizer = normalizer;
         self
     }
+
+    /// Converts into the registry registration while preserving frozen
+    /// permission metadata.
+    pub(crate) fn into_tool_registration(self) -> crate::tools::executor::ToolRegistration {
+        let Self {
+            definition,
+            executor,
+            normalizer,
+            foreground,
+            resource_permissions,
+            resource_permission_targets,
+        } = self;
+        crate::tools::executor::ToolRegistration::from_parts(
+            definition,
+            executor,
+            normalizer,
+            foreground,
+            resource_permissions,
+            resource_permission_targets,
+        )
+    }
 }
 
 // The registry seam deliberately gives identity normalization the same fallible
@@ -105,8 +156,8 @@ fn identity_arguments(arguments: &serde_json::Value) -> Result<serde_json::Value
 /// Builds a canonical native tool definition whose input schema is
 /// generated from the tool's typed input contract `I`.
 ///
-/// Native tools are always builtin-origin and never replayable; the three
-/// policy axes come from the composed [`ToolInvocationPolicy`].
+/// Native tools are always builtin-origin and never replayable; execution
+/// ownership comes from the composed [`ToolInvocationPolicy`].
 pub(crate) fn native_definition<I: JsonSchema>(
     id: &str,
     name: &str,
@@ -119,8 +170,6 @@ pub(crate) fn native_definition<I: JsonSchema>(
         description: description.to_owned(),
         input_schema: input_schema::<I>(),
         execution_policy: policy.execution,
-        concurrency_policy: policy.concurrency,
-        approval_policy: policy.approval,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }

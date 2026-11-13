@@ -93,6 +93,12 @@ pub use crate::context::contribution::ContributionStart;
 /// A provider-independent frozen request boundary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestSnapshot {
+    /// Native execution mode frozen at this committed request start. Together
+    /// with `history_cut.activation` this reconstructs sparse reminder consumption.
+    pub permission_mode: crate::runtime::types::ApprovalMode,
+    /// Exact canonical task input retained across continuation/reconstruction.
+    /// Its original source is loaded by identity, never inferred from history.
+    pub permission_task_message: Option<MessageId>,
     /// Exact prepared structured output, omitted from routine observations.
     pub response_schema: Option<super::structured::PreparedResponseSchema>,
     /// Associations in actual-request coordinates, distinct from checkpoint and physical call coordinates.
@@ -250,6 +256,7 @@ impl RequestSnapshot {
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        permission_mode: crate::runtime::types::ApprovalMode,
         identity: RequestIdentity,
         canonical_frontier: crate::context::resources::LedgerFrontier,
         effective_system_prompt: String,
@@ -278,6 +285,8 @@ impl RequestSnapshot {
         }
         .semantic_input_fingerprint();
         Self {
+            permission_mode,
+            permission_task_message: None,
             response_schema: None,
             tool_associations: Vec::new().into(),
             history_cut: crate::durable::projection::RequestHistoryCut {
@@ -504,6 +513,7 @@ mod tests {
 
     fn frozen(request: &ModelRequest) -> RequestSnapshot {
         let mut snapshot = RequestSnapshot::new(
+            crate::runtime::types::ApprovalMode::FullAccess,
             RequestIdentity {
                 attempt_id: AttemptId::new("attempt-frozen"),
                 turn: TurnId::new("1"),

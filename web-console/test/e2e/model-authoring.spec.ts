@@ -22,8 +22,7 @@ test('new sessions receive independently configured title and compaction models'
     const auxiliary = defaults.getByRole('button', {name:'Auxiliary models', exact:true});
     await expect(auxiliary).toHaveAttribute('aria-expanded', 'false');
     await auxiliary.click();
-    await choose(defaults, 'Title model', 'fixture/second-model');
-    await choose(defaults, 'Summary model', 'fixture/second-model');
+    await choose(defaults, 'Auxiliary model', 'fixture/second-model');
     await defaults.getByRole('button', {name:'Save Default model', exact:true}).click();
     await expect(settledSave(defaults, 'Default model')).toBeVisible();
     const session = await openEmptySession(page, fixture, 'Workspace A');
@@ -31,8 +30,8 @@ test('new sessions receive independently configured title and compaction models'
     const { settings } = await native.readSettings(session);
     expect(settings.model).toMatchObject({
       model: 'fixture/console-model',
-      summaryModel: {mode:'explicit', model:'fixture/second-model'},
-      titleModel: {mode:'explicit', model:'fixture/second-model'},
+      auxiliary: {mode:'explicit', model:'fixture/second-model'},
+      
     });
     expect(errors).toEqual([]);
   } finally { await native?.shutdown(); await fixture.stop(false); }

@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import type { RuntimeClientSnapshot, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v77';
+import type { RuntimeClientSnapshot, RuntimeClientTranscriptEntry } from '../../protocol/app-server/v78';
 import { AgentReading } from '../src/client/agent-reading';
 import { repairTranscript, replaceTranscript } from '../src/client/transcript';
 import { Server, snapshot, readingWindow } from './fixture';
@@ -8,13 +8,13 @@ const row = (n: number): RuntimeClientTranscriptEntry => ({ cursor: String(n), i
 function pending() {
   const entry = row(1);
   entry.response_pending = true;
-  entry.tool_calls = [{ committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'reply-1' }, block_index: 0 }, assembly_complete: true, message_id: 'reply-1', block_index: 0, call_id: 'call-1', tool_id: 'tool-bash', name: 'bash', state: { type: 'assembled', arguments: '{}' } }];
+  entry.tool_calls = [{ committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'reply-1' }, block_index: 0 }, assembly_complete: true, message_id: 'reply-1', block_index: 0, call_id: 'call-1', tool_id: 'tool-bash', name: 'bash', state: { type: 'assembled', arguments: "{\"arguments\":{}}" } }];
   return entry;
 }
 function settled() {
   const entry = pending();
   entry.response_pending = false;
-  entry.tool_calls![0].state = { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: '30' } };
+  entry.tool_calls![0].state = { type: 'settled', arguments: "{\"arguments\":{}}", result: { status: { type: 'success' }, duration_ms: '30' } };
   return entry;
 }
 const state = (entries: RuntimeClientTranscriptEntry[]): RuntimeClientSnapshot => ({ ...snapshot(), transcript: { entries, next_cursor: null } });

@@ -87,7 +87,7 @@ describe("loaded resources", () => {
       cursor: nextCursor(before.cursor),
       event: {
         type: "resource_generation_updated", model_status: { available: true, body_deferred: false },
-        model: sessionModel("published-model"), approval_mode: "policy", plugins: { goal: null, todo: null, agent_status: null },
+        model: sessionModel("published-model"), approval_mode: "plan", plugins: { goal: null, todo: null, agent_status: null },
         capabilities: {
           ...before.capabilities,
           revision: exact(BigInt(before.capabilities.revision) + 1n),
@@ -129,7 +129,7 @@ describe("loaded resources", () => {
       cursor: nextCursor(before.cursor),
       event: {
         type: "resource_generation_updated", model_status: { available: true, body_deferred: false },
-        model: sessionModel("published-model"), approval_mode: "policy", plugins: { goal: null, todo: null, agent_status: null },
+        model: sessionModel("published-model"), approval_mode: "plan", plugins: { goal: null, todo: null, agent_status: null },
         // A reload that only rewrote project instructions repeats the
         // capability view it composed against, unchanged revision and all.
         capabilities: before.capabilities,
@@ -162,7 +162,7 @@ it("CFG275 reload replaces diagnostics with the resource generation and preserve
   const before = stateOf({ resources: { revision: "1", inspection: { main: null, agents: {}, workflows: {}, sources: { optional: { status: "unprepared" } }, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] } } });
   const frozen = JSON.stringify(before.resources);
   const next = { main: null, agents: {}, workflows: {}, sources: {}, skills: [], skill_diagnostics: [], definitions: [], resource_diagnostics: [] };
-  const after = reduce(before, { cursor: nextCursor(before.cursor), event: { type: "resource_generation_updated", model_status: { available: true, body_deferred: false }, model: sessionModel("published-model"), approval_mode: "policy", plugins: { goal: null, todo: null, agent_status: null }, capabilities: before.capabilities, resources: { revision: "2", inspection: next } } });
+  const after = reduce(before, { cursor: nextCursor(before.cursor), event: { type: "resource_generation_updated", model_status: { available: true, body_deferred: false }, model: sessionModel("published-model"), approval_mode: "plan", plugins: { goal: null, todo: null, agent_status: null }, capabilities: before.capabilities, resources: { revision: "2", inspection: next } } });
   assert.equal(after.resources.revision, "2");
   assert.deepEqual(after.resources.inspection, next);
   assert.equal(JSON.stringify(before.resources), frozen);
