@@ -391,7 +391,6 @@ impl AgentExecution<'_> {
                 must_cover.as_ref(),
                 fresh.as_ref(),
                 &CompactionInput {
-                    effective_system_prompt: &staged.request.effective_system_prompt,
                     tools: &staged.request.tools,
                     staged_request_context: &staged_context,
                     estimated_input: staged.estimated_input,
@@ -1078,7 +1077,28 @@ impl AgentExecution<'_> {
                 input_schema: workflow_output.output_schema(),
             });
         }
-        let mut effective_system_prompt = projection.effective_system_prompt.clone();
+        let effective_system_prompt =
+            self.request_effective_system_prompt(projection.effective_system_prompt.clone());
+        ModelRequest {
+            prompt_fallback_authorization:
+                crate::model::types::PromptFallbackAuthorization::default(),
+            response_schema: None,
+            response_byte_limit: None,
+            images: std::collections::BTreeMap::new(),
+            invocation: primary.invocation_config(),
+            messages,
+            tools,
+            effective_system_prompt,
+            continuation: self.pending_continuation.clone(),
+            continuation_source: self.continuation_source.clone(),
+        }
+    }
+
+    /// Complete the accepted sections with this logical step's frozen feedback.
+    pub(super) fn request_effective_system_prompt(
+        &self,
+        mut effective_system_prompt: String,
+    ) -> String {
         if let Some(feedback) = &self.logical_step.frozen_workflow_feedback {
             if !effective_system_prompt.is_empty() {
                 effective_system_prompt.push('\n');
@@ -1104,19 +1124,7 @@ impl AgentExecution<'_> {
             effective_system_prompt.push_str("\nReason: ");
             effective_system_prompt.push_str(&hint.reason);
         }
-        ModelRequest {
-            prompt_fallback_authorization:
-                crate::model::types::PromptFallbackAuthorization::default(),
-            response_schema: None,
-            response_byte_limit: None,
-            images: std::collections::BTreeMap::new(),
-            invocation: primary.invocation_config(),
-            messages,
-            tools,
-            effective_system_prompt,
-            continuation: self.pending_continuation.clone(),
-            continuation_source: self.continuation_source.clone(),
-        }
+        effective_system_prompt
     }
 }
 

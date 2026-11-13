@@ -641,6 +641,7 @@ impl AnthropicStreamNormalizer {
                             .as_deref()
                             .or(error.precise_error_type.as_deref()),
                         error.param.as_deref(),
+                        error.message.as_deref().unwrap_or_default(),
                     )
                 {
                     kind = ModelErrorKind::NativeFormatUnsupported;
@@ -1268,6 +1269,15 @@ mod native_format_error_tests {
         );
         assert_ne!(
             classify(valid, false),
+            ModelErrorKind::NativeFormatUnsupported
+        );
+        let type_message_only = r#"{"type":"error","error":{"type":"invalid_request_error","message":"output_config.format is not supported by this model."}}"#;
+        assert_eq!(
+            classify(type_message_only, true),
+            ModelErrorKind::NativeFormatUnsupported
+        );
+        assert_ne!(
+            classify(type_message_only, false),
             ModelErrorKind::NativeFormatUnsupported
         );
         let unrelated = r#"{"type":"error","error":{"type":"invalid_request_error","code":"unsupported_value","param":"thinking","message":"output_config.format"}}"#;

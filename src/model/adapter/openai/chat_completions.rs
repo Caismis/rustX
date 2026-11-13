@@ -1426,6 +1426,7 @@ fn chat_stream_error(error: &serde_json::Value, native_format: bool) -> ModelErr
             error.get("type").and_then(serde_json::Value::as_str),
             error.get("code").and_then(serde_json::Value::as_str),
             error.get("param").and_then(serde_json::Value::as_str),
+            message,
             "response_format",
         )
         && error
@@ -1458,6 +1459,23 @@ mod native_format_rejection_tests {
     use super::chat_stream_error;
     use crate::model::{ModelErrorKind, ModelRetryDisposition};
     use serde_json::json;
+
+    #[test]
+    fn type_message_only_stream_rejection_is_request_and_protocol_scoped() {
+        let detail = json!({
+            "type": "invalid_request_error",
+            "message": "'response_format.type' : value is not one of the allowed values ['text','json_object']"
+        });
+        let error = detail;
+        assert_eq!(
+            chat_stream_error(&error, true).kind,
+            ModelErrorKind::NativeFormatUnsupported
+        );
+        assert_eq!(
+            chat_stream_error(&error, false).kind,
+            ModelErrorKind::InvalidRequest
+        );
+    }
 
     #[test]
     fn stream_rejection_requires_native_request_and_exact_structured_fields() {

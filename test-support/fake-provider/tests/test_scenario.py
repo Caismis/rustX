@@ -306,7 +306,10 @@ def test_chunked_compaction_scenario_enforces_fallback_and_fragment_count():
     rejected, final = scenario.select([*history, native])
     assert not final
     assert isinstance(rejected.respond, HttpError)
-    assert rejected.respond.body["error"]["code"] == "unsupported_parameter"
+    assert rejected.respond.body["error"] == {
+        "type": "invalid_request_error",
+        "message": "'response_format.type' : value is not one of the allowed values ['text','json_object']",
+    }
     assert rejected.expect.json_subset["response_format"]["type"] == "json_schema"
     first_prompt, final = scenario.select([*history, native, native])
     assert not final

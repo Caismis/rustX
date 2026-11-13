@@ -2,8 +2,9 @@ import { afterEach, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { cleanup, render } from '@testing-library/react';
 import type { RuntimeClientCompactionView } from '../../protocol/app-server/v79';
+import { RpcFailure } from '../src/client/errors';
 import { compactionPresentation, ContextSeat } from '../src/app/agent/ContextSeat';
-import { Server, snapshot } from './fixture';
+import { Server, snapshot, projectionHead } from './fixture';
 
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); });
@@ -86,6 +87,56 @@ it('reconciles a lost cancellation only from the matching released native reques
   expect(presentation.container.textContent).toContain('Compaction cancelled');
   expect(presentation.container.querySelector('[data-compaction-marker]')).toBeNull();
   expect(server.client.compact('A')).toBe(true);
+});
+
+it.each((['skipped', 'cancelled'] as const).flatMap(status =>
+  [false, true].flatMap(reconnect => [false, true].map(newerCommit => ({ status, reconnect, newerCommit }))),
+))('reconciles $status presentation (reconnect=$reconnect, newerCommit=$newerCommit)', async ({ status, reconnect, newerCommit }) => {
+  server = new Server();
+  await server.attached('A');
+  server.held.add('context/compact');
+  expect(server.client.compact('A')).toBe(true);
+  await server.waitFor('context/compact', 1);
+  const requestId = server.client.getSnapshot().views.A.compactionRequest!.requestId;
+  await server.update('A', { ...snapshot(), context: { compaction_count: 0, compaction_in_progress: false,
+    manual_compaction: { request_id: requestId, released: true, skipped: status === 'skipped', cancelled: status === 'cancelled', error: null } } });
+  expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe(status);
+
+  // An idle snapshot passes through real client reconciliation. No running
+  // notification arrives to clear the earlier terminal request.
+  const generation = server.client.getSnapshot().generation;
+  const latest = newerCommit ? receipt('1') : undefined;
+  const next = { ...snapshot(), context: { compaction_count: newerCommit ? 1 : 0,
+    compaction_in_progress: false, latest_compaction: latest,
+    projection_head: latest ? { ...projectionHead(), checkpoint_id: latest.checkpoint_id, activation_id: latest.activation_id } : undefined } };
+  if (reconnect) {
+    await server.client.disconnect();
+    server.snapshots.set('A', next);
+    server.handlers.set('session/subscribe', () => {
+      server.handlers.delete('session/subscribe');
+      throw new RpcFailure({ code: -32000, message: 'History advanced while disconnected', data: { kind: 'resync_required' } });
+    });
+    await server.connect();
+    await server.client.waitForAttachment('A', () => true);
+    expect(server.client.getSnapshot().generation).toBeGreaterThan(generation);
+  } else {
+    await server.update('A', next);
+    expect(server.client.getSnapshot().generation).toBe(generation);
+  }
+  const view = server.client.getSnapshot().views.A;
+  expect(view.compactionRequest?.status).toBe(status);
+  expect(view.compactionRequest?.generation).toBe(generation);
+  expect(view.snapshot?.context?.compaction_count).toBe(newerCommit ? 1 : 0);
+  expect(view.snapshot?.context?.projection_head).toEqual(next.context.projection_head);
+  expect(view.compactionRequest?.receipt).toBeUndefined();
+  expect(view.snapshot?.context?.latest_compaction).toEqual(latest);
+  expect(compactionPresentation(view.snapshot?.context, view.compactionRequest)).toEqual({ state: newerCommit ? 'succeeded' : status });
+  const presentation = render(createElement(ContextSeat, { client: server.client, sessionId: 'A' }));
+  const terminalText = status === 'skipped' ? 'No eligible history to compact' : 'Compaction cancelled';
+  if (newerCommit) expect(presentation.container.textContent).not.toContain(terminalText);
+  else expect(presentation.container.textContent).toContain(terminalText);
+  expect(presentation.container.querySelector('[data-compaction-marker]')).toBeNull();
+  presentation.unmount();
 });
 
 it('still rejects a skipped discriminator for an unrelated request', async () => {

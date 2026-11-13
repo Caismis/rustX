@@ -436,6 +436,44 @@ pub struct AcceptedContext {
 }
 
 impl AcceptedContext {
+    /// Project the runtime-owned, activation-dependent native reminder without
+    /// admitting another contributor batch or changing its accepted User records.
+    /// The existing generation ID and every other contributor stay frozen.
+    pub(crate) fn refresh_permission_reminder(
+        &mut self,
+        text: String,
+    ) -> Result<(), ContextAssemblyError> {
+        validate_text(&text, "permission reminder")?;
+        let owner =
+            ContextContributorIdentity::Native(NativeContextContributor::PermissionReminder);
+        self.system_sections
+            .retain(|section| section.contributor != owner);
+        self.system_sections.push(native_section(
+            SystemSectionLane::PermissionReminder,
+            NativeContextContributor::PermissionReminder,
+            text,
+        ));
+        self.system_sections.sort_by(|left, right| {
+            left.lane
+                .cmp(&right.lane)
+                .then_with(|| left.contributor.cmp(&right.contributor))
+        });
+        if !self
+            .generation
+            .contributors
+            .iter()
+            .any(|generation| generation.identity == owner)
+        {
+            self.generation.contributors.push(native_generation(
+                NativeContextContributor::PermissionReminder,
+            ));
+            self.generation
+                .contributors
+                .sort_by(|left, right| left.identity.cmp(&right.identity));
+        }
+        Ok(())
+    }
+
     /// Select frozen accepted records visible in this actual request.
     pub(crate) fn request_contributions(&self, active: &[MessageBlock]) -> Vec<ContributionStart> {
         self.user_messages

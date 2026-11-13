@@ -431,6 +431,82 @@ fn assert_tool_units_complete(messages: &rustx::model::SelectedModelInput, conte
     }
 }
 
+/// A checkpoint reprojects only the activation-dependent native reminder;
+/// the admitted generation and every original contributor remain exact.
+fn assert_reminder_activation_refresh(before: &RequestSnapshot, after: &RequestSnapshot) {
+    use rustx::context::{ContributorGeneration, SystemSectionLane};
+    use rustx::runtime::identity::{ContextContributorIdentity, NativeContextContributor};
+
+    let owner = ContextContributorIdentity::Native(NativeContextContributor::PermissionReminder);
+    assert_eq!(before.context_generation.id, after.context_generation.id);
+    assert!(
+        !before
+            .context_generation
+            .contributors
+            .iter()
+            .any(|entry| entry.identity == owner)
+    );
+    assert_eq!(
+        before.context_generation.contributors,
+        after
+            .context_generation
+            .contributors
+            .iter()
+            .filter(|entry| entry.identity != owner)
+            .cloned()
+            .collect::<Vec<_>>(),
+        "activation preserves all originally accepted contributor metadata",
+    );
+    assert_eq!(
+        after
+            .context_generation
+            .contributors
+            .iter()
+            .filter(|entry| entry.identity == owner)
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![ContributorGeneration {
+            identity: owner.clone(),
+            attestation: None
+        }],
+    );
+    assert_eq!(
+        before.system_sections,
+        after
+            .system_sections
+            .iter()
+            .filter(|section| section.contributor != owner)
+            .cloned()
+            .collect::<Vec<_>>(),
+        "activation preserves all other accepted system sections",
+    );
+    let sections = after
+        .system_sections
+        .iter()
+        .filter(|section| section.contributor == owner)
+        .collect::<Vec<_>>();
+    assert_eq!(sections.len(), 1);
+    assert_eq!(sections[0].lane, SystemSectionLane::PermissionReminder);
+    assert_eq!(
+        sections[0].content,
+        rustx::runtime::permission::permission_reminder_text(after.permission_mode)
+    );
+    assert_eq!(
+        after
+            .effective_system_prompt
+            .matches(sections[0].content.as_str())
+            .count(),
+        1
+    );
+    assert_eq!(
+        after
+            .effective_system_prompt
+            .matches("Execution permission mode:")
+            .count(),
+        1
+    );
+}
+
 fn anthropic_state(signature: &str) -> ProviderContinuationState {
     ProviderContinuationState::Anthropic(AnthropicContinuation {
         opaque: serde_json::json!({"type":"thinking", "thinking":"native reasoning", "signature": signature}),
@@ -983,10 +1059,7 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     // generation (modules never recaptured or reevaluated) but rebuilds from its own
     // post-compaction Surface revision.
     assert_eq!(snapshots[2].identity.turn, snapshots[3].identity.turn);
-    assert_eq!(
-        snapshots[2].context_generation, snapshots[3].context_generation,
-        "the overflow retry reuses the one admitted context generation"
-    );
+    assert_reminder_activation_refresh(&snapshots[2], &snapshots[3]);
     assert_ne!(
         snapshots[1].context_generation, snapshots[2].context_generation,
         "a new primary step admits a new context generation"
@@ -996,10 +1069,7 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
         "compaction changes projection activation independently of canonical growth"
     );
     assert_eq!(snapshots[4].identity.turn, snapshots[5].identity.turn);
-    assert_eq!(
-        snapshots[4].context_generation,
-        snapshots[5].context_generation
-    );
+    assert_reminder_activation_refresh(&snapshots[4], &snapshots[5]);
     assert_ne!(
         snapshots[4].history_cut.activation,
         snapshots[5].history_cut.activation

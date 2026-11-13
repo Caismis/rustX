@@ -749,8 +749,8 @@ def chunked_compaction() -> AdaptiveScenario:
             )
             if native:
                 return Step(expect, HttpError(400, {"error": {
-                    "type": "invalid_request_error", "code": "unsupported_parameter",
-                    "param": "response_format", "message": "response_format is unsupported",
+                    "type": "invalid_request_error",
+                    "message": "'response_format.type' : value is not one of the allowed values ['text','json_object']",
                 }})), False
             # Deliberately omit input/total usage: an absent quantity is not
             # zero. The nonzero output and reasoning subtotals remain real.

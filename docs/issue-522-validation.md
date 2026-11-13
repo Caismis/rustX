@@ -21,7 +21,7 @@ compaction honors the frozen Auxiliary output limit, removes authored context
 tuning, and keeps accepted chunk progress and distinct cancelled/skipped Trace
 terminals.
 
-Current local verification establishes the following results:
+Integration-baseline local verification establishes the following results:
 
 - Library coverage comprises 5,527 distinct passing cases and 22 ignored cases.
   The initial full discovery ran 5,512 passing cases and exposed 15 fixture
@@ -54,6 +54,58 @@ and 33 ignored cases across the documented runs. Regenerated editor schemas and
 protocol artifacts are byte-identical to the checked-in artifacts. Linux
 `rust-contracts` and `rust-boundaries` lane coverage checks passed. A remote FULL
 CI result for the new integrated commit has not yet been established.
+
+### Review follow-up (2026-11-13)
+
+The native-format classifiers now recognize complete protocol-field rejection
+messages when optional `code` or `param` metadata is absent. Recognition remains
+owned by the provider adapter and requires a prepared Native-schema request.
+HTTP status, error type and any supplied metadata must agree. Nested schema
+defects, unrelated fields, authentication, rate limits and context overflow do
+not authorize a format downgrade. The HTTP matrix includes the
+[type/message-only example documented by the OpenAI Agents SDK](https://openai.github.io/openai-agents-python/models/#structured-outputs-support)
+and the [Anthropic error envelope](https://platform.claude.com/docs/en/api/errors#error-shapes).
+
+The composed real-HTTP compaction regression checks that the rejected Native
+request does not advance its source cursor. Adding the Prompt schema makes that
+original fragment too large; replanning prices every complete Prompt request,
+preserves the frozen Model/Profile/schema and captured cut, covers every retired
+source byte and activates exactly one checkpoint.
+Its deterministic 50,000-byte initial source forces an actual prefix replan:
+the Native request costs 11,200 tokens, that source under Prompt costs 11,271
+against the same 11,200-token allowance, and the first replanned Prompt request
+costs 11,200. The run observes 44 primary calls and 22 Summary calls: one rejected
+Native call and 21 accepted Prompt calls, with one final activation.
+
+In-preparation compaction now prices the activation-dependent permission reminder
+before final fit and checkpoint authorization. Successful activation refreshes
+only that native contribution while preserving accepted external contributions,
+their generation and staged identities. Eligibility is consumed only by a
+committed request snapshot containing the reminder. Regressions cover optional
+and mandatory compaction after prior consumption, no duplicate on the following
+request, cancellation between activation and start, and refusal when the minimum
+prospective request fits only without the reminder.
+
+Retained skipped/cancelled Web feedback yields to a newer native compaction.
+Eight actual-client reconciliation/render cases cover both terminal outcomes,
+with and without reconnect or a newer idle checkpoint, deliberately omitting
+the intermediate running notification.
+
+The retained-tool-pair fixture uses a 230-token window: unchanged history costs
+210 and still triggers proactive compaction, while the minimum Summary, exact
+retained tool pair and rearmed reminder cost 207 against a hard limit of 229.
+Repeated-overflow checks preserve the exact generation ID and all original
+contributor entries and sections, allowing only the required native reminder.
+
+Follow-up local verification passes 531 relevant all-feature library cases,
+196 cases in the complete Provider target (six ignored), and 43 cases in the
+complete Conformance target (three ignored): 770 distinct passing Rust cases.
+The complete Web suite passes 4,856 cases with four skips, and the complete
+provider-emulator suite passes all 59 cases. All ten pinned-browser compaction
+and summary-presentation scenarios pass with no retries, skips or screenshot
+changes. Formatting, strict all-target/all-feature Clippy, Web typecheck,
+production Web build and source/artifact provenance checks pass. These local
+results do not establish a completed remote FULL run for the follow-up commit.
 
 ### Historical local integration verification
 

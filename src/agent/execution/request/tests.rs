@@ -394,6 +394,11 @@ async fn optional_summary_failure_reuses_the_once_accepted_staged_context() {
     let (result, adapter, summarizer, invocations) = failed_summary_attempt(2, true, 160).await;
     assert!(matches!(result.outcome, AttemptOutcome::Completed { .. }));
     assert_eq!(adapter.request_count(), 1);
+    assert!(
+        !adapter.requests()[0]
+            .effective_system_prompt
+            .contains("Execution permission mode:")
+    );
     assert_eq!(summarizer.requests().len(), 1);
     assert_eq!(invocations.load(Ordering::SeqCst), 1);
     assert!(result.projections.is_empty());
@@ -1326,4 +1331,274 @@ fn assert_full_agent_input_oracle(
         after = page.next_sequence;
     }
     assert_eq!(terminals, 1);
+}
+
+fn reminder_compaction_runtime(
+    hard_input_limit: u64,
+    invocations: Arc<std::sync::atomic::AtomicUsize>,
+) -> ContextRuntime {
+    use crate::context::{CompactionBudgets, ContextConfig, ContextEngine};
+    use crate::scripted_suites::support::context::{
+        FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator,
+    };
+    let mut assembly = crate::context::ContextAssembly::new();
+    assembly
+        .register_extension(
+            "reminder.test",
+            Some("generation-1".into()),
+            Arc::new(CountingContext {
+                invocations,
+                add_message: true,
+            }),
+        )
+        .unwrap();
+    ContextRuntime::with_scripted_summarizer_and_assembly(
+        ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: hard_input_limit + 1,
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+            },
+            Arc::new(ScriptedEstimator::new(50, 10, 0)),
+        )
+        .unwrap(),
+        Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+            "short summary".into(),
+        )])),
+        None,
+        assembly,
+        CompactionBudgets::new(1, 1, 1_000_000),
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+async fn automatic_compaction_reminder_case(mandatory: bool, cancel_before_start: bool) {
+    use crate::agent::execution::test_sync::StartBoundaryPause;
+    use crate::runtime::identity::{ContextContributorIdentity, NativeContextContributor};
+    use std::sync::atomic::Ordering;
+
+    let hard_input_limit = 600;
+    let adapter = Arc::new(ScriptedAdapter::new(vec![
+        workflow_output_turn(&[], Some("first answer")),
+        workflow_output_turn(&[], Some("second answer")),
+    ]));
+    let invocations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut first = request(&adapter);
+    first.model = crate::scripted_suites::support::attempt_model_with_window(
+        adapter.clone(),
+        "reminder-test",
+        hard_input_limit + 1,
+        1,
+    );
+    // The previously consumed mode keeps initial assembly quiet. Historical
+    // input is already pressured before this preparation starts.
+    first.conversation = ConversationState::from_messages(
+        (0..if mandatory { 13 } else { 11 })
+            .map(|index| {
+                MessageBlock::User(inbound_message(
+                    &format!("reminder-history-{index}"),
+                    "old history",
+                    UserSource::Human,
+                ))
+            })
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let tool_runtime = tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
+    let lease = capability_lease(ToolRegistry::new(), &tool_runtime)
+        .await
+        .into_lease();
+    let mut policy = crate::scripted_suites::support::default_execution_policy();
+    policy.last_permission_reminder_mode = Some(policy.approval_mode);
+    let mode = policy.approval_mode;
+    let mut execution = AgentExecution::new(
+        first,
+        lease,
+        &cancellation,
+        policy,
+        reminder_compaction_runtime(hard_input_limit, invocations.clone()),
+        &tool_runtime,
+        crate::agent::AttemptLifecycle::inert(),
+    )
+    .unwrap();
+    let controller = if cancel_before_start {
+        let (pause, control, _) = StartBoundaryPause::install(true, false);
+        execution.install_start_boundary_pause(pause);
+        let mut control = control.unwrap();
+        let cancellation = cancellation.clone();
+        Some(tokio::spawn(async move {
+            control.await_park(1).await;
+            cancellation.cancel();
+            control.release();
+        }))
+    } else {
+        None
+    };
+    let result = execution.run().await;
+    if let Some(controller) = controller {
+        controller.await.unwrap();
+    }
+    assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    assert!(
+        tool_runtime
+            .durable_store()
+            .projection_head()
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(adapter.request_count(), usize::from(!cancel_before_start));
+    assert_eq!(
+        result.permission_reminder_consumed,
+        (!cancel_before_start).then_some(mode)
+    );
+    if cancel_before_start {
+        assert!(matches!(result.outcome, AttemptOutcome::Cancelled { .. }));
+    } else {
+        assert!(matches!(result.outcome, AttemptOutcome::Completed { .. }));
+        let snapshots = request_snapshot_history(tool_runtime.durable_store().as_ref());
+        let snapshot = &snapshots[0];
+        assert_eq!(
+            snapshot
+                .system_sections
+                .iter()
+                .filter(|section| section.contributor
+                    == ContextContributorIdentity::Native(
+                        NativeContextContributor::PermissionReminder
+                    ))
+                .count(),
+            1
+        );
+        assert_eq!(snapshot.contributions.len(), 1);
+        assert_eq!(snapshot.context_generation.id, 1);
+        assert!(
+            snapshot
+                .context_generation
+                .contributors
+                .iter()
+                .any(|generation| generation.attestation.as_deref() == Some("generation-1"))
+        );
+        assert_eq!(
+            snapshot.request_context_ids,
+            vec![snapshot.contributions[0].message_id.clone()]
+        );
+        assert_eq!(
+            snapshot
+                .context_generation
+                .contributors
+                .iter()
+                .filter(|generation| generation.identity
+                    == ContextContributorIdentity::Native(
+                        NativeContextContributor::PermissionReminder
+                    ))
+                .count(),
+            1
+        );
+    }
+    // Another admitted execution inherits the actual consumption result. A
+    // cancelled prepared request must leave the activated reminder eligible.
+    let mut next = request(&adapter);
+    next.attempt_id = AttemptId::new("attempt-2");
+    next.model = crate::scripted_suites::support::attempt_model_with_window(
+        adapter.clone(),
+        "reminder-test",
+        hard_input_limit + 1,
+        1,
+    );
+    next.conversation = result.conversation;
+    let mut policy = crate::scripted_suites::support::default_execution_policy();
+    policy.last_permission_reminder_mode = result.permission_reminder_consumed;
+    let next_cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let lease = capability_lease(ToolRegistry::new(), &tool_runtime)
+        .await
+        .into_lease();
+    let next_result = AgentExecution::new(
+        next,
+        lease,
+        &next_cancellation,
+        policy,
+        reminder_compaction_runtime(
+            hard_input_limit,
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        ),
+        &tool_runtime,
+        crate::agent::AttemptLifecycle::inert(),
+    )
+    .unwrap()
+    .run()
+    .await;
+    assert!(matches!(
+        next_result.outcome,
+        AttemptOutcome::Completed { .. }
+    ));
+    let requests = adapter.requests();
+    assert_eq!(
+        requests[0]
+            .effective_system_prompt
+            .matches("Execution permission mode:")
+            .count(),
+        1
+    );
+    if cancel_before_start {
+        assert_eq!(requests.len(), 1);
+    } else {
+        assert_eq!(requests.len(), 2);
+        assert!(
+            !requests[1]
+                .effective_system_prompt
+                .contains("Execution permission mode:")
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn automatic_compaction_refreshes_only_the_native_reminder_once() {
+    automatic_compaction_reminder_case(false, false).await;
+    automatic_compaction_reminder_case(true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn automatic_compaction_reminder_survives_cancellation_before_start() {
+    automatic_compaction_reminder_case(true, true).await;
+}
+
+#[tokio::test]
+async fn prospective_compaction_reminder_is_priced_before_checkpoint_activation() {
+    use crate::context::TokenEstimator;
+    use crate::scripted_suites::support::context::ScriptedEstimator;
+
+    let estimator = ScriptedEstimator::new(50, 10, 0);
+    let minimum_candidate = vec![
+        crate::context::planning::minimum_summary(),
+        crate::model::ModelInputMessage::Canonical(MessageBlock::User(inbound_message(
+            "prospective-staged",
+            "accepted staged context",
+            UserSource::Human,
+        ))),
+    ];
+    let hard_input_limit = estimator.estimate_input(&minimum_candidate, "", &[]);
+    let reminder = crate::runtime::permission::permission_reminder_text(
+        crate::runtime::ApprovalMode::FullAccess,
+    );
+    assert!(estimator.estimate_input(&minimum_candidate, &reminder, &[]) > hard_input_limit);
+    let (result, adapter, summarizer, invocations) = failed_summary_attempt_with_feedback(
+        3,
+        true,
+        hard_input_limit,
+        crate::context::ContextErrorKind::SummaryFailed,
+        None,
+        true,
+    )
+    .await;
+    assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
+    assert_eq!(adapter.request_count(), 0);
+    assert!(
+        summarizer.requests().is_empty(),
+        "refuse the prospective minimum before summary or checkpoint authorization"
+    );
+    assert_eq!(invocations.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(
+        result.projections.is_empty(),
+        "the summary plus staged context fits only without the activated reminder"
+    );
 }

@@ -54,6 +54,7 @@ pub(crate) fn normalize_error_for_format(error: OpenAIError, field: &str) -> Mod
                 failure.provider_type.as_deref(),
                 failure.provider_code.as_deref(),
                 failure.provider_param.as_deref(),
+                &failure.message,
                 field,
             )
     });
@@ -69,6 +70,7 @@ pub(crate) fn is_explicit_format_rejection(
     provider_type: Option<&str>,
     provider_code: Option<&str>,
     provider_param: Option<&str>,
+    message: &str,
     expected_field: &str,
 ) -> bool {
     let rejected_field = match provider_code {
@@ -83,7 +85,20 @@ pub(crate) fn is_explicit_format_rejection(
         }
         _ => false,
     };
-    provider_type == Some("invalid_request_error") && rejected_field
+    provider_type == Some("invalid_request_error")
+        && (rejected_field
+            || (matches!(
+                provider_code,
+                None | Some(
+                    "invalid_request_error" | "unsupported_parameter" | "unsupported_value"
+                )
+            ) && (provider_param.is_none()
+                || provider_param == Some(expected_field)
+                || provider_param == Some(format!("{expected_field}.type").as_str()))
+                && crate::model::adapter::structured::explicit_format_rejection_message(
+                    message,
+                    expected_field,
+                )))
 }
 
 /// Normalizes one SDK-variant error that carried no HTTP failure of its own.

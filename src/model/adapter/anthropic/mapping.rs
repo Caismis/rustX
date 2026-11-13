@@ -158,13 +158,24 @@ pub(crate) fn is_native_format_rejection(
     provider_type: Option<&str>,
     code: Option<&str>,
     param: Option<&str>,
+    message: &str,
 ) -> bool {
     provider_type == Some("invalid_request_error")
-        && matches!(code, Some("unsupported_parameter" | "unsupported_value"))
-        && matches!(
-            param,
-            Some("output_config.format" | "output_config.format.type")
-        )
+        && ((matches!(code, Some("unsupported_parameter" | "unsupported_value"))
+            && matches!(
+                param,
+                Some("output_config.format" | "output_config.format.type")
+            ))
+            || (matches!(
+                code,
+                None | Some("unsupported_parameter" | "unsupported_value")
+            ) && matches!(
+                param,
+                None | Some("output_config.format" | "output_config.format.type")
+            ) && crate::model::adapter::structured::explicit_format_rejection_message(
+                message,
+                "output_config.format",
+            )))
 }
 
 pub(crate) fn normalize_http_error_for_format(
@@ -187,6 +198,10 @@ pub(crate) fn normalize_http_error_for_format(
                 detail.get("type").and_then(serde_json::Value::as_str),
                 detail.get("code").and_then(serde_json::Value::as_str),
                 detail.get("param").and_then(serde_json::Value::as_str),
+                detail
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
             )
         }) {
             error.kind = ModelErrorKind::NativeFormatUnsupported;

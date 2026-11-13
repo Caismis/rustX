@@ -821,7 +821,11 @@ async fn proactive_compaction_before_the_next_turn() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
-    let runtime = runtime_with(200, 0, 5, weighted(100, 10, 0), summarizer);
+    // Leave room for the rearmed native reminder while preserving the most
+    // recent complete tool pair; the unchanged 210-token history still
+    // crosses this window's proactive threshold.
+    let estimator = weighted(100, 10, 0);
+    let runtime = runtime_with(230, 0, 5, estimator.clone(), summarizer);
     let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = common::durable_agent_result(
@@ -946,6 +950,40 @@ async fn proactive_compaction_before_the_next_turn() {
         "first request carries the initial history"
     );
     assert_eq!(requests[1].messages.len(), 3);
+    let limits = engine(230, 0, 5, estimator.clone());
+    let hard_limit = limits.admissible_input_limit(1).unwrap();
+    let proactive_limit = limits.proactive_input_limit(1).unwrap();
+    assert_eq!(hard_limit, 229);
+    let unchanged = rustx::model::input::canonical_input(&result.messages()[..3]);
+    let unchanged_estimate = estimator.estimate_input(&unchanged, "", &requests[1].tools);
+    assert_eq!(unchanged_estimate, 210);
+    assert!(unchanged_estimate >= proactive_limit);
+    let minimum_retaining_pair = vec![
+        crate::context::planning::minimum_summary(),
+        requests[1].messages[1].clone(),
+        requests[1].messages[2].clone(),
+    ];
+    let prospective_minimum = estimator.estimate_input(
+        &minimum_retaining_pair,
+        &requests[1].effective_system_prompt,
+        &requests[1].tools,
+    );
+    assert_eq!(prospective_minimum, 207);
+    assert!(prospective_minimum <= hard_limit);
+    assert_eq!(
+        requests[1]
+            .effective_system_prompt
+            .matches("Execution permission mode:")
+            .count(),
+        1
+    );
+    assert!(
+        estimator.estimate_input(
+            &requests[1].messages.to_vec(),
+            &requests[1].effective_system_prompt,
+            &requests[1].tools,
+        ) <= hard_limit
+    );
     let ModelInputMessage::Derived(summary) = &requests[1].messages[0] else {
         panic!("first projected message must be the summary");
     };

@@ -309,3 +309,175 @@ async fn provider_rejection_of_native_format_never_falls_back_or_retries() {
         assert_eq!(format["type"], "json_schema");
     }
 }
+
+fn format_field(protocol: ModelProtocol) -> &'static str {
+    match protocol {
+        ModelProtocol::OpenAiChatCompletions => "response_format",
+        ModelProtocol::OpenAiResponses => "text.format",
+        ModelProtocol::AnthropicMessages => "output_config.format",
+    }
+}
+
+async fn assert_format_error(
+    protocol: ModelProtocol,
+    detail: Value,
+    status: u16,
+    native: bool,
+    expected: ModelErrorKind,
+) {
+    let diagnostic = format!("{protocol:?}, native={native}, status={status}, {detail}");
+    let server = crate::common::FixtureServer::start(move |_, _| {
+        crate::common::FixtureReply::json_error(
+            status,
+            "fixture error",
+            &json!({"type": "error", "error": detail}),
+        )
+    })
+    .await;
+    let mut inputs = vec![request(protocol, native)];
+    if !native {
+        // Capability alone never authorizes feature-error classification for
+        // an ordinary request without a prepared native response schema.
+        let mut plain = request(protocol, true);
+        plain.response_schema = None;
+        inputs.push(plain);
+    }
+    for (index, input) in inputs.into_iter().enumerate() {
+        let events =
+            crate::common::collect_events(adapter(protocol, &server).as_ref(), input).await;
+        let Some(ModelEvent::Failed { error }) = events.last() else {
+            panic!("expected provider failure: {diagnostic}");
+        };
+        assert_eq!(error.kind, expected, "{diagnostic}");
+        if expected == ModelErrorKind::NativeFormatUnsupported {
+            assert_eq!(
+                error.retry_disposition,
+                rustx::model::ModelRetryDisposition::Never,
+                "{diagnostic}"
+            );
+        }
+        assert_eq!(
+            server.attempt_count(),
+            index as u64 + 1,
+            "no adapter retry: {diagnostic}"
+        );
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One cross-protocol matrix keeps positive and exclusion evidence adjacent.
+async fn native_format_rejections_accept_only_complete_protocol_field_diagnostics() {
+    for protocol in PROTOCOLS {
+        let field = format_field(protocol);
+        let type_field = format!("{field}.type");
+        // The allowed-values diagnostic mirrors the type/message-only error
+        // documented by the OpenAI Agents SDK; the other forms explicitly
+        // reject the whole field or its json_schema type, never schema content.
+        for message in [
+            format!(
+                "'{type_field}' : value is not one of the allowed values ['text','json_object']"
+            ),
+            format!(
+                "\"{type_field}\": value is not one of the allowed values [\"text\", \"json_object\"]"
+            ),
+            format!("Unsupported parameter: '{field}' is not supported with this model."),
+            format!("{field} is not supported by this model."),
+            format!(
+                "Unsupported value: '{type_field}' does not support 'json_schema' with this model."
+            ),
+        ] {
+            for metadata in [
+                json!({}),
+                json!({"code": "unsupported_value"}),
+                json!({"param": type_field}),
+                json!({"param": field}),
+                json!({"code": null, "param": null}),
+            ] {
+                let mut detail = json!({"type": "invalid_request_error", "message": message});
+                detail
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(metadata.as_object().unwrap().clone());
+                assert_format_error(
+                    protocol,
+                    detail.clone(),
+                    400,
+                    true,
+                    ModelErrorKind::NativeFormatUnsupported,
+                )
+                .await;
+                assert_format_error(protocol, detail, 400, false, ModelErrorKind::InvalidRequest)
+                    .await;
+            }
+        }
+        // Optional structured fields cannot contradict the prose. A nested
+        // schema field, schema defect or unrelated request error stays fatal.
+        let explicit = format!(
+            "'{type_field}' : value is not one of the allowed values ['text','json_object']"
+        );
+        for metadata in [
+            json!({"code": "invalid_schema"}),
+            json!({"code": "unsupported_parameter", "param": "thinking"}),
+            json!({"param": format!("{field}.schema.properties.type")}),
+            json!({"param": "unrelated"}),
+        ] {
+            let mut detail = json!({"type": "invalid_request_error", "message": explicit});
+            detail
+                .as_object_mut()
+                .unwrap()
+                .extend(metadata.as_object().unwrap().clone());
+            assert_format_error(protocol, detail, 400, true, ModelErrorKind::InvalidRequest).await;
+        }
+        for message in [
+            format!("unsupported {field}"),
+            format!("{field}: schema contains unsupported keyword 'oneOf'"),
+            format!("Invalid schema for {field}: additionalProperties is required"),
+            format!(
+                "'{type_field}' : value is not one of the allowed values ['text','json_schema']"
+            ),
+            format!(
+                "'{field}.schema.properties.type' : value is not one of the allowed values ['text','json_object']"
+            ),
+            format!("Invalid schema description: {explicit}"),
+            format!("{explicit}; schema validation failed"),
+            "messages: expected an array".to_owned(),
+        ] {
+            assert_format_error(
+                protocol,
+                json!({"type":"invalid_request_error", "message":message}),
+                400,
+                true,
+                ModelErrorKind::InvalidRequest,
+            )
+            .await;
+        }
+        for wrong_protocol in PROTOCOLS.into_iter().filter(|other| *other != protocol) {
+            let other = format_field(wrong_protocol);
+            assert_format_error(protocol, json!({"type":"invalid_request_error", "message":format!("'{other}.type' : value is not one of the allowed values ['text','json_object']")}), 400, true, ModelErrorKind::InvalidRequest).await;
+        }
+        for (status, expected) in [
+            (401, ModelErrorKind::Authentication),
+            (403, ModelErrorKind::Authentication),
+            (429, ModelErrorKind::RateLimit),
+        ] {
+            assert_format_error(
+                protocol,
+                json!({"type":"invalid_request_error", "message":explicit}),
+                status,
+                true,
+                expected,
+            )
+            .await;
+        }
+        assert_format_error(protocol, json!({"type":"invalid_request_error", "message":format!("{explicit}; maximum context length exceeded")}), 400, true, ModelErrorKind::ContextWindowExceeded).await;
+        assert_format_error(protocol, json!({"type":"invalid_request_error", "code":"context_length_exceeded", "message":explicit}), 400, true, ModelErrorKind::ContextWindowExceeded).await;
+        assert_format_error(
+            protocol,
+            json!({"type":"unrelated_error", "message":explicit}),
+            400,
+            true,
+            ModelErrorKind::InvalidRequest,
+        )
+        .await;
+    }
+}

@@ -1920,6 +1920,7 @@ async fn summary_retry_reuses_frozen_wire_input_and_commits_one_checkpoint() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
+    use rustx::context::tokens::{DefaultTokenEstimator, TokenEstimator};
     use rustx::durable::AuxiliaryStore;
     use rustx::events::types::RuntimeEvent as E;
     use rustx::model::ModelRequestOwner;
@@ -1927,8 +1928,13 @@ async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
         AuxiliaryBusinessSource, AuxiliaryCallOutcome, AuxiliaryInputEvidence,
         AuxiliaryRequestTerminal, AuxiliaryUsageCompleteness,
     };
-    use rustx::model::structured::StructuredOutputStrategy;
+    use rustx::model::projected::ProjectedMessage;
+    use rustx::model::structured::{
+        PreparedResponseSchema, ResponseSchema, StructuredOutputStrategy,
+    };
+    use sha2::{Digest, Sha256};
     use std::collections::BTreeSet;
+    use std::fmt::Write as _;
 
     let Some(emulator) = ProviderEmulator::start("chunked_compaction").await else {
         return;
@@ -1940,7 +1946,23 @@ async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
         ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
     };
     let driver = Driver::start(&emulator, &setup).await;
-    driver.submit(CHUNKED_PROMPT);
+    // Make the first source itself larger than the Summary allowance. This
+    // forces exact prefix pricing rather than leaving whole-message slack
+    // that could hide the added Prompt schema cost after the Native failure.
+    let mut source_padding = String::with_capacity(782 * 64);
+    for index in 0..782 {
+        write!(
+            source_padding,
+            "{:x}",
+            Sha256::digest(format!("chunked-source:{index}").as_bytes())
+        )
+        .expect("fixture string formatting");
+    }
+    let prompt = format!(
+        "{CHUNKED_PROMPT}\nHistorical fixture payload:\n{}",
+        &source_padding[..50_000]
+    );
+    driver.submit(&prompt);
 
     // This barrier is reached on the Prompt retry after the Native failure.
     // A Session update now cannot alter any remaining call in this operation.
@@ -1997,6 +2019,125 @@ async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
         assert!(
             request["body"].get("response_format").is_none(),
             "fallback is retained"
+        );
+    }
+    let frozen_schema = ResponseSchema::new(
+        summary[0]["body"]["response_format"]["json_schema"]["name"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+        summary[0]["body"]["response_format"]["json_schema"]["schema"].clone(),
+        64 * 1024,
+    )
+    .unwrap();
+    let prompt_instruction = frozen_schema.prompt_instruction();
+    // Reconstruct the provider-neutral Summary input from the observed wire
+    // body and use the production estimator over the complete frozen request.
+    let text_parts = |content: &serde_json::Value| -> Vec<String> {
+        match content {
+            serde_json::Value::String(text) => vec![text.clone()],
+            serde_json::Value::Array(parts) => parts
+                .iter()
+                .map(|part| {
+                    assert_eq!(
+                        part["type"], "text",
+                        "Summary wire input must contain only text"
+                    );
+                    part["text"]
+                        .as_str()
+                        .expect("typed text content")
+                        .to_owned()
+                })
+                .collect(),
+            _ => panic!("unexpected Summary wire content: {content}"),
+        }
+    };
+    let estimate = |body: &serde_json::Value, force_prompt: bool| {
+        let mut request = crate::common::simple_request(
+            rustx::model::ModelProtocol::OpenAiChatCompletions,
+            SUMMARY_MODEL,
+            "",
+        );
+        let messages = body["messages"].as_array().unwrap();
+        let users: Vec<_> = messages
+            .iter()
+            .filter(|message| message["role"] == "user")
+            .collect();
+        let systems: Vec<_> = messages
+            .iter()
+            .filter(|message| message["role"] == "system")
+            .collect();
+        assert_eq!(users.len(), 1, "one exact Summary user envelope");
+        assert!(systems.len() <= 1, "one effective system prompt");
+        assert_eq!(
+            messages.len(),
+            users.len() + systems.len(),
+            "no omitted Summary wire messages"
+        );
+        let mut input = rustx::context::summarizer::SummaryRequest::default()
+            .model_input()
+            .messages;
+        let rustx::model::ModelInputMessage::Derived(message) = &mut input[0] else {
+            unreachable!()
+        };
+        let ProjectedMessage::User { content, .. } = &mut message.message else {
+            unreachable!()
+        };
+        *content = text_parts(&users[0]["content"])
+            .into_iter()
+            .map(|text| UserContentBlock::Text(TextBlock { text }))
+            .collect();
+        request.messages = input.into();
+        request.effective_system_prompt = if force_prompt {
+            prompt_instruction.clone()
+        } else {
+            systems.first().map_or_else(String::new, |message| {
+                text_parts(&message["content"]).concat()
+            })
+        };
+        request.response_schema = Some(PreparedResponseSchema {
+            schema: frozen_schema.clone(),
+            strategy: if !force_prompt && body.get("response_format").is_some() {
+                StructuredOutputStrategy::Native
+            } else {
+                StructuredOutputStrategy::Prompt
+            },
+        });
+        DefaultTokenEstimator.estimate_frozen_request(&request)
+    };
+    let output = summary[0]["body"]
+        .get("max_completion_tokens")
+        .or_else(|| summary[0]["body"].get("max_tokens"))
+        .unwrap()
+        .as_u64()
+        .unwrap();
+    let input_limit = 16_000 - 800 - output;
+    let native_price = estimate(&summary[0]["body"], false);
+    let native_as_prompt_price = estimate(&summary[0]["body"], true);
+    let first_prompt_price = estimate(&summary[1]["body"], false);
+    assert!(
+        native_price <= input_limit,
+        "Native={native_price}, input_limit={input_limit}"
+    );
+    assert!(
+        native_as_prompt_price > input_limit,
+        "the unchanged Native source would overflow after adding the Prompt schema: Native={native_price}, Native as Prompt={native_as_prompt_price}, first Prompt={first_prompt_price}, input_limit={input_limit}, output={output}"
+    );
+    for request in &summary[1..] {
+        let system = request["body"]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|message| message["role"] == "system")
+            .unwrap();
+        assert_eq!(
+            text_parts(&system["content"]).concat(),
+            prompt_instruction,
+            "the frozen schema is unchanged"
+        );
+        assert!(
+            estimate(&request["body"], false) <= input_limit,
+            "every complete Prompt request is independently repriced"
         );
     }
     let final_primary = primary.last().unwrap();
@@ -2138,6 +2279,9 @@ async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
     let cut = driver.store.auxiliary_audit_cut().unwrap();
     let mut last_range: Option<(u32, u32)> = None;
     let mut previous_accepted = None;
+    let mut frozen_invocation = None;
+    let mut rejected_ranges = None;
+    let mut captured_cut = None;
     for (index, call_id) in starts.iter().enumerate() {
         let call = driver
             .store
@@ -2154,6 +2298,14 @@ async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
             "each fragment has one real physical request"
         );
         assert_eq!(requests[0].model, SUMMARY_MODEL);
+        if let Some(frozen) = &frozen_invocation {
+            assert_eq!(
+                &call.invocation_fingerprint, frozen,
+                "the Model, Profile and resource revision stay frozen"
+            );
+        } else {
+            frozen_invocation = Some(call.invocation_fingerprint.clone());
+        }
         let evidence = requests[0].request_evidence.as_ref().unwrap();
         let AuxiliaryBusinessSource::Compaction {
             operation_id,
@@ -2168,14 +2320,22 @@ async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
             index.checked_sub(1).map(|i| starts[i])
         );
         let AuxiliaryInputEvidence::Compaction {
+            cut,
             source_ranges,
             previous_summary,
             output_strategy,
-            ..
         } = &call.input
         else {
             panic!("summary Call has native compaction provenance")
         };
+        if let Some(captured) = &captured_cut {
+            assert_eq!(
+                cut, captured,
+                "the captured historical source never changes"
+            );
+        } else {
+            captured_cut = Some(cut.clone());
+        }
         assert_eq!(
             previous_summary.as_ref().map(|r| &r.call_id),
             previous_accepted
@@ -2187,6 +2347,20 @@ async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
                 requests[0].local_terminal,
                 Some(AuxiliaryRequestTerminal::Failed)
             );
+            assert_eq!(
+                requests[0].normalized_failure_kind,
+                Some(rustx::model::ModelErrorKind::NativeFormatUnsupported)
+            );
+            assert_eq!(
+                evidence.observed_provider_terminal,
+                Some(
+                    rustx::model::auxiliary::AuxiliaryObservedProviderTerminal::Failed {
+                        kind: rustx::model::ModelErrorKind::NativeFormatUnsupported,
+                    }
+                )
+            );
+            rejected_ranges = Some(source_ranges.clone());
+            assert!(previous_summary.is_none());
             assert!(evidence.usage.is_none());
             assert_eq!(
                 evidence.usage_completeness,
@@ -2197,6 +2371,19 @@ async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
         assert!(
             matches!(output_strategy, StructuredOutputStrategy::PromptFallback { operation_id } if operation_id == operation)
         );
+        if index == 1 {
+            let rejected = rejected_ranges.as_ref().unwrap();
+            let first = &source_ranges[0];
+            assert_eq!(
+                (first.projection_index, first.byte_start),
+                (rejected[0].projection_index, rejected[0].byte_start),
+                "the rejected Native request never advances the source cursor"
+            );
+            assert_ne!(
+                source_ranges, rejected,
+                "the complete Prompt request is replanned"
+            );
+        }
         assert_eq!(call.outcome, Some(AuxiliaryCallOutcome::Completed));
         let (ordinal, accepted_ranges, generation) = accepted[index - 1];
         assert_eq!(ordinal as usize, index);
@@ -2230,6 +2417,65 @@ async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
         assert_eq!(usage.details.as_ref().unwrap().reasoning_tokens, Some(13));
     }
     let (snapshot, _) = driver.snapshot().unwrap();
+    let head = snapshot.context.projection_head.as_ref().unwrap();
+    assert_eq!(head.activation_id.0, 1, "one installed activation");
+    assert_eq!(
+        driver
+            .store
+            .projection_timeline(rustx::context::checkpoint::ProjectionActivationId(0), 64,)
+            .unwrap()
+            .len(),
+        1
+    );
+    // Independently enumerate canonical source records at the captured cut.
+    // Every retired occurrence must be covered through its complete rendering.
+    let mut at_cut = Vec::new();
+    let mut after = rustx::context::resources::LedgerFrontier(0);
+    loop {
+        let page = driver
+            .store
+            .compaction_message_page(
+                captured_cut.as_ref().unwrap(),
+                after,
+                None,
+                rustx::context::resources::ResourceLimits::default(),
+            )
+            .unwrap();
+        if page.rows.is_empty() {
+            break;
+        }
+        after = rustx::context::resources::LedgerFrontier(page.rows.last().unwrap().0);
+        at_cut.extend(page.rows.into_iter().map(|(_, message)| message));
+    }
+    let retired_count = at_cut.len() - head.original_items as usize;
+    let expected_lengths: Vec<_> = at_cut
+        .into_iter()
+        .take(retired_count)
+        .map(|message| {
+            u32::try_from(
+                rustx::context::summarizer::SummaryRequest {
+                    retired: vec![message.into()],
+                    ..Default::default()
+                }
+                .render_transcript()
+                .len(),
+            )
+            .expect("bounded fixture source rendering")
+        })
+        .collect();
+    let mut endpoints = vec![0; expected_lengths.len()];
+    for (_, ranges, _) in &accepted {
+        for range in *ranges {
+            let index = range.projection_index as usize;
+            assert_eq!(range.byte_start, endpoints[index]);
+            assert!(range.byte_end <= expected_lengths[index]);
+            endpoints[index] = range.byte_end;
+        }
+    }
+    assert_eq!(
+        endpoints, expected_lengths,
+        "every retired source byte is covered exactly once"
+    );
     assert_eq!(snapshot.context.compaction_count, 1);
     let occupancy = snapshot
         .context

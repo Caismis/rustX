@@ -19,7 +19,6 @@ use crate::tools::types::ModelToolDefinition;
 
 /// The complete frozen primary request inputs relevant to compaction fit.
 pub(super) struct CompactionInput<'a> {
-    pub(super) effective_system_prompt: &'a str,
     pub(super) tools: &'a [ModelToolDefinition],
     pub(super) staged_request_context: &'a [MessageBlock],
     pub(super) estimated_input: u64,
@@ -360,6 +359,25 @@ impl AgentExecution<'_> {
         need: CompactionNeed,
         operation: &dyn crate::context::summarizer::SummaryOperation,
     ) -> Result<CompletedCompaction, ContextError> {
+        // Compaction activates a new context, so its next actual request has a
+        // native reminder even when the old context had already consumed it.
+        // Price that complete prospective request before checkpoint authority
+        // can be granted; do not mutate accepted input on a deferred attempt.
+        let mut activated_context =
+            self.logical_step.accepted_context.clone().ok_or_else(|| {
+                ContextError::new(
+                    ContextErrorKind::Internal,
+                    "compaction has no accepted primary context",
+                )
+            })?;
+        activated_context
+            .refresh_permission_reminder(crate::runtime::permission::permission_reminder_text(
+                self.permission_reminder.mode,
+            ))
+            .map_err(|error| ContextError::new(ContextErrorKind::Internal, error.to_string()))?;
+        let effective_system_prompt = self.request_effective_system_prompt(
+            crate::context::render_effective_system_prompt(&activated_context.system_sections),
+        );
         let operation_id = operation.budget().operation_id().clone();
         let cancellation = self.cancellation.signal();
         // Resolved before the exclusive borrow of the conversation: the
@@ -411,7 +429,7 @@ impl AgentExecution<'_> {
             self.store.as_ref(),
             input.tools,
             observed.as_ref(),
-            input.effective_system_prompt,
+            &effective_system_prompt,
             &CompactionConstraints {
                 must_cover_through,
                 fresh_inbound,
@@ -466,6 +484,7 @@ impl AgentExecution<'_> {
             // Successful activated compaction arms the next request's sparse
             // permission reminder (Issue #544 §10).
             self.permission_reminder.mark_after_compaction();
+            self.logical_step.accepted_context = Some(activated_context);
         }
         self.install_committed_carryover(completed.carryover_level)?;
         Ok(CompletedCompaction { input_tokens_after })

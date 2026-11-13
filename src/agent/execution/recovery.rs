@@ -335,17 +335,11 @@ impl AgentExecution<'_> {
                 failure: AttemptFailure::Runtime { error },
             });
         }
-        let (effective_system_prompt, tools, estimated_input) = self
+        let (tools, estimated_input) = self
             .logical_step
             .current_input
             .as_ref()
-            .map(|input| {
-                (
-                    input.request.effective_system_prompt.clone(),
-                    input.request.tools.clone(),
-                    input.estimated_input,
-                )
-            })
+            .map(|input| (input.request.tools.clone(), input.estimated_input))
             .ok_or_else(|| {
                 Self::context_failure_terminal(&ContextError::new(
                     ContextErrorKind::Internal,
@@ -388,7 +382,6 @@ impl AgentExecution<'_> {
                 must_cover.as_ref(),
                 fresh.as_ref(),
                 &CompactionInput {
-                    effective_system_prompt: &effective_system_prompt,
                     tools: &tools,
                     staged_request_context: &[],
                     estimated_input,

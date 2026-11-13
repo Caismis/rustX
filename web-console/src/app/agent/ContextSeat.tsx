@@ -11,9 +11,9 @@ export function compactionPresentation(context?: RuntimeClientContextView, reque
   if (context?.compaction_in_progress) return { state: 'running' as const };
   if (request?.status === 'submitting') return { state: 'submitting' as const };
   if (request?.status === 'uncertain') return { state: 'uncertain' as const };
-  if (request?.status === 'skipped') return { state: 'skipped' as const };
-  if (request?.status === 'cancelled') return { state: 'cancelled' as const };
   const newerCommit = !!request && (context?.compaction_count ?? 0) > request.baselineCount;
+  if (request?.status === 'skipped' && !newerCommit) return { state: 'skipped' as const };
+  if (request?.status === 'cancelled' && !newerCommit) return { state: 'cancelled' as const };
   if (request?.status === 'succeeded' && !newerCommit) return { state: 'succeeded' as const };
   if (request?.status === 'failed' && !newerCommit) return { state: 'failed' as const, diagnostic: request.diagnostic };
   if (context?.compaction_error) return { state: 'failed' as const, diagnostic: context.compaction_error };

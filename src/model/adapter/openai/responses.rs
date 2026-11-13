@@ -1880,6 +1880,7 @@ fn responses_stream_error(event: &serde_json::Value, native_format: bool) -> Mod
             str_field(error, "type"),
             str_field(error, "code"),
             str_field(error, "param"),
+            message,
             "text.format",
         )
         && event
@@ -1920,6 +1921,23 @@ mod native_format_rejection_tests {
     use super::responses_stream_error;
     use crate::model::{ModelErrorKind, ModelRetryDisposition};
     use serde_json::json;
+
+    #[test]
+    fn type_message_only_stream_rejection_is_request_and_protocol_scoped() {
+        let detail = json!({
+            "type": "invalid_request_error",
+            "message": "'text.format.type' : value is not one of the allowed values ['text','json_object']"
+        });
+        let event = json!({"error": detail});
+        assert_eq!(
+            responses_stream_error(&event, true).kind,
+            ModelErrorKind::NativeFormatUnsupported
+        );
+        assert_eq!(
+            responses_stream_error(&event, false).kind,
+            ModelErrorKind::InvalidRequest
+        );
+    }
 
     #[test]
     fn stream_rejection_requires_native_request_and_exact_structured_fields() {
