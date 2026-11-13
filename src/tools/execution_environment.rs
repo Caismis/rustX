@@ -259,7 +259,7 @@ pub(crate) fn compose(
     base: &ToolEnvironment,
     selection: &PythonSelection,
 ) -> Result<Vec<(String, String)>, ()> {
-    if host.closed.is_some() {
+    if host.closed.is_some() || selection.guard_unavailable {
         return Err(());
     }
     let mut entries = host.entries.clone();

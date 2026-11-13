@@ -267,6 +267,17 @@ impl Owner {
                 return;
             }
         }
+        let mut tasks = self.tasks.lock().expect("workspace python tasks");
+        tasks.retain(|task| !task.is_finished());
+        const MAX_LIVE_TASKS: usize = 64;
+        if tasks.len() >= MAX_LIVE_TASKS {
+            drop(tasks);
+            self.admitted
+                .lock()
+                .expect("workspace python admission")
+                .remove(&canonical);
+            return;
+        }
         let owner = Arc::clone(self);
         let task = handle.spawn(async move {
             let _leave = AdmitLeave {
@@ -275,13 +286,6 @@ impl Owner {
             };
             owner.prepare(canonical).await;
         });
-        let mut tasks = self.tasks.lock().expect("workspace python tasks");
-        tasks.retain(|task| !task.is_finished());
-        const MAX_RETAINED_TASKS: usize = 64;
-        let overflow = tasks.len().saturating_sub(MAX_RETAINED_TASKS - 1);
-        if overflow > 0 {
-            tasks.drain(0..overflow);
-        }
         tasks.push(task);
     }
 
@@ -315,12 +319,12 @@ impl Owner {
             flight.wait().await;
             return;
         }
+        let _finish = FinishFlight {
+            owner: self,
+            root: canonical.clone(),
+            flight,
+        };
         self.prepare_locked(&canonical).await;
-        self.flights
-            .lock()
-            .expect("workspace python flights")
-            .remove(&canonical);
-        flight.finish();
     }
 
     async fn prepare_locked(&self, root: &Path) {
@@ -485,15 +489,13 @@ impl Owner {
             return;
         }
         let target = root.join(".venv");
-        let argv = vec![
-            uv.display().to_string(),
-            "venv".to_owned(),
-            "--no-project".to_owned(),
-            "--no-config".to_owned(),
+        let mut argv = vec![uv.display().to_string(), "venv".to_owned()];
+        argv.extend(isolated_discovery_args());
+        argv.extend([
             "--python".to_owned(),
             interpreter.display().to_string(),
             target.display().to_string(),
-        ];
+        ]);
         if let Err(message) = self.run(root, argv, host.as_ref(), CREATE_TIMEOUT).await {
             if self.inputs_match(root, expected) {
                 self.unavailable(root, &message, expected.clone());
@@ -601,13 +603,11 @@ impl Owner {
             uv.display().to_string(),
             "python".to_owned(),
             "find".to_owned(),
-            "--no-project".to_owned(),
-            // `--no-project` does not stop uv from walking parent
-            // `.python-version` files. `--no-config` suppresses that discovery.
-            // Offline, proxy, certificate, index, and cache settings still
-            // arrive through the process environment.
-            "--no-config".to_owned(),
         ];
+        // `--no-project` does not stop a parent `.python-version` walk.
+        // `--directory` runs discovery outside the Workspace tree, so that
+        // walk cannot see it. User and system uv.toml files still apply.
+        argv.extend(isolated_discovery_args());
         // The root pin is the request. With no pin, requires-python constrains
         // uv's selection. Ancestor version files are not a request.
         if let Some(pin) = pin {
@@ -800,6 +800,23 @@ impl Owner {
     #[allow(clippy::unused_self)]
     fn before_lock(&self) -> Option<tokio::sync::oneshot::Sender<()>> {
         None
+    }
+}
+
+struct FinishFlight<'a> {
+    owner: &'a Owner,
+    root: PathBuf,
+    flight: Arc<Flight>,
+}
+
+impl Drop for FinishFlight<'_> {
+    fn drop(&mut self) {
+        self.owner
+            .flights
+            .lock()
+            .expect("workspace python flights")
+            .remove(&self.root);
+        self.flight.finish();
     }
 }
 
@@ -1133,6 +1150,30 @@ fn find_uv(host: &ExecutionHost, workspace: &Path) -> Option<PathBuf> {
     None
 }
 
+fn isolated_discovery_args() -> [String; 3] {
+    [
+        "--no-project".to_owned(),
+        "--directory".to_owned(),
+        discovery_directory().display().to_string(),
+    ]
+}
+
+fn discovery_directory() -> PathBuf {
+    static DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+    DIRECTORY
+        .get_or_init(|| {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            let directory = std::env::temp_dir()
+                .join(format!("rustx-uv-discovery-{}-{nanos}", std::process::id()));
+            let _ = std::fs::create_dir_all(&directory);
+            directory
+        })
+        .clone()
+}
+
 fn uv_can_create(text: &str) -> bool {
     let Ok(version) = Version::from_str(text) else {
         return false;
@@ -1192,18 +1233,30 @@ fn parse_request(pin: &str) -> Result<ParsedRequest, ()> {
 }
 
 fn split_implementation(pin: &str) -> Result<(Option<String>, &str), ()> {
+    let mut best: Option<&str> = None;
     for name in IMPLEMENTATIONS {
-        if pin.len() > name.len() && pin[..name.len()].eq_ignore_ascii_case(name) {
-            let tail = &pin[name.len()..];
-            let tail = tail
-                .strip_prefix('-')
-                .or_else(|| tail.strip_prefix('@'))
-                .unwrap_or(tail);
-            if tail.is_empty() {
-                return Err(());
-            }
-            return Ok((Some((*name).to_owned()), tail));
+        let Some(tail) = pin.get(name.len()..) else {
+            continue;
+        };
+        if !pin[..name.len()].eq_ignore_ascii_case(name) {
+            continue;
         }
+        if !(tail.starts_with('-') || tail.starts_with('@')) {
+            continue;
+        }
+        if best.is_none_or(|current| name.len() > current.len()) {
+            best = Some(name);
+        }
+    }
+    if let Some(name) = best {
+        let tail = pin[name.len()..]
+            .strip_prefix('-')
+            .or_else(|| pin[name.len()..].strip_prefix('@'))
+            .unwrap_or("");
+        if tail.is_empty() {
+            return Err(());
+        }
+        return Ok((Some((*name).to_owned()), tail));
     }
     if let Some(head_end) = pin.find(|character: char| {
         character.is_ascii_digit() || matches!(character, '>' | '<' | '=' | '~' | ',')
@@ -1306,14 +1359,37 @@ fn selection_from_guard(specific: Option<PathBuf>, diagnostic: &str) -> PythonSe
 }
 
 fn fallback_guard() -> Option<PathBuf> {
-    static GUARD: OnceLock<Option<PathBuf>> = OnceLock::new();
-    GUARD
-        .get_or_init(|| {
-            let directory =
-                std::env::temp_dir().join(format!("rustx-python-guard-{}", std::process::id()));
-            install_guard(&directory, "Workspace Python is not ready")
-        })
-        .clone()
+    static GUARD: OnceLock<PathBuf> = OnceLock::new();
+    if let Some(directory) = GUARD.get() {
+        return Some(directory.clone());
+    }
+    let directory = install_fallback_guard()?;
+    let _ = GUARD.set(directory.clone());
+    Some(directory)
+}
+
+fn install_fallback_guard() -> Option<PathBuf> {
+    let parent = std::env::temp_dir();
+    for _ in 0..4 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let directory = parent.join(format!("rustx-python-guard-{}-{nanos}", std::process::id()));
+        if claim_fresh_directory(&directory).is_none() {
+            continue;
+        }
+        if let Some(directory) = install_guard(&directory, "Workspace Python is not ready") {
+            return Some(directory);
+        }
+    }
+    None
+}
+
+fn claim_fresh_directory(directory: &Path) -> Option<PathBuf> {
+    std::fs::create_dir(directory).ok()?;
+    let _ = std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700));
+    Some(directory.to_path_buf())
 }
 
 fn ensure_guard(diagnostic: &str) -> Option<PathBuf> {
@@ -1431,16 +1507,38 @@ async fn acquire_lock(
 #[cfg(test)]
 mod tests {
     use super::{
-        Owner, ProgramOutput, ProgramProbe, ProgramRequest, Record, ensure_guard,
-        exact_pin_conflicts, generation_of, lock_file, path_request, pin_matches, scan_admit,
-        uv_can_create,
+        Owner, ParsedRequest, ProgramOutput, ProgramProbe, ProgramRequest, PythonSelection, Record,
+        ensure_guard, exact_pin_conflicts, generation_of, lock_file, parse_request, path_request,
+        pin_matches, scan_admit, uv_can_create,
     };
     use crate::tools::execution_environment::{ExecutionHost, host_from_entries};
+    use futures_util::future::BoxFuture;
     use pep440_rs::Version;
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::str::FromStr;
     use std::sync::{Arc, Mutex};
+
+    struct HoldProbe {
+        release: tokio::sync::watch::Receiver<bool>,
+    }
+
+    impl ProgramProbe for HoldProbe {
+        fn run(&self, _request: ProgramRequest) -> BoxFuture<'_, Result<ProgramOutput, String>> {
+            let mut release = self.release.clone();
+            Box::pin(async move {
+                loop {
+                    if *release.borrow() {
+                        break;
+                    }
+                    if release.changed().await.is_err() {
+                        break;
+                    }
+                }
+                Err("preparation stopped".to_owned())
+            })
+        }
+    }
 
     struct Scripted {
         calls: Mutex<Vec<Vec<String>>>,
@@ -1666,7 +1764,8 @@ mod tests {
         assert_eq!(venv.len(), 1);
         let argv = &venv[0];
         assert!(argv.iter().any(|arg| arg == "--no-project"));
-        assert!(argv.iter().any(|arg| arg == "--no-config"));
+        assert!(argv.iter().any(|arg| arg == "--directory"));
+        assert!(argv.iter().all(|arg| arg != "--no-config"));
         assert!(argv.iter().any(|arg| arg == "--python"));
         assert!(
             !argv
@@ -1934,7 +2033,8 @@ mod tests {
             .find(|argv| argv.iter().any(|arg| arg == "find"))
             .expect("find");
         assert!(find.iter().any(|arg| arg == "--no-project"));
-        assert!(find.iter().any(|arg| arg == "--no-config"));
+        assert!(find.iter().any(|arg| arg == "--directory"));
+        assert!(find.iter().all(|arg| arg != "--no-config"));
         assert!(find.iter().any(|arg| arg == ">=3.12"));
         assert!(find.iter().all(|arg| arg != "3.11"));
     }
@@ -2368,28 +2468,45 @@ mod tests {
         std::fs::write(parent.path().join(".python-version"), "9.99\n").expect("pin");
         let child = parent.path().join("workspace");
         std::fs::create_dir(&child).expect("child");
-        let suppressed = std::process::Command::new(&uv)
+        let private = tempfile::tempdir().expect("discovery");
+        let config_home = parent.path().join("xdg");
+        std::fs::create_dir_all(config_home.join("uv")).expect("uv config");
+        std::fs::write(
+            config_home.join("uv/uv.toml"),
+            "python-preference = \"only-managed\"\n",
+        )
+        .expect("uv.toml");
+        let managed = parent.path().join("managed");
+        std::fs::create_dir(&managed).expect("managed");
+        let configured = std::process::Command::new(&uv)
             .args([
                 "python",
                 "find",
                 "--no-project",
-                "--no-config",
+                "--directory",
+                private.path().to_str().expect("utf8"),
                 "--offline",
                 "--no-python-downloads",
             ])
             .current_dir(&child)
             .env("UV_OFFLINE", "1")
-            .env("UV_INDEX_URL", "https://example.invalid/simple")
+            .env("XDG_CONFIG_HOME", &config_home)
+            .env("UV_PYTHON_INSTALL_DIR", &managed)
             .output()
             .expect("uv");
-        let suppressed_text = format!(
+        let configured_text = format!(
             "{}{}",
-            String::from_utf8_lossy(&suppressed.stdout),
-            String::from_utf8_lossy(&suppressed.stderr)
+            String::from_utf8_lossy(&configured.stdout),
+            String::from_utf8_lossy(&configured.stderr)
+        );
+        assert!(!configured.status.success());
+        assert!(
+            !configured_text.contains("9.99"),
+            "ancestor pin leaked through configured discovery: {configured_text}"
         );
         assert!(
-            !suppressed_text.contains("9.99"),
-            "ancestor pin leaked: {suppressed_text}"
+            configured_text.contains("managed"),
+            "file-backed python-preference was ignored: {configured_text}"
         );
         let discovered = std::process::Command::new(&uv)
             .args([
@@ -2401,6 +2518,8 @@ mod tests {
             ])
             .current_dir(&child)
             .env("UV_OFFLINE", "1")
+            .env("XDG_CONFIG_HOME", &config_home)
+            .env("UV_PYTHON_INSTALL_DIR", &managed)
             .output()
             .expect("uv");
         let discovered_text = format!(
@@ -2412,5 +2531,115 @@ mod tests {
             discovered_text.contains("9.99"),
             "the fixture did not reproduce ancestor discovery: {discovered_text}"
         );
+    }
+
+    #[test]
+    fn unicode_and_graalpython_requests_parse_without_a_short_prefix() {
+        assert!(parse_request("中文测试").is_err());
+        match parse_request("graalpython-3.12").expect("graalpython") {
+            ParsedRequest::Release {
+                implementation,
+                version,
+            } => {
+                assert_eq!(implementation.as_deref(), Some("graalpython"));
+                assert_eq!(version.release(), &[3u64, 12]);
+            }
+            ParsedRequest::Spec { .. } => panic!("graalpython-3.12 is an exact request"),
+        }
+    }
+
+    #[tokio::test]
+    async fn unicode_pin_does_not_wedge_a_later_preparation() {
+        let root = workspace();
+        write_venv(&root.path().join(".venv"));
+        std::fs::write(root.path().join(".python-version"), "中文测试\n").expect("pin");
+        let root_path = std::fs::canonicalize(root.path()).expect("canonical");
+        let owner = Owner::for_test(Arc::new(Scripted::new("0.10.2")), None, None, None);
+        owner.prepare(root_path.clone()).await;
+        match owner.records.lock().expect("records").get(&root_path) {
+            Some(Record::Conflict { .. }) => {}
+            other => panic!("expected conflict, got {other:?}"),
+        }
+        std::fs::write(root_path.join(".python-version"), "3.12\n").expect("valid pin");
+        let prepare = owner.prepare(root_path.clone());
+        tokio::time::timeout(std::time::Duration::from_secs(5), prepare)
+            .await
+            .expect("a later pin must not wait on the unfinished flight");
+        match owner.records.lock().expect("records").get(&root_path) {
+            Some(Record::Ready { .. }) => {}
+            other => panic!("expected ready, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn preexisting_guard_directory_is_not_adopted() {
+        let parent = tempfile::tempdir().expect("parent");
+        let planted = parent.path().join("planted");
+        std::fs::create_dir(&planted).expect("planted");
+        write_executable(&planted.join("python"), "#!/bin/sh\nprintf 'HIJACK\\n'\n");
+        write_executable(&planted.join("python3"), "#!/bin/sh\nprintf 'HIJACK\\n'\n");
+        assert!(super::claim_fresh_directory(&planted).is_none());
+    }
+
+    #[test]
+    fn missing_guard_directories_do_not_restore_host_python() {
+        let selection = super::selection_from_guard(None, "disk full");
+        if selection.guard_unavailable {
+            let host = host_from_entries(vec![("PATH", "/usr/bin"), ("HOME", "/home/ada")]);
+            assert!(
+                crate::tools::execution_environment::compose(
+                    &host,
+                    &crate::tools::environment::ToolEnvironment::new(),
+                    &selection,
+                )
+                .is_err()
+            );
+        }
+        let closed = PythonSelection {
+            path_prefix: Vec::new(),
+            virtual_env: None,
+            diagnostic: "disk full".to_owned(),
+            guard_unavailable: true,
+        };
+        let host = host_from_entries(vec![("PATH", "/usr/bin:/bin"), ("HOME", "/home/ada")]);
+        assert!(
+            crate::tools::execution_environment::compose(
+                &host,
+                &crate::tools::environment::ToolEnvironment::new(),
+                &closed,
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn live_preparations_stay_joined_past_the_task_cap() {
+        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+        let probe = Arc::new(HoldProbe {
+            release: release_rx,
+        });
+        let mut owner = Owner::for_test(probe.clone(), None, None, None);
+        owner.schedules = true;
+        let owner = Arc::new(owner);
+        let mut roots = Vec::new();
+        for _ in 0..65 {
+            let root = workspace();
+            write_venv(&root.path().join(".venv"));
+            let root_path = std::fs::canonicalize(root.path()).expect("canonical");
+            roots.push(root);
+            owner.schedule_on(root_path);
+        }
+        assert_eq!(owner.tasks.lock().expect("tasks").len(), 64);
+        assert_eq!(owner.admitted.lock().expect("admitted").len(), 64);
+        owner.shutdown.cancel();
+        release_tx.send(true).expect("release");
+        let tasks = std::mem::take(&mut *owner.tasks.lock().expect("tasks"));
+        assert_eq!(tasks.len(), 64);
+        for task in tasks {
+            tokio::time::timeout(std::time::Duration::from_secs(5), task)
+                .await
+                .expect("shutdown joins a live preparation")
+                .expect("task");
+        }
     }
 }

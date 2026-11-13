@@ -31,10 +31,15 @@ ordinary meaning.
   probed. `uv` is not required for reuse.
 - A missing environment is created only with `uv` 0.10.0 or newer, at the
   final path, without `--clear`, `--seed`, or `--allow-existing`. Bootstrap
-  `uv` commands also pass `--no-config` so an ancestor `.python-version` cannot
-  select the interpreter. Offline, proxy, certificate, index, and cache
-  settings still come from the captured environment. There is no installer,
-  `python -m venv` fallback, `uv sync`, or package seed.
+  `uv` commands pass `--directory` pointing at a private directory outside the
+  Workspace tree, so a `.python-version` on the Workspace or its parents
+  cannot select the interpreter. A pin above that private directory can still
+  be walked. User and system `uv.toml` files still apply, together with
+  offline, proxy, certificate, index, and cache settings from the captured
+  environment. There is no installer, `python -m venv` fallback, `uv sync`,
+  or package seed. At most 64 preparations run at once. A further Workspace is
+  left for a later schedule, and shutdown joins every preparation that was
+  started.
 - A symlink, file, or invalid directory at `.venv` is left in place and
   reported internally as a conflict.
 - The Workspace-root `.python-version` is the explicit interpreter request.
@@ -42,15 +47,17 @@ ordinary meaning.
   such as `cpython-` or `pypy-` must match `sys.implementation.name`; an
   unknown or trailing qualifier is rejected. With no pin, the root
   `pyproject.toml` `[project].requires-python` specifier is passed to
-  `uv python find --no-project --no-config`. The selected interpreter is
+  `uv python find --no-project --directory <outside the Workspace>`. The selected interpreter is
   checked against both inputs before it is ready. The readiness identity is
   snapshotted after the environment exists and before those probes. A pin,
   project, or interpreter change during a probe does not publish Ready.
   Neither root file is edited.
 - When the environment is not ready, `python` and `python3` resolve to a
   guard that exits 127. If the Workspace state directory cannot be written,
-  a process-lifetime fallback guard is used instead of the host interpreter.
-  `git`, `ls`, `cargo`, and other commands keep the host `PATH`.
+  a private process-lifetime fallback guard is created. If neither directory
+  can be created, that command fails closed instead of using the host
+  interpreter. `git`, `ls`, `cargo`, and other commands keep the host `PATH`
+  when a guard directory exists.
 - Registration queues the authorized directory only when the Product Host
   attests a shared filesystem. The location id is not a path. Waiting for
   the cross-process lock observes runtime shutdown and does not stay blocked
