@@ -427,7 +427,8 @@ export type Request1 =
         target: AttachmentTarget;
         config: SessionModelConfig;
         /**
-         * A primary-model picker can recover unchanged auxiliary model references that were removed.
+         * Explicitly recover an unchanged auxiliary selection whose model is unavailable.
+         * Ordinary primary-model or profile edits must omit this opt-in.
          */
         recover_unavailable_auxiliary?: boolean | null;
       };

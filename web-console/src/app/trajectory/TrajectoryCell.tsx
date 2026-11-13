@@ -11,6 +11,7 @@ import { markdownPreviewText } from '../../presentation/markdown/preview';
 import css from './Trajectory.module.css';
 import { isWorkflowCall } from './workflow';
 import { workflowStatus } from '../agent/workflow-state';
+import { modelToolArgumentPreview } from './tool-arguments';
 
 /** The ledger's role vocabulary: native kinds plus the two input cells. */
 export type CellKind = TraceKind | 'system' | 'context' | 'workflow_node';
@@ -101,7 +102,7 @@ export function listText(tx: Translate, item: InspectableDisplayItem): string {
   if (item.type === 'WorkflowNode') return [item.workflowNode.instance.node, item.workflowNode.input_preview, item.workflowNode.output_preview].filter(Boolean).join(' → ');
   if (item.type === 'SystemPromptCell') return item.label;
   if (item.type === 'ContextRow') return item.context.preview?.text ? markdownPreviewText(item.context.preview.text) : '';
-  if (record.tool) return [record.tool.name ?? record.tool.tool_id, record.tool.arguments?.text].filter(Boolean).join(' ');
+  if (record.tool) return [record.tool.name ?? record.tool.tool_id, modelToolArgumentPreview(record.tool.arguments)].filter(Boolean).join(' ');
   const text = recordText(tx, record);
   return text === '' && record.kind === 'assistant' && record.calls.length ? tx('trajectory:record.tool-call-only') : text;
 }
@@ -134,7 +135,7 @@ export function CellContent({ item }: { item: InspectableDisplayItem }) {
   }
   if (record.tool) {
     const name = record.tool.name ?? record.tool.tool_id;
-    const args = record.tool.arguments?.text;
+    const args = modelToolArgumentPreview(record.tool.arguments);
     const preview = record.preview?.text;
     const imageRead = record.tool.tool_id === READ_IMAGE_TOOL && record.tool.outcome === 'success' && record.attachments.some(artifact => artifact.image);
     const result = (imageRead && (!preview || preview === READ_IMAGE_RECEIPT) ? attachmentSummary(tx, record) || preview : preview) ?? record.tool.detail?.text;

@@ -33017,7 +33017,7 @@
                   "$ref": "#/$defs/SessionModelConfig"
                 },
                 "recover_unavailable_auxiliary": {
-                  "description": "A primary-model picker can recover unchanged auxiliary model references that were removed.",
+                  "description": "Explicitly recover an unchanged auxiliary selection whose model is unavailable.\nOrdinary primary-model or profile edits must omit this opt-in.",
                   "type": [
                     "boolean",
                     "null"

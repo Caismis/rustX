@@ -417,7 +417,8 @@ pub enum Method {
     ModelSet {
         target: AttachmentTarget,
         config: Box<crate::model::session::SessionModelConfig>,
-        /// A primary-model picker can recover unchanged auxiliary model references that were removed.
+        /// Explicitly recover an unchanged auxiliary selection whose model is unavailable.
+        /// Ordinary primary-model or profile edits must omit this opt-in.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recover_unavailable_auxiliary: Option<bool>,
     },

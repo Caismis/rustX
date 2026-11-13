@@ -1133,7 +1133,8 @@
       "upstream_sha256": "081fdf9092da9fe24e23b255262f3bd0f0e020aa9f377e318722f956b6cd371a",
       "retained_dependencies": [
         "../../locale/translation",
-        "./layout"
+        "./layout",
+        "./tool-arguments"
       ],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [
@@ -1145,7 +1146,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "01970d146a81c5fb824498f19a55204267722fd322ae452df96e45c2203f4016",
+      "local_sha256": "8a3259924f5c9e0abb19154a34a1c0fa5fb49b7144080878d0492e24bef1d2b6",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/trajectory-search-index.ts",
@@ -3478,6 +3479,7 @@
         "../agent/workflow-state",
         "./Trajectory.module.css",
         "./layout",
+        "./tool-arguments",
         "./workflow",
         "react"
       ],
@@ -3505,7 +3507,7 @@
           "treatment": "Summarize successful image results from recorded attachments."
         }
       ],
-      "local_sha256": "87ba3b14dcfea49db70e9dcfd8ea4d466da78ff052285a5caf371cd1cae6a1e6"
+      "local_sha256": "ad5540980ce49424db364a6eb200cfe6581d62bbdf4966b7a458930b1b62efaa"
     },
     {
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",

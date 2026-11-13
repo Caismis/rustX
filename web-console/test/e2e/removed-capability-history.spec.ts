@@ -19,6 +19,17 @@ async function inspect(page: Page, row: Locator, fields: { tab: string; contains
   for (const { tab, contains } of fields) {
     await details.getByRole('tab', { name: tab, exact: true }).click();
     const body = details.getByRole('tabpanel');
+    if (tab === 'Schema') {
+      const schema = body.getByRole('tree');
+      await expect(schema).toBeVisible();
+      const expand = schema.getByRole('button', { name: 'Expand', exact: true });
+      // Read the complete retained schema through its normal disclosure
+      // controls, independent of the compiler's resource graph layout.
+      for (let count = 0; count < 256 && await expand.count(); count++) {
+        await expand.first().click();
+      }
+      await expect(expand).toHaveCount(0);
+    }
     await expect(body).toContainText(contains);
     await expect(details.getByRole('alert')).toHaveCount(0);
     values[tab] = await body.innerText();
