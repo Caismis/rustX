@@ -113,8 +113,7 @@ impl SettledExecution<'_> {
             conversation: self.execution.conversation,
             durable_failure: self.execution.durable_failure,
             durable_failure_kind: self.execution.durable_failure_kind,
-            permission_reminder_emitted: self.execution.permission_reminder.emitted_mode(),
-            permission_reminder_unconsumed_pending: self.execution.permission_reminder.pending,
+            permission_reminder_consumed: self.execution.permission_reminder.consumed_mode(),
             permission_task_message: self
                 .execution
                 .permission_task

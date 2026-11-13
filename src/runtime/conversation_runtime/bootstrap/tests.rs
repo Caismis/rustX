@@ -438,8 +438,13 @@ async fn permission_task_pointer_survives_reopen_and_is_replaced_by_new_human_in
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "real policy-change, cancellation and reconstruction matrix"
+)]
 async fn permission_reminder_ignores_modes_that_never_reached_a_request_start() {
-    for reopen in [false, true] {
+    use crate::agent::execution::test_sync::StartBoundaryPause;
+    for (cancel, reopen) in [(false, false), (false, true), (true, false), (true, true)] {
         let dir = tempfile::tempdir().unwrap();
         let (runtime, model) =
             headless_runtime(&dir, vec![one_turn_script(), one_turn_script()], None, None).await;
@@ -488,6 +493,48 @@ async fn permission_reminder_ignores_modes_that_never_reached_a_request_start() 
                     .unwrap(),
                 crate::runtime::configuration_commit::StagedOutcome::Committed
             );
+            if mode == ApprovalMode::Plan && cancel {
+                let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
+                runtime
+                    .inner
+                    .probe
+                    .lock()
+                    .unwrap()
+                    .get_or_insert_with(CoordinatorProbe::default)
+                    .start_boundary_pause = Some(pause);
+                let mut pre_start = pre_start.unwrap();
+                runtime
+                    .submit_inbound(text_content("Mode B is cancelled before request start"))
+                    .unwrap();
+                pre_start.await_park(1).await;
+                runtime
+                    .cancel_current_attempt(&AttemptId::for_conversation(
+                        runtime.conversation_id(),
+                        1,
+                    ))
+                    .unwrap();
+                pre_start.release();
+                await_settled_ledger(&runtime, 1).await;
+                runtime
+                    .inner
+                    .probe
+                    .lock()
+                    .unwrap()
+                    .as_mut()
+                    .unwrap()
+                    .start_boundary_pause = None;
+                assert_eq!(
+                    model.requests().len(),
+                    1,
+                    "mode B never reached the provider"
+                );
+                assert_eq!(request_snapshots(&runtime.request_history()).len(), 1);
+                assert_eq!(
+                    runtime.inner.lock_state().last_permission_reminder_mode,
+                    Some(ApprovalMode::FullAccess),
+                    "a cancelled mode B request cannot erase mode A consumption"
+                );
+            }
         }
         assert_eq!(
             runtime.inner.lock_state().last_permission_reminder_mode,
@@ -502,7 +549,7 @@ async fn permission_reminder_ignores_modes_that_never_reached_a_request_start() 
             runtime.activate();
             (runtime, model, 0)
         } else {
-            (runtime, model, 1)
+            (runtime, model, if cancel { 2 } else { 1 })
         };
         runtime
             .submit_inbound(text_content("Next request still uses mode A"))
@@ -517,7 +564,7 @@ async fn permission_reminder_ignores_modes_that_never_reached_a_request_start() 
                 .contains(&crate::runtime::permission::permission_reminder_text(
                     ApprovalMode::FullAccess
                 )),
-            "unobserved A-to-B-to-A changes must stay quiet, reopen={reopen}"
+            "unconsumed A-to-B-to-A changes must stay quiet, cancel={cancel}, reopen={reopen}"
         );
         runtime.shutdown().await.unwrap();
     }

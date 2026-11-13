@@ -33,49 +33,46 @@ deny and ask resource settings still apply."
     }
 }
 
-/// Attempt-local reminder eligibility.
+/// Request-start consumption retained across admitted executions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionReminderState {
     /// Frozen mode for this admitted execution.
     pub mode: ApprovalMode,
-    /// Whether the next successful request-start should include a reminder.
-    pub pending: bool,
+    /// Last mode consumed in the current context activation.
+    consumed: Option<ApprovalMode>,
 }
 
 impl PermissionReminderState {
     /// Reminder eligibility for one admitted execution.
     ///
-    /// `last_emitted` is the mode last successfully injected on this
+    /// `consumed` is the mode last successfully consumed on this
     /// conversation. When it already matches `mode`, consecutive ordinary
     /// user turns stay quiet until compaction or an effective mode change.
     #[must_use]
-    pub fn for_admission(mode: ApprovalMode, last_emitted: Option<ApprovalMode>) -> Self {
-        Self {
-            mode,
-            pending: last_emitted != Some(mode),
-        }
+    pub fn for_admission(mode: ApprovalMode, consumed: Option<ApprovalMode>) -> Self {
+        Self { mode, consumed }
     }
 
     /// Marks a successful compaction activation for the next request.
     pub fn mark_after_compaction(&mut self) {
-        self.pending = true;
+        self.consumed = None;
     }
 
     /// Text to inject when pending; does not consume eligibility.
     #[must_use]
     pub fn pending_text(&self) -> Option<String> {
-        self.pending.then(|| permission_reminder_text(self.mode))
+        (self.consumed != Some(self.mode)).then(|| permission_reminder_text(self.mode))
     }
 
     /// Consumes eligibility after successful request-start commit.
     pub fn consume_after_start_commit(&mut self) {
-        self.pending = false;
+        self.consumed = Some(self.mode);
     }
 
-    /// Mode that was successfully injected at least once during this attempt.
+    /// Last successfully consumed mode, unchanged by pre-start cancellation.
     #[must_use]
-    pub const fn emitted_mode(&self) -> Option<ApprovalMode> {
-        if self.pending { None } else { Some(self.mode) }
+    pub const fn consumed_mode(&self) -> Option<ApprovalMode> {
+        self.consumed
     }
 }
 
@@ -89,13 +86,14 @@ mod tests {
         assert!(state.pending_text().unwrap().contains("plan"));
         state.consume_after_start_commit();
         assert!(state.pending_text().is_none());
-        assert_eq!(state.emitted_mode(), Some(ApprovalMode::Plan));
+        assert_eq!(state.consumed_mode(), Some(ApprovalMode::Plan));
         state.mark_after_compaction();
         assert!(state.pending_text().unwrap().contains("plan"));
+        assert_eq!(state.consumed_mode(), None);
     }
 
     #[test]
-    fn matching_prior_emit_suppresses_new_admission() {
+    fn matching_prior_consumption_suppresses_new_admission() {
         let state =
             PermissionReminderState::for_admission(ApprovalMode::Plan, Some(ApprovalMode::Plan));
         assert!(state.pending_text().is_none());
@@ -104,48 +102,6 @@ mod tests {
             Some(ApprovalMode::Plan),
         );
         assert!(changed.pending_text().unwrap().contains("automatic"));
-    }
-
-    #[test]
-    fn unconsumed_pending_after_compaction_must_clear_last_emitted() {
-        let mut state =
-            PermissionReminderState::for_admission(ApprovalMode::Plan, Some(ApprovalMode::Plan));
-        assert!(state.pending_text().is_none());
-        state.mark_after_compaction();
-        assert!(state.pending);
-        assert!(state.pending_text().unwrap().contains("plan"));
-        assert_eq!(state.emitted_mode(), None);
-    }
-
-    /// Mirrors attempt settlement: compaction arms pending, then cancel before
-    /// `ModelRequestStarted` must clear `last_permission_reminder_mode` so the
-    /// next attempt does not suppress the reminder.
-    #[test]
-    fn settlement_after_compaction_cancel_before_request_start_rearms_next_attempt() {
-        let mut last_permission_reminder_mode = Some(ApprovalMode::Plan);
-        let mut state = PermissionReminderState::for_admission(
-            ApprovalMode::Plan,
-            last_permission_reminder_mode,
-        );
-        assert!(!state.pending);
-        state.mark_after_compaction();
-        // Cancel before request-start commit: pending stays true, never consumed.
-        assert!(state.pending);
-        assert_eq!(state.emitted_mode(), None);
-        match (state.emitted_mode(), state.pending) {
-            (Some(mode), _) => last_permission_reminder_mode = Some(mode),
-            (None, true) => last_permission_reminder_mode = None,
-            (None, false) => {}
-        }
-        assert_eq!(last_permission_reminder_mode, None);
-        let next = PermissionReminderState::for_admission(
-            ApprovalMode::Plan,
-            last_permission_reminder_mode,
-        );
-        assert!(
-            next.pending,
-            "next attempt must re-emit after compaction→pending→cancel before start"
-        );
-        assert!(next.pending_text().unwrap().contains("plan"));
+        assert_eq!(changed.consumed_mode(), Some(ApprovalMode::Plan));
     }
 }

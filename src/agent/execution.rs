@@ -272,10 +272,8 @@ pub struct AgentExecutionResult {
     pub durable_failure: Option<String>,
     /// The typed durable stage associated with [`Self::durable_failure`].
     pub durable_failure_kind: Option<DurableFailureKind>,
-    /// Permission mode successfully injected during this attempt, when any.
-    pub permission_reminder_emitted: Option<crate::runtime::types::ApprovalMode>,
-    /// Reminder eligibility was still pending at settlement (never consumed).
-    pub permission_reminder_unconsumed_pending: bool,
+    /// Final reminder consumption identity for the current context activation.
+    pub permission_reminder_consumed: Option<crate::runtime::types::ApprovalMode>,
     /// Latest native task identity handed back with the settled execution.
     pub permission_task_message: Option<MessageId>,
 }

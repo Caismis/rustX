@@ -303,14 +303,7 @@ impl RuntimeInner {
             }
             state.conversation = Some(result.conversation);
             state.permission_task_message = result.permission_task_message;
-            match (
-                result.permission_reminder_emitted,
-                result.permission_reminder_unconsumed_pending,
-            ) {
-                (Some(mode), _) => state.last_permission_reminder_mode = Some(mode),
-                (None, true) => state.last_permission_reminder_mode = None,
-                (None, false) => {}
-            }
+            state.last_permission_reminder_mode = result.permission_reminder_consumed;
             if let Some(diagnostic) = durable_failure {
                 let operation = match result.durable_failure_kind {
                     Some(crate::agent::DurableFailureKind::Compaction) => {
