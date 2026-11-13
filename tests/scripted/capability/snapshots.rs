@@ -1644,179 +1644,21 @@ fn assert_no_skill_environment(dir: &std::path::Path) {
     }
 }
 
-/// One direct or nested child observed while it existed.
-///
-/// The record outlives the process. A probe that has already exited stays in
-/// the log, which a final `/proc/.../children` snapshot cannot do.
-#[cfg(target_os = "linux")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ObservedProcessStart {
-    pid: i32,
-    comm: String,
-    cmdline: String,
-}
-
-/// Counts every descendant that appears during discovery, preparation, and
-/// reload, including commands that exit before the test looks.
-///
-/// Observation requires `/proc`. A missing procfs is an error, never an empty
-/// successful count.
-#[cfg(target_os = "linux")]
-struct ProcessStartRecorder {
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    records: std::sync::Arc<Mutex<Vec<ObservedProcessStart>>>,
-    samples: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-#[cfg(target_os = "linux")]
-impl ProcessStartRecorder {
-    fn start() -> Result<Self, String> {
-        match std::fs::read_dir("/proc/self/task") {
-            Ok(mut tasks) => {
-                if tasks.next().is_none() {
-                    return Err(
-                        "process-start observation found no /proc/self/task entries; refusing to report zero"
-                            .to_owned(),
-                    );
-                }
-            }
-            Err(error) => {
-                return Err(format!(
-                    "process-start observation requires /proc/self/task ({error}); refusing to report zero"
-                ));
-            }
-        }
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let records = std::sync::Arc::new(Mutex::new(Vec::new()));
-        let samples = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let stop_thread = std::sync::Arc::clone(&stop);
-        let records_thread = std::sync::Arc::clone(&records);
-        let samples_thread = std::sync::Arc::clone(&samples);
-        let thread = std::thread::spawn(move || {
-            let mut seen = std::collections::BTreeSet::new();
-            while !stop_thread.load(std::sync::atomic::Ordering::Relaxed) {
-                let Ok(found) = sample_descendant_starts() else {
-                    continue;
-                };
-                samples_thread.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let mut guard = records_thread.lock().expect("process-start log");
-                for record in found {
-                    if seen.insert(record.pid) {
-                        guard.push(record);
-                    }
-                }
-            }
-        });
-        Ok(Self {
-            stop,
-            records,
-            samples,
-            thread: Some(thread),
-        })
-    }
-
-    fn pids(&self) -> std::collections::BTreeSet<i32> {
-        self.records
-            .lock()
-            .expect("process-start log")
-            .iter()
-            .map(|record| record.pid)
-            .collect()
-    }
-
-    fn started_since(&self, before: &std::collections::BTreeSet<i32>) -> Vec<ObservedProcessStart> {
-        self.records
-            .lock()
-            .expect("process-start log")
-            .iter()
-            .filter(|record| !before.contains(&record.pid))
-            .cloned()
-            .collect()
-    }
-
-    fn successful_samples(&self) -> u64 {
-        self.samples.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    fn stop(&mut self) {
-        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl Drop for ProcessStartRecorder {
-    fn drop(&mut self) {
-        self.stop();
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn sample_descendant_starts() -> std::io::Result<Vec<ObservedProcessStart>> {
-    let mut queue = direct_child_pids(std::process::id())?;
-    let mut queued = queue
-        .iter()
-        .copied()
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut found = Vec::new();
-    while let Some(pid) = queue.pop() {
-        found.push(observe_process(pid));
-        if let Ok(children) = direct_child_pids(u32::try_from(pid).unwrap_or(0)) {
-            for child in children {
-                if queued.insert(child) {
-                    queue.push(child);
-                }
-            }
-        }
-    }
-    Ok(found)
-}
-
-#[cfg(target_os = "linux")]
-fn direct_child_pids(pid: u32) -> std::io::Result<Vec<i32>> {
-    let task_dir = if pid == std::process::id() {
-        std::path::PathBuf::from("/proc/self/task")
-    } else {
-        std::path::PathBuf::from(format!("/proc/{pid}/task"))
-    };
-    let mut pids = Vec::new();
-    for task in std::fs::read_dir(task_dir)? {
-        let Ok(task) = task else { continue };
-        let Ok(text) = std::fs::read_to_string(task.path().join("children")) else {
-            continue;
-        };
-        pids.extend(
-            text.split_whitespace()
-                .filter_map(|token| token.parse::<i32>().ok()),
-        );
-    }
-    Ok(pids)
-}
-
-#[cfg(target_os = "linux")]
-fn observe_process(pid: i32) -> ObservedProcessStart {
-    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm"))
-        .unwrap_or_default()
-        .trim()
-        .to_owned();
-    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
-    let cmdline = String::from_utf8_lossy(&cmdline).replace('\0', " ");
-    ObservedProcessStart { pid, comm, cmdline }
-}
-
-/// Runs this test again in a fresh process so parallel suite children cannot
-/// enter the process-start log. A harness that runs zero tests is a failure.
+/// Compiles the libc launch recorder and runs `test_name` in a fresh process
+/// with that library preloaded. Parallel tests cannot write its log. A harness
+/// that runs zero tests is a failure.
 #[cfg(target_os = "linux")]
 fn run_isolated_observation(test_name: &str) {
+    let library = compile_launch_recorder();
+    let log = tempfile::NamedTempFile::new().expect("launch log");
     let output =
         std::process::Command::new(std::env::current_exe().expect("current test executable"))
             .args(["--exact", test_name, "--test-threads=1"])
             .env("RUSTX_SKILL_PROBE_CHILD", "1")
+            .env("RUSTX_LAUNCH_LOG", log.path())
+            .env("LD_PRELOAD", &library)
             .output()
-            .expect("spawn the isolated process-start observation");
+            .expect("spawn the isolated launch observation");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -1825,47 +1667,127 @@ fn run_isolated_observation(test_name: &str) {
     );
 }
 
-/// Negative control: an awaited `python3 --version` has exited, and the
-/// recorder still contains its pid. The two-second bound is a liveness guard;
-/// the loop yields and does not sleep.
 #[cfg(target_os = "linux")]
-#[test]
-fn process_start_recorder_detects_an_exited_interpreter_probe() {
-    let mut recorder = ProcessStartRecorder::start().expect("process-start recorder");
-    let ready = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while recorder.successful_samples() == 0 && std::time::Instant::now() < ready {
-        std::thread::yield_now();
-    }
+fn compile_launch_recorder() -> std::path::PathBuf {
+    let directory =
+        std::env::temp_dir().join(format!("rustx-launch-recorder-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("launch recorder directory");
+    let library = directory.join("librustx_launch_recorder.so");
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/scripted/capability/launch_recorder_preload.rs");
+    let output = std::process::Command::new("rustc")
+        .args([
+            "--crate-type",
+            "cdylib",
+            "--edition",
+            "2021",
+            "-C",
+            "panic=abort",
+            "-C",
+            "opt-level=3",
+            "-o",
+        ])
+        .arg(&library)
+        .arg(&source)
+        .output()
+        .expect("run rustc for the launch recorder");
     assert!(
-        recorder.successful_samples() > 0,
-        "process-start observation never sampled /proc; refusing to treat that as a detection"
+        output.status.success(),
+        "launch recorder failed to compile\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    let mut child = std::process::Command::new("python3")
+    library
+}
+
+/// The preloaded recorder must be mapped. An absent recorder is a failure,
+/// never an empty launch log.
+#[cfg(target_os = "linux")]
+fn launch_log_path() -> std::path::PathBuf {
+    let path = std::env::var("RUSTX_LAUNCH_LOG").expect("RUSTX_LAUNCH_LOG");
+    let maps = std::fs::read_to_string("/proc/self/maps").expect("process maps");
+    assert!(
+        maps.contains("librustx_launch_recorder"),
+        "launch recorder is not loaded; refusing to report zero starts"
+    );
+    std::path::PathBuf::from(path)
+}
+
+/// Reads the launch log after every launch the caller awaited has returned.
+///
+/// The recorder writes each attempt on the launching thread before the libc
+/// function returns, so this read follows those writes.
+#[cfg(target_os = "linux")]
+fn drain_launch_log(path: &std::path::Path) -> String {
+    std::fs::read_to_string(path).expect("launch log")
+}
+
+/// Spawns `python3 --version`, waits until it has exited, and returns its pid.
+#[cfg(target_os = "linux")]
+fn await_exited_python_probe(fork_exec: bool) -> u32 {
+    use std::os::unix::process::CommandExt;
+    let mut command = std::process::Command::new("python3");
+    command
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn python3 --version");
-    let pid = i32::try_from(child.id()).expect("probe pid fits in i32");
+        .stderr(std::process::Stdio::null());
+    if fork_exec {
+        // An empty `pre_exec` selects std's fork/`execvp` path. The closure
+        // runs between fork and exec and performs no work.
+        #[allow(unsafe_code)]
+        unsafe {
+            command.pre_exec(|| Ok(()));
+        }
+    }
+    let mut child = command.spawn().expect("spawn python3 --version");
+    let pid = child.id();
     let status = child.wait().expect("wait for python3 --version");
     assert!(status.success(), "{status}");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while std::time::Instant::now() < deadline && !recorder.pids().contains(&pid) {
-        std::thread::yield_now();
-    }
-    assert!(
-        recorder.pids().contains(&pid),
-        "recorder missed exited pid {pid} after {} samples; observed {:?}",
-        recorder.successful_samples(),
-        recorder.started_since(&std::collections::BTreeSet::new())
-    );
     assert!(
         !std::path::Path::new(&format!("/proc/{pid}")).exists(),
         "the probe must already have exited"
     );
-    assert!(recorder.successful_samples() > 0);
-    recorder.stop();
+    pid
+}
+
+/// Negative control: the observer does not read until both awaited probes have
+/// exited. The log still contains the `posix_spawnp` and `execvp` attempts.
+#[cfg(target_os = "linux")]
+#[test]
+fn launch_recorder_counts_an_exited_probe_while_the_observer_is_gated() {
+    if std::env::var_os("RUSTX_SKILL_PROBE_CHILD").is_none() {
+        run_isolated_observation(
+            "scripted_suites::capability::snapshots::launch_recorder_counts_an_exited_probe_while_the_observer_is_gated",
+        );
+        return;
+    }
+    let path = launch_log_path();
+    std::fs::write(&path, "").expect("truncate launch log");
+    let released = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    let reader_path = path.clone();
+    let reader_released = std::sync::Arc::clone(&released);
+    let reader = std::thread::spawn(move || {
+        gate.recv().expect("observation gate");
+        reader_released.store(true, std::sync::atomic::Ordering::SeqCst);
+        drain_launch_log(&reader_path)
+    });
+    let _spawn_pid = await_exited_python_probe(false);
+    let _exec_pid = await_exited_python_probe(true);
+    assert!(
+        !released.load(std::sync::atomic::Ordering::SeqCst),
+        "the observer read the launch log before both probes had exited"
+    );
+    release.send(()).expect("release the observer");
+    let launches = reader.join().expect("observer joins after the probes exit");
+    assert!(
+        launches.contains("posix_spawnp\tpython3\n"),
+        "missing posix_spawnp attempt after the probe exited:\n{launches}"
+    );
+    assert!(
+        launches.contains("execvp\tpython3\n"),
+        "missing execvp attempt after the probe exited:\n{launches}"
+    );
 }
 
 async fn exercise_skill_catalog_without_environments() {
@@ -1927,20 +1849,24 @@ async fn skill_metadata_does_not_probe_or_materialize() {
     if std::env::var_os("RUSTX_SKILL_PROBE_CHILD").is_some() {
         #[cfg(target_os = "linux")]
         {
-            let mut recorder = ProcessStartRecorder::start().expect("process-start recorder");
-            let before = recorder.pids();
+            let path = launch_log_path();
+            let before = drain_launch_log(&path);
             exercise_skill_catalog_without_environments().await;
-            let started = recorder.started_since(&before);
-            let samples = recorder.successful_samples();
-            recorder.stop();
-            assert!(samples > 0, "process-start observation took no samples");
+            let after = drain_launch_log(&path);
+            assert!(
+                after.starts_with(&before),
+                "the launch log was replaced during skill discovery"
+            );
+            let started = &after[before.len()..];
             assert!(
                 started.is_empty(),
-                "skill discovery started processes: {started:?}"
+                "skill discovery launched processes:\n{started}"
             );
         }
         #[cfg(not(target_os = "linux"))]
-        panic!("process-start observation was requested without /proc; refusing to report zero");
+        panic!(
+            "launch observation was requested without the Linux recorder; refusing to report zero"
+        );
         return;
     }
     #[cfg(target_os = "linux")]
